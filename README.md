@@ -1,94 +1,234 @@
 # Discord AI Agent
 
-Discord AI Agent is a self-hosted Discord bot that gives a server a natural-language AI assistant. Users mention `@ai` and the model can answer normally, search permission-aware Discord history, summarize channel context, generate images, use hosted web/time tools, inspect app logs, and save private skills in Postgres.
+A self-hosted AI bot for private Discord servers.
 
-This repo is designed for people running their own bot on their own Discord server. It does not include any Discord data, embeddings, private skills, logs, or deployment secrets.
+Mention `@ai` and it can answer questions, search your server's history, summarize channels, generate images, look things up on the web, and remember private server-specific skills. The interface is deliberately simple: users talk to it like a person, and the model decides which tools to use.
 
-## Capabilities
+This is built for friend groups, clubs, communities, and small teams that want a useful AI assistant without handing their Discord history to a hosted SaaS bot.
 
-- Natural `@ai <request>` interaction, no command memorization required.
-- Permission-aware Discord history search over bot-visible indexed messages.
-- Per-channel persistent conversation memory for bot turns and tool results.
-- Full-server crawl and incremental indexing through the Discord bot API.
-- Background embeddings with pgvector-backed semantic retrieval.
-- OpenRouter chat, embeddings, image generation, web search, web fetch, and datetime tools.
-- DB-backed private skills that never need to enter Git.
-- GitHub PR creation for code/tool proposals that require human review.
-- Structured logs, trace IDs, tool audit logs, and owner-only Railway log inspection.
+## Why This Exists
 
-## Privacy Warning
+Most Discord bots make users learn commands. Most AI chat apps do not understand your server. Discord AI Agent is the middle path:
 
-Do not publish a production database, embedding table, trace log, `.discord-ai-agent/` directory, skill export, Railway logs, or Discord message dump. These can contain private server/member data even when API secrets are absent.
+- One natural interface: `@ai what did we say about pizza?`
+- Permission-aware memory over indexed Discord history.
+- Persistent per-channel conversation context.
+- Web search, image generation, stats, summaries, and private skills.
+- Self-hosted code and database, so your server data stays under your control.
 
-Only crawl servers where you have permission to run this kind of bot. Retrieval filters by channels the requesting Discord user can currently view, but the database still stores indexed bot-visible history.
+The goal is not to be a generic Discord bot framework. It is a practical AI agent you can run for your own server and extend over time.
 
-## Requirements
+## How It Works
 
-- Node.js 22+
-- Docker Desktop or another Postgres with `pgvector`
-- A Discord application and bot account
-- An OpenRouter API key
-- Optional: GitHub token for PR proposal tools
-- Optional: Railway token for owner-only runtime log inspection
-
-## Local Setup
-
-```bash
-cp .env.example .env
-npm install
-docker compose up -d postgres
-npm run migrate
-npm run invite-url
-npm run preflight
-npm run dev
+```text
+Discord mention
+  -> agent router
+  -> model chooses tools
+  -> local tools query Postgres / Discord history / GitHub / Railway
+  -> hosted OpenRouter tools handle web, fetch, and time
+  -> one conversational Discord reply
 ```
 
-Set these values in `.env`:
+Discord AI Agent stores bot-visible messages in Postgres, creates embeddings with OpenRouter, and uses pgvector plus keyword search for retrieval. Every history lookup is filtered by the channels the requesting Discord user can currently view.
+
+Private skills are stored in the database, not Git. Public baseline behavior can live in Markdown under `skills/`, but server-specific memories learned through `@ai learn this for next time ...` stay private.
+
+## What You Get
+
+- Natural `@ai <request>` interaction.
+- Full-server crawl through the Discord bot API.
+- Incremental indexing for new, edited, and deleted messages.
+- Permission-aware history search.
+- Per-channel persistent conversation memory.
+- Channel and user stats.
+- Thread/channel summaries.
+- Image generation.
+- Hosted web search, web fetch, and datetime tools through OpenRouter.
+- Private DB-backed skills.
+- Optional GitHub PR creation for proposed code/tool changes.
+- Structured logs, trace IDs, and owner-only Railway log inspection.
+
+## What You Need
+
+- Node.js 22+
+- Docker Desktop, or another Postgres instance with `pgvector`
+- A Discord application/bot token
+- An OpenRouter API key
+- Optional: a GitHub token if you want PR proposal tools
+- Optional: Railway if you want to deploy it there
+
+## Quickstart
+
+Clone and install:
+
+```bash
+git clone https://github.com/Slokh/discord-ai-agent.git
+cd discord-ai-agent
+npm install
+cp .env.example .env
+```
+
+Start Postgres:
+
+```bash
+docker compose up -d postgres
+npm run migrate
+```
+
+Fill in `.env`:
 
 ```bash
 DISCORD_TOKEN=
 DISCORD_CLIENT_ID=
 DISCORD_GUILD_ID=
 OPENROUTER_API_KEY=
-GITHUB_TOKEN=
-GITHUB_REPOSITORY=owner/discord-ai-agent
 BOT_NAME=ai
 ```
 
-The generated invite URL uses least-privilege bot permissions. The bot should not be granted Administrator.
+Generate an invite URL:
 
-## Running Processes
+```bash
+npm run invite-url
+```
 
-The default local process role is `bot`.
+Invite the bot to your server, then run checks:
+
+```bash
+npm run preflight
+```
+
+Start the bot:
 
 ```bash
 npm run dev
-npm run worker
-DISCORD_AI_AGENT_PROCESS_ROLE=all npm run dev
 ```
 
-For Docker:
+In Discord:
+
+```text
+@ai hello
+@ai what can you do?
+@ai status
+```
+
+## Index Your Server History
+
+The bot can answer normal questions immediately. To let it search old Discord messages, run a crawl:
+
+```bash
+npm run crawl
+```
+
+For larger servers, keep a worker running so embeddings process in the background:
+
+```bash
+npm run worker
+```
+
+Messages become keyword-searchable as soon as they are stored. Semantic search improves as embeddings finish.
+
+Useful indexing commands:
+
+```bash
+npm run crawl                 # continue/resume crawling
+npm run reindex               # reset crawl cursors and crawl again
+npm run embeddings:backfill   # enqueue missing/stale embeddings
+npm run embeddings:worker     # process embedding jobs only
+```
+
+## Discord Setup Notes
+
+In the Discord Developer Portal:
+
+1. Create an application.
+2. Add a bot.
+3. Enable these privileged gateway intents:
+   - Server Members Intent
+   - Message Content Intent
+4. Copy the bot token into `DISCORD_TOKEN`.
+5. Copy the application/client ID into `DISCORD_CLIENT_ID`.
+6. Copy your server ID into `DISCORD_GUILD_ID`.
+7. Run `npm run invite-url` and invite the bot.
+
+The bot does not need Administrator. It only indexes and answers from channels it can see, and users only retrieve history from channels they can currently view.
+
+## Example Prompts
+
+```text
+@ai what did we say about buying a projector?
+@ai summarize what happened in this channel this week
+@ai rank channels by messages per day
+@ai what are the recurring topics in #movies?
+@ai find the message where someone mentioned "the projector setup"
+@ai next world cup match?
+@ai make an image of a wizard eating nachos
+@ai learn this for next time: movie night ties are settled by whoever hosted last
+@ai add a tool to check our Minecraft server status
+```
+
+## Configuration
+
+Required:
+
+| Variable | Purpose |
+| --- | --- |
+| `DISCORD_TOKEN` | Discord bot token |
+| `DISCORD_CLIENT_ID` | Discord application/client ID |
+| `DISCORD_GUILD_ID` | Server to run in |
+| `OPENROUTER_API_KEY` | Chat, embeddings, images, and hosted tools |
+
+Common optional settings:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BOT_NAME` | `ai` | Name used in examples and prompts |
+| `OPENROUTER_CHAT_MODEL` | `deepseek/deepseek-v4-flash` | Main agent model |
+| `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
+| `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
+| `GITHUB_TOKEN` | unset | Enables PR proposal tools |
+| `GITHUB_REPOSITORY` | `owner/discord-ai-agent` | Repo for proposed changes |
+| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `bot`, `worker`, or `all` |
+
+## Running Locally
+
+One-process local development:
+
+```bash
+npm run dev
+```
+
+Separate bot and worker:
+
+```bash
+npm run bot
+npm run worker
+```
+
+Docker:
 
 ```bash
 docker compose up --build bot worker
 ```
 
-## Indexing And Embeddings
-
-Crawling stores bot-visible Discord messages and queues embeddings in the background:
+Local prompt testing without Discord:
 
 ```bash
-npm run crawl
-npm run reindex
-npm run embeddings:backfill
-npm run embeddings:worker
+npm run prompt -- --no-memory "what can you do?"
 ```
-
-Messages become keyword-searchable before semantic search fully catches up.
 
 ## Private Skills
 
-Committed Markdown files under `skills/` are public baseline behavior. Private server-specific skills are stored in Postgres and override public skills with the same name.
+Skills are reusable instructions the agent loads into its system prompt.
+
+Public/default skills can live in `skills/*.md`. Private server-specific skills live in Postgres and should not be committed. The Discord command:
+
+```text
+@ai learn this for next time: movie night starts at 8 unless someone says otherwise
+```
+
+creates or updates a private database skill after policy checks.
+
+Manage DB-backed skills:
 
 ```bash
 npm run skills -- list --all
@@ -98,52 +238,54 @@ npm run skills -- disable movie-night
 npm run skills -- delete movie-night
 ```
 
-`@ai learn this for next time ...` creates or updates a private database skill after policy validation.
+## Deployment
 
-## Useful Commands
+Railway works well for the first hosted deployment:
+
+- Postgres service with persistent volume.
+- Bot service with `DISCORD_AI_AGENT_PROCESS_ROLE=bot`.
+- Worker service with `DISCORD_AI_AGENT_PROCESS_ROLE=worker`.
+- Both app services connected to the same GitHub repo and database.
+
+See [docs/railway-deploy.md](docs/railway-deploy.md) for a detailed Railway setup.
+
+## Privacy And Safety
+
+Do not publish:
+
+- `.env` files
+- production database dumps
+- embeddings
+- trace logs
+- Railway logs
+- `.discord-ai-agent/`
+- private skill exports
+- Discord message exports
+
+Even without API keys, those files can contain private server/member data.
+
+Before making a public release, run:
+
+```bash
+npm run scan:release
+```
+
+## Development
+
+```bash
+npm run verify      # lint, typecheck, tests, audit
+npm run verify:db   # migration + pgvector integration tests
+```
+
+Useful diagnostics:
 
 ```bash
 npm run doctor
 npm run smoke:discord
 npm run smoke:openrouter
 npm run smoke:github
-npm run clear-commands
-npm run blocked-users -- list
-npm run blocked-users -- block 123456789012345678 "reason"
-npm run aliases -- add alice alice-smith
-npm run prompt -- --no-memory "status"
-```
-
-## Discord Examples
-
-```text
-@ai hello
-@ai status
-@ai tools
-@ai undo
-@ai what did we say about pizza?
-@ai what did @someone say about pizza since 2024-01-01?
-@ai summarize this thread
-@ai next world cup match?
-@ai make an image of a wizard eating nachos
-@ai learn this for next time: movie night ties are settled by whoever hosted last
-@ai add a tool to check the Minecraft server status
-```
-
-## Verification
-
-```bash
-npm run verify
-npm run verify:db
-```
-
-Before making a public release, also run the privacy/security scan:
-
-```bash
-npm run scan:release
 ```
 
 ## License
 
 MIT
-

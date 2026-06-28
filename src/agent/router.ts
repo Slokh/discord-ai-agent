@@ -25,7 +25,7 @@ import type { ChatMessage } from "../models/openrouter.js";
 import type { ConversationMessage } from "../db/repositories.js";
 import type { AgentFile, AgentResponse, ToolContext } from "../tools/types.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
-import { toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
+import { openRouterServerToolDefinitionsForModel, toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import type { Logger } from "pino";
 
@@ -146,7 +146,18 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       durationMs: durationMs(roundStartedAt)
     });
     if (modelRoutes.length === 0) {
-      const responseContent = response.content.trim();
+      const responseContent = stripLeakedHostedToolMarkup(response.content).trim();
+      if (!responseContent && isLeakedHostedToolMarkup(response.content)) {
+        return await recoverFromLeakedHostedToolMarkup(ctx, {
+          text,
+          files,
+          memoryEvents,
+          requestLogger,
+          startedAt,
+          model: response.model,
+          estimatedCostUsd: response.estimatedCostUsd
+        });
+      }
       if (!responseContent && memoryEvents.length > 0) {
         return await synthesizeFinalAnswerWithoutTools(ctx, {
           reason: "empty model response after tool evidence",
@@ -654,10 +665,16 @@ async function synthesizeFinalAnswerWithoutTools(
   });
   const response = await ctx.openRouter.chat({
     messages: finalSynthesisMessages(input.text, input.memoryEvents),
+    tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
     maxTokens: 900
   });
-  const content = response.content.trim() || toolEvidenceFallback(input.memoryEvents, input.text) || "I found relevant evidence, but I could not compose a clean answer from it.";
+  let content = stripLeakedHostedToolMarkup(response.content).trim();
+  if (!content && isLeakedHostedToolMarkup(response.content)) {
+    const recovery = await hostedToolMarkupRecoveryResponse(ctx, input.text);
+    content = recovery.content;
+  }
+  content = content || toolEvidenceFallback(input.memoryEvents, input.text) || "I found relevant evidence, but I could not compose a clean answer from it.";
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
@@ -696,13 +713,102 @@ async function synthesizeFinalAnswerWithoutTools(
   };
 }
 
+async function recoverFromLeakedHostedToolMarkup(
+  ctx: ToolContext,
+  input: {
+    text: string;
+    files: AgentFile[];
+    memoryEvents: NonNullable<AgentResponse["memoryEvents"]>;
+    requestLogger: Logger;
+    startedAt: number;
+    model: string;
+    estimatedCostUsd?: number;
+  }
+): Promise<AgentResponse> {
+  input.requestLogger.warn(
+    {
+      model: input.model
+    },
+    "Model leaked hosted tool markup"
+  );
+  await recordTraceEvent(ctx, {
+    eventName: "agent.hosted_tool_markup_leaked",
+    level: "warn",
+    summary: "Model returned raw hosted tool markup instead of a user-visible answer",
+    metadata: {
+      model: input.model
+    }
+  });
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "agentError",
+    argumentsSummary: input.text,
+    error: "hosted_tool_markup_leaked",
+    model: input.model,
+    estimatedCostUsd: input.estimatedCostUsd
+  });
+
+  const recovery = await hostedToolMarkupRecoveryResponse(ctx, input.text);
+  input.requestLogger.info(
+    {
+      durationMs: durationMs(input.startedAt),
+      finalChars: recovery.content.length,
+      fileCount: input.files.length,
+      memoryEventCount: input.memoryEvents.length
+    },
+    "Agent request complete after hosted tool markup recovery"
+  );
+  await recordTraceEvent(ctx, {
+    eventName: "agent.request.complete",
+    summary: `Recovered from hosted tool markup with ${recovery.content.length} chars`,
+    metadata: {
+      finalChars: recovery.content.length,
+      fileCount: input.files.length,
+      memoryEventCount: input.memoryEvents.length
+    },
+    durationMs: durationMs(input.startedAt)
+  });
+  return {
+    content: cleanResponse(recovery.content, ctx.config.maxReplyChars),
+    files: input.files.length > 0 ? input.files : undefined,
+    memoryEvents: input.memoryEvents.length > 0 ? input.memoryEvents : undefined
+  };
+}
+
+async function hostedToolMarkupRecoveryResponse(ctx: ToolContext, text: string) {
+  const response = await ctx.openRouter.chat({
+    messages: [
+      {
+        role: "system",
+        content:
+          "Your previous response emitted raw hosted tool-call markup. Answer the user in plain text. You may use hosted web tools if needed, but never print <tool_call> tags, XML-like tool markup, tool names, or arguments."
+      },
+      { role: "user", content: text }
+    ],
+    tools: openRouterServerToolDefinitionsForModel(),
+    temperature: 0.2,
+    maxTokens: 900
+  });
+  const content = stripLeakedHostedToolMarkup(response.content).trim();
+  return {
+    content:
+      content ||
+      "I tried to look that up, but the hosted web tool returned raw tool-call text instead of a usable result. Try again in a second.",
+    model: response.model,
+    estimatedCostUsd: response.estimatedCostUsd
+  };
+}
+
 function finalSynthesisMessages(userText: string, memoryEvents: NonNullable<AgentResponse["memoryEvents"]>): ChatMessage[] {
   return [
     {
       role: "system",
       content:
-        "Write one natural Discord reply using only the provided tool evidence. Lead with the verdict. Be blunt, casual, and decisive; do not pad the answer with neutral caveats or a roll call of weak matches. " +
-        "Do not call, request, name, or mention tools. Do not mention skipped redundant tool calls. Use dates sparingly: show dates only when the user asks about timing, links, sources, proof, or exact messages, " +
+        "Write one natural Discord reply. Lead with the verdict. Be blunt, casual, and decisive; do not pad the answer with neutral caveats or a roll call of weak matches. " +
+        "For Discord history claims, use only the provided Discord tool evidence. If that evidence does not answer the user's question and the question is about public/current/external/how-to information, use hosted web tools instead of stopping at Discord evidence. " +
+        "Do not print XML-like tool-call markup, raw tool names, or skipped redundant tool calls in the final answer. Use dates sparingly: show dates only when the user asks about timing, links, sources, proof, or exact messages, " +
         "or when a date is needed to avoid making old evidence sound current. Do not add a Sources section unless asked. " +
         "For who-is-best/favorite/most/opinion questions, make a direct call if the evidence supports one. If it does not, say the verdict plainly, like 'No winner' or 'I can't crown anyone from that', then give the shortest reason. " +
         "When naming people from Discord evidence, only use exact handles or IDs shown in the evidence; do not infer real names or display names. " +
@@ -724,6 +830,17 @@ function renderMemoryEventsForFinalSynthesis(memoryEvents: NonNullable<AgentResp
       return `[${index + 1}] ${toolName}\n${event.content.trim()}`;
     })
     .join("\n\n");
+}
+
+function isLeakedHostedToolMarkup(content: string) {
+  return /<tool_call>\s*openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/i.test(content.trim());
+}
+
+function stripLeakedHostedToolMarkup(content: string) {
+  return content
+    .replace(/<tool_call>\s*openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/gi, "")
+    .replace(/<arg_key>[\s\S]*?<\/arg_key>\s*<arg_value>[\s\S]*?<\/arg_value>/gi, "")
+    .trim();
 }
 
 async function skippedRedundantHistorySearchResult(
@@ -1010,6 +1127,7 @@ function chatMessages(text: string, skills: string, sessionMessages: Conversatio
         "You are Discord AI Agent, a private Discord server assistant. Be useful, concise, blunt, and casual. Lead with the answer or verdict. Do not be neutral for neutrality's sake. " +
         "You can call local Discord AI Agent function tools and OpenRouter-hosted server tools. Let tool calls do the work when they match the user's request. " +
         "For private server memory, call searchDiscordHistory. Never invent Discord history. " +
+        "Do not use Discord history search for ordinary public how-to questions, public apps/sites/games/products/services, or unfamiliar external nouns unless the user asks what this Discord server said about them. Prefer web_search for those. " +
         "After searchDiscordHistory returns evidence, answer from that evidence instead of searching again unless the next search adds a specific user, channel, or date filter. " +
         "When answering from Discord search evidence, use dates sparingly; show them only when the user asks about timing, links, sources, proof, or exact messages, or when needed to avoid making old messages sound recent. " +
         "When naming people from Discord search evidence, only use exact handles or IDs shown in the tool output; do not infer real names or display names. " +

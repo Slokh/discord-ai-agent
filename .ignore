@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.discord-ai-agent/
+.env
+.env.*
+.railway/
+*.dump
+*.sql.dump
+*.sqlite
+*.sqlite3
+*.db
+*.pem
+*.key
+*.crt

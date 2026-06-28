@@ -1,0 +1,70 @@
+{
+  "name": "discord-ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first Discord AI bot with permission-aware server memory, tools, images, and skill PRs.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "bot": "tsx watch src/index.ts bot",
+    "worker": "tsx watch src/index.ts worker",
+    "start": "node dist/src/index.js",
+    "start:bot": "node dist/src/index.js bot",
+    "start:worker": "node dist/src/index.js worker",
+    "start:all": "node dist/src/index.js all",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:db": "DISCORD_AI_AGENT_DB_TESTS=true vitest run tests/integration/repository-db.test.ts tests/integration/jobs-db.test.ts",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "verify": "npm run lint && npm run typecheck && npm test && npm audit --omit=dev",
+    "verify:db": "npm run migrate && npm run test:db",
+    "migrate": "tsx src/db/migrate.ts",
+    "crawl": "tsx scripts/crawl.ts",
+    "reindex": "tsx scripts/crawl.ts --reindex",
+    "aliases": "tsx scripts/userAliases.ts",
+    "skills": "tsx scripts/skills.ts",
+    "blocked-users": "tsx scripts/blockedUsers.ts",
+    "embeddings:backfill": "tsx scripts/backfillEmbeddings.ts",
+    "embeddings:worker": "tsx scripts/embeddingWorker.ts",
+    "embeddings:reprioritize": "tsx scripts/reprioritizeEmbeddingQueue.ts",
+    "doctor": "tsx scripts/doctor.ts",
+    "prompt": "tsx scripts/prompt.ts",
+    "invite-url": "tsx scripts/discordInviteUrl.ts",
+    "preflight": "tsx scripts/preflight.ts",
+    "smoke:discord": "tsx scripts/smokeDiscord.ts",
+    "smoke:github": "tsx scripts/smokeGithub.ts",
+    "smoke:openrouter": "tsx scripts/smokeOpenRouter.ts",
+    "smoke:startup": "tsx scripts/smokeStartup.ts",
+    "scan:release": "tsx scripts/scanRelease.ts",
+    "clear-commands": "tsx src/discord/registerCommands.ts",
+    "register-commands": "tsx src/discord/registerCommands.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@octokit/rest": "^21.1.1",
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.5.0",
+    "pg": "^8.16.3",
+    "pg-boss": "^10.3.2",
+    "pino": "^9.7.0",
+    "pino-pretty": "^13.0.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@types/node": "^22.16.5",
+    "@types/pg": "^8.15.4",
+    "eslint": "^9.31.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.37.0",
+    "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "undici": "6.27.0"
+  }
+}

@@ -1,0 +1,1084 @@
+import {
+  analyzeDiscordData,
+  answerFromHistory,
+  cleanResponse,
+  createSkillFromRequest,
+  createToolProposalFromRequest,
+  findDiscordChannels,
+  findDiscordRoles,
+  findDiscordUsers,
+  generateImage,
+  getDiscordChannelTopics,
+  getDiscordMessageContext,
+  getDiscordStats,
+  getPinnedMessages,
+  inspectAgentLogs,
+  inspectRailwayLogs,
+  getRecentDiscordMessages,
+  listTools,
+  reportStatus,
+  searchDiscordAttachments,
+  summarizeDiscordHistory,
+  summarizeCurrentThread
+} from "../tools/coreTools.js";
+import type { ChatMessage } from "../models/openrouter.js";
+import type { ConversationMessage } from "../db/repositories.js";
+import type { AgentFile, AgentResponse, ToolContext } from "../tools/types.js";
+import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
+import { toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
+import { durationMs, logger, previewText } from "../util/logger.js";
+import type { Logger } from "pino";
+
+type AgentToolRoute = {
+  id: string;
+  name: ToolName;
+  arguments?: Record<string, unknown>;
+  argumentsText: string;
+};
+
+const MAX_TOOL_ROUNDS = 4;
+
+export async function handleAgentRequest(ctx: ToolContext, userText: string): Promise<AgentResponse> {
+  try {
+    return await handleAgentRequestInner(ctx, userText);
+  } catch (error) {
+    await recordTraceEvent(ctx, {
+      eventName: "agent.request.failed",
+      level: "error",
+      summary: error instanceof Error ? error.message : String(error)
+    });
+    await ctx.repo
+      .auditTool({
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        userId: ctx.userId,
+        toolName: "agentError",
+        argumentsSummary: userText,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      .catch(() => undefined);
+    throw error;
+  }
+}
+
+async function handleAgentRequestInner(ctx: ToolContext, userText: string): Promise<AgentResponse> {
+  const startedAt = Date.now();
+  const text = userText.trim();
+  if (!text) return { content: "Say what you need after mentioning me." };
+
+  const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
+  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? []);
+  const files: AgentFile[] = [];
+  const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
+  const toolUseCounts = new Map<ToolName, number>();
+  const successfulToolCallKeys = new Set<string>();
+  let successfulHistorySearchRoute: AgentToolRoute | undefined;
+  const requestLogger = logger.child({
+    requestId: ctx.requestId,
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId
+  });
+
+  requestLogger.info(
+    {
+      textPreview: previewText(text),
+      sessionMessageCount: ctx.sessionMessages?.length ?? 0,
+      visibleChannelCount: ctx.visibleChannelIds.length,
+      mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
+      mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0
+    },
+    "Agent request started"
+  );
+  await recordTraceEvent(ctx, {
+    eventName: "agent.request.started",
+    summary: previewText(text),
+    metadata: {
+      sessionMessageCount: ctx.sessionMessages?.length ?? 0,
+      visibleChannelCount: ctx.visibleChannelIds.length,
+      mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
+      mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0
+    }
+  });
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    const roundStartedAt = Date.now();
+    requestLogger.debug(
+      {
+        round: round + 1,
+        messageCount: messages.length,
+        fileCount: files.length,
+        memoryEventCount: memoryEvents.length
+      },
+      "Agent model round starting"
+    );
+    const response = await ctx.openRouter.chat({
+      messages,
+      tools: toolDefinitionsForModel(),
+      temperature: 0.2,
+      maxTokens: 900
+    });
+
+    const modelRoutes = selectModelToolRoutes(response.toolCalls, text);
+    requestLogger.info(
+      {
+        round: round + 1,
+        durationMs: durationMs(roundStartedAt),
+        model: response.model,
+        outputChars: response.content.length,
+        requestedToolCalls: response.toolCalls.map((call) => call.name),
+        selectedLocalTools: modelRoutes.map((route) => route.name),
+        estimatedCostUsd: response.estimatedCostUsd
+      },
+      "Agent model round complete"
+    );
+    await recordTraceEvent(ctx, {
+      eventName: "agent.model.round.complete",
+      summary: `Round ${round + 1}: ${modelRoutes.map((route) => route.name).join(", ") || "no local tools"}`,
+      metadata: {
+        round: round + 1,
+        model: response.model,
+        outputChars: response.content.length,
+        requestedToolCalls: response.toolCalls.map((call) => call.name),
+        selectedLocalTools: modelRoutes.map((route) => route.name),
+        estimatedCostUsd: response.estimatedCostUsd
+      },
+      durationMs: durationMs(roundStartedAt)
+    });
+    if (modelRoutes.length === 0) {
+      const responseContent = response.content.trim();
+      if (!responseContent && memoryEvents.length > 0) {
+        return await synthesizeFinalAnswerWithoutTools(ctx, {
+          reason: "empty model response after tool evidence",
+          text,
+          messages,
+          files,
+          memoryEvents,
+          requestLogger,
+          startedAt
+        });
+      }
+      const content = responseContent || blockedToolFallback(response.toolCalls) || "I could not pick a safe tool for that. Try asking a little more directly.";
+      await ctx.repo.auditTool({
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        userId: ctx.userId,
+        toolName: "chat",
+        argumentsSummary: text,
+        resultSummary: content,
+        model: response.model,
+        estimatedCostUsd: response.estimatedCostUsd
+      });
+
+      requestLogger.info(
+        {
+          durationMs: durationMs(startedAt),
+          finalChars: content.length,
+          fileCount: files.length,
+          memoryEventCount: memoryEvents.length
+        },
+        "Agent request complete"
+      );
+      await recordTraceEvent(ctx, {
+        eventName: "agent.request.complete",
+        summary: `Completed with ${content.length} chars`,
+        metadata: {
+          finalChars: content.length,
+          fileCount: files.length,
+          memoryEventCount: memoryEvents.length
+        },
+        durationMs: durationMs(startedAt)
+      });
+      return {
+        content: cleanResponse(content, ctx.config.maxReplyChars),
+        files: files.length > 0 ? files : undefined,
+        memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
+      };
+    }
+
+    await ctx.repo.auditTool({
+      guildId: ctx.guildId,
+      channelId: ctx.channelId,
+      userId: ctx.userId,
+      toolName: "modelToolRouter",
+      argumentsSummary: text,
+      resultSummary: modelRoutes.map((route) => route.name).join(", "),
+      model: response.model,
+      estimatedCostUsd: response.estimatedCostUsd
+    });
+
+    messages.push({
+      role: "assistant",
+      content: response.content,
+      tool_calls: modelRoutes.map((route) => ({
+        id: route.id,
+        type: "function",
+        function: {
+          name: route.name,
+          arguments: route.argumentsText
+        }
+      }))
+    });
+
+    let skippedRedundantToolThisRound = false;
+    let completedTerminalToolThisRound = false;
+    for (const route of modelRoutes) {
+      const toolUseCount = (toolUseCounts.get(route.name) ?? 0) + 1;
+      toolUseCounts.set(route.name, toolUseCount);
+      const routeKey = toolRouteKey(route);
+      const toolStartedAt = Date.now();
+      requestLogger.info(
+        {
+          toolName: route.name,
+          argumentsPreview: previewText(route.argumentsText, 300)
+        },
+        "Local tool execution starting"
+      );
+      await recordTraceEvent(ctx, {
+        eventName: "agent.tool.started",
+        summary: route.name,
+        metadata: {
+          toolName: route.name,
+          argumentsPreview: previewText(route.argumentsText, 300)
+        }
+      });
+      const isRedundantHistorySearch =
+        route.name === "searchDiscordHistory" &&
+        successfulHistorySearchRoute != null &&
+        isRedundantHistorySearchRoute(successfulHistorySearchRoute, route);
+      const isRepeatedExactToolCall = !isRedundantHistorySearch && successfulToolCallKeys.has(routeKey);
+      const isRedundantToolCall = isRedundantHistorySearch || isRepeatedExactToolCall;
+      const result = isRedundantHistorySearch
+        ? await skippedRedundantHistorySearchResult(ctx, {
+            text,
+            route,
+            previousRoute: successfulHistorySearchRoute!,
+            toolUseCount
+          })
+        : isRepeatedExactToolCall
+          ? await skippedRedundantToolResult(ctx, { text, route, toolUseCount })
+        : await executeLocalToolRoute(ctx, route, text);
+      requestLogger.info(
+        {
+          toolName: route.name,
+          durationMs: durationMs(toolStartedAt),
+          outputChars: result.content.length,
+          fileCount: result.files?.length ?? 0,
+          skippedRedundantToolCall: isRedundantToolCall || undefined
+        },
+        "Local tool execution complete"
+      );
+      await recordTraceEvent(ctx, {
+        eventName: "agent.tool.complete",
+        summary: `${route.name}: ${result.content.length} chars`,
+        metadata: {
+          toolName: route.name,
+          outputChars: result.content.length,
+          fileCount: result.files?.length ?? 0,
+          skippedRedundantToolCall: isRedundantToolCall || undefined
+        },
+        durationMs: durationMs(toolStartedAt)
+      });
+      if (route.name === "searchDiscordHistory" && !isRedundantHistorySearch && historySearchReturnedEvidence(result.content)) {
+        successfulHistorySearchRoute = route;
+      }
+      if (isRedundantToolCall) {
+        skippedRedundantToolThisRound = true;
+      } else {
+        successfulToolCallKeys.add(routeKey);
+      }
+      if ((route.name === "summarizeDiscordHistory" || route.name === "analyzeDiscordData") && !isRedundantToolCall) {
+        completedTerminalToolThisRound = true;
+      }
+      if (result.files?.length) files.push(...result.files);
+      if (!isRedundantToolCall) {
+        memoryEvents.push({
+          role: "tool",
+          content: result.content,
+          metadata: {
+            toolName: route.name,
+            arguments: route.arguments ?? {},
+            files: result.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+          }
+        });
+      }
+      messages.push({
+        role: "tool",
+        tool_call_id: route.id,
+        name: route.name,
+        content: result.content
+      });
+    }
+
+    if (skippedRedundantToolThisRound) {
+      return await synthesizeFinalAnswerWithoutTools(ctx, {
+        reason: "redundant tool call",
+        text,
+        messages,
+        files,
+        memoryEvents,
+        requestLogger,
+        startedAt
+      });
+    }
+
+    if (completedTerminalToolThisRound) {
+      return await synthesizeFinalAnswerWithoutTools(ctx, {
+        reason: "terminal summary tool complete",
+        text,
+        messages,
+        files,
+        memoryEvents,
+        requestLogger,
+        startedAt
+      });
+    }
+  }
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "agentError",
+    argumentsSummary: text,
+    error: "tool_round_limit"
+  });
+
+  requestLogger.warn(
+    {
+      durationMs: durationMs(startedAt),
+      fileCount: files.length,
+      memoryEventCount: memoryEvents.length
+    },
+    "Agent stopped after tool round limit"
+  );
+  await recordTraceEvent(ctx, {
+    eventName: "agent.tool_round_limit",
+    level: "warn",
+    summary: "Agent stopped after tool round limit",
+    metadata: {
+      fileCount: files.length,
+      memoryEventCount: memoryEvents.length
+    },
+    durationMs: durationMs(startedAt)
+  });
+  if (memoryEvents.length > 0) {
+    return await synthesizeFinalAnswerWithoutTools(ctx, {
+      reason: "tool round limit",
+      text,
+      messages,
+      files,
+      memoryEvents,
+      requestLogger,
+      startedAt
+    });
+  }
+  return {
+    content: cleanResponse(
+      "I got stuck calling tools repeatedly. Try asking again with a little more detail.",
+      ctx.config.maxReplyChars
+    ),
+    files: files.length > 0 ? files : undefined,
+    memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
+  };
+}
+
+async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, originalText: string): Promise<AgentResponse> {
+  if (route.name === "listTools") {
+    return { content: cleanResponse(await listTools(ctx), ctx.config.maxReplyChars) };
+  }
+
+  if (route.name === "findDiscordUsers") {
+    return {
+      content: cleanResponse(
+        await findDiscordUsers(ctx, stringArgument(route.arguments, "query") ?? originalText, numberArgument(route.arguments, "limit")),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "findDiscordChannels") {
+    return {
+      content: cleanResponse(
+        await findDiscordChannels(ctx, stringArgument(route.arguments, "query") ?? originalText, numberArgument(route.arguments, "limit")),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "findDiscordRoles") {
+    return {
+      content: cleanResponse(
+        await findDiscordRoles(ctx, stringArgument(route.arguments, "query") ?? originalText, numberArgument(route.arguments, "limit")),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "reportStatus") {
+    return { content: cleanResponse(await reportStatus(ctx), ctx.config.maxReplyChars) };
+  }
+
+  if (route.name === "inspectAgentLogs") {
+    return {
+      content: cleanResponse(
+        await inspectAgentLogs(ctx, {
+          traceId: stringArgument(route.arguments, "traceId"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "inspectRailwayLogs") {
+    return {
+      content: cleanResponse(
+        await inspectRailwayLogs(ctx, {
+          service: stringArgument(route.arguments, "service"),
+          since: stringArgument(route.arguments, "since"),
+          lines: numberArgument(route.arguments, "lines"),
+          filter: stringArgument(route.arguments, "filter")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "createSkillDraft") {
+    return { content: cleanResponse(await createSkillFromRequest(ctx, stringArgument(route.arguments, "instruction") ?? originalText), ctx.config.maxReplyChars) };
+  }
+
+  if (route.name === "openGithubPullRequest") {
+    return {
+      content: cleanResponse(await createToolProposalFromRequest(ctx, stringArgument(route.arguments, "request") ?? originalText), ctx.config.maxReplyChars)
+    };
+  }
+
+  if (route.name === "generateImage") {
+    const prompt = stringArgument(route.arguments, "prompt") ?? originalText;
+    const image = await generateImage(ctx, prompt);
+    return {
+      content: cleanResponse(image.content, ctx.config.maxReplyChars),
+      files: image.files
+    };
+  }
+
+  if (route.name === "summarizeDiscordThread") {
+    return { content: cleanResponse(await summarizeCurrentThread(ctx), ctx.config.maxReplyChars) };
+  }
+
+  if (route.name === "getRecentDiscordMessages") {
+    return {
+      content: cleanResponse(
+        await getRecentDiscordMessages(ctx, {
+          channelIds: stringArrayArgument(route.arguments, "channelIds"),
+          authorIds: stringArrayArgument(route.arguments, "authorIds"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getDiscordMessageContext") {
+    return {
+      content: cleanResponse(
+        await getDiscordMessageContext(ctx, {
+          messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl") ?? originalText,
+          before: numberArgument(route.arguments, "before"),
+          after: numberArgument(route.arguments, "after")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "searchDiscordAttachments") {
+    return {
+      content: cleanResponse(
+        await searchDiscordAttachments(ctx, {
+          query: stringArgument(route.arguments, "query"),
+          channelIds: stringArrayArgument(route.arguments, "channelIds"),
+          authorIds: stringArrayArgument(route.arguments, "authorIds"),
+          contentType: stringArgument(route.arguments, "contentType"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getPinnedMessages") {
+    return {
+      content: cleanResponse(
+        await getPinnedMessages(ctx, {
+          channelIds: stringArrayArgument(route.arguments, "channelIds"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getDiscordStats") {
+    return {
+      content: cleanResponse(
+        await getDiscordStats(ctx, {
+          authorIds: stringArrayArgument(route.arguments, "authorIds"),
+          channelIds: stringArrayArgument(route.arguments, "channelIds"),
+          authorQueries: stringArrayArgument(route.arguments, "authorQueries"),
+          channelQueries: stringArrayArgument(route.arguments, "channelQueries"),
+          dateFrom: stringArgument(route.arguments, "dateFrom"),
+          dateTo: stringArgument(route.arguments, "dateTo"),
+          groupBy: stringArgument(route.arguments, "groupBy"),
+          metric: stringArgument(route.arguments, "metric"),
+          includeBots: booleanArgument(route.arguments, "includeBots"),
+          sort: stringArgument(route.arguments, "sort"),
+          query: stringArgument(route.arguments, "query"),
+          attachmentContentType: stringArgument(route.arguments, "attachmentContentType"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "analyzeDiscordData") {
+    return {
+      content: cleanResponse(
+        await analyzeDiscordData(ctx, {
+          task: stringArgument(route.arguments, "task") ?? originalText,
+          query: stringArgument(route.arguments, "query"),
+          authorIds: stringArrayArgument(route.arguments, "authorIds"),
+          channelIds: stringArrayArgument(route.arguments, "channelIds"),
+          authorQueries: stringArrayArgument(route.arguments, "authorQueries"),
+          channelQueries: stringArrayArgument(route.arguments, "channelQueries"),
+          dateFrom: stringArgument(route.arguments, "dateFrom"),
+          dateTo: stringArgument(route.arguments, "dateTo"),
+          includeBots: booleanArgument(route.arguments, "includeBots"),
+          sampleLimit: numberArgument(route.arguments, "sampleLimit"),
+          resultLimit: numberArgument(route.arguments, "resultLimit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getDiscordChannelTopics") {
+    return {
+      content: cleanResponse(
+        await getDiscordChannelTopics(ctx, {
+          channelIds: stringArrayArgument(route.arguments, "channelIds"),
+          channelQueries: stringArrayArgument(route.arguments, "channelQueries"),
+          dateFrom: stringArgument(route.arguments, "dateFrom"),
+          dateTo: stringArgument(route.arguments, "dateTo"),
+          channelLimit: numberArgument(route.arguments, "channelLimit"),
+          topicsPerChannel: numberArgument(route.arguments, "topicsPerChannel"),
+          samplesPerChannel: numberArgument(route.arguments, "samplesPerChannel"),
+          minChannelMessages: numberArgument(route.arguments, "minChannelMessages"),
+          minMessageChars: numberArgument(route.arguments, "minMessageChars"),
+          includeBots: booleanArgument(route.arguments, "includeBots")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "summarizeDiscordHistory") {
+    return {
+      content: cleanResponse(
+        await summarizeDiscordHistory(ctx, {
+          question: stringArgument(route.arguments, "question") ?? originalText,
+          authorIds: stringArrayArgument(route.arguments, "authorIds"),
+          channelIds: stringArrayArgument(route.arguments, "channelIds"),
+          authorQueries: stringArrayArgument(route.arguments, "authorQueries"),
+          channelQueries: stringArrayArgument(route.arguments, "channelQueries"),
+          dateFrom: stringArgument(route.arguments, "dateFrom"),
+          dateTo: stringArgument(route.arguments, "dateTo"),
+          sampleLimit: numberArgument(route.arguments, "sampleLimit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  return {
+    content: cleanResponse(
+      await answerFromHistory(ctx, stringArgumentPreservingEmpty(route.arguments, "query") ?? originalText, {
+        authorIds: stringArrayArgument(route.arguments, "authorIds"),
+        channelIds: stringArrayArgument(route.arguments, "channelIds"),
+        authorQueries: stringArrayArgument(route.arguments, "authorQueries"),
+        channelQueries: stringArrayArgument(route.arguments, "channelQueries"),
+        dateFrom: stringArgument(route.arguments, "dateFrom"),
+        dateTo: stringArgument(route.arguments, "dateTo"),
+        limit: numberArgument(route.arguments, "limit"),
+        requestText: originalText
+      }),
+      ctx.config.maxReplyChars
+    )
+  };
+}
+
+async function synthesizeFinalAnswerWithoutTools(
+  ctx: ToolContext,
+  input: {
+    reason: string;
+    text: string;
+    messages: ChatMessage[];
+    files: AgentFile[];
+    memoryEvents: NonNullable<AgentResponse["memoryEvents"]>;
+    requestLogger: Logger;
+    startedAt: number;
+  }
+): Promise<AgentResponse> {
+  const finalStartedAt = Date.now();
+  input.requestLogger.info(
+    {
+      reason: input.reason,
+      messageCount: input.messages.length,
+      fileCount: input.files.length,
+      memoryEventCount: input.memoryEvents.length
+    },
+    "Agent forced final synthesis"
+  );
+  await recordTraceEvent(ctx, {
+    eventName: "agent.final_synthesis.started",
+    summary: input.reason,
+    metadata: {
+      reason: input.reason,
+      messageCount: input.messages.length,
+      fileCount: input.files.length,
+      memoryEventCount: input.memoryEvents.length
+    }
+  });
+  const response = await ctx.openRouter.chat({
+    messages: finalSynthesisMessages(input.text, input.memoryEvents),
+    temperature: 0.2,
+    maxTokens: 900
+  });
+  const content = response.content.trim() || toolEvidenceFallback(input.memoryEvents, input.text) || "I found relevant evidence, but I could not compose a clean answer from it.";
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "chat",
+    argumentsSummary: input.text,
+    resultSummary: content,
+    model: response.model,
+    estimatedCostUsd: response.estimatedCostUsd
+  });
+  input.requestLogger.info(
+    {
+      durationMs: durationMs(input.startedAt),
+      finalSynthesisDurationMs: durationMs(finalStartedAt),
+      finalChars: content.length,
+      fileCount: input.files.length,
+      memoryEventCount: input.memoryEvents.length
+    },
+    "Agent request complete"
+  );
+  await recordTraceEvent(ctx, {
+    eventName: "agent.request.complete",
+    summary: `Final synthesis completed with ${content.length} chars`,
+    metadata: {
+      reason: input.reason,
+      finalChars: content.length,
+      fileCount: input.files.length,
+      memoryEventCount: input.memoryEvents.length
+    },
+    durationMs: durationMs(input.startedAt)
+  });
+  return {
+    content: cleanResponse(content, ctx.config.maxReplyChars),
+    files: input.files.length > 0 ? input.files : undefined,
+    memoryEvents: input.memoryEvents.length > 0 ? input.memoryEvents : undefined
+  };
+}
+
+function finalSynthesisMessages(userText: string, memoryEvents: NonNullable<AgentResponse["memoryEvents"]>): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "Write one natural Discord reply using only the provided tool evidence. Lead with the verdict. Be blunt, casual, and decisive; do not pad the answer with neutral caveats or a roll call of weak matches. " +
+        "Do not call, request, name, or mention tools. Do not mention skipped redundant tool calls. Use dates sparingly: show dates only when the user asks about timing, links, sources, proof, or exact messages, " +
+        "or when a date is needed to avoid making old evidence sound current. Do not add a Sources section unless asked. " +
+        "For who-is-best/favorite/most/opinion questions, make a direct call if the evidence supports one. If it does not, say the verdict plainly, like 'No winner' or 'I can't crown anyone from that', then give the shortest reason. " +
+        "When naming people from Discord evidence, only use exact handles or IDs shown in the evidence; do not infer real names or display names. " +
+        (wantsDiscordMessageLinks(userText) ? "The user explicitly asked for message/source links, so include the exact Discord message URLs from the evidence for the relevant messages. " : "") +
+        "For data-analysis results, do not invent secondary stats that were not explicitly computed. If the evidence is weak or insufficient, say that briefly and do not list every weak match."
+    },
+    {
+      role: "user",
+      content: `User request: ${userText}\n\nTool evidence:\n${renderMemoryEventsForFinalSynthesis(memoryEvents)}`
+    }
+  ];
+}
+
+function renderMemoryEventsForFinalSynthesis(memoryEvents: NonNullable<AgentResponse["memoryEvents"]>) {
+  return memoryEvents
+    .filter((event) => event.content.trim())
+    .map((event, index) => {
+      const toolName = typeof event.metadata?.toolName === "string" ? event.metadata.toolName : "tool";
+      return `[${index + 1}] ${toolName}\n${event.content.trim()}`;
+    })
+    .join("\n\n");
+}
+
+async function skippedRedundantHistorySearchResult(
+  ctx: ToolContext,
+  input: { text: string; route: AgentToolRoute; previousRoute: AgentToolRoute; toolUseCount: number }
+): Promise<AgentResponse> {
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "agentToolRepeatGuard",
+    argumentsSummary: input.text,
+    resultSummary:
+      `skipped redundant searchDiscordHistory call ${input.toolUseCount}: ${previewText(input.route.argumentsText, 200)}; ` +
+      `previous: ${previewText(input.previousRoute.argumentsText, 200)}`
+  });
+  return {
+    content:
+      "Skipped redundant history search. Use the earlier searchDiscordHistory evidence already provided in this turn unless a new user, channel, or date filter is needed."
+  };
+}
+
+async function skippedRedundantToolResult(ctx: ToolContext, input: { text: string; route: AgentToolRoute; toolUseCount: number }): Promise<AgentResponse> {
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "agentToolRepeatGuard",
+    argumentsSummary: input.text,
+    resultSummary: `skipped redundant ${input.route.name} call ${input.toolUseCount}: ${previewText(input.route.argumentsText, 200)}`
+  });
+  return {
+    content: `Skipped redundant ${input.route.name} call. Use the earlier ${input.route.name} evidence already provided in this turn.`
+  };
+}
+
+function selectModelToolRoutes(
+  toolCalls: Array<{ id: string; name: string; argumentsText: string }>,
+  originalText: string
+): AgentToolRoute[] {
+  const routes: AgentToolRoute[] = [];
+  for (const call of toolCalls) {
+    const tool = toolByName(call.name);
+    if (!tool) continue;
+    if (tool.mutates && !isExplicitMutationRequest(call.name, originalText)) continue;
+    routes.push({
+      id: call.id,
+      name: tool.name,
+      arguments: parseToolArguments(call.argumentsText),
+      argumentsText: call.argumentsText
+    });
+  }
+  return routes;
+}
+
+function historySearchReturnedEvidence(content: string) {
+  return content.trimStart().startsWith("Discord search evidence:");
+}
+
+function isRedundantHistorySearchRoute(previous: AgentToolRoute, next: AgentToolRoute) {
+  if (historySearchAddsNewFilter(previous.arguments, next.arguments)) return false;
+  if (historySearchBroadensQuery(previous.arguments, next.arguments)) return false;
+  return true;
+}
+
+function historySearchAddsNewFilter(previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined) {
+  return ["authorIds", "channelIds", "dateFrom", "dateTo"].some((key) => canonicalToolFilter(previous?.[key]) !== canonicalToolFilter(next?.[key]) && canonicalToolFilter(next?.[key]) !== "");
+}
+
+function historySearchBroadensQuery(previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined) {
+  return !isBroadHistoryQuery(previous?.query) && isBroadHistoryQuery(next?.query);
+}
+
+function isBroadHistoryQuery(value: unknown) {
+  if (typeof value !== "string") return false;
+  const cleaned = value
+    .toLowerCase()
+    .replace(/["'`“”‘’]/g, "")
+    .replace(/[?.!,;:()[\]{}]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned === "" || cleaned === "*" || /^(?:recent|recently|recentyl|lately|latest|current|currently|now|these days|this week|this month|this year)$/.test(cleaned);
+}
+
+function canonicalToolFilter(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string | number => typeof item === "string" || typeof item === "number")
+      .map(String)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .sort()
+      .join(",");
+  }
+  if (typeof value === "string" || typeof value === "number") return String(value).trim();
+  return "";
+}
+
+async function recordTraceEvent(
+  ctx: ToolContext,
+  input: {
+    eventName: string;
+    level?: "debug" | "info" | "warn" | "error";
+    summary?: string | null;
+    metadata?: Record<string, unknown>;
+    durationMs?: number | null;
+  }
+) {
+  const recorder = (ctx.repo as unknown as { recordTraceEvent?: (event: typeof input) => Promise<void> }).recordTraceEvent;
+  if (!recorder) return;
+  await recorder.call(ctx.repo, input).catch((error) => {
+    logger.warn({ err: error, eventName: input.eventName }, "Failed to record agent trace event");
+  });
+}
+
+function toolRouteKey(route: AgentToolRoute): string {
+  return `${route.name}:${JSON.stringify(canonicalToolArguments(route.arguments ?? {}))}`;
+}
+
+function canonicalToolArguments(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items = value.map(canonicalToolArguments);
+    if (items.every((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")) {
+      return [...items].sort((a, b) => String(a).localeCompare(String(b)));
+    }
+    return items;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalToolArguments(nested)])
+    );
+  }
+  return value ?? null;
+}
+
+function blockedToolFallback(toolCalls: Array<{ name: string }>) {
+  const blockedMutation = toolCalls.find((call) => call.name === "createSkillDraft" || call.name === "openGithubPullRequest");
+  if (!blockedMutation) return undefined;
+  if (blockedMutation.name === "createSkillDraft") {
+    return "I can create or update a skill, but ask me directly to learn or remember it first.";
+  }
+  return "I can propose tool/code changes, but ask me directly to add, build, create, or implement the tool first.";
+}
+
+function toolEvidenceFallback(memoryEvents: NonNullable<AgentResponse["memoryEvents"]>, userText = "") {
+  const latest = [...memoryEvents].reverse().find((event) => event.content.trim());
+  if (!latest) return undefined;
+  const latestSummary = [...memoryEvents].reverse().find((event) => {
+    const toolName = typeof event.metadata?.toolName === "string" ? event.metadata.toolName : "";
+    return (
+      ["summarizeDiscordHistory", "getDiscordChannelTopics", "summarizeDiscordThread", "analyzeDiscordData"].includes(toolName) &&
+      isUsefulSummaryContent(event.content)
+    );
+  });
+  if (latestSummary) return latestSummary.content.trim();
+  const results = parseDiscordEvidenceResults(latest.content).slice(0, 5);
+  if (results.length === 0) return undefined;
+  const includeLinks = wantsDiscordMessageLinks(userText);
+  const filter = latest.content.match(/^Applied date filter:\s*(.+)$/m)?.[1]?.trim();
+  const filterPhrase = fallbackFilterPhrase(filter);
+  const header = includeLinks
+    ? filterPhrase
+      ? `I found matching Discord messages ${filterPhrase}:`
+      : "I found matching Discord messages:"
+    : filterPhrase
+      ? `No solid answer from the indexed messages ${filterPhrase}. Weak matches:`
+      : "No solid answer from the indexed messages. Weak matches:";
+  return [
+    header,
+    ...results.map((result) => {
+      const link = includeLinks && result.link ? `\n  ${result.link}` : "";
+      const date = includeLinks ? ` on ${result.date}` : "";
+      return `- ${result.author}${date}: "${previewText(result.content, 180)}"${link}`;
+    }),
+    "",
+    includeLinks ? "I would treat these as evidence snippets, not a complete conclusion." : "I would not crown anyone from that."
+  ].join("\n");
+}
+
+function isUsefulSummaryContent(content: string) {
+  const trimmed = content.trim();
+  return trimmed.length > 0 && !/^Done\.$/i.test(trimmed);
+}
+
+function parseDiscordEvidenceResults(content: string) {
+  const results: Array<{ author: string; date: string; content: string; link: string | null }> = [];
+  const lines = content.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^\[\d+\]\s+(.+?)\s+(?:channel=\S+\s+)?at\s+(\S+)/);
+    if (!match) continue;
+    const [, author, timestamp] = match;
+    const snippet = lines[index + 1]?.trim();
+    if (!snippet || /^https?:\/\//i.test(snippet)) continue;
+    results.push({
+      author,
+      date: timestamp.slice(0, 10),
+      content: snippet,
+      link: discordMessageLinkFromLines(lines, index + 2)
+    });
+  }
+  return results;
+}
+
+function discordMessageLinkFromLines(lines: string[], startIndex: number) {
+  for (let index = startIndex; index < Math.min(lines.length, startIndex + 3); index += 1) {
+    const line = lines[index]?.trim() ?? "";
+    const match = line.match(/https:\/\/discord(?:app)?\.com\/channels\/[^\s]+\/[^\s]+\/[^\s]+/i);
+    if (match) return match[0];
+    if (/^\[\d+\]\s+/.test(line)) return null;
+  }
+  return null;
+}
+
+function fallbackFilterPhrase(filter: string | undefined) {
+  if (!filter || filter === "none") return "";
+  if (filter.startsWith("from ")) return `since ${filter.slice("from ".length)}`;
+  if (filter.startsWith("until ")) return `through ${filter.slice("until ".length)}`;
+  return `from ${filter}`;
+}
+
+function wantsDiscordMessageLinks(text: string) {
+  return (
+    /\b(?:link|links|url|urls|source|sources|receipt|receipts|proof|evidence)\b/i.test(text) &&
+    /\b(?:message|messages|post|posts|source|sources|link|links|url|urls|receipt|receipts|proof|evidence)\b/i.test(text)
+  );
+}
+
+function isExplicitMutationRequest(toolName: string, text: string) {
+  if (toolName === "createSkillDraft") return isSkillRequest(text);
+  if (toolName === "openGithubPullRequest") return isToolChangeRequest(text);
+  return false;
+}
+
+function parseToolArguments(argumentsText: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(argumentsText);
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringArgument(args: Record<string, unknown> | undefined, key: string) {
+  const value = args?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringArgumentPreservingEmpty(args: Record<string, unknown> | undefined, key: string) {
+  const value = args?.[key];
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+function stringArrayArgument(args: Record<string, unknown> | undefined, key: string) {
+  const value = args?.[key];
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  return strings.length > 0 ? strings : undefined;
+}
+
+function numberArgument(args: Record<string, unknown> | undefined, key: string) {
+  const value = args?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return undefined;
+}
+
+function booleanArgument(args: Record<string, unknown> | undefined, key: string) {
+  const value = args?.[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (/^(true|yes|1)$/i.test(value)) return true;
+    if (/^(false|no|0)$/i.test(value)) return false;
+  }
+  return undefined;
+}
+
+function chatMessages(text: string, skills: string, sessionMessages: ConversationMessage[] = []): ChatMessage[] {
+  return [
+    {
+      role: "system" as const,
+      content:
+        "You are Discord AI Agent, a private Discord server assistant. Be useful, concise, blunt, and casual. Lead with the answer or verdict. Do not be neutral for neutrality's sake. " +
+        "You can call local Discord AI Agent function tools and OpenRouter-hosted server tools. Let tool calls do the work when they match the user's request. " +
+        "For private server memory, call searchDiscordHistory. Never invent Discord history. " +
+        "After searchDiscordHistory returns evidence, answer from that evidence instead of searching again unless the next search adds a specific user, channel, or date filter. " +
+        "When answering from Discord search evidence, use dates sparingly; show them only when the user asks about timing, links, sources, proof, or exact messages, or when needed to avoid making old messages sound recent. " +
+        "When naming people from Discord search evidence, only use exact handles or IDs shown in the tool output; do not infer real names or display names. " +
+        "For recent/current/latest Discord-history questions, use an explicit date window instead of searching all indexed history; default vague 'recently' to about the last year. " +
+        "When a user names a Discord person/channel/role without an exact mention or ID, use findDiscordUsers/findDiscordChannels/findDiscordRoles before filtered history searches. " +
+        "For requests to link, show, or list a person's messages, use searchDiscordHistory with authorQueries/authorIds; do not search for the username as ordinary message text. " +
+        "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext for Discord message links, searchDiscordAttachments for files/images, getPinnedMessages for pins, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, and activity over time. " +
+        "For ad hoc Discord data-analysis questions that require inferring a repeated text format, extracting values, deduping, or doing exact math over many messages, use analyzeDiscordData instead of searchDiscordHistory. Give it the user's task and a broad keyword query; it will sample visible messages, infer the extraction plan, and run the aggregation. " +
+        "For broad recaps like what a person or channel has been up to, what happened recently, or summarize activity over a period, use summarizeDiscordHistory after resolving ambiguous users/channels. " +
+        "For recurring topics, themes, memes, bits, or what people usually talk about in channels, use getDiscordChannelTopics, not getDiscordStats groupBy=message. " +
+        "For channel stats, groupBy=channel rolls thread/forum-post messages up into their parent channels; use groupBy=thread only when the user asks about threads or forum posts separately. " +
+        "For least/fewest/lowest stats, use getDiscordStats with sort=countAsc. For channel popularity normalized by how long channels have existed, use metric=messagesPerChannelDay and groupBy=channel. " +
+        "For follow-up recalculations of a ranking, call getDiscordStats again over all visible data unless the user explicitly asks to limit it to the previously listed items. " +
+        "For favorite/best/most popular message questions, use getDiscordStats with metric=reactions and groupBy=message as evidence, then make a clear pick when the evidence supports one. " +
+        "For current public information, news, schedules, prices, releases, or external facts, use web_search and datetime when useful. " +
+        "For URLs, use web_fetch when reading the page would improve the answer. " +
+        "For Discord image requests, call generateImage so the result can be attached. " +
+        "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +
+        "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. " +
+        "For owner debugging of Railway deployment logs, startup failures, worker crashes, missing traces, or hosting/runtime errors, call inspectRailwayLogs. " +
+        "After tools return, synthesize one natural Discord reply. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
+        "Only call mutating tools when the user explicitly asks to learn/update a skill or create/propose a tool. " +
+        "Use prior channel conversation context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
+        "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
+    },
+    { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
+    ...sessionMessagesForPrompt(sessionMessages),
+    { role: "user" as const, content: text }
+  ];
+}
+
+function sessionMessagesForPrompt(sessionMessages: ConversationMessage[]): ChatMessage[] {
+  if (sessionMessages.length === 0) return [];
+  return [
+    {
+      role: "system",
+      content:
+        "Recent persistent memory for this Discord channel follows. It may include earlier user mentions, Discord AI Agent replies, and local tool results. " +
+        "Use it for continuity, references like 'that', and questions about what Discord AI Agent previously did in this channel. " +
+        "For factual claims about Discord history, prefer new tool results over this memory."
+    },
+    ...sessionMessages.map(sessionMessageToChatMessage)
+  ];
+}
+
+function sessionMessageToChatMessage(message: ConversationMessage): ChatMessage {
+  if (message.role === "assistant") {
+    return { role: "assistant", content: `[Earlier Discord AI Agent reply; not authoritative for Discord facts] ${message.content}` };
+  }
+
+  if (message.role === "tool") {
+    const toolName = typeof message.metadata.toolName === "string" ? message.metadata.toolName : "tool";
+    return {
+      role: "assistant",
+      content: `[Earlier ${toolName} result; not authoritative unless refreshed] ${message.content}`
+    };
+  }
+
+  const author = message.authorDisplayName || message.authorId || "User";
+  return {
+    role: "user",
+    content: `${author}: ${message.content}`
+  };
+}
+
+function isSkillRequest(text: string) {
+  return /\b(learn this|remember this for next time|create a skill|update a skill|add a skill)\b/i.test(text);
+}
+
+function isToolChangeRequest(text: string) {
+  return /\b(add|build|create|implement)\b.*\b(tool|integration|connector)\b/i.test(text);
+}

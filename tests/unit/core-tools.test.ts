@@ -1,0 +1,1056 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  analyzeDiscordData,
+  answerFromHistory,
+  extractHistorySearchSyntax,
+  findDiscordRoles,
+  findDiscordUsers,
+  extractHistoryFilters,
+  extractSkillRequest,
+  generateImage,
+  getDiscordChannelTopics,
+  getDiscordStats,
+  inspectAgentLogs,
+  inspectRailwayLogs,
+  reportStatus,
+  summarizeCurrentThread
+} from "../../src/tools/coreTools.js";
+import type { ToolContext } from "../../src/tools/types.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe("extractSkillRequest", () => {
+  it("derives a stable skill name from learn-this requests", () => {
+    expect(extractSkillRequest("learn this for next time: movie night votes use the poll")).toEqual({
+      action: "add",
+      skillName: "movie-night-votes-use-the-poll",
+      instruction: "movie night votes use the poll"
+    });
+  });
+
+  it("parses explicit create skill requests", () => {
+    expect(extractSkillRequest("create a skill called movie night: use the poll")).toEqual({
+      action: "add",
+      skillName: "movie-night",
+      instruction: "use the poll"
+    });
+  });
+
+  it("parses explicit update skill requests", () => {
+    expect(extractSkillRequest("update skill minecraft server: check the pinned post first")).toEqual({
+      action: "update",
+      skillName: "minecraft-server",
+      instruction: "check the pinned post first"
+    });
+  });
+});
+
+describe("extractHistoryFilters", () => {
+  it("extracts absolute since and before dates", () => {
+    const filters = extractHistoryFilters("what did we say about pizza since 2024-01-01 before 2024-02-01");
+    expect(filters.dateFrom?.toISOString()).toBe("2024-01-01T00:00:00.000Z");
+    expect(filters.dateTo?.toISOString()).toBe("2024-02-01T23:59:59.999Z");
+  });
+
+  it("ignores messages without absolute date filters", () => {
+    expect(extractHistoryFilters("what did we say last week")).toEqual({
+      dateFrom: undefined,
+      dateTo: undefined
+    });
+  });
+
+  it("extracts colon-style Discord history filters", () => {
+    const filters = extractHistorySearchSyntax('from:riverrunner in:"general chat" after:2024-01-01 before:2024-02-01 pizza');
+
+    expect(filters.query).toBe("pizza");
+    expect(filters.authorQueries).toEqual(["riverrunner"]);
+    expect(filters.channelQueries).toEqual(["general chat"]);
+    expect(filters.dateFrom?.toISOString()).toBe("2024-01-01T00:00:00.000Z");
+    expect(filters.dateTo?.toISOString()).toBe("2024-02-01T23:59:59.999Z");
+  });
+});
+
+describe("Discord lookup tools", () => {
+  it("formats user lookup matches from visible indexed history", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        findDiscordUsers: vi.fn(async () => [
+          {
+            id: "123",
+            username: "riverrunner",
+            globalName: "River",
+            aliases: ["riverphone"],
+            isBot: false,
+            messageCount: 42,
+            lastMessageAt: new Date("2024-01-01T00:00:00Z"),
+            score: 90
+          }
+        ]),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await findDiscordUsers(ctx, "connor");
+
+    expect(response).toContain("River / @riverrunner id=123");
+    expect(response).toContain("aliases=riverphone");
+    expect(ctx.repo.findDiscordUsers).toHaveBeenCalledWith({
+      guildId: "guild",
+      visibleChannelIds: ["channel"],
+      query: "connor",
+      limit: 8
+    });
+  });
+
+  it("finds roles from the live Discord role snapshot", async () => {
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      discordRoles: [
+        { id: "1", name: "admin", position: 2, managed: false, memberCount: 2 },
+        { id: "2", name: "cool people", position: 1, managed: false, memberCount: 5 }
+      ]
+    } as unknown as ToolContext;
+
+    const response = await findDiscordRoles(ctx, "cool");
+
+    expect(response).toContain("cool people id=2");
+    expect(response).not.toContain("admin");
+  });
+});
+
+describe("getDiscordStats", () => {
+  it("formats permission-filtered indexed Discord stats", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        discordStats: vi.fn(async () => ({
+          totalMessages: 10,
+          totalAttachments: 2,
+          totalReactions: 4,
+          userCount: 3,
+          channelCount: 1,
+          activeDays: 5,
+          metric: "messages",
+          groupBy: "overall",
+          rows: [{ key: "overall", label: "All visible messages", value: 10 }],
+          topUsers: [{ authorId: "u1", authorUsername: "alice", messageCount: 7 }],
+          topChannels: [{ channelId: "channel", channelName: "general", messageCount: 10 }]
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getDiscordStats(ctx);
+
+    expect(response).toContain("Messages: 10");
+    expect(response).toContain("@alice: 7");
+    expect(response).toContain("#general: 10");
+  });
+
+  it("passes filters and grouping options through to stats", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        findDiscordUsers: vi.fn(async () => [{ id: "hunter-id", username: "jordan1323", globalName: "Jordan", isBot: false, messageCount: 12 }]),
+        discordStats: vi.fn(async () => ({
+          totalMessages: 12,
+          totalAttachments: 0,
+          totalReactions: 0,
+          userCount: 1,
+          channelCount: 2,
+          activeDays: 3,
+          metric: "messages",
+          groupBy: "channel",
+          rows: [
+            {
+              key: "channel-a",
+              label: "general",
+              value: 9,
+              channelId: "channel-a",
+              channelName: "general",
+              authorId: null,
+              authorUsername: null,
+              periodStart: null
+            }
+          ],
+          topUsers: [],
+          topChannels: []
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getDiscordStats(ctx, {
+      authorQueries: ["hunter"],
+      groupBy: "channel",
+      metric: "messages",
+      limit: 20
+    });
+
+    expect(response).toContain("Grouped by: channel");
+    expect(response).toContain("#general: 9");
+    expect(ctx.repo.discordStats).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorIds: ["hunter-id"],
+        groupBy: "channel",
+        metric: "messages",
+        limit: 20
+      })
+    );
+  });
+
+  it("formats message-level reaction stats with exact message timestamps", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        discordStats: vi.fn(async () => ({
+          totalMessages: 1,
+          totalAttachments: 0,
+          totalReactions: 7,
+          userCount: 1,
+          channelCount: 1,
+          activeDays: 1,
+          metric: "reactions",
+          groupBy: "message",
+          rows: [
+            {
+              key: "message-1",
+              label: "pizza ledger",
+              value: 7,
+              authorId: "hunter-id",
+              authorUsername: "jordan1323",
+              channelId: "channel",
+              channelName: "lounge",
+              messageId: "message-1",
+              messageLink: "https://discord.com/channels/guild/channel/message-1",
+              periodStart: new Date("2026-04-14T21:17:47.316Z")
+            }
+          ],
+          topUsers: [],
+          topChannels: []
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getDiscordStats(ctx, {
+      groupBy: "message",
+      metric: "reactions",
+      limit: 5
+    });
+
+    expect(response).toContain("Grouped by: message");
+    expect(response).toContain('@jordan1323 in #lounge at 2026-04-14T21:17:47.316Z: "pizza ledger": 7');
+  });
+
+  it("formats normalized channel messages-per-day stats with denominator details", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        discordStats: vi.fn(async () => ({
+          totalMessages: 336715,
+          totalAttachments: 0,
+          totalReactions: 0,
+          userCount: 12,
+          channelCount: 1,
+          activeDays: 3000,
+          metric: "messagesPerChannelDay",
+          groupBy: "channel",
+          rows: [
+            {
+              key: "channel",
+              label: "lounge",
+              value: 84.2531,
+              authorId: null,
+              authorUsername: null,
+              channelId: "channel",
+              channelName: "lounge",
+              messageId: null,
+              messageLink: null,
+              periodStart: null,
+              messageCount: 336715,
+              activeDays: 3000,
+              channelCreatedAt: new Date("2015-08-15T00:00:00.000Z"),
+              channelAgeDays: 3996
+            }
+          ],
+          topUsers: [],
+          topChannels: []
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getDiscordStats(ctx, {
+      groupBy: "channel",
+      metric: "messagesPerChannelDay",
+      sort: "countDesc"
+    });
+
+    expect(response).toContain("Metric: messages per channel day");
+    expect(response).toContain("#lounge: 84.2531 messages/channel day (336,715 messages over 3,996 days since 2015-08-15)");
+  });
+});
+
+describe("analyzeDiscordData", () => {
+  it("infers and runs generic extracted data analytics from sampled messages", async () => {
+    const chat = vi.fn(async () => ({
+      content: JSON.stringify({
+        pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
+        query: "wordle",
+        groupBy: "user",
+        metric: "numericAverage",
+        sort: "valueAsc",
+        captureIndex: 1,
+        numericCaptureIndex: 2,
+        numericValueMap: { X: 7 },
+        distinctBy: ["author", "capture"],
+        dedupeOrder: "numericAsc",
+        minMatches: 20,
+        explanation: "Parse Wordle puzzle id and score, dedupe by user+puzzle, and rank by average score."
+      }),
+      model: "planner-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        keywordSearch: vi.fn(async () => [
+          {
+            messageId: "message-1",
+            guildId: "guild",
+            channelId: "channel",
+            authorId: "user-1",
+            authorUsername: "fixtureuser",
+            content: "Wordle 1 3/6",
+            normalizedContent: "Wordle 1 3/6",
+            createdAt: new Date("2026-01-01T00:00:00Z"),
+            score: 1,
+            link: "https://discord.com/channels/guild/channel/message-1"
+          }
+        ]),
+        discordPatternStats: vi.fn(async () => ({
+          pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
+          query: "wordle",
+          metric: "numericAverage",
+          groupBy: "user",
+          captureIndex: 1,
+          numericCaptureIndex: 2,
+          totalMatches: 34,
+          totalGroups: 1,
+          minMatches: 20,
+          rows: [
+            {
+              key: "user-1",
+              label: "fixtureuser",
+              value: 3.848,
+              matchCount: 34,
+              distinctAuthors: 1,
+              numericCount: 34,
+              numericAverage: 3.848,
+              numericMin: 2,
+              numericMax: 7,
+              numericSum: 130.832,
+              authorId: "user-1",
+              authorUsername: "fixtureuser",
+              channelId: null,
+              channelName: null,
+              captureValue: null,
+              periodStart: null,
+              firstMatchedAt: new Date("2025-01-01T00:00:00Z"),
+              lastMatchedAt: new Date("2026-06-01T00:00:00Z")
+            }
+          ]
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await analyzeDiscordData(ctx, { task: "who is the top wordle player in this discord", query: "wordle" });
+
+    expect(response).toContain("Discord data analysis:");
+    expect(response).toContain("Inferred plan: Parse Wordle puzzle id");
+    expect(response).toContain("Metric: numeric average");
+    expect(response).toContain("@fixtureuser: 3.848 numeric average");
+    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "guild",
+        visibleChannelIds: ["channel"],
+        query: "wordle",
+        limit: 80
+      })
+    );
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining("Return only compact JSON") }),
+          expect.objectContaining({ content: expect.stringContaining("Wordle 1 3/6") })
+        ])
+      })
+    );
+    expect(ctx.repo.discordPatternStats).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "guild",
+        visibleChannelIds: ["channel"],
+        pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
+        groupBy: "user",
+        metric: "numericAverage",
+        sort: "valueAsc",
+        captureIndex: 1,
+        numericCaptureIndex: 2,
+        numericValueMap: { X: 7 },
+        distinctBy: ["author", "capture"],
+        dedupeOrder: "numericAsc",
+        minMatches: 20
+      })
+    );
+  });
+});
+
+describe("getDiscordChannelTopics", () => {
+  it("summarizes recurring channel topics from embedded sampled messages", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const chat = vi.fn(async () => ({
+      content: "#stonks: job hunting, startup links, and work complaints.",
+      model: "test-chat",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        discordChannelTopicCandidates: vi.fn(async () => [
+          topicCandidate("startup jobs are brutal", [1, 0]),
+          topicCandidate("interview loops and job offers", [0.95, 0.05]),
+          topicCandidate("work complaints are back", [0.9, 0.1]),
+          topicCandidate("nvda earnings and markets", [0, 1]),
+          topicCandidate("stocks are ripping again", [0.05, 0.95]),
+          topicCandidate("market close was wild", [0.1, 0.9])
+        ]),
+        auditTool
+      },
+      openRouter: { chat },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getDiscordChannelTopics(ctx, {
+      channelLimit: 1,
+      topicsPerChannel: 2,
+      samplesPerChannel: 20
+    });
+
+    expect(response).toContain("job hunting");
+    expect(ctx.repo.discordChannelTopicCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelLimit: 1,
+        samplesPerChannel: 20
+      })
+    );
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining("#stonks") }),
+          expect.objectContaining({ content: expect.stringContaining("startup jobs are brutal") })
+        ])
+      })
+    );
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDiscordChannelTopics" }));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "composeChannelTopics", model: "test-chat" }));
+  });
+});
+
+describe("answerFromHistory", () => {
+  it("returns a deterministic no-results answer without asking the model to compose from empty evidence", async () => {
+    const chat = vi.fn();
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxHistoryResults: 10,
+        openRouter: { apiKey: "test-key", embeddingModel: "test-embed" },
+        embeddingDimensions: 2
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        keywordSearch: vi.fn(async () => []),
+        vectorSearch: vi.fn(async () => []),
+        getCrawlStatus: vi.fn(async () => [{ status: "running", channels: 2, messages: 10 }]),
+        auditTool
+      },
+      openRouter: {
+        embed: vi.fn(async () => [[0.1, 0.2]]),
+        chat
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await answerFromHistory(ctx, "what did we say about pizza?");
+
+    expect(response).toContain("did not find matching indexed Discord messages");
+    expect(response).toContain("running=2 channels/10 messages");
+    expect(chat).not.toHaveBeenCalled();
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "searchDiscordHistory" }));
+  });
+
+  it("returns search evidence without asking the model to compose", async () => {
+    const result = searchResult();
+    const ctx = historyAnswerContext({
+      keywordResults: [
+        result,
+        searchResult({
+          messageId: "message-2",
+          createdAt: new Date("2025-06-15T00:00:00.000Z"),
+          normalizedContent: "pizza party happened later",
+          link: "https://discord.com/channels/guild/channel/message-2"
+        })
+      ]
+    });
+
+    const response = await answerFromHistory(ctx, "what did we say about pizza?");
+
+    expect(response).toContain("Discord search evidence:");
+    expect(response).toContain("Question: what did we say about pizza?");
+    expect(response).toContain("Effective query: pizza");
+    expect(response).toContain("Applied date filter: none");
+    expect(response).toContain("Evidence dates: 2024-01-01 to 2025-06-15");
+    expect(response).toContain("Evidence authors: @alice");
+    expect(response).toContain("These are historical Discord messages, not necessarily recent/current events.");
+    expect(response).toContain("use only the exact @handles or IDs shown");
+    expect(response).toContain("The user did not ask for sources");
+    expect(response).toContain("pizza night is friday");
+    expect(response).toContain(result.link);
+    expect(ctx.openRouter.chat).not.toHaveBeenCalled();
+    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "searchDiscordHistory" }));
+    expect(ctx.repo.auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "composeHistoryAnswer" }));
+  });
+
+  it("marks source requests in the returned evidence", async () => {
+    const result = searchResult();
+    const ctx = historyAnswerContext({
+      keywordResults: [result]
+    });
+
+    const response = await answerFromHistory(ctx, "what did we say about pizza? show sources");
+
+    expect(response).toContain("The user asked for sources");
+    expect(response).toContain(result.link);
+  });
+
+  it("marks message-link requests in the returned evidence", async () => {
+    const result = searchResult();
+    const ctx = historyAnswerContext({
+      keywordResults: [result]
+    });
+
+    const response = await answerFromHistory(ctx, "link to the message about pizza");
+
+    expect(response).toContain("The user asked for sources");
+    expect(response).toContain(result.link);
+  });
+
+  it("treats filter-only from: syntax as a broad author scan", async () => {
+    const result = searchResult({ authorId: "rare-user-id", authorUsername: "rare_guest_0001", normalizedContent: "Wordle 218 1/6" });
+    const ctx = historyAnswerContext({
+      keywordResults: [],
+      recentResults: [result],
+      userMatches: [{ id: "rare-user-id", username: "rare_guest_0001", globalName: null, aliases: [], isBot: false, messageCount: 4, lastMessageAt: null, score: 90 }]
+    });
+
+    const response = await answerFromHistory(ctx, "from:rare_guest_0001");
+
+    expect(response).toContain("Effective query: (recent messages)");
+    expect(response).toContain("Wordle 218 1/6");
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorIds: ["rare-user-id"]
+      })
+    );
+  });
+
+  it("treats resolved link-to-person requests as broad author scans", async () => {
+    const result = searchResult({ authorId: "rare-user-id", authorUsername: "rare_guest_0001", normalizedContent: "Wordle 218 1/6" });
+    const ctx = historyAnswerContext({
+      keywordResults: [],
+      recentResults: [result]
+    });
+
+    const response = await answerFromHistory(ctx, "link to the message from rare_guest_0001", {
+      authorIds: ["rare-user-id"],
+      requestText: "link to the message from rare_guest_0001"
+    });
+
+    expect(response).toContain("Effective query: (recent messages)");
+    expect(response).toContain(result.link);
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorIds: ["rare-user-id"]
+      })
+    );
+    expect(ctx.repo.keywordSearch).not.toHaveBeenCalled();
+  });
+
+  it("treats username-only queries as broad scans when the user asked for links and the author is resolved", async () => {
+    const result = searchResult({ authorId: "rare-user-id", authorUsername: "rare_guest_0001", normalizedContent: "is the ram all the way in" });
+    const ctx = historyAnswerContext({
+      keywordResults: [],
+      recentResults: [result]
+    });
+
+    const response = await answerFromHistory(ctx, "rare_guest_0001", {
+      authorIds: ["rare-user-id"],
+      requestText: "bro i want the source link for pony's message"
+    });
+
+    expect(response).toContain("Effective query: (recent messages)");
+    expect(response).toContain(result.link);
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorIds: ["rare-user-id"]
+      })
+    );
+  });
+
+  it("keeps the topic query when a resolved link request asks about a topic", async () => {
+    const result = searchResult({ authorId: "rare-user-id", authorUsername: "rare_guest_0001", normalizedContent: "pizza night is friday" });
+    const ctx = historyAnswerContext({
+      keywordResults: [result],
+      recentResults: []
+    });
+
+    const response = await answerFromHistory(ctx, "link to the message from rare_guest_0001 about pizza", {
+      authorIds: ["rare-user-id"],
+      requestText: "link to the message from rare_guest_0001 about pizza"
+    });
+
+    expect(response).toContain("Effective query: pizza");
+    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "pizza",
+        authorIds: ["rare-user-id"]
+      })
+    );
+    expect(ctx.repo.recentMessagesFromChannels).not.toHaveBeenCalled();
+  });
+
+  it("does not treat normal uses of the word source as source requests", async () => {
+    const result = searchResult({ normalizedContent: "open source tools are useful" });
+    const ctx = historyAnswerContext({
+      keywordResults: [result]
+    });
+
+    const response = await answerFromHistory(ctx, "what did we say about open source?");
+
+    expect(response).toContain("The user did not ask for sources");
+    expect(response).toContain("open source tools are useful");
+  });
+
+  it("defaults vague recent history questions to the last year", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-27T12:00:00.000Z"));
+    const result = searchResult({ createdAt: new Date("2025-09-15T15:36:25.540Z") });
+    const ctx = historyAnswerContext({
+      keywordResults: [result]
+    });
+
+    const response = await answerFromHistory(ctx, "has anyone changed jobs or careers recentyl");
+
+    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dateFrom: new Date("2025-06-27T00:00:00.000Z"),
+        dateTo: undefined
+      })
+    );
+    expect(response).toContain("Applied date filter: from 2025-06-27");
+  });
+});
+
+function historyAnswerContext(input: { keywordResults: any[]; recentResults?: any[]; userMatches?: any[] }) {
+  const auditTool = vi.fn(async () => undefined);
+  return {
+    config: {
+      maxHistoryResults: 10,
+      openRouter: { apiKey: "test-key", embeddingModel: "test-embed" },
+      embeddingDimensions: 2
+    },
+    repo: {
+      getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+      findDiscordUsers: vi.fn(async () => input.userMatches ?? []),
+      keywordSearch: vi.fn(async () => input.keywordResults),
+      vectorSearch: vi.fn(async () => []),
+      recentMessagesFromChannels: vi.fn(async () => input.recentResults ?? []),
+      getCrawlStatus: vi.fn(async () => []),
+      auditTool
+    },
+    openRouter: {
+      embed: vi.fn(async () => [[0.1, 0.2]]),
+      chat: vi.fn()
+    },
+    github: {},
+    guildId: "guild",
+    channelId: "channel",
+    userId: "user",
+    userDisplayName: "User",
+    visibleChannelIds: ["channel"]
+  } as any;
+}
+
+function searchResult(overrides: Record<string, unknown> = {}) {
+  return {
+    messageId: "message-1",
+    guildId: "guild",
+    channelId: "channel",
+    authorId: "alice-id",
+    authorUsername: "alice",
+    content: "pizza night is friday",
+    normalizedContent: "pizza night is friday",
+    createdAt: new Date("2024-01-01T00:00:00.000Z"),
+    score: 1,
+    link: "https://discord.com/channels/guild/channel/message-1",
+    ...overrides
+  };
+}
+
+function topicCandidate(content: string, embedding: number[]) {
+  return {
+    channelId: "stonks",
+    channelName: "stonks",
+    messageId: `message-${content}`,
+    authorUsername: "alice",
+    normalizedContent: content,
+    createdAt: new Date("2024-01-01T00:00:00.000Z"),
+    embedding,
+    channelMessageCount: 1000
+  };
+}
+
+describe("generateImage", () => {
+  it("uses returned media types for attached image files and audits estimated cost", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      repo: { auditTool },
+      openRouter: {
+        generateImage: vi.fn(async () => ({
+          model: "test/image",
+          estimatedCostUsd: 0.031,
+          raw: {},
+          data: [
+            {
+              b64_json: Buffer.from("<svg></svg>").toString("base64"),
+              media_type: "image/svg+xml"
+            }
+          ]
+        }))
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user"
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, "logo");
+
+    expect(result.files[0]).toMatchObject({
+      name: expect.stringMatching(/\.svg$/),
+      contentType: "image/svg+xml"
+    });
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "generateImage",
+        estimatedCostUsd: 0.031
+      })
+    );
+  });
+
+  it("fetches returned image URLs into attachments when possible", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => "image/webp" },
+        arrayBuffer: async () => Buffer.from("image-data").buffer
+      }))
+    );
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: {
+        generateImage: vi.fn(async () => ({
+          model: "test/image",
+          raw: {},
+          data: [{ url: "https://example.com/generated.webp" }]
+        }))
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user"
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, "logo");
+
+    expect(result.content).toBe("Generated image for: logo");
+    expect(result.files[0]).toMatchObject({
+      name: expect.stringMatching(/\.webp$/),
+      contentType: "image/webp"
+    });
+  });
+
+  it("falls back to image URLs when attachment fetching fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 404,
+        headers: { get: () => "text/html" },
+        arrayBuffer: async () => new ArrayBuffer(0)
+      }))
+    );
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: {
+        generateImage: vi.fn(async () => ({
+          model: "test/image",
+          raw: {},
+          data: [{ url: "https://example.com/generated.png" }]
+        }))
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user"
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, "logo");
+
+    expect(result.files).toEqual([]);
+    expect(result.content).toContain("https://example.com/generated.png");
+  });
+});
+
+describe("reportStatus", () => {
+  it("includes logged model cost estimates", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      repo: {
+        health: vi.fn(async () => ({ messages: 2, embeddings: 1, toolCalls: 3, estimatedCostUsd: 0.12345 })),
+        getCrawlStatus: vi.fn(async () => []),
+        embeddingBacklog: vi.fn(async () => 4),
+        interactionBlockCount: vi.fn(async () => 1),
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      config: { openRouter: { embeddingModel: "test/embed" }, discord: { clientId: "bot" } }
+    } as unknown as ToolContext;
+
+    const response = await reportStatus(ctx);
+    expect(response).toContain("Estimated model cost logged: $0.1235");
+    expect(response).toContain("Embeddings pending/backfill: 4");
+    expect(response).toContain("Interaction-blocked users: 1");
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "reportStatus" }));
+  });
+});
+
+describe("inspectAgentLogs", () => {
+  it("formats trace events and tool audit logs", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      repo: {
+        getTraceEvents: vi.fn(async () => [
+          {
+            id: 1,
+            traceId: "trace-1",
+            requestId: "trace-1",
+            guildId: "guild",
+            channelId: "channel",
+            userId: "user",
+            messageId: "trace-1",
+            eventName: "agent.request.started",
+            level: "info",
+            summary: "hello",
+            metadata: {},
+            durationMs: null,
+            createdAt: new Date("2026-01-01T00:00:00Z")
+          },
+          {
+            id: 2,
+            traceId: "trace-1",
+            requestId: "trace-1",
+            guildId: "guild",
+            channelId: "channel",
+            userId: "user",
+            messageId: "trace-1",
+            eventName: "agent.request.complete",
+            level: "info",
+            summary: "done",
+            metadata: {},
+            durationMs: 1234,
+            createdAt: new Date("2026-01-01T00:00:01Z")
+          }
+        ]),
+        getToolAuditLogs: vi.fn(async () => [
+          {
+            id: 1,
+            traceId: "trace-1",
+            guildId: "guild",
+            channelId: "channel",
+            userId: "user",
+            toolName: "searchDiscordHistory",
+            argumentsSummary: "pizza",
+            resultSummary: "found pizza",
+            error: null,
+            model: "chat-model",
+            estimatedCostUsd: 0.001,
+            createdAt: new Date("2026-01-01T00:00:02Z")
+          }
+        ]),
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await inspectAgentLogs(ctx, { traceId: "trace-1", limit: 10 });
+
+    expect(response).toContain("Discord AI Agent logs for trace trace-1");
+    expect(response).toContain("agent.request.complete 1234ms");
+    expect(response).toContain("searchDiscordHistory");
+    expect(ctx.repo.getTraceEvents).toHaveBeenCalledWith({
+      guildId: "guild",
+      visibleChannelIds: ["channel"],
+      traceId: "trace-1",
+      limit: 10
+    });
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectAgentLogs" }));
+  });
+});
+
+describe("inspectRailwayLogs", () => {
+  it("rejects non-owner requests", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        railway: {
+          token: "token",
+          projectId: "project",
+          environment: "production",
+          logOwnerUserIds: ["owner"]
+        }
+      },
+      repo: { auditTool },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "not-owner"
+    } as unknown as ToolContext;
+
+    await expect(inspectRailwayLogs(ctx, { service: "discord-ai-agent-bot" })).resolves.toBe("Railway log access is owner-only.");
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectRailwayLogs", error: "unauthorized" }));
+  });
+});
+
+describe("summarizeCurrentThread", () => {
+  it("does not load messages when the current channel is not visible to the requester", async () => {
+    const recentMessages = vi.fn();
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["other-channel"]),
+        recentMessages,
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "private-channel",
+      userId: "user",
+      visibleChannelIds: ["public-channel"],
+      config: { maxThreadSummaryMessages: 80 },
+      openRouter: { chat: vi.fn() }
+    } as unknown as ToolContext;
+
+    const response = await summarizeCurrentThread(ctx);
+
+    expect(response).toContain("current visibility grant");
+    expect(recentMessages).not.toHaveBeenCalled();
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "summarizeDiscordThread",
+        resultSummary: "permission_denied"
+      })
+    );
+  });
+
+  it("summarizes indexed messages only after current-channel visibility is confirmed", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        recentMessages: vi.fn(async () => [
+          {
+            authorUsername: "alice",
+            authorId: "alice-id",
+            normalizedContent: "we picked nachos",
+            createdAt: new Date("2024-01-01T00:00:00Z")
+          }
+        ]),
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        chat: vi.fn(async () => ({ content: "Nachos won.", model: "test", raw: {} }))
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      config: { maxThreadSummaryMessages: 80 }
+    } as unknown as ToolContext;
+
+    await expect(summarizeCurrentThread(ctx)).resolves.toBe("Nachos won.");
+    expect(ctx.repo.recentMessages).toHaveBeenCalledWith({
+      guildId: "guild",
+      channelId: "channel",
+      limit: 80
+    });
+    expect(ctx.openRouter.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([expect.objectContaining({ role: "user", content: expect.stringContaining("we picked nachos") })])
+      })
+    );
+  });
+});

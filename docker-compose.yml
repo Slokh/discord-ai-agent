@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: discord_ai_agent
+      POSTGRES_PASSWORD: discord_ai_agent
+      POSTGRES_DB: discord_ai_agent
+    ports:
+      - "5433:5432"
+    volumes:
+      - discord_ai_agent_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U discord_ai_agent -d discord_ai_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./.discord-ai-agent:/app/.discord-ai-agent
+    command: ["node", "dist/src/index.js", "bot"]
+
+  bot:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./.discord-ai-agent:/app/.discord-ai-agent
+    command: ["node", "dist/src/index.js", "bot"]
+
+  worker:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./.discord-ai-agent:/app/.discord-ai-agent
+    command: ["node", "dist/src/index.js", "worker"]
+
+volumes:
+  discord_ai_agent_pg:

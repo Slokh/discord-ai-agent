@@ -459,7 +459,7 @@ describe("agent router", () => {
 
     expect(response.content).toContain("moving in with his girlfriend");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
-    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
     expect(sampleMessagesFromChannels).toHaveBeenCalledWith(
       expect.objectContaining({
         guildId: "g",
@@ -638,7 +638,7 @@ describe("agent router", () => {
     expect(response.content).toBe("People mostly shared job-search updates and interview nerves.");
     expect(keywordSearch).toHaveBeenCalledTimes(1);
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
-    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
@@ -705,7 +705,7 @@ describe("agent router", () => {
     expect(response.content).toBe("@taylorplays has mostly been posting Wordle updates recently.");
     expect(recentMessagesFromChannels).toHaveBeenCalledTimes(1);
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
-    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
@@ -916,7 +916,7 @@ describe("agent router", () => {
 
     expect(response.content).toBe("The useful summary is that people mentioned job changes in 2025.");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(5);
-    expect((ctx.openRouter.chat as any).mock.calls[4][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[4][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       5,
       expect.objectContaining({
@@ -974,7 +974,7 @@ describe("agent router", () => {
 
     expect(response.content).toBe("People mentioned job changes in 2025.");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
-    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
   });
 
   it("falls back to compact evidence bullets when forced final synthesis is empty", async () => {
@@ -1045,6 +1045,46 @@ describe("agent router", () => {
     expect(response.content).toBe("A haiku is a compact three-line poem.");
     expect(ctx.repo.getVisibleIndexedChannelIds).not.toHaveBeenCalled();
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
+  });
+
+  it("recovers when a hosted OpenRouter tool call leaks as text", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content:
+              "<tool_call>openrouter_web_fetch<arg_key>url</arg_key><arg_value>https://example.com/game</arg_value></tool_call>",
+            model: "tool-leak-model",
+            raw: {},
+            toolCalls: []
+          })
+          .mockResolvedValueOnce({
+            content: "Check your rank from the game's ranked mode screen.",
+            model: "recovery-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "how can i see my rank?");
+
+    expect(response.content).toBe("Check your rank from the game's ranked mode screen.");
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
+    expect((ctx.openRouter.chat as any).mock.calls[1][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_fetch" })]));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
   });
 
   it("passes prior channel session memory to the model for follow-up continuity", async () => {

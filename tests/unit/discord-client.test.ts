@@ -7,12 +7,10 @@ import {
   explicitUserMentionIds,
   hasExplicitBotAddress,
   hasExplicitBotMention,
-  isUndoRequest,
   isSelfMessage,
   persistReactionMessage,
   shouldProcessGuildEvent,
-  stripBotAddress,
-  undoRequestCount
+  stripBotAddress
 } from "../../src/discord/client.js";
 
 describe("isSelfMessage", () => {
@@ -60,25 +58,6 @@ describe("explicit mention parsing", () => {
 
   it("extracts content channel mentions without needing Discord mention cache state", () => {
     expect(explicitChannelMentionIds("<#123> pizza <#456> <#123>")).toEqual(["123", "456"]);
-  });
-});
-
-describe("isUndoRequest", () => {
-  it("accepts short natural undo requests", () => {
-    expect(isUndoRequest("undo")).toBe(true);
-    expect(isUndoRequest("undo that")).toBe(true);
-    expect(isUndoRequest("undo 3")).toBe(true);
-    expect(isUndoRequest("undo last 3")).toBe(true);
-    expect(isUndoRequest("forget last please")).toBe(true);
-    expect(isUndoRequest("delete the world")).toBe(false);
-  });
-
-  it("parses undo counts with a safety cap", () => {
-    expect(undoRequestCount("undo")).toBe(1);
-    expect(undoRequestCount("undo 3")).toBe(3);
-    expect(undoRequestCount("forget last 2 please")).toBe(2);
-    expect(undoRequestCount("undo 999")).toBe(10);
-    expect(undoRequestCount("undo 0")).toBeUndefined();
   });
 });
 

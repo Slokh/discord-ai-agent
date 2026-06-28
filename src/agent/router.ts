@@ -19,7 +19,8 @@ import {
   reportStatus,
   searchDiscordAttachments,
   summarizeDiscordHistory,
-  summarizeCurrentThread
+  summarizeCurrentThread,
+  undoConversationTurns
 } from "../tools/coreTools.js";
 import type { ChatMessage } from "../models/openrouter.js";
 import type { ConversationMessage } from "../db/repositories.js";
@@ -72,7 +73,6 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
   const successfulToolCallKeys = new Set<string>();
-  let successfulHistorySearchRoute: AgentToolRoute | undefined;
   const requestLogger = logger.child({
     requestId: ctx.requestId,
     guildId: ctx.guildId,
@@ -119,7 +119,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       maxTokens: 900
     });
 
-    const modelRoutes = selectModelToolRoutes(response.toolCalls, text);
+    const modelRoutes = selectModelToolRoutes(response.toolCalls);
     requestLogger.info(
       {
         round: round + 1,
@@ -169,7 +169,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           startedAt
         });
       }
-      const content = responseContent || blockedToolFallback(response.toolCalls) || "I could not pick a safe tool for that. Try asking a little more directly.";
+      const content = responseContent || "I could not pick a safe tool for that. Try asking a little more directly.";
       await ctx.repo.auditTool({
         guildId: ctx.guildId,
         channelId: ctx.channelId,
@@ -253,21 +253,10 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           argumentsPreview: previewText(route.argumentsText, 300)
         }
       });
-      const isRedundantHistorySearch =
-        route.name === "searchDiscordHistory" &&
-        successfulHistorySearchRoute != null &&
-        isRedundantHistorySearchRoute(successfulHistorySearchRoute, route);
-      const isRepeatedExactToolCall = !isRedundantHistorySearch && successfulToolCallKeys.has(routeKey);
-      const isRedundantToolCall = isRedundantHistorySearch || isRepeatedExactToolCall;
-      const result = isRedundantHistorySearch
-        ? await skippedRedundantHistorySearchResult(ctx, {
-            text,
-            route,
-            previousRoute: successfulHistorySearchRoute!,
-            toolUseCount
-          })
-        : isRepeatedExactToolCall
-          ? await skippedRedundantToolResult(ctx, { text, route, toolUseCount })
+      const isRepeatedExactToolCall = successfulToolCallKeys.has(routeKey);
+      const isRedundantToolCall = isRepeatedExactToolCall;
+      const result = isRepeatedExactToolCall
+        ? await skippedRedundantToolResult(ctx, { text, route, toolUseCount })
         : await executeLocalToolRoute(ctx, route, text);
       requestLogger.info(
         {
@@ -290,9 +279,6 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         },
         durationMs: durationMs(toolStartedAt)
       });
-      if (route.name === "searchDiscordHistory" && !isRedundantHistorySearch && historySearchReturnedEvidence(result.content)) {
-        successfulHistorySearchRoute = route;
-      }
       if (isRedundantToolCall) {
         skippedRedundantToolThisRound = true;
       } else {
@@ -457,7 +443,21 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
   }
 
   if (route.name === "createSkillDraft") {
-    return { content: cleanResponse(await createSkillFromRequest(ctx, stringArgument(route.arguments, "instruction") ?? originalText), ctx.config.maxReplyChars) };
+    return {
+      content: cleanResponse(
+        await createSkillFromRequest(ctx, {
+          skillName: stringArgument(route.arguments, "skillName") ?? "server-note",
+          instruction: stringArgument(route.arguments, "instruction") ?? originalText
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "undoConversationTurns") {
+    return {
+      content: cleanResponse(await undoConversationTurns(ctx, numberArgument(route.arguments, "count")), ctx.config.maxReplyChars)
+    };
   }
 
   if (route.name === "openGithubPullRequest") {
@@ -674,7 +674,7 @@ async function synthesizeFinalAnswerWithoutTools(
     const recovery = await hostedToolMarkupRecoveryResponse(ctx, input.text);
     content = recovery.content;
   }
-  content = content || toolEvidenceFallback(input.memoryEvents, input.text) || "I found relevant evidence, but I could not compose a clean answer from it.";
+  content = content || toolEvidenceFallback(input.memoryEvents) || "I found relevant evidence, but I could not compose a clean answer from it.";
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
@@ -810,9 +810,9 @@ function finalSynthesisMessages(userText: string, memoryEvents: NonNullable<Agen
         "For Discord history claims, use only the provided Discord tool evidence. If that evidence does not answer the user's question and the question is about public/current/external/how-to information, use hosted web tools instead of stopping at Discord evidence. " +
         "Do not print XML-like tool-call markup, raw tool names, or skipped redundant tool calls in the final answer. Use dates sparingly: show dates only when the user asks about timing, links, sources, proof, or exact messages, " +
         "or when a date is needed to avoid making old evidence sound current. Do not add a Sources section unless asked. " +
+        "If the user asks for links, sources, receipts, proof, or exact messages, include exact Discord message URLs from the evidence. " +
         "For who-is-best/favorite/most/opinion questions, make a direct call if the evidence supports one. If it does not, say the verdict plainly, like 'No winner' or 'I can't crown anyone from that', then give the shortest reason. " +
         "When naming people from Discord evidence, only use exact handles or IDs shown in the evidence; do not infer real names or display names. " +
-        (wantsDiscordMessageLinks(userText) ? "The user explicitly asked for message/source links, so include the exact Discord message URLs from the evidence for the relevant messages. " : "") +
         "For data-analysis results, do not invent secondary stats that were not explicitly computed. If the evidence is weak or insufficient, say that briefly and do not list every weak match."
     },
     {
@@ -843,26 +843,6 @@ function stripLeakedHostedToolMarkup(content: string) {
     .trim();
 }
 
-async function skippedRedundantHistorySearchResult(
-  ctx: ToolContext,
-  input: { text: string; route: AgentToolRoute; previousRoute: AgentToolRoute; toolUseCount: number }
-): Promise<AgentResponse> {
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "agentToolRepeatGuard",
-    argumentsSummary: input.text,
-    resultSummary:
-      `skipped redundant searchDiscordHistory call ${input.toolUseCount}: ${previewText(input.route.argumentsText, 200)}; ` +
-      `previous: ${previewText(input.previousRoute.argumentsText, 200)}`
-  });
-  return {
-    content:
-      "Skipped redundant history search. Use the earlier searchDiscordHistory evidence already provided in this turn unless a new user, channel, or date filter is needed."
-  };
-}
-
 async function skippedRedundantToolResult(ctx: ToolContext, input: { text: string; route: AgentToolRoute; toolUseCount: number }): Promise<AgentResponse> {
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -877,15 +857,11 @@ async function skippedRedundantToolResult(ctx: ToolContext, input: { text: strin
   };
 }
 
-function selectModelToolRoutes(
-  toolCalls: Array<{ id: string; name: string; argumentsText: string }>,
-  originalText: string
-): AgentToolRoute[] {
+function selectModelToolRoutes(toolCalls: Array<{ id: string; name: string; argumentsText: string }>): AgentToolRoute[] {
   const routes: AgentToolRoute[] = [];
   for (const call of toolCalls) {
     const tool = toolByName(call.name);
     if (!tool) continue;
-    if (tool.mutates && !isExplicitMutationRequest(call.name, originalText)) continue;
     routes.push({
       id: call.id,
       name: tool.name,
@@ -894,49 +870,6 @@ function selectModelToolRoutes(
     });
   }
   return routes;
-}
-
-function historySearchReturnedEvidence(content: string) {
-  return content.trimStart().startsWith("Discord search evidence:");
-}
-
-function isRedundantHistorySearchRoute(previous: AgentToolRoute, next: AgentToolRoute) {
-  if (historySearchAddsNewFilter(previous.arguments, next.arguments)) return false;
-  if (historySearchBroadensQuery(previous.arguments, next.arguments)) return false;
-  return true;
-}
-
-function historySearchAddsNewFilter(previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined) {
-  return ["authorIds", "channelIds", "dateFrom", "dateTo"].some((key) => canonicalToolFilter(previous?.[key]) !== canonicalToolFilter(next?.[key]) && canonicalToolFilter(next?.[key]) !== "");
-}
-
-function historySearchBroadensQuery(previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined) {
-  return !isBroadHistoryQuery(previous?.query) && isBroadHistoryQuery(next?.query);
-}
-
-function isBroadHistoryQuery(value: unknown) {
-  if (typeof value !== "string") return false;
-  const cleaned = value
-    .toLowerCase()
-    .replace(/["'`“”‘’]/g, "")
-    .replace(/[?.!,;:()[\]{}]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned === "" || cleaned === "*" || /^(?:recent|recently|recentyl|lately|latest|current|currently|now|these days|this week|this month|this year)$/.test(cleaned);
-}
-
-function canonicalToolFilter(value: unknown): string {
-  if (Array.isArray(value)) {
-    return value
-      .filter((item): item is string | number => typeof item === "string" || typeof item === "number")
-      .map(String)
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .sort()
-      .join(",");
-  }
-  if (typeof value === "string" || typeof value === "number") return String(value).trim();
-  return "";
 }
 
 async function recordTraceEvent(
@@ -978,16 +911,7 @@ function canonicalToolArguments(value: unknown): unknown {
   return value ?? null;
 }
 
-function blockedToolFallback(toolCalls: Array<{ name: string }>) {
-  const blockedMutation = toolCalls.find((call) => call.name === "createSkillDraft" || call.name === "openGithubPullRequest");
-  if (!blockedMutation) return undefined;
-  if (blockedMutation.name === "createSkillDraft") {
-    return "I can create or update a skill, but ask me directly to learn or remember it first.";
-  }
-  return "I can propose tool/code changes, but ask me directly to add, build, create, or implement the tool first.";
-}
-
-function toolEvidenceFallback(memoryEvents: NonNullable<AgentResponse["memoryEvents"]>, userText = "") {
+function toolEvidenceFallback(memoryEvents: NonNullable<AgentResponse["memoryEvents"]>) {
   const latest = [...memoryEvents].reverse().find((event) => event.content.trim());
   if (!latest) return undefined;
   const latestSummary = [...memoryEvents].reverse().find((event) => {
@@ -1000,25 +924,18 @@ function toolEvidenceFallback(memoryEvents: NonNullable<AgentResponse["memoryEve
   if (latestSummary) return latestSummary.content.trim();
   const results = parseDiscordEvidenceResults(latest.content).slice(0, 5);
   if (results.length === 0) return undefined;
-  const includeLinks = wantsDiscordMessageLinks(userText);
   const filter = latest.content.match(/^Applied date filter:\s*(.+)$/m)?.[1]?.trim();
   const filterPhrase = fallbackFilterPhrase(filter);
-  const header = includeLinks
-    ? filterPhrase
-      ? `I found matching Discord messages ${filterPhrase}:`
-      : "I found matching Discord messages:"
-    : filterPhrase
-      ? `No solid answer from the indexed messages ${filterPhrase}. Weak matches:`
-      : "No solid answer from the indexed messages. Weak matches:";
+  const header = filterPhrase
+    ? `No solid answer from the indexed messages ${filterPhrase}. Weak matches:`
+    : "No solid answer from the indexed messages. Weak matches:";
   return [
     header,
     ...results.map((result) => {
-      const link = includeLinks && result.link ? `\n  ${result.link}` : "";
-      const date = includeLinks ? ` on ${result.date}` : "";
-      return `- ${result.author}${date}: "${previewText(result.content, 180)}"${link}`;
+      return `- ${result.author}: "${previewText(result.content, 180)}"`;
     }),
     "",
-    includeLinks ? "I would treat these as evidence snippets, not a complete conclusion." : "I would not crown anyone from that."
+    "I would not crown anyone from that."
   ].join("\n");
 }
 
@@ -1061,19 +978,6 @@ function fallbackFilterPhrase(filter: string | undefined) {
   if (filter.startsWith("from ")) return `since ${filter.slice("from ".length)}`;
   if (filter.startsWith("until ")) return `through ${filter.slice("until ".length)}`;
   return `from ${filter}`;
-}
-
-function wantsDiscordMessageLinks(text: string) {
-  return (
-    /\b(?:link|links|url|urls|source|sources|receipt|receipts|proof|evidence)\b/i.test(text) &&
-    /\b(?:message|messages|post|posts|source|sources|link|links|url|urls|receipt|receipts|proof|evidence)\b/i.test(text)
-  );
-}
-
-function isExplicitMutationRequest(toolName: string, text: string) {
-  if (toolName === "createSkillDraft") return isSkillRequest(text);
-  if (toolName === "openGithubPullRequest") return isToolChangeRequest(text);
-  return false;
 }
 
 function parseToolArguments(argumentsText: string): Record<string, unknown> {
@@ -1128,10 +1032,9 @@ function chatMessages(text: string, skills: string, sessionMessages: Conversatio
         "You can call local Discord AI Agent function tools and OpenRouter-hosted server tools. Let tool calls do the work when they match the user's request. " +
         "For private server memory, call searchDiscordHistory. Never invent Discord history. " +
         "Do not use Discord history search for ordinary public how-to questions, public apps/sites/games/products/services, or unfamiliar external nouns unless the user asks what this Discord server said about them. Prefer web_search for those. " +
-        "After searchDiscordHistory returns evidence, answer from that evidence instead of searching again unless the next search adds a specific user, channel, or date filter. " +
         "When answering from Discord search evidence, use dates sparingly; show them only when the user asks about timing, links, sources, proof, or exact messages, or when needed to avoid making old messages sound recent. " +
         "When naming people from Discord search evidence, only use exact handles or IDs shown in the tool output; do not infer real names or display names. " +
-        "For recent/current/latest Discord-history questions, use an explicit date window instead of searching all indexed history; default vague 'recently' to about the last year. " +
+        "For recent/current/latest Discord-history questions, choose and pass an explicit date window that fits the user request instead of searching all indexed history. " +
         "When a user names a Discord person/channel/role without an exact mention or ID, use findDiscordUsers/findDiscordChannels/findDiscordRoles before filtered history searches. " +
         "For requests to link, show, or list a person's messages, use searchDiscordHistory with authorQueries/authorIds; do not search for the username as ordinary message text. " +
         "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext for Discord message links, searchDiscordAttachments for files/images, getPinnedMessages for pins, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, and activity over time. " +
@@ -1146,10 +1049,11 @@ function chatMessages(text: string, skills: string, sessionMessages: Conversatio
         "For URLs, use web_fetch when reading the page would improve the answer. " +
         "For Discord image requests, call generateImage so the result can be attached. " +
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +
+        "For undo/delete/forget/remove requests about your previous replies, call undoConversationTurns. " +
         "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. " +
         "For owner debugging of Railway deployment logs, startup failures, worker crashes, missing traces, or hosting/runtime errors, call inspectRailwayLogs. " +
         "After tools return, synthesize one natural Discord reply. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
-        "Only call mutating tools when the user explicitly asks to learn/update a skill or create/propose a tool. " +
+        "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, create/propose a code/tool change, or undo/delete/forget prior agent turns. " +
         "Use prior channel conversation context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
@@ -1191,12 +1095,4 @@ function sessionMessageToChatMessage(message: ConversationMessage): ChatMessage 
     role: "user",
     content: `${author}: ${message.content}`
   };
-}
-
-function isSkillRequest(text: string) {
-  return /\b(learn this|remember this for next time|create a skill|update a skill|add a skill)\b/i.test(text);
-}
-
-function isToolChangeRequest(text: string) {
-  return /\b(add|build|create|implement)\b.*\b(tool|integration|connector)\b/i.test(text);
 }

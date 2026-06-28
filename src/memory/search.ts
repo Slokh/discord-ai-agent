@@ -86,52 +86,12 @@ export async function searchDiscordHistory(input: {
 
 export function buildHistoryRetrievalQuery(query: string): string {
   const normalized = normalizeMessageContent(query);
-  const withoutDiscordFilters = normalized
+  return normalized
     .replace(/(?:#channel|@user|@role):\d+/gi, " ")
     .replace(/\b(?:from|in|after|before|since|until):(?:"[^"]+"|'[^']+'|[^\s]+)/gi, " ")
-    .replace(/\b(?:since|after|from|before|until|to)\s+\d{4}-\d{2}-\d{2}\b/gi, " ");
-  const candidate = stripHistoryQuestionFraming(withoutDiscordFilters);
-  const queryText = candidate || normalized;
-  return isRecencyOnlyHistoryQuery(queryText) ? "" : queryText;
-}
-
-function stripHistoryQuestionFraming(query: string): string {
-  let text = query.replace(/\s+/g, " ").trim();
-  const aboutMatch = text.match(/\b(?:about|regarding|re:)\s+(.+)$/i);
-  if (aboutMatch?.[1]?.trim()) {
-    text = aboutMatch[1];
-  } else {
-    for (const pattern of historyQuestionPrefixes) {
-      text = text.replace(pattern, "");
-    }
-  }
-
-  return text
-    .replace(/^(?:in|from|on)\s+/i, "")
-    .replace(/\s+(?:in|from|on)$/i, "")
-    .replace(/[?.!]+$/g, "")
+    .replace(/\b(?:since|after|from|before|until|to)\s+\d{4}-\d{2}-\d{2}\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-const historyQuestionPrefixes = [
-  /^what\s+did\s+(?:we|i|you|they|he|she|someone|anyone)\s+(?:say|discuss|decide|remember)\s+(?:about|on|regarding)?\s*/i,
-  /^what\s+did\s+(?:we|i|you|they|he|she|someone|anyone)\s+talk\s+about\s*/i,
-  /^what\s+was\s+(?:said|decided|discussed)\s+(?:about|on|regarding)?\s*/i,
-  /^who\s+said\s*/i,
-  /^when\s+did\s+(?:we|i|you|they|he|she|someone|anyone)\s+(?:say|decide|discuss|talk\s+about)\s*/i,
-  /^did\s+(?:we|i|you|they|he|she|someone|anyone)\s+(?:say|decide|discuss|talk\s+about)\s+(?:about|on|regarding)?\s*/i,
-  /^(?:find|search|remember|history)\s+(?:messages?\s+)?(?:about|for|on)?\s*/i
-];
-
-function isRecencyOnlyHistoryQuery(query: string) {
-  const cleaned = query
-    .toLowerCase()
-    .replace(/["'`“”‘’]/g, "")
-    .replace(/[?.!,;:()[\]{}]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return /^(?:recent|recently|recentyl|lately|latest|current|currently|now|these days|this week|this month|this year)$/.test(cleaned);
 }
 
 export async function resolveSearchChannelIds(input: {

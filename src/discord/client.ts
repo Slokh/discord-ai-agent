@@ -25,7 +25,6 @@ import { durationMs, logger, previewText } from "../util/logger.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 
 const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
-const MAX_UNDO_TURNS = 10;
 const DISCORD_AGENT_RESPONSE_TIMEOUT_MS = 90_000;
 
 export type DiscordAiAgentBotRuntime = {
@@ -291,45 +290,6 @@ async function handleMessageCreate(
   });
   requestLogger.debug({ threadKey }, "Ensured conversation session");
 
-  const undoCount = undoRequestCount(text);
-  if (undoCount != null) {
-    const undoResult = await input.repo.deleteMostRecentConversationTurns({ threadKey, count: undoCount });
-    let deletedDiscordReplies = 0;
-    for (const messageId of undoResult.assistantDiscordMessageIds) {
-      if (await deleteDiscordMessageById(message, messageId)) deletedDiscordReplies += 1;
-    }
-    const undoContent =
-      undoResult.deletedRows > 0
-        ? `Undid my last ${formatTurnCount(undoResult.deletedTurns)} in this channel and removed ${formatRowCount(undoResult.deletedRows)} from memory.`
-        : "I do not have a previous reply in this channel to undo.";
-    const finalReply = await thinking.edit(cleanResponse(undoContent, input.config.maxReplyChars));
-    requestLogger.info(
-      {
-        replyMessageId: finalReply.id,
-        requestedUndoTurns: undoCount,
-        deletedTurns: undoResult.deletedTurns,
-        deletedMemoryRows: undoResult.deletedRows,
-        deletedDiscordReplies,
-        targetDiscordMessageIds: undoResult.assistantDiscordMessageIds,
-        durationMs: durationMs(messageStartedAt)
-      },
-      "Handled undo request without calling agent"
-    );
-    await recordTraceEvent(input.repo, {
-      eventName: "discord.undo.handled",
-      summary: `Undid ${undoResult.deletedTurns} turns`,
-      metadata: {
-        replyMessageId: finalReply.id,
-        requestedUndoTurns: undoCount,
-        deletedTurns: undoResult.deletedTurns,
-        deletedMemoryRows: undoResult.deletedRows,
-        deletedDiscordReplies
-      },
-      durationMs: durationMs(messageStartedAt)
-    });
-    return;
-  }
-
   const priorSessionMessages = await input.repo.recentConversationMessages({
     threadKey,
     limit: SESSION_CONTEXT_MESSAGE_LIMIT
@@ -405,7 +365,14 @@ async function handleMessageCreate(
           threadKey,
           sessionMessages: priorSessionMessages,
           requestId,
-          discordRoles: discordRoleSnapshots(message.guild)
+          discordRoles: discordRoleSnapshots(message.guild),
+          deleteDiscordMessageIds: async (messageIds) => {
+            let deleted = 0;
+            for (const messageId of messageIds) {
+              if (await deleteDiscordMessageById(message, messageId)) deleted += 1;
+            }
+            return deleted;
+          }
         },
         text
       ),
@@ -635,31 +602,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-}
-
-export function isUndoRequest(text: string) {
-  return undoRequestCount(text) != null;
-}
-
-export function undoRequestCount(text: string): number | undefined {
-  const match = text
-    .trim()
-    .match(
-      /^(?:undo(?:\s+(?:that|last))?|forget(?:\s+(?:that|last|the last one))?|delete(?:\s+(?:that|last))?|remove(?:\s+(?:that|last))?)(?:\s+(\d{1,3}))?(?:\s+please)?[.!?]*$/i
-    );
-  if (!match) return undefined;
-
-  const requestedCount = match[1] == null ? 1 : Number(match[1]);
-  if (!Number.isInteger(requestedCount) || requestedCount < 1) return undefined;
-  return Math.min(requestedCount, MAX_UNDO_TURNS);
-}
-
-function formatTurnCount(count: number) {
-  return `${count} ${count === 1 ? "turn" : "turns"}`;
-}
-
-function formatRowCount(count: number) {
-  return `${count} memory ${count === 1 ? "row" : "rows"}`;
 }
 
 async function deleteDiscordMessageById(sourceMessage: Message, messageId: string): Promise<boolean> {

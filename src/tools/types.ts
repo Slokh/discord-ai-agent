@@ -19,6 +19,7 @@ export type ToolContext = {
   sessionMessages?: ConversationMessage[];
   requestId?: string;
   discordRoles?: DiscordRoleSnapshot[];
+  deleteDiscordMessageIds?: (messageIds: string[]) => Promise<number>;
 };
 
 export type DiscordRoleSnapshot = {

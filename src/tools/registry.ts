@@ -20,6 +20,7 @@ export type ToolName =
   | "openGithubPullRequest"
   | "inspectAgentLogs"
   | "inspectRailwayLogs"
+  | "undoConversationTurns"
   | "reportStatus";
 
 export type ToolRegistryEntry = {
@@ -108,7 +109,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "searchDiscordHistory",
     description:
-      "Search permission-filtered indexed Discord history. Use structured authorIds/channelIds after findDiscordUsers/findDiscordChannels when names are ambiguous. Supports natural filters like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
+      "Search permission-filtered indexed Discord history. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use structured authorIds/channelIds after findDiscordUsers/findDiscordChannels when names are ambiguous. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -116,7 +117,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         query: {
           type: "string",
-          description: "The user's history question or search phrase. May include from:, in:, after:, before:, since:, or until: filters."
+          description: "Focused Discord history search phrase. May include from:, in:, after:, before:, since:, or until: filters if the user typed them."
         },
         authorIds: {
           type: "array",
@@ -140,11 +141,11 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         dateFrom: {
           type: "string",
-          description: "Inclusive UTC date lower bound as YYYY-MM-DD."
+          description: "Inclusive UTC date lower bound as YYYY-MM-DD. Set this explicitly for recent/latest/current/time-window requests."
         },
         dateTo: {
           type: "string",
-          description: "Inclusive UTC date upper bound as YYYY-MM-DD."
+          description: "Inclusive UTC date upper bound as YYYY-MM-DD. Set this explicitly when the user gives an end date or bounded window."
         },
         limit: {
           type: "number",
@@ -487,7 +488,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         dateFrom: {
           type: "string",
-          description: "Inclusive UTC date lower bound as YYYY-MM-DD. Defaults to about the last year for recent summaries."
+          description: "Inclusive UTC date lower bound as YYYY-MM-DD. Set this explicitly for recent/latest/current/time-window summaries."
         },
         dateTo: {
           type: "string",
@@ -532,24 +533,30 @@ export const toolRegistry: ToolRegistryEntry[] = [
   },
   {
     name: "createSkillDraft",
-    description: "Draft or update a Markdown skill and open a GitHub PR.",
+    description:
+      "Create or update a private database-backed Markdown skill. Use only when the user explicitly asks the agent to learn, remember, save, or update durable behavior/knowledge for next time.",
     userVisible: true,
     mutates: true,
     parameters: {
       type: "object",
       properties: {
+        skillName: {
+          type: "string",
+          description: "Short stable kebab-case skill name, such as movie-night, minecraft-server, or house-rules."
+        },
         instruction: {
           type: "string",
           description: "The durable instruction the user wants Discord AI Agent to remember."
         }
       },
-      required: ["instruction"],
+      required: ["skillName", "instruction"],
       additionalProperties: false
     }
   },
   {
     name: "openGithubPullRequest",
-    description: "Open a GitHub PR for skill or tool proposal changes.",
+    description:
+      "Open a GitHub PR for requested code, tool, integration, or repository changes. Use only when the user explicitly asks to add, build, implement, change, or propose tooling/code.",
     userVisible: true,
     mutates: true,
     parameters: {
@@ -561,6 +568,23 @@ export const toolRegistry: ToolRegistryEntry[] = [
         }
       },
       required: ["request"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "undoConversationTurns",
+    description:
+      "Undo the agent's most recent reply turns in the current Discord channel by removing them from persistent memory and, when possible, deleting the bot reply messages. Use when the user asks to undo, forget, delete, or remove the agent's previous response.",
+    userVisible: true,
+    mutates: true,
+    parameters: {
+      type: "object",
+      properties: {
+        count: {
+          type: "number",
+          description: "Number of recent agent turns to undo. Defaults to 1 and is capped by the tool."
+        }
+      },
       additionalProperties: false
     }
   },

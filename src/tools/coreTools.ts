@@ -31,7 +31,7 @@ export type HistoryAnswerOptions = {
   requestText?: string;
 };
 
-const DEFAULT_RECENT_HISTORY_DAYS = 365;
+const MAX_UNDO_TURNS = 10;
 const MS_PER_DAY = 86_400_000;
 
 type ChannelTopicCluster = {
@@ -135,7 +135,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
   const explicitDateFrom = coerceDateStart(options.dateFrom) ?? syntaxFilters.dateFrom;
   const explicitDateTo = coerceDateEnd(options.dateTo) ?? syntaxFilters.dateTo;
   const historyFilters = {
-    dateFrom: explicitDateFrom ?? inferRecentHistoryDateFrom(question, explicitDateTo),
+    dateFrom: explicitDateFrom,
     dateTo: explicitDateTo
   };
   const authorIds = [
@@ -157,12 +157,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     syntaxFilters.channelQueries.length > 0 ||
     syntaxFilters.dateFrom != null ||
     syntaxFilters.dateTo != null;
-  const hasExplicitFilters =
-    authorIds.length > 0 || channelIds.length > 0 || historyFilters.dateFrom != null || historyFilters.dateTo != null;
-  const query = cleanFilteredHistoryQuery(syntaxFilters.query || (hasSyntaxFilters ? "" : question), {
-    requestText,
-    hasExplicitFilters
-  });
+  const query = (syntaxFilters.query || (hasSyntaxFilters ? "" : question)).trim();
   const effectiveQuery = buildHistoryRetrievalQuery(query);
   const results = await searchDiscordHistory({
     repo: ctx.repo,
@@ -654,7 +649,7 @@ export async function summarizeDiscordHistory(
   const question = input.question.trim() || "Summarize this Discord history.";
   const sampleLimit = boundedLimit(input.sampleLimit, 60, 10, 120);
   const explicitDateTo = coerceDateEnd(input.dateTo);
-  const dateFrom = coerceDateStart(input.dateFrom) ?? inferRecentHistoryDateFrom(question, explicitDateTo);
+  const dateFrom = coerceDateStart(input.dateFrom);
   const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
   const authorIds = uniqueStrings([
     ...normalizeIds(input.authorIds),
@@ -822,10 +817,19 @@ export async function generateImage(ctx: ToolContext, prompt: string): Promise<{
   return { content, files };
 }
 
-export async function createSkillFromRequest(ctx: ToolContext, request: string): Promise<string> {
-  const skillRequest = extractSkillRequest(request);
+export type SkillDraftInput = {
+  skillName: string;
+  instruction: string;
+};
+
+export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraftInput): Promise<string> {
+  const skillName = cleanSkillName(input.skillName);
+  const instruction = input.instruction.trim();
+  const request = instruction;
+  if (!instruction) return "I need a durable instruction before I can save a skill.";
+
   const skills = await loadSkills({ repo: ctx.repo });
-  const existingSkill = skills.find((skill) => skill.name === skillRequest.skillName);
+  const existingSkill = skills.find((skill) => skill.name === skillName);
   const existingSkills = renderSkillsForPrompt(skills, 4000);
 
   let markdown: string;
@@ -843,8 +847,8 @@ export async function createSkillFromRequest(ctx: ToolContext, request: string):
           role: "user",
           content: [
             `Requested by ${ctx.userDisplayName}: ${request}`,
-            `Skill file target: skills/${skillRequest.skillName}.md`,
-            `Instruction to incorporate: ${skillRequest.instruction}`,
+            `Skill file target: skills/${skillName}.md`,
+            `Instruction to incorporate: ${instruction}`,
             existingSkill ? `Existing target skill:\n${existingSkill.content}` : "Existing target skill: none",
             `Other existing skills:\n${existingSkills || "No existing skills."}`
           ].join("\n\n")
@@ -856,15 +860,15 @@ export async function createSkillFromRequest(ctx: ToolContext, request: string):
     markdown = response.content.trim();
   } else {
     markdown = existingSkill
-      ? `${existingSkill.content.trim()}\n\n## Update\n\nRequested by ${ctx.userDisplayName}.\n\n${skillRequest.instruction}\n`
-      : `# ${skillRequest.skillName}\n\nRequested by ${ctx.userDisplayName}.\n\n${skillRequest.instruction}\n`;
+      ? `${existingSkill.content.trim()}\n\n## Update\n\nRequested by ${ctx.userDisplayName}.\n\n${instruction}\n`
+      : `# ${skillName}\n\nRequested by ${ctx.userDisplayName}.\n\n${instruction}\n`;
   }
 
   const policy = validateSkillMarkdown(markdown);
   if (!policy.ok) {
     await ctx.repo.recordSkillChange({
-      skillName: skillRequest.skillName,
-      filePath: `database:${skillRequest.skillName}.md`,
+      skillName,
+      filePath: `database:${skillName}.md`,
       requesterId: ctx.userId,
       request,
       content: markdown,
@@ -879,7 +883,7 @@ export async function createSkillFromRequest(ctx: ToolContext, request: string):
       channelId: ctx.channelId,
       userId: ctx.userId,
       toolName: "createSkillDraft",
-      argumentsSummary: summarizeForAudit({ request, skillName: skillRequest.skillName }),
+      argumentsSummary: summarizeForAudit({ request, skillName }),
       resultSummary: summarizeForAudit({ persisted: false, policyReasons: policy.reasons })
     });
 
@@ -887,7 +891,7 @@ export async function createSkillFromRequest(ctx: ToolContext, request: string):
   }
 
   const skill = await ctx.repo.upsertDatabaseSkill({
-    name: skillRequest.skillName,
+    name: skillName,
     content: markdown,
     requesterId: ctx.userId,
     request
@@ -898,11 +902,40 @@ export async function createSkillFromRequest(ctx: ToolContext, request: string):
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "createSkillDraft",
-    argumentsSummary: summarizeForAudit({ request, skillName: skillRequest.skillName }),
+    argumentsSummary: summarizeForAudit({ request, skillName }),
     resultSummary: summarizeForAudit({ persisted: true, source: skill.source, version: skill.version })
   });
 
   return `Saved private skill \`${skill.name}\` to the database (v${skill.version}).`;
+}
+
+export async function undoConversationTurns(ctx: ToolContext, count?: number): Promise<string> {
+  const threadKey = ctx.threadKey ?? `discord:${ctx.guildId}:${ctx.channelId}`;
+  const undoCount = boundedLimit(count, 1, 1, MAX_UNDO_TURNS);
+  const undoResult = await ctx.repo.deleteMostRecentConversationTurns({ threadKey, count: undoCount });
+  const deletedDiscordReplies =
+    ctx.deleteDiscordMessageIds && undoResult.assistantDiscordMessageIds.length > 0
+      ? await ctx.deleteDiscordMessageIds(undoResult.assistantDiscordMessageIds)
+      : 0;
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "undoConversationTurns",
+    argumentsSummary: summarizeForAudit({ threadKey, count: undoCount }),
+    resultSummary: summarizeForAudit({
+      deletedTurns: undoResult.deletedTurns,
+      deletedMemoryRows: undoResult.deletedRows,
+      deletedDiscordReplies,
+      targetDiscordMessageIds: undoResult.assistantDiscordMessageIds
+    })
+  });
+
+  if (undoResult.deletedRows === 0) return "I do not have a previous reply in this channel to undo.";
+  return `Undid my last ${formatTurnCount(undoResult.deletedTurns)} in this channel and removed ${formatRowCount(
+    undoResult.deletedRows
+  )} from memory.`;
 }
 
 export async function createToolProposalFromRequest(ctx: ToolContext, request: string): Promise<string> {
@@ -1882,6 +1915,18 @@ function cleanLookupValue(value: string) {
   return value.trim().replace(/^[@#]/, "");
 }
 
+function cleanSkillName(value: string) {
+  return slugify(value).slice(0, 48) || "server-note";
+}
+
+function formatTurnCount(count: number) {
+  return `${count} ${count === 1 ? "turn" : "turns"}`;
+}
+
+function formatRowCount(count: number) {
+  return `${count} memory ${count === 1 ? "row" : "rows"}`;
+}
+
 function extractMentionId(value: string, kind: "user" | "channel" | "role" | "any") {
   const trimmed = value.trim();
   if (kind === "user" || kind === "any") {
@@ -1926,9 +1971,6 @@ function formatHistoryEvidence(input: {
   dateFrom?: Date;
   dateTo?: Date;
 }) {
-  const sourceInstruction = wantsSourceDetails(input.question)
-    ? "The user asked for sources, so the final answer may include short citation markers and links from these results."
-    : "The user did not ask for sources, so the final answer should not include citation markers, footnotes, raw Discord URLs, or a Sources section.";
   const dateSummary = historyEvidenceDateSummary(input.results);
   const authors = historyEvidenceAuthors(input.results);
   const appliedDateFilter = historyEvidenceAppliedDateFilter(input.dateFrom, input.dateTo);
@@ -1940,7 +1982,7 @@ function formatHistoryEvidence(input: {
     `Applied date filter: ${appliedDateFilter}`,
     `Evidence dates: ${dateSummary}`,
     `Evidence authors: ${authors}`,
-    sourceInstruction,
+    "Use links only if helpful or if the user asked for links, sources, receipts, proof, or exact messages. Otherwise do not add citation markers, raw Discord URLs, or a Sources section.",
     "These are historical Discord messages, not necessarily recent/current events. Use the timestamps for grounding, but only show dates when the user asks about timing, links, sources, proof, or exact messages, or when needed to avoid making old evidence sound current.",
     "When naming people from this evidence, use only the exact @handles or IDs shown in the result lines. Do not infer real names, display names, or create @handles from message text.",
     "If the final answer mentions dates or times, use only the exact timestamps shown here. If the results do not support the answer, say that clearly.",
@@ -2000,73 +2042,6 @@ function historyEvidenceDateSummary(results: SearchResult[]) {
   return `${oldestDate} to ${newestDate} (${spanDays.toLocaleString("en-US")} days)`;
 }
 
-function inferRecentHistoryDateFrom(question: string, dateTo?: Date) {
-  if (dateTo) return undefined;
-  if (!/\b(?:recent(?:ly|yl)?|lately|latest|current(?:ly)?|now|these days|today|this week|this month|this year)\b/i.test(question)) {
-    return undefined;
-  }
-
-  const cutoff = new Date(Date.now() - DEFAULT_RECENT_HISTORY_DAYS * MS_PER_DAY);
-  return new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth(), cutoff.getUTCDate()));
-}
-
-function cleanFilteredHistoryQuery(query: string, input: { requestText: string; hasExplicitFilters: boolean }) {
-  const trimmed = query.trim();
-  if (!trimmed) return "";
-  if (!input.hasExplicitFilters) return trimmed;
-  if (!buildHistoryRetrievalQuery(trimmed).trim()) return "";
-  return isFilterOnlyMessageListingRequest(trimmed) || isFilterOnlyMessageListingRequest(input.requestText) ? "" : trimmed;
-}
-
-function isFilterOnlyMessageListingRequest(text: string) {
-  if (!/\b(?:find|get|give|grab|link|list|pull|show|source|sources|url|urls|message|messages|post|posts)\b/i.test(text)) {
-    return false;
-  }
-
-  const cleaned = text
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/<@!?\d+>|<#\d+>/g, " ")
-    .replace(/\bfrom:(?:"[^"]+"|'[^']+'|[^\s]+)/g, " ")
-    .replace(/\bin:(?:"[^"]+"|'[^']+'|[^\s]+)/g, " ")
-    .replace(
-      /\b(?:from|by|for)\s+(?:"[^"]+"|'[^']+'|@?[\w.-]+(?:\s+(?!(?:about|regarding|re|containing|with|in|on)\b)@?[\w.-]+){0,3})(?=\s+(?:about|regarding|re|containing|with|in|on)\b|$)/g,
-      " "
-    )
-    .replace(
-      /\bin\s+(?:"[^"]+"|'[^']+'|#?[\w.-]+(?:\s+(?!(?:about|regarding|re|containing|with|from|by|for|on)\b)#?[\w.-]+){0,3})(?=\s+(?:about|regarding|re|containing|with|from|by|for|on)\b|$)/g,
-      " "
-    )
-    .replace(/\b@?[\w.-]*\d[\w.-]*\b/g, " ")
-    .replace(/\b@?[a-z][a-z0-9_.-]{1,}'s\b/g, " ")
-    .replace(
-      /\b(?:a|all|an|any|bro|can|could|direct|discord|exact|evidence|find|for|from|get|give|grab|history|i|link|links|list|me|message|messages|need|of|please|pls|post|posts|proof|pull|receipt|receipts|show|source|sources|that|the|these|this|to|url|urls|want|wants|wanted|would|you)\b/g,
-      " "
-    )
-    .replace(/[^\p{L}\p{N}_-]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return cleaned.length === 0;
-}
-
-function wantsSourceDetails(question: string) {
-  const trimmed = question.trim();
-  return (
-    /\b(?:show|include|give|send|link|cite)\b.{0,40}\b(?:source|sources|citation|citations|receipt|receipts|link|links|proof|evidence)\b/i.test(
-      question
-    ) ||
-    /\b(?:link|links|url|urls|source|sources|receipt|receipts|proof|evidence)\b.{0,60}\b(?:message|messages|post|posts)\b/i.test(
-      question
-    ) ||
-    /\b(?:message|messages|post|posts)\b.{0,60}\b(?:link|links|url|urls|source|sources|receipt|receipts|proof|evidence)\b/i.test(
-      question
-    ) ||
-    /\b(?:receipts|citations)\b/i.test(question) ||
-    /^(?:source|sources|proof|evidence)\??$/i.test(trimmed)
-  );
-}
-
 function noHistoryResultsMessage(crawl: Array<{ status: string; channels: number; messages: number }>) {
   const active = crawl.filter((row) => ["pending", "running", "error"].includes(row.status));
   if (active.length === 0) {
@@ -2077,12 +2052,6 @@ function noHistoryResultsMessage(crawl: Array<{ status: string; channels: number
     "I did not find matching indexed Discord messages that you can access yet.",
     `Crawl status: ${active.map((row) => `${row.status}=${row.channels} channels/${row.messages} messages`).join(", ")}.`
   ].join("\n");
-}
-
-export function extractImagePrompt(message: string) {
-  return message
-    .replace(/^(make|generate|create|draw)\s+(an?\s+)?(image|picture|photo|art)\s+(of\s+)?/i, "")
-    .trim();
 }
 
 export function describeSkillPullRequestResult(result: {
@@ -2106,38 +2075,6 @@ export function describeSkillPullRequestResult(result: {
   return `I opened a skill PR for human review: ${result.prUrl}`;
 }
 
-export function extractSkillRequest(message: string) {
-  const text = message.trim();
-  const explicit = text.match(
-    /^(?:please\s+)?(?<action>create|add|update)\s+(?:a\s+)?skill(?:\s+(?:called|named|for|about))?\s+(?<name>[^:]+?)(?:\s*:\s*(?<instruction>[\s\S]+))?$/i
-  );
-  if (explicit?.groups?.name) {
-    const action = explicit.groups.action?.toLowerCase() === "update" ? "update" : "add";
-    const instruction = (explicit.groups.instruction ?? text).trim();
-    return {
-      action,
-      skillName: slugify(explicit.groups.name).slice(0, 48) || "server-note",
-      instruction
-    };
-  }
-
-  const learn = text.match(/^(?:please\s+)?(?:learn|remember)\s+(?:this\s+)?(?:for\s+next\s+time\s*)?:?\s*(?<instruction>[\s\S]+)$/i);
-  const instruction = (learn?.groups?.instruction ?? text).trim();
-  return {
-    action: "add",
-    skillName: slugify(instruction).slice(0, 48) || "server-note",
-    instruction
-  };
-}
-
-export function extractHistoryFilters(message: string) {
-  const syntax = extractHistorySearchSyntax(message);
-
-  return {
-    dateFrom: syntax.dateFrom,
-    dateTo: syntax.dateTo
-  };
-}
 
 export function extractHistorySearchSyntax(message: string) {
   const authorIds: string[] = [];

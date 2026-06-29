@@ -10,7 +10,6 @@ import {
   getDiscordChannelTopics,
   getDiscordStats,
   inspectAgentLogs,
-  inspectRailwayLogs,
   reportStatus,
   summarizeCurrentThread,
   undoConversationTurns
@@ -979,6 +978,18 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:00:02Z")
           }
         ]),
+        getTaskEvents: vi.fn(async () => [
+          {
+            id: 1,
+            taskId: "task-1",
+            traceId: "trace-1",
+            eventName: "task.progress",
+            level: "info",
+            summary: "Kubernetes sandbox is running the task.",
+            metadata: { step: "sandbox_running" },
+            createdAt: new Date("2026-01-01T00:00:03Z")
+          }
+        ]),
         auditTool
       },
       guildId: "guild",
@@ -991,6 +1002,7 @@ describe("inspectAgentLogs", () => {
 
     expect(response).toContain("Discord AI Agent logs for trace trace-1");
     expect(response).toContain("agent.request.complete 1234ms");
+    expect(response).toContain("task.progress task=task-1");
     expect(response).toContain("searchDiscordHistory");
     expect(ctx.repo.getTraceEvents).toHaveBeenCalledWith({
       guildId: "guild",
@@ -998,30 +1010,13 @@ describe("inspectAgentLogs", () => {
       traceId: "trace-1",
       limit: 10
     });
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectAgentLogs" }));
-  });
-});
-
-describe("inspectRailwayLogs", () => {
-  it("rejects non-owner requests", async () => {
-    const auditTool = vi.fn(async () => undefined);
-    const ctx = {
-      config: {
-        railway: {
-          token: "token",
-          projectId: "project",
-          environment: "production",
-          logOwnerUserIds: ["owner"]
-        }
-      },
-      repo: { auditTool },
+    expect(ctx.repo.getTaskEvents).toHaveBeenCalledWith({
       guildId: "guild",
-      channelId: "channel",
-      userId: "not-owner"
-    } as unknown as ToolContext;
-
-    await expect(inspectRailwayLogs(ctx, { service: "discord-ai-agent-bot" })).resolves.toBe("Railway log access is owner-only.");
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectRailwayLogs", error: "unauthorized" }));
+      visibleChannelIds: ["channel"],
+      traceId: "trace-1",
+      limit: 10
+    });
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectAgentLogs" }));
   });
 });
 

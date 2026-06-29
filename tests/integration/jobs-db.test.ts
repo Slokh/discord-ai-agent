@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import PgBoss from "pg-boss";
 import { loadConfig } from "../../src/config/env.js";
-import { AGENT_CODEGEN_JOB, CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
+import { AGENT_TASK_JOB, CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
 
@@ -158,7 +158,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
-  it("processes agent codegen jobs when the codegen worker is enabled", async () => {
+  it("starts agent task sandboxes when the task worker is enabled", async () => {
     const config = testConfig();
     const pool = createPool(config);
     const repo = new DiscordAiAgentRepository(pool);
@@ -169,20 +169,18 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       pgBossSchema: "pgboss_test",
       crawlWorker: false,
       embeddingWorker: false,
-      codegenWorker: true,
+      taskWorker: true,
       crawler: {
         crawlConfiguredGuild: async () => undefined
       },
-      agentCodegen: {
-        name: "test-codegen-backend",
-        run: async (job, context) => {
+      agentTask: {
+        name: "test-sandbox-backend",
+        start: async (job, context) => {
           processedRequests.push(job.request);
-          await context?.progress?.({ step: "test-step", message: "Running test codegen step." });
+          await context?.progress?.({ step: "test-step", message: "Starting test sandbox." });
           return {
-            branchName: "discord-ai-agent/update-test",
-            prUrl: "https://github.com/example/repo/pull/1",
-            draft: false,
-            verifyPassed: true
+            sandboxRunId: "sandbox-run-1",
+            backendJobName: "agent-task-test"
           };
         }
       }
@@ -190,28 +188,26 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     runtimes.push(runtime);
 
     try {
-      const { jobId, requestId } = await runtime.enqueueAgentCodegen({
+      const { jobId, taskId } = await runtime.enqueueAgentTask({
         request: "add a calendar integration",
-        updateName: "calendar integration",
+        title: "calendar integration",
         requestedBy: "test"
       });
       expect(jobId).toEqual(expect.any(String));
-      expect(requestId).toEqual(expect.any(String));
+      expect(taskId).toEqual(expect.any(String));
 
       await waitFor(() => processedRequests.includes("add a calendar integration"), 10_000);
       await waitFor(async () => {
-        const job = await repo.getAgentCodegenJob(requestId);
-        return job?.status === "succeeded" && job.prUrl === "https://github.com/example/repo/pull/1";
+        const job = await repo.getAgentTask(taskId);
+        return job?.status === "running" && job.currentStep === "sandbox_running";
       }, 10_000);
-      const job = await repo.getAgentCodegenJob(requestId);
+      const job = await repo.getAgentTask(taskId);
       expect(job).toEqual(
         expect.objectContaining({
-          status: "succeeded",
-          backend: "test-codegen-backend",
-          currentStep: "done",
-          statusMessage: "Opened pull request.",
-          branchName: "discord-ai-agent/update-test",
-          verifyPassed: true
+          status: "running",
+          backend: "test-sandbox-backend",
+          currentStep: "sandbox_running",
+          statusMessage: "Kubernetes sandbox is running the task."
         })
       );
     } finally {
@@ -220,42 +216,31 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     }
   });
 
-  it("can enqueue agent codegen jobs without running the codegen worker", async () => {
+  it("can enqueue agent tasks without running the task worker", async () => {
     const config = testConfig();
-    const pool = createPool(config);
     const runtime = await startJobs({
       config,
       pgBossSchema: "pgboss_test",
       worker: false,
       crawlWorker: false,
       embeddingWorker: false,
-      codegenWorker: false,
+      taskWorker: false,
       crawler: {
         crawlConfiguredGuild: async () => undefined
       }
     });
     runtimes.push(runtime);
 
-    try {
-      const { jobId } = await runtime.enqueueAgentCodegen({
-        request: "add a calendar integration",
-        updateName: "calendar integration",
-        requestedBy: "test"
-      });
-      expect(jobId).toEqual(expect.any(String));
+    const { jobId } = await runtime.enqueueAgentTask({
+      request: "add a calendar integration",
+      title: "calendar integration",
+      requestedBy: "test"
+    });
+    expect(jobId).toEqual(expect.any(String));
 
-      const job = await pool.query(
-        "SELECT EXTRACT(epoch FROM expire_in)::int AS expire_seconds FROM pgboss_test.job WHERE id = $1",
-        [jobId]
-      );
-      expect(job.rows[0]?.expire_seconds).toBe(config.codegenJobTimeoutMinutes * 60);
-
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      await runtime.boss.deleteJob(AGENT_CODEGEN_JOB, jobId!);
-    } finally {
-      await runtime.stop();
-      await pool.end();
-    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await runtime.boss.deleteJob(AGENT_TASK_JOB, jobId!);
+    await runtime.stop();
   });
 
   it("deduplicates repeated crawl enqueue requests for the configured guild", async () => {

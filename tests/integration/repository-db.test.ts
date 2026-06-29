@@ -188,7 +188,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       filePath: `skills/skill-${randomUUID()}.md`,
       requesterId: userId,
       request: "remember my private request",
-      dryRun: true
+      policyReasons: ["blocked in test"]
     });
     const dbSkillName = `skill-${randomUUID()}`;
     await repo.upsertDatabaseSkill({
@@ -310,14 +310,14 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ).resolves.toHaveLength(1);
   });
 
-  it("records dry-run skill changes without marking the skill as installed", async () => {
+  it("records policy-blocked skill changes without marking the skill as installed", async () => {
     const skillName = `skill-${randomUUID()}`;
     await repo.recordSkillChange({
       skillName,
       filePath: `skills/${skillName}.md`,
       requesterId: `user-${randomUUID()}`,
-      request: "remember this dry run",
-      dryRun: true
+      request: "remember this blocked skill",
+      policyReasons: ["blocked by policy"]
     });
 
     const [changes, skills] = await Promise.all([
@@ -405,6 +405,48 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         nextRunAt: new Date("2026-06-30T12:00:00.000Z")
       })
     ).resolves.toBe(true);
+  });
+
+  it("keeps sandbox runs terminal when completion callback wins the creation race", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const sandboxRunId = `run-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Task Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId,
+      channelId: `channel-${randomUUID()}`,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "race test",
+      request: "simulate a fast sandbox callback",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+    await repo.markAgentTaskSucceeded({
+      taskId,
+      branchName: "discord-ai-agent/update-race-test",
+      prUrl: "https://github.com/example/discord-ai-agent/pull/1",
+      draft: false,
+      verifyPassed: true
+    });
+
+    await repo.recordSandboxRun({
+      taskId,
+      sandboxRunId,
+      backend: "kubernetes-sandbox",
+      namespace: "discord-ai-agent",
+      backendJobName: "agent-task-race-test",
+      image: "sandbox:test"
+    });
+
+    const result = await pool.query("SELECT status, completed_at FROM sandbox_runs WHERE sandbox_run_id = $1", [sandboxRunId]);
+    expect(result.rows[0]?.status).toBe("succeeded");
+    expect(result.rows[0]?.completed_at).toBeInstanceOf(Date);
+    await expect(repo.listTerminalSandboxRunsPendingCleanup()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ sandboxRunId, taskId, status: "succeeded" })])
+    );
   });
 
   it("includes logged model cost estimates in health", async () => {
@@ -1492,7 +1534,7 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM conversation_messages WHERE thread_key LIKE 'discord:guild-%'");
   await pool.query("DELETE FROM conversation_sessions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM crawl_cursors WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
-  await pool.query("DELETE FROM agent_codegen_jobs WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR request_id LIKE 'codegen-%'");
+  await pool.query("DELETE FROM agent_tasks WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR task_id LIKE 'task-%'");
   await pool.query("DELETE FROM durable_workflows WHERE guild_id LIKE 'guild-%' OR id LIKE 'workflow-%'");
   await pool.query("DELETE FROM server_overlays WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM interaction_blocks WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");

@@ -1,80 +1,87 @@
 # Discord AI Agent
 
-A self-hosted AI bot for private Discord servers.
+A self-hosted AI agent for private Discord servers.
 
-Mention `@ai` and it can answer questions, search your server's history, summarize channels, generate images, look things up on the web, and remember private server-specific skills. The interface is deliberately simple: users talk to it like a person, and the model decides which tools to use.
+Mention `@ai` and the bot can answer questions, search server history with Discord permissions, summarize channels, generate images, look things up on the web, remember private server skills, and open code-update PRs for itself.
 
-This is built for friend groups, clubs, communities, and small teams that want a useful AI assistant without handing their Discord history to a hosted SaaS bot.
+The interface is intentionally simple: users talk to the bot naturally, and the model chooses tools.
 
 ## Why This Exists
 
-Most Discord bots make users learn commands. Most AI chat apps do not understand your server. Discord AI Agent is the middle path:
+Most Discord bots make people learn commands. Most AI chat apps do not understand your Discord server. Discord AI Agent is the middle path:
 
-- One natural interface: `@ai what did we say about pizza?`
-- Permission-aware memory over indexed Discord history.
-- Persistent per-channel conversation context.
-- Web search, image generation, stats, summaries, and private skills.
-- Self-hosted code and database, so your server data stays under your control.
+- One interface: `@ai <request>`
+- Permission-aware memory over indexed Discord history
+- Persistent per-channel conversation context
+- Web, image, stats, summary, and skill tools
+- Self-hosted data and deployment
+- Isolated Kubernetes sandboxes for code-update PRs
 
-The goal is not to be a generic Discord bot framework. It is a practical AI agent you can run for your own server and extend over time.
+The project is built for friend groups, clubs, small communities, and teams that want a useful shared assistant without sending their server history to a hosted bot.
 
-## How It Works
+## Architecture
 
 ```text
 Discord mention
-  -> agent router
+  -> bot/control plane
   -> model chooses tools
-  -> local tools query Postgres / Discord history / GitHub / Railway
-  -> hosted OpenRouter tools handle web, fetch, and time
-  -> one conversational Discord reply
+  -> Postgres memory, Discord tools, web tools, image tools
+  -> durable agent task when code changes are requested
+  -> Kubernetes sandbox job
+  -> GitHub PR
+  -> Discord reply edited with progress/final result
 ```
 
-Discord AI Agent stores bot-visible messages in Postgres, creates embeddings with OpenRouter, and uses pgvector plus keyword search for retrieval. Every history lookup is filtered by the channels the requesting Discord user can currently view.
+The app has three long-running services:
 
-Private skills are stored in the database, not Git. Public baseline behavior can live in Markdown under `skills/`, but server-specific memories learned through `@ai learn this for next time ...` stay private.
+- `api`: internal callback API for sandbox task progress.
+- `bot`: Discord gateway process and user-facing responses.
+- `worker`: crawling, embeddings, queue processing, Kubernetes sandbox launch, reconciliation, and cleanup.
 
-Long-running agent work is modeled as durable execution state in Postgres. Codegen runs through a portable execution backend interface; the default backend is a Railway worker. Progress phases such as clone, install, Codex, verify, scan, push, and PR creation are written to trace events and the codegen job row so the Discord reply can update in place.
+Postgres with `pgvector` is the source of truth for Discord history, embeddings, sessions, skills, traces, task events, and sandbox runs.
 
-Private server overlays and durable workflows are database-backed foundations for server-specific instructions and future recurring jobs such as digests, watches, or scheduled maintenance. They are intentionally self-hosted primitives, not a hosted multi-tenant platform.
+## Capabilities
 
-## What You Get
+- Natural `@ai <request>` interaction
+- Full-server crawl through the Discord bot API
+- Incremental indexing for new, edited, and deleted messages
+- Permission-aware history retrieval
+- Per-channel persistent conversation memory
+- Channel/user stats and data analysis tools
+- Thread/channel summaries
+- Image generation
+- OpenRouter-hosted web search, web fetch, and datetime tools
+- Private DB-backed skills
+- Code-update PRs through isolated Kubernetes sandbox tasks
+- Structured logs and trace/task event inspection
 
-- Natural `@ai <request>` interaction.
-- Full-server crawl through the Discord bot API.
-- Incremental indexing for new, edited, and deleted messages.
-- Permission-aware history search.
-- Per-channel persistent conversation memory.
-- Channel and user stats.
-- Thread/channel summaries.
-- Image generation.
-- Hosted web search, web fetch, and datetime tools through OpenRouter.
-- Private DB-backed skills.
-- Optional GitHub PR creation for requested agent updates.
-- In-place codegen progress updates and final PR links.
-- Database-backed server overlays and durable workflow foundations.
-- Structured logs, trace IDs, and owner-only Railway log inspection.
+## Requirements
 
-## What You Need
+Local development:
 
 - Node.js 22+
-- Docker Desktop, or another Postgres instance with `pgvector`
-- A Discord application/bot token
-- An OpenRouter API key
-- Optional: a GitHub token if you want PR proposal tools
-- Optional: Railway if you want to deploy it there
+- Docker Desktop or another Postgres instance with `pgvector`
+- Discord application/bot token
+- OpenRouter API key
+
+Production:
+
+- Kubernetes, with AWS EKS as the primary reference target
+- Managed Postgres with `pgvector`
+- Container registry for app/sandbox images
+- Existing Kubernetes Secret containing app secrets
+- GitHub App credentials, or a GitHub token for local/dev code-update PRs
 
 ## Quickstart
 
-Clone and install:
-
 ```bash
-git clone https://github.com/Slokh/discord-ai-agent.git
+git clone https://github.com/your-org/discord-ai-agent.git
 cd discord-ai-agent
 npm install
 cp .env.example .env
 ```
 
-Start Postgres:
+Start local Postgres and migrate:
 
 ```bash
 docker compose up -d postgres
@@ -88,6 +95,7 @@ DISCORD_TOKEN=
 DISCORD_CLIENT_ID=
 DISCORD_GUILD_ID=
 OPENROUTER_API_KEY=
+TASK_SIGNING_SECRET=
 BOT_NAME=ai
 ```
 
@@ -97,80 +105,58 @@ Generate an invite URL:
 npm run invite-url
 ```
 
-Invite the bot to your server, then run checks:
+Invite the bot, then run:
 
 ```bash
 npm run preflight
-```
-
-Start the bot:
-
-```bash
 npm run dev
 ```
 
-In Discord:
+Try:
 
 ```text
 @ai hello
-@ai what can you do?
+@ai tools
 @ai status
 ```
 
-## Index Your Server History
+## Indexing Discord History
 
-The bot can answer normal questions immediately. To let it search old Discord messages, run a crawl:
+The bot can answer normal questions immediately. To search old Discord messages, run:
 
 ```bash
 npm run crawl
-```
-
-For larger servers, keep a worker running so embeddings process in the background:
-
-```bash
 npm run worker
 ```
 
 Messages become keyword-searchable as soon as they are stored. Semantic search improves as embeddings finish.
 
-Useful indexing commands:
+Useful commands:
 
 ```bash
-npm run crawl                 # continue/resume crawling
-npm run reindex               # reset crawl cursors and crawl again
-npm run embeddings:backfill   # enqueue missing/stale embeddings
-npm run embeddings:worker     # process embedding jobs only
+npm run crawl
+npm run reindex
+npm run embeddings:backfill
+npm run embeddings:worker
+npm run prompt -- --no-memory "what can you do?"
 ```
 
-## Discord Setup Notes
+## Code Updates
 
-In the Discord Developer Portal:
+When someone asks `@ai update yourself to ...`, the bot creates a durable `agent.task`, the worker starts a Kubernetes sandbox Job, and the sandbox:
 
-1. Create an application.
-2. Add a bot.
-3. Enable these privileged gateway intents:
-   - Server Members Intent
-   - Message Content Intent
-4. Copy the bot token into `DISCORD_TOKEN`.
-5. Copy the application/client ID into `DISCORD_CLIENT_ID`.
-6. Copy your server ID into `DISCORD_GUILD_ID`.
-7. Run `npm run invite-url` and invite the bot.
+1. Clones the configured GitHub repo.
+2. Runs Codex with the requested change.
+3. Runs verification and release scanning.
+4. Pushes a branch.
+5. Opens a GitHub PR only if there is a real diff.
+6. Reports progress back to the internal API.
 
-The bot does not need Administrator. It only indexes and answers from channels it can see, and users only retrieve history from channels they can currently view.
+The original Discord reply is edited with progress and the final PR link.
+If a sandbox crashes, disappears, or exits without sending its terminal callback, the worker reconciler marks the task failed in Postgres and later cleans up the sandbox Job, Secret, and ConfigMap.
 
-## Example Prompts
-
-```text
-@ai what did we say about buying a projector?
-@ai summarize what happened in this channel this week
-@ai rank channels by messages per day
-@ai what are the recurring topics in #movies?
-@ai find the message where someone mentioned "the projector setup"
-@ai next world cup match?
-@ai make an image of a wizard eating nachos
-@ai learn this for next time: movie night ties are settled by whoever hosted last
-@ai add a tool to check our Minecraft server status
-```
+For production setup, see [docs/eks-deploy.md](docs/eks-deploy.md).
+For a reference AWS baseline, see [deploy/terraform/aws](deploy/terraform/aws).
 
 ## Configuration
 
@@ -180,64 +166,38 @@ Required:
 | --- | --- |
 | `DISCORD_TOKEN` | Discord bot token |
 | `DISCORD_CLIENT_ID` | Discord application/client ID |
-| `DISCORD_GUILD_ID` | Server to run in |
+| `DISCORD_GUILD_ID` | Discord server to run in |
 | `OPENROUTER_API_KEY` | Chat, embeddings, images, and hosted tools |
+| `DATABASE_URL` | Postgres connection string |
+| `TASK_SIGNING_SECRET` | Signs sandbox callback tokens |
 
 Common optional settings:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BOT_NAME` | `ai` | Name used in examples and prompts |
-| `OPENROUTER_CHAT_MODEL` | `deepseek/deepseek-v4-flash` | Main agent model |
+| `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
+| `OPENROUTER_CHAT_MODEL` | `z-ai/glm-5.2` | Main agent model |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
-| `GITHUB_TOKEN` | unset | Enables skill PRs and Railway codegen PRs |
-| `GITHUB_REPOSITORY` | `owner/discord-ai-agent` | Repo for skill PRs and codegen jobs |
-| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `bot`, `worker`, `codegen`, or `all` |
-
-For `@ai add/build/implement ...` requests, run a separate Railway service with `npm run start:codegen`. The bot keeps the Discord reply open while the codegen worker clones the repo, runs Codex in an ephemeral checkout, commits only if there is a real diff, and opens a PR. When the worker finishes, the bot edits the original Discord reply with the PR link or the failure/no-change result.
-
-## Running Locally
-
-One-process local development:
-
-```bash
-npm run dev
-```
-
-Separate bot, worker, and codegen processes:
-
-```bash
-npm run bot
-npm run worker
-npm run codegen
-```
-
-Docker:
-
-```bash
-docker compose up --build bot worker codegen
-```
-
-Local prompt testing without Discord:
-
-```bash
-npm run prompt -- --no-memory "what can you do?"
-```
+| `GITHUB_REPOSITORY` | `owner/repo` | Repo for code-update PRs |
+| `GITHUB_BASE_BRANCH` | `main` | PR base branch |
+| `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |
+| `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
+| `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
+| `CONTROL_PLANE_INTERNAL_URL` | `http://discord-ai-agent-api:8080` | Sandbox callback URL |
+| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all` |
+| `RUN_MIGRATIONS` | `true` | Run migrations on process startup; Helm runtime pods set this to `false` because migrations run as a hook |
 
 ## Private Skills
 
-Skills are reusable instructions the agent loads into its system prompt.
-
-Public/default skills can live in `skills/*.md`. Private server-specific skills live in Postgres and should not be committed. The Discord command:
+Private server-specific skills live in Postgres, not Git.
 
 ```text
 @ai learn this for next time: movie night starts at 8 unless someone says otherwise
 ```
 
-creates or updates a private database skill after policy checks.
-
-Manage DB-backed skills:
+Manage skills:
 
 ```bash
 npm run skills -- list --all
@@ -247,55 +207,12 @@ npm run skills -- disable movie-night
 npm run skills -- delete movie-night
 ```
 
-## Deployment
+## Security Model
 
-Railway works well for the first hosted deployment:
-
-- Postgres service with persistent volume.
-- Bot service with `DISCORD_AI_AGENT_PROCESS_ROLE=bot`.
-- Worker service with `DISCORD_AI_AGENT_PROCESS_ROLE=worker`.
-- Codegen service with `DISCORD_AI_AGENT_PROCESS_ROLE=codegen`.
-- All app services connected to the same GitHub repo and database.
-
-See [docs/railway-deploy.md](docs/railway-deploy.md) for a detailed Railway setup.
-
-## Privacy And Safety
-
-Do not publish:
-
-- `.env` files
-- production database dumps
-- embeddings
-- trace logs
-- Railway logs
-- `.discord-ai-agent/`
-- private skill exports
-- Discord message exports
-
-Even without API keys, those files can contain private server/member data.
-
-Before making a public release, run:
-
-```bash
-npm run scan:release
-```
-
-## Development
-
-```bash
-npm run verify      # lint, typecheck, tests, audit
-npm run verify:db   # migration + pgvector integration tests
-```
-
-Useful diagnostics:
-
-```bash
-npm run doctor
-npm run smoke:discord
-npm run smoke:openrouter
-npm run smoke:github
-```
-
-## License
-
-MIT
+- The bot only indexes bot-visible Discord messages.
+- Retrieval is filtered by channels the requester can currently view.
+- Code-update work runs in isolated Kubernetes sandbox Jobs.
+- Sandboxes receive scoped task secrets, not Discord tokens or database credentials.
+- Only the worker service account can create sandbox Jobs, Secrets, and ConfigMaps.
+- Task progress and tool usage are persisted for audit/debugging.
+- Private Discord data, skills, logs, database dumps, and embeddings should never be committed.

@@ -1,12 +1,13 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
-import { assertDiscordConfig, assertOpenRouterConfig, loadConfig } from "./config/env.js";
-import { RailwayCodegenBackend } from "./codegen/backend.js";
+import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
+import { startInternalApi } from "./control/internalApi.js";
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
 import { DiscordAiAgentRepository } from "./db/repositories.js";
+import { KubernetesExecutionBackend } from "./execution/backend.js";
+import { startSandboxReconciler } from "./execution/reconciler.js";
 import { OpenRouterClient } from "./models/openrouter.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
-import { GitHubSkillClient } from "./skills/github.js";
 import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
 import { startJobs } from "./jobs/queue.js";
@@ -14,11 +15,13 @@ import { logger } from "./util/logger.js";
 
 async function main() {
   const config = loadConfig();
+  const startsApi = config.processRole === "all" || config.processRole === "api";
   const startsBot = config.processRole === "all" || config.processRole === "bot";
   const startsWorker = config.processRole === "all" || config.processRole === "worker";
-  const startsCodegenWorker = config.processRole === "all" || config.processRole === "codegen";
   if (startsBot || startsWorker) assertDiscordConfig(config);
-  assertOpenRouterConfig(config);
+  if (startsBot || startsWorker) assertOpenRouterConfig(config);
+  if (startsApi) assertTaskCallbackConfig(config);
+  if (startsWorker) assertExecutionConfig(config);
 
   logger.info(
     {
@@ -37,23 +40,25 @@ async function main() {
       },
       github: {
         repository: config.github.repository,
-        baseBranch: config.github.baseBranch,
-        dryRun: config.github.dryRun
+        baseBranch: config.github.baseBranch
       }
     },
     "Starting Discord AI Agent"
   );
 
-  logger.info("Running database migrations");
-  await runMigrations(config.databaseUrl);
-  logger.info("Database migrations complete");
+  if (config.runMigrations) {
+    logger.info("Running database migrations");
+    await runMigrations(config.databaseUrl);
+    logger.info("Database migrations complete");
+  } else {
+    logger.info("Skipping startup database migrations");
+  }
 
   const pool = createPool(config);
   logger.debug("Postgres pool created");
   const repo = new DiscordAiAgentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
-  const github = new GitHubSkillClient(config.github);
-  const codegenBackend = new RailwayCodegenBackend(config);
+  const executionBackend = startsWorker ? new KubernetesExecutionBackend(config) : undefined;
 
   const client =
     startsBot || startsWorker
@@ -83,19 +88,21 @@ async function main() {
       })
     : {
         crawlConfiguredGuild: async () => {
-          throw new Error("Discord crawler is unavailable in the codegen-only process.");
+          throw new Error("Discord crawler is unavailable in the API-only process.");
         }
       };
-  const startsEmbeddingWorker = startsBot || startsWorker;
-  logger.info({ startsBot, startsWorker, startsEmbeddingWorker, startsCodegenWorker }, "Starting job runtime");
+  const startsEmbeddingWorker = startsWorker;
+  logger.info({ startsApi, startsBot, startsWorker, startsEmbeddingWorker }, "Starting job runtime");
   const jobs = await startJobs({
     config,
     repo,
     crawler,
-    agentCodegen: {
-      name: codegenBackend.name,
-      run: async (job, context) => codegenBackend.run(job, context)
-    },
+    agentTask: executionBackend
+      ? {
+          name: executionBackend.name,
+          start: async (job, context) => executionBackend.start(job, context)
+        }
+      : undefined,
     embedding: {
       embedMessages: async (messageIds) => {
         await embedStoredMessages({ repo, openRouter, config, messageIds });
@@ -106,16 +113,20 @@ async function main() {
     },
     crawlWorker: startsWorker,
     embeddingWorker: startsEmbeddingWorker,
-    codegenWorker: startsCodegenWorker
+    taskWorker: startsWorker
   });
   jobRuntimeRef.current = jobs;
-  logger.info({ startsBot, startsWorker, startsEmbeddingWorker, startsCodegenWorker }, "Job runtime ready");
-  const runtime = startsBot && client && crawler instanceof DiscordCrawler ? createDiscordAiAgentBot({ config, repo, openRouter, github, crawler, jobs, client }) : null;
+  logger.info({ startsApi, startsBot, startsWorker, startsEmbeddingWorker }, "Job runtime ready");
+  const internalApi = startsApi ? await startInternalApi({ config, repo }) : null;
+  const sandboxReconciler = startsWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
+  const runtime = startsBot && client && crawler instanceof DiscordCrawler ? createDiscordAiAgentBot({ config, repo, openRouter, crawler, jobs, client }) : null;
 
   const shutdown = async () => {
     logger.info("Shutting down Discord AI Agent");
     runtime?.destroy();
     if (!runtime) client?.destroy();
+    sandboxReconciler?.stop();
+    await internalApi?.close().catch(() => undefined);
     await jobs.stop().catch(() => undefined);
     await pool.end().catch(() => undefined);
     process.exit(0);
@@ -131,8 +142,10 @@ async function main() {
     logger.info("Logging into Discord as worker process");
     await client.login(config.discord.token);
     logger.info("Discord AI Agent worker is online");
+  } else if (startsApi) {
+    logger.info("Discord AI Agent internal API is online");
   } else {
-    logger.info("Discord AI Agent codegen worker is online");
+    logger.info("Discord AI Agent process is online");
   }
 }
 

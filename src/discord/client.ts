@@ -14,7 +14,6 @@ import {
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { isOpenRouterContentFilterError, type OpenRouterClient } from "../models/openrouter.js";
-import type { GitHubSkillClient } from "../skills/github.js";
 import { embeddingPriorityForMessageTimestamp, type JobRuntime } from "../jobs/queue.js";
 import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
@@ -39,7 +38,6 @@ export function createDiscordAiAgentBot(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   openRouter: OpenRouterClient;
-  github: GitHubSkillClient;
   crawler: DiscordCrawler;
   jobs?: JobRuntime;
   client?: Client;
@@ -169,7 +167,6 @@ async function handleMessageCreate(
     config: AppConfig;
     repo: DiscordAiAgentRepository;
     openRouter: OpenRouterClient;
-    github: GitHubSkillClient;
     jobs?: JobRuntime;
   },
   client: Client,
@@ -369,7 +366,6 @@ async function handleMessageCreate(
           config: input.config,
           repo: input.repo,
           openRouter: input.openRouter,
-          github: input.github,
           jobs: input.jobs,
           guildId: message.guildId,
           channelId: message.channelId,

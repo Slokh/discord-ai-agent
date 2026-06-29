@@ -13,7 +13,6 @@ import {
   getDiscordStats,
   getPinnedMessages,
   inspectAgentLogs,
-  inspectRailwayLogs,
   getRecentDiscordMessages,
   listTools,
   reportStatus,
@@ -432,20 +431,6 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
         await inspectAgentLogs(ctx, {
           traceId: stringArgument(route.arguments, "traceId"),
           limit: numberArgument(route.arguments, "limit")
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
-  }
-
-  if (route.name === "inspectRailwayLogs") {
-    return {
-      content: cleanResponse(
-        await inspectRailwayLogs(ctx, {
-          service: stringArgument(route.arguments, "service"),
-          since: stringArgument(route.arguments, "since"),
-          lines: numberArgument(route.arguments, "lines"),
-          filter: stringArgument(route.arguments, "filter")
         }),
         ctx.config.maxReplyChars
       )
@@ -1067,7 +1052,6 @@ function chatMessages(
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +
         "For undo/delete/forget/remove requests about your previous replies, call undoConversationTurns. " +
         "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. " +
-        "For owner debugging of Railway deployment logs, startup failures, worker crashes, missing traces, or hosting/runtime errors, call inspectRailwayLogs. " +
         "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
         "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, run a coding PR update, or undo/delete/forget prior agent turns. " +
         "Use prior channel conversation context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +

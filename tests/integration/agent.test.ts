@@ -1404,25 +1404,29 @@ describe("agent router", () => {
   });
 
   it("executes model-selected update requests as coding PR jobs", async () => {
-    const enqueueAgentCodegen = vi.fn(async () => ({
+    const enqueueAgentTask = vi.fn(async () => ({
       jobId: "job-1",
-      requestId: "codegen-calendar-integration"
+      taskId: "task-calendar-integration"
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, github: { dryRun: false } },
+      config: { maxReplyChars: 1800, github: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
-        getAgentCodegenJob: vi.fn(async () => ({
-          requestId: "codegen-calendar-integration",
+        getAgentTask: vi.fn(async () => ({
+          taskId: "task-calendar-integration",
           pgBossJobId: "job-1",
           traceId: "trace-1",
           guildId: "g",
           channelId: "c",
           userId: "u",
-          updateName: "calendar-integration",
+          taskType: "code_update",
+          title: "calendar-integration",
           request: "add a calendar integration",
           requestedBy: "User (u)",
           status: "succeeded",
+          backend: "kubernetes-sandbox",
+          currentStep: "done",
+          statusMessage: "Opened pull request.",
           branchName: "discord-ai-agent/update-calendar-integration",
           prUrl: "https://github.com/example/repo/pull/1",
           draft: false,
@@ -1431,6 +1435,7 @@ describe("agent router", () => {
           createdAt: new Date(),
           startedAt: new Date(),
           completedAt: new Date(),
+          progressUpdatedAt: new Date(),
           updatedAt: new Date()
         }))
       },
@@ -1458,7 +1463,7 @@ describe("agent router", () => {
       },
       github: {},
       jobs: {
-        enqueueAgentCodegen
+        enqueueAgentTask
       },
       guildId: "g",
       channelId: "c",
@@ -1471,14 +1476,15 @@ describe("agent router", () => {
     const response = await handleAgentRequest(ctx, "how should we track events?");
 
     expect(response.content).toBe("Opened a review PR.");
-    expect(enqueueAgentCodegen).toHaveBeenCalledWith(
+    expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        updateName: "calendar-integration",
+        title: "calendar-integration",
         request: "add a calendar integration",
-        requestedBy: "User (u)"
+        requestedBy: "User (u)",
+        taskType: "code_update"
       })
     );
-    expect(ctx.repo.getAgentCodegenJob).toHaveBeenCalledWith("codegen-calendar-integration");
+    expect(ctx.repo.getAgentTask).toHaveBeenCalledWith("task-calendar-integration");
     expect(ctx.updateStatus).toHaveBeenCalledWith("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "openGithubPullRequest" }));
   });

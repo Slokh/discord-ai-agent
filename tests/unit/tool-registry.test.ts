@@ -23,7 +23,6 @@ describe("toolRegistry", () => {
       "openGithubPullRequest",
       "undoConversationTurns",
       "inspectAgentLogs",
-      "inspectRailwayLogs",
       "reportStatus"
     ]);
   });

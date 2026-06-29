@@ -19,7 +19,6 @@ export type ToolName =
   | "createSkillDraft"
   | "openGithubPullRequest"
   | "inspectAgentLogs"
-  | "inspectRailwayLogs"
   | "undoConversationTurns"
   | "reportStatus";
 
@@ -576,7 +575,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "openGithubPullRequest",
     description:
-      "Run a Railway codegen worker job for a requested Discord AI Agent update, wait for the result, and return the PR link only when it creates a real code diff. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
+      "Run an isolated Kubernetes sandbox task for a requested Discord AI Agent update, wait for the result, and return the PR link only when it creates a real code diff. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
     userVisible: true,
     mutates: true,
     parameters: {
@@ -611,7 +610,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "inspectAgentLogs",
     description:
-      "Inspect Discord AI Agent's own recent trace events and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. traceId is usually the originating Discord message ID.",
+      "Inspect Discord AI Agent's own recent trace events, task events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. traceId is usually the originating Discord message ID.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -624,36 +623,6 @@ export const toolRegistry: ToolRegistryEntry[] = [
         limit: {
           type: "number",
           description: "Maximum trace events and tool logs to return. Defaults to 20."
-        }
-      },
-      additionalProperties: false
-    }
-  },
-  {
-    name: "inspectRailwayLogs",
-    description:
-      "Owner-only. Inspect Railway deployment logs for Discord AI Agent bot/worker infrastructure debugging when app traces are missing, startup failed, deployments are suspect, or Railway/runtime errors are needed.",
-    userVisible: false,
-    mutates: false,
-    parameters: {
-      type: "object",
-      properties: {
-        service: {
-          type: "string",
-          enum: ["discord-ai-agent-bot", "discord-ai-agent-worker"],
-          description: "Railway service to inspect. Defaults to discord-ai-agent-bot."
-        },
-        since: {
-          type: "string",
-          description: "Relative time window up to 6h, like 30m, 2h, or 45s. Defaults to 30m."
-        },
-        lines: {
-          type: "number",
-          description: "Maximum log lines, capped at 200. Defaults to 100."
-        },
-        filter: {
-          type: "string",
-          description: "Optional Railway log filter, such as @level:error or a text search."
         }
       },
       additionalProperties: false
@@ -761,7 +730,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   if (name === "generateImage") return "generation";
   if (name === "createSkillDraft") return "memory";
   if (name === "openGithubPullRequest") return "coding";
-  if (name === "inspectAgentLogs" || name === "inspectRailwayLogs" || name === "reportStatus" || name === "listTools") return "ops";
+  if (name === "inspectAgentLogs" || name === "reportStatus" || name === "listTools") return "ops";
   return "discord";
 }
 
@@ -785,7 +754,6 @@ function defaultToolExamples(name: ToolName): string[] {
     createSkillDraft: "@ai learn this for next time: movie night is on Fridays",
     openGithubPullRequest: "@ai update yourself to handle Bluesky links better",
     inspectAgentLogs: "@ai why did that last answer fail?",
-    inspectRailwayLogs: "@ai check railway bot logs for errors",
     undoConversationTurns: "@ai undo that",
     reportStatus: "@ai status"
   };

@@ -18,7 +18,7 @@ const deniedTerms = [
   deny("private owner id", ["316647", "885259", "276299"]),
   deny("private bot application id", ["152049", "516666", "8931242"]),
   deny("private test guild id", ["152049", "685600", "8753395"]),
-  deny("private Railway project id", ["f618", "5373", "-1998", "-4e1f", "-8fba", "-311eead63b0f"]),
+  deny("private legacy hosting project id", ["f618", "5373", "-1998", "-4e1f", "-8fba", "-311eead63b0f"]),
   deny("private blocked user id", ["230801", "712691", "019777"]),
   deny("private member handle", ["hunter", "1323"]),
   deny("private member handle", ["sergeant", "gnome"]),
@@ -35,11 +35,11 @@ const secretPatterns: Array<{ label: string; pattern: RegExp }> = [
   { label: "GitHub fine-grained token", pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/ },
   { label: "OpenRouter key", pattern: /\bsk-or-v1-[A-Za-z0-9_-]{20,}\b/ },
   { label: "Discord token", pattern: /\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}\b/ },
-  { label: "Railway public proxy host", pattern: /\bproxy\.rlwy\.net\b/i }
+  { label: "legacy hosting public proxy host", pattern: /\bproxy\.rlwy\.net\b/i }
 ];
 
 async function main() {
-  const files = await trackedFiles();
+  const files = await releaseCandidateFiles();
   const findings: Finding[] = [];
 
   for (const file of files) {
@@ -62,15 +62,17 @@ async function main() {
     process.exit(1);
   }
 
-  process.stdout.write(`Release scan passed across ${files.length} tracked files.\n`);
+  process.stdout.write(`Release scan passed across ${files.length} release candidate files.\n`);
 }
 
 function deny(label: string, pieces: string[]) {
   return { label, term: pieces.join("") };
 }
 
-async function trackedFiles() {
-  const { stdout } = await execFileAsync("git", ["ls-files"], { maxBuffer: 1024 * 1024 });
+async function releaseCandidateFiles() {
+  const { stdout } = await execFileAsync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
+    maxBuffer: 1024 * 1024
+  });
   return stdout
     .split(/\r?\n/)
     .map((line) => line.trim())

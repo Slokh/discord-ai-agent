@@ -1,22 +1,15 @@
 import { Octokit } from "@octokit/rest";
 import { loadConfig } from "../src/config/env.js";
-import { parseGitHubRepository } from "../src/skills/github.js";
+import { resolveGitHubTaskToken } from "../src/github/appToken.js";
+import { parseGitHubRepository } from "../src/github/repository.js";
 
 async function main() {
   const config = loadConfig();
 
-  if (config.github.dryRun) {
-    process.stdout.write("github skipped: dry-run mode is enabled.\n");
-    return;
-  }
-
-  if (!config.github.token) {
-    throw new Error("GITHUB_TOKEN is required because real GitHub PR mode is enabled.");
-  }
-
   const { owner, repo } = parseGitHubRepository(config.github.repository);
+  const token = await resolveGitHubTaskToken(config);
 
-  const octokit = new Octokit({ auth: config.github.token });
+  const octokit = new Octokit({ auth: token });
   const [repository, branch] = await Promise.all([
     octokit.repos.get({ owner, repo }),
     octokit.repos.getBranch({ owner, repo, branch: config.github.baseBranch })

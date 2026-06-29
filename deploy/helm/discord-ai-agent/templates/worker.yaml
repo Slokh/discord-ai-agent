@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-worker
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "discord-ai-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-worker
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "dist/src/index.js", "worker"]
+          env:
+            - name: DISCORD_AI_AGENT_PROCESS_ROLE
+              value: worker
+            {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.discordEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.githubEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.internalApiEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.sandboxLauncherEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}

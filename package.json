@@ -3,16 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local-first Discord AI bot with permission-aware server memory, tools, images, and skill PRs.",
+  "description": "Self-hosted Discord AI agent with permission-aware memory, model-led tools, and sandboxed code-update PRs.",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "api": "tsx watch src/index.ts api",
     "bot": "tsx watch src/index.ts bot",
     "worker": "tsx watch src/index.ts worker",
-    "codegen": "tsx watch src/index.ts codegen",
     "start": "node dist/src/index.js",
+    "start:api": "node dist/src/index.js api",
     "start:bot": "node dist/src/index.js bot",
     "start:worker": "node dist/src/index.js worker",
-    "start:codegen": "node dist/src/index.js codegen",
     "start:all": "node dist/src/index.js all",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
@@ -47,6 +47,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@kubernetes/client-node": "^1.4.0",
     "@octokit/rest": "^21.1.1",
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",

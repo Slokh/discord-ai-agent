@@ -1,14 +1,12 @@
 import type { AppConfig } from "../config/env.js";
 import type { ConversationMessage, DiscordAiAgentRepository } from "../db/repositories.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
-import type { GitHubSkillClient } from "../skills/github.js";
 import type { JobRuntime } from "../jobs/queue.js";
 
 export type ToolContext = {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   openRouter: OpenRouterClient;
-  github: GitHubSkillClient;
   jobs?: JobRuntime;
   guildId: string;
   channelId: string;

@@ -4,7 +4,7 @@ import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
 import type {
-  AgentCodegenJobRecord,
+  AgentTaskRecord,
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
   DiscordChannelTopicCandidate,
@@ -15,11 +15,11 @@ import type {
   DiscordStats,
   DiscordUserLookupResult,
   SearchResult,
+  TaskEvent,
   ToolAuditLog,
   TraceEvent
 } from "../db/repositories.js";
 import { renderToolList } from "./registry.js";
-import { fetchRailwayLogs, type RailwayLogEntry } from "../railway/logs.js";
 
 export type HistoryAnswerOptions = {
   authorIds?: string[];
@@ -34,8 +34,8 @@ export type HistoryAnswerOptions = {
 
 const MAX_UNDO_TURNS = 10;
 const MS_PER_DAY = 86_400_000;
-const AGENT_CODEGEN_WAIT_TIMEOUT_MS = 25 * 60 * 1000;
-const AGENT_CODEGEN_POLL_INTERVAL_MS = 2_000;
+const AGENT_TASK_WAIT_TIMEOUT_MS = 25 * 60 * 1000;
+const AGENT_TASK_POLL_INTERVAL_MS = 2_000;
 
 type ChannelTopicCluster = {
   size: number;
@@ -876,7 +876,6 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
       request,
       content: markdown,
       source: "database",
-      dryRun: false,
       merged: false,
       policyReasons: policy.reasons
     });
@@ -949,14 +948,7 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
   ).slice(0, 48) || "agent-update";
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
-  const result = ctx.config.github.dryRun
-    ? await ctx.github.createAgentUpdateDryRun({
-        title: `Update Discord AI Agent: ${updateName}`,
-        updateName,
-        request: request.trim(),
-        requestedBy
-      })
-    : await enqueueAgentCodegenJob(ctx, { request, updateName, requestedBy });
+  const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy });
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -964,81 +956,79 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     userId: ctx.userId,
     toolName: "openGithubPullRequest",
     argumentsSummary: summarizeForAudit({ request, updateName }),
-    resultSummary: summarizeForAudit(agentCodegenAuditSummary(result))
+    resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
-  if (result.dryRun === true) {
-    return `I drafted a Railway codegen job in dry-run mode for \`${result.requestId}\`${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real coding jobs.`;
-  }
-  return formatAgentCodegenResult(result);
+  return formatAgentTaskResult(result);
 }
 
-async function enqueueAgentCodegenJob(
+async function enqueueAgentCodeUpdateTask(
   ctx: ToolContext,
   input: { request: string; updateName: string; requestedBy: string }
-): Promise<{ dryRun: false; requestId: string; jobId: string | null; job?: AgentCodegenJobRecord; timedOut?: boolean }> {
+): Promise<{ taskId: string; jobId: string | null; job?: AgentTaskRecord; timedOut?: boolean }> {
   if (!ctx.jobs) {
-    throw new Error("Railway codegen queue is unavailable in this process.");
+    throw new Error("Agent task queue is unavailable in this process.");
   }
   await ctx.updateStatus?.("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
-  const enqueued = await ctx.jobs.enqueueAgentCodegen({
+  const enqueued = await ctx.jobs.enqueueAgentTask({
     request: input.request.trim(),
-    updateName: input.updateName,
-    requestedBy: input.requestedBy
+    title: input.updateName,
+    requestedBy: input.requestedBy,
+    taskType: "code_update"
   });
-  const job = await waitForAgentCodegenResult(ctx, enqueued.requestId);
-  return { dryRun: false, ...enqueued, ...job };
+  const job = await waitForAgentTaskResult(ctx, enqueued.taskId);
+  return { ...enqueued, ...job };
 }
 
-async function waitForAgentCodegenResult(
+async function waitForAgentTaskResult(
   ctx: ToolContext,
-  requestId: string
-): Promise<{ job?: AgentCodegenJobRecord; timedOut?: boolean }> {
-  const deadline = Date.now() + AGENT_CODEGEN_WAIT_TIMEOUT_MS;
+  taskId: string
+): Promise<{ job?: AgentTaskRecord; timedOut?: boolean }> {
+  const deadline = Date.now() + AGENT_TASK_WAIT_TIMEOUT_MS;
   let lastProgressKey: string | undefined;
 
   while (Date.now() < deadline) {
-    const job = await ctx.repo.getAgentCodegenJob(requestId);
+    const job = await ctx.repo.getAgentTask(taskId);
     if (job) {
-      if (isTerminalAgentCodegenStatus(job.status)) {
+      if (isTerminalAgentTaskStatus(job.status)) {
         return { job };
       }
       const progressKey = `${job.status}:${job.currentStep ?? ""}:${job.statusMessage ?? ""}`;
       if (progressKey !== lastProgressKey) {
         lastProgressKey = progressKey;
-        await ctx.updateStatus?.(agentCodegenProgressMessage(job));
+        await ctx.updateStatus?.(agentTaskProgressMessage(job));
       }
     }
-    await sleep(AGENT_CODEGEN_POLL_INTERVAL_MS);
+    await sleep(AGENT_TASK_POLL_INTERVAL_MS);
   }
 
-  const job = await ctx.repo.getAgentCodegenJob(requestId);
+  const job = await ctx.repo.getAgentTask(taskId);
   return { job, timedOut: true };
 }
 
-function isTerminalAgentCodegenStatus(status: AgentCodegenJobRecord["status"]) {
-  return status === "succeeded" || status === "failed" || status === "no_changes";
+function isTerminalAgentTaskStatus(status: AgentTaskRecord["status"]) {
+  return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
 }
 
-function agentCodegenProgressMessage(job: AgentCodegenJobRecord) {
+function agentTaskProgressMessage(job: AgentTaskRecord) {
   const detail = job.statusMessage ?? (job.status === "running" ? "Working on the code change now." : "Preparing the code change.");
-  return `${detail}\n\nUpdate: \`${job.updateName}\`${job.currentStep ? `\nStep: \`${job.currentStep}\`` : ""}`;
+  return `${detail}\n\nUpdate: \`${job.title}\`${job.currentStep ? `\nStep: \`${job.currentStep}\`` : ""}`;
 }
 
-function formatAgentCodegenResult(input: {
-  requestId: string;
+function formatAgentTaskResult(input: {
+  taskId: string;
   jobId: string | null;
-  job?: AgentCodegenJobRecord;
+  job?: AgentTaskRecord;
   timedOut?: boolean;
 }) {
   if (input.timedOut) {
     const status = input.job?.status ? ` Current status: \`${input.job.status}\`.` : "";
-    return `I’m still working on that code change and do not have the final result yet.${status} Request ID: \`${input.requestId}\`.`;
+    return `I’m still working on that code change and do not have the final result yet.${status} Task ID: \`${input.taskId}\`.`;
   }
 
   const job = input.job;
   if (!job) {
-    return `I started the code change, but I could not find its result row. Request ID: \`${input.requestId}\`.`;
+    return `I started the code change, but I could not find its result row. Task ID: \`${input.taskId}\`.`;
   }
 
   if (job.status === "succeeded" && job.prUrl) {
@@ -1047,23 +1037,25 @@ function formatAgentCodegenResult(input: {
   }
 
   if (job.status === "no_changes") {
-    return `I tried to make that change, but the codegen run did not produce a code diff, so no PR was opened. Request ID: \`${input.requestId}\`.`;
+    return `I tried to make that change, but the sandbox did not produce a code diff, so no PR was opened. Task ID: \`${input.taskId}\`.`;
+  }
+
+  if (job.status === "cancelled") {
+    return `That code change task was cancelled. Task ID: \`${input.taskId}\`.`;
   }
 
   if (job.status === "failed") {
-    return `I tried to make that change, but codegen failed: ${job.error ?? "unknown error"}`;
+    return `I tried to make that change, but the sandbox failed: ${job.error ?? "unknown error"}`;
   }
 
-  return `I’m still working on that code change. Current status: \`${job.status}\`. Request ID: \`${input.requestId}\`.`;
+  return `I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`;
 }
 
-function agentCodegenAuditSummary(result: unknown) {
+function agentTaskAuditSummary(result: unknown) {
   if (!result || typeof result !== "object") return result;
-  if ("dryRun" in result && result.dryRun) return result;
-  const typed = result as { requestId?: string; jobId?: string | null; timedOut?: boolean; job?: AgentCodegenJobRecord };
+  const typed = result as { taskId?: string; jobId?: string | null; timedOut?: boolean; job?: AgentTaskRecord };
   return {
-    dryRun: false,
-    requestId: typed.requestId,
+    taskId: typed.taskId,
     jobId: typed.jobId,
     timedOut: typed.timedOut,
     status: typed.job?.status,
@@ -1120,8 +1112,14 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
 export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: string; limit?: number } = {}): Promise<string> {
   const limit = clampInteger(input.limit, 1, 50, 20);
   const traceId = input.traceId?.trim() || undefined;
-  const [events, toolLogs] = await Promise.all([
+  const [events, taskEvents, toolLogs] = await Promise.all([
     ctx.repo.getTraceEvents({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      traceId,
+      limit
+    }),
+    ctx.repo.getTaskEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
       traceId,
@@ -1141,10 +1139,10 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     userId: ctx.userId,
     toolName: "inspectAgentLogs",
     argumentsSummary: summarizeForAudit({ traceId, limit }),
-    resultSummary: summarizeForAudit({ traceEvents: events.length, toolLogs: toolLogs.length })
+    resultSummary: summarizeForAudit({ traceEvents: events.length, taskEvents: taskEvents.length, toolLogs: toolLogs.length })
   });
 
-  if (events.length === 0 && toolLogs.length === 0) {
+  if (events.length === 0 && taskEvents.length === 0 && toolLogs.length === 0) {
     return traceId ? `No Discord AI Agent trace or tool logs matched traceId=${traceId}.` : "No recent Discord AI Agent trace or tool logs matched visible channels.";
   }
 
@@ -1153,58 +1151,12 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     "",
     formatTraceEvents(events),
     "",
+    formatTaskEvents(taskEvents),
+    "",
     formatToolAuditLogs(toolLogs)
   ]
     .filter((line) => line !== "")
     .join("\n");
-}
-
-export async function inspectRailwayLogs(
-  ctx: ToolContext,
-  input: { service?: string; since?: string; lines?: number; filter?: string } = {}
-): Promise<string> {
-  if (!ctx.config.railway.logOwnerUserIds.includes(ctx.userId)) {
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "inspectRailwayLogs",
-      argumentsSummary: summarizeForAudit(input),
-      error: "unauthorized"
-    });
-    return "Railway log access is owner-only.";
-  }
-
-  let result: Awaited<ReturnType<typeof fetchRailwayLogs>>;
-  try {
-    result = await fetchRailwayLogs(ctx.config.railway, input);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "inspectRailwayLogs",
-      argumentsSummary: summarizeForAudit(input),
-      error: message
-    });
-    return `Railway log lookup failed: ${message}`;
-  }
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "inspectRailwayLogs",
-    argumentsSummary: summarizeForAudit({
-      service: result.service,
-      since: result.since,
-      lines: result.lines,
-      filter: result.filter
-    }),
-    resultSummary: summarizeForAudit({ entries: result.entries.length, stderr: result.stderr || undefined })
-  });
-
-  return formatRailwayLogs(result);
 }
 
 function formatDiscordUserMatches(results: DiscordUserLookupResult[]) {
@@ -1234,6 +1186,20 @@ function formatTraceEvents(events: TraceEvent[]) {
   ].join("\n");
 }
 
+function formatTaskEvents(events: TaskEvent[]) {
+  if (events.length === 0) return "Task events: none.";
+  return [
+    "Task events:",
+    ...events
+      .slice()
+      .reverse()
+      .map((event) => {
+        const summary = event.summary ? ` - ${truncateForDiscord(event.summary, 180)}` : "";
+        return `- ${event.createdAt.toISOString()} ${event.level} ${event.eventName} task=${event.taskId}${summary}`;
+      })
+  ].join("\n");
+}
+
 function formatToolAuditLogs(logs: ToolAuditLog[]) {
   if (logs.length === 0) return "Tool audit logs: none.";
   return [
@@ -1250,34 +1216,6 @@ function formatToolAuditLogs(logs: ToolAuditLog[]) {
         const result = log.resultSummary ? ` -> ${truncateForDiscord(log.resultSummary, 180)}` : "";
         return `- ${log.createdAt.toISOString()} ${log.toolName}${bits.length ? ` (${bits.join(", ")})` : ""}${result}`;
       })
-  ].join("\n");
-}
-
-function formatRailwayLogs(result: {
-  service: string;
-  since: string;
-  lines: number;
-  filter: string | null;
-  entries: RailwayLogEntry[];
-  stderr: string;
-}) {
-  const header = `Railway logs for ${result.service} since ${result.since}${result.filter ? ` filter=${result.filter}` : ""}:`;
-  if (result.entries.length === 0) {
-    return [header, result.stderr ? `stderr: ${truncateForDiscord(result.stderr, 500)}` : "No log lines returned."].join("\n");
-  }
-
-  return [
-    header,
-    ...result.entries.slice(-result.lines).map((entry) => {
-      const fields = [
-        entry.level,
-        entry.traceId ? `trace=${entry.traceId}` : null,
-        entry.requestId && entry.requestId !== entry.traceId ? `request=${entry.requestId}` : null,
-        entry.messageId && entry.messageId !== entry.traceId ? `message=${entry.messageId}` : null,
-        entry.durationMs == null ? null : `${entry.durationMs}ms`
-      ].filter(Boolean);
-      return `- ${entry.timestamp ?? "(no timestamp)"}${fields.length ? ` ${fields.join(" ")}` : ""}: ${truncateForDiscord(entry.message, 260)}`;
-    })
   ].join("\n");
 }
 
@@ -2153,28 +2091,6 @@ function noHistoryResultsMessage(crawl: Array<{ status: string; channels: number
     `Crawl status: ${active.map((row) => `${row.status}=${row.channels} channels/${row.messages} messages`).join(", ")}.`
   ].join("\n");
 }
-
-export function describeSkillPullRequestResult(result: {
-  dryRun: boolean;
-  filePath: string;
-  branchName: string;
-  prUrl?: string;
-  merged?: boolean;
-  autoMergeQueued?: boolean;
-  autoMergeError?: string;
-  policyReasons?: string[];
-  dryRunPath?: string;
-  content: string;
-}) {
-  if (result.policyReasons?.length) {
-    return `I drafted a skill, but it failed policy checks: ${result.policyReasons.join("; ")}`;
-  }
-  if (result.dryRun) {
-    return `I drafted \`${result.filePath}\` in dry-run mode${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real PRs.`;
-  }
-  return `I opened a skill PR for human review: ${result.prUrl}`;
-}
-
 
 export function extractHistorySearchSyntax(message: string) {
   const authorIds: string[] = [];

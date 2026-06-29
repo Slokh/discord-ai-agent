@@ -296,19 +296,20 @@ export type ToolAuditLog = {
   createdAt: Date;
 };
 
-export type AgentCodegenJobStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes";
+export type AgentTaskStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
 
-export type AgentCodegenJobRecord = {
-  requestId: string;
+export type AgentTaskRecord = {
+  taskId: string;
   pgBossJobId: string | null;
   traceId: string | null;
   guildId: string | null;
   channelId: string | null;
   userId: string | null;
-  updateName: string;
+  taskType: string;
+  title: string;
   request: string;
   requestedBy: string;
-  status: AgentCodegenJobStatus;
+  status: AgentTaskStatus;
   backend: string | null;
   currentStep: string | null;
   statusMessage: string | null;
@@ -321,6 +322,33 @@ export type AgentCodegenJobRecord = {
   startedAt: Date | null;
   completedAt: Date | null;
   progressUpdatedAt: Date | null;
+  updatedAt: Date;
+};
+
+export type TaskEvent = {
+  id: number;
+  taskId: string;
+  traceId: string | null;
+  eventName: string;
+  level: TraceEventLevel;
+  summary: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
+export type SandboxRunRecord = {
+  sandboxRunId: string;
+  taskId: string;
+  taskStatus: AgentTaskStatus | null;
+  backend: string;
+  namespace: string | null;
+  backendJobName: string | null;
+  image: string | null;
+  status: string;
+  metadata: Record<string, unknown>;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  cleanedUpAt: Date | null;
   updatedAt: Date;
 };
 
@@ -2091,49 +2119,52 @@ export class DiscordAiAgentRepository {
     return Number(result.rows[0]?.count ?? 0);
   }
 
-  async upsertAgentCodegenQueued(input: {
-    requestId: string;
+  async upsertAgentTaskQueued(input: {
+    taskId: string;
     pgBossJobId?: string | null;
     traceId?: string | null;
     guildId?: string | null;
     channelId?: string | null;
     userId?: string | null;
-    updateName: string;
+    taskType: string;
+    title: string;
     request: string;
     requestedBy: string;
     backend?: string | null;
   }) {
     await this.pool.query(
       `
-        INSERT INTO agent_codegen_jobs(
-          request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          update_name, request, requested_by, backend, status, current_step, status_message, progress_updated_at, updated_at
+        INSERT INTO agent_tasks(
+          task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          task_type, title, request, requested_by, backend, status, current_step, status_message, progress_updated_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'queued', 'queued', 'Waiting for the codegen worker to pick this up.', now(), now())
-        ON CONFLICT(request_id) DO UPDATE SET
-          pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_codegen_jobs.pgboss_job_id),
-          trace_id = coalesce(EXCLUDED.trace_id, agent_codegen_jobs.trace_id),
-          guild_id = coalesce(EXCLUDED.guild_id, agent_codegen_jobs.guild_id),
-          channel_id = coalesce(EXCLUDED.channel_id, agent_codegen_jobs.channel_id),
-          user_id = coalesce(EXCLUDED.user_id, agent_codegen_jobs.user_id),
-          update_name = EXCLUDED.update_name,
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'queued', 'queued', 'Waiting for a Kubernetes sandbox to start.', now(), now())
+        ON CONFLICT(task_id) DO UPDATE SET
+          pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_tasks.pgboss_job_id),
+          trace_id = coalesce(EXCLUDED.trace_id, agent_tasks.trace_id),
+          guild_id = coalesce(EXCLUDED.guild_id, agent_tasks.guild_id),
+          channel_id = coalesce(EXCLUDED.channel_id, agent_tasks.channel_id),
+          user_id = coalesce(EXCLUDED.user_id, agent_tasks.user_id),
+          task_type = EXCLUDED.task_type,
+          title = EXCLUDED.title,
           request = EXCLUDED.request,
           requested_by = EXCLUDED.requested_by,
-          backend = coalesce(EXCLUDED.backend, agent_codegen_jobs.backend),
+          backend = coalesce(EXCLUDED.backend, agent_tasks.backend),
           status = CASE
-            WHEN agent_codegen_jobs.status IN ('running', 'succeeded', 'failed', 'no_changes') THEN agent_codegen_jobs.status
+            WHEN agent_tasks.status IN ('running', 'succeeded', 'failed', 'no_changes', 'cancelled') THEN agent_tasks.status
             ELSE 'queued'
           END,
           updated_at = now()
       `,
       [
-        input.requestId,
+        input.taskId,
         input.pgBossJobId ?? null,
         input.traceId ?? null,
         input.guildId ?? null,
         input.channelId ?? null,
         input.userId ?? null,
-        input.updateName,
+        input.taskType,
+        input.title,
         input.request,
         input.requestedBy,
         input.backend ?? null
@@ -2141,95 +2172,255 @@ export class DiscordAiAgentRepository {
     );
   }
 
-  async markAgentCodegenRunning(input: { requestId: string; backend?: string | null; step?: string | null; statusMessage?: string | null }) {
+  async markAgentTaskRunning(input: { taskId: string; backend?: string | null; step?: string | null; statusMessage?: string | null }) {
     await this.pool.query(
       `
-        UPDATE agent_codegen_jobs
+        UPDATE agent_tasks
         SET status = 'running',
             backend = coalesce($2, backend),
             current_step = coalesce($3, current_step, 'running'),
-            status_message = coalesce($4, status_message, 'Running codegen.'),
+            status_message = coalesce($4, status_message, 'Running agent task.'),
             progress_updated_at = now(),
             started_at = coalesce(started_at, now()),
             updated_at = now()
-        WHERE request_id = $1
+        WHERE task_id = $1
       `,
-      [input.requestId, input.backend ?? null, input.step ?? null, input.statusMessage ?? null]
+      [input.taskId, input.backend ?? null, input.step ?? null, input.statusMessage ?? null]
     );
   }
 
-  async markAgentCodegenProgress(input: { requestId: string; step: string; statusMessage: string; backend?: string | null }) {
+  async markAgentTaskProgress(input: {
+    taskId: string;
+    step: string;
+    statusMessage: string;
+    backend?: string | null;
+    metadata?: Record<string, unknown>;
+  }) {
     await this.pool.query(
       `
-        UPDATE agent_codegen_jobs
-        SET backend = coalesce($4, backend),
-            current_step = $2,
-            status_message = $3,
-            progress_updated_at = now(),
-            updated_at = now()
-        WHERE request_id = $1
+        WITH updated AS (
+          UPDATE agent_tasks
+          SET backend = coalesce($4, backend),
+              current_step = $2,
+              status_message = $3,
+              progress_updated_at = now(),
+              updated_at = now()
+          WHERE task_id = $1
+          RETURNING task_id, trace_id, guild_id, channel_id, user_id
+        ),
+        event_insert AS (
+          INSERT INTO task_events(task_id, trace_id, event_name, level, summary, metadata)
+          SELECT task_id, trace_id, 'task.progress', 'info', $3, jsonb_build_object('step', $2) || $5::jsonb
+          FROM updated
+        )
+        INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, summary, metadata)
+        SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.progress', $3, jsonb_build_object('step', $2) || $5::jsonb
+        FROM updated
       `,
-      [input.requestId, input.step, input.statusMessage, input.backend ?? null]
+      [input.taskId, input.step, input.statusMessage, input.backend ?? null, JSON.stringify(input.metadata ?? {})]
     );
   }
 
-  async markAgentCodegenSucceeded(input: {
-    requestId: string;
+  async recordSandboxRun(input: {
+    taskId: string;
+    sandboxRunId: string;
+    backend: string;
+    namespace?: string | null;
+    backendJobName?: string | null;
+    image?: string | null;
+    metadata?: Record<string, unknown>;
+  }) {
+    await this.pool.query(
+      `
+        INSERT INTO sandbox_runs(
+          sandbox_run_id, task_id, backend, namespace, backend_job_name, image,
+          status, metadata, started_at, completed_at, updated_at
+        )
+        SELECT
+          $1, at.task_id, $3, $4, $5, $6,
+          CASE
+            WHEN at.status IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN at.status
+            ELSE 'running'
+          END,
+          $7::jsonb,
+          now(),
+          CASE
+            WHEN at.status IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN coalesce(at.completed_at, now())
+            ELSE NULL
+          END,
+          now()
+        FROM agent_tasks at
+        WHERE at.task_id = $2
+        ON CONFLICT(sandbox_run_id) DO UPDATE SET
+          backend = EXCLUDED.backend,
+          namespace = EXCLUDED.namespace,
+          backend_job_name = EXCLUDED.backend_job_name,
+          image = EXCLUDED.image,
+          status = CASE
+            WHEN sandbox_runs.status IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN sandbox_runs.status
+            ELSE EXCLUDED.status
+          END,
+          metadata = sandbox_runs.metadata || EXCLUDED.metadata,
+          completed_at = coalesce(sandbox_runs.completed_at, EXCLUDED.completed_at),
+          updated_at = now()
+      `,
+      [
+        input.sandboxRunId,
+        input.taskId,
+        input.backend,
+        input.namespace ?? null,
+        input.backendJobName ?? null,
+        input.image ?? null,
+        JSON.stringify(input.metadata ?? {})
+      ]
+    );
+  }
+
+  async markAgentTaskSucceeded(input: {
+    taskId: string;
     branchName: string;
     prUrl: string;
     draft: boolean;
     verifyPassed: boolean;
+    metadata?: Record<string, unknown>;
   }) {
     await this.pool.query(
       `
-        UPDATE agent_codegen_jobs
-        SET status = 'succeeded',
-            current_step = 'done',
-            status_message = 'Opened pull request.',
-            branch_name = $2,
-            pr_url = $3,
-            draft = $4,
-            verify_passed = $5,
-            error = NULL,
-            completed_at = now(),
-            updated_at = now()
-        WHERE request_id = $1
+        WITH updated AS (
+          UPDATE agent_tasks
+          SET status = 'succeeded',
+              current_step = 'done',
+              status_message = 'Opened pull request.',
+              branch_name = $2,
+              pr_url = $3,
+              draft = $4,
+              verify_passed = $5,
+              error = NULL,
+              completed_at = now(),
+              updated_at = now()
+          WHERE task_id = $1
+          RETURNING task_id, trace_id, guild_id, channel_id, user_id
+        ),
+        sandbox_update AS (
+          UPDATE sandbox_runs
+          SET status = 'succeeded', completed_at = now(), updated_at = now()
+          WHERE task_id = $1 AND completed_at IS NULL
+        ),
+        event_insert AS (
+          INSERT INTO task_events(task_id, trace_id, event_name, level, summary, metadata)
+          SELECT task_id, trace_id, 'task.completed', 'info', 'Opened pull request.', $6::jsonb
+          FROM updated
+        )
+        INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, summary, metadata)
+        SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.completed', 'Opened pull request.', $6::jsonb
+        FROM updated
       `,
-      [input.requestId, input.branchName, input.prUrl, input.draft, input.verifyPassed]
+      [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
     );
   }
 
-  async markAgentCodegenFailed(input: { requestId: string; status?: "failed" | "no_changes"; error: string }) {
+  async markAgentTaskFailed(input: {
+    taskId: string;
+    status?: "failed" | "no_changes" | "cancelled";
+    error: string;
+    metadata?: Record<string, unknown>;
+  }) {
     await this.pool.query(
       `
-        UPDATE agent_codegen_jobs
-        SET status = $2,
-            current_step = $2,
-            status_message = $3,
-            error = $3,
-            completed_at = now(),
-            updated_at = now()
-        WHERE request_id = $1
+        WITH updated AS (
+          UPDATE agent_tasks
+          SET status = $2,
+              current_step = $2,
+              status_message = $3,
+              error = $3,
+              completed_at = now(),
+              updated_at = now()
+          WHERE task_id = $1
+          RETURNING task_id, trace_id, guild_id, channel_id, user_id
+        ),
+        sandbox_update AS (
+          UPDATE sandbox_runs
+          SET status = $2, completed_at = now(), updated_at = now()
+          WHERE task_id = $1 AND completed_at IS NULL
+        ),
+        event_insert AS (
+          INSERT INTO task_events(task_id, trace_id, event_name, level, summary, metadata)
+          SELECT task_id, trace_id, 'task.completed', CASE WHEN $2 = 'cancelled' THEN 'info' ELSE 'error' END, $3, $4::jsonb
+          FROM updated
+        )
+        INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, level, summary, metadata)
+        SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.completed', CASE WHEN $2 = 'cancelled' THEN 'info' ELSE 'error' END, $3, $4::jsonb
+        FROM updated
       `,
-      [input.requestId, input.status ?? "failed", input.error]
+      [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
     );
   }
 
-  async getAgentCodegenJob(requestId: string): Promise<AgentCodegenJobRecord | undefined> {
+  async getAgentTask(taskId: string): Promise<AgentTaskRecord | undefined> {
     const result = await this.pool.query(
       `
         SELECT
-          request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          update_name, request, requested_by, status, backend, current_step,
+          task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, completed_at, progress_updated_at, updated_at
-        FROM agent_codegen_jobs
-        WHERE request_id = $1
+        FROM agent_tasks
+        WHERE task_id = $1
       `,
-      [requestId]
+      [taskId]
     );
     const row = result.rows[0];
-    return row ? rowToAgentCodegenJob(row) : undefined;
+    return row ? rowToAgentTask(row) : undefined;
+  }
+
+  async listActiveSandboxRuns(limit = 50): Promise<SandboxRunRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          sr.sandbox_run_id, sr.task_id, at.status AS task_status, sr.backend, sr.namespace,
+          sr.backend_job_name, sr.image, sr.status, sr.metadata, sr.started_at,
+          sr.completed_at, sr.cleaned_up_at, sr.updated_at
+        FROM sandbox_runs sr
+        JOIN agent_tasks at ON at.task_id = sr.task_id
+        WHERE at.status IN ('queued', 'running')
+          AND sr.status = 'running'
+        ORDER BY sr.updated_at ASC
+        LIMIT $1
+      `,
+      [Math.max(1, Math.min(200, Math.trunc(limit)))]
+    );
+    return result.rows.map(rowToSandboxRun);
+  }
+
+  async listTerminalSandboxRunsPendingCleanup(limit = 50): Promise<SandboxRunRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          sr.sandbox_run_id, sr.task_id, at.status AS task_status, sr.backend, sr.namespace,
+          sr.backend_job_name, sr.image, sr.status, sr.metadata, sr.started_at,
+          sr.completed_at, sr.cleaned_up_at, sr.updated_at
+        FROM sandbox_runs sr
+        JOIN agent_tasks at ON at.task_id = sr.task_id
+        WHERE at.status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+          AND sr.cleaned_up_at IS NULL
+        ORDER BY coalesce(sr.completed_at, sr.updated_at) ASC
+        LIMIT $1
+      `,
+      [Math.max(1, Math.min(200, Math.trunc(limit)))]
+    );
+    return result.rows.map(rowToSandboxRun);
+  }
+
+  async markSandboxRunCleanedUp(sandboxRunId: string) {
+    await this.pool.query(
+      `
+        UPDATE sandbox_runs
+        SET cleaned_up_at = now(),
+            updated_at = now()
+        WHERE sandbox_run_id = $1
+      `,
+      [sandboxRunId]
+    );
   }
 
   async getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> {
@@ -2497,6 +2688,31 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToToolAuditLog);
   }
 
+  async getTaskEvents(input: {
+    guildId: string;
+    visibleChannelIds: string[];
+    traceId?: string;
+    limit: number;
+  }): Promise<TaskEvent[]> {
+    const limit = Math.max(1, Math.min(100, Math.trunc(input.limit)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          te.id, te.task_id, te.trace_id, te.event_name, te.level,
+          te.summary, te.metadata, te.created_at
+        FROM task_events te
+        JOIN agent_tasks at ON at.task_id = te.task_id
+        WHERE at.guild_id = $1
+          AND ($2::text IS NULL OR te.trace_id = $2 OR te.task_id = $2)
+          AND (at.channel_id IS NULL OR at.channel_id = ANY($3::text[]))
+        ORDER BY te.created_at DESC, te.id DESC
+        LIMIT $4
+      `,
+      [input.guildId, input.traceId ?? null, input.visibleChannelIds, limit]
+    );
+    return result.rows.map(rowToTaskEvent);
+  }
+
   async ensureConversationSession(input: {
     threadKey: string;
     guildId: string;
@@ -2687,7 +2903,6 @@ export class DiscordAiAgentRepository {
     prUrl?: string | null;
     content?: string | null;
     source?: string;
-    dryRun: boolean;
     merged?: boolean;
     policyReasons?: string[];
   }) {
@@ -2695,9 +2910,9 @@ export class DiscordAiAgentRepository {
       `
         INSERT INTO skill_changes(
           skill_name, file_path, requester_id, request, branch_name,
-          pr_url, dry_run, merged, policy_reasons
+          pr_url, merged, policy_reasons
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `,
       [
         input.skillName,
@@ -2706,13 +2921,12 @@ export class DiscordAiAgentRepository {
         input.request ?? null,
         input.branchName ?? null,
         input.prUrl ?? null,
-        input.dryRun,
         input.merged ?? false,
         JSON.stringify(input.policyReasons ?? [])
       ]
     );
 
-    if (!input.dryRun && !input.policyReasons?.length) {
+    if (!input.policyReasons?.length) {
       await this.pool.query(
         `
           INSERT INTO skills(name, file_path, source, content, enabled, version, last_pr_url, updated_at)
@@ -2791,9 +3005,9 @@ export class DiscordAiAgentRepository {
         `
           INSERT INTO skill_changes(
             skill_name, file_path, requester_id, request, branch_name,
-            pr_url, dry_run, merged, policy_reasons
+            pr_url, merged, policy_reasons
           )
-          VALUES ($1, $2, $3, $4, null, null, false, true, '[]'::jsonb)
+          VALUES ($1, $2, $3, $4, null, null, true, '[]'::jsonb)
         `,
         [input.name, filePath, input.requesterId ?? null, input.request ?? null]
       );
@@ -2845,6 +3059,20 @@ export class DiscordAiAgentRepository {
       estimatedCostUsd: Number(estimatedCost.rows[0]?.cost ?? 0)
     };
   }
+
+  async getAgentTaskMetrics(): Promise<{
+    tasksByStatus: Array<{ status: string; count: number }>;
+    sandboxRunsByStatus: Array<{ status: string; count: number }>;
+  }> {
+    const [tasks, sandboxRuns] = await Promise.all([
+      this.pool.query("SELECT status, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
+      this.pool.query("SELECT status, count(*)::int AS count FROM sandbox_runs GROUP BY status ORDER BY status")
+    ]);
+    return {
+      tasksByStatus: tasks.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
+      sandboxRunsByStatus: sandboxRuns.rows.map((row) => ({ status: String(row.status), count: Number(row.count) }))
+    };
+  }
 }
 
 function rowToSearchResult(row: any): SearchResult {
@@ -2894,6 +3122,37 @@ function rowToToolAuditLog(row: any): ToolAuditLog {
     model: row.model == null ? null : String(row.model),
     estimatedCostUsd: row.estimated_cost_usd == null ? null : Number(row.estimated_cost_usd),
     createdAt: new Date(row.created_at)
+  };
+}
+
+function rowToTaskEvent(row: any): TaskEvent {
+  return {
+    id: Number(row.id),
+    taskId: String(row.task_id),
+    traceId: row.trace_id == null ? null : String(row.trace_id),
+    eventName: String(row.event_name),
+    level: row.level as TraceEventLevel,
+    summary: row.summary == null ? null : String(row.summary),
+    metadata: row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {},
+    createdAt: new Date(row.created_at)
+  };
+}
+
+function rowToSandboxRun(row: any): SandboxRunRecord {
+  return {
+    sandboxRunId: String(row.sandbox_run_id),
+    taskId: String(row.task_id),
+    taskStatus: row.task_status == null ? null : (String(row.task_status) as AgentTaskStatus),
+    backend: String(row.backend),
+    namespace: row.namespace == null ? null : String(row.namespace),
+    backendJobName: row.backend_job_name == null ? null : String(row.backend_job_name),
+    image: row.image == null ? null : String(row.image),
+    status: String(row.status),
+    metadata: row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {},
+    startedAt: row.started_at == null ? null : new Date(row.started_at),
+    completedAt: row.completed_at == null ? null : new Date(row.completed_at),
+    cleanedUpAt: row.cleaned_up_at == null ? null : new Date(row.cleaned_up_at),
+    updatedAt: new Date(row.updated_at)
   };
 }
 
@@ -3467,8 +3726,8 @@ function rowToDiscordAttachmentSearchResult(row: any): DiscordAttachmentSearchRe
   };
 }
 
-function normalizeFilterIds(ids?: string[], legacyId?: string | null): string[] {
-  return [...new Set([...(ids ?? []), legacyId ?? ""].map((id) => id.trim()).filter(Boolean))];
+function normalizeFilterIds(ids?: string[], singleId?: string | null): string[] {
+  return [...new Set([...(ids ?? []), singleId ?? ""].map((id) => id.trim()).filter(Boolean))];
 }
 
 function normalizeLookupQuery(query: string, options: { stripChannelPrefix?: boolean } = {}) {
@@ -3545,18 +3804,19 @@ function rowToMessageForEmbedding(row: any): MessageForEmbedding {
   };
 }
 
-function rowToAgentCodegenJob(row: any): AgentCodegenJobRecord {
+function rowToAgentTask(row: any): AgentTaskRecord {
   return {
-    requestId: String(row.request_id),
+    taskId: String(row.task_id),
     pgBossJobId: row.pgboss_job_id == null ? null : String(row.pgboss_job_id),
     traceId: row.trace_id == null ? null : String(row.trace_id),
     guildId: row.guild_id == null ? null : String(row.guild_id),
     channelId: row.channel_id == null ? null : String(row.channel_id),
     userId: row.user_id == null ? null : String(row.user_id),
-    updateName: String(row.update_name),
+    taskType: String(row.task_type),
+    title: String(row.title),
     request: String(row.request ?? ""),
     requestedBy: String(row.requested_by ?? ""),
-    status: row.status as AgentCodegenJobStatus,
+    status: row.status as AgentTaskStatus,
     backend: row.backend == null ? null : String(row.backend),
     currentStep: row.current_step == null ? null : String(row.current_step),
     statusMessage: row.status_message == null ? null : String(row.status_message),

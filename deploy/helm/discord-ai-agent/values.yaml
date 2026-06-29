@@ -1,0 +1,72 @@
+image:
+  repository: ghcr.io/owner/discord-ai-agent
+  tag: latest
+  pullPolicy: IfNotPresent
+
+sandbox:
+  image: ghcr.io/owner/discord-ai-agent-sandbox:latest
+  imagePullPolicy: IfNotPresent
+  serviceAccountName: discord-ai-agent-sandbox
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  taskTimeoutSeconds: 1800
+  ttlSecondsAfterFinished: 3600
+
+secret:
+  existingSecretName: discord-ai-agent-env
+
+config:
+  botName: ai
+  githubRepository: owner/repo
+  githubBaseBranch: main
+  openRouterChatModel: z-ai/glm-5.2
+  openRouterEmbeddingModel: qwen/qwen3-embedding-8b
+  openRouterImageModel: google/gemini-3.1-flash-image
+  embeddingDimensions: "1536"
+  databaseUrlSecretKey: DATABASE_URL
+  discordTokenSecretKey: DISCORD_TOKEN
+  discordClientIdSecretKey: DISCORD_CLIENT_ID
+  discordGuildIdSecretKey: DISCORD_GUILD_ID
+  openRouterApiKeySecretKey: OPENROUTER_API_KEY
+  githubTokenSecretKey: GITHUB_TOKEN
+  githubAppIdSecretKey: GITHUB_APP_ID
+  githubAppPrivateKeySecretKey: GITHUB_APP_PRIVATE_KEY
+  githubAppInstallationIdSecretKey: GITHUB_APP_INSTALLATION_ID
+  taskSigningSecretKey: TASK_SIGNING_SECRET
+
+api:
+  replicas: 1
+  port: 8080
+  metrics:
+    scrapeAnnotations: true
+  resources: {}
+
+bot:
+  replicas: 1
+  resources: {}
+
+worker:
+  replicas: 1
+  resources: {}
+
+migrations:
+  enabled: true
+
+networkPolicy:
+  enabled: true
+  allowSandboxInternetEgress: true
+
+ciliumFqdnPolicy:
+  enabled: false
+  allowedHosts:
+    - github.com
+    - api.github.com
+    - codeload.github.com
+    - objects.githubusercontent.com
+    - openrouter.ai
+    - registry.npmjs.org

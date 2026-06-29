@@ -3269,14 +3269,52 @@ export class DiscordAiAgentRepository {
   async getAgentTaskMetrics(): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     sandboxRunsByStatus: Array<{ status: string; count: number }>;
+    codegenPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
+    sandboxCacheEvents: Array<{ cacheType: string; cacheStatus: string; count: number }>;
   }> {
-    const [tasks, sandboxRuns] = await Promise.all([
+    const [tasks, sandboxRuns, phaseDurations, cacheEvents] = await Promise.all([
       this.pool.query("SELECT status, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
-      this.pool.query("SELECT status, count(*)::int AS count FROM sandbox_runs GROUP BY status ORDER BY status")
+      this.pool.query("SELECT status, count(*)::int AS count FROM sandbox_runs GROUP BY status ORDER BY status"),
+      this.pool.query(`
+        SELECT
+          regexp_replace(metadata->>'step', '_complete$', '') AS phase,
+          count(*)::int AS count,
+          round(avg((metadata->>'durationMs')::numeric))::int AS avg_ms,
+          max((metadata->>'durationMs')::numeric)::int AS max_ms
+        FROM task_events
+        WHERE event_name = 'task.progress'
+          AND metadata ? 'durationMs'
+          AND (metadata->>'step') ~ '_complete$'
+        GROUP BY phase
+        ORDER BY phase
+      `),
+      this.pool.query(`
+        SELECT
+          metadata->>'cacheType' AS cache_type,
+          metadata->>'cacheStatus' AS cache_status,
+          count(*)::int AS count
+        FROM task_events
+        WHERE event_name = 'task.progress'
+          AND metadata ? 'cacheType'
+          AND metadata ? 'cacheStatus'
+        GROUP BY cache_type, cache_status
+        ORDER BY cache_type, cache_status
+      `)
     ]);
     return {
       tasksByStatus: tasks.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
-      sandboxRunsByStatus: sandboxRuns.rows.map((row) => ({ status: String(row.status), count: Number(row.count) }))
+      sandboxRunsByStatus: sandboxRuns.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
+      codegenPhaseDurations: phaseDurations.rows.map((row) => ({
+        phase: String(row.phase),
+        count: Number(row.count),
+        avgMs: Number(row.avg_ms),
+        maxMs: Number(row.max_ms)
+      })),
+      sandboxCacheEvents: cacheEvents.rows.map((row) => ({
+        cacheType: String(row.cache_type),
+        cacheStatus: String(row.cache_status),
+        count: Number(row.count)
+      }))
     };
   }
 }

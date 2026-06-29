@@ -147,18 +147,34 @@ When someone asks `@ai update yourself to ...`, the bot creates a durable `agent
 
 1. Refreshes a cached bare clone of the configured GitHub repo.
 2. Creates a per-task worktree and branch.
-3. Restores dependencies from a package-lock-keyed cache, or seeds that cache with `npm ci`.
+3. Restores dependencies from a package manifest/lockfile-keyed cache, or seeds that cache with `npm ci`.
 4. Runs Codex with the requested change.
-5. Runs verification and release scanning.
-6. Pushes a branch.
-7. Opens a GitHub PR only if there is a real diff.
-8. Reports progress and phase timings back to the internal API.
+5. Refreshes dependencies again if Codex changed `package.json` or `package-lock.json`.
+6. Runs verification and release scanning.
+7. Pushes a branch.
+8. Opens a GitHub PR only if there is a real diff.
+9. Reports progress, cache hit/miss data, and phase timings back to the internal API.
 
-The original Discord reply is edited with progress and the final PR link.
+The original Discord reply is edited with progress and the final PR link plus compact timing/cache details.
 If a sandbox crashes, disappears, or exits without sending its terminal callback, the worker reconciler marks the task failed in Postgres and later cleans up the sandbox Job, Secret, and ConfigMap.
+
+The sandbox also installs ephemeral helper CLIs on Codex's `PATH`:
+
+- `agent-task-context` prints the task/repo/cache context.
+- `agent-cache-info` prints cache entry counts from inside the sandbox.
+- `agent-progress <step> <message>` sends an explicit task progress event.
+
+Cache operator scripts:
+
+```bash
+npm run sandbox-cache:status
+npm run sandbox-cache:prune
+npm run sandbox-cache:clear
+```
 
 For a local Kubernetes full-loop test, see [docs/local-kubernetes.md](docs/local-kubernetes.md).
 For production setup, see [docs/eks-deploy.md](docs/eks-deploy.md).
+For the cache-first runtime and warm-sandbox direction, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
 For a reference AWS baseline, see [deploy/terraform/aws](deploy/terraform/aws).
 
 ## Configuration

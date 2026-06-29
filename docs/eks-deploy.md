@@ -108,11 +108,22 @@ The worker reconciles active sandbox runs. If a Kubernetes Job fails, disappears
 The Helm chart creates a sandbox cache PVC by default. Sandbox Jobs mount it at `/var/cache/discord-ai-agent` and reuse:
 
 - a bare Git mirror refreshed from origin before each task
-- per-task Git worktrees created from that mirror
 - the npm download cache
-- a `node_modules` snapshot keyed by `package-lock.json` and Node version
+- a `node_modules` snapshot keyed by Node version plus `package.json` and `package-lock.json`
 
-Per-task workspaces are still cleaned up after each run; the shared cache is intentionally retained. If you run multiple worker replicas or expect concurrent code-update tasks, use storage that supports your desired access mode and tune `sandbox.cache.accessModes`/`sandbox.cache.storageClassName`.
+Per-task Git worktrees are created on sandbox-local temporary storage and cleaned up after each run; the shared cache is intentionally retained. If Codex changes `package.json` or `package-lock.json`, the sandbox refreshes dependencies again before verification so tests do not run against stale dependencies.
+
+The default chart uses a `ReadWriteOnce` cache PVC and `worker.replicas=1`. Keep that shape unless your storage class supports the access mode and scheduling behavior you need for concurrent code-update tasks. For multi-worker or warm-pool deployments, move cache/sandbox ownership to an explicit lease model before scaling codegen horizontally.
+
+Cache operator scripts can run anywhere the cache volume is mounted:
+
+```bash
+npm run sandbox-cache:status
+npm run sandbox-cache:prune
+npm run sandbox-cache:clear
+```
+
+The API `/metrics` endpoint includes aggregate codegen phase timings and sandbox cache hit/miss counters.
 
 ## Networking
 

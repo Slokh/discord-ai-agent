@@ -519,6 +519,45 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
   });
 
+  it("aggregates agent task phase durations and sandbox cache events", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Task Metrics Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId,
+      channelId,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "metrics test",
+      request: "measure cache",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+
+    await repo.markAgentTaskProgress({
+      taskId,
+      step: "repo_complete",
+      statusMessage: "Finished repo.",
+      metadata: { durationMs: 120 }
+    });
+    await repo.markAgentTaskProgress({
+      taskId,
+      step: "dependency_cache_hit",
+      statusMessage: "Restored dependencies.",
+      metadata: { cacheType: "dependencies", cacheStatus: "hit" }
+    });
+
+    await expect(repo.getAgentTaskMetrics()).resolves.toEqual(
+      expect.objectContaining({
+        codegenPhaseDurations: expect.arrayContaining([expect.objectContaining({ phase: "repo", count: 1, avgMs: 120, maxMs: 120 })]),
+        sandboxCacheEvents: expect.arrayContaining([expect.objectContaining({ cacheType: "dependencies", cacheStatus: "hit", count: 1 })])
+      })
+    );
+  });
+
   it("includes logged model cost estimates in health", async () => {
     const userId = `user-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;

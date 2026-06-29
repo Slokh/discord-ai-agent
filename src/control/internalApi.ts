@@ -229,7 +229,21 @@ async function renderMetrics(repo: DiscordAiAgentRepository) {
     ...taskMetrics.tasksByStatus.map((row) => `discord_ai_agent_agent_tasks_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),
     "# HELP discord_ai_agent_sandbox_runs_total Sandbox runs by status.",
     "# TYPE discord_ai_agent_sandbox_runs_total gauge",
-    ...taskMetrics.sandboxRunsByStatus.map((row) => `discord_ai_agent_sandbox_runs_total{status=${quoteMetricLabel(row.status)}} ${row.count}`)
+    ...taskMetrics.sandboxRunsByStatus.map((row) => `discord_ai_agent_sandbox_runs_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),
+    "# HELP discord_ai_agent_codegen_phase_duration_avg_ms Average code-update phase duration in milliseconds.",
+    "# TYPE discord_ai_agent_codegen_phase_duration_avg_ms gauge",
+    ...taskMetrics.codegenPhaseDurations.map((row) => `discord_ai_agent_codegen_phase_duration_avg_ms{phase=${quoteMetricLabel(row.phase)}} ${row.avgMs}`),
+    "# HELP discord_ai_agent_codegen_phase_duration_max_ms Maximum code-update phase duration in milliseconds.",
+    "# TYPE discord_ai_agent_codegen_phase_duration_max_ms gauge",
+    ...taskMetrics.codegenPhaseDurations.map((row) => `discord_ai_agent_codegen_phase_duration_max_ms{phase=${quoteMetricLabel(row.phase)}} ${row.maxMs}`),
+    "# HELP discord_ai_agent_sandbox_cache_events_total Sandbox cache hit/miss events by cache type.",
+    "# TYPE discord_ai_agent_sandbox_cache_events_total counter",
+    ...taskMetrics.sandboxCacheEvents.map(
+      (row) =>
+        `discord_ai_agent_sandbox_cache_events_total{cache_type=${quoteMetricLabel(row.cacheType)},cache_status=${quoteMetricLabel(
+          row.cacheStatus
+        )}} ${row.count}`
+    )
   ];
   return `${lines.join("\n")}\n`;
 }

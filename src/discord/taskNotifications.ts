@@ -59,8 +59,14 @@ async function notifyTask(input: { client: Client; repo: DiscordAiAgentRepositor
       throw new Error(`Channel ${task.discordResponseChannelId} does not support message edits.`);
     }
     const messages = channel.messages;
-    const [message, commandEvents] = await Promise.all([
+    const [message, taskEvents, commandEvents] = await Promise.all([
       messages.fetch(task.discordResponseMessageId),
+      input.repo.getTaskEvents({
+        guildId: task.guildId ?? "",
+        visibleChannelIds: task.channelId ? [task.channelId] : [],
+        traceId: task.taskId,
+        limit: 30
+      }),
       input.repo.getSandboxCommandEvents({
         guildId: task.guildId ?? "",
         visibleChannelIds: task.channelId ? [task.channelId] : undefined,
@@ -70,7 +76,7 @@ async function notifyTask(input: { client: Client; repo: DiscordAiAgentRepositor
     ]);
     await message.edit(
       cleanResponse(
-        formatAgentTaskResult({ taskId: task.taskId, jobId: task.pgBossJobId, job: task, commandEvents }),
+        formatAgentTaskResult({ taskId: task.taskId, jobId: task.pgBossJobId, job: task, taskEvents, commandEvents }),
         input.config.maxReplyChars
       )
     );

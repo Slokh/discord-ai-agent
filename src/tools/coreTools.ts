@@ -951,7 +951,10 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
   const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy });
-  const commandEvents = await loadTaskCommandEventsForResult(ctx, result.taskId, result.job);
+  const [taskEvents, commandEvents] = await Promise.all([
+    loadTaskEventsForResult(ctx, result.taskId, result.job),
+    loadTaskCommandEventsForResult(ctx, result.taskId, result.job)
+  ]);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -962,7 +965,7 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
-  return formatAgentTaskResult({ ...result, commandEvents });
+  return formatAgentTaskResult({ ...result, taskEvents, commandEvents });
 }
 
 async function enqueueAgentCodeUpdateTask(
@@ -1026,6 +1029,7 @@ export function formatAgentTaskResult(input: {
   jobId: string | null;
   job?: AgentTaskRecord;
   timedOut?: boolean;
+  taskEvents?: TaskEvent[];
   commandEvents?: SandboxCommandEvent[];
 }) {
   if (input.timedOut) {
@@ -1040,7 +1044,7 @@ export function formatAgentTaskResult(input: {
 
   if (job.status === "succeeded" && job.prUrl) {
     const draftNote = job.draft ? " It opened as a draft because verification did not fully pass." : "";
-    return `Done: ${job.prUrl}${draftNote}`;
+    return [`Done: ${job.prUrl}${draftNote}`, formatAgentTaskTimingSummary(input.taskEvents)].filter(Boolean).join("\n");
   }
 
   if (job.status === "no_changes") {
@@ -1092,6 +1096,87 @@ async function loadTaskCommandEventsForResult(ctx: ToolContext, taskId: string, 
     taskId,
     limit: 8
   });
+}
+
+async function loadTaskEventsForResult(ctx: ToolContext, taskId: string, job?: AgentTaskRecord) {
+  if (!job || !isTerminalAgentTaskStatus(job.status)) return [];
+  return ctx.repo.getTaskEvents({
+    guildId: ctx.guildId,
+    visibleChannelIds: ctx.visibleChannelIds,
+    traceId: taskId,
+    limit: 30
+  });
+}
+
+function formatAgentTaskTimingSummary(events: TaskEvent[] | undefined) {
+  if (!events?.length) return "";
+  const terminalMetadata = events.find((event) => event.eventName === "task.completed")?.metadata;
+  const timings = recordFromUnknown(terminalMetadata?.timingsMs) ?? timingsFromProgressEvents(events);
+  const cache = recordFromUnknown(terminalMetadata?.cache) ?? cacheFromProgressEvents(events);
+  const timingLine = formatCompactTimingLine(timings);
+  const cacheLine = formatCompactCacheLine(cache);
+  return [timingLine, cacheLine].filter(Boolean).join("\n");
+}
+
+function timingsFromProgressEvents(events: TaskEvent[]) {
+  const timings: Record<string, number> = {};
+  for (const event of events) {
+    const step = stringFromUnknown(event.metadata.step);
+    const durationMs = numberFromUnknown(event.metadata.durationMs);
+    if (!step || durationMs == null || !step.endsWith("_complete")) continue;
+    timings[step.replace(/_complete$/, "")] = durationMs;
+  }
+  return Object.keys(timings).length ? timings : undefined;
+}
+
+function cacheFromProgressEvents(events: TaskEvent[]) {
+  const cache: Record<string, unknown> = {};
+  for (const event of events.slice().reverse()) {
+    const cacheType = stringFromUnknown(event.metadata.cacheType);
+    const cacheStatus = stringFromUnknown(event.metadata.cacheStatus);
+    if (cacheType === "repo" && cacheStatus) cache.repo = cacheStatus;
+    if (cacheType === "dependencies" && cacheStatus) {
+      cache.dependencies = cacheStatus;
+      cache.dependencyCacheKey = stringFromUnknown(event.metadata.lockHash);
+      if (event.metadata.reason === "dependency_files_changed_after_codex") cache.dependencyRefreshAfterCodex = true;
+    }
+    const taskCache = recordFromUnknown(event.metadata.cache);
+    if (taskCache) Object.assign(cache, taskCache);
+  }
+  return Object.keys(cache).length ? cache : undefined;
+}
+
+function formatCompactTimingLine(timings: Record<string, unknown> | undefined) {
+  if (!timings) return "";
+  const parts = [
+    ["total", timings.total],
+    ["startup", timings.sandboxStartup],
+    ["repo", timings.repo],
+    ["deps", timings.dependencies],
+    ["deps2", timings.dependenciesPostCodex],
+    ["codex", timings.codex],
+    ["verify", timings.verify],
+    ["scan", timings.scan],
+    ["push", timings.push],
+    ["PR", timings.pr]
+  ]
+    .map(([label, value]) => {
+      const ms = numberFromUnknown(value);
+      return ms == null ? null : `${label}=${formatDurationMs(ms)}`;
+    })
+    .filter(Boolean);
+  return parts.length ? `Timings: ${parts.join(" | ")}` : "";
+}
+
+function formatCompactCacheLine(cache: Record<string, unknown> | undefined) {
+  if (!cache) return "";
+  const repo = stringFromUnknown(cache.repo);
+  const dependencies = stringFromUnknown(cache.dependencies);
+  const dependencyRefresh = cache.dependencyRefreshAfterCodex ? " | refreshed deps after Codex" : "";
+  const key = stringFromUnknown(cache.dependencyCacheKey);
+  const keySuffix = key ? ` ${key.slice(0, 18)}` : "";
+  const parts = [repo ? `repo=${repo}` : "", dependencies ? `deps=${dependencies}${keySuffix}` : ""].filter(Boolean);
+  return parts.length ? `Cache: ${parts.join(" | ")}${dependencyRefresh}` : "";
 }
 
 function agentTaskAuditSummary(result: unknown) {
@@ -1197,7 +1282,10 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
     requestedBy,
     retriedFromTaskId: task.taskId
   });
-  const commandEvents = await loadTaskCommandEventsForResult(ctx, result.taskId, result.job);
+  const [taskEvents, commandEvents] = await Promise.all([
+    loadTaskEventsForResult(ctx, result.taskId, result.job),
+    loadTaskCommandEventsForResult(ctx, result.taskId, result.job)
+  ]);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -1208,7 +1296,7 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
-  return formatAgentTaskResult({ ...result, commandEvents });
+  return formatAgentTaskResult({ ...result, taskEvents, commandEvents });
 }
 
 export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string; reason?: string } = {}): Promise<string> {
@@ -1275,6 +1363,8 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
     `- Embeddings: ${health.embeddings}`,
     `- Tool calls logged: ${health.toolCalls}`,
     `- Agent tasks: ${taskMetrics.tasksByStatus.map((row) => `${row.status}=${row.count}`).join(", ") || "none"}`,
+    `- Codegen timings: ${formatCodegenMetricSummary(taskMetrics.codegenPhaseDurations)}`,
+    `- Sandbox cache: ${formatCacheMetricSummary(taskMetrics.sandboxCacheEvents)}`,
     recentTasks.length ? "Recent tasks:" : "Recent tasks: none",
     ...recentTasks.map((task) => `- ${formatAgentTaskLine(task)}`)
   ].join("\n");
@@ -1490,6 +1580,22 @@ function formatAgentTaskLine(task: AgentTaskRecord) {
   return `${parts.join(" | ")}\n  ${truncateForDiscord(task.title, 180)}`;
 }
 
+function formatCodegenMetricSummary(rows: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>) {
+  if (rows.length === 0) return "none yet";
+  const preferred = ["repo", "dependencies", "dependenciesPostCodex", "codex", "verify", "scan", "push", "pr", "total"];
+  const byPhase = new Map(rows.map((row) => [row.phase, row]));
+  return preferred
+    .map((phase) => byPhase.get(phase))
+    .filter((row): row is { phase: string; count: number; avgMs: number; maxMs: number } => Boolean(row))
+    .map((row) => `${row.phase} avg=${formatDurationMs(row.avgMs)} max=${formatDurationMs(row.maxMs)}`)
+    .join(", ");
+}
+
+function formatCacheMetricSummary(rows: Array<{ cacheType: string; cacheStatus: string; count: number }>) {
+  if (rows.length === 0) return "none yet";
+  return rows.map((row) => `${row.cacheType}.${row.cacheStatus}=${row.count}`).join(", ");
+}
+
 function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {
   if (events.length === 0) return "Sandbox commands: none.";
   return [
@@ -1506,6 +1612,28 @@ function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {
         }`;
       })
   ].join("\n");
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function stringFromUnknown(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberFromUnknown(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function formatDurationMs(ms: number) {
+  const rounded = Math.max(0, Math.round(ms));
+  if (rounded < 1000) return `${rounded}ms`;
+  const seconds = rounded / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s`;
 }
 
 function formatDurationSeconds(seconds: number) {

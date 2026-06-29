@@ -59,6 +59,8 @@ bot:
   resources: {}
 
 worker:
+  # Keep this at 1 with the default ReadWriteOnce sandbox cache PVC. Use RWX
+  # storage or a DB-backed cache/sandbox lease model before scaling codegen workers.
   replicas: 1
   resources: {}
 

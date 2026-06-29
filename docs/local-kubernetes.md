@@ -94,9 +94,16 @@ Expected behavior:
 - The message edits as the task moves through sandbox startup, repo refresh/worktree, dependency cache, Codex, verify, scan, push, and PR.
 - A sandbox Job appears in Kubernetes.
 - A `discord-ai-agent-sandbox-cache` PVC is created by the chart and reused across sandbox Jobs.
-- The final Discord edit contains the PR link or a concise failure summary.
+- The final Discord edit contains the PR link or a concise failure summary, plus phase timing and cache hit/miss details.
 - `@ai what happened to the last update?` shows task events and sandbox command output.
 - `@ai show recent update tasks` lists recent task history.
+
+Optional cache checks:
+
+```bash
+npm run sandbox-cache:status
+npm run sandbox-cache:prune
+```
 
 ## Cleanup
 

@@ -6,6 +6,7 @@ import {
   extractHistorySearchSyntax,
   findDiscordRoles,
   findDiscordUsers,
+  formatAgentTaskResult,
   generateImage,
   getDiscordChannelTopics,
   getDiscordStats,
@@ -108,6 +109,51 @@ describe("model-led mutating tools", () => {
     expect(response).toBe("Undid my last 2 turns in this channel and removed 4 memory rows from memory.");
     expect(ctx.repo.deleteMostRecentConversationTurns).toHaveBeenCalledWith({ threadKey: "discord:guild:channel", count: 2 });
     expect(deleteDiscordMessageIds).toHaveBeenCalledWith(["reply-1"]);
+  });
+});
+
+describe("formatAgentTaskResult", () => {
+  it("includes compact timings and cache details for successful code-update PRs", () => {
+    const response = formatAgentTaskResult({
+      taskId: "task-1",
+      jobId: "job-1",
+      job: {
+        taskId: "task-1",
+        pgBossJobId: "job-1",
+        status: "succeeded",
+        title: "update status",
+        prUrl: "https://github.com/example/repo/pull/1",
+        draft: false,
+        updatedAt: new Date("2026-01-01T00:00:00Z")
+      } as any,
+      taskEvents: [
+        {
+          eventName: "task.completed",
+          metadata: {
+            timingsMs: {
+              total: 123_000,
+              dependencies: 500,
+              codex: 100_000,
+              verify: 2_000,
+              push: 1_000,
+              pr: 750
+            },
+            cache: {
+              repo: "hit",
+              dependencies: "miss",
+              dependencyCacheKey: "node-22-abcdef1234567890",
+              dependencyRefreshAfterCodex: true
+            }
+          }
+        }
+      ] as any
+    });
+
+    expect(response).toContain("Done: https://github.com/example/repo/pull/1");
+    expect(response).toContain("Timings: total=2m 3s");
+    expect(response).toContain("codex=1m 40s");
+    expect(response).toContain("Cache: repo=hit | deps=miss node-22-abcdef123");
+    expect(response).toContain("refreshed deps after Codex");
   });
 });
 

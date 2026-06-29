@@ -19,20 +19,19 @@ export type SkillPullRequestResult = {
   dryRunPath?: string;
 };
 
-export type ProposalPullRequestResult = {
+export type AgentUpdatePullRequestResult = {
   dryRun: boolean;
-  filePath: string;
   branchName: string;
   prUrl?: string;
-  content: string;
   dryRunPath?: string;
 };
 
 type DryRunMetadata = {
-  kind: "skill" | "tool-proposal";
+  kind: "skill" | "agent-update";
   title: string;
   branchName: string;
-  filePath: string;
+  filePath?: string;
+  request?: string;
   requestedBy: string;
   pullRequestBody: string;
   autoMergeEligible: boolean;
@@ -168,32 +167,29 @@ export class GitHubSkillClient {
     };
   }
 
-  async createToolProposalPullRequest(input: {
+  async createAgentUpdatePullRequest(input: {
     title: string;
-    proposalName: string;
-    markdown: string;
+    updateName: string;
+    request: string;
     requestedBy: string;
-  }): Promise<ProposalPullRequestResult> {
+  }): Promise<AgentUpdatePullRequestResult> {
     const stamp = uniqueSuffix();
-    const filePath = `tool-requests/${slugify(input.proposalName || input.title || "tool")}-${stamp}.md`;
-    const branchName = `discord-ai-agent/tool-${slugify(input.proposalName || "tool")}-${stamp}`;
+    const branchName = `discord-ai-agent/update-${slugify(input.updateName || "update")}-${stamp}`;
 
     if (this.config.dryRun) {
-      const pullRequestBody = toolProposalPullRequestBody(input.requestedBy);
-      const dryRunPath = await this.writeDryRunArtifact(branchName, filePath, input.markdown, {
-        kind: "tool-proposal",
+      const pullRequestBody = agentUpdatePullRequestBody(input.requestedBy, input.request);
+      const dryRunPath = await this.writeDryRunManifest(branchName, {
+        kind: "agent-update",
         title: input.title,
         branchName,
-        filePath,
+        request: input.request,
         requestedBy: input.requestedBy,
         pullRequestBody,
         autoMergeEligible: false
       });
       return {
         dryRun: true,
-        filePath,
         branchName,
-        content: input.markdown,
         dryRunPath
       };
     }
@@ -209,25 +205,33 @@ export class GitHubSkillClient {
       repo,
       ref: `heads/${this.config.baseBranch}`
     });
+    const baseSha = baseRef.data.object.sha;
+    const baseCommit = await octokit.git.getCommit({
+      owner,
+      repo,
+      commit_sha: baseSha
+    });
+    const updateCommit = await octokit.git.createCommit({
+      owner,
+      repo,
+      message: `Request Discord AI Agent update: ${input.updateName}`,
+      tree: baseCommit.data.tree.sha,
+      parents: [baseSha],
+      author: {
+        name: "discord-ai-agent",
+        email: "discord-ai-agent-bot@users.noreply.github.com"
+      },
+      committer: {
+        name: "discord-ai-agent",
+        email: "discord-ai-agent-bot@users.noreply.github.com"
+      }
+    });
 
     await octokit.git.createRef({
       owner,
       repo,
       ref: `refs/heads/${branchName}`,
-      sha: baseRef.data.object.sha
-    });
-
-    await octokit.repos.createOrUpdateFileContents({
-      owner,
-      repo,
-      path: filePath,
-      branch: branchName,
-      message: `Propose Discord AI Agent tool: ${input.proposalName}`,
-      content: Buffer.from(input.markdown, "utf8").toString("base64"),
-      committer: {
-        name: "discord-ai-agent",
-        email: "discord-ai-agent-bot@users.noreply.github.com"
-      }
+      sha: updateCommit.data.sha
     });
 
     const pr = await octokit.pulls.create({
@@ -236,16 +240,22 @@ export class GitHubSkillClient {
       title: input.title,
       head: branchName,
       base: this.config.baseBranch,
-      body: toolProposalPullRequestBody(input.requestedBy)
+      body: agentUpdatePullRequestBody(input.requestedBy, input.request)
     });
 
     return {
       dryRun: false,
-      filePath,
       branchName,
-      prUrl: pr.data.html_url,
-      content: input.markdown
+      prUrl: pr.data.html_url
     };
+  }
+
+  private async writeDryRunManifest(branchName: string, metadata: DryRunMetadata) {
+    const branchDir = path.resolve(process.cwd(), this.config.dryRunDir, branchName);
+    await fs.mkdir(branchDir, { recursive: true });
+    const manifestPath = path.join(branchDir, "discord-ai-agent-dry-run.json");
+    await fs.writeFile(manifestPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+    return manifestPath;
   }
 
   private async writeDryRunArtifact(branchName: string, filePath: string, content: string, metadata: DryRunMetadata) {
@@ -334,9 +344,12 @@ function skillPullRequestBody(requestedBy: string) {
   );
 }
 
-function toolProposalPullRequestBody(requestedBy: string) {
+function agentUpdatePullRequestBody(requestedBy: string, request: string) {
   return (
-    `Tool/code change proposed by ${requestedBy} via Discord AI Agent.\n\n` +
-    "Discord AI Agent never auto-merges tool or code changes; a human must review and implement/merge this PR."
+    `Update proposed by ${requestedBy} via Discord AI Agent.\n\n` +
+    "## Requested Update\n\n" +
+    `${request.trim() || "(No request text provided.)"}\n\n` +
+    "## Review Boundary\n\n" +
+    "Discord AI Agent does not auto-merge code changes. A human must review and merge this PR after checks pass."
   );
 }

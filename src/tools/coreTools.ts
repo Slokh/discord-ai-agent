@@ -938,28 +938,17 @@ export async function undoConversationTurns(ctx: ToolContext, count?: number): P
   )} from memory.`;
 }
 
-export async function createToolProposalFromRequest(ctx: ToolContext, request: string): Promise<string> {
-  const proposalName = slugify(request.replace(/^(add|build|create)\s+(a\s+)?tool\s+(for\s+|to\s+)?/i, "")).slice(0, 48) || "tool";
-  const markdown = [
-    `# Tool Proposal: ${proposalName}`,
-    "",
-    `Requested by ${ctx.userDisplayName} (${ctx.userId}).`,
-    "",
-    "## Request",
-    "",
-    request.trim(),
-    "",
-    "## Review Notes",
-    "",
-    "- This is a proposal PR only.",
-    "- Discord AI Agent must not auto-merge tool or code changes.",
-    "- A human should review the intended API, credentials, safety boundary, and tests before implementation."
-  ].join("\n");
+export async function createAgentUpdateFromRequest(ctx: ToolContext, request: string): Promise<string> {
+  const updateName = slugify(
+    request
+      .replace(/^(please\s+)?(update yourself|self[- ]?update|add|build|create|implement|change)\s*(to\s+|so\s+that\s+)?/i, "")
+      .replace(/^(a|an|the)\s+/i, "")
+  ).slice(0, 48) || "agent-update";
 
-  const result = await ctx.github.createToolProposalPullRequest({
-    title: `Propose Discord AI Agent tool: ${proposalName}`,
-    proposalName,
-    markdown,
+  const result = await ctx.github.createAgentUpdatePullRequest({
+    title: `Update Discord AI Agent: ${updateName}`,
+    updateName,
+    request: request.trim(),
     requestedBy: `${ctx.userDisplayName} (${ctx.userId})`
   });
 
@@ -968,14 +957,14 @@ export async function createToolProposalFromRequest(ctx: ToolContext, request: s
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "openGithubPullRequest",
-    argumentsSummary: summarizeForAudit({ request, proposalName }),
-    resultSummary: summarizeForAudit({ dryRun: result.dryRun, prUrl: result.prUrl, filePath: result.filePath })
+    argumentsSummary: summarizeForAudit({ request, updateName }),
+    resultSummary: summarizeForAudit({ dryRun: result.dryRun, prUrl: result.prUrl, branchName: result.branchName })
   });
 
   if (result.dryRun) {
-    return `I drafted a tool proposal PR in dry-run mode for \`${result.filePath}\`${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real PRs.`;
+    return `I drafted an update PR in dry-run mode for branch \`${result.branchName}\`${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real PRs.`;
   }
-  return `I opened a tool proposal PR for human review: ${result.prUrl}`;
+  return `I opened an update PR for review: ${result.prUrl}`;
 }
 
 export async function reportStatus(ctx: ToolContext): Promise<string> {

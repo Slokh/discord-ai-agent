@@ -3,7 +3,7 @@ import {
   answerFromHistory,
   cleanResponse,
   createSkillFromRequest,
-  createToolProposalFromRequest,
+  createAgentUpdateFromRequest,
   findDiscordChannels,
   findDiscordRoles,
   findDiscordUsers,
@@ -465,7 +465,7 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
 
   if (route.name === "openGithubPullRequest") {
     return {
-      content: cleanResponse(await createToolProposalFromRequest(ctx, stringArgument(route.arguments, "request") ?? originalText), ctx.config.maxReplyChars)
+      content: cleanResponse(await createAgentUpdateFromRequest(ctx, stringArgument(route.arguments, "request") ?? originalText), ctx.config.maxReplyChars)
     };
   }
 
@@ -1056,7 +1056,7 @@ function chatMessages(text: string, skills: string, sessionMessages: Conversatio
         "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. " +
         "For owner debugging of Railway deployment logs, startup failures, worker crashes, missing traces, or hosting/runtime errors, call inspectRailwayLogs. " +
         "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
-        "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, create/propose a code/tool change, or undo/delete/forget prior agent turns. " +
+        "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, open an agent update PR, or undo/delete/forget prior agent turns. " +
         "Use prior channel conversation context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },

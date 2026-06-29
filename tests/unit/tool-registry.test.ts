@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openRouterServerToolRegistry, renderToolList, toolDefinitionsForModel, toolRegistry } from "../../src/tools/registry.js";
+import { openRouterServerToolRegistry, renderToolList, toolContracts, toolDefinitionsForModel, toolRegistry } from "../../src/tools/registry.js";
 
 describe("toolRegistry", () => {
   it("contains the local milestone tools", () => {
@@ -32,6 +32,30 @@ describe("toolRegistry", () => {
     expect(renderToolList()).toContain("searchDiscordHistory");
     expect(renderToolList()).toContain("Generate an image");
     expect(renderToolList()).toContain("web_search");
+  });
+
+  it("exports a self-documenting contract for every local tool", () => {
+    const contracts = toolContracts();
+    expect(contracts.map((tool) => tool.name)).toEqual(toolRegistry.map((tool) => tool.name));
+    expect(contracts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "openGithubPullRequest",
+          category: "coding",
+          mutates: true,
+          permissionRequirements: expect.arrayContaining(["explicit_user_request"]),
+          auditEvents: expect.arrayContaining(["tool_audit_logs", "trace_events"]),
+          examples: expect.arrayContaining(["@ai update yourself to handle Bluesky links better"])
+        }),
+        expect.objectContaining({
+          name: "searchDiscordHistory",
+          category: "discord",
+          permissionRequirements: expect.arrayContaining(["requester_visible_discord_channels"]),
+          examples: expect.arrayContaining(["@ai what did we say about job hunting?"])
+        })
+      ])
+    );
+    expect(contracts.every((tool) => tool.examples.length > 0 && tool.permissionRequirements.length > 0 && tool.auditEvents.length > 0)).toBe(true);
   });
 
   it("exports OpenRouter-compatible local function and server tool definitions", () => {

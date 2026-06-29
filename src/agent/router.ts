@@ -23,7 +23,7 @@ import {
   undoConversationTurns
 } from "../tools/coreTools.js";
 import type { ChatMessage } from "../models/openrouter.js";
-import type { ConversationMessage } from "../db/repositories.js";
+import type { ConversationMessage, ServerOverlay } from "../db/repositories.js";
 import type { AgentFile, AgentResponse, DiscordReplyContext, ToolContext } from "../tools/types.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { openRouterServerToolDefinitionsForModel, toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
@@ -68,7 +68,8 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
   if (!text) return { content: "Say what you need after mentioning me." };
 
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
-  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext);
+  const serverOverlay = await loadServerOverlay(ctx);
+  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay);
   const files: AgentFile[] = [];
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
@@ -86,6 +87,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       sessionMessageCount: ctx.sessionMessages?.length ?? 0,
       hasReplyContext: Boolean(ctx.replyContext),
       replyContextMessageId: ctx.replyContext?.messageId,
+      hasServerOverlay: Boolean(serverOverlay?.enabled && serverOverlay.systemPrompt.trim()),
       visibleChannelCount: ctx.visibleChannelIds.length,
       mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0
@@ -99,6 +101,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       sessionMessageCount: ctx.sessionMessages?.length ?? 0,
       hasReplyContext: Boolean(ctx.replyContext),
       replyContextMessageId: ctx.replyContext?.messageId,
+      hasServerOverlay: Boolean(serverOverlay?.enabled && serverOverlay.systemPrompt.trim()),
       visibleChannelCount: ctx.visibleChannelIds.length,
       mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0
@@ -1034,7 +1037,8 @@ function chatMessages(
   text: string,
   skills: string,
   sessionMessages: ConversationMessage[] = [],
-  replyContext?: DiscordReplyContext
+  replyContext?: DiscordReplyContext,
+  serverOverlay?: ServerOverlay
 ): ChatMessage[] {
   return [
     {
@@ -1070,9 +1074,28 @@ function chatMessages(
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
+    ...serverOverlayMessagesForPrompt(serverOverlay),
     ...sessionMessagesForPrompt(sessionMessages),
     ...replyContextMessagesForPrompt(replyContext),
     { role: "user" as const, content: text }
+  ];
+}
+
+async function loadServerOverlay(ctx: ToolContext): Promise<ServerOverlay | undefined> {
+  const loader = (ctx.repo as unknown as { getServerOverlay?: (guildId: string) => Promise<ServerOverlay | undefined> }).getServerOverlay;
+  if (!loader) return undefined;
+  return await loader.call(ctx.repo, ctx.guildId);
+}
+
+function serverOverlayMessagesForPrompt(serverOverlay: ServerOverlay | undefined): ChatMessage[] {
+  if (!serverOverlay?.enabled || !serverOverlay.systemPrompt.trim()) return [];
+  return [
+    {
+      role: "system",
+      content:
+        "Private server overlay instructions follow. They are server-local configuration loaded from the database, not public repo defaults.\n" +
+        serverOverlay.systemPrompt.trim()
+    }
   ];
 }
 

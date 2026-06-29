@@ -33,6 +33,10 @@ Discord AI Agent stores bot-visible messages in Postgres, creates embeddings wit
 
 Private skills are stored in the database, not Git. Public baseline behavior can live in Markdown under `skills/`, but server-specific memories learned through `@ai learn this for next time ...` stay private.
 
+Long-running agent work is modeled as durable execution state in Postgres. Codegen runs through a portable execution backend interface; the default backend is a Railway worker. Progress phases such as clone, install, Codex, verify, scan, push, and PR creation are written to trace events and the codegen job row so the Discord reply can update in place.
+
+Private server overlays and durable workflows are database-backed foundations for server-specific instructions and future recurring jobs such as digests, watches, or scheduled maintenance. They are intentionally self-hosted primitives, not a hosted multi-tenant platform.
+
 ## What You Get
 
 - Natural `@ai <request>` interaction.
@@ -46,6 +50,8 @@ Private skills are stored in the database, not Git. Public baseline behavior can
 - Hosted web search, web fetch, and datetime tools through OpenRouter.
 - Private DB-backed skills.
 - Optional GitHub PR creation for requested agent updates.
+- In-place codegen progress updates and final PR links.
+- Database-backed server overlays and durable workflow foundations.
 - Structured logs, trace IDs, and owner-only Railway log inspection.
 
 ## What You Need

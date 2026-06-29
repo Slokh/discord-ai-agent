@@ -58,12 +58,14 @@ async function runCodeUpdate(env: SandboxEnv) {
     await progress(env, "clone", "Cloning the repository into the sandbox.", { branch: env.githubBaseBranch });
     await runCommand("git", ["clone", "--depth", "1", "--branch", env.githubBaseBranch, `https://github.com/${owner}/${repo}.git`, checkoutDir], {
       cwd: workRoot,
-      env: gitEnv
+      env: gitEnv,
+      taskEnv: env,
+      step: "clone"
     });
     await progress(env, "branch", `Creating implementation branch ${branchName}.`, { branchName });
-    await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir });
+    await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir, taskEnv: env, step: "branch" });
     await progress(env, "install", "Installing repository dependencies with npm ci.");
-    await runCommand("npm", ["ci"], { cwd: checkoutDir });
+    await runCommand("npm", ["ci"], { cwd: checkoutDir, taskEnv: env, step: "install" });
     await progress(env, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, env);
 
@@ -86,31 +88,41 @@ async function runCodeUpdate(env: SandboxEnv) {
       {
         cwd: checkoutDir,
         env: codexEnv(env, gitEnv, workRoot),
-        input: codeUpdatePrompt(env)
+        input: codeUpdatePrompt(env),
+        taskEnv: env,
+        step: "codex"
       }
     );
 
     await progress(env, "diff", "Checking whether Codex produced a real code diff.");
-    const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir });
+    const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir, taskEnv: env, step: "diff" });
     if (!status.stdout.trim()) {
       throw new Error("Agent task produced no diff; no PR will be opened.");
     }
 
     await progress(env, "verify", "Running npm run verify on the generated changes.");
-    const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true });
+    const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "verify" });
     await progress(env, "scan", "Running release scan before pushing generated changes.");
-    const scan = await runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true });
+    const scan = await runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan" });
     if (scan.exitCode !== 0) {
       throw new Error("Release scan failed after agent task; refusing to push generated changes.");
     }
 
     await progress(env, "commit", "Committing generated changes.");
-    await runCommand("git", ["config", "user.name", "discord-ai-agent"], { cwd: checkoutDir });
-    await runCommand("git", ["config", "user.email", "discord-ai-agent-bot@users.noreply.github.com"], { cwd: checkoutDir });
-    await runCommand("git", ["add", "-A"], { cwd: checkoutDir });
-    await runCommand("git", ["commit", "-m", `Implement Discord AI Agent update: ${env.taskTitle}`], { cwd: checkoutDir });
+    await runCommand("git", ["config", "user.name", "discord-ai-agent"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
+    await runCommand("git", ["config", "user.email", "discord-ai-agent-bot@users.noreply.github.com"], {
+      cwd: checkoutDir,
+      taskEnv: env,
+      step: "commit"
+    });
+    await runCommand("git", ["add", "-A"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
+    await runCommand("git", ["commit", "-m", `Implement Discord AI Agent update: ${env.taskTitle}`], {
+      cwd: checkoutDir,
+      taskEnv: env,
+      step: "commit"
+    });
     await progress(env, "push", "Pushing the generated branch to GitHub.", { branchName });
-    await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: gitEnv });
+    await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
 
     const draft = verify.exitCode !== 0;
     await progress(env, "pr", "Opening the GitHub pull request.", { draft });
@@ -310,9 +322,12 @@ async function runCommand(
     env?: NodeJS.ProcessEnv;
     input?: string;
     allowFailure?: boolean;
+    taskEnv?: SandboxEnv;
+    step?: string;
   }
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   console.log(JSON.stringify({ event: "sandbox.command.start", command, args: redactedArgs(command, args), cwd: options.cwd }));
+  const startedAt = Date.now();
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
@@ -339,10 +354,38 @@ async function runCommand(
     child.on("error", reject);
     child.on("close", (code) => resolve(code ?? 1));
   });
+  await recordCommand(options.taskEnv, {
+    step: options.step ?? command,
+    command: `${command} ${redactedArgs(command, args).join(" ")}`.trim(),
+    exitCode,
+    outputTail: stdout,
+    errorTail: stderr,
+    durationMs: Date.now() - startedAt
+  });
   if (exitCode !== 0 && !options.allowFailure) {
     throw new Error(`${command} ${args.join(" ")} failed with exit code ${exitCode}: ${stderr || stdout}`);
   }
   return { exitCode, stdout, stderr };
+}
+
+async function recordCommand(
+  env: SandboxEnv | undefined,
+  body: {
+    step: string;
+    command: string;
+    exitCode: number;
+    outputTail: string;
+    errorTail: string;
+    durationMs: number;
+  }
+) {
+  if (!env) return;
+  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/commands`, {
+    sandboxRunId: env.sandboxRunId,
+    ...body
+  }).catch((error) => {
+    console.error("Failed to post sandbox command event", error);
+  });
 }
 
 function appendLimited(current: string, next: string) {

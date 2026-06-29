@@ -1412,6 +1412,7 @@ describe("agent router", () => {
       config: { maxReplyChars: 1800, github: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
+        getSandboxCommandEvents: vi.fn(async () => []),
         getAgentTask: vi.fn(async () => ({
           taskId: "task-calendar-integration",
           pgBossJobId: "job-1",

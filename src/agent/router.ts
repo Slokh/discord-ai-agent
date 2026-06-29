@@ -4,6 +4,7 @@ import {
   cleanResponse,
   createSkillFromRequest,
   createAgentUpdateFromRequest,
+  cancelAgentTask,
   findDiscordChannels,
   findDiscordRoles,
   findDiscordUsers,
@@ -12,10 +13,14 @@ import {
   getDiscordMessageContext,
   getDiscordStats,
   getPinnedMessages,
+  getAgentTaskStatus,
+  getDeploymentStatus,
   inspectAgentLogs,
   getRecentDiscordMessages,
+  listAgentTasks,
   listTools,
   reportStatus,
+  retryAgentTask,
   searchDiscordAttachments,
   summarizeDiscordHistory,
   summarizeCurrentThread,
@@ -459,6 +464,52 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     return {
       content: cleanResponse(await createAgentUpdateFromRequest(ctx, stringArgument(route.arguments, "request") ?? originalText), ctx.config.maxReplyChars)
     };
+  }
+
+  if (route.name === "getAgentTaskStatus") {
+    return {
+      content: cleanResponse(
+        await getAgentTaskStatus(ctx, {
+          taskId: stringArgument(route.arguments, "taskId"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "listAgentTasks") {
+    return {
+      content: cleanResponse(
+        await listAgentTasks(ctx, {
+          statuses: stringArrayArgument(route.arguments, "statuses"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "retryAgentTask") {
+    return {
+      content: cleanResponse(await retryAgentTask(ctx, { taskId: stringArgument(route.arguments, "taskId") }), ctx.config.maxReplyChars)
+    };
+  }
+
+  if (route.name === "cancelAgentTask") {
+    return {
+      content: cleanResponse(
+        await cancelAgentTask(ctx, {
+          taskId: stringArgument(route.arguments, "taskId"),
+          reason: stringArgument(route.arguments, "reason")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getDeploymentStatus") {
+    return { content: cleanResponse(await getDeploymentStatus(ctx), ctx.config.maxReplyChars) };
   }
 
   if (route.name === "generateImage") {

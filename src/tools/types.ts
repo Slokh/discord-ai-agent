@@ -19,6 +19,8 @@ export type ToolContext = {
   sessionMessages?: ConversationMessage[];
   replyContext?: DiscordReplyContext;
   requestId?: string;
+  statusChannelId?: string;
+  statusMessageId?: string;
   discordRoles?: DiscordRoleSnapshot[];
   deleteDiscordMessageIds?: (messageIds: string[]) => Promise<number>;
   updateStatus?: (content: string) => Promise<void>;

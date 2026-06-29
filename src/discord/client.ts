@@ -377,6 +377,8 @@ async function handleMessageCreate(
           sessionMessages: priorSessionMessages,
           replyContext,
           requestId,
+          statusChannelId: thinking.channelId,
+          statusMessageId: thinking.id,
           discordRoles: discordRoleSnapshots(message.guild),
           updateStatus: async (content) => {
             await thinking.edit(cleanResponse(content, input.config.maxReplyChars));

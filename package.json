@@ -34,6 +34,7 @@
     "prompt": "tsx scripts/prompt.ts",
     "invite-url": "tsx scripts/discordInviteUrl.ts",
     "preflight": "tsx scripts/preflight.ts",
+    "preflight:deploy": "tsx scripts/deployPreflight.ts",
     "smoke:discord": "tsx scripts/smokeDiscord.ts",
     "smoke:github": "tsx scripts/smokeGithub.ts",
     "smoke:openrouter": "tsx scripts/smokeOpenRouter.ts",

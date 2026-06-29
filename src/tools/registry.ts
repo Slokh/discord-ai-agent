@@ -18,6 +18,11 @@ export type ToolName =
   | "generateImage"
   | "createSkillDraft"
   | "openGithubPullRequest"
+  | "getAgentTaskStatus"
+  | "listAgentTasks"
+  | "retryAgentTask"
+  | "cancelAgentTask"
+  | "getDeploymentStatus"
   | "inspectAgentLogs"
   | "undoConversationTurns"
   | "reportStatus";
@@ -591,6 +596,107 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "getAgentTaskStatus",
+    description:
+      "Look up the current or recent code-update task status, progress events, and sandbox command output. Use when a user asks what happened to an update, whether it is done, why it failed, or for a task ID.",
+    userVisible: true,
+    mutates: false,
+    category: "coding",
+    parameters: {
+      type: "object",
+      properties: {
+        taskId: {
+          type: "string",
+          description: "Optional task ID. If omitted, returns the latest visible task in this Discord channel."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum progress and command events to include. Defaults to 8."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "listAgentTasks",
+    description:
+      "List recent visible code-update tasks with their statuses. Use when a user asks for task history, queued work, previous PR attempts, or what updates are in progress.",
+    userVisible: true,
+    mutates: false,
+    category: "coding",
+    parameters: {
+      type: "object",
+      properties: {
+        statuses: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["queued", "running", "succeeded", "failed", "no_changes", "cancelled"]
+          },
+          description: "Optional statuses to filter by."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum tasks to return. Defaults to 10."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "retryAgentTask",
+    description:
+      "Retry a failed, no-change, or cancelled code-update task using the original request. Use when a user asks to retry, rerun, or try again after a code-update task did not complete.",
+    userVisible: true,
+    mutates: true,
+    category: "coding",
+    parameters: {
+      type: "object",
+      properties: {
+        taskId: {
+          type: "string",
+          description: "Optional task ID. If omitted, retries the latest retryable visible task in this Discord channel."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "cancelAgentTask",
+    description:
+      "Cancel an active queued or running code-update task. Use when a user asks to stop, cancel, abort, or kill an in-progress self-update.",
+    userVisible: true,
+    mutates: true,
+    category: "coding",
+    parameters: {
+      type: "object",
+      properties: {
+        taskId: {
+          type: "string",
+          description: "Optional task ID. If omitted, cancels the latest active visible task in this Discord channel."
+        },
+        reason: {
+          type: "string",
+          description: "Optional user-facing reason for cancellation."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "getDeploymentStatus",
+    description:
+      "Report the running deployment revision, uptime, database health, agent task metrics, and recent tasks. Use after deploys or when users ask whether the deployed bot is healthy.",
+    userVisible: true,
+    mutates: false,
+    category: "ops",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  },
+  {
     name: "undoConversationTurns",
     description:
       "Undo the agent's most recent reply turns in the current Discord channel by removing them from persistent memory and, when possible, deleting the bot reply messages. Use when the user asks to undo, forget, delete, or remove the agent's previous response.",
@@ -729,8 +835,16 @@ function defaultPermissionRequirements(tool: ToolRegistryEntry): string[] {
 function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["category"]> {
   if (name === "generateImage") return "generation";
   if (name === "createSkillDraft") return "memory";
-  if (name === "openGithubPullRequest") return "coding";
-  if (name === "inspectAgentLogs" || name === "reportStatus" || name === "listTools") return "ops";
+  if (
+    name === "openGithubPullRequest" ||
+    name === "getAgentTaskStatus" ||
+    name === "listAgentTasks" ||
+    name === "retryAgentTask" ||
+    name === "cancelAgentTask"
+  ) {
+    return "coding";
+  }
+  if (name === "inspectAgentLogs" || name === "reportStatus" || name === "getDeploymentStatus" || name === "listTools") return "ops";
   return "discord";
 }
 
@@ -753,6 +867,11 @@ function defaultToolExamples(name: ToolName): string[] {
     generateImage: "@ai make an image of a wizard eating nachos",
     createSkillDraft: "@ai learn this for next time: movie night is on Fridays",
     openGithubPullRequest: "@ai update yourself to handle Bluesky links better",
+    getAgentTaskStatus: "@ai what happened to the last update?",
+    listAgentTasks: "@ai show recent update tasks",
+    retryAgentTask: "@ai retry that update",
+    cancelAgentTask: "@ai cancel the current update",
+    getDeploymentStatus: "@ai deployment status",
     inspectAgentLogs: "@ai why did that last answer fail?",
     undoConversationTurns: "@ai undo that",
     reportStatus: "@ai status"

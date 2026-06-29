@@ -155,6 +155,7 @@ When someone asks `@ai update yourself to ...`, the bot creates a durable `agent
 The original Discord reply is edited with progress and the final PR link.
 If a sandbox crashes, disappears, or exits without sending its terminal callback, the worker reconciler marks the task failed in Postgres and later cleans up the sandbox Job, Secret, and ConfigMap.
 
+For a local Kubernetes full-loop test, see [docs/local-kubernetes.md](docs/local-kubernetes.md).
 For production setup, see [docs/eks-deploy.md](docs/eks-deploy.md).
 For a reference AWS baseline, see [deploy/terraform/aws](deploy/terraform/aws).
 

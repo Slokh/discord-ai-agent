@@ -990,6 +990,20 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:00:03Z")
           }
         ]),
+        getSandboxCommandEvents: vi.fn(async () => [
+          {
+            id: 1,
+            taskId: "task-1",
+            sandboxRunId: "run-1",
+            step: "verify",
+            command: "npm run verify",
+            exitCode: 1,
+            outputTail: "",
+            errorTail: "test failure",
+            durationMs: 123,
+            createdAt: new Date("2026-01-01T00:00:04Z")
+          }
+        ]),
         auditTool
       },
       guildId: "guild",
@@ -1003,6 +1017,8 @@ describe("inspectAgentLogs", () => {
     expect(response).toContain("Discord AI Agent logs for trace trace-1");
     expect(response).toContain("agent.request.complete 1234ms");
     expect(response).toContain("task.progress task=task-1");
+    expect(response).toContain("Sandbox commands:");
+    expect(response).toContain("npm run verify");
     expect(response).toContain("searchDiscordHistory");
     expect(ctx.repo.getTraceEvents).toHaveBeenCalledWith({
       guildId: "guild",
@@ -1011,6 +1027,12 @@ describe("inspectAgentLogs", () => {
       limit: 10
     });
     expect(ctx.repo.getTaskEvents).toHaveBeenCalledWith({
+      guildId: "guild",
+      visibleChannelIds: ["channel"],
+      traceId: "trace-1",
+      limit: 10
+    });
+    expect(ctx.repo.getSandboxCommandEvents).toHaveBeenCalledWith({
       guildId: "guild",
       visibleChannelIds: ["channel"],
       traceId: "trace-1",

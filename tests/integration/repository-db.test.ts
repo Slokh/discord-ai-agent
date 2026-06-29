@@ -449,6 +449,76 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
   });
 
+  it("tracks agent task notifications, command output, cancellation, and history", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const sandboxRunId = `run-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Task Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId,
+      channelId,
+      userId: `user-${randomUUID()}`,
+      discordResponseChannelId: channelId,
+      discordResponseMessageId: `reply-${randomUUID()}`,
+      taskType: "code_update",
+      title: "cancel test",
+      request: "simulate a cancellable sandbox task",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+
+    await repo.recordSandboxCommandEvent({
+      taskId,
+      sandboxRunId,
+      step: "verify",
+      command: "npm run verify",
+      exitCode: 1,
+      outputTail: "stdout tail",
+      errorTail: "stderr tail",
+      durationMs: 123
+    });
+
+    await expect(repo.getSandboxCommandEvents({ guildId, visibleChannelIds: [channelId], taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({ taskId, sandboxRunId, step: "verify", exitCode: 1, errorTail: "stderr tail" })
+    ]);
+    await expect(repo.cancelAgentTask({ taskId, reason: "user changed their mind" })).resolves.toBe(true);
+    await repo.markAgentTaskSucceeded({
+      taskId,
+      branchName: "discord-ai-agent/update-cancel-test",
+      prUrl: "https://github.com/example/discord-ai-agent/pull/99",
+      draft: false,
+      verifyPassed: true
+    });
+
+    await expect(repo.getAgentTask(taskId)).resolves.toMatchObject({
+      taskId,
+      status: "cancelled",
+      discordResponseChannelId: channelId,
+      discordResponseMessageId: expect.any(String),
+      prUrl: null,
+      cancelledAt: expect.any(Date)
+    });
+    await expect(repo.listAgentTasks({ guildId, visibleChannelIds: [channelId], statuses: ["cancelled"], limit: 5 })).resolves.toEqual([
+      expect.objectContaining({ taskId, status: "cancelled" })
+    ]);
+    await expect(repo.listTerminalAgentTasksNeedingNotification()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId, status: "cancelled" })])
+    );
+
+    await repo.markAgentTaskNotificationFailed({ taskId, error: "missing message" });
+    await expect(repo.listTerminalAgentTasksNeedingNotification()).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId })])
+    );
+    await repo.markAgentTaskNotified(taskId);
+    await expect(repo.getAgentTask(taskId)).resolves.toMatchObject({
+      notifiedAt: expect.any(Date),
+      notificationError: null
+    });
+  });
+
   it("includes logged model cost estimates in health", async () => {
     const userId = `user-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;

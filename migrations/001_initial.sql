@@ -264,6 +264,9 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   guild_id text,
   channel_id text,
   user_id text,
+  discord_response_channel_id text,
+  discord_response_message_id text,
+  retried_from_task_id text REFERENCES agent_tasks(task_id) ON DELETE SET NULL,
   task_type text NOT NULL,
   title text NOT NULL,
   request text NOT NULL,
@@ -279,13 +282,27 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   error text,
   created_at timestamptz NOT NULL DEFAULT now(),
   started_at timestamptz,
+  cancelled_at timestamptz,
   completed_at timestamptz,
+  notified_at timestamptz,
+  notification_error text,
   progress_updated_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS agent_tasks_status_updated_idx
   ON agent_tasks(status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS agent_tasks_guild_updated_idx
+  ON agent_tasks(guild_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS agent_tasks_notification_idx
+  ON agent_tasks(completed_at ASC)
+  WHERE status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+    AND notified_at IS NULL
+    AND notification_error IS NULL
+    AND discord_response_channel_id IS NOT NULL
+    AND discord_response_message_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS agent_tasks_trace_idx
   ON agent_tasks(trace_id);
@@ -324,3 +341,19 @@ CREATE TABLE IF NOT EXISTS sandbox_runs (
 
 CREATE INDEX IF NOT EXISTS sandbox_runs_task_idx
   ON sandbox_runs(task_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS sandbox_command_events (
+  id bigserial PRIMARY KEY,
+  task_id text NOT NULL REFERENCES agent_tasks(task_id) ON DELETE CASCADE,
+  sandbox_run_id text,
+  step text NOT NULL,
+  command text,
+  exit_code integer,
+  output_tail text NOT NULL DEFAULT '',
+  error_tail text NOT NULL DEFAULT '',
+  duration_ms integer,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS sandbox_command_events_task_created_idx
+  ON sandbox_command_events(task_id, created_at DESC);

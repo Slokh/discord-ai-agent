@@ -305,6 +305,9 @@ export type AgentTaskRecord = {
   guildId: string | null;
   channelId: string | null;
   userId: string | null;
+  discordResponseChannelId: string | null;
+  discordResponseMessageId: string | null;
+  retriedFromTaskId: string | null;
   taskType: string;
   title: string;
   request: string;
@@ -320,7 +323,10 @@ export type AgentTaskRecord = {
   error: string | null;
   createdAt: Date;
   startedAt: Date | null;
+  cancelledAt: Date | null;
   completedAt: Date | null;
+  notifiedAt: Date | null;
+  notificationError: string | null;
   progressUpdatedAt: Date | null;
   updatedAt: Date;
 };
@@ -350,6 +356,19 @@ export type SandboxRunRecord = {
   completedAt: Date | null;
   cleanedUpAt: Date | null;
   updatedAt: Date;
+};
+
+export type SandboxCommandEvent = {
+  id: number;
+  taskId: string;
+  sandboxRunId: string | null;
+  step: string;
+  command: string | null;
+  exitCode: number | null;
+  outputTail: string;
+  errorTail: string;
+  durationMs: number | null;
+  createdAt: Date;
 };
 
 export type ServerOverlay = {
@@ -2126,6 +2145,9 @@ export class DiscordAiAgentRepository {
     guildId?: string | null;
     channelId?: string | null;
     userId?: string | null;
+    discordResponseChannelId?: string | null;
+    discordResponseMessageId?: string | null;
+    retriedFromTaskId?: string | null;
     taskType: string;
     title: string;
     request: string;
@@ -2136,15 +2158,19 @@ export class DiscordAiAgentRepository {
       `
         INSERT INTO agent_tasks(
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          discord_response_channel_id, discord_response_message_id, retried_from_task_id,
           task_type, title, request, requested_by, backend, status, current_step, status_message, progress_updated_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'queued', 'queued', 'Waiting for a Kubernetes sandbox to start.', now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'queued', 'queued', 'Waiting for a Kubernetes sandbox to start.', now(), now())
         ON CONFLICT(task_id) DO UPDATE SET
           pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_tasks.pgboss_job_id),
           trace_id = coalesce(EXCLUDED.trace_id, agent_tasks.trace_id),
           guild_id = coalesce(EXCLUDED.guild_id, agent_tasks.guild_id),
           channel_id = coalesce(EXCLUDED.channel_id, agent_tasks.channel_id),
           user_id = coalesce(EXCLUDED.user_id, agent_tasks.user_id),
+          discord_response_channel_id = coalesce(EXCLUDED.discord_response_channel_id, agent_tasks.discord_response_channel_id),
+          discord_response_message_id = coalesce(EXCLUDED.discord_response_message_id, agent_tasks.discord_response_message_id),
+          retried_from_task_id = coalesce(EXCLUDED.retried_from_task_id, agent_tasks.retried_from_task_id),
           task_type = EXCLUDED.task_type,
           title = EXCLUDED.title,
           request = EXCLUDED.request,
@@ -2163,6 +2189,9 @@ export class DiscordAiAgentRepository {
         input.guildId ?? null,
         input.channelId ?? null,
         input.userId ?? null,
+        input.discordResponseChannelId ?? null,
+        input.discordResponseMessageId ?? null,
+        input.retriedFromTaskId ?? null,
         input.taskType,
         input.title,
         input.request,
@@ -2299,6 +2328,7 @@ export class DiscordAiAgentRepository {
               completed_at = now(),
               updated_at = now()
           WHERE task_id = $1
+            AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
           RETURNING task_id, trace_id, guild_id, channel_id, user_id
         ),
         sandbox_update AS (
@@ -2333,9 +2363,11 @@ export class DiscordAiAgentRepository {
               current_step = $2,
               status_message = $3,
               error = $3,
+              cancelled_at = CASE WHEN $2 = 'cancelled' THEN coalesce(cancelled_at, now()) ELSE cancelled_at END,
               completed_at = now(),
               updated_at = now()
           WHERE task_id = $1
+            AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
           RETURNING task_id, trace_id, guild_id, channel_id, user_id
         ),
         sandbox_update AS (
@@ -2361,9 +2393,11 @@ export class DiscordAiAgentRepository {
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          discord_response_channel_id, discord_response_message_id, retried_from_task_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
-          created_at, started_at, completed_at, progress_updated_at, updated_at
+          created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
+          progress_updated_at, updated_at
         FROM agent_tasks
         WHERE task_id = $1
       `,
@@ -2371,6 +2405,178 @@ export class DiscordAiAgentRepository {
     );
     const row = result.rows[0];
     return row ? rowToAgentTask(row) : undefined;
+  }
+
+  async listAgentTasks(input: {
+    guildId: string;
+    visibleChannelIds?: string[];
+    channelId?: string | null;
+    statuses?: AgentTaskStatus[];
+    limit?: number;
+  }): Promise<AgentTaskRecord[]> {
+    const limit = Math.max(1, Math.min(50, Math.trunc(input.limit ?? 10)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          task_type, title, request, requested_by, status, backend, current_step,
+          status_message, branch_name, pr_url, draft, verify_passed, error,
+          created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
+          progress_updated_at, updated_at
+        FROM agent_tasks
+        WHERE guild_id = $1
+          AND ($2::text[] IS NULL OR channel_id IS NULL OR channel_id = ANY($2::text[]))
+          AND ($3::text IS NULL OR channel_id = $3)
+          AND (coalesce(array_length($4::text[], 1), 0) = 0 OR status = ANY($4::text[]))
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT $5
+      `,
+      [input.guildId, input.visibleChannelIds ?? null, input.channelId ?? null, input.statuses ?? [], limit]
+    );
+    return result.rows.map(rowToAgentTask);
+  }
+
+  async listTerminalAgentTasksNeedingNotification(limit = 20): Promise<AgentTaskRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          task_type, title, request, requested_by, status, backend, current_step,
+          status_message, branch_name, pr_url, draft, verify_passed, error,
+          created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
+          progress_updated_at, updated_at
+        FROM agent_tasks
+        WHERE status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+          AND notified_at IS NULL
+          AND notification_error IS NULL
+          AND discord_response_channel_id IS NOT NULL
+          AND discord_response_message_id IS NOT NULL
+        ORDER BY coalesce(completed_at, updated_at) ASC
+        LIMIT $1
+      `,
+      [Math.max(1, Math.min(100, Math.trunc(limit)))]
+    );
+    return result.rows.map(rowToAgentTask);
+  }
+
+  async markAgentTaskNotified(taskId: string) {
+    await this.pool.query(
+      `
+        UPDATE agent_tasks
+        SET notified_at = now(),
+            notification_error = NULL,
+            updated_at = now()
+        WHERE task_id = $1
+      `,
+      [taskId]
+    );
+  }
+
+  async markAgentTaskNotificationFailed(input: { taskId: string; error: string }) {
+    await this.pool.query(
+      `
+        UPDATE agent_tasks
+        SET notification_error = $2,
+            updated_at = now()
+        WHERE task_id = $1
+      `,
+      [input.taskId, input.error]
+    );
+  }
+
+  async cancelAgentTask(input: { taskId: string; reason?: string | null }): Promise<boolean> {
+    const message = input.reason?.trim() || "Cancelled by Discord request.";
+    const result = await this.pool.query(
+      `
+        WITH updated AS (
+          UPDATE agent_tasks
+          SET status = 'cancelled',
+              current_step = 'cancelled',
+              status_message = $2,
+              error = $2,
+              cancelled_at = now(),
+              completed_at = coalesce(completed_at, now()),
+              updated_at = now()
+          WHERE task_id = $1
+            AND status IN ('queued', 'running')
+          RETURNING task_id, trace_id, guild_id, channel_id, user_id
+        ),
+        sandbox_update AS (
+          UPDATE sandbox_runs
+          SET status = 'cancelled', completed_at = coalesce(completed_at, now()), updated_at = now()
+          WHERE task_id = $1 AND completed_at IS NULL
+        ),
+        event_insert AS (
+          INSERT INTO task_events(task_id, trace_id, event_name, level, summary, metadata)
+          SELECT task_id, trace_id, 'task.cancelled', 'info', $2, '{}'::jsonb
+          FROM updated
+        )
+        INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, level, summary, metadata)
+        SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.cancelled', 'info', $2, '{}'::jsonb
+        FROM updated
+      `,
+      [input.taskId, message]
+    );
+    return Boolean(result.rowCount && result.rowCount > 0);
+  }
+
+  async recordSandboxCommandEvent(input: {
+    taskId: string;
+    sandboxRunId?: string | null;
+    step: string;
+    command?: string | null;
+    exitCode?: number | null;
+    outputTail?: string | null;
+    errorTail?: string | null;
+    durationMs?: number | null;
+  }) {
+    await this.pool.query(
+      `
+        INSERT INTO sandbox_command_events(
+          task_id, sandbox_run_id, step, command, exit_code, output_tail, error_tail, duration_ms
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [
+        input.taskId,
+        input.sandboxRunId ?? null,
+        input.step,
+        input.command ?? null,
+        input.exitCode == null ? null : Math.trunc(input.exitCode),
+        input.outputTail ?? "",
+        input.errorTail ?? "",
+        input.durationMs == null ? null : Math.trunc(input.durationMs)
+      ]
+    );
+  }
+
+  async getSandboxCommandEvents(input: {
+    guildId: string;
+    visibleChannelIds?: string[];
+    taskId?: string;
+    traceId?: string;
+    limit?: number;
+  }): Promise<SandboxCommandEvent[]> {
+    const limit = Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          sce.id, sce.task_id, sce.sandbox_run_id, sce.step, sce.command, sce.exit_code,
+          sce.output_tail, sce.error_tail, sce.duration_ms, sce.created_at
+        FROM sandbox_command_events sce
+        JOIN agent_tasks at ON at.task_id = sce.task_id
+        WHERE at.guild_id = $1
+          AND ($2::text[] IS NULL OR at.channel_id IS NULL OR at.channel_id = ANY($2::text[]))
+          AND ($3::text IS NULL OR sce.task_id = $3)
+          AND ($4::text IS NULL OR at.trace_id = $4 OR sce.task_id = $4)
+        ORDER BY sce.created_at DESC, sce.id DESC
+        LIMIT $5
+      `,
+      [input.guildId, input.visibleChannelIds ?? null, input.taskId ?? null, input.traceId ?? null, limit]
+    );
+    return result.rows.map(rowToSandboxCommandEvent);
   }
 
   async listActiveSandboxRuns(limit = 50): Promise<SandboxRunRecord[]> {
@@ -3812,6 +4018,9 @@ function rowToAgentTask(row: any): AgentTaskRecord {
     guildId: row.guild_id == null ? null : String(row.guild_id),
     channelId: row.channel_id == null ? null : String(row.channel_id),
     userId: row.user_id == null ? null : String(row.user_id),
+    discordResponseChannelId: row.discord_response_channel_id == null ? null : String(row.discord_response_channel_id),
+    discordResponseMessageId: row.discord_response_message_id == null ? null : String(row.discord_response_message_id),
+    retriedFromTaskId: row.retried_from_task_id == null ? null : String(row.retried_from_task_id),
     taskType: String(row.task_type),
     title: String(row.title),
     request: String(row.request ?? ""),
@@ -3827,9 +4036,27 @@ function rowToAgentTask(row: any): AgentTaskRecord {
     error: row.error == null ? null : String(row.error),
     createdAt: new Date(row.created_at),
     startedAt: row.started_at == null ? null : new Date(row.started_at),
+    cancelledAt: row.cancelled_at == null ? null : new Date(row.cancelled_at),
     completedAt: row.completed_at == null ? null : new Date(row.completed_at),
+    notifiedAt: row.notified_at == null ? null : new Date(row.notified_at),
+    notificationError: row.notification_error == null ? null : String(row.notification_error),
     progressUpdatedAt: row.progress_updated_at == null ? null : new Date(row.progress_updated_at),
     updatedAt: new Date(row.updated_at)
+  };
+}
+
+function rowToSandboxCommandEvent(row: any): SandboxCommandEvent {
+  return {
+    id: Number(row.id),
+    taskId: String(row.task_id),
+    sandboxRunId: row.sandbox_run_id == null ? null : String(row.sandbox_run_id),
+    step: String(row.step),
+    command: row.command == null ? null : String(row.command),
+    exitCode: row.exit_code == null ? null : Number(row.exit_code),
+    outputTail: String(row.output_tail ?? ""),
+    errorTail: String(row.error_tail ?? ""),
+    durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+    createdAt: new Date(row.created_at)
   };
 }
 

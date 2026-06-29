@@ -102,6 +102,28 @@ async function handleRequest(input: {
     return;
   }
 
+  const commandMatch = url.pathname.match(/^\/internal\/tasks\/([^/]+)\/commands$/);
+  if (method === "POST" && commandMatch) {
+    const taskId = decodeURIComponent(commandMatch[1] ?? "");
+    if (!authorized(input.config, input.request, taskId)) {
+      sendJson(input.response, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = parseCommandEvent(await readJsonBody(input.request));
+    await input.repo.recordSandboxCommandEvent({
+      taskId,
+      sandboxRunId: body.sandboxRunId,
+      step: body.step,
+      command: body.command,
+      exitCode: body.exitCode,
+      outputTail: body.outputTail,
+      errorTail: body.errorTail,
+      durationMs: body.durationMs
+    });
+    sendJson(input.response, 200, { ok: true });
+    return;
+  }
+
   sendJson(input.response, 404, { error: "not_found" });
 }
 
@@ -148,6 +170,29 @@ function parseCompletionEvent(value: unknown): AgentTaskCompletionEvent {
     verifyPassed: typeof body.verifyPassed === "boolean" ? body.verifyPassed : null,
     error: stringOrNull(body.error),
     metadata: body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? (body.metadata as Record<string, unknown>) : {}
+  };
+}
+
+function parseCommandEvent(value: unknown): {
+  sandboxRunId: string | null;
+  step: string;
+  command: string | null;
+  exitCode: number | null;
+  outputTail: string;
+  errorTail: string;
+  durationMs: number | null;
+} {
+  if (!value || typeof value !== "object") throw new Error("Command event body must be an object.");
+  const body = value as Record<string, unknown>;
+  const step = typeof body.step === "string" && body.step.trim() ? body.step.trim() : "command";
+  return {
+    sandboxRunId: stringOrNull(body.sandboxRunId),
+    step,
+    command: stringOrNull(body.command),
+    exitCode: typeof body.exitCode === "number" && Number.isFinite(body.exitCode) ? Math.trunc(body.exitCode) : null,
+    outputTail: typeof body.outputTail === "string" ? body.outputTail.slice(-40_000) : "",
+    errorTail: typeof body.errorTail === "string" ? body.errorTail.slice(-40_000) : "",
+    durationMs: typeof body.durationMs === "number" && Number.isFinite(body.durationMs) ? Math.trunc(body.durationMs) : null
   };
 }
 

@@ -5,6 +5,7 @@ import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js"
 import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
 import type {
   AgentTaskRecord,
+  AgentTaskStatus,
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
   DiscordChannelTopicCandidate,
@@ -15,6 +16,7 @@ import type {
   DiscordStats,
   DiscordUserLookupResult,
   SearchResult,
+  SandboxCommandEvent,
   TaskEvent,
   ToolAuditLog,
   TraceEvent
@@ -949,6 +951,7 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
   const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy });
+  const commandEvents = await loadTaskCommandEventsForResult(ctx, result.taskId, result.job);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -959,12 +962,12 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
-  return formatAgentTaskResult(result);
+  return formatAgentTaskResult({ ...result, commandEvents });
 }
 
 async function enqueueAgentCodeUpdateTask(
   ctx: ToolContext,
-  input: { request: string; updateName: string; requestedBy: string }
+  input: { request: string; updateName: string; requestedBy: string; retriedFromTaskId?: string | null }
 ): Promise<{ taskId: string; jobId: string | null; job?: AgentTaskRecord; timedOut?: boolean }> {
   if (!ctx.jobs) {
     throw new Error("Agent task queue is unavailable in this process.");
@@ -974,7 +977,10 @@ async function enqueueAgentCodeUpdateTask(
     request: input.request.trim(),
     title: input.updateName,
     requestedBy: input.requestedBy,
-    taskType: "code_update"
+    taskType: "code_update",
+    discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
+    discordResponseMessageId: ctx.statusMessageId,
+    retriedFromTaskId: input.retriedFromTaskId ?? undefined
   });
   const job = await waitForAgentTaskResult(ctx, enqueued.taskId);
   return { ...enqueued, ...job };
@@ -1015,11 +1021,12 @@ function agentTaskProgressMessage(job: AgentTaskRecord) {
   return `${detail}\n\nUpdate: \`${job.title}\`${job.currentStep ? `\nStep: \`${job.currentStep}\`` : ""}`;
 }
 
-function formatAgentTaskResult(input: {
+export function formatAgentTaskResult(input: {
   taskId: string;
   jobId: string | null;
   job?: AgentTaskRecord;
   timedOut?: boolean;
+  commandEvents?: SandboxCommandEvent[];
 }) {
   if (input.timedOut) {
     const status = input.job?.status ? ` Current status: \`${input.job.status}\`.` : "";
@@ -1037,18 +1044,54 @@ function formatAgentTaskResult(input: {
   }
 
   if (job.status === "no_changes") {
-    return `I tried to make that change, but the sandbox did not produce a code diff, so no PR was opened. Task ID: \`${input.taskId}\`.`;
+    return [
+      `I tried to make that change, but the sandbox did not produce a code diff, so no PR was opened. Task ID: \`${input.taskId}\`.`,
+      formatLastCommandFailure(input.commandEvents)
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   if (job.status === "cancelled") {
-    return `That code change task was cancelled. Task ID: \`${input.taskId}\`.`;
+    return [
+      `That code change task was cancelled. Task ID: \`${input.taskId}\`.`,
+      job.error ? truncateForDiscord(job.error, 500) : "",
+      formatLastCommandFailure(input.commandEvents)
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   if (job.status === "failed") {
-    return `I tried to make that change, but the sandbox failed: ${job.error ?? "unknown error"}`;
+    return [
+      `I tried to make that change, but the sandbox failed: ${truncateForDiscord(job.error ?? "unknown error", 900)}`,
+      formatLastCommandFailure(input.commandEvents)
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   return `I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`;
+}
+
+function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined) {
+  const event = events?.find((candidate) => candidate.exitCode !== 0) ?? events?.[0];
+  if (!event) return "";
+  const tail = event.errorTail || event.outputTail;
+  const detail = tail ? `\n${truncateForDiscord(tail.trim(), 900)}` : "";
+  const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;
+  const duration = event.durationMs == null ? "" : ` ${event.durationMs}ms`;
+  return `Last sandbox command: \`${event.command ?? event.step}\`${exit}${duration}${detail}`;
+}
+
+async function loadTaskCommandEventsForResult(ctx: ToolContext, taskId: string, job?: AgentTaskRecord) {
+  if (!job || !isTerminalAgentTaskStatus(job.status)) return [];
+  return ctx.repo.getSandboxCommandEvents({
+    guildId: ctx.guildId,
+    visibleChannelIds: ctx.visibleChannelIds,
+    taskId,
+    limit: 8
+  });
 }
 
 function agentTaskAuditSummary(result: unknown) {
@@ -1068,6 +1111,173 @@ function agentTaskAuditSummary(result: unknown) {
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: string; limit?: number } = {}): Promise<string> {
+  const task = await resolveVisibleAgentTask(ctx, input.taskId, {
+    statuses: undefined,
+    limit: 1
+  });
+  if (!task) return input.taskId ? `No visible agent task matched \`${input.taskId}\`.` : "No recent agent task matched this channel.";
+
+  const limit = clampInteger(input.limit, 1, 20, 8);
+  const [events, commandEvents] = await Promise.all([
+    ctx.repo.getTaskEvents({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      traceId: task.taskId,
+      limit
+    }),
+    ctx.repo.getSandboxCommandEvents({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      taskId: task.taskId,
+      limit
+    })
+  ]);
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "getAgentTaskStatus",
+    argumentsSummary: summarizeForAudit({ taskId: input.taskId, limit }),
+    resultSummary: summarizeForAudit({ taskId: task.taskId, status: task.status, events: events.length, commandEvents: commandEvents.length })
+  });
+
+  return [
+    "Agent task status:",
+    formatAgentTaskLine(task),
+    task.request ? `Request: ${truncateForDiscord(task.request, 800)}` : "",
+    task.error ? `Error: ${truncateForDiscord(task.error, 800)}` : "",
+    task.prUrl ? `PR: ${task.prUrl}` : "",
+    "",
+    formatTaskEvents(events),
+    "",
+    formatSandboxCommandEvents(commandEvents)
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+export async function listAgentTasks(ctx: ToolContext, input: { statuses?: string[]; limit?: number } = {}): Promise<string> {
+  const statuses = normalizeAgentTaskStatuses(input.statuses);
+  const limit = clampInteger(input.limit, 1, 20, 10);
+  const tasks = await ctx.repo.listAgentTasks({
+    guildId: ctx.guildId,
+    visibleChannelIds: ctx.visibleChannelIds,
+    statuses,
+    limit
+  });
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "listAgentTasks",
+    argumentsSummary: summarizeForAudit({ statuses, limit }),
+    resultSummary: summarizeForAudit({ tasks: tasks.length })
+  });
+
+  if (tasks.length === 0) return "No visible agent tasks matched.";
+  return ["Recent agent tasks:", ...tasks.map(formatAgentTaskLine)].join("\n");
+}
+
+export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string } = {}): Promise<string> {
+  const task = await resolveVisibleAgentTask(ctx, input.taskId, {
+    statuses: ["failed", "no_changes", "cancelled"],
+    limit: 1
+  });
+  if (!task) return input.taskId ? `No retryable visible agent task matched \`${input.taskId}\`.` : "No recent failed, no-change, or cancelled agent task matched.";
+
+  const requestedBy = `${ctx.userDisplayName} (${ctx.userId}) retrying ${task.taskId}`;
+  const result = await enqueueAgentCodeUpdateTask(ctx, {
+    request: task.request,
+    updateName: `${task.title}-retry`,
+    requestedBy,
+    retriedFromTaskId: task.taskId
+  });
+  const commandEvents = await loadTaskCommandEventsForResult(ctx, result.taskId, result.job);
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "retryAgentTask",
+    argumentsSummary: summarizeForAudit({ taskId: task.taskId }),
+    resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
+  });
+
+  return formatAgentTaskResult({ ...result, commandEvents });
+}
+
+export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string; reason?: string } = {}): Promise<string> {
+  const task = await resolveVisibleAgentTask(ctx, input.taskId, {
+    statuses: ["queued", "running"],
+    limit: 1
+  });
+  if (!task) return input.taskId ? `No active visible agent task matched \`${input.taskId}\`.` : "No active agent task matched.";
+
+  const cancelled = await ctx.repo.cancelAgentTask({
+    taskId: task.taskId,
+    reason: input.reason ?? `Cancelled by ${ctx.userDisplayName} (${ctx.userId}).`
+  });
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "cancelAgentTask",
+    argumentsSummary: summarizeForAudit({ taskId: task.taskId, reason: input.reason }),
+    resultSummary: summarizeForAudit({ cancelled })
+  });
+
+  if (!cancelled) return `Task \`${task.taskId}\` was not cancelled, likely because it already finished.`;
+  return `Cancelled agent task \`${task.taskId}\`. The sandbox cleanup reconciler will remove any remaining Kubernetes resources.`;
+}
+
+export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
+  const [health, taskMetrics, recentTasks] = await Promise.all([
+    ctx.repo.health(),
+    ctx.repo.getAgentTaskMetrics(),
+    ctx.repo.listAgentTasks({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      limit: 5
+    })
+  ]);
+
+  const revision =
+    process.env.GITHUB_SHA ??
+    process.env.RENDER_GIT_COMMIT ??
+    process.env.RAILWAY_GIT_COMMIT_SHA ??
+    process.env.K_REVISION ??
+    process.env.HOSTNAME ??
+    "unknown";
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "getDeploymentStatus",
+    argumentsSummary: "deployment status",
+    resultSummary: summarizeForAudit({ revision, recentTasks: recentTasks.length })
+  });
+
+  return [
+    "Deployment status:",
+    `- Revision: ${revision}`,
+    `- Uptime: ${formatDurationSeconds(process.uptime())}`,
+    `- Node: ${process.version}`,
+    `- Repository: ${ctx.config.github.repository || "not configured"}`,
+    `- Base branch: ${ctx.config.github.baseBranch}`,
+    `- Indexed messages: ${health.messages}`,
+    `- Embeddings: ${health.embeddings}`,
+    `- Tool calls logged: ${health.toolCalls}`,
+    `- Agent tasks: ${taskMetrics.tasksByStatus.map((row) => `${row.status}=${row.count}`).join(", ") || "none"}`,
+    recentTasks.length ? "Recent tasks:" : "Recent tasks: none",
+    ...recentTasks.map((task) => `- ${formatAgentTaskLine(task)}`)
+  ].join("\n");
 }
 
 export async function reportStatus(ctx: ToolContext): Promise<string> {
@@ -1112,7 +1322,7 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
 export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: string; limit?: number } = {}): Promise<string> {
   const limit = clampInteger(input.limit, 1, 50, 20);
   const traceId = input.traceId?.trim() || undefined;
-  const [events, taskEvents, toolLogs] = await Promise.all([
+  const [events, taskEvents, commandEvents, toolLogs] = await Promise.all([
     ctx.repo.getTraceEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
@@ -1120,6 +1330,12 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
       limit
     }),
     ctx.repo.getTaskEvents({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      traceId,
+      limit
+    }),
+    ctx.repo.getSandboxCommandEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
       traceId,
@@ -1139,10 +1355,15 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     userId: ctx.userId,
     toolName: "inspectAgentLogs",
     argumentsSummary: summarizeForAudit({ traceId, limit }),
-    resultSummary: summarizeForAudit({ traceEvents: events.length, taskEvents: taskEvents.length, toolLogs: toolLogs.length })
+    resultSummary: summarizeForAudit({
+      traceEvents: events.length,
+      taskEvents: taskEvents.length,
+      commandEvents: commandEvents.length,
+      toolLogs: toolLogs.length
+    })
   });
 
-  if (events.length === 0 && taskEvents.length === 0 && toolLogs.length === 0) {
+  if (events.length === 0 && taskEvents.length === 0 && commandEvents.length === 0 && toolLogs.length === 0) {
     return traceId ? `No Discord AI Agent trace or tool logs matched traceId=${traceId}.` : "No recent Discord AI Agent trace or tool logs matched visible channels.";
   }
 
@@ -1152,6 +1373,8 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     formatTraceEvents(events),
     "",
     formatTaskEvents(taskEvents),
+    "",
+    formatSandboxCommandEvents(commandEvents),
     "",
     formatToolAuditLogs(toolLogs)
   ]
@@ -1217,6 +1440,82 @@ function formatToolAuditLogs(logs: ToolAuditLog[]) {
         return `- ${log.createdAt.toISOString()} ${log.toolName}${bits.length ? ` (${bits.join(", ")})` : ""}${result}`;
       })
   ].join("\n");
+}
+
+async function resolveVisibleAgentTask(
+  ctx: ToolContext,
+  taskId: string | undefined,
+  options: { statuses?: AgentTaskStatus[]; limit: number }
+): Promise<AgentTaskRecord | undefined> {
+  if (taskId?.trim()) {
+    const task = await ctx.repo.getAgentTask(taskId.trim());
+    if (!task || !isAgentTaskVisible(ctx, task)) return undefined;
+    if (options.statuses?.length && !options.statuses.includes(task.status)) return undefined;
+    return task;
+  }
+  return (
+    await ctx.repo.listAgentTasks({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      channelId: ctx.channelId,
+      statuses: options.statuses,
+      limit: options.limit
+    })
+  )[0];
+}
+
+function isAgentTaskVisible(ctx: ToolContext, task: AgentTaskRecord) {
+  return task.guildId === ctx.guildId && (!task.channelId || ctx.visibleChannelIds.includes(task.channelId));
+}
+
+function normalizeAgentTaskStatuses(statuses: string[] | undefined): AgentTaskStatus[] | undefined {
+  if (!statuses?.length) return undefined;
+  const allowed: AgentTaskStatus[] = ["queued", "running", "succeeded", "failed", "no_changes", "cancelled"];
+  const normalized = uniqueStrings(statuses.map((status) => status.trim()).filter(Boolean)).filter((status): status is AgentTaskStatus =>
+    allowed.includes(status as AgentTaskStatus)
+  );
+  return normalized.length ? normalized : undefined;
+}
+
+function formatAgentTaskLine(task: AgentTaskRecord) {
+  const parts = [
+    `\`${task.taskId}\``,
+    task.status,
+    task.currentStep ? `step=${task.currentStep}` : null,
+    task.prUrl ? `PR=${task.prUrl}` : null,
+    task.retriedFromTaskId ? `retryOf=${task.retriedFromTaskId}` : null,
+    task.notificationError ? `notifyError=${truncateForDiscord(task.notificationError, 80)}` : null,
+    `updated=${task.updatedAt.toISOString()}`
+  ].filter(Boolean);
+  return `${parts.join(" | ")}\n  ${truncateForDiscord(task.title, 180)}`;
+}
+
+function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {
+  if (events.length === 0) return "Sandbox commands: none.";
+  return [
+    "Sandbox commands:",
+    ...events
+      .slice()
+      .reverse()
+      .map((event) => {
+        const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;
+        const duration = event.durationMs == null ? "" : ` ${event.durationMs}ms`;
+        const tail = (event.errorTail || event.outputTail).trim();
+        return `- ${event.createdAt.toISOString()} ${event.step}${exit}${duration} ${truncateForDiscord(event.command ?? "", 160)}${
+          tail ? `\n  ${truncateForDiscord(tail, 300)}` : ""
+        }`;
+      })
+  ].join("\n");
+}
+
+function formatDurationSeconds(seconds: number) {
+  const total = Math.max(0, Math.trunc(seconds));
+  const days = Math.floor(total / 86_400);
+  const hours = Math.floor((total % 86_400) / 3_600);
+  const minutes = Math.floor((total % 3_600) / 60);
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m ${total % 60}s`;
 }
 
 function clampInteger(value: number | undefined, min: number, max: number, fallback: number) {

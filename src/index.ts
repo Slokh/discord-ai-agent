@@ -10,6 +10,7 @@ import { OpenRouterClient } from "./models/openrouter.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
 import { createDiscordAiAgentBot } from "./discord/client.js";
+import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
 import { startJobs } from "./jobs/queue.js";
 import { logger } from "./util/logger.js";
 
@@ -120,9 +121,11 @@ async function main() {
   const internalApi = startsApi ? await startInternalApi({ config, repo }) : null;
   const sandboxReconciler = startsWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
   const runtime = startsBot && client && crawler instanceof DiscordCrawler ? createDiscordAiAgentBot({ config, repo, openRouter, crawler, jobs, client }) : null;
+  const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
 
   const shutdown = async () => {
     logger.info("Shutting down Discord AI Agent");
+    taskNotifier?.stop();
     runtime?.destroy();
     if (!runtime) client?.destroy();
     sandboxReconciler?.stop();

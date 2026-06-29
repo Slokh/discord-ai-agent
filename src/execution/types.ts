@@ -10,6 +10,9 @@ export type AgentTaskJob = {
   guildId?: string;
   channelId?: string;
   userId?: string;
+  discordResponseChannelId?: string;
+  discordResponseMessageId?: string;
+  retriedFromTaskId?: string;
 };
 
 export type AgentTaskStartResult = {

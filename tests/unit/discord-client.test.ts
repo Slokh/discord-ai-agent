@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   deletedMessageIdsForConfiguredGuild,
   discordChannelThreadKey,
+  discordReplyThreadKey,
   explicitChannelMentionIds,
   explicitRoleMentionIds,
   explicitUserMentionIds,
@@ -85,6 +86,10 @@ describe("single-guild event filters", () => {
 describe("discordChannelThreadKey", () => {
   it("keys persistent conversation memory by Discord channel", () => {
     expect(discordChannelThreadKey("guild-a", "channel-b")).toBe("discord:guild-a:channel-b");
+  });
+
+  it("keys Discord reply sessions by root message", () => {
+    expect(discordReplyThreadKey("guild-a", "channel-b", "message-c")).toBe("discord:guild-a:channel-b:message-c");
   });
 });
 

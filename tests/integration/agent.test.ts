@@ -1282,7 +1282,22 @@ describe("agent router", () => {
         content: "should I merge this PR?",
         attachmentSummaries: ["diff.png image/png 12000 bytes"],
         createdAt: "2026-06-29T16:00:00.000Z",
-        url: "https://discord.com/channels/g/c/parent-1"
+        url: "https://discord.com/channels/g/c/parent-1",
+        rootMessageId: "parent-1",
+        chain: [
+          {
+            messageId: "parent-1",
+            channelId: "c",
+            guildId: "g",
+            authorId: "alice",
+            authorDisplayName: "Alice",
+            authorIsBot: false,
+            content: "should I merge this PR?",
+            attachmentSummaries: ["diff.png image/png 12000 bytes"],
+            createdAt: "2026-06-29T16:00:00.000Z",
+            url: "https://discord.com/channels/g/c/parent-1"
+          }
+        ]
       }
     } as unknown as ToolContext;
 
@@ -1294,10 +1309,10 @@ describe("agent router", () => {
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "system",
-            content: expect.stringContaining("The current user message is a Discord reply to this parent message.")
+            content: expect.stringContaining("The current user message is a Discord reply.")
           }),
-          expect.objectContaining({ role: "system", content: expect.stringContaining("Parent author: Alice") }),
-          expect.objectContaining({ role: "system", content: expect.stringContaining("Parent content: should I merge this PR?") }),
+          expect.objectContaining({ role: "system", content: expect.stringContaining("Author: Alice") }),
+          expect.objectContaining({ role: "system", content: expect.stringContaining("Content: should I merge this PR?") }),
           expect.objectContaining({ role: "system", content: expect.stringContaining("Attachments: diff.png image/png 12000 bytes") }),
           expect.objectContaining({ role: "user", content: "yes" })
         ])

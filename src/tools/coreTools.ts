@@ -5,6 +5,7 @@ import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js"
 import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
 import type {
   AgentCodegenJobRecord,
+  ConversationMessage,
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
   DiscordChannelTopicCandidate,
@@ -915,7 +916,21 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
 export async function undoConversationTurns(ctx: ToolContext, count?: number): Promise<string> {
   const threadKey = ctx.threadKey ?? `discord:${ctx.guildId}:${ctx.channelId}`;
   const undoCount = boundedLimit(count, 1, 1, MAX_UNDO_TURNS);
-  const undoResult = await ctx.repo.deleteMostRecentConversationTurns({ threadKey, count: undoCount });
+  let undoResult = await ctx.repo.deleteMostRecentConversationTurns({ threadKey, count: undoCount });
+  let target = "thread";
+  if (undoResult.deletedRows === 0) {
+    const fallback = (ctx.repo as unknown as {
+      deleteMostRecentConversationTurnsForChannel?: (input: {
+        guildId: string;
+        channelId: string;
+        count: number;
+      }) => Promise<typeof undoResult>;
+    }).deleteMostRecentConversationTurnsForChannel;
+    if (fallback) {
+      undoResult = await fallback.call(ctx.repo, { guildId: ctx.guildId, channelId: ctx.channelId, count: undoCount });
+      target = "channel";
+    }
+  }
   const deletedDiscordReplies =
     ctx.deleteDiscordMessageIds && undoResult.assistantDiscordMessageIds.length > 0
       ? await ctx.deleteDiscordMessageIds(undoResult.assistantDiscordMessageIds)
@@ -926,7 +941,7 @@ export async function undoConversationTurns(ctx: ToolContext, count?: number): P
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "undoConversationTurns",
-    argumentsSummary: summarizeForAudit({ threadKey, count: undoCount }),
+    argumentsSummary: summarizeForAudit({ threadKey, count: undoCount, target }),
     resultSummary: summarizeForAudit({
       deletedTurns: undoResult.deletedTurns,
       deletedMemoryRows: undoResult.deletedRows,
@@ -939,6 +954,44 @@ export async function undoConversationTurns(ctx: ToolContext, count?: number): P
   return `Undid my last ${formatTurnCount(undoResult.deletedTurns)} in this channel and removed ${formatRowCount(
     undoResult.deletedRows
   )} from memory.`;
+}
+
+export async function getRecentAgentMemory(
+  ctx: ToolContext,
+  input: { limit?: number; includeToolResults?: boolean } = {}
+): Promise<string> {
+  const limit = boundedLimit(input.limit, 12, 1, 30);
+  const includeToolResults = input.includeToolResults ?? true;
+  const loader = (ctx.repo as unknown as {
+    recentConversationMessagesForChannel?: (input: {
+      guildId: string;
+      channelId: string;
+      limit: number;
+      includeTools?: boolean;
+    }) => Promise<ConversationMessage[]>;
+  }).recentConversationMessagesForChannel;
+
+  if (!loader) return "Recent agent memory is unavailable in this runtime.";
+  const messages = (
+    await loader.call(ctx.repo, {
+      guildId: ctx.guildId,
+      channelId: ctx.channelId,
+      limit,
+      includeTools: includeToolResults
+    })
+  ).filter((message) => !ctx.requestId || message.discordMessageId !== ctx.requestId);
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "getRecentAgentMemory",
+    argumentsSummary: summarizeForAudit({ limit, includeToolResults }),
+    resultSummary: summarizeForAudit({ resultCount: messages.length })
+  });
+
+  if (messages.length === 0) return "I do not have recent agent memory for this channel.";
+  return formatRecentAgentMemory(messages);
 }
 
 export async function createAgentUpdateFromRequest(ctx: ToolContext, request: string): Promise<string> {
@@ -1317,6 +1370,20 @@ function formatMessageList(results: SearchResult[], emptyMessage: string) {
       return `[${index + 1}] ${author} channel=${result.channelId} at ${result.createdAt.toISOString()}\n${content}\n${result.link}`;
     })
     .join("\n\n");
+}
+
+function formatRecentAgentMemory(messages: ConversationMessage[]) {
+  return [
+    "Recent Discord AI Agent memory in this channel:",
+    ...messages.map((message, index) => {
+      const role = message.role === "tool" ? `tool:${typeof message.metadata.toolName === "string" ? message.metadata.toolName : "unknown"}` : message.role;
+      const author = message.authorDisplayName || message.authorId || "unknown";
+      const timestamp = message.createdAt.toISOString();
+      const url = typeof message.metadata.discordUrl === "string" ? `\n${message.metadata.discordUrl}` : "";
+      const content = truncateForDiscord(message.content, 500);
+      return `[${index + 1}] ${timestamp} ${role} ${author}\n${content}${url}`;
+    })
+  ].join("\n\n");
 }
 
 function formatAttachmentResults(results: DiscordAttachmentSearchResult[]) {

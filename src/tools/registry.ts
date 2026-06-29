@@ -6,6 +6,7 @@ export type ToolName =
   | "findDiscordChannels"
   | "findDiscordRoles"
   | "searchDiscordHistory"
+  | "getRecentAgentMemory"
   | "getRecentDiscordMessages"
   | "getDiscordMessageContext"
   | "searchDiscordAttachments"
@@ -172,6 +173,28 @@ export const toolRegistry: ToolRegistryEntry[] = [
         }
       },
       required: ["query"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "getRecentAgentMemory",
+    description:
+      "Get recent Discord AI Agent conversation memory from the current channel. Use for top-level questions about what the agent previously said, did, generated, linked, opened, or needs to continue when there is no Discord reply context. Do not use for factual claims about server history; use Discord history/stat tools for that.",
+    userVisible: true,
+    mutates: false,
+    category: "memory",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Maximum recent memory rows. Defaults to 12."
+        },
+        includeToolResults: {
+          type: "boolean",
+          description: "Whether to include previous local tool results. Defaults to true."
+        }
+      },
       additionalProperties: false
     }
   },
@@ -772,6 +795,7 @@ function defaultToolExamples(name: ToolName): string[] {
     findDiscordChannels: "@ai find channel movies",
     findDiscordRoles: "@ai find role admin",
     searchDiscordHistory: "@ai what did we say about job hunting?",
+    getRecentAgentMemory: "@ai what did you just say?",
     getRecentDiscordMessages: "@ai what just happened in here?",
     getDiscordMessageContext: "@ai show the context around this message link",
     searchDiscordAttachments: "@ai find the image of nachos",

@@ -23,6 +23,7 @@ import { handleAgentRequest } from "../agent/router.js";
 import { cleanResponse } from "../tools/coreTools.js";
 import type { DiscordReplyContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
+import { chunkForDiscord, DISCORD_MESSAGE_CHAR_LIMIT, truncateForDiscord } from "../util/text.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
 
@@ -384,7 +385,7 @@ async function handleMessageCreate(
           requestId,
           discordRoles: discordRoleSnapshots(message.guild),
           updateStatus: async (content) => {
-            await thinking.edit(cleanResponse(content, input.config.maxReplyChars));
+            await thinking.edit(truncateForDiscord(cleanResponse(content, input.config.maxReplyChars), DISCORD_MESSAGE_CHAR_LIMIT));
           },
           deleteDiscordMessageIds: async (messageIds) => {
             let deleted = 0;
@@ -417,11 +418,13 @@ async function handleMessageCreate(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
-    const finalReply = await thinking.edit({
-      content: response.content,
-      files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
-    });
-    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with final response");
+    const replyMessages = await sendChunkedAgentResponse(
+      message.channel,
+      thinking,
+      response.content,
+      response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
+    );
+    requestLogger.info({ replyMessageIds: replyMessages.map((msg) => msg.id) }, "Sent chunked Discord reply with final response");
 
     for (const memoryEvent of response.memoryEvents ?? []) {
       await input.repo.appendConversationMessage({
@@ -440,12 +443,13 @@ async function handleMessageCreate(
     await input.repo.appendConversationMessage({
       threadKey,
       role: "assistant",
-      discordMessageId: finalReply.id,
+      discordMessageId: replyMessages[0]?.id,
       authorId: client.user.id,
       authorDisplayName: client.user.username,
       content: response.content,
       metadata: {
-        discordUrl: finalReply.url,
+        discordUrl: replyMessages[0]?.url,
+        messageCount: replyMessages.length,
         files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
       }
     });
@@ -453,7 +457,7 @@ async function handleMessageCreate(
     await recordTraceEvent(input.repo, {
       eventName: "discord.mention.handled",
       summary: "Discord mention handled",
-      metadata: { replyMessageId: finalReply.id },
+      metadata: { replyMessageId: replyMessages[0]?.id, replyMessageCount: replyMessages.length },
       durationMs: durationMs(messageStartedAt)
     });
   } catch (error) {
@@ -467,9 +471,12 @@ async function handleMessageCreate(
         },
         "Agent request blocked by OpenRouter content filter"
       );
-      const filteredContent = cleanResponse(
-        "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
-        input.config.maxReplyChars
+      const filteredContent = truncateForDiscord(
+        cleanResponse(
+          "The model/provider blocked that one, so I'm not going to keep it in channel memory. Try rephrasing it.",
+          input.config.maxReplyChars
+        ),
+        DISCORD_MESSAGE_CHAR_LIMIT
       );
       const finalReply = await thinking.edit(filteredContent);
       const deletedMemoryRows = await input.repo
@@ -512,7 +519,10 @@ async function handleMessageCreate(
         })
         .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
     }
-    const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
+    const errorContent = truncateForDiscord(
+      cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars),
+      DISCORD_MESSAGE_CHAR_LIMIT
+    );
     const finalReply = await thinking.edit(errorContent);
     requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with error response");
     await recordTraceEvent(input.repo, {
@@ -709,6 +719,47 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+/**
+ * Sends an agent response as one or more Discord messages, chunking long
+ * responses to stay within Discord's 2000-char limit. The first chunk replaces
+ * the "Thinking..." message via edit; subsequent chunks are sent as follow-up
+ * messages in the same channel. Files are attached to the first message only.
+ */
+export async function sendChunkedAgentResponse(
+  channel: Message["channel"],
+  thinking: Message,
+  content: string,
+  files?: AttachmentBuilder[]
+): Promise<Message[]> {
+  const chunks = chunkForDiscord(content || "Done.");
+  if (chunks.length === 0) {
+    const reply = await thinking.edit({ content: "Done.", files });
+    return [reply];
+  }
+
+  if (chunks.length === 1) {
+    const reply = await thinking.edit({ content: chunks[0], files });
+    return [reply];
+  }
+
+  const firstReply = await thinking.edit({ content: chunks[0], files });
+  const messages: Message[] = [firstReply];
+
+  if (channel && typeof (channel as { send?: unknown }).send === "function") {
+    for (let i = 1; i < chunks.length; i += 1) {
+      try {
+        const followUp = await (channel as { send: (opts: { content: string }) => Promise<Message> }).send({ content: chunks[i] });
+        messages.push(followUp);
+      } catch (error) {
+        logger.warn({ err: error, chunkIndex: i }, "Failed to send chunked Discord follow-up message");
+        break;
+      }
+    }
+  }
+
+  return messages;
 }
 
 async function deleteDiscordMessageById(sourceMessage: Message, messageId: string): Promise<boolean> {

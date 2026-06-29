@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  sendChunkedAgentResponse,
   deletedMessageIdsForConfiguredGuild,
   discordChannelThreadKey,
   explicitChannelMentionIds,
@@ -176,3 +177,76 @@ function fakeGuildMessage(guildId: string) {
     attachments: new Map()
   };
 }
+
+describe("sendChunkedAgentResponse", () => {
+  function createMockThinking() {
+    const editCalls: { content: string; files?: unknown[] }[] = [];
+    const thinking = {
+      id: "thinking-1",
+      url: "https://discord.com/channels/g/c/thinking-1",
+      edit: vi.fn(async (opts: { content: string; files?: unknown[] }) => {
+        editCalls.push(opts);
+        return {
+          id: opts.content.length > 100 ? "edited-first" : "thinking-1",
+          url: "https://discord.com/channels/g/c/thinking-1",
+          content: opts.content,
+          files: opts.files
+        };
+      })
+    };
+    return { thinking, editCalls };
+  }
+
+  function createMockChannel(sends: { id: string; content: string }[]) {
+    return {
+      send: vi.fn(async (opts: { content: string }) => {
+        const msg = { id: `followup-${sends.length + 1}`, content: opts.content, url: `https://discord.com/channels/g/c/followup-${sends.length + 1}` };
+        sends.push(msg);
+        return msg;
+      })
+    };
+  }
+
+  it("edits the thinking message with the full response when content fits in one chunk", async () => {
+    const { thinking, editCalls } = createMockThinking();
+    const channel = createMockChannel([]);
+    const result = await sendChunkedAgentResponse(channel as any, thinking as any, "Short response");
+    expect(result).toHaveLength(1);
+    expect(editCalls).toHaveLength(1);
+    expect(editCalls[0].content).toBe("Short response");
+    expect(channel.send).not.toHaveBeenCalled();
+  });
+
+  it("splits long content into multiple follow-up messages", async () => {
+    const { thinking, editCalls } = createMockThinking();
+    const sends: { id: string; content: string }[] = [];
+    const channel = createMockChannel(sends);
+    const longContent = "a".repeat(3000);
+    const result = await sendChunkedAgentResponse(channel as any, thinking as any, longContent);
+    expect(result.length).toBeGreaterThan(1);
+    expect(editCalls).toHaveLength(1);
+    expect(channel.send).toHaveBeenCalled();
+    expect(sends.length).toBe(result.length - 1);
+    const reassembled = result.map((m) => m.content).join("");
+    expect(reassembled.length).toBe(3000);
+  });
+
+  it("uses default 'Done.' for empty content", async () => {
+    const { thinking, editCalls } = createMockThinking();
+    const channel = createMockChannel([]);
+    const result = await sendChunkedAgentResponse(channel as any, thinking as any, "");
+    expect(result).toHaveLength(1);
+    expect(editCalls[0].content).toBe("Done.");
+  });
+
+  it("attaches files to the first message only", async () => {
+    const { thinking, editCalls } = createMockThinking();
+    const sends: { id: string; content: string }[] = [];
+    const channel = createMockChannel(sends);
+    const files = [{ name: "test.png" }];
+    const longContent = "a".repeat(2500);
+    await sendChunkedAgentResponse(channel as any, thinking as any, longContent, files as any);
+    expect(editCalls[0].files).toHaveLength(1);
+    expect(channel.send).toHaveBeenCalled();
+  });
+});

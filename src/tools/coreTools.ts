@@ -2240,8 +2240,8 @@ function parseUtcDateEnd(value: string) {
   return new Date(`${value}T23:59:59.999Z`);
 }
 
-export function cleanResponse(content: string, maxChars: number) {
-  return truncateForDiscord(content.trim() || "Done.", maxChars);
+export function cleanResponse(content: string, _maxChars: number) {
+  return content.trim() || "Done.";
 }
 
 function extensionForContentType(contentType: string) {

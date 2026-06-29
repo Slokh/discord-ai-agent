@@ -26,7 +26,7 @@ export type ToolContext = {
   updateStatus?: (content: string) => Promise<void>;
 };
 
-export type DiscordReplyContext = {
+export type DiscordReplyContextMessage = {
   messageId: string;
   channelId: string;
   guildId: string | null;
@@ -37,6 +37,11 @@ export type DiscordReplyContext = {
   attachmentSummaries: string[];
   createdAt: string | null;
   url: string | null;
+};
+
+export type DiscordReplyContext = DiscordReplyContextMessage & {
+  rootMessageId: string;
+  chain: DiscordReplyContextMessage[];
 };
 
 export type DiscordRoleSnapshot = {

@@ -19,7 +19,7 @@ const CODEX_TERMINATION_GRACE_MS = 10_000;
 export const CODEGEN_REQUIRED_DEV_TOOLS = ["tsx", "tsc", "eslint", "vitest"] as const;
 export const CODEGEN_REPO_CONTEXT_MAP = [
   "Repository navigation map:",
-  "- Discord intake, mention handling, reply editing, parent-message context, and channel memory writes: src/discord/client.ts.",
+  "- Discord intake, mention handling, reply editing, reply-chain context, and conversation memory writes: src/discord/client.ts.",
   "- Discord crawling, message persistence, permission checks, and command cleanup: src/discord/crawler.ts, src/discord/messagePersistence.ts, src/discord/permissions.ts, src/discord/registerCommands.ts.",
   "- Agent loop, model prompts, hosted/local tool execution, final response synthesis, and conversation memory shaping: src/agent/router.ts.",
   "- Tool schemas and tool routing guidance: src/tools/registry.ts. Tool implementations live in src/tools/coreTools.ts. Shared tool context types live in src/tools/types.ts.",

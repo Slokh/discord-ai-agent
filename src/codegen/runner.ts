@@ -76,8 +76,6 @@ export async function runAgentCodegenJob(input: {
         checkoutDir,
         "--sandbox",
         "workspace-write",
-        "--ask-for-approval",
-        "never",
         "-m",
         config.openRouter.chatModel,
         "-"

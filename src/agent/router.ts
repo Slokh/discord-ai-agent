@@ -284,7 +284,10 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       } else {
         successfulToolCallKeys.add(routeKey);
       }
-      if ((route.name === "summarizeDiscordHistory" || route.name === "analyzeDiscordData") && !isRedundantToolCall) {
+      if (
+        (route.name === "summarizeDiscordHistory" || route.name === "analyzeDiscordData" || route.name === "getDiscordMessageContext") &&
+        !isRedundantToolCall
+      ) {
         completedTerminalToolThisRound = true;
       }
       if (result.files?.length) files.push(...result.files);
@@ -321,7 +324,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
 
     if (completedTerminalToolThisRound) {
       return await synthesizeFinalAnswerWithoutTools(ctx, {
-        reason: "terminal summary tool complete",
+        reason: "terminal evidence tool complete",
         text,
         messages,
         files,
@@ -1035,11 +1038,11 @@ function chatMessages(text: string, skills: string, sessionMessages: Conversatio
         "When answering from Discord search evidence, use dates sparingly; show them only when the user asks about timing, links, sources, proof, or exact messages, or when needed to avoid making old messages sound recent. " +
         "When naming people from Discord search evidence, only use exact handles or IDs shown in the tool output; do not infer real names or display names. " +
         "For recent/current/latest Discord-history questions, choose and pass an explicit date window that fits the user request instead of searching all indexed history. " +
-        "When a user names a Discord person/channel/role without an exact mention or ID, use findDiscordUsers/findDiscordChannels/findDiscordRoles before filtered history searches. " +
+        "When a user names a Discord person/channel/role without an exact mention or ID, use findDiscordUsers/findDiscordChannels/findDiscordRoles before filtered history searches. Resolver tools are intermediate; never stop after a resolver if the user asked what someone said, did, or has been up to. " +
         "For requests to link, show, or list a person's messages, use searchDiscordHistory with authorQueries/authorIds; do not search for the username as ordinary message text. " +
-        "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext for Discord message links, searchDiscordAttachments for files/images, getPinnedMessages for pins, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, and activity over time. " +
+        "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext only for a specific Discord message link/ID or explicit surrounding-context request, searchDiscordAttachments for files/images, getPinnedMessages for pins, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, and activity over time. " +
         "For ad hoc Discord data-analysis questions that require inferring a repeated text format, extracting values, deduping, or doing exact math over many messages, use analyzeDiscordData instead of searchDiscordHistory. Give it the user's task and a broad keyword query; it will sample visible messages, infer the extraction plan, and run the aggregation. " +
-        "For broad recaps like what a person or channel has been up to, what happened recently, or summarize activity over a period, use summarizeDiscordHistory after resolving ambiguous users/channels. " +
+        "For broad recaps like what a person or channel has been up to, what happened recently, or summarize activity over a period, use summarizeDiscordHistory after resolving ambiguous users/channels. Do not answer those from resolver output alone. " +
         "For recurring topics, themes, memes, bits, or what people usually talk about in channels, use getDiscordChannelTopics, not getDiscordStats groupBy=message. " +
         "For channel stats, groupBy=channel rolls thread/forum-post messages up into their parent channels; use groupBy=thread only when the user asks about threads or forum posts separately. " +
         "For least/fewest/lowest stats, use getDiscordStats with sort=countAsc. For channel popularity normalized by how long channels have existed, use metric=messagesPerChannelDay and groupBy=channel. " +
@@ -1052,7 +1055,7 @@ function chatMessages(text: string, skills: string, sessionMessages: Conversatio
         "For undo/delete/forget/remove requests about your previous replies, call undoConversationTurns. " +
         "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. " +
         "For owner debugging of Railway deployment logs, startup failures, worker crashes, missing traces, or hosting/runtime errors, call inspectRailwayLogs. " +
-        "After tools return, synthesize one natural Discord reply. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
+        "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
         "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, create/propose a code/tool change, or undo/delete/forget prior agent turns. " +
         "Use prior channel conversation context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."

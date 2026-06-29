@@ -45,7 +45,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
   },
   {
     name: "findDiscordUsers",
-    description: "Find Discord users by username, display name, nickname-like text, mention, or ID before filtering history by author.",
+    description:
+      "Intermediate resolver: find Discord users by username, display name, nickname-like text, mention, or ID before filtering history/stats by author. Do not answer from this alone when the user asked what someone said, did, or has been up to; call the relevant history, summary, or stats tool next.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -66,7 +67,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
   },
   {
     name: "findDiscordChannels",
-    description: "Find visible Discord channels, threads, or forums by name, mention, or ID before filtering history by channel.",
+    description:
+      "Intermediate resolver: find visible Discord channels, threads, or forums by name, mention, or ID before filtering history/stats by channel. Do not answer from this alone when the user asked what happened in a channel; call the relevant history, summary, topics, or stats tool next.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -87,7 +89,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   },
   {
     name: "findDiscordRoles",
-    description: "Find Discord roles by role name or ID from the current guild.",
+    description: "Intermediate resolver: find Discord roles by role name or ID from the current guild before using role information in another answer.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -109,7 +111,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "searchDiscordHistory",
     description:
-      "Search permission-filtered indexed Discord history. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use structured authorIds/channelIds after findDiscordUsers/findDiscordChannels when names are ambiguous. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
+      "Search permission-filtered indexed Discord history. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use structured authorIds/channelIds after findDiscordUsers/findDiscordChannels when names are ambiguous. One or two distinct searches is usually enough before answering. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -184,7 +186,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
   },
   {
     name: "getDiscordMessageContext",
-    description: "Get an indexed Discord message plus nearby messages from the same channel using a Discord message link or message ID.",
+    description:
+      "Get an indexed Discord message plus nearby messages from the same channel using a specific Discord message link or message ID. Use for exact-message context, replies, or surrounding conversation. Do not use this to analyze broad search results; searchDiscordHistory evidence already includes message URLs.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -456,7 +459,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "summarizeDiscordHistory",
     description:
-      "Summarize representative indexed Discord history over a user, channel, topic, or date window. Use this for broad questions like what a person/channel has been up to, what happened recently, or a recap over time. It samples across the window instead of only returning the newest messages.",
+      "Summarize representative indexed Discord history over a user, channel, topic, or date window. Use this for broad questions like what a person/channel has been up to, what happened recently, or a recap over time. After resolving a named user/channel, call this rather than answering from resolver output alone. It samples across the window instead of only returning the newest messages.",
     userVisible: true,
     mutates: false,
     parameters: {

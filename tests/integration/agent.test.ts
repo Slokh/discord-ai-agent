@@ -1350,10 +1350,10 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "undoConversationTurns" }));
   });
 
-  it("executes model-selected tool PR proposals as review-only PRs", async () => {
-    const createToolProposalPullRequest = vi.fn(async () => ({
+  it("executes model-selected update PR requests as review-only PRs", async () => {
+    const createAgentUpdatePullRequest = vi.fn(async () => ({
       dryRun: false,
-      filePath: "tool-proposals/calendar-integration.md",
+      branchName: "discord-ai-agent/update-calendar-integration",
       prUrl: "https://github.com/example/repo/pull/12"
     }));
     const ctx = {
@@ -1384,7 +1384,7 @@ describe("agent router", () => {
           })
       },
       github: {
-        createToolProposalPullRequest
+        createAgentUpdatePullRequest
       },
       guildId: "g",
       channelId: "c",
@@ -1396,10 +1396,10 @@ describe("agent router", () => {
     const response = await handleAgentRequest(ctx, "how should we track events?");
 
     expect(response.content).toBe("Opened a review PR.");
-    expect(createToolProposalPullRequest).toHaveBeenCalledWith(
+    expect(createAgentUpdatePullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
-        proposalName: "add-a-calendar-integration",
-        markdown: expect.stringContaining("add a calendar integration")
+        updateName: "calendar-integration",
+        request: "add a calendar integration"
       })
     );
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "openGithubPullRequest" }));

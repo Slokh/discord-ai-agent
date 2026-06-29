@@ -38,7 +38,7 @@ npm run reindex
 npm run embeddings:backfill
 ```
 
-`npm run crawl` stores messages and enqueues embeddings instead of waiting for OpenRouter per message. During a large import, `@ai status` should show crawl progress and an embedding backlog that drains while `npm run dev`, `npm run worker`, or `DISCORD_AI_AGENT_PROCESS_ROLE=all npm run dev` is running.
+`npm run crawl` stores messages and enqueues embeddings instead of waiting for OpenRouter per message. During a large import, `@ai status` should show crawl progress and an embedding backlog that drains while `npm run dev`, `npm run worker`, or `DISCORD_AI_AGENT_PROCESS_ROLE=all npm run dev` is running. Self-update PR work runs in the separate `npm run codegen` process, while the bot keeps the Discord reply open and edits it with the final PR link or failure/no-change result.
 
 Then verify in Discord:
 

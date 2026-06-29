@@ -14,8 +14,11 @@ RUN npm run build
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git \
+  && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json* ./
-RUN npm install --omit=dev
+RUN npm install --omit=dev && npm install -g @openai/codex@0.142.4
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
 COPY skills ./skills

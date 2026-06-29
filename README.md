@@ -185,9 +185,11 @@ Common optional settings:
 | `OPENROUTER_CHAT_MODEL` | `deepseek/deepseek-v4-flash` | Main agent model |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
-| `GITHUB_TOKEN` | unset | Enables PR proposal tools |
-| `GITHUB_REPOSITORY` | `owner/discord-ai-agent` | Repo for proposed changes |
-| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `bot`, `worker`, or `all` |
+| `GITHUB_TOKEN` | unset | Enables skill PRs and Railway codegen PRs |
+| `GITHUB_REPOSITORY` | `owner/discord-ai-agent` | Repo for skill PRs and codegen jobs |
+| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `bot`, `worker`, `codegen`, or `all` |
+
+For `@ai add/build/implement ...` requests, run a separate Railway service with `npm run start:codegen`. The bot keeps the Discord reply open while the codegen worker clones the repo, runs Codex in an ephemeral checkout, commits only if there is a real diff, and opens a PR. When the worker finishes, the bot edits the original Discord reply with the PR link or the failure/no-change result.
 
 ## Running Locally
 
@@ -197,17 +199,18 @@ One-process local development:
 npm run dev
 ```
 
-Separate bot and worker:
+Separate bot, worker, and codegen processes:
 
 ```bash
 npm run bot
 npm run worker
+npm run codegen
 ```
 
 Docker:
 
 ```bash
-docker compose up --build bot worker
+docker compose up --build bot worker codegen
 ```
 
 Local prompt testing without Discord:
@@ -245,7 +248,8 @@ Railway works well for the first hosted deployment:
 - Postgres service with persistent volume.
 - Bot service with `DISCORD_AI_AGENT_PROCESS_ROLE=bot`.
 - Worker service with `DISCORD_AI_AGENT_PROCESS_ROLE=worker`.
-- Both app services connected to the same GitHub repo and database.
+- Codegen service with `DISCORD_AI_AGENT_PROCESS_ROLE=codegen`.
+- All app services connected to the same GitHub repo and database.
 
 See [docs/railway-deploy.md](docs/railway-deploy.md) for a detailed Railway setup.
 

@@ -47,6 +47,7 @@ async function main() {
     { DiscordAiAgentRepository },
     { OpenRouterClient },
     { GitHubSkillClient },
+    { startJobs },
     { runWithTrace }
   ] = await Promise.all([
     import("../src/agent/router.js"),
@@ -56,6 +57,7 @@ async function main() {
     import("../src/db/repositories.js"),
     import("../src/models/openrouter.js"),
     import("../src/skills/github.js"),
+    import("../src/jobs/queue.js"),
     import("../src/util/trace.js")
   ]);
 
@@ -69,6 +71,17 @@ async function main() {
   const repo = new DiscordAiAgentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const github = new GitHubSkillClient(config.github);
+  const jobs = await startJobs({
+    config,
+    repo,
+    crawler: {
+      crawlConfiguredGuild: async () => undefined
+    },
+    worker: false,
+    crawlWorker: false,
+    embeddingWorker: false,
+    codegenWorker: false
+  });
 
   try {
     applyLocalPromptDefaults(args, config);
@@ -116,6 +129,7 @@ async function main() {
             repo,
             openRouter,
             github,
+            jobs,
             guildId,
             channelId: currentChannel.id,
             userId: args.userId,
@@ -183,6 +197,7 @@ async function main() {
       }
     }
   } finally {
+    await jobs.stop().catch(() => undefined);
     await pool.end().catch(() => undefined);
   }
 }

@@ -11,10 +11,10 @@ const booleanFromEnv = z
     return ["1", "true", "yes", "on"].includes(value.toLowerCase());
   });
 
-type ProcessRole = "all" | "bot" | "worker";
+type ProcessRole = "all" | "bot" | "worker" | "codegen";
 
 function defaultProcessRole(argv = process.argv): ProcessRole {
-  const role = argv.find((arg): arg is ProcessRole => arg === "all" || arg === "bot" || arg === "worker");
+  const role = argv.find((arg): arg is ProcessRole => arg === "all" || arg === "bot" || arg === "worker" || arg === "codegen");
   return role ?? "bot";
 }
 
@@ -64,7 +64,7 @@ const defaults = {
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default(defaults.nodeEnv),
   LOG_LEVEL: z.string().default(defaults.logLevel),
-  DISCORD_AI_AGENT_PROCESS_ROLE: z.enum(["all", "bot", "worker"]).default(defaults.processRole),
+  DISCORD_AI_AGENT_PROCESS_ROLE: z.enum(["all", "bot", "worker", "codegen"]).default(defaults.processRole),
 
   DISCORD_TOKEN: z.string().optional(),
   DISCORD_CLIENT_ID: z.string().default(defaults.discordClientId),

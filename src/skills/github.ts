@@ -19,21 +19,21 @@ export type SkillPullRequestResult = {
   dryRunPath?: string;
 };
 
-export type AgentUpdatePullRequestResult = {
-  dryRun: boolean;
-  branchName: string;
-  prUrl?: string;
+export type AgentUpdateDryRunResult = {
+  dryRun: true;
+  requestId: string;
   dryRunPath?: string;
 };
 
 type DryRunMetadata = {
   kind: "skill" | "agent-update";
   title: string;
-  branchName: string;
+  branchName?: string;
+  requestId?: string;
   filePath?: string;
   request?: string;
   requestedBy: string;
-  pullRequestBody: string;
+  body: string;
   autoMergeEligible: boolean;
 };
 
@@ -167,86 +167,26 @@ export class GitHubSkillClient {
     };
   }
 
-  async createAgentUpdatePullRequest(input: {
+  async createAgentUpdateDryRun(input: {
     title: string;
     updateName: string;
     request: string;
     requestedBy: string;
-  }): Promise<AgentUpdatePullRequestResult> {
-    const stamp = uniqueSuffix();
-    const branchName = `discord-ai-agent/update-${slugify(input.updateName || "update")}-${stamp}`;
-
-    if (this.config.dryRun) {
-      const pullRequestBody = agentUpdatePullRequestBody(input.requestedBy, input.request);
-      const dryRunPath = await this.writeDryRunManifest(branchName, {
-        kind: "agent-update",
-        title: input.title,
-        branchName,
-        request: input.request,
-        requestedBy: input.requestedBy,
-        pullRequestBody,
-        autoMergeEligible: false
-      });
-      return {
-        dryRun: true,
-        branchName,
-        dryRunPath
-      };
-    }
-
-    if (!this.config.token) {
-      throw new Error("GITHUB_TOKEN is required because real GitHub PR mode is enabled.");
-    }
-    const { owner, repo } = parseGitHubRepository(this.config.repository);
-
-    const octokit = this.createGitHubApi(this.config.token);
-    const baseRef = await octokit.git.getRef({
-      owner,
-      repo,
-      ref: `heads/${this.config.baseBranch}`
-    });
-    const baseSha = baseRef.data.object.sha;
-    const baseCommit = await octokit.git.getCommit({
-      owner,
-      repo,
-      commit_sha: baseSha
-    });
-    const updateCommit = await octokit.git.createCommit({
-      owner,
-      repo,
-      message: `Request Discord AI Agent update: ${input.updateName}`,
-      tree: baseCommit.data.tree.sha,
-      parents: [baseSha],
-      author: {
-        name: "discord-ai-agent",
-        email: "discord-ai-agent-bot@users.noreply.github.com"
-      },
-      committer: {
-        name: "discord-ai-agent",
-        email: "discord-ai-agent-bot@users.noreply.github.com"
-      }
-    });
-
-    await octokit.git.createRef({
-      owner,
-      repo,
-      ref: `refs/heads/${branchName}`,
-      sha: updateCommit.data.sha
-    });
-
-    const pr = await octokit.pulls.create({
-      owner,
-      repo,
+  }): Promise<AgentUpdateDryRunResult> {
+    const requestId = `discord-ai-agent/update-${slugify(input.updateName || "update")}-${uniqueSuffix()}`;
+    const dryRunPath = await this.writeDryRunManifest(requestId, {
+      kind: "agent-update",
       title: input.title,
-      head: branchName,
-      base: this.config.baseBranch,
-      body: agentUpdatePullRequestBody(input.requestedBy, input.request)
+      requestId,
+      request: input.request,
+      requestedBy: input.requestedBy,
+      body: agentUpdateJobBody(input.requestedBy, input.request),
+      autoMergeEligible: false
     });
-
     return {
-      dryRun: false,
-      branchName,
-      prUrl: pr.data.html_url
+      dryRun: true,
+      requestId,
+      dryRunPath
     };
   }
 
@@ -332,7 +272,7 @@ function skillDryRunMetadata(input: {
     branchName: input.branchName,
     filePath: input.filePath,
     requestedBy: input.requestedBy,
-    pullRequestBody: skillPullRequestBody(input.requestedBy),
+    body: skillPullRequestBody(input.requestedBy),
     autoMergeEligible: false
   };
 }
@@ -344,12 +284,12 @@ function skillPullRequestBody(requestedBy: string) {
   );
 }
 
-function agentUpdatePullRequestBody(requestedBy: string, request: string) {
+function agentUpdateJobBody(requestedBy: string, request: string) {
   return (
     `Update proposed by ${requestedBy} via Discord AI Agent.\n\n` +
     "## Requested Update\n\n" +
     `${request.trim() || "(No request text provided.)"}\n\n` +
-    "## Review Boundary\n\n" +
-    "Discord AI Agent does not auto-merge code changes. A human must review and merge this PR after checks pass."
+    "## Implementation Boundary\n\n" +
+    "This request is handled by the Railway codegen worker. The worker should open a PR only when it creates a real code diff."
   );
 }

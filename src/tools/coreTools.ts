@@ -4,6 +4,7 @@ import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
 import type {
+  AgentCodegenJobRecord,
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
   DiscordChannelTopicCandidate,
@@ -33,6 +34,8 @@ export type HistoryAnswerOptions = {
 
 const MAX_UNDO_TURNS = 10;
 const MS_PER_DAY = 86_400_000;
+const AGENT_CODEGEN_WAIT_TIMEOUT_MS = 25 * 60 * 1000;
+const AGENT_CODEGEN_POLL_INTERVAL_MS = 2_000;
 
 type ChannelTopicCluster = {
   size: number;
@@ -945,12 +948,15 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
       .replace(/^(a|an|the)\s+/i, "")
   ).slice(0, 48) || "agent-update";
 
-  const result = await ctx.github.createAgentUpdatePullRequest({
-    title: `Update Discord AI Agent: ${updateName}`,
-    updateName,
-    request: request.trim(),
-    requestedBy: `${ctx.userDisplayName} (${ctx.userId})`
-  });
+  const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
+  const result = ctx.config.github.dryRun
+    ? await ctx.github.createAgentUpdateDryRun({
+        title: `Update Discord AI Agent: ${updateName}`,
+        updateName,
+        request: request.trim(),
+        requestedBy
+      })
+    : await enqueueAgentCodegenJob(ctx, { request, updateName, requestedBy });
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -958,13 +964,117 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     userId: ctx.userId,
     toolName: "openGithubPullRequest",
     argumentsSummary: summarizeForAudit({ request, updateName }),
-    resultSummary: summarizeForAudit({ dryRun: result.dryRun, prUrl: result.prUrl, branchName: result.branchName })
+    resultSummary: summarizeForAudit(agentCodegenAuditSummary(result))
   });
 
-  if (result.dryRun) {
-    return `I drafted an update PR in dry-run mode for branch \`${result.branchName}\`${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real PRs.`;
+  if (result.dryRun === true) {
+    return `I drafted a Railway codegen job in dry-run mode for \`${result.requestId}\`${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real coding jobs.`;
   }
-  return `I opened an update PR for review: ${result.prUrl}`;
+  return formatAgentCodegenResult(result);
+}
+
+async function enqueueAgentCodegenJob(
+  ctx: ToolContext,
+  input: { request: string; updateName: string; requestedBy: string }
+): Promise<{ dryRun: false; requestId: string; jobId: string | null; job?: AgentCodegenJobRecord; timedOut?: boolean }> {
+  if (!ctx.jobs) {
+    throw new Error("Railway codegen queue is unavailable in this process.");
+  }
+  await ctx.updateStatus?.("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
+  const enqueued = await ctx.jobs.enqueueAgentCodegen({
+    request: input.request.trim(),
+    updateName: input.updateName,
+    requestedBy: input.requestedBy
+  });
+  const job = await waitForAgentCodegenResult(ctx, enqueued.requestId);
+  return { dryRun: false, ...enqueued, ...job };
+}
+
+async function waitForAgentCodegenResult(
+  ctx: ToolContext,
+  requestId: string
+): Promise<{ job?: AgentCodegenJobRecord; timedOut?: boolean }> {
+  const deadline = Date.now() + AGENT_CODEGEN_WAIT_TIMEOUT_MS;
+  let lastStatus: AgentCodegenJobRecord["status"] | undefined;
+
+  while (Date.now() < deadline) {
+    const job = await ctx.repo.getAgentCodegenJob(requestId);
+    if (job) {
+      if (isTerminalAgentCodegenStatus(job.status)) {
+        return { job };
+      }
+      if (job.status !== lastStatus) {
+        lastStatus = job.status;
+        await ctx.updateStatus?.(agentCodegenProgressMessage(job));
+      }
+    }
+    await sleep(AGENT_CODEGEN_POLL_INTERVAL_MS);
+  }
+
+  const job = await ctx.repo.getAgentCodegenJob(requestId);
+  return { job, timedOut: true };
+}
+
+function isTerminalAgentCodegenStatus(status: AgentCodegenJobRecord["status"]) {
+  return status === "succeeded" || status === "failed" || status === "no_changes";
+}
+
+function agentCodegenProgressMessage(job: AgentCodegenJobRecord) {
+  if (job.status === "running") return `Working on \`${job.updateName}\` now...`;
+  return `Preparing to work on \`${job.updateName}\`...`;
+}
+
+function formatAgentCodegenResult(input: {
+  requestId: string;
+  jobId: string | null;
+  job?: AgentCodegenJobRecord;
+  timedOut?: boolean;
+}) {
+  if (input.timedOut) {
+    const status = input.job?.status ? ` Current status: \`${input.job.status}\`.` : "";
+    return `I’m still working on that code change and do not have the final result yet.${status} Request ID: \`${input.requestId}\`.`;
+  }
+
+  const job = input.job;
+  if (!job) {
+    return `I started the code change, but I could not find its result row. Request ID: \`${input.requestId}\`.`;
+  }
+
+  if (job.status === "succeeded" && job.prUrl) {
+    const draftNote = job.draft ? " It opened as a draft because verification did not fully pass." : "";
+    return `Done: ${job.prUrl}${draftNote}`;
+  }
+
+  if (job.status === "no_changes") {
+    return `I tried to make that change, but the codegen run did not produce a code diff, so no PR was opened. Request ID: \`${input.requestId}\`.`;
+  }
+
+  if (job.status === "failed") {
+    return `I tried to make that change, but codegen failed: ${job.error ?? "unknown error"}`;
+  }
+
+  return `I’m still working on that code change. Current status: \`${job.status}\`. Request ID: \`${input.requestId}\`.`;
+}
+
+function agentCodegenAuditSummary(result: unknown) {
+  if (!result || typeof result !== "object") return result;
+  if ("dryRun" in result && result.dryRun) return result;
+  const typed = result as { requestId?: string; jobId?: string | null; timedOut?: boolean; job?: AgentCodegenJobRecord };
+  return {
+    dryRun: false,
+    requestId: typed.requestId,
+    jobId: typed.jobId,
+    timedOut: typed.timedOut,
+    status: typed.job?.status,
+    prUrl: typed.job?.prUrl,
+    draft: typed.job?.draft,
+    verifyPassed: typed.job?.verifyPassed,
+    error: typed.job?.error
+  };
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 export async function reportStatus(ctx: ToolContext): Promise<string> {

@@ -12,6 +12,7 @@ import { AppConfigCodegenCredentialProvider, type CodegenCredentialProvider } fr
 import { reportCodegenProgress, type CodegenProgressReporter } from "./progress.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
+export const CODEGEN_REQUIRED_DEV_TOOLS = ["tsx", "tsc", "eslint", "vitest"] as const;
 
 export type AgentCodegenJob = {
   requestId: string;
@@ -64,6 +65,8 @@ export async function runAgentCodegenJob(input: {
     await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir });
     await progress(input.progress, "install", "Installing repository dependencies with npm ci.");
     await runCommand("npm", ["ci", "--include=dev"], { cwd: checkoutDir, env: commandEnv });
+    await progress(input.progress, "preflight", "Checking that codegen dev tooling is available.");
+    await assertCodegenDevTooling(checkoutDir, commandEnv);
     await progress(input.progress, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, config);
 
@@ -157,6 +160,40 @@ export function codegenCommandEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv
     npm_config_omit: "",
     npm_config_production: "false"
   };
+}
+
+export async function missingCodegenDevTools(checkoutDir: string): Promise<string[]> {
+  const missing: string[] = [];
+  for (const tool of CODEGEN_REQUIRED_DEV_TOOLS) {
+    const binaryPath = codegenDevToolPath(checkoutDir, tool);
+    try {
+      await fs.access(binaryPath);
+    } catch {
+      missing.push(tool);
+    }
+  }
+  return missing;
+}
+
+async function assertCodegenDevTooling(checkoutDir: string, env: NodeJS.ProcessEnv) {
+  const missing = await missingCodegenDevTools(checkoutDir);
+  if (missing.length > 0) {
+    throw new Error(
+      [
+        `Codegen checkout is missing dev tool binaries after npm ci --include=dev: ${missing.join(", ")}.`,
+        "The Railway codegen worker needs devDependencies in its ephemeral checkout before Codex can safely edit and verify changes."
+      ].join(" ")
+    );
+  }
+
+  for (const tool of CODEGEN_REQUIRED_DEV_TOOLS) {
+    await runCommand(codegenDevToolPath(checkoutDir, tool), ["--version"], { cwd: checkoutDir, env });
+  }
+}
+
+function codegenDevToolPath(checkoutDir: string, tool: (typeof CODEGEN_REQUIRED_DEV_TOOLS)[number]) {
+  const binaryName = process.platform === "win32" ? `${tool}.cmd` : tool;
+  return path.join(checkoutDir, "node_modules", ".bin", binaryName);
 }
 
 async function writeCodexConfig(workRoot: string, checkoutDir: string, config: AppConfig) {

@@ -74,8 +74,7 @@ export async function runAgentCodegenJob(input: {
         "--ephemeral",
         "-C",
         checkoutDir,
-        "--sandbox",
-        "workspace-write",
+        "--dangerously-bypass-approvals-and-sandbox",
         "-m",
         config.openRouter.chatModel,
         "-"

@@ -21,6 +21,7 @@ describe("toolRegistry", () => {
       "generateImage",
       "createSkillDraft",
       "openGithubPullRequest",
+      "undoConversationTurns",
       "inspectAgentLogs",
       "inspectRailwayLogs",
       "reportStatus"

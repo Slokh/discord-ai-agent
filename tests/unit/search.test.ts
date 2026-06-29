@@ -116,23 +116,21 @@ describe("searchDiscordHistory", () => {
     ).resolves.toEqual([]);
   });
 
-  it("treats recency-only queries as recent-message lookup instead of keyword search", async () => {
-    const recentMessagesFromChannels = vi.fn(async () => [result("recent-message", 1)]);
+  it("treats recency words as normal model-provided search text", async () => {
+    const keywordSearch = vi.fn(async () => [result("keyword-message", 1)]);
     const repo = {
       getVisibleIndexedChannelIds: async () => ["c"],
-      recentMessagesFromChannels,
-      keywordSearch: async () => {
-        throw new Error("recency-only query should not run keyword search");
+      recentMessagesFromChannels: async () => {
+        throw new Error("non-empty query should not run recent-message scan");
       },
-      vectorSearch: async () => {
-        throw new Error("recency-only query should not run vector search");
-      }
+      keywordSearch,
+      vectorSearch: async () => []
     };
 
     const results = await searchDiscordHistory({
       repo: repo as any,
-      openRouter: { embed: async () => [[0.1, 0.2]] } as any,
-      config: { maxHistoryResults: 10, openRouter: { apiKey: "test-key", embeddingModel: "test/embed" }, embeddingDimensions: 2 } as any,
+      openRouter: {} as any,
+      config: { maxHistoryResults: 10, openRouter: {} } as any,
       search: {
         guildId: "g",
         userVisibleChannelIds: ["c"],
@@ -142,8 +140,8 @@ describe("searchDiscordHistory", () => {
       }
     });
 
-    expect(results.map((item) => item.messageId)).toEqual(["recent-message"]);
-    expect(recentMessagesFromChannels).toHaveBeenCalledWith(
+    expect(results.map((item) => item.messageId)).toEqual(["keyword-message"]);
+    expect(keywordSearch).toHaveBeenCalledWith(
       expect.objectContaining({
         guildId: "g",
         visibleChannelIds: ["c"],
@@ -158,21 +156,21 @@ describe("buildHistoryRetrievalQuery", () => {
   it("removes mentioned channel filters and date filters from the retrieval query", () => {
     expect(
       buildHistoryRetrievalQuery("what did we say in <#123> about pizza since 2024-01-01 before 2024-02-01?")
-    ).toBe("pizza");
+    ).toBe("what did we say in about pizza ?");
   });
 
-  it("removes mentioned user filters from author-scoped history questions", () => {
-    expect(buildHistoryRetrievalQuery("what did <@456> say about nachos?")).toBe("nachos");
+  it("removes Discord mention filters but does not rewrite natural question framing", () => {
+    expect(buildHistoryRetrievalQuery("what did <@456> say about nachos?")).toBe("what did say about nachos?");
   });
 
-  it("turns direct history prompts into topic-focused search text", () => {
-    expect(buildHistoryRetrievalQuery("who said movie night was Friday?")).toBe("movie night was Friday");
-    expect(buildHistoryRetrievalQuery("did we decide on the minecraft seed?")).toBe("the minecraft seed");
+  it("preserves direct history prompts for the model-provided search phrase", () => {
+    expect(buildHistoryRetrievalQuery("who said movie night was Friday?")).toBe("who said movie night was Friday?");
+    expect(buildHistoryRetrievalQuery("did we decide on the minecraft seed?")).toBe("did we decide on the minecraft seed?");
   });
 
-  it("drops recency-only search text", () => {
-    expect(buildHistoryRetrievalQuery("recent")).toBe("");
-    expect(buildHistoryRetrievalQuery("recently")).toBe("");
+  it("preserves recency words because date-window selection is model-led", () => {
+    expect(buildHistoryRetrievalQuery("recent")).toBe("recent");
+    expect(buildHistoryRetrievalQuery("recently")).toBe("recently");
     expect(buildHistoryRetrievalQuery('"')).toBe('"');
   });
 });

@@ -472,7 +472,7 @@ describe("agent router", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "composeDiscordHistorySummary", model: "summary-model" }));
   });
 
-  it("keeps Discord message links in fallback answers when the user asks for them", async () => {
+  it("keeps fallback answers compact when final synthesis fails", async () => {
     const auditTool = vi.fn(async () => undefined);
     const result = agentSearchResult({
       messageId: "rare-message",
@@ -523,7 +523,8 @@ describe("agent router", () => {
     const response = await handleAgentRequest(ctx, "link to the message from rare_guest_0001");
 
     expect(response.content).toContain("@rare_guest_0001");
-    expect(response.content).toContain("https://discord.com/channels/g/c/rare-message");
+    expect(response.content).not.toContain("https://discord.com/channels/g/c/rare-message");
+    expect(response.content).toContain("Weak matches");
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "searchDiscordHistory" }));
   });
 
@@ -591,7 +592,7 @@ describe("agent router", () => {
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
   });
 
-  it("skips redundant history-search retries and synthesizes from the first evidence", async () => {
+  it("allows the model to refine history searches within a turn", async () => {
     const auditTool = vi.fn(async () => undefined);
     const keywordSearch = vi.fn(async () => [agentSearchResult()]);
     const ctx = {
@@ -636,20 +637,103 @@ describe("agent router", () => {
     const response = await handleAgentRequest(ctx, "what have people said about job hunting or interviewing?");
 
     expect(response.content).toBe("People mostly shared job-search updates and interview nerves.");
-    expect(keywordSearch).toHaveBeenCalledTimes(1);
+    expect(keywordSearch).toHaveBeenCalledTimes(2);
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
     expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
         messages: expect.arrayContaining([
-          expect.objectContaining({ role: "system", content: expect.stringContaining("Write one natural Discord reply") }),
-          expect.objectContaining({ role: "user", content: expect.stringContaining("Discord search evidence:") })
+          expect.objectContaining({ role: "tool", name: "searchDiscordHistory", content: expect.stringContaining("Effective query: job hunting") }),
+          expect.objectContaining({ role: "tool", name: "searchDiscordHistory", content: expect.stringContaining("Effective query: interview") })
         ])
       })
     );
-    expect((ctx.openRouter.chat as any).mock.calls[2][0].messages[1].content).not.toContain("Skipped redundant history search");
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
+    expect(JSON.stringify((ctx.openRouter.chat as any).mock.calls[2][0].messages)).not.toContain("Skipped redundant history search");
+    expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
+  });
+
+  it("synthesizes after message context instead of entering another search loop", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const keywordSearch = vi.fn(async () => [
+      agentSearchResult({
+        normalizedContent: "Got the job",
+        createdAt: new Date("2025-08-22T12:00:00.000Z"),
+        link: "https://discord.com/channels/111111111111111111/222222222222222222/123456789012345678"
+      })
+    ]);
+    const messageContext = vi.fn(async () => [
+      agentSearchResult({
+        messageId: "123456789012345678",
+        normalizedContent: "Got the job",
+        createdAt: new Date("2025-08-22T12:00:00.000Z"),
+        link: "https://discord.com/channels/111111111111111111/222222222222222222/123456789012345678"
+      })
+    ]);
+    const ctx = {
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        keywordSearch,
+        vectorSearch: vi.fn(async () => []),
+        messageContext,
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              { id: "call-1", name: "searchDiscordHistory", argumentsText: JSON.stringify({ query: "changed jobs", limit: 10 }) },
+              { id: "call-2", name: "searchDiscordHistory", argumentsText: JSON.stringify({ query: "got the job", limit: 10 }) }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "",
+            model: "context-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-3",
+                name: "getDiscordMessageContext",
+                argumentsText: JSON.stringify({
+                  messageIdOrUrl: "https://discord.com/channels/111111111111111111/222222222222222222/123456789012345678"
+                })
+              }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "Yeah, @alice said they got the job.",
+            model: "final-model",
+            raw: {},
+            toolCalls: [
+              { id: "call-ignored", name: "searchDiscordHistory", argumentsText: JSON.stringify({ query: "another job search" }) }
+            ]
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "has anyone changed jobs recently?");
+
+    expect(response.content).toBe("Yeah, @alice said they got the job.");
+    expect(keywordSearch).toHaveBeenCalledTimes(2);
+    expect(messageContext).toHaveBeenCalledTimes(1);
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
+    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "function", function: expect.objectContaining({ name: "getDiscordMessageContext" }) })])
+    );
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDiscordMessageContext" }));
+    expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "tool_round_limit" }));
   });
 
   it("skips exact duplicate local tool calls and synthesizes from the first result", async () => {
@@ -868,7 +952,7 @@ describe("agent router", () => {
 
   it("synthesizes a final answer instead of dumping raw tool output at the tool round limit", async () => {
     const auditTool = vi.fn(async () => undefined);
-    const keywordSearch = vi.fn(async () => [agentSearchResult()]);
+    const recentMessagesFromChannels = vi.fn(async () => [agentSearchResult()]);
     const toolCallForRound = (round: number) => ({
       content: "",
       model: `tool-model-${round}`,
@@ -876,8 +960,8 @@ describe("agent router", () => {
       toolCalls: [
         {
           id: `call-${round}`,
-          name: "searchDiscordHistory",
-          argumentsText: JSON.stringify({ query: "job changes", dateFrom: `2025-0${round}-01` })
+          name: "getRecentDiscordMessages",
+          argumentsText: JSON.stringify({ limit: 10 + round })
         }
       ]
     });
@@ -885,8 +969,7 @@ describe("agent router", () => {
       config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
-        keywordSearch,
-        vectorSearch: vi.fn(async () => []),
+        recentMessagesFromChannels,
         getCrawlStatus: vi.fn(async () => []),
         auditTool
       },
@@ -922,10 +1005,11 @@ describe("agent router", () => {
       expect.objectContaining({
         messages: expect.arrayContaining([
           expect.objectContaining({ role: "system", content: expect.stringContaining("Write one natural Discord reply") }),
-          expect.objectContaining({ role: "user", content: expect.stringContaining("Discord search evidence:") })
+          expect.objectContaining({ role: "user", content: expect.stringContaining("@alice channel=c") })
         ])
       })
     );
+    expect(recentMessagesFromChannels).toHaveBeenCalledTimes(4);
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "tool_round_limit" }));
   });
 
@@ -1168,30 +1252,43 @@ describe("agent router", () => {
     );
   });
 
-  it("ignores model-selected skill drafts unless the user explicitly asks Discord AI Agent to learn something", async () => {
-    const createSkillPullRequest = vi.fn();
+  it("executes model-selected skill drafts through the structured tool boundary", async () => {
+    const upsertDatabaseSkill = vi.fn(async (input: { name: string; content: string }) => ({
+      name: input.name,
+      content: input.content,
+      source: "database",
+      version: 1
+    }));
     const ctx = {
-      config: { maxReplyChars: 1800 },
+      config: { maxReplyChars: 1800, openRouter: {} },
       repo: {
+        listEnabledDatabaseSkills: vi.fn(async () => []),
+        upsertDatabaseSkill,
         auditTool: vi.fn(async () => undefined)
       },
       openRouter: {
-        chat: vi.fn(async () => ({
-          content: "Movie night is usually casual.",
-          model: "chat-model",
-          raw: {},
-          toolCalls: [
-            {
-              id: "call-1",
-              name: "createSkillDraft",
-              argumentsText: JSON.stringify({ instruction: "movie night is on Fridays" })
-            }
-          ]
-        }))
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-1",
+                name: "createSkillDraft",
+                argumentsText: JSON.stringify({ skillName: "movie-night", instruction: "movie night is on Fridays" })
+              }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "Saved that as a private skill.",
+            model: "chat-model",
+            raw: {},
+            toolCalls: []
+          })
       },
-      github: {
-        createSkillPullRequest
-      },
+      github: {},
       guildId: "g",
       channelId: "c",
       userId: "u",
@@ -1201,31 +1298,90 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "what is movie night?");
 
-    expect(response.content).toBe("Movie night is usually casual.");
-    expect(createSkillPullRequest).not.toHaveBeenCalled();
-    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
+    expect(response.content).toBe("Saved that as a private skill.");
+    expect(upsertDatabaseSkill).toHaveBeenCalledWith(expect.objectContaining({ name: "movie-night", request: "movie night is on Fridays" }));
+    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "createSkillDraft" }));
   });
 
-  it("ignores model-selected tool PRs unless the user explicitly asks to change tooling", async () => {
-    const createToolProposalPullRequest = vi.fn();
+  it("executes model-selected undo requests through the local undo tool", async () => {
+    const deleteDiscordMessageIds = vi.fn(async () => 1);
+    const deleteMostRecentConversationTurns = vi.fn(async () => ({
+      deletedTurns: 1,
+      deletedRows: 2,
+      assistantDiscordMessageIds: ["reply-1"]
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        deleteMostRecentConversationTurns,
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [{ id: "call-1", name: "undoConversationTurns", argumentsText: JSON.stringify({ count: 1 }) }]
+          })
+          .mockResolvedValueOnce({
+            content: "Undone.",
+            model: "chat-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      deleteDiscordMessageIds
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "undo that");
+
+    expect(response.content).toBe("Undone.");
+    expect(deleteMostRecentConversationTurns).toHaveBeenCalledWith({ threadKey: "discord:g:c", count: 1 });
+    expect(deleteDiscordMessageIds).toHaveBeenCalledWith(["reply-1"]);
+    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "undoConversationTurns" }));
+  });
+
+  it("executes model-selected tool PR proposals as review-only PRs", async () => {
+    const createToolProposalPullRequest = vi.fn(async () => ({
+      dryRun: false,
+      filePath: "tool-proposals/calendar-integration.md",
+      prUrl: "https://github.com/example/repo/pull/12"
+    }));
     const ctx = {
       config: { maxReplyChars: 1800 },
       repo: {
         auditTool: vi.fn(async () => undefined)
       },
       openRouter: {
-        chat: vi.fn(async () => ({
-          content: "You could track those manually for now.",
-          model: "chat-model",
-          raw: {},
-          toolCalls: [
-            {
-              id: "call-1",
-              name: "openGithubPullRequest",
-              argumentsText: JSON.stringify({ request: "add a calendar integration" })
-            }
-          ]
-        }))
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-1",
+                name: "openGithubPullRequest",
+                argumentsText: JSON.stringify({ request: "add a calendar integration" })
+              }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "Opened a review PR.",
+            model: "chat-model",
+            raw: {},
+            toolCalls: []
+          })
       },
       github: {
         createToolProposalPullRequest
@@ -1239,9 +1395,14 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "how should we track events?");
 
-    expect(response.content).toBe("You could track those manually for now.");
-    expect(createToolProposalPullRequest).not.toHaveBeenCalled();
-    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
+    expect(response.content).toBe("Opened a review PR.");
+    expect(createToolProposalPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proposalName: "add-a-calendar-integration",
+        markdown: expect.stringContaining("add a calendar integration")
+      })
+    );
+    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "openGithubPullRequest" }));
   });
 
   it("audits failed agent requests before surfacing the error to Discord", async () => {

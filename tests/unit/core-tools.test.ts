@@ -2,18 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeDiscordData,
   answerFromHistory,
+  createSkillFromRequest,
   extractHistorySearchSyntax,
   findDiscordRoles,
   findDiscordUsers,
-  extractHistoryFilters,
-  extractSkillRequest,
   generateImage,
   getDiscordChannelTopics,
   getDiscordStats,
   inspectAgentLogs,
   inspectRailwayLogs,
   reportStatus,
-  summarizeCurrentThread
+  summarizeCurrentThread,
+  undoConversationTurns
 } from "../../src/tools/coreTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
@@ -23,44 +23,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("extractSkillRequest", () => {
-  it("derives a stable skill name from learn-this requests", () => {
-    expect(extractSkillRequest("learn this for next time: movie night votes use the poll")).toEqual({
-      action: "add",
-      skillName: "movie-night-votes-use-the-poll",
-      instruction: "movie night votes use the poll"
-    });
-  });
-
-  it("parses explicit create skill requests", () => {
-    expect(extractSkillRequest("create a skill called movie night: use the poll")).toEqual({
-      action: "add",
-      skillName: "movie-night",
-      instruction: "use the poll"
-    });
-  });
-
-  it("parses explicit update skill requests", () => {
-    expect(extractSkillRequest("update skill minecraft server: check the pinned post first")).toEqual({
-      action: "update",
-      skillName: "minecraft-server",
-      instruction: "check the pinned post first"
-    });
-  });
-});
-
-describe("extractHistoryFilters", () => {
+describe("extractHistorySearchSyntax", () => {
   it("extracts absolute since and before dates", () => {
-    const filters = extractHistoryFilters("what did we say about pizza since 2024-01-01 before 2024-02-01");
+    const filters = extractHistorySearchSyntax("what did we say about pizza since 2024-01-01 before 2024-02-01");
+    expect(filters.query).toBe("what did we say about pizza");
     expect(filters.dateFrom?.toISOString()).toBe("2024-01-01T00:00:00.000Z");
     expect(filters.dateTo?.toISOString()).toBe("2024-02-01T23:59:59.999Z");
   });
 
   it("ignores messages without absolute date filters", () => {
-    expect(extractHistoryFilters("what did we say last week")).toEqual({
-      dateFrom: undefined,
-      dateTo: undefined
-    });
+    const filters = extractHistorySearchSyntax("what did we say last week");
+    expect(filters.dateFrom).toBeUndefined();
+    expect(filters.dateTo).toBeUndefined();
   });
 
   it("extracts colon-style Discord history filters", () => {
@@ -71,6 +45,70 @@ describe("extractHistoryFilters", () => {
     expect(filters.channelQueries).toEqual(["general chat"]);
     expect(filters.dateFrom?.toISOString()).toBe("2024-01-01T00:00:00.000Z");
     expect(filters.dateTo?.toISOString()).toBe("2024-02-01T23:59:59.999Z");
+  });
+});
+
+describe("model-led mutating tools", () => {
+  it("saves a skill from structured model arguments", async () => {
+    const ctx = {
+      config: { openRouter: {}, maxReplyChars: 1800 },
+      repo: {
+        listEnabledDatabaseSkills: vi.fn(async () => []),
+        upsertDatabaseSkill: vi.fn(async (input: { name: string; content: string }) => ({
+          name: input.name,
+          content: input.content,
+          source: "database",
+          version: 1
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      userDisplayName: "User",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await createSkillFromRequest(ctx, {
+      skillName: "Movie Night",
+      instruction: "movie night votes should use the pinned poll"
+    });
+
+    expect(response).toBe("Saved private skill `movie-night` to the database (v1).");
+    expect(ctx.repo.upsertDatabaseSkill).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "movie-night",
+        request: "movie night votes should use the pinned poll"
+      })
+    );
+  });
+
+  it("undoes recent conversation turns through a tool boundary", async () => {
+    const deleteDiscordMessageIds = vi.fn(async () => 1);
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        deleteMostRecentConversationTurns: vi.fn(async () => ({
+          deletedTurns: 2,
+          deletedRows: 4,
+          assistantDiscordMessageIds: ["reply-1"]
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      userDisplayName: "User",
+      visibleChannelIds: ["channel"],
+      threadKey: "discord:guild:channel",
+      deleteDiscordMessageIds
+    } as unknown as ToolContext;
+
+    const response = await undoConversationTurns(ctx, 2);
+
+    expect(response).toBe("Undid my last 2 turns in this channel and removed 4 memory rows from memory.");
+    expect(ctx.repo.deleteMostRecentConversationTurns).toHaveBeenCalledWith({ threadKey: "discord:guild:channel", count: 2 });
+    expect(deleteDiscordMessageIds).toHaveBeenCalledWith(["reply-1"]);
   });
 });
 
@@ -549,13 +587,13 @@ describe("answerFromHistory", () => {
 
     expect(response).toContain("Discord search evidence:");
     expect(response).toContain("Question: what did we say about pizza?");
-    expect(response).toContain("Effective query: pizza");
+    expect(response).toContain("Effective query: what did we say about pizza?");
     expect(response).toContain("Applied date filter: none");
     expect(response).toContain("Evidence dates: 2024-01-01 to 2025-06-15");
     expect(response).toContain("Evidence authors: @alice");
     expect(response).toContain("These are historical Discord messages, not necessarily recent/current events.");
     expect(response).toContain("use only the exact @handles or IDs shown");
-    expect(response).toContain("The user did not ask for sources");
+    expect(response).toContain("Use links only if helpful or if the user asked for links");
     expect(response).toContain("pizza night is friday");
     expect(response).toContain(result.link);
     expect(ctx.openRouter.chat).not.toHaveBeenCalled();
@@ -563,7 +601,7 @@ describe("answerFromHistory", () => {
     expect(ctx.repo.auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "composeHistoryAnswer" }));
   });
 
-  it("marks source requests in the returned evidence", async () => {
+  it("returns links in evidence for the model to use when sources are requested", async () => {
     const result = searchResult();
     const ctx = historyAnswerContext({
       keywordResults: [result]
@@ -571,11 +609,11 @@ describe("answerFromHistory", () => {
 
     const response = await answerFromHistory(ctx, "what did we say about pizza? show sources");
 
-    expect(response).toContain("The user asked for sources");
+    expect(response).toContain("Use links only if helpful or if the user asked for links");
     expect(response).toContain(result.link);
   });
 
-  it("marks message-link requests in the returned evidence", async () => {
+  it("returns links in evidence for the model to use when message links are requested", async () => {
     const result = searchResult();
     const ctx = historyAnswerContext({
       keywordResults: [result]
@@ -583,7 +621,7 @@ describe("answerFromHistory", () => {
 
     const response = await answerFromHistory(ctx, "link to the message about pizza");
 
-    expect(response).toContain("The user asked for sources");
+    expect(response).toContain("Use links only if helpful or if the user asked for links");
     expect(response).toContain(result.link);
   });
 
@@ -606,14 +644,14 @@ describe("answerFromHistory", () => {
     );
   });
 
-  it("treats resolved link-to-person requests as broad author scans", async () => {
+  it("runs broad author scans when the model passes an empty query with an author filter", async () => {
     const result = searchResult({ authorId: "rare-user-id", authorUsername: "rare_guest_0001", normalizedContent: "Wordle 218 1/6" });
     const ctx = historyAnswerContext({
       keywordResults: [],
       recentResults: [result]
     });
 
-    const response = await answerFromHistory(ctx, "link to the message from rare_guest_0001", {
+    const response = await answerFromHistory(ctx, "", {
       authorIds: ["rare-user-id"],
       requestText: "link to the message from rare_guest_0001"
     });
@@ -628,14 +666,14 @@ describe("answerFromHistory", () => {
     expect(ctx.repo.keywordSearch).not.toHaveBeenCalled();
   });
 
-  it("treats username-only queries as broad scans when the user asked for links and the author is resolved", async () => {
+  it("runs broad resolved-user scans when the model passes an empty query", async () => {
     const result = searchResult({ authorId: "rare-user-id", authorUsername: "rare_guest_0001", normalizedContent: "is the ram all the way in" });
     const ctx = historyAnswerContext({
       keywordResults: [],
       recentResults: [result]
     });
 
-    const response = await answerFromHistory(ctx, "rare_guest_0001", {
+    const response = await answerFromHistory(ctx, "", {
       authorIds: ["rare-user-id"],
       requestText: "bro i want the source link for pony's message"
     });
@@ -656,7 +694,7 @@ describe("answerFromHistory", () => {
       recentResults: []
     });
 
-    const response = await answerFromHistory(ctx, "link to the message from rare_guest_0001 about pizza", {
+    const response = await answerFromHistory(ctx, "pizza", {
       authorIds: ["rare-user-id"],
       requestText: "link to the message from rare_guest_0001 about pizza"
     });
@@ -671,7 +709,7 @@ describe("answerFromHistory", () => {
     expect(ctx.repo.recentMessagesFromChannels).not.toHaveBeenCalled();
   });
 
-  it("does not treat normal uses of the word source as source requests", async () => {
+  it("uses the same link guidance for normal uses of the word source", async () => {
     const result = searchResult({ normalizedContent: "open source tools are useful" });
     const ctx = historyAnswerContext({
       keywordResults: [result]
@@ -679,11 +717,11 @@ describe("answerFromHistory", () => {
 
     const response = await answerFromHistory(ctx, "what did we say about open source?");
 
-    expect(response).toContain("The user did not ask for sources");
+    expect(response).toContain("Use links only if helpful or if the user asked for links");
     expect(response).toContain("open source tools are useful");
   });
 
-  it("defaults vague recent history questions to the last year", async () => {
+  it("does not add a hidden date window for vague recent history questions", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-27T12:00:00.000Z"));
     const result = searchResult({ createdAt: new Date("2025-09-15T15:36:25.540Z") });
@@ -695,11 +733,11 @@ describe("answerFromHistory", () => {
 
     expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(
       expect.objectContaining({
-        dateFrom: new Date("2025-06-27T00:00:00.000Z"),
+        dateFrom: undefined,
         dateTo: undefined
       })
     );
-    expect(response).toContain("Applied date filter: from 2025-06-27");
+    expect(response).toContain("Applied date filter: none");
   });
 });
 

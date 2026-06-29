@@ -13,7 +13,11 @@ describe("config", () => {
         "GITHUB_DRY_RUN_DIR",
         "RAILWAY_PROJECT_ID",
         "RAILWAY_ENVIRONMENT",
-        "RAILWAY_LOG_OWNER_USER_IDS"
+        "RAILWAY_LOG_OWNER_USER_IDS",
+        "OPENROUTER_CHAT_MODEL",
+        "OPENROUTER_CODEGEN_MODEL",
+        "CODEGEN_JOB_TIMEOUT_MINUTES",
+        "CODEGEN_CODEX_TIMEOUT_MINUTES"
       ],
       () => {
         const config = loadConfig();
@@ -28,7 +32,10 @@ describe("config", () => {
         expect(config.railway.projectId).toBe("");
         expect(config.railway.environment).toBe("production");
         expect(config.railway.logOwnerUserIds).toEqual([]);
+        expect(config.openRouter.chatModel).toBe("deepseek/deepseek-v4-flash");
+        expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
         expect(config.codegenJobTimeoutMinutes).toBe(60);
+        expect(config.codegenCodexTimeoutMinutes).toBe(20);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
         expect(config.crawlRetryMaxMs).toBe(30_000);
@@ -52,6 +59,22 @@ describe("config", () => {
     withEnv({ CODEGEN_JOB_TIMEOUT_MINUTES: "90" }, () => {
       expect(loadConfig().codegenJobTimeoutMinutes).toBe(90);
     });
+  });
+
+  it("allows configuring the codegen model and Codex subprocess timeout separately from chat", () => {
+    withEnv(
+      {
+        OPENROUTER_CHAT_MODEL: "deepseek/deepseek-v4-flash",
+        OPENROUTER_CODEGEN_MODEL: "z-ai/glm-5.2",
+        CODEGEN_CODEX_TIMEOUT_MINUTES: "12"
+      },
+      () => {
+        const config = loadConfig();
+        expect(config.openRouter.chatModel).toBe("deepseek/deepseek-v4-flash");
+        expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
+        expect(config.codegenCodexTimeoutMinutes).toBe(12);
+      }
+    );
   });
 });
 

@@ -43,6 +43,7 @@ const defaults = {
   openRouterAppTitle: "Discord AI Agent",
   openRouterHttpReferer: "http://localhost",
   openRouterChatModel: "deepseek/deepseek-v4-flash",
+  openRouterCodegenModel: "z-ai/glm-5.2",
   openRouterEmbeddingModel: "qwen/qwen3-embedding-8b",
   openRouterImageModel: "google/gemini-3.1-flash-image",
   githubRepository: "owner/discord-ai-agent" as string,
@@ -53,6 +54,7 @@ const defaults = {
   railwayEnvironment: "production",
   railwayLogOwnerUserIds: "",
   codegenJobTimeoutMinutes: 60,
+  codegenCodexTimeoutMinutes: 20,
   crawlBatchSize: 100,
   crawlFetchRetries: 3,
   crawlRetryBaseMs: 1000,
@@ -80,6 +82,7 @@ const envSchema = z.object({
   OPENROUTER_APP_TITLE: z.string().default(defaults.openRouterAppTitle),
   OPENROUTER_HTTP_REFERER: z.string().default(defaults.openRouterHttpReferer),
   OPENROUTER_CHAT_MODEL: z.string().default(defaults.openRouterChatModel),
+  OPENROUTER_CODEGEN_MODEL: z.string().default(defaults.openRouterCodegenModel),
   OPENROUTER_EMBEDDING_MODEL: z.string().default(defaults.openRouterEmbeddingModel),
   OPENROUTER_IMAGE_MODEL: z.string().default(defaults.openRouterImageModel),
 
@@ -94,6 +97,7 @@ const envSchema = z.object({
   RAILWAY_ENVIRONMENT: z.string().default(defaults.railwayEnvironment),
   RAILWAY_LOG_OWNER_USER_IDS: z.string().default(defaults.railwayLogOwnerUserIds),
   CODEGEN_JOB_TIMEOUT_MINUTES: z.coerce.number().int().min(15).max(240).default(defaults.codegenJobTimeoutMinutes),
+  CODEGEN_CODEX_TIMEOUT_MINUTES: z.coerce.number().int().min(5).max(120).default(defaults.codegenCodexTimeoutMinutes),
 
   CRAWL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(defaults.crawlBatchSize),
   CRAWL_FETCH_RETRIES: z.coerce.number().int().min(0).max(10).default(defaults.crawlFetchRetries),
@@ -131,6 +135,7 @@ export function loadConfig() {
       appTitle: parsed.data.OPENROUTER_APP_TITLE,
       httpReferer: parsed.data.OPENROUTER_HTTP_REFERER,
       chatModel: parsed.data.OPENROUTER_CHAT_MODEL,
+      codegenModel: parsed.data.OPENROUTER_CODEGEN_MODEL,
       embeddingModel: parsed.data.OPENROUTER_EMBEDDING_MODEL,
       imageModel: parsed.data.OPENROUTER_IMAGE_MODEL
     },
@@ -148,6 +153,7 @@ export function loadConfig() {
       logOwnerUserIds: parseCsv(parsed.data.RAILWAY_LOG_OWNER_USER_IDS)
     },
     codegenJobTimeoutMinutes: parsed.data.CODEGEN_JOB_TIMEOUT_MINUTES,
+    codegenCodexTimeoutMinutes: parsed.data.CODEGEN_CODEX_TIMEOUT_MINUTES,
     crawlBatchSize: parsed.data.CRAWL_BATCH_SIZE,
     crawlFetchRetries: parsed.data.CRAWL_FETCH_RETRIES,
     crawlRetryBaseMs: parsed.data.CRAWL_RETRY_BASE_MS,

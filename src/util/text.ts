@@ -3,6 +3,25 @@ export function truncateForDiscord(text: string, maxChars: number): string {
   return `${text.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n...[truncated]`;
 }
 
+export function chunkMessageForDiscord(text: string, maxChars: number): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  if (trimmed.length <= maxChars) return [trimmed];
+
+  const chunks: string[] = [];
+  let remaining = trimmed;
+  while (remaining.length > maxChars) {
+    const newlineIdx = remaining.lastIndexOf("\n", maxChars);
+    const spaceIdx = remaining.lastIndexOf(" ", maxChars);
+    const splitAt = Math.max(newlineIdx, spaceIdx);
+    const end = splitAt > maxChars * 0.5 ? splitAt + 1 : maxChars;
+    chunks.push(remaining.slice(0, end).trim());
+    remaining = remaining.slice(end).trim();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
 export function slugify(value: string): string {
   return value
     .toLowerCase()

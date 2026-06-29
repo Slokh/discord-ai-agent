@@ -6,6 +6,7 @@ import {
   MessageFlags,
   Partials,
   type Guild,
+  type PartialTextBasedChannelFields,
   type Message,
   type MessageReaction,
   type PartialMessage,
@@ -21,8 +22,9 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { handleAgentRequest } from "../agent/router.js";
 import { cleanResponse } from "../tools/coreTools.js";
-import type { DiscordReplyContext } from "../tools/types.js";
+import type { AgentFile, DiscordReplyContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
+import { chunkMessageForDiscord } from "../util/text.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
 
@@ -417,11 +419,12 @@ async function handleMessageCreate(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
-    const finalReply = await thinking.edit({
-      content: response.content,
-      files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
-    });
-    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with final response");
+    const replyMessages = await sendAgentReply(message, thinking, response.content, input.config.maxReplyChars, response.files);
+    const finalReply = replyMessages[0];
+    requestLogger.info(
+      { replyMessageId: finalReply.id, replyMessageCount: replyMessages.length },
+      "Edited Discord reply with final response"
+    );
 
     for (const memoryEvent of response.memoryEvents ?? []) {
       await input.repo.appendConversationMessage({
@@ -721,6 +724,39 @@ async function deleteDiscordMessageById(sourceMessage: Message, messageId: strin
     logger.warn({ err: error, messageId }, "Failed to delete undone Discord reply");
     return false;
   }
+}
+
+async function sendAgentReply(
+  sourceMessage: Message,
+  thinking: Message,
+  content: string,
+  maxChars: number,
+  files?: AgentFile[]
+): Promise<Message[]> {
+  const chunks = chunkMessageForDiscord(content, maxChars);
+  if (chunks.length === 0) {
+    const edited = await thinking.edit({
+      content: "Done.",
+      files: files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
+    });
+    return [edited];
+  }
+
+  const fileBuilders = files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }));
+  const firstReply = await thinking.edit({
+    content: chunks[0],
+    files: fileBuilders
+  });
+  if (chunks.length === 1) return [firstReply];
+
+  const additionalReplies: Message[] = [];
+  for (let index = 1; index < chunks.length; index += 1) {
+    const channel = sourceMessage.channel as unknown as PartialTextBasedChannelFields;
+    if (typeof channel.send !== "function") break;
+    const reply = await channel.send({ content: chunks[index] });
+    additionalReplies.push(reply);
+  }
+  return [firstReply, ...additionalReplies];
 }
 
 async function persistReactionMessageUpdate(

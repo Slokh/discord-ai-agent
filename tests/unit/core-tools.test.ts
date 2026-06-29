@@ -1092,3 +1092,41 @@ describe("summarizeCurrentThread", () => {
     );
   });
 });
+
+describe("chunkResponse", () => {
+  it("returns a single chunk for short content", async () => {
+    const { chunkResponse } = await import("../../src/tools/coreTools.js");
+    expect(chunkResponse("hello world", 100)).toEqual(["hello world"]);
+  });
+
+  it("returns [\"Done.\"] for empty or whitespace content", async () => {
+    const { chunkResponse } = await import("../../src/tools/coreTools.js");
+    expect(chunkResponse("", 100)).toEqual(["Done."]);
+    expect(chunkResponse("   ", 100)).toEqual(["Done."]);
+  });
+
+  it("splits long content into multiple chunks", async () => {
+    const { chunkResponse } = await import("../../src/tools/coreTools.js");
+    const text = "a".repeat(2500);
+    const chunks = chunkResponse(text, 100);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(100);
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+});
+
+describe("cleanResponse", () => {
+  it("trims and returns content without truncating at maxChars", async () => {
+    const { cleanResponse } = await import("../../src/tools/coreTools.js");
+    const text = "  hello world  ";
+    expect(cleanResponse(text, 5)).toBe("hello world");
+  });
+
+  it("returns Done. for empty content", async () => {
+    const { cleanResponse } = await import("../../src/tools/coreTools.js");
+    expect(cleanResponse("", 5)).toBe("Done.");
+    expect(cleanResponse("   ", 5)).toBe("Done.");
+  });
+});

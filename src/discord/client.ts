@@ -20,7 +20,7 @@ import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { handleAgentRequest } from "../agent/router.js";
-import { cleanResponse } from "../tools/coreTools.js";
+import { chunkResponse, cleanResponse } from "../tools/coreTools.js";
 import type { DiscordReplyContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
@@ -384,7 +384,8 @@ async function handleMessageCreate(
           requestId,
           discordRoles: discordRoleSnapshots(message.guild),
           updateStatus: async (content) => {
-            await thinking.edit(cleanResponse(content, input.config.maxReplyChars));
+            const [firstChunk] = chunkResponse(cleanResponse(content), input.config.maxReplyChars);
+            await thinking.edit(firstChunk);
           },
           deleteDiscordMessageIds: async (messageIds) => {
             let deleted = 0;
@@ -417,11 +418,19 @@ async function handleMessageCreate(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
+    const chunks = chunkResponse(response.content, input.config.maxReplyChars);
     const finalReply = await thinking.edit({
-      content: response.content,
+      content: chunks[0],
       files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
     });
     requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with final response");
+
+    if (chunks.length > 1) {
+      for (let i = 1; i < chunks.length; i += 1) {
+        await message.channel.send(chunks[i]);
+      }
+      requestLogger.info({ chunkCount: chunks.length }, "Sent additional chunked Discord messages for long response");
+    }
 
     for (const memoryEvent of response.memoryEvents ?? []) {
       await input.repo.appendConversationMessage({
@@ -467,11 +476,14 @@ async function handleMessageCreate(
         },
         "Agent request blocked by OpenRouter content filter"
       );
-      const filteredContent = cleanResponse(
-        "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
+      const filteredChunks = chunkResponse(
+        cleanResponse("The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it."),
         input.config.maxReplyChars
       );
-      const finalReply = await thinking.edit(filteredContent);
+      const finalReply = await thinking.edit(filteredChunks[0]);
+      for (let i = 1; i < filteredChunks.length; i += 1) {
+        await message.channel.send(filteredChunks[i]);
+      }
       const deletedMemoryRows = await input.repo
         .deleteConversationMessagesByDiscordMessageIds({
           threadKey,
@@ -512,8 +524,15 @@ async function handleMessageCreate(
         })
         .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
     }
-    const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
-    const finalReply = await thinking.edit(errorContent);
+    const errorChunks = chunkResponse(
+      cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`),
+      input.config.maxReplyChars
+    );
+    const finalReply = await thinking.edit(errorChunks[0]);
+    for (let i = 1; i < errorChunks.length; i += 1) {
+      await message.channel.send(errorChunks[i]);
+    }
+    const errorContent = errorChunks.join("\n");
     requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with error response");
     await recordTraceEvent(input.repo, {
       eventName: "discord.mention.failed",

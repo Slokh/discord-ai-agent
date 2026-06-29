@@ -1,7 +1,7 @@
 import { buildHistoryRetrievalQuery, searchDiscordHistory, formatSearchResults } from "../memory/search.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { validateSkillMarkdown } from "../skills/policy.js";
-import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
+import { chunkForDiscord, slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
 import type {
   AgentCodegenJobRecord,
@@ -2240,8 +2240,19 @@ function parseUtcDateEnd(value: string) {
   return new Date(`${value}T23:59:59.999Z`);
 }
 
-export function cleanResponse(content: string, maxChars: number) {
-  return truncateForDiscord(content.trim() || "Done.", maxChars);
+export function cleanResponse(content: string, _maxChars?: number) {
+  return content.trim() || "Done.";
+}
+
+/**
+ * Splits an agent response into Discord-safe chunks. Returns the original
+ * content as a single-element array when it fits within `maxChars`. Callers
+ * should send each chunk as a sequential Discord message to avoid
+ * truncation at the 2000-character limit.
+ */
+export function chunkResponse(content: string, maxChars: number): string[] {
+  const trimmed = content.trim() || "Done.";
+  return chunkForDiscord(trimmed, maxChars);
 }
 
 function extensionForContentType(contentType: string) {

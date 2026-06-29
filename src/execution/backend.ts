@@ -70,44 +70,46 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       "discord-ai-agent/task-id": job.taskId,
       "discord-ai-agent/sandbox-run-id": sandboxRunId
     };
+    const secretName = `${name}-secret`;
+    const configMapName = `${name}-config`;
 
     await context.progress?.({
       step: "sandbox_prepare",
       message: "Preparing an isolated Kubernetes sandbox for the code change.",
       metadata: { namespace, jobName: name, sandboxRunId }
     });
-    await this.createSecret(namespace, `${name}-secret`, labels, {
-      GITHUB_TOKEN: githubToken,
-      OPENROUTER_API_KEY: this.config.openRouter.apiKey,
-      AGENT_TASK_TOKEN: token
-    });
-    await this.createConfigMap(namespace, `${name}-config`, labels, {
-      TASK_ID: job.taskId,
-      TRACE_ID: job.traceId ?? job.taskId,
-      SANDBOX_RUN_ID: sandboxRunId,
-      TASK_TITLE: job.title,
-      TASK_REQUEST: job.request,
-      REQUESTED_BY: job.requestedBy,
-      CONTROL_PLANE_INTERNAL_URL: this.config.execution.controlPlaneInternalUrl,
-      GITHUB_REPOSITORY: this.config.github.repository,
-      GITHUB_BASE_BRANCH: this.config.github.baseBranch,
-      OPENROUTER_CHAT_MODEL: this.config.openRouter.chatModel
-    });
-
-    await context.progress?.({
-      step: "sandbox_start",
-      message: "Starting the Kubernetes sandbox job.",
-      metadata: { namespace, jobName: name, image: this.config.execution.kubernetes.sandboxImage }
-    });
     try {
+      await this.createSecret(namespace, secretName, labels, {
+        GITHUB_TOKEN: githubToken,
+        OPENROUTER_API_KEY: this.config.openRouter.apiKey,
+        AGENT_TASK_TOKEN: token
+      });
+      await this.createConfigMap(namespace, configMapName, labels, {
+        TASK_ID: job.taskId,
+        TRACE_ID: job.traceId ?? job.taskId,
+        SANDBOX_RUN_ID: sandboxRunId,
+        TASK_TITLE: job.title,
+        TASK_REQUEST: job.request,
+        REQUESTED_BY: job.requestedBy,
+        CONTROL_PLANE_INTERNAL_URL: this.config.execution.controlPlaneInternalUrl,
+        GITHUB_REPOSITORY: this.config.github.repository,
+        GITHUB_BASE_BRANCH: this.config.github.baseBranch,
+        OPENROUTER_CHAT_MODEL: this.config.openRouter.chatModel
+      });
+
+      await context.progress?.({
+        step: "sandbox_start",
+        message: "Starting the Kubernetes sandbox job.",
+        metadata: { namespace, jobName: name, image: this.config.execution.kubernetes.sandboxImage }
+      });
       await this.batch.createNamespacedJob({
         namespace,
         body: this.jobManifest({ name, namespace, labels })
       });
     } catch (error) {
       await Promise.all([
-        this.deleteSecret(namespace, `${name}-secret`).catch(() => undefined),
-        this.deleteConfigMap(namespace, `${name}-config`).catch(() => undefined)
+        this.deleteSecret(namespace, secretName).catch(() => undefined),
+        this.deleteConfigMap(namespace, configMapName).catch(() => undefined)
       ]);
       throw error;
     }

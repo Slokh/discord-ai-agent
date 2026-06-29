@@ -8,11 +8,13 @@ import type { AppConfig } from "../config/env.js";
 import { parseGitHubRepository } from "../skills/github.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { slugify } from "../util/text.js";
+import { CodexActivityTracker, type CodexActivitySnapshot } from "./activity.js";
 import { AppConfigCodegenCredentialProvider, type CodegenCredentialProvider } from "./credentials.js";
 import { reportCodegenProgress, type CodegenProgressReporter } from "./progress.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const CODEX_OUTPUT_LOG_INTERVAL_MS = 30_000;
+const CODEX_ACTIVITY_HEARTBEAT_MS = 5_000;
 const CODEX_TERMINATION_GRACE_MS = 10_000;
 export const CODEGEN_REQUIRED_DEV_TOOLS = ["tsx", "tsc", "eslint", "vitest"] as const;
 export const CODEGEN_REPO_CONTEXT_MAP = [
@@ -90,27 +92,35 @@ export async function runAgentCodegenJob(input: {
 
     const codegenModel = config.openRouter.codegenModel;
     const codexTimeoutMs = minutesToMs(config.codegenCodexTimeoutMinutes);
+    const codexActivity = new CodexActivityTracker({
+      onSnapshot: (snapshot) => {
+        logCodexActivitySnapshot(job, snapshot);
+        if (!snapshot.final) {
+          void progress(input.progress, "codex", codexActivityProgressMessage(snapshot), {
+            activity: codexActivityMetadata(snapshot)
+          }).catch((error) => logger.warn({ err: error, requestId: job.requestId }, "Failed to report Codex activity progress"));
+        }
+      }
+    });
     await progress(input.progress, "codex", "Running Codex to implement the requested change.", {
       model: codegenModel,
       timeoutMinutes: config.codegenCodexTimeoutMinutes
     });
     await runCommand(
       process.env.CODEX_BIN || "codex",
-      [
-        "exec",
-        "--ephemeral",
-        "-C",
-        checkoutDir,
-        "--dangerously-bypass-approvals-and-sandbox",
-        "-m",
-        codegenModel,
-        "-"
-      ],
+      codexExecArgs({ checkoutDir, model: codegenModel }),
       {
         cwd: checkoutDir,
         env: credentials.codexEnv({ baseEnv: commandEnv, workRoot }),
         input: codegenPrompt(job),
-        timeoutMs: codexTimeoutMs
+        timeoutMs: codexTimeoutMs,
+        outputObserver: {
+          onStdout: (text) => codexActivity.acceptStdout(text),
+          onStderr: (text) => codexActivity.acceptStderr(text),
+          onHeartbeat: () => codexActivity.heartbeat(),
+          onFinish: () => codexActivity.finish(),
+          heartbeatMs: CODEX_ACTIVITY_HEARTBEAT_MS
+        }
       }
     );
 
@@ -184,6 +194,22 @@ export function codegenCommandEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv
     npm_config_omit: "",
     npm_config_production: "false"
   };
+}
+
+export function codexExecArgs(input: { checkoutDir: string; model: string }) {
+  return [
+    "exec",
+    "--json",
+    "--color",
+    "never",
+    "--ephemeral",
+    "-C",
+    input.checkoutDir,
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-m",
+    input.model,
+    "-"
+  ];
 }
 
 export async function missingCodegenDevTools(checkoutDir: string): Promise<string[]> {
@@ -261,6 +287,7 @@ export function codegenPrompt(job: AgentCodegenJob) {
     "- Do not add request-only documentation artifacts; the PR body records the request.",
     "- Do not print full files or full diffs unless a command failure makes that necessary.",
     "- Do not repeatedly reprint the same diff or revisit the same design choice once it is resolved.",
+    "- Emit concise operational progress notes as you work: current action, important decision or blocker, and next step. Keep them factual and do not expose private chain-of-thought.",
     "- Prefer one implementation pass, one focused test pass, and at most one repair pass for failures.",
     "- Before finishing, run the most relevant checks you can, then exit promptly.",
     "",
@@ -315,6 +342,7 @@ async function runCommand(
     input?: string;
     allowFailure?: boolean;
     timeoutMs?: number;
+    outputObserver?: CommandOutputObserver;
   }
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const startedAt = Date.now();
@@ -333,6 +361,7 @@ async function runCommand(
   const stderrLogger = createCommandOutputLogger(command, "stderr");
   let timeout: NodeJS.Timeout | undefined;
   let forceKillTimeout: NodeJS.Timeout | undefined;
+  let heartbeatInterval: NodeJS.Timeout | undefined;
 
   if (options.timeoutMs && options.timeoutMs > 0) {
     timeout = setTimeout(() => {
@@ -351,14 +380,21 @@ async function runCommand(
     timeout.unref();
   }
 
+  if (options.outputObserver?.onHeartbeat) {
+    heartbeatInterval = setInterval(options.outputObserver.onHeartbeat, options.outputObserver.heartbeatMs ?? CODEX_OUTPUT_LOG_INTERVAL_MS);
+    heartbeatInterval.unref();
+  }
+
   child.stdout.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stdout = appendLimited(stdout, text);
+    options.outputObserver?.onStdout?.(text);
     logCommandOutput(stdoutLogger, text);
   });
   child.stderr.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stderr = appendLimited(stderr, text);
+    options.outputObserver?.onStderr?.(text);
     logCommandOutput(stderrLogger, text);
   });
 
@@ -374,6 +410,8 @@ async function runCommand(
   } finally {
     if (timeout) clearTimeout(timeout);
     if (forceKillTimeout) clearTimeout(forceKillTimeout);
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    options.outputObserver?.onFinish?.();
     flushCommandOutput(stdoutLogger);
     flushCommandOutput(stderrLogger);
   }
@@ -403,6 +441,14 @@ type CommandOutputLogger = {
   bufferedBytes: number;
   bufferedLines: number;
   bufferedChunks: number;
+};
+
+type CommandOutputObserver = {
+  onStdout?: (text: string) => void;
+  onStderr?: (text: string) => void;
+  onHeartbeat?: () => void;
+  onFinish?: () => void;
+  heartbeatMs?: number;
 };
 
 function createCommandOutputLogger(command: string, stream: "stdout" | "stderr"): CommandOutputLogger {
@@ -469,4 +515,78 @@ function formatDuration(ms: number) {
   if (minutes === 0) return `${seconds}s`;
   if (seconds === 0) return `${minutes}m`;
   return `${minutes}m ${seconds}s`;
+}
+
+function logCodexActivitySnapshot(job: AgentCodegenJob, snapshot: CodexActivitySnapshot) {
+  logger.info(
+    {
+      requestId: job.requestId,
+      updateName: job.updateName,
+      ...codexActivityMetadata(snapshot)
+    },
+    snapshot.final ? "Codex activity final summary" : "Codex activity summary"
+  );
+}
+
+function codexActivityProgressMessage(snapshot: CodexActivitySnapshot) {
+  const parts = [`Codex is working (${formatDuration(snapshot.durationMs)} elapsed).`];
+  if (snapshot.silentForMs >= CODEX_OUTPUT_LOG_INTERVAL_MS) {
+    parts.push(`No Codex output for ${formatDuration(snapshot.silentForMs)}.`);
+  }
+  if (snapshot.commandStarts > 0) {
+    parts.push(`Commands: ${snapshot.commandCompletions}/${snapshot.commandStarts} complete${snapshot.commandFailures ? `, ${snapshot.commandFailures} failed` : ""}.`);
+  }
+  if (snapshot.filePaths.length > 0) {
+    parts.push(`Touched: ${snapshot.filePaths.slice(0, 3).join(", ")}${snapshot.filePaths.length > 3 ? "..." : ""}.`);
+  }
+  if (snapshot.lastActivity) {
+    parts.push(`Latest: ${snapshot.lastActivity}.`);
+  }
+  return parts.join(" ");
+}
+
+function codexActivityMetadata(snapshot: CodexActivitySnapshot) {
+  return {
+    final: snapshot.final,
+    durationMs: snapshot.durationMs,
+    silentForMs: snapshot.silentForMs,
+    longestOutputGapMs: snapshot.longestOutputGapMs,
+    totalEvents: snapshot.totalEvents,
+    topEventTypes: topEventTypes(snapshot.eventTypes),
+    phase: snapshot.phase,
+    phaseDurationsMs: snapshot.phaseDurationsMs,
+    commandStarts: snapshot.commandStarts,
+    commandCompletions: snapshot.commandCompletions,
+    commandFailures: snapshot.commandFailures,
+    activeCommands: snapshot.activeCommands,
+    lastCommand: snapshot.lastCommand,
+    recentCommands: snapshot.recentCommands,
+    repeatedCommands: snapshot.repeatedCommands,
+    fileChangeStarts: snapshot.fileChangeStarts,
+    fileChangeCompletions: snapshot.fileChangeCompletions,
+    filePaths: snapshot.filePaths,
+    recentFileChanges: snapshot.recentFileChanges,
+    planUpdates: snapshot.planUpdates,
+    planSnippets: snapshot.planSnippets,
+    reasoningChars: snapshot.reasoningChars,
+    reasoningSnippets: snapshot.reasoningSnippets,
+    messageChars: snapshot.messageChars,
+    messageSnippets: snapshot.messageSnippets,
+    toolUses: snapshot.toolUses,
+    toolResults: snapshot.toolResults,
+    jsonParseErrors: snapshot.jsonParseErrors,
+    nonJsonLines: snapshot.nonJsonLines,
+    stderrBytes: snapshot.stderrBytes,
+    stderrSnippets: snapshot.stderrSnippets,
+    recentActivities: snapshot.recentActivities,
+    lastEventType: snapshot.lastEventType,
+    lastActivity: snapshot.lastActivity
+  };
+}
+
+function topEventTypes(eventTypes: Record<string, number>) {
+  return Object.entries(eventTypes)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 12)
+    .map(([type, count]) => ({ type, count }));
 }

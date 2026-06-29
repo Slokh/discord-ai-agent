@@ -28,6 +28,7 @@ import type { AgentFile, AgentResponse, DiscordReplyContext, ToolContext } from 
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { openRouterServerToolDefinitionsForModel, toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
+import { truncateForDiscord } from "../util/text.js";
 import type { Logger } from "pino";
 
 type AgentToolRoute = {
@@ -262,9 +263,10 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       });
       const isRepeatedExactToolCall = successfulToolCallKeys.has(routeKey);
       const isRedundantToolCall = isRepeatedExactToolCall;
-      const result = isRepeatedExactToolCall
+      const rawResult = isRepeatedExactToolCall
         ? await skippedRedundantToolResult(ctx, { text, route, toolUseCount })
         : await executeLocalToolRoute(ctx, route, text);
+      const result = limitToolResultForModel(rawResult, ctx.config.maxReplyChars);
       requestLogger.info(
         {
           toolName: route.name,
@@ -638,6 +640,13 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
       }),
       ctx.config.maxReplyChars
     )
+  };
+}
+
+function limitToolResultForModel(result: AgentResponse, maxChars: number): AgentResponse {
+  return {
+    ...result,
+    content: truncateForDiscord(cleanResponse(result.content), maxChars)
   };
 }
 

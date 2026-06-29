@@ -56,12 +56,6 @@ export type AgentFile = {
 
 export type AgentResponse = {
   content: string;
-  /**
-   * When the agent response is long enough to require multiple Discord
-   * messages, this array holds each chunk. Callers that support multi-message
-   * replies should prefer `chunks` over `content` when present.
-   */
-  chunks?: string[];
   files?: AgentFile[];
   memoryEvents?: Array<{
     role: "tool";

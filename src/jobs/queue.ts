@@ -10,6 +10,7 @@ export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
 export const AGENT_CODEGEN_JOB = "agent.codegen";
 const EMBEDDING_JOB_BATCH_SIZE = 400;
+const DEFAULT_CODEGEN_JOB_TIMEOUT_MINUTES = 60;
 
 type MessageEmbeddingJob = {
   messageId: string;
@@ -60,14 +61,28 @@ export async function startJobs(input: {
   const boss = input.pgBossSchema
     ? new PgBoss({ connectionString: input.config.databaseUrl, schema: input.pgBossSchema })
     : new PgBoss(input.config.databaseUrl);
-  logger.info({ crawlWorkerEnabled, embeddingWorkerEnabled, codegenWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" }, "Starting pg-boss");
+  const codegenJobTimeoutMinutes = input.config.codegenJobTimeoutMinutes ?? DEFAULT_CODEGEN_JOB_TIMEOUT_MINUTES;
+  logger.info(
+    { crawlWorkerEnabled, embeddingWorkerEnabled, codegenWorkerEnabled, codegenJobTimeoutMinutes, schema: input.pgBossSchema ?? "pgboss" },
+    "Starting pg-boss"
+  );
   await boss.start();
   await boss.createQueue(CRAWL_GUILD_JOB, { name: CRAWL_GUILD_JOB, policy: "short" });
   await boss.updateQueue(CRAWL_GUILD_JOB, { name: CRAWL_GUILD_JOB, policy: "short" });
   await boss.createQueue(EMBED_MESSAGE_JOB, { name: EMBED_MESSAGE_JOB, policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
   await boss.updateQueue(EMBED_MESSAGE_JOB, { name: EMBED_MESSAGE_JOB, policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
-  await boss.createQueue(AGENT_CODEGEN_JOB, { name: AGENT_CODEGEN_JOB, policy: "short", retryLimit: 0 });
-  await boss.updateQueue(AGENT_CODEGEN_JOB, { name: AGENT_CODEGEN_JOB, policy: "short", retryLimit: 0 });
+  await boss.createQueue(AGENT_CODEGEN_JOB, {
+    name: AGENT_CODEGEN_JOB,
+    policy: "short",
+    retryLimit: 0,
+    expireInMinutes: codegenJobTimeoutMinutes
+  });
+  await boss.updateQueue(AGENT_CODEGEN_JOB, {
+    name: AGENT_CODEGEN_JOB,
+    policy: "short",
+    retryLimit: 0,
+    expireInMinutes: codegenJobTimeoutMinutes
+  });
   logger.info(
     { queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_CODEGEN_JOB], crawlWorkerEnabled, embeddingWorkerEnabled, codegenWorkerEnabled },
     "pg-boss ready"
@@ -134,95 +149,99 @@ export async function startJobs(input: {
   }
 
   if (codegenWorkerEnabled && input.agentCodegen) {
-    await boss.work<AgentCodegenJob>(AGENT_CODEGEN_JOB, { batchSize: 1, pollingIntervalSeconds: 2 }, async (jobs) => {
-      for (const job of jobs) {
-        const startedAt = Date.now();
-        await runWithTrace(
-          {
-            traceId: job.data.traceId ?? job.data.requestId,
-            requestId: job.data.requestId,
-            guildId: job.data.guildId,
-            channelId: job.data.channelId,
-            userId: job.data.userId
-          },
-          async () => {
-            logger.info(
-              { queue: AGENT_CODEGEN_JOB, jobId: job.id, requestId: job.data.requestId, updateName: job.data.updateName },
-              "Running agent.codegen job"
-            );
-            const backendName = input.agentCodegen?.name ?? "railway-local-worker";
-            await input.repo?.markAgentCodegenRunning({
+    await boss.work<AgentCodegenJob>(
+      AGENT_CODEGEN_JOB,
+      { batchSize: 1, pollingIntervalSeconds: 2 },
+      async (jobs) => {
+        for (const job of jobs) {
+          const startedAt = Date.now();
+          await runWithTrace(
+            {
+              traceId: job.data.traceId ?? job.data.requestId,
               requestId: job.data.requestId,
-              backend: backendName,
-              step: "running",
-              statusMessage: "Starting codegen worker."
-            });
-            try {
-              const result = await input.agentCodegen!.run(job.data, {
-                progress: async (event) => {
-                  await input.repo?.markAgentCodegenProgress({
-                    requestId: job.data.requestId,
-                    backend: backendName,
-                    step: event.step,
-                    statusMessage: event.message
-                  });
-                  await input.repo?.recordTraceEvent({
-                    traceId: job.data.traceId ?? job.data.requestId,
-                    requestId: job.data.requestId,
-                    guildId: job.data.guildId,
-                    channelId: job.data.channelId,
-                    userId: job.data.userId,
-                    eventName: "codegen.progress",
-                    summary: event.message,
-                    metadata: {
-                      step: event.step,
-                      backend: backendName,
-                      ...event.metadata
-                    }
-                  });
-                }
-              });
-              await input.repo?.markAgentCodegenSucceeded({
-                requestId: job.data.requestId,
-                branchName: result.branchName,
-                prUrl: result.prUrl,
-                draft: result.draft,
-                verifyPassed: result.verifyPassed
-              });
+              guildId: job.data.guildId,
+              channelId: job.data.channelId,
+              userId: job.data.userId
+            },
+            async () => {
               logger.info(
-                {
-                  queue: AGENT_CODEGEN_JOB,
-                  jobId: job.id,
+                { queue: AGENT_CODEGEN_JOB, jobId: job.id, requestId: job.data.requestId, updateName: job.data.updateName },
+                "Running agent.codegen job"
+              );
+              const backendName = input.agentCodegen?.name ?? "railway-local-worker";
+              await input.repo?.markAgentCodegenRunning({
+                requestId: job.data.requestId,
+                backend: backendName,
+                step: "running",
+                statusMessage: "Starting codegen worker."
+              });
+              try {
+                const result = await input.agentCodegen!.run(job.data, {
+                  progress: async (event) => {
+                    await input.repo?.markAgentCodegenProgress({
+                      requestId: job.data.requestId,
+                      backend: backendName,
+                      step: event.step,
+                      statusMessage: event.message
+                    });
+                    await input.repo?.recordTraceEvent({
+                      traceId: job.data.traceId ?? job.data.requestId,
+                      requestId: job.data.requestId,
+                      guildId: job.data.guildId,
+                      channelId: job.data.channelId,
+                      userId: job.data.userId,
+                      eventName: "codegen.progress",
+                      summary: event.message,
+                      metadata: {
+                        step: event.step,
+                        backend: backendName,
+                        ...event.metadata
+                      }
+                    });
+                  }
+                });
+                await input.repo?.markAgentCodegenSucceeded({
                   requestId: job.data.requestId,
+                  branchName: result.branchName,
                   prUrl: result.prUrl,
                   draft: result.draft,
-                  durationMs: durationMs(startedAt)
-                },
-                "agent.codegen job complete"
-              );
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              await input.repo?.markAgentCodegenFailed({
-                requestId: job.data.requestId,
-                status: isNoChangesCodegenError(message) ? "no_changes" : "failed",
-                error: message
-              });
-              logger.error(
-                {
-                  err: error,
-                  queue: AGENT_CODEGEN_JOB,
-                  jobId: job.id,
+                  verifyPassed: result.verifyPassed
+                });
+                logger.info(
+                  {
+                    queue: AGENT_CODEGEN_JOB,
+                    jobId: job.id,
+                    requestId: job.data.requestId,
+                    prUrl: result.prUrl,
+                    draft: result.draft,
+                    durationMs: durationMs(startedAt)
+                  },
+                  "agent.codegen job complete"
+                );
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                await input.repo?.markAgentCodegenFailed({
                   requestId: job.data.requestId,
-                  durationMs: durationMs(startedAt)
-                },
-                "agent.codegen job failed"
-              );
-              throw error;
+                  status: isNoChangesCodegenError(message) ? "no_changes" : "failed",
+                  error: message
+                });
+                logger.error(
+                  {
+                    err: error,
+                    queue: AGENT_CODEGEN_JOB,
+                    jobId: job.id,
+                    requestId: job.data.requestId,
+                    durationMs: durationMs(startedAt)
+                  },
+                  "agent.codegen job failed"
+                );
+                throw error;
+              }
             }
-          }
-        );
+          );
+        }
       }
-    });
+    );
   } else if (codegenWorkerEnabled) {
     logger.warn({ queue: AGENT_CODEGEN_JOB }, "Agent codegen worker requested without a runner");
   }
@@ -287,7 +306,8 @@ export async function startJobs(input: {
         id =
           (await boss.send(AGENT_CODEGEN_JOB, data, {
             singletonKey: requestId,
-            retryLimit: 0
+            retryLimit: 0,
+            expireInMinutes: codegenJobTimeoutMinutes
           })) ?? null;
       } catch (error) {
         await input.repo?.markAgentCodegenFailed({

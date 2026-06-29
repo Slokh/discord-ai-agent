@@ -222,6 +222,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
 
   it("can enqueue agent codegen jobs without running the codegen worker", async () => {
     const config = testConfig();
+    const pool = createPool(config);
     const runtime = await startJobs({
       config,
       pgBossSchema: "pgboss_test",
@@ -235,16 +236,26 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     });
     runtimes.push(runtime);
 
-    const { jobId } = await runtime.enqueueAgentCodegen({
-      request: "add a calendar integration",
-      updateName: "calendar integration",
-      requestedBy: "test"
-    });
-    expect(jobId).toEqual(expect.any(String));
+    try {
+      const { jobId } = await runtime.enqueueAgentCodegen({
+        request: "add a calendar integration",
+        updateName: "calendar integration",
+        requestedBy: "test"
+      });
+      expect(jobId).toEqual(expect.any(String));
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    await runtime.boss.deleteJob(AGENT_CODEGEN_JOB, jobId!);
-    await runtime.stop();
+      const job = await pool.query(
+        "SELECT EXTRACT(epoch FROM expire_in)::int AS expire_seconds FROM pgboss_test.job WHERE id = $1",
+        [jobId]
+      );
+      expect(job.rows[0]?.expire_seconds).toBe(config.codegenJobTimeoutMinutes * 60);
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await runtime.boss.deleteJob(AGENT_CODEGEN_JOB, jobId!);
+    } finally {
+      await runtime.stop();
+      await pool.end();
+    }
   });
 
   it("deduplicates repeated crawl enqueue requests for the configured guild", async () => {

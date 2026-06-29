@@ -23,6 +23,7 @@ import { handleAgentRequest } from "../agent/router.js";
 import { cleanResponse } from "../tools/coreTools.js";
 import type { DiscordReplyContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
+import { chunkForDiscord } from "../util/text.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
 
@@ -417,11 +418,10 @@ async function handleMessageCreate(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
-    const finalReply = await thinking.edit({
-      content: response.content,
-      files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
-    });
-    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with final response");
+    const replyChunks = chunkForDiscord(response.content, input.config.maxReplyChars);
+    const attachments = response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }));
+    const finalReply = await sendChunkedReply(thinking, message, replyChunks, attachments);
+    requestLogger.info({ replyMessageId: finalReply.id, chunkCount: replyChunks.length }, "Edited Discord reply with final response");
 
     for (const memoryEvent of response.memoryEvents ?? []) {
       await input.repo.appendConversationMessage({
@@ -709,6 +709,41 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+/**
+ * Sends an agent response that may exceed Discord's 2000-character message limit
+ * as multiple sequential messages. The first chunk replaces the "Thinking..."
+ * placeholder reply; subsequent chunks are sent as follow-up messages in the same
+ * channel. Attachments are only attached to the first message.
+ */
+export async function sendChunkedReply(
+  thinking: Message,
+  sourceMessage: Message,
+  chunks: string[],
+  attachments?: AttachmentBuilder[]
+): Promise<Message> {
+  if (chunks.length <= 1) {
+    return thinking.edit({
+      content: chunks[0] ?? "",
+      files: attachments
+    }) as Promise<Message>;
+  }
+
+  const firstReply = (await thinking.edit({
+    content: chunks[0],
+    files: attachments
+  })) as Message;
+
+  const channel = sourceMessage.channel;
+  if (typeof (channel as { send?: unknown }).send !== "function") return firstReply;
+
+  const send = (channel as { send: (content: string) => Promise<Message> }).send;
+  let lastMessage = firstReply;
+  for (let i = 1; i < chunks.length; i++) {
+    lastMessage = await send(chunks[i]);
+  }
+  return lastMessage;
 }
 
 async function deleteDiscordMessageById(sourceMessage: Message, messageId: string): Promise<boolean> {

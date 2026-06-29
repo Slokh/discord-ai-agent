@@ -207,8 +207,12 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         },
         durationMs: durationMs(startedAt)
       });
+      // The main agent response is intentionally not truncated here so that the
+      // Discord client can split it into multiple messages when it exceeds the
+      // Discord message character limit. Tool route responses below still use
+      // cleanResponse for short-form summaries.
       return {
-        content: cleanResponse(content, ctx.config.maxReplyChars),
+        content: content.trim() || "Done.",
         files: files.length > 0 ? files : undefined,
         memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
       };

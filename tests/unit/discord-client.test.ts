@@ -9,6 +9,7 @@ import {
   hasExplicitBotMention,
   isSelfMessage,
   persistReactionMessage,
+  sendChunkedReply,
   shouldProcessGuildEvent,
   stripBotAddress
 } from "../../src/discord/client.js";
@@ -176,3 +177,55 @@ function fakeGuildMessage(guildId: string) {
     attachments: new Map()
   };
 }
+
+describe("sendChunkedReply", () => {
+  function makeThinking() {
+    return {
+      edit: vi.fn().mockResolvedValue({ id: "msg-1" })
+    } as any;
+  }
+
+  function makeSourceMessage(sends: string[]) {
+    return {
+      channel: {
+        send: vi.fn().mockImplementation(async (content: string) => {
+          sends.push(content);
+          return { id: `msg-${sends.length + 1}` };
+        })
+      }
+    } as any;
+  }
+
+  it("edits the thinking message with a single chunk and no follow-ups", async () => {
+    const thinking = makeThinking();
+    const sourceMessage = makeSourceMessage([]);
+    const result = await sendChunkedReply(thinking, sourceMessage, ["short reply"], undefined);
+    expect(thinking.edit).toHaveBeenCalledTimes(1);
+    expect(thinking.edit).toHaveBeenCalledWith({ content: "short reply", files: undefined });
+    expect(sourceMessage.channel.send).not.toHaveBeenCalled();
+    expect(result).toEqual({ id: "msg-1" });
+  });
+
+  it("edits the first chunk then sends remaining chunks as follow-up messages", async () => {
+    const thinking = makeThinking();
+    const sends: string[] = [];
+    const sourceMessage = makeSourceMessage(sends);
+    const chunks = ["chunk-1", "chunk-2", "chunk-3"];
+    const result = await sendChunkedReply(thinking, sourceMessage, chunks, undefined);
+    expect(thinking.edit).toHaveBeenCalledTimes(1);
+    expect(thinking.edit).toHaveBeenCalledWith({ content: "chunk-1", files: undefined });
+    expect(sends).toEqual(["chunk-2", "chunk-3"]);
+    expect(result).toEqual({ id: "msg-3" });
+  });
+
+  it("attaches files only to the first message", async () => {
+    const thinking = makeThinking();
+    const sends: string[] = [];
+    const sourceMessage = makeSourceMessage(sends);
+    const fakeAttachment = { name: "file.png" } as any;
+    const result = await sendChunkedReply(thinking, sourceMessage, ["a", "b"], [fakeAttachment]);
+    expect(thinking.edit).toHaveBeenCalledWith({ content: "a", files: [fakeAttachment] });
+    expect(sends).toEqual(["b"]);
+    expect(result).toEqual({ id: "msg-2" });
+  });
+});

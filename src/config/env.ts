@@ -52,6 +52,7 @@ const defaults = {
   railwayProjectId: "",
   railwayEnvironment: "production",
   railwayLogOwnerUserIds: "",
+  codegenJobTimeoutMinutes: 60,
   crawlBatchSize: 100,
   crawlFetchRetries: 3,
   crawlRetryBaseMs: 1000,
@@ -92,6 +93,7 @@ const envSchema = z.object({
   RAILWAY_PROJECT_ID: z.string().default(defaults.railwayProjectId),
   RAILWAY_ENVIRONMENT: z.string().default(defaults.railwayEnvironment),
   RAILWAY_LOG_OWNER_USER_IDS: z.string().default(defaults.railwayLogOwnerUserIds),
+  CODEGEN_JOB_TIMEOUT_MINUTES: z.coerce.number().int().min(15).max(240).default(defaults.codegenJobTimeoutMinutes),
 
   CRAWL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(defaults.crawlBatchSize),
   CRAWL_FETCH_RETRIES: z.coerce.number().int().min(0).max(10).default(defaults.crawlFetchRetries),
@@ -145,6 +147,7 @@ export function loadConfig() {
       environment: parsed.data.RAILWAY_ENVIRONMENT,
       logOwnerUserIds: parseCsv(parsed.data.RAILWAY_LOG_OWNER_USER_IDS)
     },
+    codegenJobTimeoutMinutes: parsed.data.CODEGEN_JOB_TIMEOUT_MINUTES,
     crawlBatchSize: parsed.data.CRAWL_BATCH_SIZE,
     crawlFetchRetries: parsed.data.CRAWL_FETCH_RETRIES,
     crawlRetryBaseMs: parsed.data.CRAWL_RETRY_BASE_MS,

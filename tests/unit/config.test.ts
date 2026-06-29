@@ -28,6 +28,7 @@ describe("config", () => {
         expect(config.railway.projectId).toBe("");
         expect(config.railway.environment).toBe("production");
         expect(config.railway.logOwnerUserIds).toEqual([]);
+        expect(config.codegenJobTimeoutMinutes).toBe(60);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
         expect(config.crawlRetryMaxMs).toBe(30_000);
@@ -44,6 +45,12 @@ describe("config", () => {
   it("accepts the Railway-native codegen process role", () => {
     withEnv({ DISCORD_AI_AGENT_PROCESS_ROLE: "codegen" }, () => {
       expect(loadConfig().processRole).toBe("codegen");
+    });
+  });
+
+  it("allows configuring the codegen job timeout", () => {
+    withEnv({ CODEGEN_JOB_TIMEOUT_MINUTES: "90" }, () => {
+      expect(loadConfig().codegenJobTimeoutMinutes).toBe(90);
     });
   });
 });

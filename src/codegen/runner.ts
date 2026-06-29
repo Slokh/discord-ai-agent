@@ -173,6 +173,7 @@ export async function runAgentCodegenJob(input: {
     if (!status.stdout.trim()) {
       throw new Error("Agent codegen produced no diff; no PR will be opened.");
     }
+    const changedFiles = changedFilesFromGitStatus(status.stdout);
 
     await progress(input.progress, "verify", "Running npm run verify on the generated changes.");
     const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, env: commandEnv, allowFailure: true });
@@ -186,7 +187,7 @@ export async function runAgentCodegenJob(input: {
     await runCommand("git", ["config", "user.name", "discord-ai-agent"], { cwd: checkoutDir });
     await runCommand("git", ["config", "user.email", "discord-ai-agent-bot@users.noreply.github.com"], { cwd: checkoutDir });
     await runCommand("git", ["add", "-A"], { cwd: checkoutDir });
-    await runCommand("git", ["commit", "-m", `Implement Discord AI Agent update: ${job.updateName}`], { cwd: checkoutDir });
+    await runCommand("git", ["commit", "-m", codegenPullRequestTitle(job.request)], { cwd: checkoutDir });
     await progress(input.progress, "push", "Pushing the generated branch to GitHub.", { branchName });
     await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: authEnv });
 
@@ -195,14 +196,15 @@ export async function runAgentCodegenJob(input: {
     const pr = await new Octokit({ auth: credentials.githubToken() }).pulls.create({
       owner,
       repo,
-      title: `Update Discord AI Agent: ${job.updateName}`,
+      title: codegenPullRequestTitle(job.request),
       head: branchName,
       base: config.github.baseBranch,
       draft,
       body: pullRequestBody({
         job,
         model: codegenModel,
-        verifyPassed: verify.exitCode === 0
+        verifyPassed: verify.exitCode === 0,
+        changedFiles
       })
     });
 
@@ -355,25 +357,63 @@ export function codegenPrompt(job: AgentCodegenJob) {
   ].join("\n");
 }
 
-function pullRequestBody(input: { job: AgentCodegenJob; model: string; verifyPassed: boolean }) {
+export function codegenPullRequestTitle(request: string) {
+  const firstMeaningfulLine =
+    request
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !/^[-*_#\s]+$/.test(line)) ?? "Agent update";
+  const normalized = firstMeaningfulLine
+    .replace(/^#+\s*/, "")
+    .replace(/^[-*]\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return truncateTitle(normalized || "Agent update", 100);
+}
+
+export function pullRequestBody(input: { job: AgentCodegenJob; model: string; verifyPassed: boolean; changedFiles: string[] }) {
   return [
-    `Prompted by: ${input.job.requestedBy}`,
-    "",
-    "## Requested Update",
+    "## Why",
     "",
     input.job.request.trim(),
     "",
-    "## Agent Codegen",
+    "## Changes",
     "",
-    `- Request ID: \`${input.job.requestId}\``,
-    "- Runtime: Railway `codegen` worker",
-    `- Model: \`${input.model}\``,
+    ...formatChangedFiles(input.changedFiles),
     "",
-    "## Verification",
+    "## Testing",
     "",
     `- \`npm run verify\`: ${input.verifyPassed ? "passed" : "failed; opened as draft"}`,
-    "- `npm run scan:release`: passed"
+    "- `npm run scan:release`: passed",
+    "",
+    "## Context",
+    "",
+    `- Prompted by: ${input.job.requestedBy}`,
+    `- Request ID: \`${input.job.requestId}\``,
+    `- Model: \`${input.model}\``
   ].join("\n");
+}
+
+export function changedFilesFromGitStatus(status: string) {
+  return status
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const file = line.length > 3 ? line.slice(3).trim() : line.trim();
+      return file.includes(" -> ") ? (file.split(" -> ").pop() ?? file).trim() : file;
+    })
+    .filter(Boolean);
+}
+
+function formatChangedFiles(changedFiles: string[]) {
+  if (changedFiles.length === 0) return ["- See diff for implementation details."];
+  return changedFiles.map((file) => `- Updated \`${file}\`.`);
+}
+
+function truncateTitle(title: string, maxLength: number) {
+  if (title.length <= maxLength) return title;
+  return `${title.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 function codegenCommandProgressMessage(event: CodexCommandEvent) {

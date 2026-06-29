@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import PgBoss from "pg-boss";
 import { loadConfig } from "../../src/config/env.js";
-import { CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
+import { AGENT_CODEGEN_JOB, CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
+import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -157,6 +158,84 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
+  it("processes agent codegen jobs when the codegen worker is enabled", async () => {
+    const config = testConfig();
+    const pool = createPool(config);
+    const repo = new DiscordAiAgentRepository(pool);
+    const processedRequests: string[] = [];
+    const runtime = await startJobs({
+      config,
+      repo,
+      pgBossSchema: "pgboss_test",
+      crawlWorker: false,
+      embeddingWorker: false,
+      codegenWorker: true,
+      crawler: {
+        crawlConfiguredGuild: async () => undefined
+      },
+      agentCodegen: {
+        run: async (job) => {
+          processedRequests.push(job.request);
+          return {
+            branchName: "discord-ai-agent/update-test",
+            prUrl: "https://github.com/example/repo/pull/1",
+            draft: false,
+            verifyPassed: true
+          };
+        }
+      }
+    });
+    runtimes.push(runtime);
+
+    try {
+      const { jobId, requestId } = await runtime.enqueueAgentCodegen({
+        request: "add a calendar integration",
+        updateName: "calendar integration",
+        requestedBy: "test"
+      });
+      expect(jobId).toEqual(expect.any(String));
+      expect(requestId).toEqual(expect.any(String));
+
+      await waitFor(() => processedRequests.includes("add a calendar integration"), 10_000);
+      await waitFor(async () => {
+        const job = await repo.getAgentCodegenJob(requestId);
+        return job?.status === "succeeded" && job.prUrl === "https://github.com/example/repo/pull/1";
+      }, 10_000);
+      const job = await repo.getAgentCodegenJob(requestId);
+      expect(job).toEqual(expect.objectContaining({ status: "succeeded", branchName: "discord-ai-agent/update-test", verifyPassed: true }));
+    } finally {
+      await runtime.stop();
+      await pool.end();
+    }
+  });
+
+  it("can enqueue agent codegen jobs without running the codegen worker", async () => {
+    const config = testConfig();
+    const runtime = await startJobs({
+      config,
+      pgBossSchema: "pgboss_test",
+      worker: false,
+      crawlWorker: false,
+      embeddingWorker: false,
+      codegenWorker: false,
+      crawler: {
+        crawlConfiguredGuild: async () => undefined
+      }
+    });
+    runtimes.push(runtime);
+
+    const { jobId } = await runtime.enqueueAgentCodegen({
+      request: "add a calendar integration",
+      updateName: "calendar integration",
+      requestedBy: "test"
+    });
+    expect(jobId).toEqual(expect.any(String));
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await runtime.boss.deleteJob(AGENT_CODEGEN_JOB, jobId!);
+    await runtime.stop();
+  });
+
   it("deduplicates repeated crawl enqueue requests for the configured guild", async () => {
     const config = testConfig();
     const runtime = await startJobs({
@@ -191,10 +270,10 @@ function testConfig() {
   };
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs: number) {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("Timed out waiting for condition.");

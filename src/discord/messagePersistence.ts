@@ -43,6 +43,13 @@ export async function persistDiscordMessage(repo: DiscordAiAgentRepository, mess
       system: message.system,
       pinned: message.pinned,
       url: message.url,
+      reference: message.reference
+        ? {
+            messageId: message.reference.messageId ?? null,
+            channelId: message.reference.channelId ?? null,
+            guildId: message.reference.guildId ?? null
+          }
+        : null,
       reactions: reactionSummariesFromMessage(message)
     },
     attachments: [...message.attachments.values()].map((attachment) => ({

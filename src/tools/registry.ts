@@ -559,7 +559,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "openGithubPullRequest",
     description:
-      "Open a GitHub PR for a requested Discord AI Agent update, integration, or repository change. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
+      "Run a Railway codegen worker job for a requested Discord AI Agent update, wait for the result, and return the PR link only when it creates a real code diff. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
     userVisible: true,
     mutates: true,
     parameters: {
@@ -567,7 +567,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         request: {
           type: "string",
-          description: "The requested agent update, integration, or repository change."
+          description: "The requested agent update, integration, or repository change to implement."
         }
       },
       required: ["request"],

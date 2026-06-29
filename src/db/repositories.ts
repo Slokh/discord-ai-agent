@@ -296,6 +296,30 @@ export type ToolAuditLog = {
   createdAt: Date;
 };
 
+export type AgentCodegenJobStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes";
+
+export type AgentCodegenJobRecord = {
+  requestId: string;
+  pgBossJobId: string | null;
+  traceId: string | null;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+  updateName: string;
+  request: string;
+  requestedBy: string;
+  status: AgentCodegenJobStatus;
+  branchName: string | null;
+  prUrl: string | null;
+  draft: boolean | null;
+  verifyPassed: boolean | null;
+  error: string | null;
+  createdAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  updatedAt: Date;
+};
+
 export class DiscordAiAgentRepository {
   constructor(private readonly pool: DbPool) {}
 
@@ -2033,6 +2057,120 @@ export class DiscordAiAgentRepository {
     return Number(result.rows[0]?.count ?? 0);
   }
 
+  async upsertAgentCodegenQueued(input: {
+    requestId: string;
+    pgBossJobId?: string | null;
+    traceId?: string | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    updateName: string;
+    request: string;
+    requestedBy: string;
+  }) {
+    await this.pool.query(
+      `
+        INSERT INTO agent_codegen_jobs(
+          request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          update_name, request, requested_by, status, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'queued', now())
+        ON CONFLICT(request_id) DO UPDATE SET
+          pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_codegen_jobs.pgboss_job_id),
+          trace_id = coalesce(EXCLUDED.trace_id, agent_codegen_jobs.trace_id),
+          guild_id = coalesce(EXCLUDED.guild_id, agent_codegen_jobs.guild_id),
+          channel_id = coalesce(EXCLUDED.channel_id, agent_codegen_jobs.channel_id),
+          user_id = coalesce(EXCLUDED.user_id, agent_codegen_jobs.user_id),
+          update_name = EXCLUDED.update_name,
+          request = EXCLUDED.request,
+          requested_by = EXCLUDED.requested_by,
+          status = CASE
+            WHEN agent_codegen_jobs.status IN ('running', 'succeeded', 'failed', 'no_changes') THEN agent_codegen_jobs.status
+            ELSE 'queued'
+          END,
+          updated_at = now()
+      `,
+      [
+        input.requestId,
+        input.pgBossJobId ?? null,
+        input.traceId ?? null,
+        input.guildId ?? null,
+        input.channelId ?? null,
+        input.userId ?? null,
+        input.updateName,
+        input.request,
+        input.requestedBy
+      ]
+    );
+  }
+
+  async markAgentCodegenRunning(requestId: string) {
+    await this.pool.query(
+      `
+        UPDATE agent_codegen_jobs
+        SET status = 'running',
+            started_at = coalesce(started_at, now()),
+            updated_at = now()
+        WHERE request_id = $1
+      `,
+      [requestId]
+    );
+  }
+
+  async markAgentCodegenSucceeded(input: {
+    requestId: string;
+    branchName: string;
+    prUrl: string;
+    draft: boolean;
+    verifyPassed: boolean;
+  }) {
+    await this.pool.query(
+      `
+        UPDATE agent_codegen_jobs
+        SET status = 'succeeded',
+            branch_name = $2,
+            pr_url = $3,
+            draft = $4,
+            verify_passed = $5,
+            error = NULL,
+            completed_at = now(),
+            updated_at = now()
+        WHERE request_id = $1
+      `,
+      [input.requestId, input.branchName, input.prUrl, input.draft, input.verifyPassed]
+    );
+  }
+
+  async markAgentCodegenFailed(input: { requestId: string; status?: "failed" | "no_changes"; error: string }) {
+    await this.pool.query(
+      `
+        UPDATE agent_codegen_jobs
+        SET status = $2,
+            error = $3,
+            completed_at = now(),
+            updated_at = now()
+        WHERE request_id = $1
+      `,
+      [input.requestId, input.status ?? "failed", input.error]
+    );
+  }
+
+  async getAgentCodegenJob(requestId: string): Promise<AgentCodegenJobRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          update_name, request, requested_by, status, branch_name, pr_url,
+          draft, verify_passed, error, created_at, started_at, completed_at, updated_at
+        FROM agent_codegen_jobs
+        WHERE request_id = $1
+      `,
+      [requestId]
+    );
+    const row = result.rows[0];
+    return row ? rowToAgentCodegenJob(row) : undefined;
+  }
+
   async auditTool(input: {
     traceId?: string | null;
     guildId?: string | null;
@@ -3202,5 +3340,29 @@ function rowToMessageForEmbedding(row: any): MessageForEmbedding {
     normalizedContent: String(row.normalized_content ?? ""),
     deletedAt: row.deleted_at == null ? null : new Date(row.deleted_at),
     embeddingModel: row.embedding_model == null ? null : String(row.embedding_model)
+  };
+}
+
+function rowToAgentCodegenJob(row: any): AgentCodegenJobRecord {
+  return {
+    requestId: String(row.request_id),
+    pgBossJobId: row.pgboss_job_id == null ? null : String(row.pgboss_job_id),
+    traceId: row.trace_id == null ? null : String(row.trace_id),
+    guildId: row.guild_id == null ? null : String(row.guild_id),
+    channelId: row.channel_id == null ? null : String(row.channel_id),
+    userId: row.user_id == null ? null : String(row.user_id),
+    updateName: String(row.update_name),
+    request: String(row.request ?? ""),
+    requestedBy: String(row.requested_by ?? ""),
+    status: row.status as AgentCodegenJobStatus,
+    branchName: row.branch_name == null ? null : String(row.branch_name),
+    prUrl: row.pr_url == null ? null : String(row.pr_url),
+    draft: row.draft == null ? null : Boolean(row.draft),
+    verifyPassed: row.verify_passed == null ? null : Boolean(row.verify_passed),
+    error: row.error == null ? null : String(row.error),
+    createdAt: new Date(row.created_at),
+    startedAt: row.started_at == null ? null : new Date(row.started_at),
+    completedAt: row.completed_at == null ? null : new Date(row.completed_at),
+    updatedAt: new Date(row.updated_at)
   };
 }

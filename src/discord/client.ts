@@ -23,6 +23,7 @@ import { handleAgentRequest } from "../agent/router.js";
 import { cleanResponse } from "../tools/coreTools.js";
 import type { DiscordReplyContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
+import { chunkMessage } from "../util/text.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
 
@@ -384,7 +385,7 @@ async function handleMessageCreate(
           requestId,
           discordRoles: discordRoleSnapshots(message.guild),
           updateStatus: async (content) => {
-            await thinking.edit(cleanResponse(content, input.config.maxReplyChars));
+            await thinking.edit(chunkMessage(cleanResponse(content))[0] ?? "");
           },
           deleteDiscordMessageIds: async (messageIds) => {
             let deleted = 0;
@@ -417,11 +418,18 @@ async function handleMessageCreate(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
+    const chunks = chunkMessage(response.content);
+    const firstChunk = chunks[0] ?? "";
     const finalReply = await thinking.edit({
-      content: response.content,
+      content: firstChunk,
       files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
     });
-    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with final response");
+    requestLogger.info({ replyMessageId: finalReply.id, chunkCount: chunks.length }, "Edited Discord reply with final response");
+
+    for (let i = 1; i < chunks.length; i++) {
+      const continuation = await message.channel.send(chunks[i]);
+      requestLogger.info({ continuationMessageId: continuation.id, chunkIndex: i }, "Sent continuation chunk");
+    }
 
     for (const memoryEvent of response.memoryEvents ?? []) {
       await input.repo.appendConversationMessage({

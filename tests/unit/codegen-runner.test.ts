@@ -2,7 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CODEGEN_REQUIRED_DEV_TOOLS, codexExecArgs, codegenCommandEnv, missingCodegenDevTools } from "../../src/codegen/runner.js";
+import {
+  CODEGEN_REPO_CONTEXT_MAP,
+  CODEGEN_REQUIRED_DEV_TOOLS,
+  codexExecArgs,
+  codegenCommandEnv,
+  codegenPrompt,
+  missingCodegenDevTools
+} from "../../src/codegen/runner.js";
 
 describe("codegen runner", () => {
   const tempDirs: string[] = [];
@@ -53,5 +60,31 @@ describe("codegen runner", () => {
       "test/model",
       "-"
     ]);
+  });
+
+  it("keeps a repository navigation map for common codegen tasks", () => {
+    expect(CODEGEN_REPO_CONTEXT_MAP).toContain("src/discord/client.ts");
+    expect(CODEGEN_REPO_CONTEXT_MAP).toContain("src/agent/router.ts");
+    expect(CODEGEN_REPO_CONTEXT_MAP).toContain("src/tools/registry.ts");
+    expect(CODEGEN_REPO_CONTEXT_MAP).toContain("src/tools/coreTools.ts");
+    expect(CODEGEN_REPO_CONTEXT_MAP).toContain("src/db/repositories.ts");
+    expect(CODEGEN_REPO_CONTEXT_MAP).toContain("src/codegen/runner.ts");
+    expect(CODEGEN_REPO_CONTEXT_MAP).toContain("Ignore dist/ and node_modules/");
+  });
+
+  it("injects the repository map into Codex prompts before the user request", () => {
+    const prompt = codegenPrompt({
+      requestId: "codegen-123",
+      request: "add better logging to Discord replies",
+      updateName: "better-logging",
+      requestedBy: "kartik (123)"
+    });
+
+    expect(prompt).toContain("Use the repository map below to choose the first files to inspect");
+    expect(prompt).toContain(CODEGEN_REPO_CONTEXT_MAP);
+    expect(prompt.indexOf(CODEGEN_REPO_CONTEXT_MAP)).toBeLessThan(prompt.indexOf("Requested update:"));
+    expect(prompt).toContain("Request ID: codegen-123");
+    expect(prompt).toContain("Requested by: kartik (123)");
+    expect(prompt).toContain("add better logging to Discord replies");
   });
 });

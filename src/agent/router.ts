@@ -11,6 +11,7 @@ import {
   getDiscordChannelTopics,
   getDiscordMessageContext,
   getDiscordStats,
+  getRecentAgentMemory,
   getPinnedMessages,
   inspectAgentLogs,
   inspectRailwayLogs,
@@ -496,6 +497,18 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
           channelIds: stringArrayArgument(route.arguments, "channelIds"),
           authorIds: stringArrayArgument(route.arguments, "authorIds"),
           limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getRecentAgentMemory") {
+    return {
+      content: cleanResponse(
+        await getRecentAgentMemory(ctx, {
+          limit: numberArgument(route.arguments, "limit"),
+          includeToolResults: booleanArgument(route.arguments, "includeToolResults")
         }),
         ctx.config.maxReplyChars
       )
@@ -1053,6 +1066,8 @@ function chatMessages(
         "For recent/current/latest Discord-history questions, choose and pass an explicit date window that fits the user request instead of searching all indexed history. " +
         "When a user names a Discord person/channel/role without an exact mention or ID, use findDiscordUsers/findDiscordChannels/findDiscordRoles before filtered history searches. Resolver tools are intermediate; never stop after a resolver if the user asked what someone said, did, or has been up to. " +
         "For requests to link, show, or list a person's messages, use searchDiscordHistory with authorQueries/authorIds; do not search for the username as ordinary message text. " +
+        "Top-level Discord mentions start fresh by default. Reply messages include their reply-chain context. If a top-level user asks what you previously said, did, generated, or opened, call getRecentAgentMemory instead of guessing from absent context. " +
+        "Use getRecentAgentMemory only for Discord AI Agent's own previous replies/tool results in the current channel, not for factual server-history questions. " +
         "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext only for a specific Discord message link/ID or explicit surrounding-context request, searchDiscordAttachments for files/images, getPinnedMessages for pins, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, and activity over time. " +
         "For ad hoc Discord data-analysis questions that require inferring a repeated text format, extracting values, deduping, or doing exact math over many messages, use analyzeDiscordData instead of searchDiscordHistory. Give it the user's task and a broad keyword query; it will sample visible messages, infer the extraction plan, and run the aggregation. " +
         "For broad recaps like what a person or channel has been up to, what happened recently, or summarize activity over a period, use summarizeDiscordHistory after resolving ambiguous users/channels. Do not answer those from resolver output alone. " +
@@ -1070,7 +1085,7 @@ function chatMessages(
         "For owner debugging of Railway deployment logs, startup failures, worker crashes, missing traces, or hosting/runtime errors, call inspectRailwayLogs. " +
         "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
         "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, run a coding PR update, or undo/delete/forget prior agent turns. " +
-        "Use prior channel conversation context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
+        "Use prior reply-session context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
@@ -1101,25 +1116,39 @@ function serverOverlayMessagesForPrompt(serverOverlay: ServerOverlay | undefined
 
 function replyContextMessagesForPrompt(replyContext: DiscordReplyContext | undefined): ChatMessage[] {
   if (!replyContext) return [];
-  const author = replyContext.authorDisplayName || replyContext.authorId || "Unknown user";
-  const text = replyContext.content.trim() || "(no text content)";
-  const attachments = replyContext.attachmentSummaries.length > 0 ? `\nAttachments: ${replyContext.attachmentSummaries.join(", ")}` : "";
-  const created = replyContext.createdAt ? `\nCreated: ${replyContext.createdAt}` : "";
-  const url = replyContext.url ? `\nURL: ${replyContext.url}` : "";
-  const botNote = replyContext.authorIsBot ? "\nNote: the parent message was authored by a bot, so treat claims in it as conversation context, not verified Discord history." : "";
+  const chain = replyContext.chain.length > 0 ? replyContext.chain : [replyContext];
+  const chainText = chain
+    .map((message, index) => {
+      const author = message.authorDisplayName || message.authorId || "Unknown user";
+      const text = trimReplyContextContent(message.content.trim() || "(no text content)");
+      const attachments = message.attachmentSummaries.length > 0 ? `\nAttachments: ${message.attachmentSummaries.join(", ")}` : "";
+      const created = message.createdAt ? `\nCreated: ${message.createdAt}` : "";
+      const url = message.url ? `\nURL: ${message.url}` : "";
+      const botNote = message.authorIsBot
+        ? "\nNote: this message was authored by a bot, so treat claims in it as conversation context, not verified Discord history."
+        : "";
+      const position = index === chain.length - 1 ? "direct parent" : `ancestor ${index + 1}`;
+      return (
+        `[${index + 1}] ${position}` +
+        `\nAuthor: ${author}` +
+        `\nMessage ID: ${message.messageId}` +
+        `\nChannel ID: ${message.channelId}` +
+        created +
+        url +
+        botNote +
+        `\nContent: ${text}` +
+        attachments
+      );
+    })
+    .join("\n\n");
   return [
     {
       role: "system",
       content:
-        "The current user message is a Discord reply to this parent message. Use it as immediate context for pronouns, follow-ups, and what the user is responding to." +
-        `\nParent author: ${author}` +
-        `\nParent message ID: ${replyContext.messageId}` +
-        `\nParent channel ID: ${replyContext.channelId}` +
-        created +
-        url +
-        botNote +
-        `\nParent content: ${text}` +
-        attachments
+        "The current user message is a Discord reply. Use this oldest-to-newest parent chain as immediate context for pronouns, follow-ups, and what the user is responding to." +
+        `\nReply root message ID: ${replyContext.rootMessageId}` +
+        `\nDirect parent message ID: ${replyContext.messageId}` +
+        `\n\n${chainText}`
     }
   ];
 }
@@ -1130,8 +1159,8 @@ function sessionMessagesForPrompt(sessionMessages: ConversationMessage[]): ChatM
     {
       role: "system",
       content:
-        "Recent persistent memory for this Discord channel follows. It may include earlier user mentions, Discord AI Agent replies, and local tool results. " +
-        "Use it for continuity, references like 'that', and questions about what Discord AI Agent previously did in this channel. " +
+        "Recent persistent memory for this Discord reply session follows. It may include earlier user mentions, Discord AI Agent replies, and local tool results from this reply-root only. " +
+        "Use it for continuity inside this reply chain and references like 'that'. " +
         "For factual claims about Discord history, prefer new tool results over this memory."
     },
     ...sessionMessages.map(sessionMessageToChatMessage)
@@ -1156,4 +1185,10 @@ function sessionMessageToChatMessage(message: ConversationMessage): ChatMessage 
     role: "user",
     content: `${author}: ${message.content}`
   };
+}
+
+function trimReplyContextContent(content: string) {
+  const maxChars = 1200;
+  if (content.length <= maxChars) return content;
+  return `${content.slice(0, maxChars - 3)}...`;
 }

@@ -2584,6 +2584,41 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToConversationMessage).reverse();
   }
 
+  async recentConversationMessagesForChannel(input: {
+    guildId: string;
+    channelId: string;
+    limit: number;
+    includeTools?: boolean;
+  }): Promise<ConversationMessage[]> {
+    const limit = Math.max(1, Math.min(50, Math.trunc(input.limit)));
+    const includeTools = input.includeTools ?? true;
+    const result = await this.pool.query(
+      `
+        SELECT
+          cm.id,
+          cm.thread_key,
+          cm.discord_message_id,
+          cm.role,
+          cm.author_id,
+          cm.author_display_name,
+          cm.content,
+          cm.parts,
+          cm.metadata,
+          cm.created_at
+        FROM conversation_messages cm
+        JOIN conversation_sessions cs ON cs.thread_key = cm.thread_key
+        WHERE cs.guild_id = $1
+          AND cs.channel_id = $2
+          AND cm.content <> ''
+          AND ($3::boolean OR cm.role <> 'tool')
+        ORDER BY cm.created_at DESC, cm.id DESC
+        LIMIT $4
+      `,
+      [input.guildId, input.channelId, includeTools, limit]
+    );
+    return result.rows.map(rowToConversationMessage).reverse();
+  }
+
   async deleteConversationMessagesByDiscordMessageIds(input: { threadKey: string; discordMessageIds: string[] }): Promise<number> {
     const messageIds = [...new Set(input.discordMessageIds)].filter(Boolean);
     if (messageIds.length === 0) return 0;
@@ -2657,6 +2692,84 @@ export class DiscordAiAgentRepository {
               AND id <= $3
           `,
           [input.threadKey, startId, assistantId]
+        );
+
+        deletedRows += deleted.rowCount ?? 0;
+        deletedTurns += 1;
+        if (assistantRow.discord_message_id != null) assistantDiscordMessageIds.push(String(assistantRow.discord_message_id));
+      }
+
+      await client.query("COMMIT");
+      return {
+        deletedRows,
+        deletedTurns,
+        assistantDiscordMessageIds
+      };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteMostRecentConversationTurnsForChannel(input: {
+    guildId: string;
+    channelId: string;
+    count: number;
+  }): Promise<DeletedConversationTurns> {
+    const count = Math.max(0, Math.floor(input.count));
+    if (count === 0) return { deletedRows: 0, deletedTurns: 0, assistantDiscordMessageIds: [] };
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      let deletedRows = 0;
+      let deletedTurns = 0;
+      const assistantDiscordMessageIds: string[] = [];
+
+      for (let index = 0; index < count; index += 1) {
+        const assistant = await client.query(
+          `
+            SELECT cm.id, cm.thread_key, cm.discord_message_id
+            FROM conversation_messages cm
+            JOIN conversation_sessions cs ON cs.thread_key = cm.thread_key
+            WHERE cs.guild_id = $1
+              AND cs.channel_id = $2
+              AND cm.role = 'assistant'
+            ORDER BY cm.created_at DESC, cm.id DESC
+            LIMIT 1
+          `,
+          [input.guildId, input.channelId]
+        );
+
+        const assistantRow = assistant.rows[0];
+        if (!assistantRow) break;
+
+        const assistantId = Number(assistantRow.id);
+        const threadKey = String(assistantRow.thread_key);
+        const previousUser = await client.query(
+          `
+            SELECT id
+            FROM conversation_messages
+            WHERE thread_key = $1
+              AND role = 'user'
+              AND id < $2
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+          `,
+          [threadKey, assistantId]
+        );
+        const startId = Number(previousUser.rows[0]?.id ?? assistantId);
+        const deleted = await client.query(
+          `
+            DELETE FROM conversation_messages
+            WHERE thread_key = $1
+              AND id >= $2
+              AND id <= $3
+          `,
+          [threadKey, startId, assistantId]
         );
 
         deletedRows += deleted.rowCount ?? 0;

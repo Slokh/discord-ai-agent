@@ -46,6 +46,7 @@ export async function runAgentCodegenJob(input: {
   const checkoutDir = path.join(workRoot, "repo");
   const branchName = codegenBranchName(job.updateName);
   const authEnv = await credentials.gitAuthEnv(workRoot);
+  const commandEnv = codegenCommandEnv(authEnv);
   const startedAt = Date.now();
 
   logger.info(
@@ -62,7 +63,7 @@ export async function runAgentCodegenJob(input: {
     await progress(input.progress, "branch", `Creating implementation branch ${branchName}.`, { branchName });
     await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir });
     await progress(input.progress, "install", "Installing repository dependencies with npm ci.");
-    await runCommand("npm", ["ci"], { cwd: checkoutDir });
+    await runCommand("npm", ["ci", "--include=dev"], { cwd: checkoutDir, env: commandEnv });
     await progress(input.progress, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, config);
 
@@ -81,7 +82,7 @@ export async function runAgentCodegenJob(input: {
       ],
       {
         cwd: checkoutDir,
-        env: credentials.codexEnv({ baseEnv: authEnv, workRoot }),
+        env: credentials.codexEnv({ baseEnv: commandEnv, workRoot }),
         input: codegenPrompt(job)
       }
     );
@@ -93,9 +94,9 @@ export async function runAgentCodegenJob(input: {
     }
 
     await progress(input.progress, "verify", "Running npm run verify on the generated changes.");
-    const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true });
+    const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, env: commandEnv, allowFailure: true });
     await progress(input.progress, "scan", "Running release scan before pushing generated changes.");
-    const scan = await runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true });
+    const scan = await runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, env: commandEnv, allowFailure: true });
     if (scan.exitCode !== 0) {
       throw new Error("Release scan failed after agent codegen; refusing to push generated changes.");
     }
@@ -143,6 +144,19 @@ export async function runAgentCodegenJob(input: {
 function codegenBranchName(updateName: string) {
   const slug = slugify(updateName).slice(0, 48) || "agent-update";
   return `discord-ai-agent/update-${slug}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+}
+
+export function codegenCommandEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    NODE_ENV: "development",
+    NPM_CONFIG_INCLUDE: "dev",
+    NPM_CONFIG_OMIT: "",
+    NPM_CONFIG_PRODUCTION: "false",
+    npm_config_include: "dev",
+    npm_config_omit: "",
+    npm_config_production: "false"
+  };
 }
 
 async function writeCodexConfig(workRoot: string, checkoutDir: string, config: AppConfig) {

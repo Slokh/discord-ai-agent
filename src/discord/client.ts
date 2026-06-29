@@ -26,7 +26,6 @@ import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
 
 const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
-const DISCORD_AGENT_RESPONSE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -392,7 +391,7 @@ async function handleMessageCreate(
         },
         text
       ),
-      DISCORD_AGENT_RESPONSE_TIMEOUT_MS,
+      input.config.discordAgentResponseTimeoutMs,
       "Discord AI Agent agent request"
     );
 

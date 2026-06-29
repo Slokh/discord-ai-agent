@@ -186,6 +186,7 @@ Common optional settings:
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
 | `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
 | `CONTROL_PLANE_INTERNAL_URL` | `http://discord-ai-agent-api:8080` | Sandbox callback URL |
+| `DISCORD_AGENT_RESPONSE_TIMEOUT_MS` | `1800000` | Max time a Discord request can keep editing the same reply while waiting for tools/code-update PRs |
 | `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all` |
 | `RUN_MIGRATIONS` | `true` | Run migrations on process startup; Helm runtime pods set this to `false` because migrations run as a hook |
 

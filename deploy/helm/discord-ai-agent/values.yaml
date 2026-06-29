@@ -28,6 +28,7 @@ config:
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
   embeddingDimensions: "1536"
+  discordAgentResponseTimeoutMs: "1800000"
   databaseUrlSecretKey: DATABASE_URL
   discordTokenSecretKey: DISCORD_TOKEN
   discordClientIdSecretKey: DISCORD_CLIENT_ID

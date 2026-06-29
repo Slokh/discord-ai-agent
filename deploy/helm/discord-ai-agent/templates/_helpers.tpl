@@ -36,6 +36,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.openRouterImageModel | quote }}
 - name: EMBEDDING_DIMENSIONS
   value: {{ .Values.config.embeddingDimensions | quote }}
+- name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS
+  value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
 {{- end -}}
 
 {{- define "discord-ai-agent.databaseEnv" -}}

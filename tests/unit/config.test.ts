@@ -32,6 +32,7 @@ describe("config", () => {
         expect(config.execution.taskSigningSecret).toBe("");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
+        expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
         expect(config.crawlRetryMaxMs).toBe(30_000);
@@ -48,6 +49,12 @@ describe("config", () => {
   it("accepts the internal API process role", () => {
     withEnv({ DISCORD_AI_AGENT_PROCESS_ROLE: "api" }, () => {
       expect(loadConfig().processRole).toBe("api");
+    });
+  });
+
+  it("allows configuring the Discord response timeout", () => {
+    withEnv({ DISCORD_AGENT_RESPONSE_TIMEOUT_MS: "900000" }, () => {
+      expect(loadConfig().discordAgentResponseTimeoutMs).toBe(900_000);
     });
   });
 

@@ -72,7 +72,8 @@ const defaults = {
   crawlRetryMaxMs: 30_000,
   maxHistoryResults: 10,
   maxThreadSummaryMessages: 80,
-  maxReplyChars: 1800
+  maxReplyChars: 1800,
+  discordAgentResponseTimeoutMs: 30 * 60 * 1000
 } as const;
 
 const envSchema = z.object({
@@ -125,7 +126,13 @@ const envSchema = z.object({
   CRAWL_RETRY_MAX_MS: z.coerce.number().int().min(0).max(300_000).default(defaults.crawlRetryMaxMs),
   MAX_HISTORY_RESULTS: z.coerce.number().int().min(1).max(25).default(defaults.maxHistoryResults),
   MAX_THREAD_SUMMARY_MESSAGES: z.coerce.number().int().min(5).max(200).default(defaults.maxThreadSummaryMessages),
-  MAX_REPLY_CHARS: z.coerce.number().int().min(500).max(1900).default(defaults.maxReplyChars)
+  MAX_REPLY_CHARS: z.coerce.number().int().min(500).max(1900).default(defaults.maxReplyChars),
+  DISCORD_AGENT_RESPONSE_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .max(60 * 60 * 1000)
+    .default(defaults.discordAgentResponseTimeoutMs)
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -193,7 +200,8 @@ export function loadConfig() {
     crawlRetryMaxMs: parsed.data.CRAWL_RETRY_MAX_MS,
     maxHistoryResults: parsed.data.MAX_HISTORY_RESULTS,
     maxThreadSummaryMessages: parsed.data.MAX_THREAD_SUMMARY_MESSAGES,
-    maxReplyChars: parsed.data.MAX_REPLY_CHARS
+    maxReplyChars: parsed.data.MAX_REPLY_CHARS,
+    discordAgentResponseTimeoutMs: parsed.data.DISCORD_AGENT_RESPONSE_TIMEOUT_MS
   };
 }
 

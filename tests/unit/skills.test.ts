@@ -68,7 +68,7 @@ describe("GitHubSkillClient dry-run", () => {
     });
   });
 
-  it("creates a dry-run tool proposal without auto-merge", async () => {
+  it("creates a dry-run agent update PR manifest without a repo artifact", async () => {
     const dryRunDir = await fs.mkdtemp(path.join(os.tmpdir(), "discord-ai-agent-tool-dry-run-"));
     const client = new GitHubSkillClient({
       token: undefined,
@@ -78,22 +78,22 @@ describe("GitHubSkillClient dry-run", () => {
       dryRunDir
     });
 
-    const result = await client.createToolProposalPullRequest({
-      title: "Propose Discord AI Agent tool: minecraft status",
-      proposalName: "minecraft status",
-      markdown: "# Tool Proposal: minecraft status\n\nCheck server status.",
+    const result = await client.createAgentUpdatePullRequest({
+      title: "Update Discord AI Agent: minecraft status",
+      updateName: "minecraft status",
+      request: "Check server status.",
       requestedBy: "test"
     });
 
     expect(result.dryRun).toBe(true);
-    expect(result.filePath).toMatch(/^tool-requests\/minecraft-status-\d+-[a-f0-9]{8}\.md$/);
-    await expect(fs.readFile(result.dryRunPath!, "utf8")).resolves.toContain("Check server status.");
+    expect(path.basename(result.dryRunPath!)).toBe("discord-ai-agent-dry-run.json");
     await expect(readDryRunManifest(result.dryRunPath!)).resolves.toMatchObject({
-      kind: "tool-proposal",
-      title: "Propose Discord AI Agent tool: minecraft status",
+      kind: "agent-update",
+      title: "Update Discord AI Agent: minecraft status",
+      request: "Check server status.",
       requestedBy: "test",
       autoMergeEligible: false,
-      pullRequestBody: expect.stringContaining("never auto-merges")
+      pullRequestBody: expect.stringContaining("Check server status.")
     });
   });
 
@@ -113,10 +113,10 @@ describe("GitHubSkillClient dry-run", () => {
       markdown: "# Private Note\n\n- A private note from a user.",
       requestedBy: "Alice (user-delete)"
     });
-    const otherUserResult = await client.createToolProposalPullRequest({
-      title: "Propose Discord AI Agent tool: other",
-      proposalName: "other",
-      markdown: "# Tool Proposal: other\n\nKeep this.",
+    const otherUserResult = await client.createAgentUpdatePullRequest({
+      title: "Update Discord AI Agent: other",
+      updateName: "other",
+      request: "Keep this.",
       requestedBy: "Bob (user-keep)"
     });
 
@@ -214,21 +214,35 @@ describe("GitHubSkillClient dry-run", () => {
     expect(api.graphql).not.toHaveBeenCalled();
   });
 
-  it("creates real tool proposal PRs without attempting auto-merge", async () => {
+  it("creates real agent update PRs without writing request files or attempting auto-merge", async () => {
     const api = fakeGitHubApi();
     const client = new GitHubSkillClient(realGitHubConfig(), () => api as any);
 
-    const result = await client.createToolProposalPullRequest({
-      title: "Propose Discord AI Agent tool: minecraft status",
-      proposalName: "minecraft status",
-      markdown: "# Tool Proposal: minecraft status\n\nCheck server status.",
+    const result = await client.createAgentUpdatePullRequest({
+      title: "Update Discord AI Agent: minecraft status",
+      updateName: "minecraft status",
+      request: "Check server status.",
       requestedBy: "test"
     });
 
     expect(result.dryRun).toBe(false);
     expect(result.prUrl).toBe("https://github.com/example/discord-ai-agent/pull/42");
-    const toolFileCall = (api.repos.createOrUpdateFileContents.mock.calls as any[][]).at(0)?.[0];
-    expect(toolFileCall.path).toMatch(/^tool-requests\/minecraft-status-\d+-[a-f0-9]{8}\.md$/);
+    expect(api.git.getCommit).toHaveBeenCalledWith(expect.objectContaining({ commit_sha: "base-sha" }));
+    expect(api.git.createCommit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Request Discord AI Agent update: minecraft status",
+        tree: "base-tree-sha",
+        parents: ["base-sha"]
+      })
+    );
+    expect(api.git.createRef).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ref: expect.stringMatching(/^refs\/heads\/discord-ai-agent\/update-minecraft-status-/),
+        sha: "update-sha"
+      })
+    );
+    expect(api.repos.createOrUpdateFileContents).not.toHaveBeenCalled();
+    expect(api.pulls.create).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining("Check server status.") }));
     expect(api.graphql).not.toHaveBeenCalled();
     expect(api.pulls.merge).not.toHaveBeenCalled();
   });
@@ -247,7 +261,8 @@ describe("parseGitHubRepository", () => {
 });
 
 async function readDryRunManifest(dryRunPath: string) {
-  const branchDir = path.dirname(path.dirname(dryRunPath));
+  const branchDir =
+    path.basename(dryRunPath) === "discord-ai-agent-dry-run.json" ? path.dirname(dryRunPath) : path.dirname(path.dirname(dryRunPath));
   return JSON.parse(await fs.readFile(path.join(branchDir, "discord-ai-agent-dry-run.json"), "utf8"));
 }
 
@@ -266,6 +281,8 @@ function fakeGitHubApi() {
   return {
     git: {
       getRef: vi.fn(async () => ({ data: { object: { sha: "base-sha" } } })),
+      getCommit: vi.fn(async () => ({ data: { tree: { sha: "base-tree-sha" } } })),
+      createCommit: vi.fn(async () => ({ data: { sha: "update-sha" } })),
       createRef: vi.fn(async () => ({ data: {} }))
     },
     repos: {

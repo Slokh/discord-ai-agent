@@ -45,7 +45,7 @@ Private skills are stored in the database, not Git. Public baseline behavior can
 - Image generation.
 - Hosted web search, web fetch, and datetime tools through OpenRouter.
 - Private DB-backed skills.
-- Optional GitHub PR creation for proposed code/tool changes.
+- Optional GitHub PR creation for requested agent updates.
 - Structured logs, trace IDs, and owner-only Railway log inspection.
 
 ## What You Need

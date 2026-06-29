@@ -559,7 +559,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "openGithubPullRequest",
     description:
-      "Open a GitHub PR for requested code, tool, integration, or repository changes. Use only when the user explicitly asks to add, build, implement, change, or propose tooling/code.",
+      "Open a GitHub PR for a requested Discord AI Agent update, integration, or repository change. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
     userVisible: true,
     mutates: true,
     parameters: {
@@ -567,7 +567,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         request: {
           type: "string",
-          description: "The requested tool, integration, or code change."
+          description: "The requested agent update, integration, or repository change."
         }
       },
       required: ["request"],

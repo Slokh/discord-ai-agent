@@ -10,7 +10,7 @@ async function main() {
   checks.push(["Discord client ID", Boolean(config.discord.clientId), "configured in code for the Discord AI Agent bot application"]);
   checks.push(["Discord guild ID", Boolean(config.discord.guildId), "configured in code for the personal server"]);
   checks.push(["OpenRouter API key", Boolean(config.openRouter.apiKey), "required for chat, embeddings, and images"]);
-  checks.push(["GitHub token", Boolean(config.github.token) || config.github.dryRun, "required because real PR mode is enabled"]);
+  checks.push(["GitHub token", Boolean(config.github.token) || config.github.dryRun, "required for skill PRs and Railway codegen PRs"]);
   checks.push([
     "Railway log access",
     true,

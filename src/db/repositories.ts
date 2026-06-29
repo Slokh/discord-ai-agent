@@ -296,6 +296,64 @@ export type ToolAuditLog = {
   createdAt: Date;
 };
 
+export type AgentCodegenJobStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes";
+
+export type AgentCodegenJobRecord = {
+  requestId: string;
+  pgBossJobId: string | null;
+  traceId: string | null;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+  updateName: string;
+  request: string;
+  requestedBy: string;
+  status: AgentCodegenJobStatus;
+  backend: string | null;
+  currentStep: string | null;
+  statusMessage: string | null;
+  branchName: string | null;
+  prUrl: string | null;
+  draft: boolean | null;
+  verifyPassed: boolean | null;
+  error: string | null;
+  createdAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  progressUpdatedAt: Date | null;
+  updatedAt: Date;
+};
+
+export type ServerOverlay = {
+  guildId: string;
+  enabled: boolean;
+  systemPrompt: string;
+  toolPolicy: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  createdBy: string | null;
+  updatedBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type DurableWorkflowStatus = "paused" | "active" | "running" | "failed" | "complete";
+
+export type DurableWorkflow = {
+  id: string;
+  guildId: string | null;
+  name: string;
+  kind: string;
+  status: DurableWorkflowStatus;
+  schedule: string | null;
+  state: Record<string, unknown>;
+  lastStartedAt: Date | null;
+  lastCompletedAt: Date | null;
+  nextRunAt: Date | null;
+  lockedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export class DiscordAiAgentRepository {
   constructor(private readonly pool: DbPool) {}
 
@@ -2033,6 +2091,288 @@ export class DiscordAiAgentRepository {
     return Number(result.rows[0]?.count ?? 0);
   }
 
+  async upsertAgentCodegenQueued(input: {
+    requestId: string;
+    pgBossJobId?: string | null;
+    traceId?: string | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    updateName: string;
+    request: string;
+    requestedBy: string;
+    backend?: string | null;
+  }) {
+    await this.pool.query(
+      `
+        INSERT INTO agent_codegen_jobs(
+          request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          update_name, request, requested_by, backend, status, current_step, status_message, progress_updated_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'queued', 'queued', 'Waiting for the codegen worker to pick this up.', now(), now())
+        ON CONFLICT(request_id) DO UPDATE SET
+          pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_codegen_jobs.pgboss_job_id),
+          trace_id = coalesce(EXCLUDED.trace_id, agent_codegen_jobs.trace_id),
+          guild_id = coalesce(EXCLUDED.guild_id, agent_codegen_jobs.guild_id),
+          channel_id = coalesce(EXCLUDED.channel_id, agent_codegen_jobs.channel_id),
+          user_id = coalesce(EXCLUDED.user_id, agent_codegen_jobs.user_id),
+          update_name = EXCLUDED.update_name,
+          request = EXCLUDED.request,
+          requested_by = EXCLUDED.requested_by,
+          backend = coalesce(EXCLUDED.backend, agent_codegen_jobs.backend),
+          status = CASE
+            WHEN agent_codegen_jobs.status IN ('running', 'succeeded', 'failed', 'no_changes') THEN agent_codegen_jobs.status
+            ELSE 'queued'
+          END,
+          updated_at = now()
+      `,
+      [
+        input.requestId,
+        input.pgBossJobId ?? null,
+        input.traceId ?? null,
+        input.guildId ?? null,
+        input.channelId ?? null,
+        input.userId ?? null,
+        input.updateName,
+        input.request,
+        input.requestedBy,
+        input.backend ?? null
+      ]
+    );
+  }
+
+  async markAgentCodegenRunning(input: { requestId: string; backend?: string | null; step?: string | null; statusMessage?: string | null }) {
+    await this.pool.query(
+      `
+        UPDATE agent_codegen_jobs
+        SET status = 'running',
+            backend = coalesce($2, backend),
+            current_step = coalesce($3, current_step, 'running'),
+            status_message = coalesce($4, status_message, 'Running codegen.'),
+            progress_updated_at = now(),
+            started_at = coalesce(started_at, now()),
+            updated_at = now()
+        WHERE request_id = $1
+      `,
+      [input.requestId, input.backend ?? null, input.step ?? null, input.statusMessage ?? null]
+    );
+  }
+
+  async markAgentCodegenProgress(input: { requestId: string; step: string; statusMessage: string; backend?: string | null }) {
+    await this.pool.query(
+      `
+        UPDATE agent_codegen_jobs
+        SET backend = coalesce($4, backend),
+            current_step = $2,
+            status_message = $3,
+            progress_updated_at = now(),
+            updated_at = now()
+        WHERE request_id = $1
+      `,
+      [input.requestId, input.step, input.statusMessage, input.backend ?? null]
+    );
+  }
+
+  async markAgentCodegenSucceeded(input: {
+    requestId: string;
+    branchName: string;
+    prUrl: string;
+    draft: boolean;
+    verifyPassed: boolean;
+  }) {
+    await this.pool.query(
+      `
+        UPDATE agent_codegen_jobs
+        SET status = 'succeeded',
+            current_step = 'done',
+            status_message = 'Opened pull request.',
+            branch_name = $2,
+            pr_url = $3,
+            draft = $4,
+            verify_passed = $5,
+            error = NULL,
+            completed_at = now(),
+            updated_at = now()
+        WHERE request_id = $1
+      `,
+      [input.requestId, input.branchName, input.prUrl, input.draft, input.verifyPassed]
+    );
+  }
+
+  async markAgentCodegenFailed(input: { requestId: string; status?: "failed" | "no_changes"; error: string }) {
+    await this.pool.query(
+      `
+        UPDATE agent_codegen_jobs
+        SET status = $2,
+            current_step = $2,
+            status_message = $3,
+            error = $3,
+            completed_at = now(),
+            updated_at = now()
+        WHERE request_id = $1
+      `,
+      [input.requestId, input.status ?? "failed", input.error]
+    );
+  }
+
+  async getAgentCodegenJob(requestId: string): Promise<AgentCodegenJobRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          update_name, request, requested_by, status, backend, current_step,
+          status_message, branch_name, pr_url, draft, verify_passed, error,
+          created_at, started_at, completed_at, progress_updated_at, updated_at
+        FROM agent_codegen_jobs
+        WHERE request_id = $1
+      `,
+      [requestId]
+    );
+    const row = result.rows[0];
+    return row ? rowToAgentCodegenJob(row) : undefined;
+  }
+
+  async getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT guild_id, enabled, system_prompt, tool_policy, metadata, created_by, updated_by, created_at, updated_at
+        FROM server_overlays
+        WHERE guild_id = $1
+      `,
+      [guildId]
+    );
+    const row = result.rows[0];
+    return row ? rowToServerOverlay(row) : undefined;
+  }
+
+  async upsertServerOverlay(input: {
+    guildId: string;
+    enabled?: boolean;
+    systemPrompt?: string;
+    toolPolicy?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    updatedBy?: string | null;
+  }): Promise<ServerOverlay> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO server_overlays(guild_id, enabled, system_prompt, tool_policy, metadata, created_by, updated_by, updated_at)
+        VALUES ($1, coalesce($2, true), coalesce($3, ''), $4, $5, $6, $6, now())
+        ON CONFLICT(guild_id) DO UPDATE SET
+          enabled = CASE WHEN $2::boolean IS NULL THEN server_overlays.enabled ELSE EXCLUDED.enabled END,
+          system_prompt = coalesce(nullif(EXCLUDED.system_prompt, ''), server_overlays.system_prompt),
+          tool_policy = server_overlays.tool_policy || EXCLUDED.tool_policy,
+          metadata = server_overlays.metadata || EXCLUDED.metadata,
+          updated_by = EXCLUDED.updated_by,
+          updated_at = now()
+        RETURNING guild_id, enabled, system_prompt, tool_policy, metadata, created_by, updated_by, created_at, updated_at
+      `,
+      [
+        input.guildId,
+        input.enabled ?? null,
+        input.systemPrompt ?? "",
+        JSON.stringify(input.toolPolicy ?? {}),
+        JSON.stringify(input.metadata ?? {}),
+        input.updatedBy ?? null
+      ]
+    );
+    return rowToServerOverlay(result.rows[0]);
+  }
+
+  async upsertDurableWorkflow(input: {
+    id: string;
+    guildId?: string | null;
+    name: string;
+    kind: string;
+    status?: DurableWorkflowStatus;
+    schedule?: string | null;
+    state?: Record<string, unknown>;
+    nextRunAt?: Date | null;
+  }): Promise<DurableWorkflow> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO durable_workflows(id, guild_id, name, kind, status, schedule, state, next_run_at, updated_at)
+        VALUES ($1, $2, $3, $4, coalesce($5, 'paused'), $6, $7, $8, now())
+        ON CONFLICT(id) DO UPDATE SET
+          guild_id = EXCLUDED.guild_id,
+          name = EXCLUDED.name,
+          kind = EXCLUDED.kind,
+          status = EXCLUDED.status,
+          schedule = EXCLUDED.schedule,
+          state = durable_workflows.state || EXCLUDED.state,
+          next_run_at = EXCLUDED.next_run_at,
+          updated_at = now()
+        RETURNING id, guild_id, name, kind, status, schedule, state, last_started_at, last_completed_at, next_run_at, locked_at, created_at, updated_at
+      `,
+      [
+        input.id,
+        input.guildId ?? null,
+        input.name,
+        input.kind,
+        input.status ?? null,
+        input.schedule ?? null,
+        JSON.stringify(input.state ?? {}),
+        input.nextRunAt ?? null
+      ]
+    );
+    return rowToDurableWorkflow(result.rows[0]);
+  }
+
+  async listDueDurableWorkflows(input: { limit: number; now?: Date }): Promise<DurableWorkflow[]> {
+    const result = await this.pool.query(
+      `
+        SELECT id, guild_id, name, kind, status, schedule, state, last_started_at, last_completed_at, next_run_at, locked_at, created_at, updated_at
+        FROM durable_workflows
+        WHERE status = 'active'
+          AND next_run_at IS NOT NULL
+          AND next_run_at <= $1
+        ORDER BY next_run_at ASC, id ASC
+        LIMIT $2
+      `,
+      [input.now ?? new Date(), Math.max(1, Math.min(100, Math.trunc(input.limit)))]
+    );
+    return result.rows.map(rowToDurableWorkflow);
+  }
+
+  async markDurableWorkflowRunStarted(input: { id: string; lockedAt?: Date }): Promise<boolean> {
+    const result = await this.pool.query(
+      `
+        UPDATE durable_workflows
+        SET status = 'running',
+            locked_at = $2,
+            last_started_at = $2,
+            updated_at = now()
+        WHERE id = $1
+          AND status = 'active'
+        RETURNING id
+      `,
+      [input.id, input.lockedAt ?? new Date()]
+    );
+    return Boolean(result.rowCount && result.rowCount > 0);
+  }
+
+  async markDurableWorkflowRunFinished(input: {
+    id: string;
+    status?: DurableWorkflowStatus;
+    state?: Record<string, unknown>;
+    nextRunAt?: Date | null;
+  }): Promise<boolean> {
+    const result = await this.pool.query(
+      `
+        UPDATE durable_workflows
+        SET status = $2,
+            state = state || $3,
+            last_completed_at = now(),
+            next_run_at = $4,
+            locked_at = NULL,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id
+      `,
+      [input.id, input.status ?? "active", JSON.stringify(input.state ?? {}), input.nextRunAt ?? null]
+    );
+    return Boolean(result.rowCount && result.rowCount > 0);
+  }
+
   async auditTool(input: {
     traceId?: string | null;
     guildId?: string | null;
@@ -3202,5 +3542,65 @@ function rowToMessageForEmbedding(row: any): MessageForEmbedding {
     normalizedContent: String(row.normalized_content ?? ""),
     deletedAt: row.deleted_at == null ? null : new Date(row.deleted_at),
     embeddingModel: row.embedding_model == null ? null : String(row.embedding_model)
+  };
+}
+
+function rowToAgentCodegenJob(row: any): AgentCodegenJobRecord {
+  return {
+    requestId: String(row.request_id),
+    pgBossJobId: row.pgboss_job_id == null ? null : String(row.pgboss_job_id),
+    traceId: row.trace_id == null ? null : String(row.trace_id),
+    guildId: row.guild_id == null ? null : String(row.guild_id),
+    channelId: row.channel_id == null ? null : String(row.channel_id),
+    userId: row.user_id == null ? null : String(row.user_id),
+    updateName: String(row.update_name),
+    request: String(row.request ?? ""),
+    requestedBy: String(row.requested_by ?? ""),
+    status: row.status as AgentCodegenJobStatus,
+    backend: row.backend == null ? null : String(row.backend),
+    currentStep: row.current_step == null ? null : String(row.current_step),
+    statusMessage: row.status_message == null ? null : String(row.status_message),
+    branchName: row.branch_name == null ? null : String(row.branch_name),
+    prUrl: row.pr_url == null ? null : String(row.pr_url),
+    draft: row.draft == null ? null : Boolean(row.draft),
+    verifyPassed: row.verify_passed == null ? null : Boolean(row.verify_passed),
+    error: row.error == null ? null : String(row.error),
+    createdAt: new Date(row.created_at),
+    startedAt: row.started_at == null ? null : new Date(row.started_at),
+    completedAt: row.completed_at == null ? null : new Date(row.completed_at),
+    progressUpdatedAt: row.progress_updated_at == null ? null : new Date(row.progress_updated_at),
+    updatedAt: new Date(row.updated_at)
+  };
+}
+
+function rowToServerOverlay(row: any): ServerOverlay {
+  return {
+    guildId: String(row.guild_id),
+    enabled: Boolean(row.enabled),
+    systemPrompt: String(row.system_prompt ?? ""),
+    toolPolicy: row.tool_policy && typeof row.tool_policy === "object" && !Array.isArray(row.tool_policy) ? row.tool_policy : {},
+    metadata: row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {},
+    createdBy: row.created_by == null ? null : String(row.created_by),
+    updatedBy: row.updated_by == null ? null : String(row.updated_by),
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at)
+  };
+}
+
+function rowToDurableWorkflow(row: any): DurableWorkflow {
+  return {
+    id: String(row.id),
+    guildId: row.guild_id == null ? null : String(row.guild_id),
+    name: String(row.name),
+    kind: String(row.kind),
+    status: row.status as DurableWorkflowStatus,
+    schedule: row.schedule == null ? null : String(row.schedule),
+    state: row.state && typeof row.state === "object" && !Array.isArray(row.state) ? row.state : {},
+    lastStartedAt: row.last_started_at == null ? null : new Date(row.last_started_at),
+    lastCompletedAt: row.last_completed_at == null ? null : new Date(row.last_completed_at),
+    nextRunAt: row.next_run_at == null ? null : new Date(row.next_run_at),
+    lockedAt: row.locked_at == null ? null : new Date(row.locked_at),
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at)
   };
 }

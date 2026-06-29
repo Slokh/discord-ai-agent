@@ -1252,6 +1252,59 @@ describe("agent router", () => {
     );
   });
 
+  it("passes Discord reply parent context to the model for follow-up continuity", async () => {
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        chat: vi.fn(async () => ({
+          content: "Yes, merge that PR.",
+          model: "chat-model",
+          raw: {},
+          toolCalls: []
+        }))
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      replyContext: {
+        messageId: "parent-1",
+        channelId: "c",
+        guildId: "g",
+        authorId: "alice",
+        authorDisplayName: "Alice",
+        authorIsBot: false,
+        content: "should I merge this PR?",
+        attachmentSummaries: ["diff.png image/png 12000 bytes"],
+        createdAt: "2026-06-29T16:00:00.000Z",
+        url: "https://discord.com/channels/g/c/parent-1"
+      }
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "yes");
+
+    expect(response.content).toBe("Yes, merge that PR.");
+    expect(ctx.openRouter.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("The current user message is a Discord reply to this parent message.")
+          }),
+          expect.objectContaining({ role: "system", content: expect.stringContaining("Parent author: Alice") }),
+          expect.objectContaining({ role: "system", content: expect.stringContaining("Parent content: should I merge this PR?") }),
+          expect.objectContaining({ role: "system", content: expect.stringContaining("Attachments: diff.png image/png 12000 bytes") }),
+          expect.objectContaining({ role: "user", content: "yes" })
+        ])
+      })
+    );
+  });
+
   it("executes model-selected skill drafts through the structured tool boundary", async () => {
     const upsertDatabaseSkill = vi.fn(async (input: { name: string; content: string }) => ({
       name: input.name,
@@ -1350,16 +1403,36 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "undoConversationTurns" }));
   });
 
-  it("executes model-selected update PR requests as review-only PRs", async () => {
-    const createAgentUpdatePullRequest = vi.fn(async () => ({
-      dryRun: false,
-      branchName: "discord-ai-agent/update-calendar-integration",
-      prUrl: "https://github.com/example/repo/pull/12"
+  it("executes model-selected update requests as coding PR jobs", async () => {
+    const enqueueAgentCodegen = vi.fn(async () => ({
+      jobId: "job-1",
+      requestId: "codegen-calendar-integration"
     }));
     const ctx = {
-      config: { maxReplyChars: 1800 },
+      config: { maxReplyChars: 1800, github: { dryRun: false } },
       repo: {
-        auditTool: vi.fn(async () => undefined)
+        auditTool: vi.fn(async () => undefined),
+        getAgentCodegenJob: vi.fn(async () => ({
+          requestId: "codegen-calendar-integration",
+          pgBossJobId: "job-1",
+          traceId: "trace-1",
+          guildId: "g",
+          channelId: "c",
+          userId: "u",
+          updateName: "calendar-integration",
+          request: "add a calendar integration",
+          requestedBy: "User (u)",
+          status: "succeeded",
+          branchName: "discord-ai-agent/update-calendar-integration",
+          prUrl: "https://github.com/example/repo/pull/1",
+          draft: false,
+          verifyPassed: true,
+          error: null,
+          createdAt: new Date(),
+          startedAt: new Date(),
+          completedAt: new Date(),
+          updatedAt: new Date()
+        }))
       },
       openRouter: {
         chat: vi
@@ -1383,25 +1456,30 @@ describe("agent router", () => {
             toolCalls: []
           })
       },
-      github: {
-        createAgentUpdatePullRequest
+      github: {},
+      jobs: {
+        enqueueAgentCodegen
       },
       guildId: "g",
       channelId: "c",
       userId: "u",
       userDisplayName: "User",
-      visibleChannelIds: ["c"]
+      visibleChannelIds: ["c"],
+      updateStatus: vi.fn(async () => undefined)
     } as unknown as ToolContext;
 
     const response = await handleAgentRequest(ctx, "how should we track events?");
 
     expect(response.content).toBe("Opened a review PR.");
-    expect(createAgentUpdatePullRequest).toHaveBeenCalledWith(
+    expect(enqueueAgentCodegen).toHaveBeenCalledWith(
       expect.objectContaining({
         updateName: "calendar-integration",
-        request: "add a calendar integration"
+        request: "add a calendar integration",
+        requestedBy: "User (u)"
       })
     );
+    expect(ctx.repo.getAgentCodegenJob).toHaveBeenCalledWith("codegen-calendar-integration");
+    expect(ctx.updateStatus).toHaveBeenCalledWith("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "openGithubPullRequest" }));
   });
 

@@ -40,7 +40,26 @@ describe("config", () => {
     if (config.openRouter.apiKey) return;
     expect(() => assertOpenRouterConfig(config)).toThrow(/OPENROUTER_API_KEY/);
   });
+
+  it("accepts the Railway-native codegen process role", () => {
+    withEnv({ DISCORD_AI_AGENT_PROCESS_ROLE: "codegen" }, () => {
+      expect(loadConfig().processRole).toBe("codegen");
+    });
+  });
 });
+
+function withEnv(values: Record<string, string>, callback: () => void) {
+  const previous = new Map(Object.keys(values).map((name) => [name, process.env[name]]));
+  try {
+    for (const [name, value] of Object.entries(values)) process.env[name] = value;
+    callback();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
 
 function withEnvUnset(names: string[], callback: () => void) {
   const previous = new Map(names.map((name) => [name, process.env[name]]));

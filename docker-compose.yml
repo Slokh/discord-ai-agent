@@ -51,5 +51,17 @@ services:
       - ./.discord-ai-agent:/app/.discord-ai-agent
     command: ["node", "dist/src/index.js", "worker"]
 
+  codegen:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./.discord-ai-agent:/app/.discord-ai-agent
+    command: ["node", "dist/src/index.js", "codegen"]
+
 volumes:
   discord_ai_agent_pg:

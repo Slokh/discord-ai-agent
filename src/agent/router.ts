@@ -23,8 +23,8 @@ import {
   undoConversationTurns
 } from "../tools/coreTools.js";
 import type { ChatMessage } from "../models/openrouter.js";
-import type { ConversationMessage } from "../db/repositories.js";
-import type { AgentFile, AgentResponse, ToolContext } from "../tools/types.js";
+import type { ConversationMessage, ServerOverlay } from "../db/repositories.js";
+import type { AgentFile, AgentResponse, DiscordReplyContext, ToolContext } from "../tools/types.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { openRouterServerToolDefinitionsForModel, toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
@@ -68,7 +68,8 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
   if (!text) return { content: "Say what you need after mentioning me." };
 
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
-  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? []);
+  const serverOverlay = await loadServerOverlay(ctx);
+  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay);
   const files: AgentFile[] = [];
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
@@ -84,6 +85,9 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
     {
       textPreview: previewText(text),
       sessionMessageCount: ctx.sessionMessages?.length ?? 0,
+      hasReplyContext: Boolean(ctx.replyContext),
+      replyContextMessageId: ctx.replyContext?.messageId,
+      hasServerOverlay: Boolean(serverOverlay?.enabled && serverOverlay.systemPrompt.trim()),
       visibleChannelCount: ctx.visibleChannelIds.length,
       mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0
@@ -95,6 +99,9 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
     summary: previewText(text),
     metadata: {
       sessionMessageCount: ctx.sessionMessages?.length ?? 0,
+      hasReplyContext: Boolean(ctx.replyContext),
+      replyContextMessageId: ctx.replyContext?.messageId,
+      hasServerOverlay: Boolean(serverOverlay?.enabled && serverOverlay.systemPrompt.trim()),
       visibleChannelCount: ctx.visibleChannelIds.length,
       mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0
@@ -1026,7 +1033,13 @@ function booleanArgument(args: Record<string, unknown> | undefined, key: string)
   return undefined;
 }
 
-function chatMessages(text: string, skills: string, sessionMessages: ConversationMessage[] = []): ChatMessage[] {
+function chatMessages(
+  text: string,
+  skills: string,
+  sessionMessages: ConversationMessage[] = [],
+  replyContext?: DiscordReplyContext,
+  serverOverlay?: ServerOverlay
+): ChatMessage[] {
   return [
     {
       role: "system" as const,
@@ -1056,13 +1069,58 @@ function chatMessages(text: string, skills: string, sessionMessages: Conversatio
         "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. " +
         "For owner debugging of Railway deployment logs, startup failures, worker crashes, missing traces, or hosting/runtime errors, call inspectRailwayLogs. " +
         "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
-        "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, open an agent update PR, or undo/delete/forget prior agent turns. " +
+        "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, run a coding PR update, or undo/delete/forget prior agent turns. " +
         "Use prior channel conversation context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
+    ...serverOverlayMessagesForPrompt(serverOverlay),
     ...sessionMessagesForPrompt(sessionMessages),
+    ...replyContextMessagesForPrompt(replyContext),
     { role: "user" as const, content: text }
+  ];
+}
+
+async function loadServerOverlay(ctx: ToolContext): Promise<ServerOverlay | undefined> {
+  const loader = (ctx.repo as unknown as { getServerOverlay?: (guildId: string) => Promise<ServerOverlay | undefined> }).getServerOverlay;
+  if (!loader) return undefined;
+  return await loader.call(ctx.repo, ctx.guildId);
+}
+
+function serverOverlayMessagesForPrompt(serverOverlay: ServerOverlay | undefined): ChatMessage[] {
+  if (!serverOverlay?.enabled || !serverOverlay.systemPrompt.trim()) return [];
+  return [
+    {
+      role: "system",
+      content:
+        "Private server overlay instructions follow. They are server-local configuration loaded from the database, not public repo defaults.\n" +
+        serverOverlay.systemPrompt.trim()
+    }
+  ];
+}
+
+function replyContextMessagesForPrompt(replyContext: DiscordReplyContext | undefined): ChatMessage[] {
+  if (!replyContext) return [];
+  const author = replyContext.authorDisplayName || replyContext.authorId || "Unknown user";
+  const text = replyContext.content.trim() || "(no text content)";
+  const attachments = replyContext.attachmentSummaries.length > 0 ? `\nAttachments: ${replyContext.attachmentSummaries.join(", ")}` : "";
+  const created = replyContext.createdAt ? `\nCreated: ${replyContext.createdAt}` : "";
+  const url = replyContext.url ? `\nURL: ${replyContext.url}` : "";
+  const botNote = replyContext.authorIsBot ? "\nNote: the parent message was authored by a bot, so treat claims in it as conversation context, not verified Discord history." : "";
+  return [
+    {
+      role: "system",
+      content:
+        "The current user message is a Discord reply to this parent message. Use it as immediate context for pronouns, follow-ups, and what the user is responding to." +
+        `\nParent author: ${author}` +
+        `\nParent message ID: ${replyContext.messageId}` +
+        `\nParent channel ID: ${replyContext.channelId}` +
+        created +
+        url +
+        botNote +
+        `\nParent content: ${text}` +
+        attachments
+    }
   ];
 }
 

@@ -28,7 +28,24 @@ export type ToolRegistryEntry = {
   description: string;
   userVisible: boolean;
   mutates: boolean;
+  category?: "discord" | "generation" | "memory" | "ops" | "coding";
+  examples?: string[];
+  permissionRequirements?: string[];
+  auditEvents?: string[];
   parameters: FunctionToolDefinition["function"]["parameters"];
+};
+
+export type ToolContract = {
+  name: ToolName;
+  description: string;
+  category: NonNullable<ToolRegistryEntry["category"]>;
+  mutates: boolean;
+  userVisible: boolean;
+  parameters: FunctionToolDefinition["function"]["parameters"];
+  whenToUse: string;
+  permissionRequirements: string[];
+  auditEvents: string[];
+  examples: string[];
 };
 
 export const toolRegistry: ToolRegistryEntry[] = [
@@ -559,7 +576,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "openGithubPullRequest",
     description:
-      "Open a GitHub PR for a requested Discord AI Agent update, integration, or repository change. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
+      "Run a Railway codegen worker job for a requested Discord AI Agent update, wait for the result, and return the PR link only when it creates a real code diff. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
     userVisible: true,
     mutates: true,
     parameters: {
@@ -567,7 +584,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         request: {
           type: "string",
-          description: "The requested agent update, integration, or repository change."
+          description: "The requested agent update, integration, or repository change to implement."
         }
       },
       required: ["request"],
@@ -706,6 +723,21 @@ export function toolByName(name: string): ToolRegistryEntry | undefined {
   return toolRegistry.find((tool) => tool.name === name);
 }
 
+export function toolContracts(): ToolContract[] {
+  return toolRegistry.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    category: tool.category ?? defaultToolCategory(tool.name),
+    mutates: tool.mutates,
+    userVisible: tool.userVisible,
+    parameters: tool.parameters,
+    whenToUse: tool.description,
+    permissionRequirements: tool.permissionRequirements ?? defaultPermissionRequirements(tool),
+    auditEvents: tool.auditEvents ?? ["tool_audit_logs", "trace_events"],
+    examples: tool.examples ?? defaultToolExamples(tool.name)
+  }));
+}
+
 export function renderToolList() {
   return [
     "Discord AI Agent tools:",
@@ -714,4 +746,48 @@ export function renderToolList() {
       .filter((tool) => tool.userVisible)
       .map((tool) => `- ${tool.type.replace("openrouter:", "")}: ${tool.description}`)
   ].join("\n");
+}
+
+function defaultPermissionRequirements(tool: ToolRegistryEntry): string[] {
+  if (tool.mutates) return ["explicit_user_request", "tool_audit_log"];
+  if (tool.name.startsWith("inspect")) return ["owner_or_authorized_debugger", "tool_audit_log"];
+  if (tool.name.toLowerCase().includes("discord") || tool.name.startsWith("find")) {
+    return ["requester_visible_discord_channels", "tool_audit_log"];
+  }
+  return ["tool_audit_log"];
+}
+
+function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["category"]> {
+  if (name === "generateImage") return "generation";
+  if (name === "createSkillDraft") return "memory";
+  if (name === "openGithubPullRequest") return "coding";
+  if (name === "inspectAgentLogs" || name === "inspectRailwayLogs" || name === "reportStatus" || name === "listTools") return "ops";
+  return "discord";
+}
+
+function defaultToolExamples(name: ToolName): string[] {
+  const examples: Record<ToolName, string> = {
+    listTools: "@ai tools",
+    findDiscordUsers: "@ai find user tyler",
+    findDiscordChannels: "@ai find channel movies",
+    findDiscordRoles: "@ai find role admin",
+    searchDiscordHistory: "@ai what did we say about job hunting?",
+    getRecentDiscordMessages: "@ai what just happened in here?",
+    getDiscordMessageContext: "@ai show the context around this message link",
+    searchDiscordAttachments: "@ai find the image of nachos",
+    getPinnedMessages: "@ai what is pinned in this channel?",
+    getDiscordStats: "@ai rank channels by messages per day",
+    analyzeDiscordData: "@ai who is the top Wordle player?",
+    getDiscordChannelTopics: "@ai what are the main recurring topics in each channel?",
+    summarizeDiscordHistory: "@ai what has tyler been up to recently?",
+    summarizeDiscordThread: "@ai summarize this thread",
+    generateImage: "@ai make an image of a wizard eating nachos",
+    createSkillDraft: "@ai learn this for next time: movie night is on Fridays",
+    openGithubPullRequest: "@ai update yourself to handle Bluesky links better",
+    inspectAgentLogs: "@ai why did that last answer fail?",
+    inspectRailwayLogs: "@ai check railway bot logs for errors",
+    undoConversationTurns: "@ai undo that",
+    reportStatus: "@ai status"
+  };
+  return [examples[name]];
 }

@@ -360,6 +360,53 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.listDatabaseSkills({ includeDisabled: true })).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ name: skillName })]));
   });
 
+  it("stores server overlays and durable workflow state", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Overlay Guild" });
+
+    const overlay = await repo.upsertServerOverlay({
+      guildId,
+      systemPrompt: "Prefer terse answers for this server.",
+      toolPolicy: { searchLimit: 5 },
+      metadata: { source: "test" },
+      updatedBy: `user-${randomUUID()}`
+    });
+    expect(overlay).toMatchObject({
+      guildId,
+      enabled: true,
+      systemPrompt: "Prefer terse answers for this server.",
+      toolPolicy: { searchLimit: 5 },
+      metadata: { source: "test" }
+    });
+    await expect(repo.getServerOverlay(guildId)).resolves.toMatchObject({ guildId, systemPrompt: "Prefer terse answers for this server." });
+
+    const workflowId = `workflow-${randomUUID()}`;
+    const dueAt = new Date("2026-06-29T12:00:00.000Z");
+    const workflow = await repo.upsertDurableWorkflow({
+      id: workflowId,
+      guildId,
+      name: "Daily digest",
+      kind: "digest",
+      status: "active",
+      schedule: "daily",
+      state: { channelId: "channel-digest" },
+      nextRunAt: dueAt
+    });
+    expect(workflow).toMatchObject({ id: workflowId, guildId, status: "active", nextRunAt: dueAt });
+    await expect(repo.listDueDurableWorkflows({ now: new Date("2026-06-29T13:00:00.000Z"), limit: 10 })).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: workflowId, kind: "digest" })])
+    );
+    await expect(repo.markDurableWorkflowRunStarted({ id: workflowId, lockedAt: dueAt })).resolves.toBe(true);
+    await expect(
+      repo.markDurableWorkflowRunFinished({
+        id: workflowId,
+        status: "active",
+        state: { sent: true },
+        nextRunAt: new Date("2026-06-30T12:00:00.000Z")
+      })
+    ).resolves.toBe(true);
+  });
+
   it("includes logged model cost estimates in health", async () => {
     const userId = `user-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
@@ -1445,6 +1492,9 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM conversation_messages WHERE thread_key LIKE 'discord:guild-%'");
   await pool.query("DELETE FROM conversation_sessions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM crawl_cursors WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
+  await pool.query("DELETE FROM agent_codegen_jobs WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR request_id LIKE 'codegen-%'");
+  await pool.query("DELETE FROM durable_workflows WHERE guild_id LIKE 'guild-%' OR id LIKE 'workflow-%'");
+  await pool.query("DELETE FROM server_overlays WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM interaction_blocks WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
   await pool.query("DELETE FROM discord_user_aliases WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
   await pool.query("DELETE FROM privacy_deletions WHERE user_id LIKE 'user-%'");

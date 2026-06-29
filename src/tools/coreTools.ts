@@ -995,7 +995,7 @@ async function waitForAgentCodegenResult(
   requestId: string
 ): Promise<{ job?: AgentCodegenJobRecord; timedOut?: boolean }> {
   const deadline = Date.now() + AGENT_CODEGEN_WAIT_TIMEOUT_MS;
-  let lastStatus: AgentCodegenJobRecord["status"] | undefined;
+  let lastProgressKey: string | undefined;
 
   while (Date.now() < deadline) {
     const job = await ctx.repo.getAgentCodegenJob(requestId);
@@ -1003,8 +1003,9 @@ async function waitForAgentCodegenResult(
       if (isTerminalAgentCodegenStatus(job.status)) {
         return { job };
       }
-      if (job.status !== lastStatus) {
-        lastStatus = job.status;
+      const progressKey = `${job.status}:${job.currentStep ?? ""}:${job.statusMessage ?? ""}`;
+      if (progressKey !== lastProgressKey) {
+        lastProgressKey = progressKey;
         await ctx.updateStatus?.(agentCodegenProgressMessage(job));
       }
     }
@@ -1020,8 +1021,8 @@ function isTerminalAgentCodegenStatus(status: AgentCodegenJobRecord["status"]) {
 }
 
 function agentCodegenProgressMessage(job: AgentCodegenJobRecord) {
-  if (job.status === "running") return `Working on \`${job.updateName}\` now...`;
-  return `Preparing to work on \`${job.updateName}\`...`;
+  const detail = job.statusMessage ?? (job.status === "running" ? "Working on the code change now." : "Preparing the code change.");
+  return `${detail}\n\nUpdate: \`${job.updateName}\`${job.currentStep ? `\nStep: \`${job.currentStep}\`` : ""}`;
 }
 
 function formatAgentCodegenResult(input: {

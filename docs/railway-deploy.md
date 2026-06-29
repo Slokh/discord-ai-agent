@@ -56,7 +56,7 @@ npm run start:codegen
 
 - Replicas: `1` to start
 - Public domain: none needed
-- Purpose: consumes `agent.codegen` jobs, clones the configured GitHub repo into Railway's ephemeral filesystem, runs Codex, verifies generated changes, pushes a branch, and opens a PR only when there is a real diff. The queue is internal: the Discord bot waits on the persisted job result and edits the original reply with the PR link or failure/no-change result.
+- Purpose: consumes `agent.codegen` jobs through the default portable codegen backend, clones the configured GitHub repo into Railway's ephemeral filesystem, runs Codex, verifies generated changes, pushes a branch, and opens a PR only when there is a real diff. The queue is internal: the Discord bot waits on the persisted job result and edits the original reply with phase progress, the PR link, or a failure/no-change result.
 
 ## Variables
 

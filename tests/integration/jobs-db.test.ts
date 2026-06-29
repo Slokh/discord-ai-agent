@@ -174,8 +174,10 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         crawlConfiguredGuild: async () => undefined
       },
       agentCodegen: {
-        run: async (job) => {
+        name: "test-codegen-backend",
+        run: async (job, context) => {
           processedRequests.push(job.request);
+          await context?.progress?.({ step: "test-step", message: "Running test codegen step." });
           return {
             branchName: "discord-ai-agent/update-test",
             prUrl: "https://github.com/example/repo/pull/1",
@@ -202,7 +204,16 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         return job?.status === "succeeded" && job.prUrl === "https://github.com/example/repo/pull/1";
       }, 10_000);
       const job = await repo.getAgentCodegenJob(requestId);
-      expect(job).toEqual(expect.objectContaining({ status: "succeeded", branchName: "discord-ai-agent/update-test", verifyPassed: true }));
+      expect(job).toEqual(
+        expect.objectContaining({
+          status: "succeeded",
+          backend: "test-codegen-backend",
+          currentStep: "done",
+          statusMessage: "Opened pull request.",
+          branchName: "discord-ai-agent/update-test",
+          verifyPassed: true
+        })
+      );
     } finally {
       await runtime.stop();
       await pool.end();

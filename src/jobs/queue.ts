@@ -1,6 +1,7 @@
 import PgBoss from "pg-boss";
 import type { AppConfig } from "../config/env.js";
 import type { AgentCodegenJob, AgentCodegenResult } from "../codegen/runner.js";
+import type { CodegenExecutionContext } from "../codegen/backend.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
@@ -29,7 +30,8 @@ export type EmbeddingJobRunner = {
 };
 
 export type AgentCodegenJobRunner = {
-  run: (job: AgentCodegenJob) => Promise<AgentCodegenResult>;
+  name?: string;
+  run: (job: AgentCodegenJob, context?: CodegenExecutionContext) => Promise<AgentCodegenResult>;
 };
 
 export type JobRuntime = {
@@ -148,9 +150,38 @@ export async function startJobs(input: {
               { queue: AGENT_CODEGEN_JOB, jobId: job.id, requestId: job.data.requestId, updateName: job.data.updateName },
               "Running agent.codegen job"
             );
-            await input.repo?.markAgentCodegenRunning(job.data.requestId);
+            const backendName = input.agentCodegen?.name ?? "railway-local-worker";
+            await input.repo?.markAgentCodegenRunning({
+              requestId: job.data.requestId,
+              backend: backendName,
+              step: "running",
+              statusMessage: "Starting codegen worker."
+            });
             try {
-              const result = await input.agentCodegen!.run(job.data);
+              const result = await input.agentCodegen!.run(job.data, {
+                progress: async (event) => {
+                  await input.repo?.markAgentCodegenProgress({
+                    requestId: job.data.requestId,
+                    backend: backendName,
+                    step: event.step,
+                    statusMessage: event.message
+                  });
+                  await input.repo?.recordTraceEvent({
+                    traceId: job.data.traceId ?? job.data.requestId,
+                    requestId: job.data.requestId,
+                    guildId: job.data.guildId,
+                    channelId: job.data.channelId,
+                    userId: job.data.userId,
+                    eventName: "codegen.progress",
+                    summary: event.message,
+                    metadata: {
+                      step: event.step,
+                      backend: backendName,
+                      ...event.metadata
+                    }
+                  });
+                }
+              });
               await input.repo?.markAgentCodegenSucceeded({
                 requestId: job.data.requestId,
                 branchName: result.branchName,
@@ -239,6 +270,7 @@ export async function startJobs(input: {
         userId: trace?.userId
       };
       logger.info({ queue: AGENT_CODEGEN_JOB, requestId, updateName: job.updateName }, "Enqueueing agent codegen job");
+      const backendName = input.agentCodegen?.name ?? "railway-local-worker";
       await input.repo?.upsertAgentCodegenQueued({
         requestId,
         traceId: data.traceId,
@@ -247,7 +279,8 @@ export async function startJobs(input: {
         userId: data.userId,
         updateName: data.updateName,
         request: data.request,
-        requestedBy: data.requestedBy
+        requestedBy: data.requestedBy,
+        backend: backendName
       });
       let id: string | null;
       try {
@@ -272,7 +305,8 @@ export async function startJobs(input: {
         userId: data.userId,
         updateName: data.updateName,
         request: data.request,
-        requestedBy: data.requestedBy
+        requestedBy: data.requestedBy,
+        backend: backendName
       });
       logger.info({ queue: AGENT_CODEGEN_JOB, requestId, jobId: id }, "Agent codegen enqueue complete");
       return { jobId: id, requestId };

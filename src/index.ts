@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertOpenRouterConfig, loadConfig } from "./config/env.js";
-import { runAgentCodegenJob } from "./codegen/runner.js";
+import { RailwayCodegenBackend } from "./codegen/backend.js";
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
 import { DiscordAiAgentRepository } from "./db/repositories.js";
@@ -53,6 +53,7 @@ async function main() {
   const repo = new DiscordAiAgentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const github = new GitHubSkillClient(config.github);
+  const codegenBackend = new RailwayCodegenBackend(config);
 
   const client =
     startsBot || startsWorker
@@ -92,7 +93,8 @@ async function main() {
     repo,
     crawler,
     agentCodegen: {
-      run: async (job) => runAgentCodegenJob({ config, job })
+      name: codegenBackend.name,
+      run: async (job, context) => codegenBackend.run(job, context)
     },
     embedding: {
       embedMessages: async (messageIds) => {

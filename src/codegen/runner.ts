@@ -8,6 +8,8 @@ import type { AppConfig } from "../config/env.js";
 import { parseGitHubRepository } from "../skills/github.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { slugify } from "../util/text.js";
+import { AppConfigCodegenCredentialProvider, type CodegenCredentialProvider } from "./credentials.js";
+import { reportCodegenProgress, type CodegenProgressReporter } from "./progress.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 
@@ -29,20 +31,21 @@ export type AgentCodegenResult = {
   verifyPassed: boolean;
 };
 
-export async function runAgentCodegenJob(input: { config: AppConfig; job: AgentCodegenJob }): Promise<AgentCodegenResult> {
+export async function runAgentCodegenJob(input: {
+  config: AppConfig;
+  job: AgentCodegenJob;
+  credentials?: CodegenCredentialProvider;
+  progress?: CodegenProgressReporter;
+}): Promise<AgentCodegenResult> {
   const { config, job } = input;
-  if (!config.github.token) {
-    throw new Error("GITHUB_TOKEN is required for Railway-native agent codegen.");
-  }
-  if (!config.openRouter.apiKey) {
-    throw new Error("OPENROUTER_API_KEY is required for Railway-native agent codegen.");
-  }
+  const credentials = input.credentials ?? new AppConfigCodegenCredentialProvider(config);
+  credentials.assertAvailable();
 
   const { owner, repo } = parseGitHubRepository(config.github.repository);
   const workRoot = await fs.mkdtemp(path.join(os.tmpdir(), "discord-ai-agent-codegen-"));
   const checkoutDir = path.join(workRoot, "repo");
   const branchName = codegenBranchName(job.updateName);
-  const authEnv = await gitAuthEnv(workRoot, config.github.token);
+  const authEnv = await credentials.gitAuthEnv(workRoot);
   const startedAt = Date.now();
 
   logger.info(
@@ -51,14 +54,19 @@ export async function runAgentCodegenJob(input: { config: AppConfig; job: AgentC
   );
 
   try {
+    await progress(input.progress, "clone", "Cloning the repository into the Railway codegen worker.", { branch: config.github.baseBranch });
     await runCommand("git", ["clone", "--depth", "1", "--branch", config.github.baseBranch, `https://github.com/${owner}/${repo}.git`, checkoutDir], {
       cwd: workRoot,
       env: authEnv
     });
+    await progress(input.progress, "branch", `Creating implementation branch ${branchName}.`, { branchName });
     await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir });
+    await progress(input.progress, "install", "Installing repository dependencies with npm ci.");
     await runCommand("npm", ["ci"], { cwd: checkoutDir });
+    await progress(input.progress, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, config);
 
+    await progress(input.progress, "codex", "Running Codex to implement the requested change.", { model: config.openRouter.chatModel });
     await runCommand(
       process.env.CODEX_BIN || "codex",
       [
@@ -76,35 +84,36 @@ export async function runAgentCodegenJob(input: { config: AppConfig; job: AgentC
       ],
       {
         cwd: checkoutDir,
-        env: {
-          ...authEnv,
-          CODEX_HOME: path.join(workRoot, ".codex"),
-          OPENROUTER_API_KEY: config.openRouter.apiKey,
-          npm_config_yes: "true"
-        },
+        env: credentials.codexEnv({ baseEnv: authEnv, workRoot }),
         input: codegenPrompt(job)
       }
     );
 
+    await progress(input.progress, "diff", "Checking whether Codex produced a real code diff.");
     const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir });
     if (!status.stdout.trim()) {
       throw new Error("Agent codegen produced no diff; no PR will be opened.");
     }
 
+    await progress(input.progress, "verify", "Running npm run verify on the generated changes.");
     const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true });
+    await progress(input.progress, "scan", "Running release scan before pushing generated changes.");
     const scan = await runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true });
     if (scan.exitCode !== 0) {
       throw new Error("Release scan failed after agent codegen; refusing to push generated changes.");
     }
 
+    await progress(input.progress, "commit", "Committing generated changes.");
     await runCommand("git", ["config", "user.name", "discord-ai-agent"], { cwd: checkoutDir });
     await runCommand("git", ["config", "user.email", "discord-ai-agent-bot@users.noreply.github.com"], { cwd: checkoutDir });
     await runCommand("git", ["add", "-A"], { cwd: checkoutDir });
     await runCommand("git", ["commit", "-m", `Implement Discord AI Agent update: ${job.updateName}`], { cwd: checkoutDir });
+    await progress(input.progress, "push", "Pushing the generated branch to GitHub.", { branchName });
     await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: authEnv });
 
     const draft = verify.exitCode !== 0;
-    const pr = await new Octokit({ auth: config.github.token }).pulls.create({
+    await progress(input.progress, "pr", "Opening the GitHub pull request.", { draft });
+    const pr = await new Octokit({ auth: credentials.githubToken() }).pulls.create({
       owner,
       repo,
       title: `Update Discord AI Agent: ${job.updateName}`,
@@ -129,6 +138,7 @@ export async function runAgentCodegenJob(input: { config: AppConfig; job: AgentC
       verifyPassed: verify.exitCode === 0
     };
   } finally {
+    await progress(input.progress, "cleanup", "Cleaning up the ephemeral codegen checkout.");
     await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }
@@ -136,28 +146,6 @@ export async function runAgentCodegenJob(input: { config: AppConfig; job: AgentC
 function codegenBranchName(updateName: string) {
   const slug = slugify(updateName).slice(0, 48) || "agent-update";
   return `discord-ai-agent/update-${slug}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-}
-
-async function gitAuthEnv(workRoot: string, token: string) {
-  const askPassPath = path.join(workRoot, "git-askpass.sh");
-  await fs.writeFile(
-    askPassPath,
-    [
-      "#!/bin/sh",
-      "case \"$1\" in",
-      "  *Username*) printf '%s\\n' x-access-token ;;",
-      "  *) printf '%s\\n' \"$GIT_TOKEN\" ;;",
-      "esac",
-      ""
-    ].join("\n"),
-    { mode: 0o700 }
-  );
-  return {
-    ...process.env,
-    GIT_ASKPASS: askPassPath,
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_TOKEN: token
-  };
 }
 
 async function writeCodexConfig(workRoot: string, checkoutDir: string, config: AppConfig) {
@@ -228,6 +216,16 @@ function pullRequestBody(input: { job: AgentCodegenJob; model: string; verifyPas
     `- \`npm run verify\`: ${input.verifyPassed ? "passed" : "failed; opened as draft"}`,
     "- `npm run scan:release`: passed"
   ].join("\n");
+}
+
+async function progress(
+  reporter: CodegenProgressReporter | undefined,
+  step: string,
+  message: string,
+  metadata: Record<string, unknown> = {}
+) {
+  logger.info({ step, ...metadata }, `Codegen progress: ${message}`);
+  await reportCodegenProgress(reporter, { step, message, metadata });
 }
 
 async function runCommand(

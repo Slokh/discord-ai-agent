@@ -75,6 +75,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
   const successfulToolCallKeys = new Set<string>();
+  let emptyNoToolRecoveryAttempted = false;
   const requestLogger = logger.child({
     requestId: ctx.requestId,
     guildId: ctx.guildId,
@@ -133,6 +134,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         round: round + 1,
         durationMs: durationMs(roundStartedAt),
         model: response.model,
+        finishReason: response.finishReason,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
         selectedLocalTools: modelRoutes.map((route) => route.name),
@@ -146,6 +148,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       metadata: {
         round: round + 1,
         model: response.model,
+        finishReason: response.finishReason,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
         selectedLocalTools: modelRoutes.map((route) => route.name),
@@ -177,7 +180,92 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           startedAt
         });
       }
-      const content = responseContent || "I could not pick a safe tool for that. Try asking a little more directly.";
+      if (!responseContent) {
+        if (!emptyNoToolRecoveryAttempted) {
+          emptyNoToolRecoveryAttempted = true;
+          const requestedToolCalls = response.toolCalls.map((call) => call.name);
+          const unsupportedToolCalls = unsupportedToolCallNames(response.toolCalls);
+          requestLogger.warn(
+            {
+              round: round + 1,
+              model: response.model,
+              finishReason: response.finishReason,
+              requestedToolCalls,
+              unsupportedToolCalls
+            },
+            "Model returned empty response with no usable tool calls; retrying with recovery instruction"
+          );
+          await recordTraceEvent(ctx, {
+            eventName: "agent.empty_response_recovery.started",
+            level: "warn",
+            summary: "Model returned no answer and no usable tool call",
+            metadata: {
+              round: round + 1,
+              model: response.model,
+              finishReason: response.finishReason,
+              requestedToolCalls,
+              unsupportedToolCalls
+            },
+            durationMs: durationMs(roundStartedAt)
+          });
+          await ctx.repo.auditTool({
+            guildId: ctx.guildId,
+            channelId: ctx.channelId,
+            userId: ctx.userId,
+            toolName: "agentError",
+            argumentsSummary: text,
+            error: "empty_model_response_no_usable_tool",
+            model: response.model,
+            estimatedCostUsd: response.estimatedCostUsd
+          });
+          messages.push(emptyNoToolRecoveryMessage(text, { requestedToolCalls, unsupportedToolCalls }));
+          continue;
+        }
+
+        const content = emptyNoToolFinalFallback();
+        await ctx.repo.auditTool({
+          guildId: ctx.guildId,
+          channelId: ctx.channelId,
+          userId: ctx.userId,
+          toolName: "chat",
+          argumentsSummary: text,
+          resultSummary: content,
+          model: response.model,
+          estimatedCostUsd: response.estimatedCostUsd
+        });
+
+        requestLogger.warn(
+          {
+            durationMs: durationMs(startedAt),
+            model: response.model,
+            finishReason: response.finishReason,
+            finalChars: content.length,
+            fileCount: files.length,
+            memoryEventCount: memoryEvents.length
+          },
+          "Agent request completed with empty-response fallback"
+        );
+        await recordTraceEvent(ctx, {
+          eventName: "agent.empty_response_recovery.failed",
+          level: "warn",
+          summary: "Model still returned no answer after recovery",
+          metadata: {
+            model: response.model,
+            finishReason: response.finishReason,
+            finalChars: content.length,
+            fileCount: files.length,
+            memoryEventCount: memoryEvents.length
+          },
+          durationMs: durationMs(startedAt)
+        });
+        return {
+          content: cleanResponse(content, ctx.config.maxReplyChars),
+          files: files.length > 0 ? files : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
+        };
+      }
+
+      const content = responseContent;
       await ctx.repo.auditTool({
         guildId: ctx.guildId,
         channelId: ctx.channelId,
@@ -866,6 +954,35 @@ function stripLeakedHostedToolMarkup(content: string) {
     .trim();
 }
 
+function emptyNoToolRecoveryMessage(
+  userText: string,
+  input: { requestedToolCalls: string[]; unsupportedToolCalls: string[] }
+): ChatMessage {
+  const invalidToolNote =
+    input.unsupportedToolCalls.length > 0
+      ? `\nThe previous response requested unsupported tool(s): ${input.unsupportedToolCalls.join(", ")}. Choose only valid tools from the provided tool schema.`
+      : "";
+  const requestedToolNote =
+    input.requestedToolCalls.length > 0 ? `\nPrevious requested tool names: ${input.requestedToolCalls.join(", ")}.` : "";
+
+  return {
+    role: "user",
+    content:
+      "Internal retry: your previous response had no user-visible answer and no usable tool call. Do not return blank. " +
+      "Now either answer the original user request directly, ask one concise clarifying question, or call a valid tool. " +
+      "If the original request is a top-level follow-up, continuation, 'next', 'same format as before', or asks what you previously said/did/generated/opened, call getRecentAgentMemory first. " +
+      "If the request is about Discord history, people, channels, stats, or server memory, call the relevant Discord tool. " +
+      "If the request is about public/current/external information, use hosted web tools when useful." +
+      requestedToolNote +
+      invalidToolNote +
+      `\nOriginal user request: ${userText}`
+  };
+}
+
+function emptyNoToolFinalFallback() {
+  return "I got stuck generating that one. If this was a follow-up, reply to the message you want me to continue; otherwise ask again with the thing I should look up.";
+}
+
 async function skippedRedundantToolResult(ctx: ToolContext, input: { text: string; route: AgentToolRoute; toolUseCount: number }): Promise<AgentResponse> {
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -893,6 +1010,10 @@ function selectModelToolRoutes(toolCalls: Array<{ id: string; name: string; argu
     });
   }
   return routes;
+}
+
+function unsupportedToolCallNames(toolCalls: Array<{ name: string }>) {
+  return toolCalls.map((call) => call.name).filter((name) => !toolByName(name));
 }
 
 async function recordTraceEvent(

@@ -1131,6 +1131,106 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
   });
 
+  it("retries when the model returns empty content with no tool calls", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "blank-model",
+            raw: {},
+            finishReason: "stop",
+            toolCalls: []
+          })
+          .mockResolvedValueOnce({
+            content: "Recovered: I can continue from the previous profile format.",
+            model: "recovery-model",
+            raw: {},
+            finishReason: "stop",
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "next");
+
+    expect(response.content).toBe("Recovered: I can continue from the previous profile format.");
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
+    expect((ctx.openRouter.chat as any).mock.calls[1][0].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Internal retry: your previous response had no user-visible answer")
+        }),
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("call getRecentAgentMemory first")
+        })
+      ])
+    );
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "agentError",
+        error: "empty_model_response_no_usable_tool",
+        model: "blank-model"
+      })
+    );
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "recovery-model" }));
+  });
+
+  it("uses a conversational fallback if empty-response recovery also fails", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "blank-model",
+            raw: {},
+            finishReason: "stop",
+            toolCalls: []
+          })
+          .mockResolvedValueOnce({
+            content: "",
+            model: "still-blank-model",
+            raw: {},
+            finishReason: "stop",
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "same exact format as before");
+
+    expect(response.content).toContain("I got stuck generating that one.");
+    expect(response.content).not.toContain("safe tool");
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "still-blank-model" }));
+  });
+
   it("recovers when a hosted OpenRouter tool call leaks as text", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {

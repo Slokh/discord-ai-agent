@@ -179,20 +179,24 @@ export async function startJobs(input: {
               try {
                 const result = await input.agentCodegen!.run(job.data, {
                   progress: async (event) => {
-                    await input.repo?.markAgentCodegenProgress({
-                      requestId: job.data.requestId,
-                      backend: backendName,
-                      step: event.step,
-                      statusMessage: event.message
-                    });
+                    if (event.updateJobStatus ?? true) {
+                      await input.repo?.markAgentCodegenProgress({
+                        requestId: job.data.requestId,
+                        backend: backendName,
+                        step: event.step,
+                        statusMessage: event.message
+                      });
+                    }
                     await input.repo?.recordTraceEvent({
                       traceId: job.data.traceId ?? job.data.requestId,
                       requestId: job.data.requestId,
                       guildId: job.data.guildId,
                       channelId: job.data.channelId,
                       userId: job.data.userId,
-                      eventName: "codegen.progress",
+                      eventName: event.eventName ?? "codegen.progress",
+                      level: event.level,
                       summary: event.message,
+                      durationMs: event.durationMs,
                       metadata: {
                         step: event.step,
                         backend: backendName,

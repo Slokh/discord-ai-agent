@@ -1,6 +1,10 @@
 export type CodegenProgressEvent = {
   step: string;
   message: string;
+  eventName?: string;
+  level?: "debug" | "info" | "warn" | "error";
+  durationMs?: number | null;
+  updateJobStatus?: boolean;
   metadata?: Record<string, unknown>;
 };
 

@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CODEGEN_COMMAND_WARNING_THRESHOLD,
   CODEGEN_REPO_CONTEXT_MAP,
+  CODEGEN_PROMPT_COMMAND_BUDGET,
   CODEGEN_REQUIRED_DEV_TOOLS,
+  CODEGEN_WORK_ROOT_DIR,
   codexExecArgs,
   codegenCommandEnv,
   codegenPrompt,
@@ -72,6 +75,14 @@ describe("codegen runner", () => {
     expect(CODEGEN_REPO_CONTEXT_MAP).toContain("Ignore dist/ and node_modules/");
   });
 
+  it("uses a non-temp local work root so Codex helper aliases can be created", () => {
+    expect(CODEGEN_WORK_ROOT_DIR).toBe(".codegen-runs");
+  });
+
+  it("keeps command budget constants aligned between tracing and prompting", () => {
+    expect(CODEGEN_COMMAND_WARNING_THRESHOLD).toBeGreaterThanOrEqual(CODEGEN_PROMPT_COMMAND_BUDGET);
+  });
+
   it("injects the repository map into Codex prompts before the user request", () => {
     const prompt = codegenPrompt({
       requestId: "codegen-123",
@@ -81,6 +92,10 @@ describe("codegen runner", () => {
     });
 
     expect(prompt).toContain("Use the repository map below to choose the first files to inspect");
+    expect(prompt).toContain("Use apply_patch for manual source edits");
+    expect(prompt).toContain(`If you reach about ${CODEGEN_PROMPT_COMMAND_BUDGET} commands`);
+    expect(prompt).toContain("Do not run full `npm test`");
+    expect(prompt).toContain("the harness runs full verification after you exit");
     expect(prompt).toContain(CODEGEN_REPO_CONTEXT_MAP);
     expect(prompt.indexOf(CODEGEN_REPO_CONTEXT_MAP)).toBeLessThan(prompt.indexOf("Requested update:"));
     expect(prompt).toContain("Request ID: codegen-123");

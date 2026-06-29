@@ -12,6 +12,7 @@ import { AppConfigCodegenCredentialProvider, type CodegenCredentialProvider } fr
 import { reportCodegenProgress, type CodegenProgressReporter } from "./progress.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
+export const CODEGEN_REQUIRED_DEV_TOOLS = ["tsx", "tsc", "eslint", "vitest"] as const;
 
 export type AgentCodegenJob = {
   requestId: string;
@@ -46,6 +47,7 @@ export async function runAgentCodegenJob(input: {
   const checkoutDir = path.join(workRoot, "repo");
   const branchName = codegenBranchName(job.updateName);
   const authEnv = await credentials.gitAuthEnv(workRoot);
+  const commandEnv = codegenCommandEnv(authEnv);
   const startedAt = Date.now();
 
   logger.info(
@@ -62,7 +64,9 @@ export async function runAgentCodegenJob(input: {
     await progress(input.progress, "branch", `Creating implementation branch ${branchName}.`, { branchName });
     await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir });
     await progress(input.progress, "install", "Installing repository dependencies with npm ci.");
-    await runCommand("npm", ["ci"], { cwd: checkoutDir });
+    await runCommand("npm", ["ci", "--include=dev"], { cwd: checkoutDir, env: commandEnv });
+    await progress(input.progress, "preflight", "Checking that codegen dev tooling is available.");
+    await assertCodegenDevTooling(checkoutDir, commandEnv);
     await progress(input.progress, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, config);
 
@@ -81,7 +85,7 @@ export async function runAgentCodegenJob(input: {
       ],
       {
         cwd: checkoutDir,
-        env: credentials.codexEnv({ baseEnv: authEnv, workRoot }),
+        env: credentials.codexEnv({ baseEnv: commandEnv, workRoot }),
         input: codegenPrompt(job)
       }
     );
@@ -93,9 +97,9 @@ export async function runAgentCodegenJob(input: {
     }
 
     await progress(input.progress, "verify", "Running npm run verify on the generated changes.");
-    const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true });
+    const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, env: commandEnv, allowFailure: true });
     await progress(input.progress, "scan", "Running release scan before pushing generated changes.");
-    const scan = await runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true });
+    const scan = await runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, env: commandEnv, allowFailure: true });
     if (scan.exitCode !== 0) {
       throw new Error("Release scan failed after agent codegen; refusing to push generated changes.");
     }
@@ -143,6 +147,53 @@ export async function runAgentCodegenJob(input: {
 function codegenBranchName(updateName: string) {
   const slug = slugify(updateName).slice(0, 48) || "agent-update";
   return `discord-ai-agent/update-${slug}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+}
+
+export function codegenCommandEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    NODE_ENV: "development",
+    NPM_CONFIG_INCLUDE: "dev",
+    NPM_CONFIG_OMIT: "",
+    NPM_CONFIG_PRODUCTION: "false",
+    npm_config_include: "dev",
+    npm_config_omit: "",
+    npm_config_production: "false"
+  };
+}
+
+export async function missingCodegenDevTools(checkoutDir: string): Promise<string[]> {
+  const missing: string[] = [];
+  for (const tool of CODEGEN_REQUIRED_DEV_TOOLS) {
+    const binaryPath = codegenDevToolPath(checkoutDir, tool);
+    try {
+      await fs.access(binaryPath);
+    } catch {
+      missing.push(tool);
+    }
+  }
+  return missing;
+}
+
+async function assertCodegenDevTooling(checkoutDir: string, env: NodeJS.ProcessEnv) {
+  const missing = await missingCodegenDevTools(checkoutDir);
+  if (missing.length > 0) {
+    throw new Error(
+      [
+        `Codegen checkout is missing dev tool binaries after npm ci --include=dev: ${missing.join(", ")}.`,
+        "The Railway codegen worker needs devDependencies in its ephemeral checkout before Codex can safely edit and verify changes."
+      ].join(" ")
+    );
+  }
+
+  for (const tool of CODEGEN_REQUIRED_DEV_TOOLS) {
+    await runCommand(codegenDevToolPath(checkoutDir, tool), ["--version"], { cwd: checkoutDir, env });
+  }
+}
+
+function codegenDevToolPath(checkoutDir: string, tool: (typeof CODEGEN_REQUIRED_DEV_TOOLS)[number]) {
+  const binaryName = process.platform === "win32" ? `${tool}.cmd` : tool;
+  return path.join(checkoutDir, "node_modules", ".bin", binaryName);
 }
 
 async function writeCodexConfig(workRoot: string, checkoutDir: string, config: AppConfig) {

@@ -15,6 +15,22 @@ const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const CODEX_OUTPUT_LOG_INTERVAL_MS = 30_000;
 const CODEX_TERMINATION_GRACE_MS = 10_000;
 export const CODEGEN_REQUIRED_DEV_TOOLS = ["tsx", "tsc", "eslint", "vitest"] as const;
+export const CODEGEN_REPO_CONTEXT_MAP = [
+  "Repository navigation map:",
+  "- Discord intake, mention handling, reply editing, parent-message context, and channel memory writes: src/discord/client.ts.",
+  "- Discord crawling, message persistence, permission checks, and command cleanup: src/discord/crawler.ts, src/discord/messagePersistence.ts, src/discord/permissions.ts, src/discord/registerCommands.ts.",
+  "- Agent loop, model prompts, hosted/local tool execution, final response synthesis, and conversation memory shaping: src/agent/router.ts.",
+  "- Tool schemas and tool routing guidance: src/tools/registry.ts. Tool implementations live in src/tools/coreTools.ts. Shared tool context types live in src/tools/types.ts.",
+  "- Discord history search, embeddings, normalization, and retrieval behavior: src/memory/search.ts, src/memory/embedding.ts, src/memory/normalize.ts, plus query methods in src/db/repositories.ts.",
+  "- Database schema and persistence methods: migrations/*.sql and src/db/repositories.ts.",
+  "- OpenRouter chat, embeddings, images, hosted tools, timeouts, and response parsing: src/models/openrouter.ts.",
+  "- Config and environment defaults: src/config/env.ts and .env.example.",
+  "- Background queues and workers for crawling, embeddings, and codegen: src/jobs/queue.ts and src/index.ts.",
+  "- Railway-native self-update/codegen flow: src/codegen/backend.ts, src/codegen/runner.ts, src/codegen/credentials.ts, src/codegen/progress.ts.",
+  "- CLI scripts for local prompting, crawling, embeddings, deploy checks, and smoke tests: scripts/*.ts.",
+  "- Unit tests are under tests/unit/*.test.ts; database-backed integration tests are under tests/integration/*.test.ts.",
+  "- Ignore dist/ and node_modules/ when understanding source behavior; they are generated or installed artifacts."
+].join("\n");
 
 export type AgentCodegenJob = {
   requestId: string;
@@ -231,12 +247,13 @@ async function writeCodexConfig(workRoot: string, checkoutDir: string, config: A
   );
 }
 
-function codegenPrompt(job: AgentCodegenJob) {
+export function codegenPrompt(job: AgentCodegenJob) {
   return [
     "You are implementing a Discord-requested update to this TypeScript Discord AI Agent repository.",
     "",
     "Requirements:",
     "- Read only the code that is relevant to the request before editing.",
+    "- Use the repository map below to choose the first files to inspect; broaden with search only when the map does not cover the request.",
     "- Implement the requested behavior with a real code diff.",
     "- Keep changes focused and consistent with the existing architecture.",
     "- Add or update tests for the changed behavior.",
@@ -246,6 +263,8 @@ function codegenPrompt(job: AgentCodegenJob) {
     "- Do not repeatedly reprint the same diff or revisit the same design choice once it is resolved.",
     "- Prefer one implementation pass, one focused test pass, and at most one repair pass for failures.",
     "- Before finishing, run the most relevant checks you can, then exit promptly.",
+    "",
+    CODEGEN_REPO_CONTEXT_MAP,
     "",
     `Request ID: ${job.requestId}`,
     `Requested by: ${job.requestedBy}`,

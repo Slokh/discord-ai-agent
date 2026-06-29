@@ -8,9 +8,12 @@ import {
   CODEGEN_PROMPT_COMMAND_BUDGET,
   CODEGEN_REQUIRED_DEV_TOOLS,
   CODEGEN_WORK_ROOT_DIR,
+  changedFilesFromGitStatus,
   codexExecArgs,
   codegenCommandEnv,
   codegenPrompt,
+  codegenPullRequestTitle,
+  pullRequestBody,
   missingCodegenDevTools
 } from "../../src/codegen/runner.js";
 
@@ -101,5 +104,40 @@ describe("codegen runner", () => {
     expect(prompt).toContain("Request ID: codegen-123");
     expect(prompt).toContain("Requested by: kartik (123)");
     expect(prompt).toContain("add better logging to Discord replies");
+  });
+
+  it("uses the requested task as the pull request title", () => {
+    expect(codegenPullRequestTitle("Fix: Split long Discord replies into chunks")).toBe("Fix: Split long Discord replies into chunks");
+    expect(codegenPullRequestTitle("\n\n## Add codegen observability docs\nmore detail")).toBe("Add codegen observability docs");
+    expect(codegenPullRequestTitle("a".repeat(120))).toHaveLength(100);
+  });
+
+  it("formats generated pull request bodies with product-focused sections", () => {
+    const body = pullRequestBody({
+      job: {
+        requestId: "codegen-123",
+        request: "Fix long Discord replies.",
+        updateName: "long-replies",
+        requestedBy: "kartik"
+      },
+      model: "z-ai/glm-5.2",
+      verifyPassed: false,
+      changedFiles: ["src/discord/client.ts", "tests/unit/discord-client.test.ts"]
+    });
+
+    expect(body).toContain("## Why\n\nFix long Discord replies.");
+    expect(body).toContain("## Changes\n\n- Updated `src/discord/client.ts`.\n- Updated `tests/unit/discord-client.test.ts`.");
+    expect(body).toContain("## Testing\n\n- `npm run verify`: failed; opened as draft\n- `npm run scan:release`: passed");
+    expect(body).toContain("## Context\n\n- Prompted by: kartik\n- Request ID: `codegen-123`\n- Model: `z-ai/glm-5.2`");
+    expect(body).not.toContain("## Agent Codegen");
+    expect(body).not.toContain("## Requested Update");
+  });
+
+  it("extracts changed files from git porcelain status", () => {
+    expect(changedFilesFromGitStatus(" M README.md\n?? tests/new.test.ts\nR  old.ts -> src/new.ts\n")).toEqual([
+      "README.md",
+      "tests/new.test.ts",
+      "src/new.ts"
+    ]);
   });
 });

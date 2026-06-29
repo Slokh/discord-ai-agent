@@ -178,6 +178,18 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         run: async (job, context) => {
           processedRequests.push(job.request);
           await context?.progress?.({ step: "test-step", message: "Running test codegen step." });
+          await context?.progress?.({
+            step: "codex.command",
+            eventName: "codegen.command",
+            level: "debug",
+            durationMs: 1234,
+            updateJobStatus: false,
+            message: "Codex command completed in 1s: npm run typecheck",
+            metadata: {
+              command: "npm run typecheck",
+              status: "completed"
+            }
+          });
           return {
             branchName: "discord-ai-agent/update-test",
             prUrl: "https://github.com/example/repo/pull/1",
@@ -213,6 +225,24 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           branchName: "discord-ai-agent/update-test",
           verifyPassed: true
         })
+      );
+      const traceEvents = await pool.query(
+        "SELECT event_name, level, summary, metadata, duration_ms FROM trace_events WHERE request_id = $1 ORDER BY id",
+        [requestId]
+      );
+      expect(traceEvents.rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event_name: "codegen.command",
+            level: "debug",
+            summary: "Codex command completed in 1s: npm run typecheck",
+            duration_ms: 1234,
+            metadata: expect.objectContaining({
+              command: "npm run typecheck",
+              status: "completed"
+            })
+          })
+        ])
       );
     } finally {
       await runtime.stop();

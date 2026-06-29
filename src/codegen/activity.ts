@@ -52,16 +52,24 @@ export type CodexCommandActivity = {
   exitCode?: number;
 };
 
+export type CodexCommandEvent = CodexCommandActivity & {
+  commandId: string;
+  eventType: string;
+  outputPreview?: string;
+};
+
 export type CodexActivityTrackerOptions = {
   intervalMs?: number;
   now?: () => number;
   onSnapshot?: (snapshot: CodexActivitySnapshot) => void;
+  onCommand?: (event: CodexCommandEvent) => void;
 };
 
 export class CodexActivityTracker {
   private readonly intervalMs: number;
   private readonly now: () => number;
   private readonly onSnapshot?: (snapshot: CodexActivitySnapshot) => void;
+  private readonly onCommand?: (event: CodexCommandEvent) => void;
   private readonly startedAt: number;
   private lastSnapshotAt: number;
   private lastOutputAt: number;
@@ -107,6 +115,7 @@ export class CodexActivityTracker {
     this.intervalMs = options.intervalMs ?? DEFAULT_CODEX_ACTIVITY_LOG_INTERVAL_MS;
     this.now = options.now ?? Date.now;
     this.onSnapshot = options.onSnapshot;
+    this.onCommand = options.onCommand;
     this.startedAt = this.now();
     this.lastSnapshotAt = this.startedAt;
     this.lastOutputAt = this.startedAt;
@@ -254,6 +263,12 @@ export class CodexActivityTracker {
         command: commandText || id,
         status: "started"
       });
+      this.onCommand?.({
+        commandId: id,
+        eventType,
+        command: commandText || id,
+        status: "started"
+      });
     }
 
     if (isCommandComplete(eventType, command) && !this.completedCommandIds.has(id)) {
@@ -264,11 +279,18 @@ export class CodexActivityTracker {
       if (failed) this.commandFailures += 1;
       const startedAt = this.commandStartedAtById.get(id) ?? this.now();
       const exitCode = numberValue(command.exitCode) ?? numberValue(command.exit_code);
-      this.pushCommandActivity({
+      const completedActivity: CodexCommandActivity = {
         command: commandText || this.commandTextById.get(id) || id,
         status: failed ? "failed" : "completed",
         durationMs: Math.max(0, this.now() - startedAt),
         exitCode
+      };
+      this.pushCommandActivity(completedActivity);
+      this.onCommand?.({
+        commandId: id,
+        eventType,
+        ...completedActivity,
+        outputPreview: commandOutputPreview(command)
       });
     }
   }
@@ -519,6 +541,17 @@ function isCommandFailure(eventType: string, command: JsonRecord): boolean {
   const status = stringValue(command.status).toLowerCase();
   const exitCode = numberValue(command.exitCode) ?? numberValue(command.exit_code);
   return status === "failed" || status === "error" || (eventType === "item.completed" && exitCode !== undefined && exitCode !== 0);
+}
+
+function commandOutputPreview(command: JsonRecord): string | undefined {
+  const direct =
+    stringValue(command.output) ||
+    stringValue(command.stdout) ||
+    stringValue(command.stderr) ||
+    stringValue(command.error) ||
+    stringValue(command.result) ||
+    stringValue(command.text);
+  return direct ? previewText(direct, MAX_SNIPPET_CHARS) : undefined;
 }
 
 function filePaths(fileChange: JsonRecord): string[] {

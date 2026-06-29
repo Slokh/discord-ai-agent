@@ -8,6 +8,7 @@ coverage/
 .DS_Store
 *.log
 .discord-ai-agent/
+.codegen-runs/
 *.dump
 *.sql.dump
 *.sqlite

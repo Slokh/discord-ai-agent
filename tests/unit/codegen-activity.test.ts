@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CodexActivityTracker, type CodexActivitySnapshot } from "../../src/codegen/activity.js";
+import { CodexActivityTracker, type CodexActivitySnapshot, type CodexCommandEvent } from "../../src/codegen/activity.js";
 
 describe("CodexActivityTracker", () => {
   it("tracks Codex JSONL command, reasoning, file change, and final summaries", () => {
@@ -95,6 +95,48 @@ describe("CodexActivityTracker", () => {
     expect(final.commandStarts).toBe(2);
     expect(final.commandCompletions).toBe(2);
     expect(final.repeatedCommands).toEqual([{ command: "git diff -- src/codegen/runner.ts", count: 2 }]);
+  });
+
+  it("emits per-command lifecycle events with durations and failure previews", () => {
+    let now = 0;
+    const commands: CodexCommandEvent[] = [];
+    const tracker = new CodexActivityTracker({
+      now: () => now,
+      onCommand: (event) => commands.push(event)
+    });
+
+    tracker.acceptStdout(jsonLine({ type: "item.started", item: { id: "cmd-1", type: "commandExecution", command: "npm run typecheck" } }));
+    now += 2500;
+    tracker.acceptStdout(
+      jsonLine({
+        type: "item.completed",
+        item: {
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "npm run typecheck",
+          exitCode: 2,
+          stderr: "src/example.ts(1,1): error TS2322: nope"
+        }
+      })
+    );
+
+    expect(commands).toEqual([
+      {
+        commandId: "cmd-1",
+        eventType: "item.started",
+        command: "npm run typecheck",
+        status: "started"
+      },
+      {
+        commandId: "cmd-1",
+        eventType: "item.completed",
+        command: "npm run typecheck",
+        status: "failed",
+        durationMs: 2500,
+        exitCode: 2,
+        outputPreview: "src/example.ts(1,1): error TS2322: nope"
+      }
+    ]);
   });
 });
 

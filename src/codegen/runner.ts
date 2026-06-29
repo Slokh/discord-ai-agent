@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { Octokit } from "@octokit/rest";
@@ -8,14 +7,17 @@ import type { AppConfig } from "../config/env.js";
 import { parseGitHubRepository } from "../skills/github.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { slugify } from "../util/text.js";
-import { CodexActivityTracker, type CodexActivitySnapshot } from "./activity.js";
+import { CodexActivityTracker, type CodexActivitySnapshot, type CodexCommandEvent } from "./activity.js";
 import { AppConfigCodegenCredentialProvider, type CodegenCredentialProvider } from "./credentials.js";
-import { reportCodegenProgress, type CodegenProgressReporter } from "./progress.js";
+import { reportCodegenProgress, type CodegenProgressEvent, type CodegenProgressReporter } from "./progress.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const CODEX_OUTPUT_LOG_INTERVAL_MS = 30_000;
 const CODEX_ACTIVITY_HEARTBEAT_MS = 5_000;
 const CODEX_TERMINATION_GRACE_MS = 10_000;
+export const CODEGEN_WORK_ROOT_DIR = ".codegen-runs";
+export const CODEGEN_COMMAND_WARNING_THRESHOLD = 35;
+export const CODEGEN_PROMPT_COMMAND_BUDGET = 35;
 export const CODEGEN_REQUIRED_DEV_TOOLS = ["tsx", "tsc", "eslint", "vitest"] as const;
 export const CODEGEN_REPO_CONTEXT_MAP = [
   "Repository navigation map:",
@@ -63,7 +65,7 @@ export async function runAgentCodegenJob(input: {
   credentials.assertAvailable();
 
   const { owner, repo } = parseGitHubRepository(config.github.repository);
-  const workRoot = await fs.mkdtemp(path.join(os.tmpdir(), "discord-ai-agent-codegen-"));
+  const workRoot = await createCodegenWorkRoot();
   const checkoutDir = path.join(workRoot, "repo");
   const branchName = codegenBranchName(job.updateName);
   const authEnv = await credentials.gitAuthEnv(workRoot);
@@ -92,13 +94,54 @@ export async function runAgentCodegenJob(input: {
 
     const codegenModel = config.openRouter.codegenModel;
     const codexTimeoutMs = minutesToMs(config.codegenCodexTimeoutMinutes);
+    let commandBudgetWarningReported = false;
+    const pendingCodexProgressReports: Promise<void>[] = [];
+    const queueCodexProgressReport = (promise: Promise<void>, failureMessage: string) => {
+      pendingCodexProgressReports.push(promise.catch((error) => logger.warn({ err: error, requestId: job.requestId }, failureMessage)));
+    };
     const codexActivity = new CodexActivityTracker({
+      onCommand: (event) => {
+        queueCodexProgressReport(
+          progress(input.progress, "codex.command", codegenCommandProgressMessage(event), commandEventMetadata(event), {
+            eventName: "codegen.command",
+            level: event.status === "failed" ? "warn" : "debug",
+            durationMs: event.durationMs ?? null,
+            updateJobStatus: false
+          }),
+          "Failed to report Codex command event"
+        );
+      },
       onSnapshot: (snapshot) => {
         logCodexActivitySnapshot(job, snapshot);
+        if (!snapshot.final && !commandBudgetWarningReported && snapshot.commandStarts >= CODEGEN_COMMAND_WARNING_THRESHOLD) {
+          commandBudgetWarningReported = true;
+          queueCodexProgressReport(
+            progress(
+              input.progress,
+              "codex",
+              `Codex has run ${snapshot.commandStarts} commands, which is above the ${CODEGEN_COMMAND_WARNING_THRESHOLD}-command soft budget.`,
+              {
+                activity: codexActivityMetadata(snapshot),
+                commandBudget: {
+                  warningThreshold: CODEGEN_COMMAND_WARNING_THRESHOLD,
+                  promptBudget: CODEGEN_PROMPT_COMMAND_BUDGET
+                }
+              },
+              {
+                eventName: "codegen.warning",
+                level: "warn"
+              }
+            ),
+            "Failed to report Codex command budget warning"
+          );
+        }
         if (!snapshot.final) {
-          void progress(input.progress, "codex", codexActivityProgressMessage(snapshot), {
-            activity: codexActivityMetadata(snapshot)
-          }).catch((error) => logger.warn({ err: error, requestId: job.requestId }, "Failed to report Codex activity progress"));
+          queueCodexProgressReport(
+            progress(input.progress, "codex", codexActivityProgressMessage(snapshot), {
+              activity: codexActivityMetadata(snapshot)
+            }),
+            "Failed to report Codex activity progress"
+          );
         }
       }
     });
@@ -123,6 +166,7 @@ export async function runAgentCodegenJob(input: {
         }
       }
     );
+    await Promise.allSettled(pendingCodexProgressReports);
 
     await progress(input.progress, "diff", "Checking whether Codex produced a real code diff.");
     const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir });
@@ -176,6 +220,12 @@ export async function runAgentCodegenJob(input: {
     await progress(input.progress, "cleanup", "Cleaning up the ephemeral codegen checkout.");
     await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+async function createCodegenWorkRoot() {
+  const root = path.resolve(process.cwd(), CODEGEN_WORK_ROOT_DIR);
+  await fs.mkdir(root, { recursive: true });
+  return fs.mkdtemp(path.join(root, "discord-ai-agent-codegen-"));
 }
 
 function codegenBranchName(updateName: string) {
@@ -286,10 +336,13 @@ export function codegenPrompt(job: AgentCodegenJob) {
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the PR body records the request.",
     "- Do not print full files or full diffs unless a command failure makes that necessary.",
+    "- Use apply_patch for manual source edits. Do not use Python or Node string-rewrite scripts unless apply_patch is unavailable after one direct attempt.",
     "- Do not repeatedly reprint the same diff or revisit the same design choice once it is resolved.",
     "- Emit concise operational progress notes as you work: current action, important decision or blocker, and next step. Keep them factual and do not expose private chain-of-thought.",
-    "- Prefer one implementation pass, one focused test pass, and at most one repair pass for failures.",
-    "- Before finishing, run the most relevant checks you can, then exit promptly.",
+    `- Target fewer than 25 shell commands. If you reach about ${CODEGEN_PROMPT_COMMAND_BUDGET} commands, stop broad exploration, make the smallest safe finish, run one focused check, and exit.`,
+    "- Prefer one implementation pass, one focused typecheck/test pass, and at most one repair pass for failures.",
+    "- Do not run full `npm test`, broad `vitest run tests/unit/`, `npm run verify`, or `npm audit`; the harness runs full verification after you exit.",
+    "- Before finishing, run only the most relevant targeted tests plus `npm run typecheck` when useful, then exit promptly.",
     "",
     CODEGEN_REPO_CONTEXT_MAP,
     "",
@@ -323,14 +376,42 @@ function pullRequestBody(input: { job: AgentCodegenJob; model: string; verifyPas
   ].join("\n");
 }
 
+function codegenCommandProgressMessage(event: CodexCommandEvent) {
+  const duration = event.durationMs == null ? "" : ` in ${formatDuration(event.durationMs)}`;
+  const exitCode = event.exitCode == null ? "" : ` (exit ${event.exitCode})`;
+  return `Codex command ${event.status}${duration}${exitCode}: ${event.command}`;
+}
+
+function commandEventMetadata(event: CodexCommandEvent) {
+  return {
+    commandId: event.commandId,
+    eventType: event.eventType,
+    command: event.command,
+    status: event.status,
+    durationMs: event.durationMs,
+    exitCode: event.exitCode,
+    outputPreview: event.outputPreview
+  };
+}
+
 async function progress(
   reporter: CodegenProgressReporter | undefined,
   step: string,
   message: string,
-  metadata: Record<string, unknown> = {}
+  metadata: Record<string, unknown> = {},
+  options: Pick<CodegenProgressEvent, "eventName" | "level" | "durationMs" | "updateJobStatus"> = {}
 ) {
-  logger.info({ step, ...metadata }, `Codegen progress: ${message}`);
-  await reportCodegenProgress(reporter, { step, message, metadata });
+  const level = options.level ?? "info";
+  logger[level]({ step, eventName: options.eventName, durationMs: options.durationMs, updateJobStatus: options.updateJobStatus, ...metadata }, `Codegen progress: ${message}`);
+  await reportCodegenProgress(reporter, {
+    step,
+    message,
+    metadata,
+    eventName: options.eventName,
+    level: options.level,
+    durationMs: options.durationMs,
+    updateJobStatus: options.updateJobStatus
+  });
 }
 
 async function runCommand(

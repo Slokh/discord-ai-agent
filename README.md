@@ -145,12 +145,14 @@ npm run prompt -- --no-memory "what can you do?"
 
 When someone asks `@ai update yourself to ...`, the bot creates a durable `agent.task`, the worker starts a Kubernetes sandbox Job, and the sandbox:
 
-1. Clones the configured GitHub repo.
-2. Runs Codex with the requested change.
-3. Runs verification and release scanning.
-4. Pushes a branch.
-5. Opens a GitHub PR only if there is a real diff.
-6. Reports progress back to the internal API.
+1. Refreshes a cached bare clone of the configured GitHub repo.
+2. Creates a per-task worktree and branch.
+3. Restores dependencies from a package-lock-keyed cache, or seeds that cache with `npm ci`.
+4. Runs Codex with the requested change.
+5. Runs verification and release scanning.
+6. Pushes a branch.
+7. Opens a GitHub PR only if there is a real diff.
+8. Reports progress and phase timings back to the internal API.
 
 The original Discord reply is edited with progress and the final PR link.
 If a sandbox crashes, disappears, or exits without sending its terminal callback, the worker reconciler marks the task failed in Postgres and later cleans up the sandbox Job, Secret, and ConfigMap.
@@ -186,6 +188,8 @@ Common optional settings:
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
 | `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
+| `SANDBOX_CACHE_DIR` | `/var/cache/discord-ai-agent` | Sandbox repo/npm/dependency cache path |
+| `SANDBOX_CACHE_PVC_NAME` | unset | Optional Kubernetes PVC mounted at `SANDBOX_CACHE_DIR` |
 | `CONTROL_PLANE_INTERNAL_URL` | `http://discord-ai-agent-api:8080` | Sandbox callback URL |
 | `DISCORD_AGENT_RESPONSE_TIMEOUT_MS` | `1800000` | Max time a Discord request can keep editing the same reply while waiting for tools/code-update PRs |
 | `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all` |

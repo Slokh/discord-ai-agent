@@ -103,6 +103,17 @@ It does not receive Discord credentials or the database URL.
 
 The worker reconciles active sandbox runs. If a Kubernetes Job fails, disappears, or completes without a terminal callback, the task is marked failed. Once a task is terminal, the worker deletes the per-task Job, Secret, and ConfigMap and records cleanup in Postgres.
 
+## Sandbox Cache
+
+The Helm chart creates a sandbox cache PVC by default. Sandbox Jobs mount it at `/var/cache/discord-ai-agent` and reuse:
+
+- a bare Git mirror refreshed from origin before each task
+- per-task Git worktrees created from that mirror
+- the npm download cache
+- a `node_modules` snapshot keyed by `package-lock.json` and Node version
+
+Per-task workspaces are still cleaned up after each run; the shared cache is intentionally retained. If you run multiple worker replicas or expect concurrent code-update tasks, use storage that supports your desired access mode and tune `sandbox.cache.accessModes`/`sandbox.cache.storageClassName`.
+
 ## Networking
 
 The chart includes a baseline NetworkPolicy for sandbox pods:

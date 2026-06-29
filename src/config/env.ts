@@ -66,6 +66,8 @@ const defaults = {
   sandboxMemoryLimit: "2Gi",
   sandboxTaskTimeoutSeconds: 1800,
   sandboxTtlSecondsAfterFinished: 3600,
+  sandboxCacheDir: "/var/cache/discord-ai-agent",
+  sandboxCachePvcName: "",
   crawlBatchSize: 100,
   crawlFetchRetries: 3,
   crawlRetryBaseMs: 1000,
@@ -119,6 +121,8 @@ const envSchema = z.object({
   SANDBOX_MEMORY_LIMIT: z.string().default(defaults.sandboxMemoryLimit),
   SANDBOX_TASK_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(defaults.sandboxTaskTimeoutSeconds),
   SANDBOX_TTL_SECONDS_AFTER_FINISHED: z.coerce.number().int().positive().default(defaults.sandboxTtlSecondsAfterFinished),
+  SANDBOX_CACHE_DIR: z.string().default(defaults.sandboxCacheDir),
+  SANDBOX_CACHE_PVC_NAME: z.string().default(defaults.sandboxCachePvcName),
 
   CRAWL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(defaults.crawlBatchSize),
   CRAWL_FETCH_RETRIES: z.coerce.number().int().min(0).max(10).default(defaults.crawlFetchRetries),
@@ -191,7 +195,9 @@ export function loadConfig() {
         memoryRequest: parsed.data.SANDBOX_MEMORY_REQUEST,
         memoryLimit: parsed.data.SANDBOX_MEMORY_LIMIT,
         taskTimeoutSeconds: parsed.data.SANDBOX_TASK_TIMEOUT_SECONDS,
-        ttlSecondsAfterFinished: parsed.data.SANDBOX_TTL_SECONDS_AFTER_FINISHED
+        ttlSecondsAfterFinished: parsed.data.SANDBOX_TTL_SECONDS_AFTER_FINISHED,
+        cacheDir: parsed.data.SANDBOX_CACHE_DIR,
+        cachePvcName: parsed.data.SANDBOX_CACHE_PVC_NAME.trim() || null
       }
     },
     crawlBatchSize: parsed.data.CRAWL_BATCH_SIZE,

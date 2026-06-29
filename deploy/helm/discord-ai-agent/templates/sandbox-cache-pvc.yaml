@@ -1,0 +1,18 @@
+{{- if .Values.sandbox.cache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-sandbox-cache
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-cache
+spec:
+  accessModes:
+    {{- toYaml .Values.sandbox.cache.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.sandbox.cache.size | quote }}
+  {{- if .Values.sandbox.cache.storageClassName }}
+  storageClassName: {{ .Values.sandbox.cache.storageClassName | quote }}
+  {{- end }}
+{{- end }}

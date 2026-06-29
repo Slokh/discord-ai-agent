@@ -88,6 +88,12 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.sandbox.taskTimeoutSeconds | quote }}
 - name: SANDBOX_TTL_SECONDS_AFTER_FINISHED
   value: {{ .Values.sandbox.ttlSecondsAfterFinished | quote }}
+- name: SANDBOX_CACHE_DIR
+  value: {{ .Values.sandbox.cache.mountPath | quote }}
+{{- if .Values.sandbox.cache.enabled }}
+- name: SANDBOX_CACHE_PVC_NAME
+  value: {{ include "discord-ai-agent.fullname" . }}-sandbox-cache
+{{- end }}
 {{- end -}}
 
 {{- define "discord-ai-agent.discordEnv" -}}

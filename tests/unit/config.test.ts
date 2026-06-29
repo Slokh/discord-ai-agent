@@ -15,7 +15,9 @@ describe("config", () => {
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
         "KUBERNETES_NAMESPACE",
-        "SANDBOX_IMAGE"
+        "SANDBOX_IMAGE",
+        "SANDBOX_CACHE_DIR",
+        "SANDBOX_CACHE_PVC_NAME"
       ],
       () => {
         const config = loadConfig();
@@ -32,6 +34,8 @@ describe("config", () => {
         expect(config.execution.taskSigningSecret).toBe("");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
+        expect(config.execution.kubernetes.cacheDir).toBe("/var/cache/discord-ai-agent");
+        expect(config.execution.kubernetes.cachePvcName).toBeNull();
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);

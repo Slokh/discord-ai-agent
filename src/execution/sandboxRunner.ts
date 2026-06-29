@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,24 +22,33 @@ type SandboxEnv = {
   githubBaseBranch: string;
   openRouterApiKey: string;
   openRouterChatModel: string;
+  sandboxCacheDir: string;
+  sandboxStartedAtMs: number | null;
 };
+
+type TaskTimings = Record<string, number>;
 
 async function main() {
   const env = loadSandboxEnv();
+  const timings: TaskTimings = {};
+  const totalStartedAt = Date.now();
   try {
-    const result = await runCodeUpdate(env);
+    const result = await runCodeUpdate(env, timings, totalStartedAt);
     await complete(env, {
       status: "succeeded",
       branchName: result.branchName,
       prUrl: result.prUrl,
       draft: result.draft,
-      verifyPassed: result.verifyPassed
+      verifyPassed: result.verifyPassed,
+      metadata: { timingsMs: result.timings }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    timings.total = Date.now() - totalStartedAt;
     await complete(env, {
       status: message.includes("produced no diff") ? "no_changes" : "failed",
-      error: message
+      error: message,
+      metadata: { timingsMs: timings }
     }).catch((callbackError) => {
       console.error("Failed to post terminal task callback", callbackError);
     });
@@ -47,52 +56,68 @@ async function main() {
   }
 }
 
-async function runCodeUpdate(env: SandboxEnv) {
+async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStartedAt: number) {
   const { owner, repo } = parseGitHubRepository(env.githubRepository);
-  const workRoot = await fs.mkdtemp(path.join(os.tmpdir(), "discord-ai-agent-sandbox-"));
-  const checkoutDir = path.join(workRoot, "repo");
   const branchName = codeUpdateBranchName(env.taskTitle);
+  const cache = sandboxCachePaths(env, owner, repo);
+  await fs.mkdir(cache.workspacesDir, { recursive: true });
+  const workRoot = await fs.mkdtemp(path.join(cache.workspacesDir, "task-"));
+  const checkoutDir = path.join(workRoot, "repo");
   const gitEnv = await gitAuthEnv(env.githubToken, workRoot);
 
   try {
-    await progress(env, "clone", "Cloning the repository into the sandbox.", { branch: env.githubBaseBranch });
-    await runCommand("git", ["clone", "--depth", "1", "--branch", env.githubBaseBranch, `https://github.com/${owner}/${repo}.git`, checkoutDir], {
-      cwd: workRoot,
-      env: gitEnv,
-      taskEnv: env,
-      step: "clone"
+    if (env.sandboxStartedAtMs != null) {
+      timings.sandboxStartup = Math.max(0, Date.now() - env.sandboxStartedAtMs);
+      await progress(env, "sandbox_acquired", "Sandbox process started.", { durationMs: timings.sandboxStartup });
+    }
+
+    await timedPhase(env, timings, "repo", "Refreshing cached repository mirror and creating a task worktree.", async () => {
+      await prepareCachedWorktree({
+        env,
+        cache,
+        owner,
+        repo,
+        checkoutDir,
+        gitEnv,
+        workRoot
+      });
     });
+
     await progress(env, "branch", `Creating implementation branch ${branchName}.`, { branchName });
     await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir, taskEnv: env, step: "branch" });
-    await progress(env, "install", "Installing repository dependencies with npm ci.");
-    await runCommand("npm", ["ci"], { cwd: checkoutDir, taskEnv: env, step: "install" });
+
+    await timedPhase(env, timings, "dependencies", "Preparing dependencies from the shared sandbox cache.", async () => {
+      await prepareDependencies({ env, cache, checkoutDir });
+    });
+
     await progress(env, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, env);
 
-    await progress(env, "codex", "Running Codex to implement the requested change.", { model: env.openRouterChatModel });
-    await runCommand(
-      process.env.CODEX_BIN || "codex",
-      [
-        "exec",
-        "--ephemeral",
-        "-C",
-        checkoutDir,
-        "--sandbox",
-        "workspace-write",
-        "--ask-for-approval",
-        "never",
-        "-m",
-        env.openRouterChatModel,
-        "-"
-      ],
-      {
-        cwd: checkoutDir,
-        env: codexEnv(env, gitEnv, workRoot),
-        input: codeUpdatePrompt(env),
-        taskEnv: env,
-        step: "codex"
-      }
-    );
+    await timedPhase(env, timings, "codex", "Running Codex to implement the requested change.", async () => {
+      await runCommand(
+        process.env.CODEX_BIN || "codex",
+        [
+          "exec",
+          "--ephemeral",
+          "-C",
+          checkoutDir,
+          "--sandbox",
+          "workspace-write",
+          "--ask-for-approval",
+          "never",
+          "-m",
+          env.openRouterChatModel,
+          "-"
+        ],
+        {
+          cwd: checkoutDir,
+          env: codexEnv(env, gitEnv, workRoot),
+          input: codeUpdatePrompt(env),
+          taskEnv: env,
+          step: "codex"
+        }
+      );
+    }, { model: env.openRouterChatModel });
 
     await progress(env, "diff", "Checking whether Codex produced a real code diff.");
     const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir, taskEnv: env, step: "diff" });
@@ -100,10 +125,12 @@ async function runCodeUpdate(env: SandboxEnv) {
       throw new Error("Agent task produced no diff; no PR will be opened.");
     }
 
-    await progress(env, "verify", "Running npm run verify on the generated changes.");
-    const verify = await runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "verify" });
-    await progress(env, "scan", "Running release scan before pushing generated changes.");
-    const scan = await runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan" });
+    const verify = await timedPhase(env, timings, "verify", "Running npm run verify on the generated changes.", async () =>
+      runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "verify" })
+    );
+    const scan = await timedPhase(env, timings, "scan", "Running release scan before pushing generated changes.", async () =>
+      runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan" })
+    );
     if (scan.exitCode !== 0) {
       throw new Error("Release scan failed after agent task; refusing to push generated changes.");
     }
@@ -121,29 +148,47 @@ async function runCodeUpdate(env: SandboxEnv) {
       taskEnv: env,
       step: "commit"
     });
-    await progress(env, "push", "Pushing the generated branch to GitHub.", { branchName });
-    await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
+    await timedPhase(env, timings, "push", "Pushing the generated branch to GitHub.", async () => {
+      await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
+    }, { branchName });
 
     const draft = verify.exitCode !== 0;
-    await progress(env, "pr", "Opening the GitHub pull request.", { draft });
-    const pr = await new Octokit({ auth: env.githubToken }).pulls.create({
-      owner,
-      repo,
-      title: `Update Discord AI Agent: ${env.taskTitle}`,
-      head: branchName,
-      base: env.githubBaseBranch,
-      draft,
-      body: pullRequestBody({ env, verifyPassed: verify.exitCode === 0 })
-    });
+    const octokit = new Octokit({ auth: env.githubToken });
+    const pr = await timedPhase(env, timings, "pr", "Opening the GitHub pull request.", async () =>
+      octokit.pulls.create({
+        owner,
+        repo,
+        title: `Update Discord AI Agent: ${env.taskTitle}`,
+        head: branchName,
+        base: env.githubBaseBranch,
+        draft,
+        body: pullRequestBody({ env, verifyPassed: verify.exitCode === 0, timings })
+      }), { draft }
+    );
+
+    timings.total = Date.now() - totalStartedAt;
+    await octokit.pulls
+      .update({
+        owner,
+        repo,
+        pull_number: pr.data.number,
+        body: pullRequestBody({ env, verifyPassed: verify.exitCode === 0, timings })
+      })
+      .catch((error) => {
+        console.error("Failed to update PR body with final timings", error);
+      });
+    await progress(env, "task_complete", "Code update task finished.", { durationMs: timings.total, timingsMs: timings });
 
     return {
       branchName,
       prUrl: pr.data.html_url,
       draft,
-      verifyPassed: verify.exitCode === 0
+      verifyPassed: verify.exitCode === 0,
+      timings
     };
   } finally {
     await progress(env, "cleanup", "Cleaning up the ephemeral sandbox checkout.").catch(() => undefined);
+    await removeCachedWorktree(cache.mirrorDir, checkoutDir).catch(() => undefined);
     await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }
@@ -162,7 +207,9 @@ function loadSandboxEnv(): SandboxEnv {
     githubRepository: requiredEnv("GITHUB_REPOSITORY"),
     githubBaseBranch: requiredEnv("GITHUB_BASE_BRANCH"),
     openRouterApiKey: requiredEnv("OPENROUTER_API_KEY"),
-    openRouterChatModel: requiredEnv("OPENROUTER_CHAT_MODEL")
+    openRouterChatModel: requiredEnv("OPENROUTER_CHAT_MODEL"),
+    sandboxCacheDir: process.env.SANDBOX_CACHE_DIR || path.join(os.tmpdir(), "discord-ai-agent-cache"),
+    sandboxStartedAtMs: numberEnv("SANDBOX_STARTED_AT_MS")
   };
 }
 
@@ -170,6 +217,224 @@ function requiredEnv(name: string) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required in the sandbox environment.`);
   return value;
+}
+
+function numberEnv(name: string) {
+  const value = process.env[name];
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function timedPhase<T>(
+  env: SandboxEnv,
+  timings: TaskTimings,
+  step: string,
+  message: string,
+  run: () => Promise<T>,
+  metadata: Record<string, unknown> = {}
+): Promise<T> {
+  await progress(env, step, message, metadata);
+  const startedAt = Date.now();
+  try {
+    const result = await run();
+    const durationMs = Date.now() - startedAt;
+    timings[step] = durationMs;
+    await progress(env, `${step}_complete`, `Finished ${step} in ${formatDuration(durationMs)}.`, { ...metadata, durationMs });
+    return result;
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    timings[step] = durationMs;
+    await progress(env, `${step}_failed`, `${step} failed after ${formatDuration(durationMs)}.`, {
+      ...metadata,
+      durationMs,
+      error: conciseError(error)
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
+type SandboxCachePaths = {
+  rootDir: string;
+  reposDir: string;
+  locksDir: string;
+  workspacesDir: string;
+  npmCacheDir: string;
+  nodeModulesDir: string;
+  mirrorDir: string;
+  repoLockDir: string;
+};
+
+function sandboxCachePaths(env: SandboxEnv, owner: string, repo: string): SandboxCachePaths {
+  const rootDir = env.sandboxCacheDir || path.join(os.tmpdir(), "discord-ai-agent-cache");
+  const repoKey = `${slugify(`${owner}-${repo}`) || "repo"}-${sha256(`${owner}/${repo}`).slice(0, 10)}`;
+  const reposDir = path.join(rootDir, "repos");
+  const locksDir = path.join(rootDir, "locks");
+  return {
+    rootDir,
+    reposDir,
+    locksDir,
+    workspacesDir: path.join(rootDir, "workspaces"),
+    npmCacheDir: path.join(rootDir, "npm"),
+    nodeModulesDir: path.join(rootDir, "node_modules"),
+    mirrorDir: path.join(reposDir, `${repoKey}.git`),
+    repoLockDir: path.join(locksDir, `${repoKey}.repo.lock`)
+  };
+}
+
+async function prepareCachedWorktree(input: {
+  env: SandboxEnv;
+  cache: SandboxCachePaths;
+  owner: string;
+  repo: string;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+}) {
+  await fs.mkdir(input.cache.reposDir, { recursive: true });
+  await fs.mkdir(input.cache.locksDir, { recursive: true });
+  const repoUrl = `https://github.com/${input.owner}/${input.repo}.git`;
+
+  await withDirectoryLock(input.cache.repoLockDir, async () => {
+    if (await pathExists(path.join(input.cache.mirrorDir, "HEAD"))) {
+      await progress(input.env, "repo_refresh", "Fetching latest changes into the cached repository mirror.", {
+        mirrorDir: input.cache.mirrorDir
+      });
+      await runCommand("git", ["-C", input.cache.mirrorDir, "remote", "set-url", "origin", repoUrl], {
+        cwd: input.cache.reposDir,
+        env: input.gitEnv,
+        taskEnv: input.env,
+        step: "repo_refresh"
+      });
+      await runCommand("git", ["-C", input.cache.mirrorDir, "fetch", "--prune", "origin", "+refs/heads/*:refs/heads/*"], {
+        cwd: input.cache.reposDir,
+        env: input.gitEnv,
+        taskEnv: input.env,
+        step: "repo_refresh"
+      });
+    } else {
+      await progress(input.env, "repo_seed", "Seeding the cached repository mirror.", { mirrorDir: input.cache.mirrorDir });
+      await fs.rm(input.cache.mirrorDir, { recursive: true, force: true }).catch(() => undefined);
+      await runCommand("git", ["clone", "--mirror", repoUrl, input.cache.mirrorDir], {
+        cwd: input.cache.reposDir,
+        env: input.gitEnv,
+        taskEnv: input.env,
+        step: "repo_seed"
+      });
+    }
+
+    await runCommand("git", ["--git-dir", input.cache.mirrorDir, "worktree", "prune"], {
+      cwd: input.workRoot,
+      env: input.gitEnv,
+      taskEnv: input.env,
+      step: "repo_checkout"
+    });
+    await runCommand(
+      "git",
+      ["--git-dir", input.cache.mirrorDir, "worktree", "add", "--detach", input.checkoutDir, `refs/heads/${input.env.githubBaseBranch}`],
+      {
+        cwd: input.workRoot,
+        env: input.gitEnv,
+        taskEnv: input.env,
+        step: "repo_checkout"
+      }
+    );
+  });
+}
+
+async function prepareDependencies(input: { env: SandboxEnv; cache: SandboxCachePaths; checkoutDir: string }) {
+  await fs.mkdir(input.cache.npmCacheDir, { recursive: true });
+  await fs.mkdir(input.cache.nodeModulesDir, { recursive: true });
+  await fs.mkdir(input.cache.locksDir, { recursive: true });
+  const lockHash = await dependencyCacheKey(input.checkoutDir);
+  const nodeModulesPath = path.join(input.checkoutDir, "node_modules");
+  const cachedNodeModulesPath = path.join(input.cache.nodeModulesDir, lockHash);
+  const lockDir = path.join(input.cache.locksDir, `${lockHash}.node-modules.lock`);
+
+  if (await pathExists(cachedNodeModulesPath)) {
+    await progress(input.env, "dependency_cache_hit", "Restoring node_modules from the dependency cache.", { lockHash });
+    await fs.rm(nodeModulesPath, { recursive: true, force: true }).catch(() => undefined);
+    await fs.cp(cachedNodeModulesPath, nodeModulesPath, { recursive: true });
+    return;
+  }
+
+  await withDirectoryLock(lockDir, async () => {
+    if (await pathExists(cachedNodeModulesPath)) {
+      await progress(input.env, "dependency_cache_hit", "Restoring node_modules from the dependency cache.", { lockHash });
+      await fs.rm(nodeModulesPath, { recursive: true, force: true }).catch(() => undefined);
+      await fs.cp(cachedNodeModulesPath, nodeModulesPath, { recursive: true });
+      return;
+    }
+
+    await progress(input.env, "dependency_cache_miss", "Dependency cache miss; installing with persistent npm cache.", { lockHash });
+    await runCommand("npm", ["ci", "--cache", input.cache.npmCacheDir, "--prefer-offline", "--no-audit", "--fund=false"], {
+      cwd: input.checkoutDir,
+      taskEnv: input.env,
+      step: "dependencies"
+    });
+    const tempCachePath = path.join(input.cache.nodeModulesDir, `.tmp-${lockHash}-${randomUUID()}`);
+    await fs.rm(tempCachePath, { recursive: true, force: true }).catch(() => undefined);
+    await fs.cp(nodeModulesPath, tempCachePath, { recursive: true });
+    await fs.rename(tempCachePath, cachedNodeModulesPath).catch(async (error: NodeJS.ErrnoException) => {
+      await fs.rm(tempCachePath, { recursive: true, force: true }).catch(() => undefined);
+      if (error.code !== "EEXIST") throw error;
+    });
+  });
+}
+
+async function dependencyCacheKey(checkoutDir: string) {
+  const lockfile = await fs.readFile(path.join(checkoutDir, "package-lock.json"));
+  return `${process.version.replace(/^v/, "node-")}-${sha256Buffer(lockfile).slice(0, 24)}`;
+}
+
+async function removeCachedWorktree(mirrorDir: string, checkoutDir: string) {
+  if (!(await pathExists(path.join(mirrorDir, "HEAD")))) return;
+  await runCommand("git", ["--git-dir", mirrorDir, "worktree", "remove", "--force", checkoutDir], {
+    cwd: path.dirname(checkoutDir),
+    allowFailure: true
+  });
+  await runCommand("git", ["--git-dir", mirrorDir, "worktree", "prune"], {
+    cwd: path.dirname(checkoutDir),
+    allowFailure: true
+  });
+}
+
+async function withDirectoryLock<T>(lockDir: string, run: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  const staleAfterMs = 10 * 60 * 1000;
+  await fs.mkdir(path.dirname(lockDir), { recursive: true });
+  while (true) {
+    try {
+      await fs.mkdir(lockDir);
+      await fs.writeFile(path.join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+      break;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw error;
+      const stat = await fs.stat(lockDir).catch(() => null);
+      if (stat && Date.now() - stat.mtimeMs > staleAfterMs) {
+        await fs.rm(lockDir, { recursive: true, force: true }).catch(() => undefined);
+        continue;
+      }
+      if (Date.now() - startedAt > staleAfterMs) throw new Error(`Timed out waiting for cache lock ${lockDir}`);
+      await sleep(500);
+    }
+  }
+
+  try {
+    return await run();
+  } finally {
+    await fs.rm(lockDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function pathExists(filePath: string) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function progress(env: SandboxEnv, step: string, message: string, metadata: Record<string, unknown> = {}) {
@@ -292,7 +557,7 @@ function codeUpdatePrompt(env: SandboxEnv) {
   ].join("\n");
 }
 
-function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean }) {
+function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean; timings: TaskTimings }) {
   return [
     `Prompted by: ${input.env.requestedBy}`,
     "",
@@ -310,7 +575,11 @@ function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean }) {
     "## Verification",
     "",
     `- \`npm run verify\`: ${input.verifyPassed ? "passed" : "failed; opened as draft"}`,
-    "- `npm run scan:release`: passed"
+    "- `npm run scan:release`: passed",
+    "",
+    "## Timing",
+    "",
+    ...formatTimingLines(input.timings)
   ].join("\n");
 }
 
@@ -328,6 +597,7 @@ async function runCommand(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   console.log(JSON.stringify({ event: "sandbox.command.start", command, args: redactedArgs(command, args), cwd: options.cwd }));
   const startedAt = Date.now();
+  const step = options.step ?? command;
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
@@ -336,6 +606,19 @@ async function runCommand(
 
   let stdout = "";
   let stderr = "";
+  const activityTimer =
+    options.taskEnv && shouldEmitCommandActivity(step)
+      ? setInterval(() => {
+          void progress(options.taskEnv!, `${step}_activity`, `${step} is still running after ${formatDuration(Date.now() - startedAt)}.`, {
+            command,
+            stdoutChars: stdout.length,
+            stderrChars: stderr.length,
+            durationMs: Date.now() - startedAt
+          }).catch(() => undefined);
+        }, 30_000)
+      : undefined;
+  activityTimer?.unref?.();
+
   child.stdout.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stdout = appendLimited(stdout, text);
@@ -350,12 +633,17 @@ async function runCommand(
   if (options.input) child.stdin.write(options.input);
   child.stdin.end();
 
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => resolve(code ?? 1));
-  });
+  let exitCode: number;
+  try {
+    exitCode = await new Promise<number>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", (code) => resolve(code ?? 1));
+    });
+  } finally {
+    if (activityTimer) clearInterval(activityTimer);
+  }
   await recordCommand(options.taskEnv, {
-    step: options.step ?? command,
+    step,
     command: `${command} ${redactedArgs(command, args).join(" ")}`.trim(),
     exitCode,
     outputTail: stdout,
@@ -392,6 +680,49 @@ function appendLimited(current: string, next: string) {
   const combined = current + next;
   if (combined.length <= MAX_CAPTURED_COMMAND_OUTPUT) return combined;
   return combined.slice(combined.length - MAX_CAPTURED_COMMAND_OUTPUT);
+}
+
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function sha256Buffer(value: Buffer) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function formatDuration(ms: number) {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+}
+
+function conciseError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split("\n")[0]?.slice(0, 500) ?? "unknown error";
+}
+
+function formatTimingLines(timings: TaskTimings) {
+  const ordered = [
+    ["sandbox acquisition/startup", timings.sandboxStartup],
+    ["repo refresh / checkout", timings.repo],
+    ["dependency prep", timings.dependencies],
+    ["Codex execution", timings.codex],
+    ["verification", timings.verify],
+    ["scan", timings.scan],
+    ["git push", timings.push],
+    ["PR creation", timings.pr],
+    ["total", timings.total]
+  ] as const;
+  return ordered
+    .filter(([, value]) => typeof value === "number")
+    .map(([label, value]) => `- ${label}: ${formatDuration(value ?? 0)}`);
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldEmitCommandActivity(step: string) {
+  return step === "codex" || step === "verify" || step === "scan" || step === "dependencies";
 }
 
 function redactedArgs(command: string, args: string[]) {

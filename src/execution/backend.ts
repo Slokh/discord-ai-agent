@@ -94,7 +94,9 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         CONTROL_PLANE_INTERNAL_URL: this.config.execution.controlPlaneInternalUrl,
         GITHUB_REPOSITORY: this.config.github.repository,
         GITHUB_BASE_BRANCH: this.config.github.baseBranch,
-        OPENROUTER_CHAT_MODEL: this.config.openRouter.chatModel
+        OPENROUTER_CHAT_MODEL: this.config.openRouter.chatModel,
+        SANDBOX_CACHE_DIR: this.config.execution.kubernetes.cacheDir,
+        SANDBOX_STARTED_AT_MS: String(Date.now())
       });
 
       await context.progress?.({
@@ -194,6 +196,22 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
 
   private jobManifest(input: { name: string; namespace: string; labels: Record<string, string> }): k8s.V1Job {
     const k8sConfig = this.config.execution.kubernetes;
+    const volumeMounts = k8sConfig.cachePvcName
+      ? [
+          {
+            name: "sandbox-cache",
+            mountPath: k8sConfig.cacheDir
+          }
+        ]
+      : undefined;
+    const volumes = k8sConfig.cachePvcName
+      ? [
+          {
+            name: "sandbox-cache",
+            persistentVolumeClaim: { claimName: k8sConfig.cachePvcName }
+          }
+        ]
+      : undefined;
     return {
       metadata: {
         name: input.name,
@@ -222,9 +240,11 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
                 resources: {
                   requests: { cpu: k8sConfig.cpuRequest, memory: k8sConfig.memoryRequest },
                   limits: { cpu: k8sConfig.cpuLimit, memory: k8sConfig.memoryLimit }
-                }
+                },
+                ...(volumeMounts ? { volumeMounts } : {})
               }
-            ]
+            ],
+            ...(volumes ? { volumes } : {})
           }
         }
       }

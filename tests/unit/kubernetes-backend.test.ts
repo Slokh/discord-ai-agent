@@ -71,6 +71,65 @@ describe("KubernetesExecutionBackend", () => {
     );
   });
 
+  it("mounts the sandbox cache PVC and passes cache env into task config", async () => {
+    await withEnv(
+      {
+        OPENROUTER_API_KEY: "sk-test",
+        GITHUB_TOKEN: "github-token",
+        GITHUB_REPOSITORY: "example/discord-ai-agent",
+        TASK_SIGNING_SECRET: "task-secret",
+        KUBERNETES_NAMESPACE: "discord-ai-agent",
+        SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
+        SANDBOX_CACHE_PVC_NAME: "discord-ai-agent-sandbox-cache"
+      },
+      async () => {
+        const clients = fakeClients();
+        const backend = new KubernetesExecutionBackend(loadConfig(), clients);
+
+        await backend.start(agentTask());
+
+        expect(clients.core.createNamespacedConfigMap).toHaveBeenCalledWith(
+          expect.objectContaining({
+            body: expect.objectContaining({
+              data: expect.objectContaining({
+                SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
+                SANDBOX_STARTED_AT_MS: expect.any(String)
+              })
+            })
+          })
+        );
+        expect(clients.batch.createNamespacedJob).toHaveBeenCalledWith(
+          expect.objectContaining({
+            body: expect.objectContaining({
+              spec: expect.objectContaining({
+                template: expect.objectContaining({
+                  spec: expect.objectContaining({
+                    volumes: [
+                      {
+                        name: "sandbox-cache",
+                        persistentVolumeClaim: { claimName: "discord-ai-agent-sandbox-cache" }
+                      }
+                    ],
+                    containers: [
+                      expect.objectContaining({
+                        volumeMounts: [
+                          {
+                            name: "sandbox-cache",
+                            mountPath: "/var/cache/discord-ai-agent"
+                          }
+                        ]
+                      })
+                    ]
+                  })
+                })
+              })
+            })
+          })
+        );
+      }
+    );
+  });
+
   it("treats Kubernetes 404 response shapes as gone", async () => {
     const clients = fakeClients({
       readNamespacedJob: vi.fn(async () => {

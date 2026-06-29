@@ -16,6 +16,13 @@ sandbox:
       memory: 2Gi
   taskTimeoutSeconds: 1800
   ttlSecondsAfterFinished: 3600
+  cache:
+    enabled: true
+    mountPath: /var/cache/discord-ai-agent
+    size: 20Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
 
 secret:
   existingSecretName: discord-ai-agent-env

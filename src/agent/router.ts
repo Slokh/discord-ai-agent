@@ -778,8 +778,19 @@ async function synthesizeFinalAnswerWithoutTools(
     messages: finalSynthesisMessages(input.text, input.memoryEvents),
     tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
-    maxTokens: 900
+    maxTokens: 2000
   });
+
+  if (response.finishReason === "length") {
+    input.requestLogger.warn(
+      {
+        finishReason: response.finishReason,
+        contentChars: response.content.length,
+        model: response.model
+      },
+      "Final synthesis truncated due to max_tokens limit; response may be incomplete"
+    );
+  }
   let content = stripLeakedHostedToolMarkup(response.content).trim();
   if (!content && isLeakedHostedToolMarkup(response.content)) {
     const recovery = await hostedToolMarkupRecoveryResponse(ctx, input.text);
@@ -900,7 +911,7 @@ async function hostedToolMarkupRecoveryResponse(ctx: ToolContext, text: string) 
     ],
     tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
-    maxTokens: 900
+    maxTokens: 2000
   });
   const content = stripLeakedHostedToolMarkup(response.content).trim();
   return {

@@ -48,3 +48,165 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify:db
+
+  deploy-railway:
+    runs-on: ubuntu-latest
+    needs:
+      - verify
+      - verify-db
+    if: github.event_name == 'push'
+    concurrency:
+      group: railway-production
+      cancel-in-progress: false
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+      RAILWAY_ENVIRONMENT: production
+      RAILWAY_SERVICES: discord-ai-agent-bot discord-ai-agent-worker discord-ai-agent-codegen
+      TARGET_SHA: ${{ github.sha }}
+      NO_COLOR: "1"
+    steps:
+      - name: Validate Railway deployment config
+        shell: bash
+        run: |
+          test -n "$RAILWAY_TOKEN" || { echo "RAILWAY_TOKEN secret is required"; exit 1; }
+          test -n "$RAILWAY_PROJECT_ID" || { echo "RAILWAY_PROJECT_ID secret is required"; exit 1; }
+          test -n "$RAILWAY_ENVIRONMENT" || { echo "RAILWAY_ENVIRONMENT is required"; exit 1; }
+          test -n "$RAILWAY_SERVICES" || { echo "RAILWAY_SERVICES is required"; exit 1; }
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@latest
+
+      - name: Trigger Railway deployments
+        shell: bash
+        run: |
+          for service in $RAILWAY_SERVICES; do
+            echo "::group::Redeploy $service"
+            railway redeploy \
+              --project "$RAILWAY_PROJECT_ID" \
+              --environment "$RAILWAY_ENVIRONMENT" \
+              --service "$service" \
+              --from-source \
+              --yes \
+              --json
+            echo "::endgroup::"
+          done
+
+      - name: Wait for Railway deployments
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+
+          const projectId = required("RAILWAY_PROJECT_ID");
+          const environmentName = required("RAILWAY_ENVIRONMENT");
+          const services = required("RAILWAY_SERVICES").split(/\s+/).filter(Boolean);
+          const targetSha = required("TARGET_SHA");
+          const timeoutMs = 20 * 60 * 1000;
+          const pollMs = 15 * 1000;
+          const startedAt = Date.now();
+          let lastSummary = "";
+
+          function required(name) {
+            const value = process.env[name];
+            if (!value) throw new Error(`${name} is required`);
+            return value;
+          }
+
+          function railwayStatus() {
+            const stdout = execFileSync(
+              "railway",
+              ["status", "--json", "--project", projectId, "--environment", environmentName],
+              {
+                encoding: "utf8",
+                env: { ...process.env, NO_COLOR: "1" },
+                maxBuffer: 10 * 1024 * 1024
+              }
+            );
+            return JSON.parse(stdout);
+          }
+
+          function currentEnvironment(status) {
+            const environments = status.environments?.edges ?? [];
+            return (
+              environments.find((edge) => edge.node?.name === environmentName || edge.node?.id === environmentName)?.node ??
+              environments[0]?.node
+            );
+          }
+
+          function serviceInstance(environment, name) {
+            return (environment.serviceInstances?.edges ?? []).find((edge) => edge.node?.serviceName === name)?.node;
+          }
+
+          function latestDeployment(service) {
+            return service.latestDeployment ?? service.activeDeployments?.[0] ?? null;
+          }
+
+          function commitMatches(commitHash) {
+            if (!commitHash) return false;
+            return commitHash === targetSha || commitHash.startsWith(targetSha) || targetSha.startsWith(commitHash);
+          }
+
+          function isFailureStatus(status) {
+            return ["CRASHED", "FAILED", "REMOVED", "SKIPPED"].includes(String(status ?? "").toUpperCase());
+          }
+
+          function sleep(ms) {
+            return new Promise((resolve) => setTimeout(resolve, ms));
+          }
+
+          async function main() {
+            while (Date.now() - startedAt < timeoutMs) {
+              const status = railwayStatus();
+              const environment = currentEnvironment(status);
+              if (!environment) throw new Error(`Railway environment ${environmentName} was not found`);
+
+              const pending = [];
+              const failures = [];
+              const complete = [];
+
+              for (const name of services) {
+                const service = serviceInstance(environment, name);
+                if (!service) {
+                  failures.push(`${name}: service not found`);
+                  continue;
+                }
+
+                const deployment = latestDeployment(service);
+                const deploymentStatus = deployment?.status ?? "UNKNOWN";
+                const commit = deployment?.meta?.commitHash ?? "";
+                const stopped = Boolean(deployment?.deploymentStopped);
+                const summary = `${name}: ${deploymentStatus} ${commit.slice(0, 7) || "unknown"} stopped=${stopped}`;
+
+                if (commitMatches(commit) && deploymentStatus === "SUCCESS" && !stopped) {
+                  complete.push(summary);
+                } else if (commitMatches(commit) && isFailureStatus(deploymentStatus)) {
+                  failures.push(summary);
+                } else {
+                  pending.push(summary);
+                }
+              }
+
+              const summary = [...complete, ...pending, ...failures].join("\n");
+              if (summary !== lastSummary) {
+                console.log(summary);
+                lastSummary = summary;
+              }
+
+              if (failures.length > 0) throw new Error(`Railway deployment failed:\n${failures.join("\n")}`);
+              if (complete.length === services.length) {
+                console.log(`All Railway services deployed ${targetSha.slice(0, 7)}.`);
+                return;
+              }
+
+              await sleep(pollMs);
+            }
+
+            throw new Error(`Timed out waiting for Railway services to deploy ${targetSha.slice(0, 7)}`);
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE

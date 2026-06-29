@@ -12,6 +12,8 @@ import { AppConfigCodegenCredentialProvider, type CodegenCredentialProvider } fr
 import { reportCodegenProgress, type CodegenProgressReporter } from "./progress.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
+const CODEX_OUTPUT_LOG_INTERVAL_MS = 30_000;
+const CODEX_TERMINATION_GRACE_MS = 10_000;
 export const CODEGEN_REQUIRED_DEV_TOOLS = ["tsx", "tsc", "eslint", "vitest"] as const;
 
 export type AgentCodegenJob = {
@@ -70,7 +72,12 @@ export async function runAgentCodegenJob(input: {
     await progress(input.progress, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, config);
 
-    await progress(input.progress, "codex", "Running Codex to implement the requested change.", { model: config.openRouter.chatModel });
+    const codegenModel = config.openRouter.codegenModel;
+    const codexTimeoutMs = minutesToMs(config.codegenCodexTimeoutMinutes);
+    await progress(input.progress, "codex", "Running Codex to implement the requested change.", {
+      model: codegenModel,
+      timeoutMinutes: config.codegenCodexTimeoutMinutes
+    });
     await runCommand(
       process.env.CODEX_BIN || "codex",
       [
@@ -80,13 +87,14 @@ export async function runAgentCodegenJob(input: {
         checkoutDir,
         "--dangerously-bypass-approvals-and-sandbox",
         "-m",
-        config.openRouter.chatModel,
+        codegenModel,
         "-"
       ],
       {
         cwd: checkoutDir,
         env: credentials.codexEnv({ baseEnv: commandEnv, workRoot }),
-        input: codegenPrompt(job)
+        input: codegenPrompt(job),
+        timeoutMs: codexTimeoutMs
       }
     );
 
@@ -123,7 +131,7 @@ export async function runAgentCodegenJob(input: {
       draft,
       body: pullRequestBody({
         job,
-        model: config.openRouter.chatModel,
+        model: codegenModel,
         verifyPassed: verify.exitCode === 0
       })
     });
@@ -202,7 +210,7 @@ async function writeCodexConfig(workRoot: string, checkoutDir: string, config: A
   await fs.writeFile(
     path.join(codexHome, "config.toml"),
     [
-      `model = ${JSON.stringify(config.openRouter.chatModel)}`,
+      `model = ${JSON.stringify(config.openRouter.codegenModel)}`,
       'model_provider = "openrouter"',
       'approval_policy = "never"',
       'sandbox_mode = "workspace-write"',
@@ -228,13 +236,16 @@ function codegenPrompt(job: AgentCodegenJob) {
     "You are implementing a Discord-requested update to this TypeScript Discord AI Agent repository.",
     "",
     "Requirements:",
-    "- Read the relevant code before editing.",
+    "- Read only the code that is relevant to the request before editing.",
     "- Implement the requested behavior with a real code diff.",
     "- Keep changes focused and consistent with the existing architecture.",
     "- Add or update tests for the changed behavior.",
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the PR body records the request.",
-    "- Before finishing, run the most relevant checks you can.",
+    "- Do not print full files or full diffs unless a command failure makes that necessary.",
+    "- Do not repeatedly reprint the same diff or revisit the same design choice once it is resolved.",
+    "- Prefer one implementation pass, one focused test pass, and at most one repair pass for failures.",
+    "- Before finishing, run the most relevant checks you can, then exit promptly.",
     "",
     `Request ID: ${job.requestId}`,
     `Requested by: ${job.requestedBy}`,
@@ -284,10 +295,11 @@ async function runCommand(
     env?: NodeJS.ProcessEnv;
     input?: string;
     allowFailure?: boolean;
+    timeoutMs?: number;
   }
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const startedAt = Date.now();
-  logger.info({ command, args: redactedArgs(command, args), cwd: options.cwd }, "Starting codegen command");
+  logger.info({ command, args: redactedArgs(command, args), cwd: options.cwd, timeoutMs: options.timeoutMs }, "Starting codegen command");
 
   const child = spawn(command, args, {
     cwd: options.cwd,
@@ -297,26 +309,60 @@ async function runCommand(
 
   let stdout = "";
   let stderr = "";
+  let timedOut = false;
+  const stdoutLogger = createCommandOutputLogger(command, "stdout");
+  const stderrLogger = createCommandOutputLogger(command, "stderr");
+  let timeout: NodeJS.Timeout | undefined;
+  let forceKillTimeout: NodeJS.Timeout | undefined;
+
+  if (options.timeoutMs && options.timeoutMs > 0) {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      logger.error(
+        { command, args: redactedArgs(command, args), timeoutMs: options.timeoutMs, durationMs: durationMs(startedAt) },
+        "Codegen command timed out; terminating child process"
+      );
+      child.kill("SIGTERM");
+      forceKillTimeout = setTimeout(() => {
+        logger.error({ command, args: redactedArgs(command, args) }, "Codegen command did not exit after SIGTERM; killing child process");
+        child.kill("SIGKILL");
+      }, CODEX_TERMINATION_GRACE_MS);
+      forceKillTimeout.unref();
+    }, options.timeoutMs);
+    timeout.unref();
+  }
+
   child.stdout.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stdout = appendLimited(stdout, text);
-    logCommandOutput(command, "stdout", text);
+    logCommandOutput(stdoutLogger, text);
   });
   child.stderr.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stderr = appendLimited(stderr, text);
-    logCommandOutput(command, "stderr", text);
+    logCommandOutput(stderrLogger, text);
   });
 
   if (options.input) child.stdin.end(options.input);
   else child.stdin.end();
 
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => resolve(code ?? 1));
-  });
+  let exitCode: number;
+  try {
+    exitCode = await new Promise<number>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => resolve(code ?? 1));
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (forceKillTimeout) clearTimeout(forceKillTimeout);
+    flushCommandOutput(stdoutLogger);
+    flushCommandOutput(stderrLogger);
+  }
   logger.info({ command, exitCode, durationMs: durationMs(startedAt) }, "Codegen command finished");
 
+  if (timedOut) {
+    throw new Error(`${command} ${args.join(" ")} timed out after ${formatDuration(options.timeoutMs ?? 0)}: ${previewText(stderr || stdout, 1000)}`);
+  }
   if (exitCode !== 0 && !options.allowFailure) {
     throw new Error(`${command} ${args.join(" ")} failed with exit code ${exitCode}: ${previewText(stderr || stdout, 1000)}`);
   }
@@ -329,11 +375,61 @@ function appendLimited(current: string, next: string) {
   return combined.slice(combined.length - MAX_CAPTURED_COMMAND_OUTPUT);
 }
 
-function logCommandOutput(command: string, stream: "stdout" | "stderr", text: string) {
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    logger.info({ command, stream, line: previewText(line, 1000) }, "Codegen command output");
+type CommandOutputLogger = {
+  command: string;
+  stream: "stdout" | "stderr";
+  throttled: boolean;
+  lastLoggedAt: number;
+  bufferedText: string;
+  bufferedBytes: number;
+  bufferedLines: number;
+  bufferedChunks: number;
+};
+
+function createCommandOutputLogger(command: string, stream: "stdout" | "stderr"): CommandOutputLogger {
+  return {
+    command,
+    stream,
+    throttled: command === (process.env.CODEX_BIN || "codex") || path.basename(command) === "codex",
+    lastLoggedAt: 0,
+    bufferedText: "",
+    bufferedBytes: 0,
+    bufferedLines: 0,
+    bufferedChunks: 0
+  };
+}
+
+function logCommandOutput(output: CommandOutputLogger, text: string) {
+  output.bufferedText = appendLimited(output.bufferedText, text);
+  output.bufferedBytes += Buffer.byteLength(text);
+  output.bufferedLines += text.split(/\r?\n/).filter((line) => line.trim()).length;
+  output.bufferedChunks += 1;
+
+  const now = Date.now();
+  if (!output.throttled || output.lastLoggedAt === 0 || now - output.lastLoggedAt >= CODEX_OUTPUT_LOG_INTERVAL_MS) {
+    flushCommandOutput(output, now);
   }
+}
+
+function flushCommandOutput(output: CommandOutputLogger, now = Date.now()) {
+  if (output.bufferedBytes === 0) return;
+  logger.info(
+    {
+      command: output.command,
+      stream: output.stream,
+      chunks: output.bufferedChunks,
+      bytes: output.bufferedBytes,
+      lines: output.bufferedLines,
+      preview: previewText(output.bufferedText, 1000),
+      throttled: output.throttled
+    },
+    output.throttled ? "Codegen command output summary" : "Codegen command output"
+  );
+  output.lastLoggedAt = now;
+  output.bufferedText = "";
+  output.bufferedBytes = 0;
+  output.bufferedLines = 0;
+  output.bufferedChunks = 0;
 }
 
 function redactedArgs(command: string, args: string[]) {
@@ -341,4 +437,17 @@ function redactedArgs(command: string, args: string[]) {
     return args.map((arg) => (arg.startsWith("https://github.com/") ? "https://github.com/[repo].git" : arg));
   }
   return args;
+}
+
+function minutesToMs(minutes: number) {
+  return minutes * 60 * 1000;
+}
+
+function formatDuration(ms: number) {
+  if (ms < 1000) return `${ms}ms`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  if (minutes === 0) return `${seconds}s`;
+  if (seconds === 0) return `${minutes}m`;
+  return `${minutes}m ${seconds}s`;
 }

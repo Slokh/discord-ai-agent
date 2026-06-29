@@ -151,10 +151,11 @@ export async function startJobs(input: {
   if (codegenWorkerEnabled && input.agentCodegen) {
     await boss.work<AgentCodegenJob>(
       AGENT_CODEGEN_JOB,
-      { batchSize: 1, pollingIntervalSeconds: 2 },
+      { batchSize: 1, pollingIntervalSeconds: 2, includeMetadata: true },
       async (jobs) => {
         for (const job of jobs) {
           const startedAt = Date.now();
+          const jobMetadata = codegenJobMetadata(job);
           await runWithTrace(
             {
               traceId: job.data.traceId ?? job.data.requestId,
@@ -165,7 +166,7 @@ export async function startJobs(input: {
             },
             async () => {
               logger.info(
-                { queue: AGENT_CODEGEN_JOB, jobId: job.id, requestId: job.data.requestId, updateName: job.data.updateName },
+                { queue: AGENT_CODEGEN_JOB, jobId: job.id, requestId: job.data.requestId, updateName: job.data.updateName, ...jobMetadata },
                 "Running agent.codegen job"
               );
               const backendName = input.agentCodegen?.name ?? "railway-local-worker";
@@ -195,6 +196,7 @@ export async function startJobs(input: {
                       metadata: {
                         step: event.step,
                         backend: backendName,
+                        ...jobMetadata,
                         ...event.metadata
                       }
                     });
@@ -214,7 +216,8 @@ export async function startJobs(input: {
                     requestId: job.data.requestId,
                     prUrl: result.prUrl,
                     draft: result.draft,
-                    durationMs: durationMs(startedAt)
+                    durationMs: durationMs(startedAt),
+                    ...jobMetadata
                   },
                   "agent.codegen job complete"
                 );
@@ -231,7 +234,8 @@ export async function startJobs(input: {
                     queue: AGENT_CODEGEN_JOB,
                     jobId: job.id,
                     requestId: job.data.requestId,
-                    durationMs: durationMs(startedAt)
+                    durationMs: durationMs(startedAt),
+                    ...jobMetadata
                   },
                   "agent.codegen job failed"
                 );
@@ -339,6 +343,16 @@ export async function startJobs(input: {
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function codegenJobMetadata(job: PgBoss.JobWithMetadata<AgentCodegenJob>) {
+  return {
+    pgBossState: job.state,
+    pgBossRetryCount: job.retryCount,
+    pgBossRetryLimit: job.retryLimit,
+    pgBossStartedOn: job.startedOn?.toISOString?.(),
+    pgBossCreatedOn: job.createdOn?.toISOString?.()
+  };
 }
 
 export function embeddingPriorityForMessageTimestamp(createdTimestamp: number | Date | undefined | null) {

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CODEGEN_REQUIRED_DEV_TOOLS, codegenCommandEnv, missingCodegenDevTools } from "../../src/codegen/runner.js";
+import { CODEGEN_REQUIRED_DEV_TOOLS, codexExecArgs, codegenCommandEnv, missingCodegenDevTools } from "../../src/codegen/runner.js";
 
 describe("codegen runner", () => {
   const tempDirs: string[] = [];
@@ -37,5 +37,21 @@ describe("codegen runner", () => {
     await fs.writeFile(path.join(checkoutDir, "node_modules", ".bin", "tsx"), "");
 
     await expect(missingCodegenDevTools(checkoutDir)).resolves.toEqual(CODEGEN_REQUIRED_DEV_TOOLS.filter((tool) => tool !== "tsx"));
+  });
+
+  it("runs Codex exec in JSON event mode for activity logging", () => {
+    expect(codexExecArgs({ checkoutDir: "/tmp/repo", model: "test/model" })).toEqual([
+      "exec",
+      "--json",
+      "--color",
+      "never",
+      "--ephemeral",
+      "-C",
+      "/tmp/repo",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "-m",
+      "test/model",
+      "-"
+    ]);
   });
 });

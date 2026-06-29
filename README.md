@@ -35,6 +35,12 @@ Private skills are stored in the database, not Git. Public baseline behavior can
 
 Long-running agent work is modeled as durable execution state in Postgres. Codegen runs through a portable execution backend interface; the default backend is a Railway worker. Progress phases such as clone, install, Codex, verify, scan, push, and PR creation are written to trace events and the codegen job row so the Discord reply can update in place.
 
+Codegen observability highlights:
+
+- Each run uses a local `.codegen-runs` work directory as an ephemeral checkout root.
+- Individual Codex commands are recorded as trace events with duration, status, and exit code.
+- A command-budget warning is emitted when Codex runs past the soft command threshold, so loops that run too long surface early.
+
 Private server overlays and durable workflows are database-backed foundations for server-specific instructions and future recurring jobs such as digests, watches, or scheduled maintenance. They are intentionally self-hosted primitives, not a hosted multi-tenant platform.
 
 ## What You Get
@@ -51,6 +57,7 @@ Private server overlays and durable workflows are database-backed foundations fo
 - Private DB-backed skills.
 - Optional GitHub PR creation for requested agent updates.
 - In-place codegen progress updates and final PR links.
+- Per-command Codex trace events and command-budget warnings for codegen runs.
 - Database-backed server overlays and durable workflow foundations.
 - Structured logs, trace IDs, and owner-only Railway log inspection.
 

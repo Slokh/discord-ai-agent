@@ -425,8 +425,35 @@ async function prepareCachedWorktree(input: {
         step: "repo_checkout"
       }
     );
+    await repairWorktreeRemoteForBranchPush({
+      checkoutDir: input.checkoutDir,
+      repoUrl,
+      gitEnv: input.gitEnv,
+      taskEnv: input.env
+    });
   });
   return { cacheStatus };
+}
+
+export async function repairWorktreeRemoteForBranchPush(input: {
+  checkoutDir: string;
+  repoUrl: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  taskEnv?: SandboxEnv;
+}) {
+  await runCommand("git", ["remote", "set-url", "origin", input.repoUrl], {
+    cwd: input.checkoutDir,
+    env: input.gitEnv,
+    taskEnv: input.taskEnv,
+    step: "repo_checkout"
+  });
+  await runCommand("git", ["config", "--unset-all", "remote.origin.mirror"], {
+    cwd: input.checkoutDir,
+    env: input.gitEnv,
+    allowFailure: true,
+    taskEnv: input.taskEnv,
+    step: "repo_checkout"
+  });
 }
 
 async function prepareDependencies(input: {

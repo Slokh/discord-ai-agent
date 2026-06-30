@@ -25,6 +25,16 @@ export type PersistedMessage = {
   normalizedContent: string;
   createdAt: Date;
   editedAt?: Date | null;
+  messageType?: number | null;
+  isPinned?: boolean | null;
+  referencedMessageId?: string | null;
+  referencedChannelId?: string | null;
+  referencedGuildId?: string | null;
+  memberDisplayName?: string | null;
+  memberNickname?: string | null;
+  memberRoles?: string[];
+  memberJoinedAt?: Date | null;
+  memberRaw?: unknown;
   raw?: unknown;
   attachments?: PersistedAttachment[];
 };
@@ -228,6 +238,9 @@ export type MessageForEmbedding = {
   normalizedContent: string;
   deletedAt: Date | null;
   embeddingModel: string | null;
+  embeddingDimensions: number | null;
+  embeddingInputVersion: number | null;
+  embeddingInputSha256: string | null;
 };
 
 export type DeletedConversationTurn = {
@@ -429,18 +442,34 @@ export class DiscordAiAgentRepository {
     name?: string | null;
     type: number;
     isThread?: boolean;
+    discordCreatedAt?: Date | null;
+    lastMessageId?: string | null;
+    topic?: string | null;
+    ownerId?: string | null;
+    archived?: boolean | null;
+    archiveTimestamp?: Date | null;
     raw?: unknown;
   }) {
     await this.pool.query(
       `
-        INSERT INTO channels(id, guild_id, parent_id, name, type, is_thread, raw, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        INSERT INTO channels(
+          id, guild_id, parent_id, name, type, is_thread,
+          discord_created_at, last_message_id, topic, owner_id, archived, archive_timestamp,
+          raw, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
         ON CONFLICT(id) DO UPDATE SET
           guild_id = EXCLUDED.guild_id,
           parent_id = EXCLUDED.parent_id,
           name = EXCLUDED.name,
           type = EXCLUDED.type,
           is_thread = EXCLUDED.is_thread,
+          discord_created_at = EXCLUDED.discord_created_at,
+          last_message_id = EXCLUDED.last_message_id,
+          topic = EXCLUDED.topic,
+          owner_id = EXCLUDED.owner_id,
+          archived = EXCLUDED.archived,
+          archive_timestamp = EXCLUDED.archive_timestamp,
           raw = EXCLUDED.raw,
           updated_at = now()
       `,
@@ -451,6 +480,12 @@ export class DiscordAiAgentRepository {
         input.name ?? null,
         input.type,
         input.isThread ?? false,
+        input.discordCreatedAt ?? null,
+        input.lastMessageId ?? null,
+        input.topic ?? null,
+        input.ownerId ?? null,
+        input.archived ?? null,
+        input.archiveTimestamp ?? null,
         JSON.stringify(input.raw ?? {})
       ]
     );
@@ -484,6 +519,39 @@ export class DiscordAiAgentRepository {
     );
   }
 
+  async upsertGuildMember(input: {
+    guildId: string;
+    userId: string;
+    displayName?: string | null;
+    nickname?: string | null;
+    roles?: string[];
+    joinedAt?: Date | null;
+    raw?: unknown;
+  }) {
+    await this.pool.query(
+      `
+        INSERT INTO guild_members(guild_id, user_id, display_name, nickname, roles, joined_at, raw, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET
+          display_name = EXCLUDED.display_name,
+          nickname = EXCLUDED.nickname,
+          roles = EXCLUDED.roles,
+          joined_at = EXCLUDED.joined_at,
+          raw = EXCLUDED.raw,
+          updated_at = now()
+      `,
+      [
+        input.guildId,
+        input.userId,
+        input.displayName ?? null,
+        input.nickname ?? null,
+        input.roles ?? [],
+        input.joinedAt ?? null,
+        JSON.stringify(input.raw ?? {})
+      ]
+    );
+  }
+
   async upsertMessage(input: PersistedMessage) {
     await this.upsertUser({
       id: input.authorId,
@@ -492,29 +560,61 @@ export class DiscordAiAgentRepository {
       isBot: input.authorIsBot,
       raw: input.authorRaw
     });
+    if (input.memberDisplayName || input.memberNickname || input.memberRoles?.length || input.memberJoinedAt || input.memberRaw) {
+      await this.upsertGuildMember({
+        guildId: input.guildId,
+        userId: input.authorId,
+        displayName: input.memberDisplayName,
+        nickname: input.memberNickname,
+        roles: input.memberRoles,
+        joinedAt: input.memberJoinedAt,
+        raw: input.memberRaw
+      });
+    }
 
     const privacyDeleted = await this.isUserPrivacyDeleted(input.authorId);
     const content = privacyDeleted ? "" : input.content;
     const normalizedContent = privacyDeleted ? "" : input.normalizedContent;
 
-    await this.pool.query(
+    const upserted = await this.pool.query(
       `
-        INSERT INTO messages(
-          id, guild_id, channel_id, thread_id, author_id, content, normalized_content,
-          created_at, edited_at, deleted_at, raw, updated_at
+        WITH existing AS (
+          SELECT normalized_content
+          FROM messages
+          WHERE id = $1
+        ),
+        upserted AS (
+          INSERT INTO messages(
+            id, guild_id, channel_id, thread_id, author_id, content, normalized_content,
+            created_at, edited_at, deleted_at, message_type, is_pinned,
+            referenced_message_id, referenced_channel_id, referenced_guild_id,
+            raw, updated_at
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $16 THEN now() ELSE NULL END,
+            $10, $11, $12, $13, $14, $15, now()
+          )
+          ON CONFLICT(id) DO UPDATE SET
+            guild_id = EXCLUDED.guild_id,
+            channel_id = EXCLUDED.channel_id,
+            thread_id = EXCLUDED.thread_id,
+            author_id = EXCLUDED.author_id,
+            content = EXCLUDED.content,
+            normalized_content = EXCLUDED.normalized_content,
+            edited_at = EXCLUDED.edited_at,
+            deleted_at = EXCLUDED.deleted_at,
+            message_type = EXCLUDED.message_type,
+            is_pinned = EXCLUDED.is_pinned,
+            referenced_message_id = EXCLUDED.referenced_message_id,
+            referenced_channel_id = EXCLUDED.referenced_channel_id,
+            referenced_guild_id = EXCLUDED.referenced_guild_id,
+            raw = EXCLUDED.raw,
+            updated_at = now()
+          RETURNING id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $11 THEN now() ELSE NULL END, $10, now())
-        ON CONFLICT(id) DO UPDATE SET
-          guild_id = EXCLUDED.guild_id,
-          channel_id = EXCLUDED.channel_id,
-          thread_id = EXCLUDED.thread_id,
-          author_id = EXCLUDED.author_id,
-          content = EXCLUDED.content,
-          normalized_content = EXCLUDED.normalized_content,
-          edited_at = EXCLUDED.edited_at,
-          deleted_at = EXCLUDED.deleted_at,
-          raw = EXCLUDED.raw,
-          updated_at = now()
+        SELECT existing.normalized_content AS previous_normalized_content
+        FROM upserted
+        LEFT JOIN existing ON true
       `,
       [
         input.id,
@@ -526,12 +626,18 @@ export class DiscordAiAgentRepository {
         normalizedContent,
         input.createdAt,
         input.editedAt ?? null,
+        input.messageType ?? null,
+        input.isPinned ?? null,
+        input.referencedMessageId ?? null,
+        input.referencedChannelId ?? null,
+        input.referencedGuildId ?? null,
         JSON.stringify(input.raw ?? {}),
         privacyDeleted
       ]
     );
+    const previousNormalizedContent = upserted.rows[0]?.previous_normalized_content as string | undefined;
 
-    if (!normalizedContent.trim()) {
+    if (!normalizedContent.trim() || (previousNormalizedContent != null && previousNormalizedContent !== normalizedContent)) {
       await this.pool.query("DELETE FROM message_embeddings WHERE message_id = $1", [input.id]);
     }
 
@@ -563,21 +669,46 @@ export class DiscordAiAgentRepository {
     }
   }
 
-  async storeMessageEmbedding(input: { messageId: string; embedding: number[]; model: string }) {
+  async storeMessageEmbedding(input: {
+    messageId: string;
+    embedding: number[];
+    model: string;
+    dimensions?: number;
+    inputVersion?: number;
+    inputText?: string;
+    inputSha256?: string | null;
+  }) {
     await this.pool.query(
       `
-        INSERT INTO message_embeddings(message_id, embedding, model, embedded_at)
-        VALUES ($1, $2::vector, $3, now())
+        INSERT INTO message_embeddings(message_id, embedding, model, dimensions, input_version, input_text, input_sha256, embedded_at)
+        VALUES ($1, $2::vector, $3, $4, $5, $6, $7, now())
         ON CONFLICT(message_id) DO UPDATE SET
           embedding = EXCLUDED.embedding,
           model = EXCLUDED.model,
+          dimensions = EXCLUDED.dimensions,
+          input_version = EXCLUDED.input_version,
+          input_text = EXCLUDED.input_text,
+          input_sha256 = EXCLUDED.input_sha256,
           embedded_at = now()
       `,
-      [input.messageId, vectorLiteral(input.embedding), input.model]
+      [
+        input.messageId,
+        vectorLiteral(input.embedding),
+        input.model,
+        input.dimensions ?? input.embedding.length,
+        input.inputVersion ?? 1,
+        input.inputText ?? "",
+        input.inputSha256 ?? null
+      ]
     );
   }
 
-  async storeMessageEmbeddings(input: { model: string; items: Array<{ messageId: string; embedding: number[] }> }) {
+  async storeMessageEmbeddings(input: {
+    model: string;
+    dimensions?: number;
+    inputVersion?: number;
+    items: Array<{ messageId: string; embedding: number[]; inputText?: string; inputSha256?: string | null }>;
+  }) {
     if (input.items.length === 0) return;
     const client = await this.pool.connect();
     try {
@@ -585,14 +716,26 @@ export class DiscordAiAgentRepository {
       for (const item of input.items) {
         await client.query(
           `
-            INSERT INTO message_embeddings(message_id, embedding, model, embedded_at)
-            VALUES ($1, $2::vector, $3, now())
+            INSERT INTO message_embeddings(message_id, embedding, model, dimensions, input_version, input_text, input_sha256, embedded_at)
+            VALUES ($1, $2::vector, $3, $4, $5, $6, $7, now())
             ON CONFLICT(message_id) DO UPDATE SET
               embedding = EXCLUDED.embedding,
               model = EXCLUDED.model,
+              dimensions = EXCLUDED.dimensions,
+              input_version = EXCLUDED.input_version,
+              input_text = EXCLUDED.input_text,
+              input_sha256 = EXCLUDED.input_sha256,
               embedded_at = now()
           `,
-          [item.messageId, vectorLiteral(item.embedding), input.model]
+          [
+            item.messageId,
+            vectorLiteral(item.embedding),
+            input.model,
+            input.dimensions ?? item.embedding.length,
+            input.inputVersion ?? 1,
+            item.inputText ?? "",
+            item.inputSha256 ?? null
+          ]
         );
       }
       await client.query("COMMIT");
@@ -616,7 +759,10 @@ export class DiscordAiAgentRepository {
           m.content,
           m.normalized_content,
           m.deleted_at,
-          e.model AS embedding_model
+          e.model AS embedding_model,
+          e.dimensions AS embedding_dimensions,
+          e.input_version AS embedding_input_version,
+          e.input_sha256 AS embedding_input_sha256
         FROM messages m
         JOIN discord_users u ON u.id = m.author_id
         LEFT JOIN message_embeddings e ON e.message_id = m.id
@@ -642,7 +788,10 @@ export class DiscordAiAgentRepository {
           m.content,
           m.normalized_content,
           m.deleted_at,
-          e.model AS embedding_model
+          e.model AS embedding_model,
+          e.dimensions AS embedding_dimensions,
+          e.input_version AS embedding_input_version,
+          e.input_sha256 AS embedding_input_sha256
         FROM messages m
         JOIN discord_users u ON u.id = m.author_id
         LEFT JOIN message_embeddings e ON e.message_id = m.id
@@ -657,6 +806,8 @@ export class DiscordAiAgentRepository {
   async messageIdsNeedingEmbeddings(input: {
     guildId: string;
     model: string;
+    dimensions?: number;
+    inputVersion?: number;
     limit: number;
     botUserId?: string;
   }): Promise<string[]> {
@@ -679,16 +830,22 @@ export class DiscordAiAgentRepository {
             position('<@' || $4 || '>' in m.content) = 0
             AND position('<@!' || $4 || '>' in m.content) = 0
           ))
-          AND (e.message_id IS NULL OR e.model <> $2)
+          AND (
+            e.message_id IS NULL
+            OR e.model <> $2
+            OR e.dimensions <> $5
+            OR e.input_version <> $6
+            OR e.input_sha256 IS NULL
+          )
         ORDER BY m.created_at DESC
         LIMIT $3
       `,
-      [input.guildId, input.model, input.limit, input.botUserId ?? null]
+      [input.guildId, input.model, input.limit, input.botUserId ?? null, input.dimensions ?? 1536, input.inputVersion ?? 1]
     );
     return result.rows.map((row) => String(row.id));
   }
 
-  async embeddingBacklog(input: { guildId: string; model: string; botUserId?: string }) {
+  async embeddingBacklog(input: { guildId: string; model: string; dimensions?: number; inputVersion?: number; botUserId?: string }) {
     const result = await this.pool.query(
       `
         SELECT count(*)::int AS count
@@ -708,9 +865,15 @@ export class DiscordAiAgentRepository {
             position('<@' || $3 || '>' in m.content) = 0
             AND position('<@!' || $3 || '>' in m.content) = 0
           ))
-          AND (e.message_id IS NULL OR e.model <> $2)
+          AND (
+            e.message_id IS NULL
+            OR e.model <> $2
+            OR e.dimensions <> $4
+            OR e.input_version <> $5
+            OR e.input_sha256 IS NULL
+          )
       `,
-      [input.guildId, input.model, input.botUserId ?? null]
+      [input.guildId, input.model, input.botUserId ?? null, input.dimensions ?? 1536, input.inputVersion ?? 1]
     );
     return Number(result.rows[0]?.count ?? 0);
   }
@@ -3557,7 +3720,7 @@ function buildDiscordStatsBaseQuery(input: {
 }
 
 function discordStatsMetricSql(metric: DiscordStatsMetric) {
-  const channelCreatedAtSql = discordChannelCreatedAtSql("c.id", "m.created_at");
+  const channelCreatedAtSql = discordChannelCreatedAtSql("c.id", "m.created_at", "c.discord_created_at");
   if (metric === "attachments") return "coalesce(sum(attachment_stats.attachment_count), 0)::int";
   if (metric === "reactions") return "coalesce(sum(reaction_stats.reaction_count), 0)::int";
   if (metric === "uniqueActiveDays") return "count(DISTINCT date_trunc('day', m.created_at))::int";
@@ -3570,8 +3733,8 @@ function discordStatsMetricSql(metric: DiscordStatsMetric) {
   return "count(*)::int";
 }
 
-function discordChannelCreatedAtSql(channelIdSql: string, fallbackTimestampSql: string) {
-  return `CASE WHEN ${channelIdSql} ~ '^[0-9]+$' THEN to_timestamp((floor(${channelIdSql}::numeric / 4194304) + 1420070400000) / 1000.0) ELSE ${fallbackTimestampSql} END`;
+function discordChannelCreatedAtSql(channelIdSql: string, fallbackTimestampSql: string, storedTimestampSql = "c.discord_created_at") {
+  return `coalesce(${storedTimestampSql}, CASE WHEN ${channelIdSql} ~ '^[0-9]+$' THEN to_timestamp((floor(${channelIdSql}::numeric / 4194304) + 1420070400000) / 1000.0) ELSE ${fallbackTimestampSql} END)`;
 }
 
 function discordStatsEffectiveChannelIdSql() {
@@ -3589,7 +3752,7 @@ function discordStatsChannelAgeDaysSql(channelCreatedAtSql: string) {
 function discordStatsGrouping(groupBy: DiscordStatsGroupBy) {
   const nullText = "NULL::text";
   const nullTime = "NULL::timestamptz";
-  const defaultChannelCreatedAtSql = discordChannelCreatedAtSql("c.id", "m.created_at");
+  const defaultChannelCreatedAtSql = discordChannelCreatedAtSql("c.id", "m.created_at", "c.discord_created_at");
   if (groupBy === "user") {
     return {
       keySql: "m.author_id",
@@ -3617,7 +3780,7 @@ function discordStatsGrouping(groupBy: DiscordStatsGroupBy) {
       channelNameSql: effectiveChannelNameSql,
       messageIdSql: nullText,
       periodStartSql: nullTime,
-      channelCreatedAtSql: discordChannelCreatedAtSql(effectiveChannelIdSql, "m.created_at"),
+      channelCreatedAtSql: discordChannelCreatedAtSql(effectiveChannelIdSql, "m.created_at", "coalesce(parent.discord_created_at, c.discord_created_at)"),
       groupBySql: [effectiveChannelIdSql, effectiveChannelNameSql]
     };
   }
@@ -4102,7 +4265,10 @@ function rowToMessageForEmbedding(row: any): MessageForEmbedding {
     content: String(row.content ?? ""),
     normalizedContent: String(row.normalized_content ?? ""),
     deletedAt: row.deleted_at == null ? null : new Date(row.deleted_at),
-    embeddingModel: row.embedding_model == null ? null : String(row.embedding_model)
+    embeddingModel: row.embedding_model == null ? null : String(row.embedding_model),
+    embeddingDimensions: row.embedding_dimensions == null ? null : Number(row.embedding_dimensions),
+    embeddingInputVersion: row.embedding_input_version == null ? null : Number(row.embedding_input_version),
+    embeddingInputSha256: row.embedding_input_sha256 == null ? null : String(row.embedding_input_sha256)
   };
 }
 

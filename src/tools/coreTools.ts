@@ -1,4 +1,5 @@
 import { buildHistoryRetrievalQuery, searchDiscordHistory, formatSearchResults } from "../memory/search.js";
+import { MESSAGE_EMBEDDING_INPUT_VERSION } from "../memory/embedding.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
@@ -1336,6 +1337,8 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
     ctx.repo.embeddingBacklog({
       guildId: ctx.guildId,
       model: ctx.config.openRouter.embeddingModel,
+      dimensions: ctx.config.embeddingDimensions,
+      inputVersion: MESSAGE_EMBEDDING_INPUT_VERSION,
       botUserId: ctx.config.discord.clientId
     }),
     ctx.repo.interactionBlockCount(ctx.guildId)

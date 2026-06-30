@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
 import { createPool, type DbPool } from "../../src/db/pool.js";
@@ -1542,7 +1542,11 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.storeMessageEmbedding({
       messageId: alreadyEmbeddedId,
       embedding: Array.from({ length: 1536 }, () => 0.001),
-      model: "test/embed"
+      model: "test/embed",
+      dimensions: 1536,
+      inputVersion: 1,
+      inputText: "nacho plans",
+      inputSha256: sha256Hex("nacho plans")
     });
     await repo.upsertMessage({
       id: aiMentionId,
@@ -1655,4 +1659,8 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM channels WHERE id LIKE 'channel-%' OR id LIKE 'parent-%' OR id LIKE '%thread-%' OR guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM guilds WHERE id LIKE 'guild-%'");
   await pool.query("DELETE FROM discord_users WHERE id LIKE 'user-%'");
+}
+
+function sha256Hex(value: string) {
+  return createHash("sha256").update(value).digest("hex");
 }

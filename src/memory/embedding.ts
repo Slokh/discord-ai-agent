@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository, MessageForEmbedding } from "../db/repositories.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
@@ -6,6 +7,7 @@ import { chunkText } from "./normalize.js";
 
 const MAX_EMBEDDING_TEXTS_PER_REQUEST = 128;
 const MAX_PARALLEL_EMBEDDING_REQUESTS = 8;
+export const MESSAGE_EMBEDDING_INPUT_VERSION = 1;
 
 export type BatchEmbeddingResult = {
   embedded: number;
@@ -30,11 +32,16 @@ export async function embedAndStoreMessage(input: {
   );
   const embedding = averageEmbeddings(embeddings, input.config.embeddingDimensions);
   if (!embedding) return;
+  const inputText = embeddingInputText(input.normalizedContent);
 
   await input.repo.storeMessageEmbedding({
     messageId: input.messageId,
     embedding,
-    model: input.config.openRouter.embeddingModel
+    model: input.config.openRouter.embeddingModel,
+    dimensions: input.config.embeddingDimensions,
+    inputVersion: MESSAGE_EMBEDDING_INPUT_VERSION,
+    inputText,
+    inputSha256: sha256Hex(inputText)
   });
 }
 
@@ -65,6 +72,7 @@ export async function embedStoredMessages(input: {
     const message = messagesById.get(messageId);
     const skipReason = skipMessageEmbeddingReason(message, {
       embeddingModel: input.config.openRouter.embeddingModel,
+      embeddingDimensions: input.config.embeddingDimensions,
       botUserId: input.config.discord.clientId
     });
     if (skipReason) {
@@ -96,13 +104,17 @@ export async function embedStoredMessages(input: {
     }
   });
 
-  const items: Array<{ messageId: string; embedding: number[] }> = [];
+  const items: Array<{ messageId: string; embedding: number[]; inputText: string; inputSha256: string }> = [];
   for (const [messageId, embeddings] of embeddingsByMessageId) {
     const embedding = averageEmbeddings(embeddings, input.config.embeddingDimensions);
-    if (embedding) items.push({ messageId, embedding });
+    const message = messagesById.get(messageId);
+    const inputText = message ? embeddingInputText(message.normalizedContent) : "";
+    if (embedding) items.push({ messageId, embedding, inputText, inputSha256: sha256Hex(inputText) });
   }
   await input.repo.storeMessageEmbeddings({
     model: input.config.openRouter.embeddingModel,
+    dimensions: input.config.embeddingDimensions,
+    inputVersion: MESSAGE_EMBEDDING_INPUT_VERSION,
     items
   });
 
@@ -136,6 +148,7 @@ export async function embedStoredMessage(input: {
   const message = await input.repo.getMessageForEmbedding(input.messageId);
   const skipReason = skipMessageEmbeddingReason(message, {
     embeddingModel: input.config.openRouter.embeddingModel,
+    embeddingDimensions: input.config.embeddingDimensions,
     botUserId: input.config.discord.clientId
   });
 
@@ -167,14 +180,21 @@ export async function embedStoredMessage(input: {
 
 export function skipMessageEmbeddingReason(
   message: MessageForEmbedding | undefined,
-  input: { embeddingModel: string; botUserId?: string }
+  input: { embeddingModel: string; embeddingDimensions?: number; botUserId?: string }
 ) {
   if (!message) return "missing_message";
   if (message.deletedAt) return "deleted_message";
   if (!message.normalizedContent.trim()) return "empty_message";
   if (message.authorIsBot) return "bot_author";
   if (input.botUserId && hasDiscordUserMention(message.content, input.botUserId)) return "bot_mention";
-  if (message.embeddingModel === input.embeddingModel) return "already_current";
+  if (
+    message.embeddingModel === input.embeddingModel &&
+    message.embeddingDimensions === input.embeddingDimensions &&
+    message.embeddingInputVersion === MESSAGE_EMBEDDING_INPUT_VERSION &&
+    message.embeddingInputSha256 === sha256Hex(embeddingInputText(message.normalizedContent))
+  ) {
+    return "already_current";
+  }
   return undefined;
 }
 
@@ -203,6 +223,14 @@ function embeddingDimensionError(actual: number, expected: number) {
 
 function hasDiscordUserMention(content: string, userId: string) {
   return content.includes(`<@${userId}>`) || content.includes(`<@!${userId}>`);
+}
+
+export function embeddingInputText(normalizedContent: string) {
+  return normalizedContent.trim();
+}
+
+export function sha256Hex(value: string) {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {

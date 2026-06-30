@@ -11,7 +11,7 @@ import {
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { embeddingPriorityForMessageTimestamp, type MessageEmbeddingEnqueueOptions } from "../jobs/queue.js";
-import { persistDiscordMessage } from "./messagePersistence.js";
+import { channelRecordFromChannel, persistDiscordMessage } from "./messagePersistence.js";
 import { logger } from "../util/logger.js";
 
 type CrawlableChannel = GuildBasedChannel & {
@@ -266,27 +266,11 @@ export class DiscordCrawler {
   }
 
   private async persistChannel(guildId: string, channel: GuildBasedChannel) {
-    await this.input.repo.upsertChannel({
-      id: channel.id,
-      guildId,
-      parentId: "parentId" in channel ? channel.parentId : null,
-      name: "name" in channel ? channel.name : null,
-      type: channel.type,
-      isThread: false,
-      raw: { id: channel.id, type: channel.type }
-    });
+    await this.input.repo.upsertChannel({ ...channelRecordFromChannel(guildId, channel), isThread: false });
   }
 
   private async persistThread(guildId: string, thread: CrawlableChannel) {
-    await this.input.repo.upsertChannel({
-      id: thread.id,
-      guildId,
-      parentId: "parentId" in thread ? thread.parentId : null,
-      name: "name" in thread ? thread.name : null,
-      type: thread.type,
-      isThread: true,
-      raw: { id: thread.id, type: thread.type }
-    });
+    await this.input.repo.upsertChannel({ ...channelRecordFromChannel(guildId, thread), isThread: true });
   }
 
   private isSelfMessage(message: Message) {

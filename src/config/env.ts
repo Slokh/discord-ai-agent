@@ -54,6 +54,7 @@ const defaults = {
   githubAppInstallationId: "",
   internalApiHost: "0.0.0.0",
   internalApiPort: 8080,
+  controlUiAuthPassword: "",
   controlPlaneInternalUrl: "http://discord-ai-agent-api:8080",
   taskSigningSecret: "",
   kubernetesNamespace: process.env.POD_NAMESPACE || "discord-ai-agent",
@@ -108,6 +109,7 @@ const envSchema = z.object({
   GITHUB_APP_INSTALLATION_ID: z.string().default(defaults.githubAppInstallationId),
   INTERNAL_API_HOST: z.string().default(defaults.internalApiHost),
   INTERNAL_API_PORT: z.coerce.number().int().positive().default(defaults.internalApiPort),
+  CONTROL_UI_AUTH_PASSWORD: z.string().default(defaults.controlUiAuthPassword),
   CONTROL_PLANE_INTERNAL_URL: z.string().url().default(defaults.controlPlaneInternalUrl),
   TASK_SIGNING_SECRET: z.string().default(defaults.taskSigningSecret),
 
@@ -181,6 +183,9 @@ export function loadConfig() {
     internalApi: {
       host: parsed.data.INTERNAL_API_HOST,
       port: parsed.data.INTERNAL_API_PORT
+    },
+    controlUi: {
+      authPassword: parsed.data.CONTROL_UI_AUTH_PASSWORD
     },
     execution: {
       controlPlaneInternalUrl: parsed.data.CONTROL_PLANE_INTERNAL_URL.replace(/\/$/, ""),

@@ -61,6 +61,12 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
     secretKeyRef:
       name: {{ .Values.secret.existingSecretName }}
       key: {{ .Values.config.taskSigningSecretKey }}
+- name: CONTROL_UI_AUTH_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.controlUiAuthPasswordSecretKey }}
+      optional: true
 {{- end -}}
 
 {{- define "discord-ai-agent.sandboxLauncherEnv" -}}

@@ -40,10 +40,12 @@ The existing `ExecutionBackend` interface, task event stream, cache metrics, and
 
 The internal API serves a lightweight task viewer at `/tasks`. It shows recent code-update tasks, task status, sandbox metadata, completed command tails, and live stdout/stderr snippets from long-running Codex, verify, scan, and dependency-install steps.
 
-In Kubernetes, the API service is cluster-internal. Open it locally with:
+By default, the API service is cluster-internal. Open it locally with:
 
 ```sh
 kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080
 ```
 
 Then visit `http://localhost:8080/tasks`.
+
+If you expose the API service on a public hostname, set `CONTROL_UI_AUTH_PASSWORD` in the runtime Secret first. Browser access uses Basic auth with username `admin`; scripts may also use `Authorization: Bearer $CONTROL_UI_AUTH_PASSWORD`.

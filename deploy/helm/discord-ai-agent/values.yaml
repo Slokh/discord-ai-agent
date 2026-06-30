@@ -46,10 +46,18 @@ config:
   githubAppPrivateKeySecretKey: GITHUB_APP_PRIVATE_KEY
   githubAppInstallationIdSecretKey: GITHUB_APP_INSTALLATION_ID
   taskSigningSecretKey: TASK_SIGNING_SECRET
+  controlUiAuthPasswordSecretKey: CONTROL_UI_AUTH_PASSWORD
 
 api:
   replicas: 1
   port: 8080
+  service:
+    type: ClusterIP
+  publicService:
+    enabled: false
+    type: LoadBalancer
+    annotations: {}
+    port: 443
   metrics:
     scrapeAnnotations: true
   resources: {}

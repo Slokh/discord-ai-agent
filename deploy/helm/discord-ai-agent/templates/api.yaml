@@ -68,7 +68,7 @@ metadata:
     prometheus.io/port: {{ .Values.api.port | quote }}
   {{- end }}
 spec:
-  type: ClusterIP
+  type: {{ .Values.api.service.type }}
   selector:
     app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
@@ -77,3 +77,27 @@ spec:
     - name: http
       port: {{ .Values.api.port }}
       targetPort: http
+{{- if .Values.api.publicService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-api-public
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  {{- with .Values.api.publicService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.api.publicService.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+  ports:
+    - name: https
+      port: {{ .Values.api.publicService.port }}
+      targetPort: http
+{{- end }}

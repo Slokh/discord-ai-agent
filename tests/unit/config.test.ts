@@ -12,6 +12,7 @@ describe("config", () => {
         "GITHUB_REPOSITORY",
         "INTERNAL_API_HOST",
         "INTERNAL_API_PORT",
+        "CONTROL_UI_AUTH_PASSWORD",
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
         "KUBERNETES_NAMESPACE",
@@ -30,6 +31,7 @@ describe("config", () => {
         expect(config.github.repository).toBe("owner/repo");
         expect(config.internalApi.host).toBe("0.0.0.0");
         expect(config.internalApi.port).toBe(8080);
+        expect(config.controlUi.authPassword).toBe("");
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");

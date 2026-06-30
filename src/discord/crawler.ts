@@ -139,7 +139,7 @@ export class DiscordCrawler {
       await this.input.repo.updateProcessRun({
         runId,
         status: crawlStatus.some((row) => row.status === "error") ? "failed" : "succeeded",
-        summary: `Crawl finished in ${Date.now() - crawlStartedAt}ms.`,
+        summary: `Crawl finished in ${formatDurationSeconds(Date.now() - crawlStartedAt)}.`,
         metadata: { crawlStatus, durationMs: Date.now() - crawlStartedAt }
       });
     } finally {
@@ -381,6 +381,10 @@ export class DiscordCrawler {
       })
       .catch((error) => logger.warn({ err: error, channelId }, "Failed to record crawl page event"));
   }
+}
+
+function formatDurationSeconds(value: number) {
+  return `${(value / 1000).toFixed(3)}s`;
 }
 
 function emptyEmbeddingQueueStats(): Record<CrawlEmbeddingQueueStatus, number> {

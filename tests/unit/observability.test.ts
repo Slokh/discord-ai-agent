@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../../src/observability/redaction.js";
-import { summaryFromTask } from "../../src/observability/runs.js";
+import { extractDiscordMessageId, summaryFromTask } from "../../src/observability/runs.js";
 import type { AgentTaskRecord } from "../../src/db/repositories.js";
 
 describe("observability redaction", () => {
@@ -16,6 +16,15 @@ describe("observability redaction", () => {
 });
 
 describe("run summaries", () => {
+  it("extracts Discord message ids from links and pasted text", () => {
+    expect(extractDiscordMessageId("1521541635580756031")).toBe("1521541635580756031");
+    expect(extractDiscordMessageId("https://discord.com/channels/111111111111111111/222222222222222222/1521541635580756031")).toBe(
+      "1521541635580756031"
+    );
+    expect(extractDiscordMessageId("message: https://discord.com/channels/guild/channel/1521541635580756031 please")).toBe("1521541635580756031");
+    expect(extractDiscordMessageId("not a message")).toBeNull();
+  });
+
   it("derives codegen run summaries from legacy task rows", () => {
     const createdAt = new Date("2026-06-30T12:00:00Z");
     const completedAt = new Date("2026-06-30T12:02:00Z");

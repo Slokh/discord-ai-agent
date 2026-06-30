@@ -3481,7 +3481,9 @@ export class DiscordAiAgentRepository {
     return result.rowCount ?? 0;
   }
 
-  async listProcessRuns(input: { limit?: number; kind?: ProcessRunKind | null; status?: ProcessRunStatus | null } = {}): Promise<ProcessRunRecord[]> {
+  async listProcessRuns(
+    input: { limit?: number; kind?: ProcessRunKind | null; status?: ProcessRunStatus | null; includeEmbeddings?: boolean } = {}
+  ): Promise<ProcessRunRecord[]> {
     const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
     const result = await this.pool.query(
       `
@@ -3492,12 +3494,88 @@ export class DiscordAiAgentRepository {
         FROM process_runs
         WHERE ($2::text IS NULL OR kind = $2)
           AND ($3::text IS NULL OR status = $3)
+          AND ($4::boolean OR kind <> 'embedding')
         ORDER BY updated_at DESC, started_at DESC
         LIMIT $1
       `,
-      [limit, input.kind ?? null, input.status ?? null]
+      [limit, input.kind ?? null, input.status ?? null, input.includeEmbeddings ?? true]
     );
     return result.rows.map(rowToProcessRun);
+  }
+
+  async findProcessRunByDiscordMessageId(messageId: string): Promise<ProcessRunRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          pr.run_id, pr.trace_id, pr.kind, pr.status, pr.title, pr.summary, pr.guild_id, pr.channel_id,
+          pr.user_id, pr.message_id, pr.requester, pr.source, pr.metadata, pr.links, pr.started_at,
+          pr.completed_at, pr.updated_at
+        FROM process_runs pr
+        WHERE pr.run_id = $1
+           OR pr.message_id = $1
+           OR pr.metadata->>'discordResponseMessageId' = $1
+           OR pr.links->>'discordMessage' LIKE '%' || $1
+           OR (
+             pr.trace_id IS NOT NULL
+             AND EXISTS (
+               SELECT 1
+               FROM trace_events te
+               WHERE te.trace_id = pr.trace_id
+                 AND te.message_id = $1
+             )
+           )
+        ORDER BY
+          CASE
+            WHEN pr.run_id = $1 THEN 0
+            WHEN pr.message_id = $1 THEN 1
+            WHEN pr.metadata->>'discordResponseMessageId' = $1 THEN 2
+            WHEN pr.links->>'discordMessage' LIKE '%' || $1 THEN 3
+            ELSE 4
+          END,
+          pr.updated_at DESC,
+          pr.started_at DESC
+        LIMIT 1
+      `,
+      [messageId]
+    );
+    return result.rows[0] ? rowToProcessRun(result.rows[0]) : undefined;
+  }
+
+  async findAgentTaskByDiscordMessageId(messageId: string): Promise<AgentTaskRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          at.task_id, at.pgboss_job_id, at.trace_id, at.guild_id, at.channel_id, at.user_id,
+          at.thread_key, at.discord_response_channel_id, at.discord_response_message_id, at.retried_from_task_id,
+          at.task_type, at.title, at.request, at.requested_by, at.status, at.backend, at.current_step,
+          at.status_message, at.branch_name, at.pr_url, at.draft, at.verify_passed, at.error,
+          at.created_at, at.started_at, at.cancelled_at, at.completed_at, at.notified_at, at.notification_error,
+          at.progress_updated_at, at.last_rendered_signature, at.last_rendered_at, at.terminal_rendered_at, at.updated_at
+        FROM agent_tasks at
+        WHERE at.task_id = $1
+           OR at.discord_response_message_id = $1
+           OR (
+             at.trace_id IS NOT NULL
+             AND EXISTS (
+               SELECT 1
+               FROM trace_events te
+               WHERE te.trace_id = at.trace_id
+                 AND te.message_id = $1
+             )
+           )
+        ORDER BY
+          CASE
+            WHEN at.task_id = $1 THEN 0
+            WHEN at.discord_response_message_id = $1 THEN 1
+            ELSE 2
+          END,
+          at.updated_at DESC,
+          at.created_at DESC
+        LIMIT 1
+      `,
+      [messageId]
+    );
+    return result.rows[0] ? rowToAgentTask(result.rows[0]) : undefined;
   }
 
   async getProcessRun(runId: string): Promise<ProcessRunRecord | undefined> {

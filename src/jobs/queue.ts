@@ -144,7 +144,7 @@ export async function startJobs(input: {
             ?.updateProcessRun({
               runId,
               status: "succeeded",
-              summary: `Embedded batch in ${durationMs(startedAt)}ms.`,
+              summary: `Embedded batch in ${formatDurationSeconds(durationMs(startedAt))}.`,
               metadata: { result, durationMs: durationMs(startedAt) }
             })
             .catch((error) => logger.warn({ err: error, runId }, "Failed to complete embedding run"));
@@ -374,6 +374,10 @@ export async function startJobs(input: {
       await boss.stop();
     }
   };
+}
+
+function formatDurationSeconds(value: number) {
+  return `${(value / 1000).toFixed(3)}s`;
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

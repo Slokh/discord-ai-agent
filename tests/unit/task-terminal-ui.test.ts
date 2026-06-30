@@ -6,7 +6,8 @@ describe("task terminal UI", () => {
     const html = renderTaskListPage();
 
     expect(html).toContain("Agent Tasks");
-    expect(html).toContain("/api/tasks?limit=50");
+    expect(html).toContain("/api/tasks?limit=100");
+    expect(html).toContain("Needs Review");
   });
 
   it("renders a task page without allowing route text to break the script tag", () => {

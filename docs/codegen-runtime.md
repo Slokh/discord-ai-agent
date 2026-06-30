@@ -49,3 +49,5 @@ kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080
 Then visit `http://localhost:8080/tasks`.
 
 If you expose the API service on a public hostname, set `CONTROL_UI_AUTH_PASSWORD` in the runtime Secret first. Browser access uses Basic auth with username `admin`; scripts may also use `Authorization: Bearer $CONTROL_UI_AUTH_PASSWORD`.
+
+To share a pre-authenticated link, append `?auth=$CONTROL_UI_AUTH_PASSWORD` to any task viewer URL. The server validates the token, stores an HttpOnly cookie for 30 days, then redirects to the same URL without the auth query parameter.

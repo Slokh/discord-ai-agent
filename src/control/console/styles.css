@@ -505,6 +505,22 @@ kbd {
   padding: 8px 10px;
 }
 
+.detail-tabs {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+  width: 100%;
+}
+
+.detail-tabs [role="tablist"] {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.detail-tabs [role="tablist"] > span:first-child {
+  display: none;
+}
+
 [role="tab"][aria-selected="true"] {
   background:
     linear-gradient(180deg, rgb(125 211 252 / 0.13), rgb(181 242 223 / 0.08)),

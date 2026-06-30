@@ -340,7 +340,9 @@ export function App() {
             <RunHeader run={selectedRun} loading={loadingSnapshot} />
             {snapshot ? (
               <>
-                <Tabs active={tab} aria-label="Run detail sections" onChange={(nextTab) => updateConsoleState({ tab: nextTab as DetailTab })} tabs={detailTabs} />
+                <div className="detail-tabs">
+                  <Tabs active={tab} aria-label="Run detail sections" onChange={(nextTab) => updateConsoleState({ tab: nextTab as DetailTab })} tabs={detailTabs} />
+                </div>
                 {tab === "overview" && <Overview snapshot={snapshot} />}
                 {tab === "timeline" && <Timeline snapshot={snapshot} />}
                 {tab === "calls" && <Calls snapshot={snapshot} />}

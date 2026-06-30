@@ -1,6 +1,6 @@
 # Codegen Runtime
 
-Discord AI Agent uses Kubernetes sandbox Jobs for code-update tasks. The current runtime is cache-first:
+Discord AI Agent uses Kubernetes sandboxes for code-update tasks. The default runtime is cache-first:
 
 - each task gets an isolated Kubernetes Job and branch
 - a shared PVC keeps the bare Git mirror, npm download cache, and dependency snapshots warm
@@ -9,9 +9,11 @@ Discord AI Agent uses Kubernetes sandbox Jobs for code-update tasks. The current
 
 This keeps the user-facing flow synchronous while removing the most expensive repeated setup from the request path.
 
+An optional warm-pool runtime can keep reusable sandbox Pods online. When `SANDBOX_WARM_POOL_ENABLED=true`, the worker maintains up to `SANDBOX_WARM_POOL_SIZE` warm Pods per configured repository/base branch, claims a ready Pod for a task, launches the task runner through Kubernetes exec, and releases the Pod after the terminal callback. Any miss, stale Pod, failed exec, or missing pool dependency falls back to the cold Job path.
+
 ## Current Isolation Model
 
-Every code-update request still has its own task branch and sandbox process. The sandbox receives only the task callback token, GitHub task token, OpenRouter key, repo coordinates, and task prompt. The worker reconciler marks tasks failed if a sandbox exits without a terminal callback, then cleans up the Kubernetes Job, Secret, and ConfigMap.
+Every code-update request still has its own task branch and sandbox process. The sandbox receives only the task callback token, GitHub task token, OpenRouter key, repo coordinates, and task prompt. The worker reconciler marks tasks failed if a sandbox exits without a terminal callback, then cleans up cold Kubernetes Job resources or releases the warm sandbox lease.
 
 ## Cache Model
 
@@ -24,14 +26,14 @@ The retained cache contains:
 
 If Codex changes `package.json` or `package-lock.json`, the sandbox refreshes dependencies before verification so tests run with the generated dependency graph.
 
-## Warm Runtime Direction
+## Warm Runtime
 
-The next Centaur-like step is a warm codegen runtime instead of one Job per task:
+The warm-pool runtime follows the Centaur-like shape without removing the simpler cold backend:
 
-1. Add a `codegen_sandboxes` or `warm_sandboxes` table with sandbox ID, repo, status, lease owner, heartbeat, last used time, and cache metadata.
-2. Run long-lived codegen worker Pods that keep the repo mirror and dependency store mounted.
-3. Lease a warm sandbox for each task, create a fresh worktree/branch under that sandbox, execute Codex, then release or recycle the sandbox.
-4. Keep fallback support for the current Kubernetes Job backend when no warm sandbox is available.
-5. Move credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.
+1. `warm_sandboxes` stores sandbox ID, repo key, status, lease owner, heartbeat, last-used time, and metadata.
+2. Long-lived sandbox Pods keep the repo mirror and dependency store mounted.
+3. The worker claims a ready sandbox with a database lease, creates a fresh worktree/branch inside the task runner, executes Codex, then releases the sandbox.
+4. The cold Kubernetes Job backend remains the fallback when no warm sandbox is available.
+5. The next hardening step is moving credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.
 
 The existing `ExecutionBackend` interface, task event stream, cache metrics, and operator scripts are intended to survive that migration.

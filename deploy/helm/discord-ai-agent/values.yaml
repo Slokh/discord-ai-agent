@@ -23,6 +23,11 @@ sandbox:
     accessModes:
       - ReadWriteOnce
     storageClassName: ""
+  warmPool:
+    enabled: false
+    size: 0
+    leaseSeconds: 1800
+    idleTtlSeconds: 10800
 
 secret:
   existingSecretName: discord-ai-agent-env
@@ -61,7 +66,7 @@ bot:
 
 worker:
   # Keep this at 1 with the default ReadWriteOnce sandbox cache PVC. Use RWX
-  # storage or a DB-backed cache/sandbox lease model before scaling codegen workers.
+  # storage before scaling codegen workers or warm-pool pods across nodes.
   replicas: 1
   resources: {}
 

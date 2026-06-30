@@ -144,7 +144,7 @@ npm run prompt -- --no-memory "what can you do?"
 
 ## Code Updates
 
-When someone asks `@ai update yourself to ...`, the bot creates a durable `agent.task`, the worker starts a Kubernetes sandbox Job, and the sandbox:
+When someone asks `@ai update yourself to ...`, the bot creates a durable `agent.task`, the worker starts a Kubernetes sandbox, and the sandbox:
 
 1. Refreshes a cached bare clone of the configured GitHub repo.
 2. Creates a per-task worktree and branch.
@@ -156,8 +156,10 @@ When someone asks `@ai update yourself to ...`, the bot creates a durable `agent
 8. Opens a GitHub PR only if there is a real diff.
 9. Reports progress, cache hit/miss data, and phase timings back to the internal API.
 
+The default runtime starts one Kubernetes Job per task. If `SANDBOX_WARM_POOL_ENABLED=true`, workers also maintain a small pool of reusable sandbox Pods, lease one for a task when ready, and fall back to the Job path on any warm-pool miss or launch failure.
+
 The original Discord reply is edited with progress and the final PR link plus compact timing/cache details.
-If a sandbox crashes, disappears, or exits without sending its terminal callback, the worker reconciler marks the task failed in Postgres and later cleans up the sandbox Job, Secret, and ConfigMap.
+If a sandbox crashes, disappears, or exits without sending its terminal callback, the worker reconciler marks the task failed in Postgres and later cleans up the sandbox resources. Warm sandbox Pods are released back to the pool after terminal callbacks; cold Jobs are deleted with their per-task Secret and ConfigMap.
 
 The sandbox also installs ephemeral helper CLIs on Codex's `PATH`:
 
@@ -208,6 +210,10 @@ Common optional settings:
 | `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
 | `SANDBOX_CACHE_DIR` | `/var/cache/discord-ai-agent` | Sandbox repo/npm/dependency cache path |
 | `SANDBOX_CACHE_PVC_NAME` | unset | Optional Kubernetes PVC mounted at `SANDBOX_CACHE_DIR` |
+| `SANDBOX_WARM_POOL_ENABLED` | `false` | Enable reusable Kubernetes sandbox Pods for code-update tasks |
+| `SANDBOX_WARM_POOL_SIZE` | `0` | Number of warm sandbox Pods to maintain per configured repo/base branch |
+| `SANDBOX_WARM_POOL_LEASE_SECONDS` | `1800` | Lease duration refreshed by sandbox progress callbacks |
+| `SANDBOX_WARM_POOL_IDLE_TTL_SECONDS` | `10800` | Recycle ready warm Pods after this idle window |
 | `CONTROL_PLANE_INTERNAL_URL` | `http://discord-ai-agent-api:8080` | Sandbox callback URL |
 | `DISCORD_AGENT_RESPONSE_TIMEOUT_MS` | `1800000` | Max time a Discord request can run before returning an error; code-update PR work continues through background task rendering |
 | `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all` |

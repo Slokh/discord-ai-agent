@@ -13,6 +13,7 @@ type SandboxEnv = {
   taskId: string;
   traceId: string;
   sandboxRunId: string;
+  warmSandboxId: string | null;
   taskTitle: string;
   taskRequest: string;
   requestedBy: string;
@@ -252,6 +253,7 @@ function loadSandboxEnv(): SandboxEnv {
     taskId: requiredEnv("TASK_ID"),
     traceId: requiredEnv("TRACE_ID"),
     sandboxRunId: requiredEnv("SANDBOX_RUN_ID"),
+    warmSandboxId: process.env.WARM_SANDBOX_ID || null,
     taskTitle: requiredEnv("TASK_TITLE"),
     taskRequest: requiredEnv("TASK_REQUEST"),
     requestedBy: requiredEnv("REQUESTED_BY"),
@@ -591,16 +593,25 @@ async function pathExists(filePath: string) {
 }
 
 async function progress(env: SandboxEnv, step: string, message: string, metadata: Record<string, unknown> = {}) {
-  console.log(JSON.stringify({ event: "task.progress", taskId: env.taskId, step, message, metadata }));
-  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/events`, { step, message, metadata });
+  const fullMetadata = sandboxCallbackMetadata(env, metadata);
+  console.log(JSON.stringify({ event: "task.progress", taskId: env.taskId, step, message, metadata: fullMetadata }));
+  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/events`, { step, message, metadata: fullMetadata });
 }
 
 async function complete(env: SandboxEnv, body: Record<string, unknown>) {
   const metadata = body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {};
   await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/complete`, {
     ...body,
-    metadata: { sandboxRunId: env.sandboxRunId, ...metadata }
+    metadata: sandboxCallbackMetadata(env, metadata as Record<string, unknown>)
   });
+}
+
+function sandboxCallbackMetadata(env: SandboxEnv, metadata: Record<string, unknown> = {}) {
+  return {
+    sandboxRunId: env.sandboxRunId,
+    ...(env.warmSandboxId ? { warmSandboxId: env.warmSandboxId } : {}),
+    ...metadata
+  };
 }
 
 async function postJson(env: SandboxEnv, pathName: string, body: Record<string, unknown>) {
@@ -894,6 +905,7 @@ async function recordCommand(
   if (!env) return;
   await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/commands`, {
     sandboxRunId: env.sandboxRunId,
+    ...(env.warmSandboxId ? { warmSandboxId: env.warmSandboxId } : {}),
     ...body
   }).catch((error) => {
     console.error("Failed to post sandbox command event", error);

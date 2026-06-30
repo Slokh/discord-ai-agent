@@ -62,7 +62,7 @@ async function main() {
   logger.debug("Postgres pool created");
   const repo = new DiscordAiAgentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
-  const executionBackend = startsWorker ? new KubernetesExecutionBackend(config) : undefined;
+  const executionBackend = startsWorker ? new KubernetesExecutionBackend(config, undefined, { warmStore: repo }) : undefined;
 
   const client =
     startsBot || startsWorker

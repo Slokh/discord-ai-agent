@@ -69,6 +69,7 @@ async function handleRequest(input: {
       statusMessage: body.message,
       metadata: body.metadata
     });
+    await heartbeatWarmSandbox(input.repo, input.config, taskId, body.metadata ?? {});
     sendJson(input.response, 200, { ok: true });
     return;
   }
@@ -98,6 +99,7 @@ async function handleRequest(input: {
         metadata: body.metadata
       });
     }
+    await heartbeatWarmSandbox(input.repo, input.config, taskId, body.metadata ?? {});
     sendJson(input.response, 200, { ok: true });
     return;
   }
@@ -120,6 +122,7 @@ async function handleRequest(input: {
       errorTail: body.errorTail,
       durationMs: body.durationMs
     });
+    await heartbeatWarmSandbox(input.repo, input.config, taskId, body);
     sendJson(input.response, 200, { ok: true });
     return;
   }
@@ -175,6 +178,7 @@ function parseCompletionEvent(value: unknown): AgentTaskCompletionEvent {
 
 function parseCommandEvent(value: unknown): {
   sandboxRunId: string | null;
+  warmSandboxId: string | null;
   step: string;
   command: string | null;
   exitCode: number | null;
@@ -187,6 +191,7 @@ function parseCommandEvent(value: unknown): {
   const step = typeof body.step === "string" && body.step.trim() ? body.step.trim() : "command";
   return {
     sandboxRunId: stringOrNull(body.sandboxRunId),
+    warmSandboxId: stringOrNull(body.warmSandboxId),
     step,
     command: stringOrNull(body.command),
     exitCode: typeof body.exitCode === "number" && Number.isFinite(body.exitCode) ? Math.trunc(body.exitCode) : null,
@@ -194,6 +199,23 @@ function parseCommandEvent(value: unknown): {
     errorTail: typeof body.errorTail === "string" ? body.errorTail.slice(-40_000) : "",
     durationMs: typeof body.durationMs === "number" && Number.isFinite(body.durationMs) ? Math.trunc(body.durationMs) : null
   };
+}
+
+async function heartbeatWarmSandbox(
+  repo: DiscordAiAgentRepository,
+  config: AppConfig,
+  taskId: string,
+  metadata: Record<string, unknown>
+) {
+  const warmSandboxId = stringOrNull(metadata.warmSandboxId);
+  if (!warmSandboxId) return;
+  await repo
+    .heartbeatWarmSandbox({
+      sandboxId: warmSandboxId,
+      taskId,
+      leaseSeconds: config.execution.kubernetes.warmPool.leaseSeconds
+    })
+    .catch((error) => logger.warn({ err: error, taskId, warmSandboxId }, "Failed to heartbeat warm sandbox lease"));
 }
 
 function stringOrNull(value: unknown) {
@@ -230,6 +252,9 @@ async function renderMetrics(repo: DiscordAiAgentRepository) {
     "# HELP discord_ai_agent_sandbox_runs_total Sandbox runs by status.",
     "# TYPE discord_ai_agent_sandbox_runs_total gauge",
     ...taskMetrics.sandboxRunsByStatus.map((row) => `discord_ai_agent_sandbox_runs_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),
+    "# HELP discord_ai_agent_warm_sandboxes_total Warm reusable Kubernetes sandboxes by status.",
+    "# TYPE discord_ai_agent_warm_sandboxes_total gauge",
+    ...taskMetrics.warmSandboxesByStatus.map((row) => `discord_ai_agent_warm_sandboxes_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),
     "# HELP discord_ai_agent_codegen_phase_duration_avg_ms Average code-update phase duration in milliseconds.",
     "# TYPE discord_ai_agent_codegen_phase_duration_avg_ms gauge",
     ...taskMetrics.codegenPhaseDurations.map((row) => `discord_ai_agent_codegen_phase_duration_avg_ms{phase=${quoteMetricLabel(row.phase)}} ${row.avgMs}`),

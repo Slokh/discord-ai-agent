@@ -19,6 +19,7 @@ export type AgentTaskJob = {
 export type AgentTaskStartResult = {
   sandboxRunId: string;
   backendJobName: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type AgentTaskProgressEvent = {

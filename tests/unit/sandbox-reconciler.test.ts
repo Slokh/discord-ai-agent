@@ -52,6 +52,22 @@ describe("sandbox reconciler", () => {
     expect(backend.cleanupRun).toHaveBeenCalledWith(run);
     expect(repo.markSandboxRunCleanedUp).toHaveBeenCalledWith("run-1");
   });
+
+  it("reconciles the warm sandbox pool after run reconciliation", async () => {
+    const repo = {
+      listActiveSandboxRuns: vi.fn(async () => []),
+      listTerminalSandboxRunsPendingCleanup: vi.fn(async () => [])
+    };
+    const backend = {
+      observeRun: vi.fn(),
+      cleanupRun: vi.fn(),
+      reconcileWarmPool: vi.fn(async () => undefined)
+    };
+
+    await runSandboxReconciliationOnce(repo as any, backend);
+
+    expect(backend.reconcileWarmPool).toHaveBeenCalledOnce();
+  });
 });
 
 function sandboxRun(overrides: Partial<SandboxRunRecord> = {}): SandboxRunRecord {

@@ -1,6 +1,6 @@
 import PgBoss from "pg-boss";
 import type { AppConfig } from "../config/env.js";
-import type { AgentTaskJob } from "../execution/types.js";
+import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
 import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { durationMs, logger } from "../util/logger.js";
@@ -31,7 +31,7 @@ export type EmbeddingJobRunner = {
 
 export type AgentTaskRunner = {
   name?: string;
-  start: (job: AgentTaskJob, context?: ExecutionContext) => Promise<{ sandboxRunId: string; backendJobName: string }>;
+  start: (job: AgentTaskJob, context?: ExecutionContext) => Promise<AgentTaskStartResult>;
 };
 
 export type JobRuntime = {
@@ -177,7 +177,8 @@ export async function startJobs(input: {
                 backend: backendName,
                 backendJobName: result.backendJobName,
                 namespace: input.config.execution.kubernetes.namespace,
-                image: input.config.execution.kubernetes.sandboxImage
+                image: input.config.execution.kubernetes.sandboxImage,
+                metadata: result.metadata
               });
               await input.repo?.markAgentTaskProgress({
                 taskId: job.data.taskId,

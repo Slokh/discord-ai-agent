@@ -21,7 +21,7 @@ Services:
 - `api`: internal sandbox callback API.
 - `bot`: Discord gateway and reply delivery.
 - `worker`: crawl, embeddings, queues, and sandbox Job creation.
-- `sandbox`: short-lived Kubernetes Jobs created per code-update task.
+- `sandbox`: short-lived Kubernetes Jobs by default, with optional reusable warm Pods for faster code-update starts.
 
 ## Required Secret
 
@@ -99,7 +99,7 @@ The chart creates:
 - One app service account for `api`, `bot`, and migrations.
 - One worker service account with sandbox-launcher RBAC.
 - One sandbox service account for task Jobs.
-- A Role allowing only the worker service account to create sandbox Jobs, Secrets, and ConfigMaps.
+- A Role allowing only the worker service account to create sandbox Jobs, Secrets, ConfigMaps, warm Pods, and `pods/exec` sessions.
 - No RBAC permissions for the sandbox service account.
 
 The sandbox receives only:
@@ -111,7 +111,7 @@ The sandbox receives only:
 
 It does not receive Discord credentials or the database URL.
 
-The worker reconciles active sandbox runs. If a Kubernetes Job fails, disappears, or completes without a terminal callback, the task is marked failed. Once a task is terminal, the worker deletes the per-task Job, Secret, and ConfigMap and records cleanup in Postgres.
+The worker reconciles active sandbox runs. If a Kubernetes Job or warm Pod fails, disappears, or completes without a terminal callback, the task is marked failed. Once a task is terminal, the worker deletes per-task cold Job resources or releases the warm Pod lease and records cleanup in Postgres.
 
 ## Sandbox Cache
 
@@ -123,7 +123,15 @@ The Helm chart creates a sandbox cache PVC by default. Sandbox Jobs mount it at 
 
 Per-task Git worktrees are created on sandbox-local temporary storage and cleaned up after each run; the shared cache is intentionally retained. If Codex changes `package.json` or `package-lock.json`, the sandbox refreshes dependencies again before verification so tests do not run against stale dependencies.
 
-The default chart uses a `ReadWriteOnce` cache PVC and `worker.replicas=1`. Keep that shape unless your storage class supports the access mode and scheduling behavior you need for concurrent code-update tasks. For multi-worker or warm-pool deployments, move cache/sandbox ownership to an explicit lease model before scaling codegen horizontally.
+The default chart uses a `ReadWriteOnce` cache PVC and `worker.replicas=1`. Keep that shape unless your storage class supports the access mode and scheduling behavior you need for concurrent code-update tasks. The warm-pool runtime has a DB lease model for sandbox ownership, but the cache PVC still needs storage semantics that match your scheduling strategy.
+
+Optional warm pool:
+
+```bash
+helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
+  --set sandbox.warmPool.enabled=true \
+  --set sandbox.warmPool.size=3
+```
 
 Cache operator scripts can run anywhere the cache volume is mounted:
 
@@ -134,6 +142,7 @@ npm run sandbox-cache:clear
 ```
 
 The API `/metrics` endpoint includes aggregate codegen phase timings and sandbox cache hit/miss counters.
+It also reports `discord_ai_agent_warm_sandboxes_total{status=...}` when warm-pool records exist.
 
 ## Networking
 
@@ -172,6 +181,7 @@ The API service also exposes Prometheus text metrics at `/metrics`. The Helm cha
 - logged tool calls
 - agent task counts by status
 - sandbox run counts by status
+- warm sandbox counts by status
 
 ## First Run
 

@@ -30,7 +30,7 @@ variable "database_password" {
 variable "database_instance_class" {
   description = "RDS instance class."
   type        = string
-  default     = "db.t4g.medium"
+  default     = "db.t4g.small"
 }
 
 variable "database_allocated_storage_gb" {

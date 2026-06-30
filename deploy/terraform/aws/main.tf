@@ -13,10 +13,11 @@ module "vpc" {
   private_subnets = var.private_subnet_cidrs
   public_subnets  = var.public_subnet_cidrs
 
-  enable_nat_gateway   = true
-  single_nat_gateway   = true
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+  enable_nat_gateway      = false
+  single_nat_gateway      = false
+  enable_dns_hostnames    = true
+  enable_dns_support      = true
+  map_public_ip_on_launch = true
 
   private_subnet_tags = {
     "kubernetes.io/role/internal-elb" = "1"
@@ -50,7 +51,7 @@ module "eks" {
   version = "~> 20.0"
 
   cluster_name    = var.name
-  cluster_version = "1.30"
+  cluster_version = "1.34"
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
@@ -61,10 +62,11 @@ module "eks" {
   eks_managed_node_groups = {
     default = {
       min_size     = 1
-      max_size     = 4
-      desired_size = 2
+      max_size     = 2
+      desired_size = 1
 
-      instance_types = ["t3.large"]
+      subnet_ids     = module.vpc.public_subnets
+      instance_types = ["t3.medium"]
       capacity_type  = "ON_DEMAND"
     }
   }
@@ -128,6 +130,7 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids  = [aws_security_group.rds.id]
   backup_retention_period = 7
   storage_encrypted       = true
+  apply_immediately       = true
   skip_final_snapshot     = false
   deletion_protection     = true
 }

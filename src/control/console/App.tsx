@@ -6,7 +6,6 @@ import {
   Bot,
   Clock3,
   Download,
-  ExternalLink,
   FileText,
   Filter,
   Link2,
@@ -377,8 +376,6 @@ export function App() {
 }
 
 function RunHeader({ run, loading }: { run: RunSummary; loading: boolean }) {
-  const prUrl = typeof run.links.pullRequest === "string" ? run.links.pullRequest : null;
-  const discordUrl = typeof run.links.discordMessage === "string" ? run.links.discordMessage : null;
   return (
     <header className="run-header">
       <div className="title-stack">
@@ -395,20 +392,6 @@ function RunHeader({ run, loading }: { run: RunSummary; loading: boolean }) {
           {run.requester && <MetaPill icon={<Bot />} label="Requester" value={run.requester} />}
           {run.traceId && <MetaPill icon={<Link2 />} label="Trace" value={shortId(run.traceId)} />}
         </div>
-      </div>
-      <div className="header-actions">
-        <Copy value={shareableCurrentUrl()} title="Copy current view link" />
-        <Copy value={run.runId} title="Copy run id" />
-        {prUrl && (
-          <Button.Text render={<a href={prUrl} target="_blank" rel="noreferrer" />} suffix={<ExternalLink />}>
-            PR
-          </Button.Text>
-        )}
-        {discordUrl && (
-          <Button.Text render={<a href={discordUrl} target="_blank" rel="noreferrer" />} suffix={<ExternalLink />}>
-            Discord
-          </Button.Text>
-        )}
       </div>
     </header>
   );
@@ -1074,10 +1057,6 @@ function metadataValue(value: unknown) {
 
 function shortId(value: string) {
   return value.length > 14 ? `${value.slice(0, 6)}...${value.slice(-6)}` : value;
-}
-
-function shareableCurrentUrl() {
-  return window.location.href;
 }
 
 function latencyBreakdown(snapshot: RunSnapshot): LatencyRow[] {

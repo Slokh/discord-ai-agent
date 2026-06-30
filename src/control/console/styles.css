@@ -86,7 +86,6 @@ svg {
 .run-item-top,
 .run-item-bottom,
 .tag-row,
-.header-actions,
 .filter-row {
   align-items: center;
   display: flex;
@@ -444,11 +443,6 @@ kbd {
   color: var(--muted);
   max-width: 900px;
   overflow-wrap: anywhere;
-}
-
-.header-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .run-meta-row {

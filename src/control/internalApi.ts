@@ -5,6 +5,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
 import { verifyTaskBearerToken } from "../execution/token.js";
 import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execution/types.js";
+import { renderTaskListPage, renderTaskTerminalPage } from "./taskTerminalUi.js";
 
 const MAX_BODY_BYTES = 128 * 1024;
 
@@ -47,6 +48,54 @@ async function handleRequest(input: {
 
   if (method === "GET" && url.pathname === "/healthz") {
     sendJson(input.response, 200, { status: "ok" });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/") {
+    sendRedirect(input.response, "/tasks");
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/tasks") {
+    sendHtml(input.response, 200, renderTaskListPage());
+    return;
+  }
+
+  const taskPageMatch = url.pathname.match(/^\/tasks\/([^/]+)$/);
+  if (method === "GET" && taskPageMatch) {
+    sendHtml(input.response, 200, renderTaskTerminalPage(decodeURIComponent(taskPageMatch[1] ?? "")));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/tasks") {
+    const limit = parseLimit(url.searchParams.get("limit"), 50, 100);
+    sendJson(input.response, 200, {
+      tasks: await input.repo.listRecentAgentTasks(limit),
+      generatedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  const taskSnapshotMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+  if (method === "GET" && taskSnapshotMatch) {
+    const taskId = decodeURIComponent(taskSnapshotMatch[1] ?? "");
+    const task = await input.repo.getAgentTask(taskId);
+    if (!task) {
+      sendJson(input.response, 404, { error: "task_not_found" });
+      return;
+    }
+    const [events, commands, runs] = await Promise.all([
+      input.repo.getTaskEventsForTask({ taskId, limit: parseLimit(url.searchParams.get("events"), 200, 300) }),
+      input.repo.getSandboxCommandEventsForTask({ taskId, limit: parseLimit(url.searchParams.get("commands"), 50, 100) }),
+      input.repo.getSandboxRunsForTask(taskId)
+    ]);
+    sendJson(input.response, 200, {
+      task,
+      events,
+      commands,
+      runs,
+      generatedAt: new Date().toISOString()
+    });
     return;
   }
 
@@ -200,16 +249,35 @@ function stringOrNull(value: unknown) {
   return typeof value === "string" ? value : null;
 }
 
+function parseLimit(value: string | null, fallback: number, max: number) {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(max, Math.trunc(parsed)));
+}
+
 function sendJson(response: http.ServerResponse, status: number, body: Record<string, unknown>) {
   if (response.headersSent) return;
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
 }
 
+function sendHtml(response: http.ServerResponse, status: number, body: string) {
+  if (response.headersSent) return;
+  response.writeHead(status, { "content-type": "text/html; charset=utf-8" });
+  response.end(body);
+}
+
 function sendText(response: http.ServerResponse, status: number, body: string) {
   if (response.headersSent) return;
   response.writeHead(status, { "content-type": "text/plain; version=0.0.4" });
   response.end(body);
+}
+
+function sendRedirect(response: http.ServerResponse, location: string) {
+  if (response.headersSent) return;
+  response.writeHead(302, { location });
+  response.end();
 }
 
 async function renderMetrics(repo: DiscordAiAgentRepository) {

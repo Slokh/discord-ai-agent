@@ -35,3 +35,15 @@ The next Centaur-like step is a warm codegen runtime instead of one Job per task
 5. Move credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.
 
 The existing `ExecutionBackend` interface, task event stream, cache metrics, and operator scripts are intended to survive that migration.
+
+## Task Terminal UI
+
+The internal API serves a lightweight task viewer at `/tasks`. It shows recent code-update tasks, task status, sandbox metadata, completed command tails, and live stdout/stderr snippets from long-running Codex, verify, scan, and dependency-install steps.
+
+In Kubernetes, the API service is cluster-internal. Open it locally with:
+
+```sh
+kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080
+```
+
+Then visit `http://localhost:8080/tasks`.

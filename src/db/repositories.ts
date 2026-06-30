@@ -2577,6 +2577,25 @@ export class DiscordAiAgentRepository {
     return row ? rowToAgentTask(row) : undefined;
   }
 
+  async listRecentAgentTasks(limit = 50): Promise<AgentTaskRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          task_type, title, request, requested_by, status, backend, current_step,
+          status_message, branch_name, pr_url, draft, verify_passed, error,
+          created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
+          progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
+        FROM agent_tasks
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT $1
+      `,
+      [Math.max(1, Math.min(100, Math.trunc(limit)))]
+    );
+    return result.rows.map(rowToAgentTask);
+  }
+
   async listAgentTasks(input: {
     guildId: string;
     visibleChannelIds?: string[];
@@ -2800,6 +2819,27 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToSandboxCommandEvent);
   }
 
+  async getSandboxCommandEventsForTask(input: { taskId: string; limit?: number }): Promise<SandboxCommandEvent[]> {
+    const limit = Math.max(1, Math.min(100, Math.trunc(input.limit ?? 50)));
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM (
+          SELECT
+            id, task_id, sandbox_run_id, step, command, exit_code,
+            output_tail, error_tail, duration_ms, created_at
+          FROM sandbox_command_events
+          WHERE task_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT $2
+        ) recent
+        ORDER BY created_at ASC, id ASC
+      `,
+      [input.taskId, limit]
+    );
+    return result.rows.map(rowToSandboxCommandEvent);
+  }
+
   async listActiveSandboxRuns(limit = 50): Promise<SandboxRunRecord[]> {
     const result = await this.pool.query(
       `
@@ -2815,6 +2855,23 @@ export class DiscordAiAgentRepository {
         LIMIT $1
       `,
       [Math.max(1, Math.min(200, Math.trunc(limit)))]
+    );
+    return result.rows.map(rowToSandboxRun);
+  }
+
+  async getSandboxRunsForTask(taskId: string): Promise<SandboxRunRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          sr.sandbox_run_id, sr.task_id, at.status AS task_status, sr.backend, sr.namespace,
+          sr.backend_job_name, sr.image, sr.status, sr.metadata, sr.started_at,
+          sr.completed_at, sr.cleaned_up_at, sr.updated_at
+        FROM sandbox_runs sr
+        JOIN agent_tasks at ON at.task_id = sr.task_id
+        WHERE sr.task_id = $1
+        ORDER BY sr.started_at ASC NULLS LAST, sr.updated_at ASC
+      `,
+      [taskId]
     );
     return result.rows.map(rowToSandboxRun);
   }
@@ -3136,6 +3193,27 @@ export class DiscordAiAgentRepository {
         LIMIT $4
       `,
       [input.guildId, input.traceId ?? null, input.visibleChannelIds, limit]
+    );
+    return result.rows.map(rowToTaskEvent);
+  }
+
+  async getTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
+    const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM (
+          SELECT
+            id, task_id, trace_id, event_name, level,
+            summary, metadata, created_at
+          FROM task_events
+          WHERE task_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT $2
+        ) recent
+        ORDER BY created_at ASC, id ASC
+      `,
+      [input.taskId, limit]
     );
     return result.rows.map(rowToTaskEvent);
   }

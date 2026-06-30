@@ -599,7 +599,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "openGithubPullRequest",
     description:
-      "Run a Railway codegen worker job for a requested Discord AI Agent update, wait for the result, and return the PR link only when it creates a real code diff. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
+      "Start a durable Railway codegen worker job for a requested Discord AI Agent update. The bot will update the same Discord reply with progress and the PR link when the job finishes. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
     userVisible: true,
     mutates: true,
     parameters: {

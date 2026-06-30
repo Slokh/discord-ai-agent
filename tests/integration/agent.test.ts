@@ -1526,50 +1526,21 @@ describe("agent router", () => {
     const ctx = {
       config: { maxReplyChars: 1800, github: { dryRun: false } },
       repo: {
-        auditTool: vi.fn(async () => undefined),
-        getAgentCodegenJob: vi.fn(async () => ({
-          requestId: "codegen-calendar-integration",
-          pgBossJobId: "job-1",
-          traceId: "trace-1",
-          guildId: "g",
-          channelId: "c",
-          userId: "u",
-          updateName: "calendar-integration",
-          request: "add a calendar integration",
-          requestedBy: "User (u)",
-          status: "succeeded",
-          branchName: "discord-ai-agent/update-calendar-integration",
-          prUrl: "https://github.com/example/repo/pull/1",
-          draft: false,
-          verifyPassed: true,
-          error: null,
-          createdAt: new Date(),
-          startedAt: new Date(),
-          completedAt: new Date(),
-          updatedAt: new Date()
-        }))
+        auditTool: vi.fn(async () => undefined)
       },
       openRouter: {
-        chat: vi
-          .fn()
-          .mockResolvedValueOnce({
-            content: "",
-            model: "router-model",
-            raw: {},
-            toolCalls: [
-              {
-                id: "call-1",
-                name: "openGithubPullRequest",
-                argumentsText: JSON.stringify({ request: "add a calendar integration" })
-              }
-            ]
-          })
-          .mockResolvedValueOnce({
-            content: "Opened a review PR.",
-            model: "chat-model",
-            raw: {},
-            toolCalls: []
-          })
+        chat: vi.fn().mockResolvedValueOnce({
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "openGithubPullRequest",
+              argumentsText: JSON.stringify({ request: "add a calendar integration" })
+            }
+          ]
+        })
       },
       github: {},
       jobs: {
@@ -1580,20 +1551,31 @@ describe("agent router", () => {
       userId: "u",
       userDisplayName: "User",
       visibleChannelIds: ["c"],
+      threadKey: "discord:g:c:msg-1",
+      requestId: "msg-1",
+      replyChannelId: "c",
+      replyMessageId: "reply-1",
       updateStatus: vi.fn(async () => undefined)
     } as unknown as ToolContext;
 
     const response = await handleAgentRequest(ctx, "how should we track events?");
 
-    expect(response.content).toBe("Opened a review PR.");
+    expect(response.content).toBe("I’m working on that code change now. I’ll update this message with the PR link when it’s ready. Request ID: `codegen-calendar-integration`.");
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(1);
     expect(enqueueAgentCodegen).toHaveBeenCalledWith(
       expect.objectContaining({
+        requestId: "msg-1",
         updateName: "calendar-integration",
         request: "add a calendar integration",
-        requestedBy: "User (u)"
+        requestedBy: "User (u)",
+        guildId: "g",
+        channelId: "c",
+        userId: "u",
+        threadKey: "discord:g:c:msg-1",
+        replyChannelId: "c",
+        replyMessageId: "reply-1"
       })
     );
-    expect(ctx.repo.getAgentCodegenJob).toHaveBeenCalledWith("codegen-calendar-integration");
     expect(ctx.updateStatus).toHaveBeenCalledWith("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "openGithubPullRequest" }));
   });

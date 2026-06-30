@@ -15,6 +15,10 @@ const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const CODEX_OUTPUT_LOG_INTERVAL_MS = 30_000;
 const CODEX_ACTIVITY_HEARTBEAT_MS = 5_000;
 const CODEX_TERMINATION_GRACE_MS = 10_000;
+const CODEX_HARD_COMMAND_LIMIT = 60;
+const CODEX_NO_FILE_CHANGE_DEADLINE_MS = 8 * 60 * 1000;
+const CODEX_NO_FILE_CHANGE_MIN_COMMANDS = 20;
+const CODEX_SILENT_OUTPUT_TIMEOUT_MS = 5 * 60 * 1000;
 export const CODEGEN_WORK_ROOT_DIR = ".codegen-runs";
 export const CODEGEN_COMMAND_WARNING_THRESHOLD = 35;
 export const CODEGEN_PROMPT_COMMAND_BUDGET = 35;
@@ -45,6 +49,9 @@ export type AgentCodegenJob = {
   guildId?: string;
   channelId?: string;
   userId?: string;
+  threadKey?: string;
+  replyChannelId?: string;
+  replyMessageId?: string;
 };
 
 export type AgentCodegenResult = {
@@ -78,11 +85,17 @@ export async function runAgentCodegenJob(input: {
   );
 
   try {
+    const repoUrl = `https://github.com/${owner}/${repo}.git`;
+    const gitCacheDir = await ensureCodegenGitCache({ owner, repo, repoUrl, branch: config.github.baseBranch, env: authEnv });
     await progress(input.progress, "clone", "Cloning the repository into the Railway codegen worker.", { branch: config.github.baseBranch });
-    await runCommand("git", ["clone", "--depth", "1", "--branch", config.github.baseBranch, `https://github.com/${owner}/${repo}.git`, checkoutDir], {
-      cwd: workRoot,
-      env: authEnv
-    });
+    await runCommand(
+      "git",
+      ["clone", "--reference-if-able", gitCacheDir, "--depth", "1", "--branch", config.github.baseBranch, repoUrl, checkoutDir],
+      {
+        cwd: workRoot,
+        env: authEnv
+      }
+    );
     await progress(input.progress, "branch", `Creating implementation branch ${branchName}.`, { branchName });
     await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir });
     await progress(input.progress, "install", "Installing repository dependencies with npm ci.");
@@ -149,24 +162,40 @@ export async function runAgentCodegenJob(input: {
       model: codegenModel,
       timeoutMinutes: config.codegenCodexTimeoutMinutes
     });
-    await runCommand(
-      process.env.CODEX_BIN || "codex",
-      codexExecArgs({ checkoutDir, model: codegenModel }),
-      {
-        cwd: checkoutDir,
-        env: credentials.codexEnv({ baseEnv: commandEnv, workRoot }),
-        input: codegenPrompt(job),
-        timeoutMs: codexTimeoutMs,
-        outputObserver: {
-          onStdout: (text) => codexActivity.acceptStdout(text),
-          onStderr: (text) => codexActivity.acceptStderr(text),
-          onHeartbeat: () => codexActivity.heartbeat(),
-          onFinish: () => codexActivity.finish(),
-          heartbeatMs: CODEX_ACTIVITY_HEARTBEAT_MS
+    try {
+      await runCommand(
+        process.env.CODEX_BIN || "codex",
+        codexExecArgs({ checkoutDir, model: codegenModel }),
+        {
+          cwd: checkoutDir,
+          env: credentials.codexEnv({ baseEnv: commandEnv, workRoot }),
+          input: codegenPrompt(job),
+          timeoutMs: codexTimeoutMs,
+          outputObserver: {
+            onStdout: (text) => codexActivity.acceptStdout(text),
+            onStderr: (text) => codexActivity.acceptStderr(text),
+            onHeartbeat: () => codexActivity.heartbeat(),
+            onFinish: () => codexActivity.finish(),
+            onTerminate: (reason) => {
+              queueCodexProgressReport(
+                progress(
+                  input.progress,
+                  "codex",
+                  `Stopped Codex early: ${reason}`,
+                  { activity: codexActivityMetadata(codexActivity.currentSnapshot()) },
+                  { eventName: "codegen.early_terminated", level: "warn" }
+                ),
+                "Failed to report Codex early termination"
+              );
+            },
+            shouldTerminate: () => codegenEarlyTerminationReason(codexActivity.currentSnapshot()),
+            heartbeatMs: CODEX_ACTIVITY_HEARTBEAT_MS
+          }
         }
-      }
-    );
-    await Promise.allSettled(pendingCodexProgressReports);
+      );
+    } finally {
+      await Promise.allSettled(pendingCodexProgressReports);
+    }
 
     await progress(input.progress, "diff", "Checking whether Codex produced a real code diff.");
     const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir });
@@ -236,16 +265,41 @@ function codegenBranchName(updateName: string) {
 }
 
 export function codegenCommandEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const npmCacheDir = path.resolve(process.cwd(), CODEGEN_WORK_ROOT_DIR, "npm-cache");
   return {
     ...baseEnv,
     NODE_ENV: "development",
+    NPM_CONFIG_CACHE: npmCacheDir,
     NPM_CONFIG_INCLUDE: "dev",
     NPM_CONFIG_OMIT: "",
     NPM_CONFIG_PRODUCTION: "false",
+    npm_config_cache: npmCacheDir,
     npm_config_include: "dev",
     npm_config_omit: "",
     npm_config_production: "false"
   };
+}
+
+async function ensureCodegenGitCache(input: { owner: string; repo: string; repoUrl: string; branch: string; env: NodeJS.ProcessEnv }) {
+  const cacheRoot = path.resolve(process.cwd(), CODEGEN_WORK_ROOT_DIR, "git-cache");
+  const cacheDir = path.join(cacheRoot, `${input.owner}-${input.repo}.git`);
+  await fs.mkdir(cacheRoot, { recursive: true });
+  try {
+    await fs.access(path.join(cacheDir, "HEAD"));
+    const fetch = await runCommand("git", ["-C", cacheDir, "fetch", "--prune", "origin", input.branch], {
+      cwd: cacheRoot,
+      env: input.env,
+      allowFailure: true
+    });
+    if (fetch.exitCode !== 0) throw new Error("git cache fetch failed");
+  } catch {
+    await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => undefined);
+    await runCommand("git", ["clone", "--mirror", input.repoUrl, cacheDir], {
+      cwd: cacheRoot,
+      env: input.env
+    });
+  }
+  return cacheDir;
 }
 
 export function codexExecArgs(input: { checkoutDir: string; model: string }) {
@@ -478,6 +532,7 @@ async function runCommand(
   let stdout = "";
   let stderr = "";
   let timedOut = false;
+  let terminationReason: string | undefined;
   const stdoutLogger = createCommandOutputLogger(command, "stdout");
   const stderrLogger = createCommandOutputLogger(command, "stderr");
   let timeout: NodeJS.Timeout | undefined;
@@ -502,7 +557,10 @@ async function runCommand(
   }
 
   if (options.outputObserver?.onHeartbeat) {
-    heartbeatInterval = setInterval(options.outputObserver.onHeartbeat, options.outputObserver.heartbeatMs ?? CODEX_OUTPUT_LOG_INTERVAL_MS);
+    heartbeatInterval = setInterval(() => {
+      options.outputObserver?.onHeartbeat?.();
+      checkEarlyTermination();
+    }, options.outputObserver.heartbeatMs ?? CODEX_OUTPUT_LOG_INTERVAL_MS);
     heartbeatInterval.unref();
   }
 
@@ -511,12 +569,14 @@ async function runCommand(
     stdout = appendLimited(stdout, text);
     options.outputObserver?.onStdout?.(text);
     logCommandOutput(stdoutLogger, text);
+    checkEarlyTermination();
   });
   child.stderr.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stderr = appendLimited(stderr, text);
     options.outputObserver?.onStderr?.(text);
     logCommandOutput(stderrLogger, text);
+    checkEarlyTermination();
   });
 
   if (options.input) child.stdin.end(options.input);
@@ -541,10 +601,31 @@ async function runCommand(
   if (timedOut) {
     throw new Error(`${command} ${args.join(" ")} timed out after ${formatDuration(options.timeoutMs ?? 0)}: ${previewText(stderr || stdout, 1000)}`);
   }
+  if (terminationReason) {
+    throw new Error(`${command} ${args.join(" ")} stopped early: ${terminationReason}`);
+  }
   if (exitCode !== 0 && !options.allowFailure) {
     throw new Error(`${command} ${args.join(" ")} failed with exit code ${exitCode}: ${previewText(stderr || stdout, 1000)}`);
   }
   return { exitCode, stdout, stderr };
+
+  function checkEarlyTermination() {
+    if (terminationReason || timedOut) return;
+    const reason = options.outputObserver?.shouldTerminate?.();
+    if (!reason) return;
+    terminationReason = reason;
+    logger.error(
+      { command, args: redactedArgs(command, args), reason, durationMs: durationMs(startedAt) },
+      "Codegen command stopped by early termination guard"
+    );
+    options.outputObserver?.onTerminate?.(reason);
+    child.kill("SIGTERM");
+    forceKillTimeout = setTimeout(() => {
+      logger.error({ command, args: redactedArgs(command, args), reason }, "Codegen command did not exit after early SIGTERM; killing child process");
+      child.kill("SIGKILL");
+    }, CODEX_TERMINATION_GRACE_MS);
+    forceKillTimeout.unref();
+  }
 }
 
 function appendLimited(current: string, next: string) {
@@ -569,6 +650,8 @@ type CommandOutputObserver = {
   onStderr?: (text: string) => void;
   onHeartbeat?: () => void;
   onFinish?: () => void;
+  onTerminate?: (reason: string) => void;
+  shouldTerminate?: () => string | undefined;
   heartbeatMs?: number;
 };
 
@@ -703,6 +786,23 @@ function codexActivityMetadata(snapshot: CodexActivitySnapshot) {
     lastEventType: snapshot.lastEventType,
     lastActivity: snapshot.lastActivity
   };
+}
+
+export function codegenEarlyTerminationReason(snapshot: CodexActivitySnapshot): string | undefined {
+  if (snapshot.commandStarts >= CODEX_HARD_COMMAND_LIMIT) {
+    return `Codex exceeded the hard command limit (${snapshot.commandStarts}/${CODEX_HARD_COMMAND_LIMIT}).`;
+  }
+  if (
+    snapshot.durationMs >= CODEX_NO_FILE_CHANGE_DEADLINE_MS &&
+    snapshot.commandStarts >= CODEX_NO_FILE_CHANGE_MIN_COMMANDS &&
+    snapshot.fileChangeStarts === 0
+  ) {
+    return `Codex ran for ${formatDuration(snapshot.durationMs)} and ${snapshot.commandStarts} commands without starting a file change.`;
+  }
+  if (snapshot.silentForMs >= CODEX_SILENT_OUTPUT_TIMEOUT_MS) {
+    return `Codex produced no output for ${formatDuration(snapshot.silentForMs)}.`;
+  }
+  return undefined;
 }
 
 function topEventTypes(eventTypes: Record<string, number>) {

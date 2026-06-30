@@ -292,18 +292,35 @@ export async function startJobs(input: {
         ...job,
         requestId,
         traceId: trace?.traceId ?? requestId,
-        guildId: trace?.guildId,
-        channelId: trace?.channelId,
-        userId: trace?.userId
+        guildId: job.guildId ?? trace?.guildId,
+        channelId: job.channelId ?? trace?.channelId,
+        userId: job.userId ?? trace?.userId
       };
       logger.info({ queue: AGENT_CODEGEN_JOB, requestId, updateName: job.updateName }, "Enqueueing agent codegen job");
       const backendName = input.agentCodegen?.name ?? "railway-local-worker";
+      await input.repo?.recordTraceEvent({
+        traceId: data.traceId,
+        requestId,
+        guildId: data.guildId,
+        channelId: data.channelId,
+        userId: data.userId,
+        eventName: "codegen.enqueue.started",
+        summary: data.updateName,
+        metadata: {
+          replyChannelId: data.replyChannelId,
+          replyMessageId: data.replyMessageId,
+          threadKey: data.threadKey
+        }
+      });
       await input.repo?.upsertAgentCodegenQueued({
         requestId,
         traceId: data.traceId,
         guildId: data.guildId,
         channelId: data.channelId,
         userId: data.userId,
+        threadKey: data.threadKey,
+        replyChannelId: data.replyChannelId,
+        replyMessageId: data.replyMessageId,
         updateName: data.updateName,
         request: data.request,
         requestedBy: data.requestedBy,
@@ -322,6 +339,16 @@ export async function startJobs(input: {
           requestId,
           error: error instanceof Error ? error.message : String(error)
         });
+        await input.repo?.recordTraceEvent({
+          traceId: data.traceId,
+          requestId,
+          guildId: data.guildId,
+          channelId: data.channelId,
+          userId: data.userId,
+          eventName: "codegen.enqueue.failed",
+          level: "error",
+          summary: error instanceof Error ? error.message : String(error)
+        });
         throw error;
       }
       await input.repo?.upsertAgentCodegenQueued({
@@ -331,10 +358,28 @@ export async function startJobs(input: {
         guildId: data.guildId,
         channelId: data.channelId,
         userId: data.userId,
+        threadKey: data.threadKey,
+        replyChannelId: data.replyChannelId,
+        replyMessageId: data.replyMessageId,
         updateName: data.updateName,
         request: data.request,
         requestedBy: data.requestedBy,
         backend: backendName
+      });
+      await input.repo?.recordTraceEvent({
+        traceId: data.traceId,
+        requestId,
+        guildId: data.guildId,
+        channelId: data.channelId,
+        userId: data.userId,
+        eventName: "codegen.enqueue.complete",
+        summary: id ? `Enqueued codegen job ${id}` : "Codegen job deduped or not enqueued",
+        metadata: {
+          jobId: id,
+          replyChannelId: data.replyChannelId,
+          replyMessageId: data.replyMessageId,
+          threadKey: data.threadKey
+        }
       });
       logger.info({ queue: AGENT_CODEGEN_JOB, requestId, jobId: id }, "Agent codegen enqueue complete");
       return { jobId: id, requestId };

@@ -149,6 +149,10 @@ export class CodexActivityTracker {
     this.emitIfDue();
   }
 
+  currentSnapshot(): CodexActivitySnapshot {
+    return this.snapshot(false);
+  }
+
   finish(): CodexActivitySnapshot {
     if (this.stdoutBuffer.trim()) {
       this.processLine(this.stdoutBuffer);

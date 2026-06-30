@@ -305,6 +305,9 @@ export type AgentCodegenJobRecord = {
   guildId: string | null;
   channelId: string | null;
   userId: string | null;
+  threadKey: string | null;
+  replyChannelId: string | null;
+  replyMessageId: string | null;
   updateName: string;
   request: string;
   requestedBy: string;
@@ -321,6 +324,9 @@ export type AgentCodegenJobRecord = {
   startedAt: Date | null;
   completedAt: Date | null;
   progressUpdatedAt: Date | null;
+  lastRenderedSignature: string | null;
+  lastRenderedAt: Date | null;
+  terminalRenderedAt: Date | null;
   updatedAt: Date;
 };
 
@@ -2098,6 +2104,9 @@ export class DiscordAiAgentRepository {
     guildId?: string | null;
     channelId?: string | null;
     userId?: string | null;
+    threadKey?: string | null;
+    replyChannelId?: string | null;
+    replyMessageId?: string | null;
     updateName: string;
     request: string;
     requestedBy: string;
@@ -2107,15 +2116,19 @@ export class DiscordAiAgentRepository {
       `
         INSERT INTO agent_codegen_jobs(
           request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          thread_key, reply_channel_id, reply_message_id,
           update_name, request, requested_by, backend, status, current_step, status_message, progress_updated_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'queued', 'queued', 'Waiting for the codegen worker to pick this up.', now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'queued', 'queued', 'Waiting for the codegen worker to pick this up.', now(), now())
         ON CONFLICT(request_id) DO UPDATE SET
           pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_codegen_jobs.pgboss_job_id),
           trace_id = coalesce(EXCLUDED.trace_id, agent_codegen_jobs.trace_id),
           guild_id = coalesce(EXCLUDED.guild_id, agent_codegen_jobs.guild_id),
           channel_id = coalesce(EXCLUDED.channel_id, agent_codegen_jobs.channel_id),
           user_id = coalesce(EXCLUDED.user_id, agent_codegen_jobs.user_id),
+          thread_key = coalesce(EXCLUDED.thread_key, agent_codegen_jobs.thread_key),
+          reply_channel_id = coalesce(EXCLUDED.reply_channel_id, agent_codegen_jobs.reply_channel_id),
+          reply_message_id = coalesce(EXCLUDED.reply_message_id, agent_codegen_jobs.reply_message_id),
           update_name = EXCLUDED.update_name,
           request = EXCLUDED.request,
           requested_by = EXCLUDED.requested_by,
@@ -2133,6 +2146,9 @@ export class DiscordAiAgentRepository {
         input.guildId ?? null,
         input.channelId ?? null,
         input.userId ?? null,
+        input.threadKey ?? null,
+        input.replyChannelId ?? null,
+        input.replyMessageId ?? null,
         input.updateName,
         input.request,
         input.requestedBy,
@@ -2220,9 +2236,11 @@ export class DiscordAiAgentRepository {
       `
         SELECT
           request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          thread_key, reply_channel_id, reply_message_id,
           update_name, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
-          created_at, started_at, completed_at, progress_updated_at, updated_at
+          created_at, started_at, completed_at, progress_updated_at,
+          last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
         FROM agent_codegen_jobs
         WHERE request_id = $1
       `,
@@ -2230,6 +2248,55 @@ export class DiscordAiAgentRepository {
     );
     const row = result.rows[0];
     return row ? rowToAgentCodegenJob(row) : undefined;
+  }
+
+  async listRenderableAgentCodegenJobs(limit = 20): Promise<AgentCodegenJobRecord[]> {
+    const normalizedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          request_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          thread_key, reply_channel_id, reply_message_id,
+          update_name, request, requested_by, status, backend, current_step,
+          status_message, branch_name, pr_url, draft, verify_passed, error,
+          created_at, started_at, completed_at, progress_updated_at,
+          last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
+        FROM agent_codegen_jobs
+        WHERE reply_channel_id IS NOT NULL
+          AND reply_message_id IS NOT NULL
+          AND (
+            (status IN ('succeeded', 'failed', 'no_changes') AND terminal_rendered_at IS NULL)
+            OR
+            (
+              status NOT IN ('succeeded', 'failed', 'no_changes')
+              AND (
+                last_rendered_at IS NULL
+                OR coalesce(progress_updated_at, updated_at) > last_rendered_at
+              )
+            )
+          )
+        ORDER BY
+          CASE WHEN status IN ('succeeded', 'failed', 'no_changes') THEN 0 ELSE 1 END,
+          coalesce(progress_updated_at, updated_at) ASC
+        LIMIT $1
+      `,
+      [normalizedLimit]
+    );
+    return result.rows.map(rowToAgentCodegenJob);
+  }
+
+  async markAgentCodegenRendered(input: { requestId: string; signature: string; terminal: boolean }) {
+    await this.pool.query(
+      `
+        UPDATE agent_codegen_jobs
+        SET last_rendered_signature = $2,
+            last_rendered_at = now(),
+            terminal_rendered_at = CASE WHEN $3 THEN now() ELSE terminal_rendered_at END,
+            updated_at = now()
+        WHERE request_id = $1
+      `,
+      [input.requestId, input.signature, input.terminal]
+    );
   }
 
   async getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> {
@@ -3666,6 +3733,9 @@ function rowToAgentCodegenJob(row: any): AgentCodegenJobRecord {
     guildId: row.guild_id == null ? null : String(row.guild_id),
     channelId: row.channel_id == null ? null : String(row.channel_id),
     userId: row.user_id == null ? null : String(row.user_id),
+    threadKey: row.thread_key == null ? null : String(row.thread_key),
+    replyChannelId: row.reply_channel_id == null ? null : String(row.reply_channel_id),
+    replyMessageId: row.reply_message_id == null ? null : String(row.reply_message_id),
     updateName: String(row.update_name),
     request: String(row.request ?? ""),
     requestedBy: String(row.requested_by ?? ""),
@@ -3682,6 +3752,9 @@ function rowToAgentCodegenJob(row: any): AgentCodegenJobRecord {
     startedAt: row.started_at == null ? null : new Date(row.started_at),
     completedAt: row.completed_at == null ? null : new Date(row.completed_at),
     progressUpdatedAt: row.progress_updated_at == null ? null : new Date(row.progress_updated_at),
+    lastRenderedSignature: row.last_rendered_signature == null ? null : String(row.last_rendered_signature),
+    lastRenderedAt: row.last_rendered_at == null ? null : new Date(row.last_rendered_at),
+    terminalRenderedAt: row.terminal_rendered_at == null ? null : new Date(row.terminal_rendered_at),
     updatedAt: new Date(row.updated_at)
   };
 }

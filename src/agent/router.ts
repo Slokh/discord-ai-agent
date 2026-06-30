@@ -404,6 +404,34 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         name: route.name,
         content: result.content
       });
+
+      if (route.name === "openGithubPullRequest") {
+        const content = cleanResponse(result.content, ctx.config.maxReplyChars);
+        requestLogger.info(
+          {
+            durationMs: durationMs(startedAt),
+            finalChars: content.length,
+            fileCount: files.length,
+            memoryEventCount: memoryEvents.length
+          },
+          "Agent request complete after direct codegen tool result"
+        );
+        await recordTraceEvent(ctx, {
+          eventName: "agent.request.complete",
+          summary: "Completed with direct codegen tool result",
+          metadata: {
+            finalChars: content.length,
+            fileCount: files.length,
+            memoryEventCount: memoryEvents.length
+          },
+          durationMs: durationMs(startedAt)
+        });
+        return {
+          content,
+          files: files.length > 0 ? files : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
+        };
+      }
     }
 
     if (skippedRedundantToolThisRound) {

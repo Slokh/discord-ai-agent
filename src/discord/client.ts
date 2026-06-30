@@ -17,6 +17,7 @@ import { isOpenRouterContentFilterError, type OpenRouterClient } from "../models
 import type { GitHubSkillClient } from "../skills/github.js";
 import { embeddingPriorityForMessageTimestamp, type JobRuntime } from "../jobs/queue.js";
 import type { DiscordCrawler } from "./crawler.js";
+import { createCodegenDiscordRenderer } from "./codegenRenderer.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { handleAgentRequest } from "../agent/router.js";
@@ -57,6 +58,11 @@ export function createDiscordAiAgentBot(input: {
       ],
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
     });
+  const codegenRenderer = createCodegenDiscordRenderer({
+    client,
+    repo: input.repo,
+    maxReplyChars: input.config.maxReplyChars
+  });
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(
@@ -67,6 +73,7 @@ export function createDiscordAiAgentBot(input: {
       },
       "Discord AI Agent Discord bot is online"
     );
+    codegenRenderer.start();
   });
 
   client.on(Events.Error, (error) => {
@@ -161,7 +168,10 @@ export function createDiscordAiAgentBot(input: {
       if (!input.config.discord.token) throw new Error("DISCORD_TOKEN is required.");
       await client.login(input.config.discord.token);
     },
-    destroy: () => client.destroy()
+    destroy: () => {
+      codegenRenderer.stop();
+      client.destroy();
+    }
   };
 }
 
@@ -403,6 +413,8 @@ async function handleMessageCreate(
           sessionMessages: priorSessionMessages,
           replyContext,
           requestId,
+          replyChannelId: thinking.channelId,
+          replyMessageId: thinking.id,
           discordRoles: discordRoleSnapshots(message.guild),
           updateStatus: async (content) => {
             await thinking.edit(cleanResponse(content, input.config.maxReplyChars));

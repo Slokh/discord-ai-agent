@@ -11,6 +11,7 @@ import {
   changedFilesFromGitStatus,
   codexExecArgs,
   codegenCommandEnv,
+  codegenEarlyTerminationReason,
   codegenPrompt,
   codegenPullRequestTitle,
   pullRequestBody,
@@ -34,9 +35,11 @@ describe("codegen runner", () => {
     });
 
     expect(env.NODE_ENV).toBe("development");
+    expect(env.NPM_CONFIG_CACHE).toContain(".codegen-runs");
     expect(env.NPM_CONFIG_INCLUDE).toBe("dev");
     expect(env.NPM_CONFIG_OMIT).toBe("");
     expect(env.NPM_CONFIG_PRODUCTION).toBe("false");
+    expect(env.npm_config_cache).toBe(env.NPM_CONFIG_CACHE);
     expect(env.npm_config_include).toBe("dev");
     expect(env.npm_config_omit).toBe("");
     expect(env.npm_config_production).toBe("false");
@@ -84,6 +87,15 @@ describe("codegen runner", () => {
 
   it("keeps command budget constants aligned between tracing and prompting", () => {
     expect(CODEGEN_COMMAND_WARNING_THRESHOLD).toBeGreaterThanOrEqual(CODEGEN_PROMPT_COMMAND_BUDGET);
+  });
+
+  it("stops Codex early when activity shows a stuck run", () => {
+    expect(codegenEarlyTerminationReason(activity({ commandStarts: 60 }))).toContain("hard command limit");
+    expect(codegenEarlyTerminationReason(activity({ durationMs: 8 * 60 * 1000, commandStarts: 20, fileChangeStarts: 0 }))).toContain(
+      "without starting a file change"
+    );
+    expect(codegenEarlyTerminationReason(activity({ silentForMs: 5 * 60 * 1000 }))).toContain("no output");
+    expect(codegenEarlyTerminationReason(activity({ durationMs: 60_000, commandStarts: 5, fileChangeStarts: 1, silentForMs: 1000 }))).toBeUndefined();
   });
 
   it("injects the repository map into Codex prompts before the user request", () => {
@@ -141,3 +153,40 @@ describe("codegen runner", () => {
     ]);
   });
 });
+
+function activity(overrides: Partial<Parameters<typeof codegenEarlyTerminationReason>[0]> = {}): Parameters<typeof codegenEarlyTerminationReason>[0] {
+  return {
+    final: false,
+    durationMs: 0,
+    silentForMs: 0,
+    longestOutputGapMs: 0,
+    totalEvents: 0,
+    eventTypes: {},
+    phase: null,
+    phaseDurationsMs: {},
+    commandStarts: 0,
+    commandCompletions: 0,
+    commandFailures: 0,
+    activeCommands: 0,
+    recentCommands: [],
+    repeatedCommands: [],
+    fileChangeStarts: 0,
+    fileChangeCompletions: 0,
+    filePaths: [],
+    recentFileChanges: [],
+    planUpdates: 0,
+    planSnippets: [],
+    reasoningChars: 0,
+    reasoningSnippets: [],
+    messageChars: 0,
+    messageSnippets: [],
+    toolUses: 0,
+    toolResults: 0,
+    jsonParseErrors: 0,
+    nonJsonLines: 0,
+    stderrBytes: 0,
+    stderrSnippets: [],
+    recentActivities: [],
+    ...overrides
+  };
+}

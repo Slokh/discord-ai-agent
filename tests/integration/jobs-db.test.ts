@@ -203,12 +203,19 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
 
     try {
       const { jobId, requestId } = await runtime.enqueueAgentCodegen({
+        requestId: "codegen-render-target-test",
         request: "add a calendar integration",
         updateName: "calendar integration",
-        requestedBy: "test"
+        requestedBy: "test",
+        guildId: "guild-1",
+        channelId: "channel-1",
+        userId: "user-1",
+        threadKey: "discord:guild-1:channel-1:message-1",
+        replyChannelId: "channel-1",
+        replyMessageId: "reply-1"
       });
       expect(jobId).toEqual(expect.any(String));
-      expect(requestId).toEqual(expect.any(String));
+      expect(requestId).toBe("codegen-render-target-test");
 
       await waitFor(() => processedRequests.includes("add a calendar integration"), 10_000);
       await waitFor(async () => {
@@ -223,9 +230,25 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           currentStep: "done",
           statusMessage: "Opened pull request.",
           branchName: "discord-ai-agent/update-test",
-          verifyPassed: true
+          verifyPassed: true,
+          threadKey: "discord:guild-1:channel-1:message-1",
+          replyChannelId: "channel-1",
+          replyMessageId: "reply-1"
         })
       );
+      let renderable = await repo.listRenderableAgentCodegenJobs();
+      expect(renderable).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            requestId,
+            status: "succeeded",
+            replyMessageId: "reply-1"
+          })
+        ])
+      );
+      await repo.markAgentCodegenRendered({ requestId, signature: "terminal-signature", terminal: true });
+      renderable = await repo.listRenderableAgentCodegenJobs();
+      expect(renderable.some((item) => item.requestId === requestId)).toBe(false);
       const traceEvents = await pool.query(
         "SELECT event_name, level, summary, metadata, duration_ms FROM trace_events WHERE request_id = $1 ORDER BY id",
         [requestId]
@@ -270,7 +293,10 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       const { jobId } = await runtime.enqueueAgentCodegen({
         request: "add a calendar integration",
         updateName: "calendar integration",
-        requestedBy: "test"
+        requestedBy: "test",
+        threadKey: "discord:g:c:m",
+        replyChannelId: "c",
+        replyMessageId: "reply-1"
       });
       expect(jobId).toEqual(expect.any(String));
 

@@ -4,7 +4,6 @@ import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
 import type {
-  AgentCodegenJobRecord,
   ConversationMessage,
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
@@ -35,8 +34,6 @@ export type HistoryAnswerOptions = {
 
 const MAX_UNDO_TURNS = 10;
 const MS_PER_DAY = 86_400_000;
-const AGENT_CODEGEN_WAIT_TIMEOUT_MS = 25 * 60 * 1000;
-const AGENT_CODEGEN_POLL_INTERVAL_MS = 2_000;
 
 type ChannelTopicCluster = {
   size: number;
@@ -1023,112 +1020,41 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
   if (result.dryRun === true) {
     return `I drafted a Railway codegen job in dry-run mode for \`${result.requestId}\`${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real coding jobs.`;
   }
-  return formatAgentCodegenResult(result);
+  return `I’m working on that code change now. I’ll update this message with the PR link when it’s ready. Request ID: \`${result.requestId}\`.`;
 }
 
 async function enqueueAgentCodegenJob(
   ctx: ToolContext,
   input: { request: string; updateName: string; requestedBy: string }
-): Promise<{ dryRun: false; requestId: string; jobId: string | null; job?: AgentCodegenJobRecord; timedOut?: boolean }> {
+): Promise<{ dryRun: false; requestId: string; jobId: string | null }> {
   if (!ctx.jobs) {
     throw new Error("Railway codegen queue is unavailable in this process.");
   }
   await ctx.updateStatus?.("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
   const enqueued = await ctx.jobs.enqueueAgentCodegen({
+    requestId: ctx.requestId,
     request: input.request.trim(),
     updateName: input.updateName,
-    requestedBy: input.requestedBy
+    requestedBy: input.requestedBy,
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    threadKey: ctx.threadKey,
+    replyChannelId: ctx.replyChannelId,
+    replyMessageId: ctx.replyMessageId
   });
-  const job = await waitForAgentCodegenResult(ctx, enqueued.requestId);
-  return { dryRun: false, ...enqueued, ...job };
-}
-
-async function waitForAgentCodegenResult(
-  ctx: ToolContext,
-  requestId: string
-): Promise<{ job?: AgentCodegenJobRecord; timedOut?: boolean }> {
-  const deadline = Date.now() + AGENT_CODEGEN_WAIT_TIMEOUT_MS;
-  let lastProgressKey: string | undefined;
-
-  while (Date.now() < deadline) {
-    const job = await ctx.repo.getAgentCodegenJob(requestId);
-    if (job) {
-      if (isTerminalAgentCodegenStatus(job.status)) {
-        return { job };
-      }
-      const progressKey = `${job.status}:${job.currentStep ?? ""}:${job.statusMessage ?? ""}`;
-      if (progressKey !== lastProgressKey) {
-        lastProgressKey = progressKey;
-        await ctx.updateStatus?.(agentCodegenProgressMessage(job));
-      }
-    }
-    await sleep(AGENT_CODEGEN_POLL_INTERVAL_MS);
-  }
-
-  const job = await ctx.repo.getAgentCodegenJob(requestId);
-  return { job, timedOut: true };
-}
-
-function isTerminalAgentCodegenStatus(status: AgentCodegenJobRecord["status"]) {
-  return status === "succeeded" || status === "failed" || status === "no_changes";
-}
-
-function agentCodegenProgressMessage(job: AgentCodegenJobRecord) {
-  const detail = job.statusMessage ?? (job.status === "running" ? "Working on the code change now." : "Preparing the code change.");
-  return `${detail}\n\nUpdate: \`${job.updateName}\`${job.currentStep ? `\nStep: \`${job.currentStep}\`` : ""}`;
-}
-
-function formatAgentCodegenResult(input: {
-  requestId: string;
-  jobId: string | null;
-  job?: AgentCodegenJobRecord;
-  timedOut?: boolean;
-}) {
-  if (input.timedOut) {
-    const status = input.job?.status ? ` Current status: \`${input.job.status}\`.` : "";
-    return `I’m still working on that code change and do not have the final result yet.${status} Request ID: \`${input.requestId}\`.`;
-  }
-
-  const job = input.job;
-  if (!job) {
-    return `I started the code change, but I could not find its result row. Request ID: \`${input.requestId}\`.`;
-  }
-
-  if (job.status === "succeeded" && job.prUrl) {
-    const draftNote = job.draft ? " It opened as a draft because verification did not fully pass." : "";
-    return `Done: ${job.prUrl}${draftNote}`;
-  }
-
-  if (job.status === "no_changes") {
-    return `I tried to make that change, but the codegen run did not produce a code diff, so no PR was opened. Request ID: \`${input.requestId}\`.`;
-  }
-
-  if (job.status === "failed") {
-    return `I tried to make that change, but codegen failed: ${job.error ?? "unknown error"}`;
-  }
-
-  return `I’m still working on that code change. Current status: \`${job.status}\`. Request ID: \`${input.requestId}\`.`;
+  return { dryRun: false, ...enqueued };
 }
 
 function agentCodegenAuditSummary(result: unknown) {
   if (!result || typeof result !== "object") return result;
   if ("dryRun" in result && result.dryRun) return result;
-  const typed = result as { requestId?: string; jobId?: string | null; timedOut?: boolean; job?: AgentCodegenJobRecord };
+  const typed = result as { requestId?: string; jobId?: string | null };
   return {
     dryRun: false,
     requestId: typed.requestId,
-    jobId: typed.jobId,
-    timedOut: typed.timedOut,
-    status: typed.job?.status,
-    prUrl: typed.job?.prUrl,
-    draft: typed.job?.draft,
-    verifyPassed: typed.job?.verifyPassed,
-    error: typed.job?.error
+    jobId: typed.jobId
   };
-}
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 export async function reportStatus(ctx: ToolContext): Promise<string> {

@@ -19,13 +19,53 @@ import {
 } from "lucide-react";
 import { Button, Copy, Status, Tabs, Tag } from "regen-ui";
 import { fetchArtifact, fetchRuns, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
-import type { EventLevel, RunArtifact, RunEvent, RunKind, RunSnapshot, RunStatus, RunSummary, TerminalEntry } from "./types.js";
+import type { EventLevel, RunArtifact, RunEvent, RunKind, RunSnapshot, RunSpan, RunStatus, RunSummary, TerminalEntry } from "./types.js";
 
 type StatusFilter = "all" | "active" | "done" | "attention";
-type DetailTab = "overview" | "timeline" | "calls" | "terminal" | "artifacts" | "raw";
+type DetailTab = "overview" | "timeline" | "terminal" | "artifacts" | "raw";
 type TerminalStream = TerminalEntry["stream"];
 type HistoryMode = "push" | "replace";
 type LatencyRow = RunSnapshot["spans"][number] & { durationMs: number };
+type TimelinePhaseId = "initial" | "setup" | "execution" | "cleanup" | "response";
+type TimedRunEvent = { event: RunEvent; gapMs: number | null; offset: string };
+type TimelineStepKind = FlowItemKind | "span" | "event";
+type TimelineStep = {
+  id: string;
+  kind: TimelineStepKind;
+  title: string;
+  summary: string;
+  createdAt: string;
+  durationMs: number | null;
+  gapMs: number | null;
+  offset: string;
+  source: string;
+  status: RunStatus | null;
+  level: EventLevel | null;
+  metadata: Record<string, unknown>;
+  artifact?: RunArtifact;
+};
+type TimelinePhase = {
+  id: TimelinePhaseId;
+  label: string;
+  description: string;
+  steps: TimelineStep[];
+  durationMs: number;
+  status: RunStatus;
+  slowest: { name: string; durationMs: number } | null;
+};
+type FlowItemKind = "input" | "model" | "tool" | "artifact" | "response" | "error";
+type FlowItem = {
+  id: string;
+  kind: FlowItemKind;
+  title: string;
+  summary: string;
+  createdAt: string;
+  durationMs: number | null;
+  source: string;
+  level: EventLevel | null;
+  metadata: Record<string, unknown>;
+  artifact?: RunArtifact;
+};
 
 type ConsoleUrlState = {
   runId: string;
@@ -39,7 +79,6 @@ type ConsoleUrlState = {
 const detailTabs = [
   { id: "overview", label: "Overview", icon: <Activity /> },
   { id: "timeline", label: "Timeline", icon: <Clock3 /> },
-  { id: "calls", label: "Calls", icon: <Wrench /> },
   { id: "terminal", label: "Terminal", icon: <TerminalSquare /> },
   { id: "artifacts", label: "Artifacts", icon: <FileText /> },
   { id: "raw", label: "Raw", icon: <FileText /> }
@@ -54,6 +93,14 @@ const terminalStreamLabels: Record<TerminalStream, string> = {
   stdout: "stdout",
   stderr: "stderr",
   exit: "Exits"
+};
+
+const phaseDefinitions: Record<TimelinePhaseId, { label: string; description: string }> = {
+  initial: { label: "Initial Message", description: "Request intake and user-visible trigger" },
+  setup: { label: "Setup", description: "Context, permissions, sandbox, dependencies, and preflight work" },
+  execution: { label: "Execution", description: "Model, tool, command, crawl, and embedding work" },
+  cleanup: { label: "Cleanup", description: "Verification, persistence, git, PR, and finalization work" },
+  response: { label: "Response", description: "Discord edits, replies, failures, and final user-facing output" }
 };
 
 export function App() {
@@ -344,7 +391,6 @@ export function App() {
                 </div>
                 {tab === "overview" && <Overview snapshot={snapshot} />}
                 {tab === "timeline" && <Timeline snapshot={snapshot} />}
-                {tab === "calls" && <Calls snapshot={snapshot} />}
                 {tab === "terminal" && <TerminalView terminal={snapshot.terminal} query={terminalQuery} onQueryChange={setTerminalQuery} />}
                 {tab === "artifacts" && <Artifacts runId={snapshot.run.runId} artifacts={snapshot.artifacts} />}
                 {tab === "raw" && <Raw snapshot={snapshot} />}
@@ -549,14 +595,32 @@ function LatencyBreakdown({ rows, totalDuration }: { rows: LatencyRow[]; totalDu
 
 function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
   const [level, setLevel] = useState<EventLevel | "all">("all");
-  const [source, setSource] = useState<RunEvent["source"] | "all">("all");
-  const sources = useMemo(() => uniqueStrings(snapshot.events.map((event) => event.source)).sort() as Array<RunEvent["source"]>, [snapshot.events]);
+  const [source, setSource] = useState<string>("all");
+  const flowItems = useMemo(() => conversationFlow(snapshot), [snapshot]);
+  const sources = useMemo(
+    () => uniqueStrings([...snapshot.events.map((event) => event.source), ...snapshot.spans.map((span) => span.source), ...flowItems.map((item) => item.source)]).sort(),
+    [snapshot.events, snapshot.spans, flowItems]
+  );
   const events = snapshot.events.filter((event) => {
     if (level !== "all" && event.level !== level) return false;
     if (source !== "all" && event.source !== source) return false;
     return true;
   });
-  const timedEvents = eventsWithTiming(events, snapshot.run.startedAt);
+  const spans = snapshot.spans.filter((span) => {
+    if (source !== "all" && span.source !== source) return false;
+    if (level === "error") return span.status === "failed" || span.status === "cancelled";
+    if (level === "warn") return span.status === "no_changes";
+    if (level === "debug") return false;
+    return true;
+  });
+  const flows = flowItems.filter((item) => {
+    if (level !== "all" && item.level !== level) return false;
+    if (source !== "all" && item.source !== source) return false;
+    return true;
+  });
+  const timelineStartedAt = timelineStart(snapshot.run.startedAt, events, spans, flows);
+  const timedEvents = eventsWithTiming(events, timelineStartedAt);
+  const phases = timelinePhases({ events: timedEvents, spans, flows, startedAt: timelineStartedAt });
 
   return (
     <section className="panel detail-panel">
@@ -573,7 +637,7 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
             <option value="error">Errors</option>
             <option value="debug">Debug</option>
           </select>
-          <select value={source} onChange={(event) => setSource(event.target.value as RunEvent["source"] | "all")} aria-label="Timeline source filter">
+          <select value={source} onChange={(event) => setSource(event.target.value)} aria-label="Timeline source filter">
             <option value="all">All sources</option>
             {sources.map((item) => (
               <option key={item} value={item}>
@@ -583,100 +647,68 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
           </select>
         </div>
       </div>
-      {events.length === 0 ? (
-        <Empty label="No events match these filters" />
+      {phases.length === 0 ? (
+        <Empty label="No timeline items match these filters" />
       ) : (
-        <ol className="timeline">
-          {timedEvents.map(({ event, gapMs, offset }) => (
-            <li key={event.id} className={`timeline-event ${event.level}`}>
-              <div className="timeline-rail">
-                <div className="timeline-dot" />
-              </div>
-              <article className="timeline-card">
-                <div className="timeline-title">
-                  <div>
-                    <strong>{humanizeEventName(event.name)}</strong>
-                    <span>{event.source}</span>
-                  </div>
-                  <div className="time-stack">
-                    <strong>{offset}</strong>
-                    {gapMs != null && <small>{formatSignedDuration(gapMs)}</small>}
-                  </div>
-                </div>
-                <p>{event.summary ?? "No summary"}</p>
-                <div className="timeline-meta">
-                  <span>{formatDate(event.createdAt)}</span>
-                  {event.durationMs != null && <span>took {formatDuration(event.durationMs)}</span>}
-                  <span className={`level-text ${event.level}`}>{event.level}</span>
-                </div>
-                {Object.keys(event.metadata).length > 0 && (
-                  <details>
-                    <summary>Metadata</summary>
-                    <MetadataPreview metadata={event.metadata} />
-                  </details>
-                )}
-              </article>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-function Calls({ snapshot }: { snapshot: RunSnapshot }) {
-  const [kind, setKind] = useState<"all" | "model" | "tool" | "errors">("all");
-  const events = snapshot.events;
-  const calls = events
-    .map((event) => ({ event, kind: callKind(event) }))
-    .filter((item) => item.kind === "model" || item.kind === "tool" || item.event.level === "error")
-    .filter((item) => kind === "all" || (kind === "errors" ? item.event.level === "error" : item.kind === kind));
-  const counts = {
-    model: events.filter((event) => callKind(event) === "model").length,
-    tool: events.filter((event) => callKind(event) === "tool").length,
-    errors: events.filter((event) => event.level === "error").length
-  };
-
-  return (
-    <section className="panel detail-panel">
-      <div className="panel-heading">
-        <div className="panel-title">
-          <Wrench />
-          <h3>Calls</h3>
-        </div>
-        <div className="filter-row compact" aria-label="Call filters">
-          {(["all", "model", "tool", "errors"] as const).map((value) => (
-            <button key={value} className={kind === value ? "filter active" : "filter"} type="button" onClick={() => setKind(value)}>
-              {value === "all" ? "All" : `${titleCase(value)} ${value === "model" || value === "tool" || value === "errors" ? counts[value] : ""}`}
-            </button>
-          ))}
-        </div>
-      </div>
-      {calls.length === 0 ? (
-        <Empty label="No model or tool calls match these filters" />
-      ) : (
-        <div className="call-list">
-          {calls.map(({ event, kind: callType }) => (
-            <article key={event.id} className={`call-item ${event.level}`}>
-              <div className="call-heading">
-                <span className={`call-icon ${callType}`}>{callType === "model" ? <MessageSquare /> : event.level === "error" ? <XCircle /> : <Wrench />}</span>
+        <div className="phase-groups">
+          {phases.map((phase) => (
+            <details key={phase.id} className={`phase-group ${phase.status}`} open={phase.status === "failed" || phase.status === "running" || phase.id === "execution" || phase.id === "response"}>
+              <summary className="phase-summary">
                 <div>
-                  <strong>{humanizeEventName(event.name)}</strong>
-                  <p>{event.summary ?? "No summary"}</p>
+                  <strong>{phase.label}</strong>
+                  <span>{phase.description}</span>
                 </div>
-                <div className="call-badges">
-                  <span>{event.source}</span>
-                  <small>{formatOffset(snapshot.run.startedAt, event.createdAt)}</small>
-                  {event.durationMs != null && <small>{formatDuration(event.durationMs)}</small>}
+                <div className="time-stack">
+                  <strong>{formatDuration(phase.durationMs)}</strong>
+                  <small>{phase.steps.length} steps</small>
+                  {phase.slowest && <small title={phase.slowest.name}>slowest {formatDuration(phase.slowest.durationMs)}</small>}
                 </div>
-              </div>
-              {Object.keys(event.metadata).length > 0 && (
-                <details>
-                  <summary>Inspect metadata</summary>
-                  <MetadataPreview metadata={event.metadata} />
-                </details>
-              )}
-            </article>
+              </summary>
+              <ol className="phase-timeline">
+                {phase.steps.map((step) => (
+                  <li key={step.id} className={`phase-step ${step.kind} ${step.level ?? step.status ?? ""}`}>
+                    <div className="timeline-rail">
+                      <div className="timeline-dot" />
+                    </div>
+                    <article className="timeline-card">
+                      <div className="timeline-title">
+                        <span className={`timeline-icon ${step.kind}`}>{timelineStepIcon(step.kind)}</span>
+                        <div className="timeline-step-main">
+                          <strong>{step.title}</strong>
+                          <span>{step.source}</span>
+                        </div>
+                        <div className="time-stack">
+                          <strong>{step.offset}</strong>
+                          {step.gapMs != null && <small>{formatSignedDuration(step.gapMs)}</small>}
+                        </div>
+                      </div>
+                      <p>{step.summary}</p>
+                      <div className="timeline-meta">
+                        <span className={`timeline-kind ${step.kind}`}>{timelineStepLabel(step.kind)}</span>
+                        <span>{formatDate(step.createdAt)}</span>
+                        {step.durationMs != null && <span>took {formatDuration(step.durationMs)}</span>}
+                        {step.level && <span className={`level-text ${step.level}`}>{step.level}</span>}
+                        {step.status && <span className={`level-text ${step.status}`}>{step.status}</span>}
+                        {step.artifact && <span>{formatBytes(step.artifact.sizeBytes)}</span>}
+                      </div>
+                      {step.artifact && (
+                        <div className="flow-artifact-meta">
+                          <span>{step.artifact.kind}</span>
+                          <span>{step.artifact.contentType}</span>
+                          {step.artifact.redacted && <span>redacted</span>}
+                        </div>
+                      )}
+                      {Object.keys(step.metadata).length > 0 && (
+                        <details>
+                          <summary>Metadata</summary>
+                          <MetadataPreview metadata={step.metadata} />
+                        </details>
+                      )}
+                    </article>
+                  </li>
+                ))}
+              </ol>
+            </details>
           ))}
         </div>
       )}
@@ -1016,6 +1048,7 @@ function runsRoutePrefix() {
 }
 
 function parseTab(value: string | null): DetailTab {
+  if (value === "calls") return "timeline";
   return detailTabs.some((item) => item.id === value) ? (value as DetailTab) : "overview";
 }
 
@@ -1029,6 +1062,293 @@ function parseKind(value: string | null): RunKind | "all" {
 
 function isTerminal(status: RunStatus) {
   return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
+}
+
+function timelinePhases({ events, spans, flows, startedAt }: { events: TimedRunEvent[]; spans: RunSpan[]; flows: FlowItem[]; startedAt: string }): TimelinePhase[] {
+  const buckets = new Map<TimelinePhaseId, TimelineStep[]>();
+  const flowEventIds = new Set(flows.map((flow) => flow.id.match(/^event-(.+)$/)?.[1]).filter(Boolean));
+  for (const phaseId of Object.keys(phaseDefinitions) as TimelinePhaseId[]) buckets.set(phaseId, []);
+  for (const span of spans) {
+    if (isEnvelopeSpan(span)) continue;
+    buckets.get(phaseForText(span.name, span.source))?.push(timelineStepFromSpan(span, startedAt));
+  }
+  for (const flow of flows) {
+    buckets.get(phaseForText(flow.title, flow.source, flow.summary))?.push(timelineStepFromFlow(flow, startedAt));
+  }
+  for (const event of events) {
+    if (flowEventIds.has(event.event.id)) continue;
+    if (isLowSignalTimelineEvent(event.event)) continue;
+    if (isDuplicateSpanEvent(event.event, spans)) continue;
+    buckets.get(phaseForText(event.event.name, event.event.source, event.event.summary))?.push(timelineStepFromEvent(event));
+  }
+  return (Object.keys(phaseDefinitions) as TimelinePhaseId[])
+    .map((id) => {
+      const steps = buckets.get(id)!;
+      return buildTimelinePhase(id, steps);
+    })
+    .filter((phase) => phase.steps.length > 0);
+}
+
+function timelineStart(defaultStartedAt: string, events: RunEvent[], spans: RunSpan[], flows: FlowItem[]) {
+  const times = [
+    defaultStartedAt,
+    ...events.map((event) => event.createdAt),
+    ...spans.map((span) => span.startedAt),
+    ...flows.map((flow) => flow.createdAt)
+  ]
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite);
+  if (times.length === 0) return defaultStartedAt;
+  return new Date(Math.min(...times)).toISOString();
+}
+
+function buildTimelinePhase(id: TimelinePhaseId, steps: TimelineStep[]): TimelinePhase {
+  const sortedSteps = withStepGaps(steps);
+  const durations = sortedSteps.map((step) => ({ name: step.title, durationMs: step.durationMs ?? 0 })).filter((item) => item.durationMs > 0);
+  const durationMs = stepRangeDuration(sortedSteps);
+  const slowest = durations.length > 0 ? durations.reduce((current, item) => (item.durationMs > current.durationMs ? item : current), durations[0]!) : null;
+  return {
+    id,
+    label: phaseDefinitions[id].label,
+    description: phaseDefinitions[id].description,
+    steps: sortedSteps,
+    durationMs,
+    status: phaseStatus(sortedSteps),
+    slowest
+  };
+}
+
+function timelineStepFromSpan(span: RunSpan, startedAt: string): TimelineStep {
+  return {
+    id: `span-${span.id}`,
+    kind: "span",
+    title: span.name,
+    summary: spanSummary(span),
+    createdAt: span.startedAt,
+    durationMs: span.durationMs,
+    gapMs: null,
+    offset: formatOffset(startedAt, span.startedAt),
+    source: span.source,
+    status: span.status,
+    level: null,
+    metadata: span.metadata
+  };
+}
+
+function timelineStepFromFlow(flow: FlowItem, startedAt: string): TimelineStep {
+  return {
+    id: flow.id,
+    kind: flow.kind,
+    title: flow.title,
+    summary: flow.summary,
+    createdAt: flow.createdAt,
+    durationMs: flow.durationMs,
+    gapMs: null,
+    offset: formatOffset(startedAt, flow.createdAt),
+    source: flow.source,
+    status: null,
+    level: flow.level,
+    metadata: flow.metadata,
+    artifact: flow.artifact
+  };
+}
+
+function timelineStepFromEvent({ event, offset }: TimedRunEvent): TimelineStep {
+  return {
+    id: `event-${event.id}`,
+    kind: event.level === "error" ? "error" : "event",
+    title: humanizeEventName(event.name),
+    summary: event.summary ?? "No summary recorded.",
+    createdAt: event.createdAt,
+    durationMs: event.durationMs,
+    gapMs: null,
+    offset,
+    source: event.source,
+    status: null,
+    level: event.level,
+    metadata: event.metadata
+  };
+}
+
+function withStepGaps(steps: TimelineStep[]) {
+  const sortedSteps = [...steps].sort((left, right) => {
+      const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      if (Number.isFinite(timeDelta) && timeDelta !== 0) return timeDelta;
+      return timelineStepOrder(left.kind) - timelineStepOrder(right.kind);
+    });
+  return compactTimelineSteps(sortedSteps)
+    .map((step, index, sortedSteps) => {
+      const previous = index > 0 ? sortedSteps[index - 1] : null;
+      const gapMs = previous ? new Date(step.createdAt).getTime() - new Date(previous.createdAt).getTime() : null;
+      return {
+        ...step,
+        gapMs: gapMs != null && Number.isFinite(gapMs) && gapMs >= 0 ? gapMs : null
+      };
+    });
+}
+
+function compactTimelineSteps(steps: TimelineStep[]) {
+  return steps.filter((step) => {
+    if (step.kind !== "span") return true;
+    if (step.source !== "command") return true;
+    const stepName = normalizedTimelineName(step.title);
+    const stepStartedAt = new Date(step.createdAt).getTime();
+    return !steps.some((candidate) => {
+      if (candidate.id === step.id || candidate.kind !== "span" || candidate.source !== "task") return false;
+      if (normalizedTimelineName(candidate.title) !== stepName) return false;
+      const candidateStartedAt = new Date(candidate.createdAt).getTime();
+      if (!Number.isFinite(stepStartedAt) || !Number.isFinite(candidateStartedAt)) return false;
+      if (Math.abs(candidateStartedAt - stepStartedAt) > 1_500) return false;
+      return (candidate.durationMs ?? 0) >= (step.durationMs ?? 0);
+    });
+  });
+}
+
+function timelineStepOrder(kind: TimelineStepKind) {
+  const order: Record<TimelineStepKind, number> = {
+    input: 0,
+    event: 1,
+    model: 2,
+    tool: 3,
+    span: 4,
+    artifact: 5,
+    response: 6,
+    error: 7
+  };
+  return order[kind];
+}
+
+function phaseStatus(steps: TimelineStep[]): RunStatus {
+  if (steps.some((step) => step.status === "failed" || step.status === "cancelled" || step.level === "error" || step.kind === "error")) return "failed";
+  if (steps.some((step) => step.status === "running")) return "running";
+  if (steps.some((step) => step.status === "queued")) return "queued";
+  if (steps.some((step) => step.status === "no_changes")) return "no_changes";
+  return "succeeded";
+}
+
+function stepRangeDuration(steps: TimelineStep[]) {
+  if (steps.length === 0) return 0;
+  const starts = steps.map((step) => new Date(step.createdAt).getTime()).filter(Number.isFinite);
+  const ends = steps.map((step) => new Date(step.createdAt).getTime() + (step.durationMs ?? 0)).filter(Number.isFinite);
+  if (starts.length === 0 || ends.length === 0) return steps.reduce((total, step) => Math.max(total, step.durationMs ?? 0), 0);
+  const startedAt = Math.min(...starts);
+  const endedAt = Math.max(...ends);
+  return endedAt >= startedAt ? endedAt - startedAt : 0;
+}
+
+function spanSummary(span: RunSpan) {
+  const explicitSummary = typeof span.metadata.summary === "string" ? span.metadata.summary : null;
+  if (explicitSummary) return explicitSummary;
+  if (span.status === "running") return "Still running.";
+  if (span.durationMs != null) return `${titleCase(span.source)} work took ${formatDuration(span.durationMs)}.`;
+  return `${titleCase(span.source)} work has no completed duration yet.`;
+}
+
+function isEnvelopeSpan(span: RunSpan) {
+  return /\b(kubernetes sandbox|sandbox command|run total|task total|sandbox lifetime)\b/i.test(span.name.replace(/[._-]+/g, " "));
+}
+
+function isLowSignalTimelineEvent(event: RunEvent) {
+  if (event.level === "warn" || event.level === "error") return false;
+  const text = `${event.name} ${event.summary ?? ""}`.toLowerCase().replace(/[._-]+/g, " ");
+  return /\b(task progress|progress update|heartbeat|stream chunk|log chunk)\b/.test(text);
+}
+
+function isDuplicateSpanEvent(event: RunEvent, spans: RunSpan[]) {
+  const eventName = normalizedTimelineName(event.name);
+  const eventDuration = event.durationMs ?? 0;
+  if (!eventName || eventDuration <= 0) return false;
+  return spans.some((span) => {
+    if (normalizedTimelineName(span.name) !== eventName && !(eventName === "sandbox command" && span.source === "command")) return false;
+    const spanDuration = span.durationMs ?? 0;
+    if (spanDuration <= 0) return false;
+    return Math.abs(spanDuration - eventDuration) < 750;
+  });
+}
+
+function normalizedTimelineName(value: string) {
+  return value.toLowerCase().replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function phaseForText(name: string, source: string, summary?: string | null): TimelinePhaseId {
+  const text = `${name} ${source} ${summary ?? ""}`.toLowerCase().replace(/[._-]+/g, " ");
+  if (/\b(mention received|message received|user prompt|input|request received|task queued|queued)\b/.test(text)) return "initial";
+  if (/\b(verify|test|lint|scan|commit|push|pull request|pr|cleanup|persist|save|finaliz|reconcile)\b/.test(text)) return "cleanup";
+  if (/\b(sandbox|dependency|dependencies|install|clone|checkout|permission|memory|context|preflight|cache|load channel|resolve discord)\b/.test(text)) return "setup";
+  if (/\b(codex|model|openrouter|tool|chat|completion|agent request|search discord|discord history|discord stats|generate image)\b/.test(text)) return "execution";
+  if (/\b(reply|respond|response|completed|failed|cancelled|discord mention failed|message sent|message edit|final answer)\b/.test(text)) return "response";
+  return "execution";
+}
+
+function conversationFlow(snapshot: RunSnapshot): FlowItem[] {
+  const eventItems = snapshot.events.filter(isFlowEvent).map((event): FlowItem => {
+    const callType = callKind(event);
+    return {
+      id: `event-${event.id}`,
+      kind: event.level === "error" ? "error" : eventKind(event, callType),
+      title: humanizeEventName(event.name),
+      summary: event.summary ?? "No summary",
+      createdAt: event.createdAt,
+      durationMs: event.durationMs,
+      source: event.source,
+      level: event.level,
+      metadata: event.metadata
+    };
+  });
+  const artifactItems = snapshot.artifacts.filter(isFlowArtifact).map((artifact): FlowItem => ({
+    id: `artifact-${artifact.artifactId}`,
+    kind: artifactKind(artifact),
+    title: artifact.name,
+    summary: artifact.preview || `${artifact.kind} artifact`,
+    createdAt: artifact.createdAt,
+    durationMs: null,
+    source: "artifact",
+    level: null,
+    metadata: artifact.metadata,
+    artifact
+  }));
+  return [...eventItems, ...artifactItems].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+}
+
+function isFlowEvent(event: RunEvent) {
+  if (event.level === "error") return true;
+  if (isLowSignalTimelineEvent(event)) return false;
+  const kind = callKind(event);
+  if (kind === "model" || kind === "tool") return true;
+  return /\b(prompt|input|mention|message|reply|respond|response|completed|failed|final answer)\b/i.test(`${event.name} ${event.summary ?? ""}`);
+}
+
+function isFlowArtifact(artifact: RunArtifact) {
+  return /\b(prompt|response|transcript|conversation|model|tool|message|error|request|reply)\b/i.test(`${artifact.kind} ${artifact.name}`);
+}
+
+function eventKind(event: RunEvent, callType: ReturnType<typeof callKind>): FlowItemKind {
+  if (callType === "model") return "model";
+  if (callType === "tool") return "tool";
+  if (/\b(reply|respond|response|completed|final answer)\b/i.test(`${event.name} ${event.summary ?? ""}`)) return "response";
+  return "input";
+}
+
+function artifactKind(artifact: RunArtifact): FlowItemKind {
+  const text = `${artifact.kind} ${artifact.name}`.toLowerCase();
+  if (/error|response|reply/.test(text)) return "response";
+  if (/model|transcript|conversation/.test(text)) return "model";
+  if (/tool/.test(text)) return "tool";
+  return "artifact";
+}
+
+function timelineStepIcon(kind: TimelineStepKind) {
+  if (kind === "span" || kind === "event") return <Activity />;
+  if (kind === "model" || kind === "input" || kind === "response") return <MessageSquare />;
+  if (kind === "tool") return <Wrench />;
+  if (kind === "error") return <XCircle />;
+  return <FileText />;
+}
+
+function timelineStepLabel(kind: TimelineStepKind) {
+  if (kind === "span") return "phase";
+  if (kind === "event") return "event";
+  return kind;
 }
 
 function callKind(event: RunEvent) {
@@ -1112,7 +1432,8 @@ function formatDate(value: string) {
 
 function formatOffset(startedAt: string, eventAt: string) {
   const offset = new Date(eventAt).getTime() - new Date(startedAt).getTime();
-  if (!Number.isFinite(offset) || offset < 0) return "before start";
+  if (!Number.isFinite(offset)) return "unknown";
+  if (offset < 0) return "+0.000s";
   return `+${formatDuration(offset)}`;
 }
 

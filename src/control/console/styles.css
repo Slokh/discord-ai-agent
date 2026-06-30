@@ -736,15 +736,71 @@ kbd {
   padding: 0 8px;
 }
 
-.timeline {
+.phase-groups {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.phase-group {
+  background: var(--pane-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.phase-group.failed {
+  border-color: color-mix(in oklab, var(--bad) 58%, var(--border));
+}
+
+.phase-group.running {
+  border-color: color-mix(in oklab, var(--info) 58%, var(--border));
+}
+
+.phase-summary {
+  align-items: center;
+  cursor: pointer;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  list-style: none;
+  padding: 12px;
+}
+
+.phase-summary::-webkit-details-marker {
+  display: none;
+}
+
+.phase-summary > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.phase-summary > div:first-child span,
+.flow-artifact-meta {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.phase-summary .time-stack small {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phase-timeline {
+  border-top: 1px solid var(--border);
   display: grid;
   gap: 10px;
   list-style: none;
-  margin: 14px 0 0;
-  padding: 0;
+  margin: 0;
+  padding: 10px 12px 12px;
 }
 
-.timeline-event {
+.phase-step {
   display: grid;
   gap: 10px;
   grid-template-columns: 16px minmax(0, 1fr);
@@ -766,7 +822,7 @@ kbd {
   width: 1px;
 }
 
-.timeline-event:last-child .timeline-rail::after {
+.phase-step:last-child .timeline-rail::after {
   display: none;
 }
 
@@ -781,14 +837,24 @@ kbd {
   z-index: 1;
 }
 
-.timeline-event.error .timeline-dot {
+.phase-step.error .timeline-dot,
+.phase-step.failed .timeline-dot,
+.phase-step.cancelled .timeline-dot {
   background: var(--bad);
   box-shadow: 0 0 0 4px rgb(255 140 152 / 0.12);
 }
 
-.timeline-event.warn .timeline-dot {
+.phase-step.warn .timeline-dot,
+.phase-step.no_changes .timeline-dot {
   background: var(--warn);
   box-shadow: 0 0 0 4px rgb(244 199 109 / 0.12);
+}
+
+.phase-step.model .timeline-dot,
+.phase-step.tool .timeline-dot,
+.phase-step.running .timeline-dot,
+.phase-step.queued .timeline-dot {
+  background: var(--info);
 }
 
 .timeline-card {
@@ -804,14 +870,17 @@ kbd {
   padding: 12px;
 }
 
-.timeline-event.error .timeline-card {
+.phase-step.error .timeline-card,
+.phase-step.failed .timeline-card,
+.phase-step.cancelled .timeline-card {
   background:
     linear-gradient(180deg, rgb(255 140 152 / 0.09), transparent 100%),
     var(--pane-2);
   border-color: color-mix(in oklab, var(--bad) 55%, var(--border));
 }
 
-.timeline-event.warn .timeline-card {
+.phase-step.warn .timeline-card,
+.phase-step.no_changes .timeline-card {
   background:
     linear-gradient(180deg, rgb(244 199 109 / 0.08), transparent 100%),
     var(--pane-2);
@@ -820,9 +889,61 @@ kbd {
 
 .timeline-title {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.timeline-icon {
+  align-items: center;
+  background: var(--pane-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.timeline-icon.model,
+.timeline-icon.tool {
+  color: var(--info);
+}
+
+.timeline-icon.error {
+  color: var(--bad);
+}
+
+.timeline-step-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.timeline-step-main strong,
+.timeline-step-main span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-step-main span {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.timeline-kind {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  padding: 2px 7px;
+  text-transform: capitalize;
+}
+
+.timeline-title .time-stack {
+  align-items: flex-end;
 }
 
 .timeline-title + p,
@@ -839,17 +960,17 @@ kbd {
   font-size: 12px;
 }
 
-.timeline small,
+.phase-timeline small,
 .muted {
   color: var(--faint);
 }
 
-.timeline details,
+.phase-timeline details,
 .call-item details {
   color: var(--muted);
 }
 
-.timeline summary,
+.phase-timeline summary,
 .call-item summary {
   cursor: pointer;
 }
@@ -1005,6 +1126,12 @@ kbd {
   border-color: color-mix(in oklab, var(--bad) 55%, var(--border));
 }
 
+.call-item.artifact,
+.call-item.input,
+.call-item.response {
+  border-color: var(--border);
+}
+
 .call-heading {
   align-items: flex-start;
   display: grid;
@@ -1041,6 +1168,12 @@ kbd {
     linear-gradient(180deg, rgb(159 186 255 / 0.1), transparent 100%),
     var(--pane-3);
   color: var(--info);
+}
+
+.call-icon.input,
+.call-icon.response,
+.call-icon.artifact {
+  color: var(--muted);
 }
 
 .call-icon.process {
@@ -1316,7 +1449,7 @@ body,
 }
 
 h2 {
-  font-size: clamp(24px, 3.2vw, 36px);
+  font-size: clamp(21px, 2.4vw, 30px);
 }
 
 .filter:hover,
@@ -1516,26 +1649,32 @@ h2 {
 .timeline-title {
   align-items: start;
   display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
-.timeline-title > div:first-child {
+.timeline-step-main {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.timeline-title > div:first-child strong {
+.timeline-step-main strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.timeline-title > div:first-child span,
+.timeline-step-main span,
 .level-text {
   color: var(--faint);
   font-size: 12px;
+}
+
+.timeline-title .time-stack {
+  align-items: end;
+  justify-items: end;
 }
 
 .level-text.error {
@@ -1600,6 +1739,13 @@ h2 {
   color: var(--faint);
 }
 
+.flow-artifact-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 44px;
+}
+
 .jump-overlay {
   background: rgb(0 0 0 / 0.56);
 }
@@ -1619,5 +1765,27 @@ h2 {
 
   .latency-share {
     grid-column: 1 / -1;
+  }
+
+  .phase-summary,
+  .timeline-title {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .phase-summary .time-stack,
+  .timeline-title .time-stack {
+    align-items: start;
+    grid-column: 2;
+    justify-items: start;
+    min-width: 0;
+    text-align: left;
+  }
+
+  .timeline-card {
+    padding: 10px;
+  }
+
+  .flow-artifact-meta {
+    padding-left: 0;
   }
 }

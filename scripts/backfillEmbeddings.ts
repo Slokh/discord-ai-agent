@@ -3,6 +3,7 @@ import { runMigrations } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../src/db/repositories.js";
 import { startJobs } from "../src/jobs/queue.js";
+import { MESSAGE_EMBEDDING_INPUT_VERSION } from "../src/memory/embedding.js";
 import { logger } from "../src/util/logger.js";
 
 const DEFAULT_LIMIT = 1000;
@@ -32,6 +33,8 @@ async function main() {
     const messageIds = await repo.messageIdsNeedingEmbeddings({
       guildId: config.discord.guildId,
       model: config.openRouter.embeddingModel,
+      dimensions: config.embeddingDimensions,
+      inputVersion: MESSAGE_EMBEDDING_INPUT_VERSION,
       botUserId: config.discord.clientId,
       limit
     });

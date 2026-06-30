@@ -45,7 +45,11 @@ describe("embedAndStoreMessage", () => {
     expect(repo.storeMessageEmbedding).toHaveBeenCalledWith({
       messageId: "message-1",
       embedding: [1.5, 3.5],
-      model: "test/embed"
+      model: "test/embed",
+      dimensions: 2,
+      inputVersion: 1,
+      inputText: "one ".repeat(500).trim(),
+      inputSha256: expect.any(String)
     });
   });
 
@@ -94,9 +98,11 @@ describe("embedStoredMessages", () => {
     expect(openRouter.embed).toHaveBeenCalledWith(["hello", "world"], "test/embed", 2);
     expect(repo.storeMessageEmbeddings).toHaveBeenCalledWith({
       model: "test/embed",
+      dimensions: 2,
+      inputVersion: 1,
       items: [
-        { messageId: "message-1", embedding: [1, 2] },
-        { messageId: "message-2", embedding: [2, 3] }
+        { messageId: "message-1", embedding: [1, 2], inputText: "hello", inputSha256: expect.any(String) },
+        { messageId: "message-2", embedding: [2, 3], inputText: "world", inputSha256: expect.any(String) }
       ]
     });
   });
@@ -133,9 +139,11 @@ describe("embedStoredMessages", () => {
     expect(maxActiveRequests).toBeGreaterThan(1);
     expect(repo.storeMessageEmbeddings).toHaveBeenCalledWith({
       model: "test/embed",
+      dimensions: 2,
+      inputVersion: 1,
       items: expect.arrayContaining([
-        { messageId: "message-0", embedding: [1, 2] },
-        { messageId: "message-129", embedding: [1, 2] }
+        { messageId: "message-0", embedding: [1, 2], inputText: "hello 0", inputSha256: expect.any(String) },
+        { messageId: "message-129", embedding: [1, 2], inputText: "hello 129", inputSha256: expect.any(String) }
       ])
     });
   });
@@ -181,7 +189,10 @@ describe("skipMessageEmbeddingReason", () => {
     content: "hello",
     normalizedContent: "hello",
     deletedAt: null,
-    embeddingModel: null
+    embeddingModel: null,
+    embeddingDimensions: null,
+    embeddingInputVersion: null,
+    embeddingInputSha256: null
   };
 
   it("skips messages that should not be embedded or are already current", () => {
@@ -192,9 +203,18 @@ describe("skipMessageEmbeddingReason", () => {
     expect(skipMessageEmbeddingReason({ ...baseMessage, content: "<@bot> hi" }, { embeddingModel: "test/embed", botUserId: "bot" })).toBe(
       "bot_mention"
     );
-    expect(skipMessageEmbeddingReason({ ...baseMessage, embeddingModel: "test/embed" }, { embeddingModel: "test/embed" })).toBe(
-      "already_current"
-    );
+    expect(
+      skipMessageEmbeddingReason(
+        {
+          ...baseMessage,
+          embeddingModel: "test/embed",
+          embeddingDimensions: 2,
+          embeddingInputVersion: 1,
+          embeddingInputSha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        },
+        { embeddingModel: "test/embed", embeddingDimensions: 2 }
+      )
+    ).toBe("already_current");
   });
 
   it("allows normal user messages without a current embedding", () => {
@@ -226,6 +246,9 @@ function messageForEmbedding(overrides: Record<string, unknown> = {}) {
     normalizedContent: "hello",
     deletedAt: null,
     embeddingModel: null,
+    embeddingDimensions: null,
+    embeddingInputVersion: null,
+    embeddingInputSha256: null,
     ...overrides
   };
 }

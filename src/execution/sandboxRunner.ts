@@ -121,19 +121,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     await timedPhase(env, timings, "codex", "Running Codex to implement the requested change.", async () => {
       await runCommand(
         process.env.CODEX_BIN || "codex",
-        [
-          "exec",
-          "--ephemeral",
-          "-C",
-          checkoutDir,
-          "--sandbox",
-          "workspace-write",
-          "--ask-for-approval",
-          "never",
-          "-m",
-          env.openRouterChatModel,
-          "-"
-        ],
+        codexExecArgs({ checkoutDir, model: env.openRouterChatModel }),
         {
           cwd: checkoutDir,
           env: codexEnv(env, gitEnv, workRoot, toolShimDir),
@@ -735,7 +723,7 @@ async function writeCodexConfig(workRoot: string, checkoutDir: string, env: Sand
       `model = ${JSON.stringify(env.openRouterChatModel)}`,
       'model_provider = "openrouter"',
       'approval_policy = "never"',
-      'sandbox_mode = "workspace-write"',
+      'sandbox_mode = "danger-full-access"',
       'preferred_auth_method = "apikey"',
       'model_verbosity = "low"',
       "",
@@ -775,6 +763,19 @@ function codeUpdatePrompt(env: SandboxEnv) {
     env.taskRequest.trim(),
     ""
   ].join("\n");
+}
+
+export function codexExecArgs(input: { checkoutDir: string; model: string }) {
+  return [
+    "exec",
+    "--ephemeral",
+    "-C",
+    input.checkoutDir,
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-m",
+    input.model,
+    "-"
+  ];
 }
 
 function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean; timings: TaskTimings; cacheSummary: CacheSummary }) {

@@ -46,7 +46,6 @@ async function main() {
     { createPool },
     { DiscordAiAgentRepository },
     { OpenRouterClient },
-    { GitHubSkillClient },
     { startJobs },
     { runWithTrace }
   ] = await Promise.all([
@@ -56,7 +55,6 @@ async function main() {
     import("../src/db/pool.js"),
     import("../src/db/repositories.js"),
     import("../src/models/openrouter.js"),
-    import("../src/skills/github.js"),
     import("../src/jobs/queue.js"),
     import("../src/util/trace.js")
   ]);
@@ -70,7 +68,6 @@ async function main() {
   const pool = createPool(config);
   const repo = new DiscordAiAgentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
-  const github = new GitHubSkillClient(config.github);
   const jobs = await startJobs({
     config,
     repo,
@@ -80,7 +77,7 @@ async function main() {
     worker: false,
     crawlWorker: false,
     embeddingWorker: false,
-    codegenWorker: false
+    taskWorker: false
   });
 
   try {
@@ -128,7 +125,6 @@ async function main() {
             config,
             repo,
             openRouter,
-            github,
             jobs,
             guildId,
             channelId: currentChannel.id,
@@ -266,9 +262,8 @@ function parseArgs(argv: string[]): PromptArgs {
 }
 
 function applyLocalPromptDefaults(args: PromptArgs, config: ReturnType<typeof import("../src/config/env.js").loadConfig>) {
-  if (args.userId === "local-cli" && config.railway.logOwnerUserIds.length > 0) {
-    args.userId = config.railway.logOwnerUserIds[0] ?? args.userId;
-  }
+  void args;
+  void config;
 }
 
 async function resolveCurrentChannel(pool: DbPool, guildId: string, args: PromptArgs): Promise<ChannelPick> {
@@ -455,7 +450,7 @@ Options:
   --channel <name>              Use a channel by name for current-channel context.
   --channel-id <id>             Use a channel ID for current-channel context.
   --visible-channel-ids <ids>   Comma-separated visible channel IDs; defaults to all indexed channels.
-  --user-id <id>                Local requester ID. Defaults to the first Railway log owner, then local-cli.
+  --user-id <id>                Local requester ID. Defaults to local-cli.
   --user-name <name>            Local requester display name. Defaults to Local CLI.
   --no-memory                   Do not load or store CLI conversation memory.
   --use-discord-memory          Use the real Discord channel memory thread. Default uses separate CLI memory.

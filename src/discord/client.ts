@@ -14,10 +14,8 @@ import {
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { isOpenRouterContentFilterError, type OpenRouterClient } from "../models/openrouter.js";
-import type { GitHubSkillClient } from "../skills/github.js";
 import { embeddingPriorityForMessageTimestamp, type JobRuntime } from "../jobs/queue.js";
 import type { DiscordCrawler } from "./crawler.js";
-import { createCodegenDiscordRenderer } from "./codegenRenderer.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { handleAgentRequest } from "../agent/router.js";
@@ -27,9 +25,8 @@ import { durationMs, logger, previewText } from "../util/logger.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
 
-const REPLY_SESSION_CONTEXT_MESSAGE_LIMIT = 18;
+const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
 const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 8;
-const DISCORD_AGENT_RESPONSE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -41,7 +38,6 @@ export function createDiscordAiAgentBot(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   openRouter: OpenRouterClient;
-  github: GitHubSkillClient;
   crawler: DiscordCrawler;
   jobs?: JobRuntime;
   client?: Client;
@@ -58,11 +54,6 @@ export function createDiscordAiAgentBot(input: {
       ],
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
     });
-  const codegenRenderer = createCodegenDiscordRenderer({
-    client,
-    repo: input.repo,
-    maxReplyChars: input.config.maxReplyChars
-  });
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(
@@ -73,7 +64,6 @@ export function createDiscordAiAgentBot(input: {
       },
       "Discord AI Agent Discord bot is online"
     );
-    codegenRenderer.start();
   });
 
   client.on(Events.Error, (error) => {
@@ -168,10 +158,7 @@ export function createDiscordAiAgentBot(input: {
       if (!input.config.discord.token) throw new Error("DISCORD_TOKEN is required.");
       await client.login(input.config.discord.token);
     },
-    destroy: () => {
-      codegenRenderer.stop();
-      client.destroy();
-    }
+    destroy: () => client.destroy()
   };
 }
 
@@ -180,7 +167,6 @@ async function handleMessageCreate(
     config: AppConfig;
     repo: DiscordAiAgentRepository;
     openRouter: OpenRouterClient;
-    github: GitHubSkillClient;
     jobs?: JobRuntime;
   },
   client: Client,
@@ -289,7 +275,53 @@ async function handleMessageCreate(
     summary: "Sent Thinking reply",
     metadata: { replyMessageId: thinking.id }
   });
+  const threadKey = discordChannelThreadKey(message.guildId, message.channelId);
   const userDisplayName = message.member?.displayName ?? message.author.username;
+  const sessionStartedAt = Date.now();
+  await input.repo.ensureConversationSession({
+    threadKey,
+    guildId: message.guildId,
+    channelId: message.channelId,
+    metadata: {
+      kind: "discord_channel",
+      channelId: message.channelId
+    }
+  });
+  requestLogger.debug({ threadKey }, "Ensured conversation session");
+
+  const priorSessionMessages = await input.repo.recentConversationMessages({
+    threadKey,
+    limit: SESSION_CONTEXT_MESSAGE_LIMIT
+  });
+  requestLogger.info(
+    {
+      threadKey,
+      sessionMessageCount: priorSessionMessages.length,
+      durationMs: durationMs(sessionStartedAt)
+    },
+    "Loaded channel conversation memory"
+  );
+  await recordTraceEvent(input.repo, {
+    eventName: "memory.session.loaded",
+    summary: `Loaded ${priorSessionMessages.length} channel memory messages`,
+    metadata: { threadKey, sessionMessageCount: priorSessionMessages.length },
+    durationMs: durationMs(sessionStartedAt)
+  });
+  await input.repo.appendConversationMessage({
+    threadKey,
+    role: "user",
+    discordMessageId: message.id,
+    authorId: message.author.id,
+    authorDisplayName: userDisplayName,
+    content: text,
+    createdAt: message.createdAt,
+    metadata: {
+      discordUrl: message.url,
+      rawContent: message.content
+    }
+  });
+  requestLogger.debug({ threadKey }, "Stored user turn in channel memory");
+
   const permissionStartedAt = Date.now();
   const member = message.member ?? (await message.guild.members.fetch(message.author.id));
   const mentionedChannelIds = explicitChannelMentionIds(message.content);
@@ -327,72 +359,6 @@ async function handleMessageCreate(
     durationMs: durationMs(permissionStartedAt)
   });
 
-  const sessionStartedAt = Date.now();
-  const conversationRootMessageId = replyContext?.rootMessageId ?? message.id;
-  const threadKey = discordReplyThreadKey(message.guildId, message.channelId, conversationRootMessageId);
-  const sessionKind = replyContext ? "discord_reply_chain" : "discord_fresh_mention";
-  await input.repo.ensureConversationSession({
-    threadKey,
-    guildId: message.guildId,
-    channelId: message.channelId,
-    metadata: {
-      kind: sessionKind,
-      channelId: message.channelId,
-      rootMessageId: conversationRootMessageId,
-      directParentMessageId: replyContext?.messageId ?? null,
-      replyChainLength: replyContext?.chain.length ?? 0
-    }
-  });
-  requestLogger.debug({ threadKey, sessionKind, conversationRootMessageId }, "Ensured conversation session");
-
-  const priorSessionMessages = replyContext
-    ? await input.repo.recentConversationMessages({
-        threadKey,
-        limit: REPLY_SESSION_CONTEXT_MESSAGE_LIMIT
-      })
-    : [];
-  requestLogger.info(
-    {
-      threadKey,
-      sessionKind,
-      conversationRootMessageId,
-      sessionMessageCount: priorSessionMessages.length,
-      replyChainLength: replyContext?.chain.length ?? 0,
-      durationMs: durationMs(sessionStartedAt)
-    },
-    replyContext ? "Loaded reply session memory" : "Started fresh top-level session"
-  );
-  await recordTraceEvent(input.repo, {
-    eventName: "memory.session.loaded",
-    summary: replyContext
-      ? `Loaded ${priorSessionMessages.length} reply-session memory messages`
-      : "Started fresh top-level mention session",
-    metadata: {
-      threadKey,
-      sessionKind,
-      rootMessageId: conversationRootMessageId,
-      sessionMessageCount: priorSessionMessages.length,
-      replyChainLength: replyContext?.chain.length ?? 0
-    },
-    durationMs: durationMs(sessionStartedAt)
-  });
-  await input.repo.appendConversationMessage({
-    threadKey,
-    role: "user",
-    discordMessageId: message.id,
-    authorId: message.author.id,
-    authorDisplayName: userDisplayName,
-    content: text,
-    createdAt: message.createdAt,
-    metadata: {
-      discordUrl: message.url,
-      rawContent: message.content,
-      sessionKind,
-      rootMessageId: conversationRootMessageId
-    }
-  });
-  requestLogger.debug({ threadKey, sessionKind }, "Stored user turn in conversation memory");
-
   try {
     const response = await withTimeout(
       handleAgentRequest(
@@ -400,7 +366,6 @@ async function handleMessageCreate(
           config: input.config,
           repo: input.repo,
           openRouter: input.openRouter,
-          github: input.github,
           jobs: input.jobs,
           guildId: message.guildId,
           channelId: message.channelId,
@@ -413,8 +378,8 @@ async function handleMessageCreate(
           sessionMessages: priorSessionMessages,
           replyContext,
           requestId,
-          replyChannelId: thinking.channelId,
-          replyMessageId: thinking.id,
+          statusChannelId: thinking.channelId,
+          statusMessageId: thinking.id,
           discordRoles: discordRoleSnapshots(message.guild),
           updateStatus: async (content) => {
             await thinking.edit(cleanResponse(content, input.config.maxReplyChars));
@@ -429,7 +394,7 @@ async function handleMessageCreate(
         },
         text
       ),
-      DISCORD_AGENT_RESPONSE_TIMEOUT_MS,
+      input.config.discordAgentResponseTimeoutMs,
       "Discord AI Agent agent request"
     );
 
@@ -467,7 +432,7 @@ async function handleMessageCreate(
       });
     }
     if (response.memoryEvents?.length) {
-      requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Stored tool results in conversation memory");
+      requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Stored tool results in channel memory");
     }
 
     await input.repo.appendConversationMessage({
@@ -501,7 +466,7 @@ async function handleMessageCreate(
         "Agent request blocked by OpenRouter content filter"
       );
       const filteredContent = cleanResponse(
-        "The model/provider blocked that one, so I’m not going to keep it in conversation memory. Try rephrasing it.",
+        "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
         input.config.maxReplyChars
       );
       const finalReply = await thinking.edit(filteredContent);
@@ -511,7 +476,7 @@ async function handleMessageCreate(
           discordMessageIds: [message.id]
         })
         .catch((deleteError) => {
-          requestLogger.warn({ err: deleteError }, "Failed to remove content-filtered user turn from conversation memory");
+          requestLogger.warn({ err: deleteError }, "Failed to remove content-filtered user turn from channel memory");
           return 0;
         });
       requestLogger.info(
@@ -913,10 +878,6 @@ export function shouldProcessGuildEvent(configuredGuildId: string | undefined, e
 
 export function discordChannelThreadKey(guildId: string, channelId: string) {
   return `discord:${guildId}:${channelId}`;
-}
-
-export function discordReplyThreadKey(guildId: string, channelId: string, rootMessageId: string) {
-  return `discord:${guildId}:${channelId}:${rootMessageId}`;
 }
 
 export function deletedMessageIdsForConfiguredGuild(

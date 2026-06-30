@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertOpenRouterConfig, loadConfig } from "../../src/config/env.js";
+import { assertExecutionConfig, assertOpenRouterConfig, loadConfig } from "../../src/config/env.js";
 
 describe("config", () => {
   it("loads defaults", () => {
@@ -8,16 +8,16 @@ describe("config", () => {
         "DISCORD_CLIENT_ID",
         "DISCORD_GUILD_ID",
         "BOT_NAME",
+        "RUN_MIGRATIONS",
         "GITHUB_REPOSITORY",
-        "GITHUB_DRY_RUN",
-        "GITHUB_DRY_RUN_DIR",
-        "RAILWAY_PROJECT_ID",
-        "RAILWAY_ENVIRONMENT",
-        "RAILWAY_LOG_OWNER_USER_IDS",
-        "OPENROUTER_CHAT_MODEL",
-        "OPENROUTER_CODEGEN_MODEL",
-        "CODEGEN_JOB_TIMEOUT_MINUTES",
-        "CODEGEN_CODEX_TIMEOUT_MINUTES"
+        "INTERNAL_API_HOST",
+        "INTERNAL_API_PORT",
+        "CONTROL_PLANE_INTERNAL_URL",
+        "TASK_SIGNING_SECRET",
+        "KUBERNETES_NAMESPACE",
+        "SANDBOX_IMAGE",
+        "SANDBOX_CACHE_DIR",
+        "SANDBOX_CACHE_PVC_NAME"
       ],
       () => {
         const config = loadConfig();
@@ -25,17 +25,18 @@ describe("config", () => {
         expect(config.discord.clientId).toBe("");
         expect(config.discord.guildId).toBe("");
         expect(config.discord.botName).toBe("ai");
+        expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
-        expect(config.github.repository).toBe("owner/discord-ai-agent");
-        expect(config.github.dryRun).toBe(false);
-        expect(config.github.dryRunDir).toBe(".discord-ai-agent/dry-runs");
-        expect(config.railway.projectId).toBe("");
-        expect(config.railway.environment).toBe("production");
-        expect(config.railway.logOwnerUserIds).toEqual([]);
-        expect(config.openRouter.chatModel).toBe("deepseek/deepseek-v4-flash");
-        expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
-        expect(config.codegenJobTimeoutMinutes).toBe(60);
-        expect(config.codegenCodexTimeoutMinutes).toBe(20);
+        expect(config.github.repository).toBe("owner/repo");
+        expect(config.internalApi.host).toBe("0.0.0.0");
+        expect(config.internalApi.port).toBe(8080);
+        expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
+        expect(config.execution.taskSigningSecret).toBe("");
+        expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
+        expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
+        expect(config.execution.kubernetes.cacheDir).toBe("/var/cache/discord-ai-agent");
+        expect(config.execution.kubernetes.cachePvcName).toBeNull();
+        expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
         expect(config.crawlRetryMaxMs).toBe(30_000);
@@ -49,30 +50,28 @@ describe("config", () => {
     expect(() => assertOpenRouterConfig(config)).toThrow(/OPENROUTER_API_KEY/);
   });
 
-  it("accepts the Railway-native codegen process role", () => {
-    withEnv({ DISCORD_AI_AGENT_PROCESS_ROLE: "codegen" }, () => {
-      expect(loadConfig().processRole).toBe("codegen");
+  it("accepts the internal API process role", () => {
+    withEnv({ DISCORD_AI_AGENT_PROCESS_ROLE: "api" }, () => {
+      expect(loadConfig().processRole).toBe("api");
     });
   });
 
-  it("allows configuring the codegen job timeout", () => {
-    withEnv({ CODEGEN_JOB_TIMEOUT_MINUTES: "90" }, () => {
-      expect(loadConfig().codegenJobTimeoutMinutes).toBe(90);
+  it("allows configuring the Discord response timeout", () => {
+    withEnv({ DISCORD_AGENT_RESPONSE_TIMEOUT_MS: "900000" }, () => {
+      expect(loadConfig().discordAgentResponseTimeoutMs).toBe(900_000);
     });
   });
 
-  it("allows configuring the codegen model and Codex subprocess timeout separately from chat", () => {
+  it("rejects placeholder GitHub repositories for sandbox execution", () => {
     withEnv(
       {
-        OPENROUTER_CHAT_MODEL: "deepseek/deepseek-v4-flash",
-        OPENROUTER_CODEGEN_MODEL: "z-ai/glm-5.2",
-        CODEGEN_CODEX_TIMEOUT_MINUTES: "12"
+        OPENROUTER_API_KEY: "sk-test",
+        TASK_SIGNING_SECRET: "secret",
+        GITHUB_TOKEN: "github-token",
+        GITHUB_REPOSITORY: "owner/repo"
       },
       () => {
-        const config = loadConfig();
-        expect(config.openRouter.chatModel).toBe("deepseek/deepseek-v4-flash");
-        expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
-        expect(config.codegenCodexTimeoutMinutes).toBe(12);
+        expect(() => assertExecutionConfig(loadConfig())).toThrow(/placeholder/i);
       }
     );
   });

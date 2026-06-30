@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "discord-ai-agent.fullname" . }}-bot
+  labels:
+    {{- include "discord-ai-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bot
+spec:
+  replicas: {{ .Values.bot.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: bot
+  template:
+    metadata:
+      labels:
+        {{- include "discord-ai-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: bot
+    spec:
+      serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-app
+      containers:
+        - name: bot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "dist/src/index.js", "bot"]
+          env:
+            - name: DISCORD_AI_AGENT_PROCESS_ROLE
+              value: bot
+            {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.discordEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.bot.resources | nindent 12 }}

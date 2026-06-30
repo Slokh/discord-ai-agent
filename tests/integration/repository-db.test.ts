@@ -188,7 +188,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       filePath: `skills/skill-${randomUUID()}.md`,
       requesterId: userId,
       request: "remember my private request",
-      dryRun: true
+      policyReasons: ["blocked in test"]
     });
     const dbSkillName = `skill-${randomUUID()}`;
     await repo.upsertDatabaseSkill({
@@ -310,14 +310,14 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ).resolves.toHaveLength(1);
   });
 
-  it("records dry-run skill changes without marking the skill as installed", async () => {
+  it("records policy-blocked skill changes without marking the skill as installed", async () => {
     const skillName = `skill-${randomUUID()}`;
     await repo.recordSkillChange({
       skillName,
       filePath: `skills/${skillName}.md`,
       requesterId: `user-${randomUUID()}`,
-      request: "remember this dry run",
-      dryRun: true
+      request: "remember this blocked skill",
+      policyReasons: ["blocked by policy"]
     });
 
     const [changes, skills] = await Promise.all([
@@ -405,6 +405,157 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         nextRunAt: new Date("2026-06-30T12:00:00.000Z")
       })
     ).resolves.toBe(true);
+  });
+
+  it("keeps sandbox runs terminal when completion callback wins the creation race", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const sandboxRunId = `run-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Task Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId,
+      channelId: `channel-${randomUUID()}`,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "race test",
+      request: "simulate a fast sandbox callback",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+    await repo.markAgentTaskSucceeded({
+      taskId,
+      branchName: "discord-ai-agent/update-race-test",
+      prUrl: "https://github.com/example/discord-ai-agent/pull/1",
+      draft: false,
+      verifyPassed: true
+    });
+
+    await repo.recordSandboxRun({
+      taskId,
+      sandboxRunId,
+      backend: "kubernetes-sandbox",
+      namespace: "discord-ai-agent",
+      backendJobName: "agent-task-race-test",
+      image: "sandbox:test"
+    });
+
+    const result = await pool.query("SELECT status, completed_at FROM sandbox_runs WHERE sandbox_run_id = $1", [sandboxRunId]);
+    expect(result.rows[0]?.status).toBe("succeeded");
+    expect(result.rows[0]?.completed_at).toBeInstanceOf(Date);
+    await expect(repo.listTerminalSandboxRunsPendingCleanup()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ sandboxRunId, taskId, status: "succeeded" })])
+    );
+  });
+
+  it("tracks agent task notifications, command output, cancellation, and history", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const sandboxRunId = `run-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Task Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId,
+      channelId,
+      userId: `user-${randomUUID()}`,
+      discordResponseChannelId: channelId,
+      discordResponseMessageId: `reply-${randomUUID()}`,
+      taskType: "code_update",
+      title: "cancel test",
+      request: "simulate a cancellable sandbox task",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+
+    await repo.recordSandboxCommandEvent({
+      taskId,
+      sandboxRunId,
+      step: "verify",
+      command: "npm run verify",
+      exitCode: 1,
+      outputTail: "stdout tail",
+      errorTail: "stderr tail",
+      durationMs: 123
+    });
+
+    await expect(repo.getSandboxCommandEvents({ guildId, visibleChannelIds: [channelId], taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({ taskId, sandboxRunId, step: "verify", exitCode: 1, errorTail: "stderr tail" })
+    ]);
+    await expect(repo.cancelAgentTask({ taskId, reason: "user changed their mind" })).resolves.toBe(true);
+    await repo.markAgentTaskSucceeded({
+      taskId,
+      branchName: "discord-ai-agent/update-cancel-test",
+      prUrl: "https://github.com/example/discord-ai-agent/pull/99",
+      draft: false,
+      verifyPassed: true
+    });
+
+    await expect(repo.getAgentTask(taskId)).resolves.toMatchObject({
+      taskId,
+      status: "cancelled",
+      discordResponseChannelId: channelId,
+      discordResponseMessageId: expect.any(String),
+      prUrl: null,
+      cancelledAt: expect.any(Date)
+    });
+    await expect(repo.listAgentTasks({ guildId, visibleChannelIds: [channelId], statuses: ["cancelled"], limit: 5 })).resolves.toEqual([
+      expect.objectContaining({ taskId, status: "cancelled" })
+    ]);
+    await expect(repo.listTerminalAgentTasksNeedingNotification()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId, status: "cancelled" })])
+    );
+
+    await repo.markAgentTaskNotificationFailed({ taskId, error: "missing message" });
+    await expect(repo.listTerminalAgentTasksNeedingNotification()).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId })])
+    );
+    await repo.markAgentTaskNotified(taskId);
+    await expect(repo.getAgentTask(taskId)).resolves.toMatchObject({
+      notifiedAt: expect.any(Date),
+      notificationError: null
+    });
+  });
+
+  it("aggregates agent task phase durations and sandbox cache events", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Task Metrics Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId,
+      channelId,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "metrics test",
+      request: "measure cache",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+
+    await repo.markAgentTaskProgress({
+      taskId,
+      step: "repo_complete",
+      statusMessage: "Finished repo.",
+      metadata: { durationMs: 120 }
+    });
+    await repo.markAgentTaskProgress({
+      taskId,
+      step: "dependency_cache_hit",
+      statusMessage: "Restored dependencies.",
+      metadata: { cacheType: "dependencies", cacheStatus: "hit" }
+    });
+
+    await expect(repo.getAgentTaskMetrics()).resolves.toEqual(
+      expect.objectContaining({
+        codegenPhaseDurations: expect.arrayContaining([expect.objectContaining({ phase: "repo", count: 1, avgMs: 120, maxMs: 120 })]),
+        sandboxCacheEvents: expect.arrayContaining([expect.objectContaining({ cacheType: "dependencies", cacheStatus: "hit", count: 1 })])
+      })
+    );
   });
 
   it("includes logged model cost estimates in health", async () => {
@@ -1492,7 +1643,7 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM conversation_messages WHERE thread_key LIKE 'discord:guild-%'");
   await pool.query("DELETE FROM conversation_sessions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM crawl_cursors WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
-  await pool.query("DELETE FROM agent_codegen_jobs WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR request_id LIKE 'codegen-%'");
+  await pool.query("DELETE FROM agent_tasks WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR task_id LIKE 'task-%'");
   await pool.query("DELETE FROM durable_workflows WHERE guild_id LIKE 'guild-%' OR id LIKE 'workflow-%'");
   await pool.query("DELETE FROM server_overlays WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM interaction_blocks WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");

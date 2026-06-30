@@ -1,16 +1,15 @@
 import PgBoss from "pg-boss";
 import type { AppConfig } from "../config/env.js";
-import type { AgentCodegenJob, AgentCodegenResult } from "../codegen/runner.js";
-import type { CodegenExecutionContext } from "../codegen/backend.js";
+import type { AgentTaskJob } from "../execution/types.js";
+import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
-export const AGENT_CODEGEN_JOB = "agent.codegen";
+export const AGENT_TASK_JOB = "agent.task";
 const EMBEDDING_JOB_BATCH_SIZE = 400;
-const DEFAULT_CODEGEN_JOB_TIMEOUT_MINUTES = 60;
 
 type MessageEmbeddingJob = {
   messageId: string;
@@ -30,16 +29,18 @@ export type EmbeddingJobRunner = {
   embedMessages?: (messageIds: string[]) => Promise<void>;
 };
 
-export type AgentCodegenJobRunner = {
+export type AgentTaskRunner = {
   name?: string;
-  run: (job: AgentCodegenJob, context?: CodegenExecutionContext) => Promise<AgentCodegenResult>;
+  start: (job: AgentTaskJob, context?: ExecutionContext) => Promise<{ sandboxRunId: string; backendJobName: string }>;
 };
 
 export type JobRuntime = {
   boss: PgBoss;
   enqueueGuildCrawl: () => Promise<string | null>;
   enqueueMessageEmbedding: (messageId: string, options?: MessageEmbeddingEnqueueOptions) => Promise<string | null>;
-  enqueueAgentCodegen: (job: Omit<AgentCodegenJob, "requestId" | "traceId"> & { requestId?: string }) => Promise<{ jobId: string | null; requestId: string }>;
+  enqueueAgentTask: (
+    job: Omit<AgentTaskJob, "taskId" | "traceId" | "taskType"> & { taskId?: string; taskType?: AgentTaskJob["taskType"] }
+  ) => Promise<{ jobId: string | null; taskId: string }>;
   stop: () => Promise<void>;
 };
 
@@ -47,44 +48,30 @@ export async function startJobs(input: {
   config: AppConfig;
   crawler: CrawlJobRunner;
   embedding?: EmbeddingJobRunner;
-  agentCodegen?: AgentCodegenJobRunner;
+  agentTask?: AgentTaskRunner | ExecutionBackend;
   worker?: boolean;
   crawlWorker?: boolean;
   embeddingWorker?: boolean;
-  codegenWorker?: boolean;
+  taskWorker?: boolean;
   pgBossSchema?: string;
   repo?: DiscordAiAgentRepository;
 }): Promise<JobRuntime> {
   const crawlWorkerEnabled = input.crawlWorker ?? input.worker !== false;
   const embeddingWorkerEnabled = input.embeddingWorker ?? input.worker !== false;
-  const codegenWorkerEnabled = input.codegenWorker ?? false;
+  const taskWorkerEnabled = input.taskWorker ?? false;
   const boss = input.pgBossSchema
     ? new PgBoss({ connectionString: input.config.databaseUrl, schema: input.pgBossSchema })
     : new PgBoss(input.config.databaseUrl);
-  const codegenJobTimeoutMinutes = input.config.codegenJobTimeoutMinutes ?? DEFAULT_CODEGEN_JOB_TIMEOUT_MINUTES;
-  logger.info(
-    { crawlWorkerEnabled, embeddingWorkerEnabled, codegenWorkerEnabled, codegenJobTimeoutMinutes, schema: input.pgBossSchema ?? "pgboss" },
-    "Starting pg-boss"
-  );
+  logger.info({ crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" }, "Starting pg-boss");
   await boss.start();
   await boss.createQueue(CRAWL_GUILD_JOB, { name: CRAWL_GUILD_JOB, policy: "short" });
   await boss.updateQueue(CRAWL_GUILD_JOB, { name: CRAWL_GUILD_JOB, policy: "short" });
   await boss.createQueue(EMBED_MESSAGE_JOB, { name: EMBED_MESSAGE_JOB, policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
   await boss.updateQueue(EMBED_MESSAGE_JOB, { name: EMBED_MESSAGE_JOB, policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
-  await boss.createQueue(AGENT_CODEGEN_JOB, {
-    name: AGENT_CODEGEN_JOB,
-    policy: "short",
-    retryLimit: 0,
-    expireInMinutes: codegenJobTimeoutMinutes
-  });
-  await boss.updateQueue(AGENT_CODEGEN_JOB, {
-    name: AGENT_CODEGEN_JOB,
-    policy: "short",
-    retryLimit: 0,
-    expireInMinutes: codegenJobTimeoutMinutes
-  });
+  await boss.createQueue(AGENT_TASK_JOB, { name: AGENT_TASK_JOB, policy: "short", retryLimit: 0 });
+  await boss.updateQueue(AGENT_TASK_JOB, { name: AGENT_TASK_JOB, policy: "short", retryLimit: 0 });
   logger.info(
-    { queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_CODEGEN_JOB], crawlWorkerEnabled, embeddingWorkerEnabled, codegenWorkerEnabled },
+    { queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_TASK_JOB], crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled },
     "pg-boss ready"
   );
 
@@ -148,110 +135,93 @@ export async function startJobs(input: {
     logger.warn({ queue: EMBED_MESSAGE_JOB }, "Embedding worker requested without an embedding runner");
   }
 
-  if (codegenWorkerEnabled && input.agentCodegen) {
-    await boss.work<AgentCodegenJob>(
-      AGENT_CODEGEN_JOB,
-      { batchSize: 1, pollingIntervalSeconds: 2, includeMetadata: true },
-      async (jobs) => {
-        for (const job of jobs) {
-          const startedAt = Date.now();
-          const jobMetadata = codegenJobMetadata(job);
-          await runWithTrace(
-            {
-              traceId: job.data.traceId ?? job.data.requestId,
-              requestId: job.data.requestId,
-              guildId: job.data.guildId,
-              channelId: job.data.channelId,
-              userId: job.data.userId
-            },
-            async () => {
-              logger.info(
-                { queue: AGENT_CODEGEN_JOB, jobId: job.id, requestId: job.data.requestId, updateName: job.data.updateName, ...jobMetadata },
-                "Running agent.codegen job"
-              );
-              const backendName = input.agentCodegen?.name ?? "railway-local-worker";
-              await input.repo?.markAgentCodegenRunning({
-                requestId: job.data.requestId,
-                backend: backendName,
-                step: "running",
-                statusMessage: "Starting codegen worker."
+  if (taskWorkerEnabled && input.agentTask) {
+    await boss.work<AgentTaskJob>(AGENT_TASK_JOB, { batchSize: 1, pollingIntervalSeconds: 2 }, async (jobs) => {
+      for (const job of jobs) {
+        const startedAt = Date.now();
+        await runWithTrace(
+          {
+            traceId: job.data.traceId ?? job.data.taskId,
+            requestId: job.data.taskId,
+            guildId: job.data.guildId,
+            channelId: job.data.channelId,
+            userId: job.data.userId
+          },
+          async () => {
+            logger.info(
+              { queue: AGENT_TASK_JOB, jobId: job.id, taskId: job.data.taskId, title: job.data.title },
+              "Starting agent.task sandbox"
+            );
+            const backendName = input.agentTask?.name ?? "kubernetes-sandbox";
+            await input.repo?.markAgentTaskRunning({
+              taskId: job.data.taskId,
+              backend: backendName,
+              step: "sandbox_start",
+              statusMessage: "Starting Kubernetes sandbox."
+            });
+            try {
+              const result = await input.agentTask!.start(job.data, {
+                progress: async (event) => {
+                  await input.repo?.markAgentTaskProgress({
+                    taskId: job.data.taskId,
+                    backend: backendName,
+                    step: event.step,
+                    statusMessage: event.message,
+                    metadata: { backend: backendName, ...event.metadata }
+                  });
+                }
               });
-              try {
-                const result = await input.agentCodegen!.run(job.data, {
-                  progress: async (event) => {
-                    if (event.updateJobStatus ?? true) {
-                      await input.repo?.markAgentCodegenProgress({
-                        requestId: job.data.requestId,
-                        backend: backendName,
-                        step: event.step,
-                        statusMessage: event.message
-                      });
-                    }
-                    await input.repo?.recordTraceEvent({
-                      traceId: job.data.traceId ?? job.data.requestId,
-                      requestId: job.data.requestId,
-                      guildId: job.data.guildId,
-                      channelId: job.data.channelId,
-                      userId: job.data.userId,
-                      eventName: event.eventName ?? "codegen.progress",
-                      level: event.level,
-                      summary: event.message,
-                      durationMs: event.durationMs,
-                      metadata: {
-                        step: event.step,
-                        backend: backendName,
-                        ...jobMetadata,
-                        ...event.metadata
-                      }
-                    });
-                  }
-                });
-                await input.repo?.markAgentCodegenSucceeded({
-                  requestId: job.data.requestId,
-                  branchName: result.branchName,
-                  prUrl: result.prUrl,
-                  draft: result.draft,
-                  verifyPassed: result.verifyPassed
-                });
-                logger.info(
-                  {
-                    queue: AGENT_CODEGEN_JOB,
-                    jobId: job.id,
-                    requestId: job.data.requestId,
-                    prUrl: result.prUrl,
-                    draft: result.draft,
-                    durationMs: durationMs(startedAt),
-                    ...jobMetadata
-                  },
-                  "agent.codegen job complete"
-                );
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                await input.repo?.markAgentCodegenFailed({
-                  requestId: job.data.requestId,
-                  status: isNoChangesCodegenError(message) ? "no_changes" : "failed",
-                  error: message
-                });
-                logger.error(
-                  {
-                    err: error,
-                    queue: AGENT_CODEGEN_JOB,
-                    jobId: job.id,
-                    requestId: job.data.requestId,
-                    durationMs: durationMs(startedAt),
-                    ...jobMetadata
-                  },
-                  "agent.codegen job failed"
-                );
-                throw error;
-              }
+              await input.repo?.recordSandboxRun({
+                taskId: job.data.taskId,
+                sandboxRunId: result.sandboxRunId,
+                backend: backendName,
+                backendJobName: result.backendJobName,
+                namespace: input.config.execution.kubernetes.namespace,
+                image: input.config.execution.kubernetes.sandboxImage
+              });
+              await input.repo?.markAgentTaskProgress({
+                taskId: job.data.taskId,
+                backend: backendName,
+                step: "sandbox_running",
+                statusMessage: "Kubernetes sandbox is running the task.",
+                metadata: result
+              });
+              logger.info(
+                {
+                  queue: AGENT_TASK_JOB,
+                  jobId: job.id,
+                  taskId: job.data.taskId,
+                  sandboxRunId: result.sandboxRunId,
+                  backendJobName: result.backendJobName,
+                  durationMs: durationMs(startedAt)
+                },
+                "agent.task sandbox started"
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              await input.repo?.markAgentTaskFailed({
+                taskId: job.data.taskId,
+                status: isNoChangesTaskError(message) ? "no_changes" : "failed",
+                error: message
+              });
+              logger.error(
+                {
+                  err: error,
+                  queue: AGENT_TASK_JOB,
+                  jobId: job.id,
+                  taskId: job.data.taskId,
+                  durationMs: durationMs(startedAt)
+                },
+                "agent.task sandbox start failed"
+              );
+              throw error;
             }
-          );
-        }
+          }
+        );
       }
-    );
-  } else if (codegenWorkerEnabled) {
-    logger.warn({ queue: AGENT_CODEGEN_JOB }, "Agent codegen worker requested without a runner");
+    });
+  } else if (taskWorkerEnabled) {
+    logger.warn({ queue: AGENT_TASK_JOB }, "Agent task worker requested without a runner");
   }
 
   return {
@@ -285,43 +255,32 @@ export async function startJobs(input: {
       logger.debug({ queue: EMBED_MESSAGE_JOB, messageId, jobId: id ?? null }, "Message embedding enqueue complete");
       return id ?? null;
     },
-    enqueueAgentCodegen: async (job) => {
+    enqueueAgentTask: async (job) => {
       const trace = currentTraceContext();
-      const requestId = job.requestId ?? `codegen-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-      const data: AgentCodegenJob = {
+      const taskId = job.taskId ?? `task-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+      const data: AgentTaskJob = {
         ...job,
-        requestId,
-        traceId: trace?.traceId ?? requestId,
-        guildId: job.guildId ?? trace?.guildId,
-        channelId: job.channelId ?? trace?.channelId,
-        userId: job.userId ?? trace?.userId
+        taskId,
+        taskType: job.taskType ?? "code_update",
+        traceId: trace?.traceId ?? taskId,
+        guildId: trace?.guildId,
+        channelId: trace?.channelId,
+        userId: trace?.userId
       };
-      logger.info({ queue: AGENT_CODEGEN_JOB, requestId, updateName: job.updateName }, "Enqueueing agent codegen job");
-      const backendName = input.agentCodegen?.name ?? "railway-local-worker";
-      await input.repo?.recordTraceEvent({
-        traceId: data.traceId,
-        requestId,
-        guildId: data.guildId,
-        channelId: data.channelId,
-        userId: data.userId,
-        eventName: "codegen.enqueue.started",
-        summary: data.updateName,
-        metadata: {
-          replyChannelId: data.replyChannelId,
-          replyMessageId: data.replyMessageId,
-          threadKey: data.threadKey
-        }
-      });
-      await input.repo?.upsertAgentCodegenQueued({
-        requestId,
+      logger.info({ queue: AGENT_TASK_JOB, taskId, title: job.title }, "Enqueueing agent task");
+      const backendName = input.agentTask?.name ?? "kubernetes-sandbox";
+      await input.repo?.upsertAgentTaskQueued({
+        taskId,
         traceId: data.traceId,
         guildId: data.guildId,
         channelId: data.channelId,
         userId: data.userId,
         threadKey: data.threadKey,
-        replyChannelId: data.replyChannelId,
-        replyMessageId: data.replyMessageId,
-        updateName: data.updateName,
+        discordResponseChannelId: data.discordResponseChannelId,
+        discordResponseMessageId: data.discordResponseMessageId,
+        retriedFromTaskId: data.retriedFromTaskId,
+        taskType: data.taskType,
+        title: data.title,
         request: data.request,
         requestedBy: data.requestedBy,
         backend: backendName
@@ -329,60 +288,36 @@ export async function startJobs(input: {
       let id: string | null;
       try {
         id =
-          (await boss.send(AGENT_CODEGEN_JOB, data, {
-            singletonKey: requestId,
-            retryLimit: 0,
-            expireInMinutes: codegenJobTimeoutMinutes
+          (await boss.send(AGENT_TASK_JOB, data, {
+            singletonKey: taskId,
+            retryLimit: 0
           })) ?? null;
       } catch (error) {
-        await input.repo?.markAgentCodegenFailed({
-          requestId,
+        await input.repo?.markAgentTaskFailed({
+          taskId,
           error: error instanceof Error ? error.message : String(error)
-        });
-        await input.repo?.recordTraceEvent({
-          traceId: data.traceId,
-          requestId,
-          guildId: data.guildId,
-          channelId: data.channelId,
-          userId: data.userId,
-          eventName: "codegen.enqueue.failed",
-          level: "error",
-          summary: error instanceof Error ? error.message : String(error)
         });
         throw error;
       }
-      await input.repo?.upsertAgentCodegenQueued({
-        requestId,
+      await input.repo?.upsertAgentTaskQueued({
+        taskId,
         pgBossJobId: id,
         traceId: data.traceId,
         guildId: data.guildId,
         channelId: data.channelId,
         userId: data.userId,
         threadKey: data.threadKey,
-        replyChannelId: data.replyChannelId,
-        replyMessageId: data.replyMessageId,
-        updateName: data.updateName,
+        discordResponseChannelId: data.discordResponseChannelId,
+        discordResponseMessageId: data.discordResponseMessageId,
+        retriedFromTaskId: data.retriedFromTaskId,
+        taskType: data.taskType,
+        title: data.title,
         request: data.request,
         requestedBy: data.requestedBy,
         backend: backendName
       });
-      await input.repo?.recordTraceEvent({
-        traceId: data.traceId,
-        requestId,
-        guildId: data.guildId,
-        channelId: data.channelId,
-        userId: data.userId,
-        eventName: "codegen.enqueue.complete",
-        summary: id ? `Enqueued codegen job ${id}` : "Codegen job deduped or not enqueued",
-        metadata: {
-          jobId: id,
-          replyChannelId: data.replyChannelId,
-          replyMessageId: data.replyMessageId,
-          threadKey: data.threadKey
-        }
-      });
-      logger.info({ queue: AGENT_CODEGEN_JOB, requestId, jobId: id }, "Agent codegen enqueue complete");
-      return { jobId: id, requestId };
+      logger.info({ queue: AGENT_TASK_JOB, taskId, jobId: id }, "Agent task enqueue complete");
+      return { jobId: id, taskId };
     },
     stop: async () => {
       await boss.stop();
@@ -392,16 +327,6 @@ export async function startJobs(input: {
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
-}
-
-function codegenJobMetadata(job: PgBoss.JobWithMetadata<AgentCodegenJob>) {
-  return {
-    pgBossState: job.state,
-    pgBossRetryCount: job.retryCount,
-    pgBossRetryLimit: job.retryLimit,
-    pgBossStartedOn: job.startedOn?.toISOString?.(),
-    pgBossCreatedOn: job.createdOn?.toISOString?.()
-  };
 }
 
 export function embeddingPriorityForMessageTimestamp(createdTimestamp: number | Date | undefined | null) {
@@ -415,6 +340,6 @@ function normalizeEmbeddingPriority(priority: number | undefined) {
   return Math.max(0, Math.min(2_147_483_647, Math.trunc(priority)));
 }
 
-function isNoChangesCodegenError(message: string) {
+function isNoChangesTaskError(message: string) {
   return /produced no diff|no diff|no changes/i.test(message);
 }

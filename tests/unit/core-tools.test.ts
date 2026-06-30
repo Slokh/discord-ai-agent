@@ -6,11 +6,11 @@ import {
   extractHistorySearchSyntax,
   findDiscordRoles,
   findDiscordUsers,
+  formatAgentTaskResult,
   generateImage,
   getDiscordChannelTopics,
   getDiscordStats,
   inspectAgentLogs,
-  inspectRailwayLogs,
   reportStatus,
   summarizeCurrentThread,
   undoConversationTurns
@@ -109,6 +109,51 @@ describe("model-led mutating tools", () => {
     expect(response).toBe("Undid my last 2 turns in this channel and removed 4 memory rows from memory.");
     expect(ctx.repo.deleteMostRecentConversationTurns).toHaveBeenCalledWith({ threadKey: "discord:guild:channel", count: 2 });
     expect(deleteDiscordMessageIds).toHaveBeenCalledWith(["reply-1"]);
+  });
+});
+
+describe("formatAgentTaskResult", () => {
+  it("includes compact timings and cache details for successful code-update PRs", () => {
+    const response = formatAgentTaskResult({
+      taskId: "task-1",
+      jobId: "job-1",
+      job: {
+        taskId: "task-1",
+        pgBossJobId: "job-1",
+        status: "succeeded",
+        title: "update status",
+        prUrl: "https://github.com/example/repo/pull/1",
+        draft: false,
+        updatedAt: new Date("2026-01-01T00:00:00Z")
+      } as any,
+      taskEvents: [
+        {
+          eventName: "task.completed",
+          metadata: {
+            timingsMs: {
+              total: 123_000,
+              dependencies: 500,
+              codex: 100_000,
+              verify: 2_000,
+              push: 1_000,
+              pr: 750
+            },
+            cache: {
+              repo: "hit",
+              dependencies: "miss",
+              dependencyCacheKey: "node-22-abcdef1234567890",
+              dependencyRefreshAfterCodex: true
+            }
+          }
+        }
+      ] as any
+    });
+
+    expect(response).toContain("Done: https://github.com/example/repo/pull/1");
+    expect(response).toContain("Timings: total=2m 3s");
+    expect(response).toContain("codex=1m 40s");
+    expect(response).toContain("Cache: repo=hit | deps=miss node-22-abcdef123");
+    expect(response).toContain("refreshed deps after Codex");
   });
 });
 
@@ -979,6 +1024,32 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:00:02Z")
           }
         ]),
+        getTaskEvents: vi.fn(async () => [
+          {
+            id: 1,
+            taskId: "task-1",
+            traceId: "trace-1",
+            eventName: "task.progress",
+            level: "info",
+            summary: "Kubernetes sandbox is running the task.",
+            metadata: { step: "sandbox_running" },
+            createdAt: new Date("2026-01-01T00:00:03Z")
+          }
+        ]),
+        getSandboxCommandEvents: vi.fn(async () => [
+          {
+            id: 1,
+            taskId: "task-1",
+            sandboxRunId: "run-1",
+            step: "verify",
+            command: "npm run verify",
+            exitCode: 1,
+            outputTail: "",
+            errorTail: "test failure",
+            durationMs: 123,
+            createdAt: new Date("2026-01-01T00:00:04Z")
+          }
+        ]),
         auditTool
       },
       guildId: "guild",
@@ -991,6 +1062,9 @@ describe("inspectAgentLogs", () => {
 
     expect(response).toContain("Discord AI Agent logs for trace trace-1");
     expect(response).toContain("agent.request.complete 1234ms");
+    expect(response).toContain("task.progress task=task-1");
+    expect(response).toContain("Sandbox commands:");
+    expect(response).toContain("npm run verify");
     expect(response).toContain("searchDiscordHistory");
     expect(ctx.repo.getTraceEvents).toHaveBeenCalledWith({
       guildId: "guild",
@@ -998,30 +1072,19 @@ describe("inspectAgentLogs", () => {
       traceId: "trace-1",
       limit: 10
     });
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectAgentLogs" }));
-  });
-});
-
-describe("inspectRailwayLogs", () => {
-  it("rejects non-owner requests", async () => {
-    const auditTool = vi.fn(async () => undefined);
-    const ctx = {
-      config: {
-        railway: {
-          token: "token",
-          projectId: "project",
-          environment: "production",
-          logOwnerUserIds: ["owner"]
-        }
-      },
-      repo: { auditTool },
+    expect(ctx.repo.getTaskEvents).toHaveBeenCalledWith({
       guildId: "guild",
-      channelId: "channel",
-      userId: "not-owner"
-    } as unknown as ToolContext;
-
-    await expect(inspectRailwayLogs(ctx, { service: "discord-ai-agent-bot" })).resolves.toBe("Railway log access is owner-only.");
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectRailwayLogs", error: "unauthorized" }));
+      visibleChannelIds: ["channel"],
+      traceId: "trace-1",
+      limit: 10
+    });
+    expect(ctx.repo.getSandboxCommandEvents).toHaveBeenCalledWith({
+      guildId: "guild",
+      visibleChannelIds: ["channel"],
+      traceId: "trace-1",
+      limit: 10
+    });
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectAgentLogs" }));
   });
 });
 

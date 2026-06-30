@@ -22,9 +22,13 @@ describe("toolRegistry", () => {
       "generateImage",
       "createSkillDraft",
       "openGithubPullRequest",
+      "getAgentTaskStatus",
+      "listAgentTasks",
+      "retryAgentTask",
+      "cancelAgentTask",
+      "getDeploymentStatus",
       "undoConversationTurns",
       "inspectAgentLogs",
-      "inspectRailwayLogs",
       "reportStatus"
     ]);
   });

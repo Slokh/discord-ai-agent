@@ -38,7 +38,7 @@ npm run reindex
 npm run embeddings:backfill
 ```
 
-`npm run crawl` stores messages and enqueues embeddings instead of waiting for OpenRouter per message. During a large import, `@ai status` should show crawl progress and an embedding backlog that drains while `npm run dev`, `npm run worker`, or `DISCORD_AI_AGENT_PROCESS_ROLE=all npm run dev` is running. Self-update PR work runs in the separate `npm run codegen` process, while the bot keeps the Discord reply open and edits it with phase progress plus the final PR link or failure/no-change result.
+`npm run crawl` stores messages and enqueues embeddings instead of waiting for OpenRouter per message. During a large import, `@ai status` should show crawl progress and an embedding backlog that drains while `npm run worker` or `DISCORD_AI_AGENT_PROCESS_ROLE=all npm run dev` is running. Self-update PR work is started by the worker as a Kubernetes sandbox task, while the bot keeps the Discord reply open and edits it with phase progress plus the final PR link or failure/no-change result.
 
 Then verify in Discord:
 
@@ -83,7 +83,7 @@ Expected:
 - Image requests return an image or image URL.
 - Same-channel follow-ups can use Discord AI Agent's previous replies and tool results without forcing a history search.
 - Skill requests create or update a private database skill after policy validation.
-- Tool requests create a human-review PR, or write a dry-run artifact under `.discord-ai-agent/dry-runs/`.
+- Tool requests run through a sandbox task and finish with a human-review PR link, or a clear no-change/failure response.
 
 ## Permission Checks
 
@@ -106,7 +106,7 @@ docker compose up --build app
 Expected:
 
 - The app container runs migrations, starts the queue, logs into Discord, and responds to `@ai`.
-- Run `docker compose run --rm app node dist/scripts/crawl.js` to crawl from Docker; keep a bot or worker process running to process queued embeddings.
+- Run `docker compose run --rm app node dist/scripts/crawl.js` to crawl from Docker; keep a worker process running to process queued embeddings.
 
 For the separate bot/worker topology:
 

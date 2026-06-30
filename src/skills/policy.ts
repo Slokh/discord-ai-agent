@@ -4,7 +4,7 @@ export type SkillPolicyResult = {
 };
 
 const blockedPatterns: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\b(DISCORD_TOKEN|OPENROUTER_API_KEY|GITHUB_TOKEN|DATABASE_URL|RAILWAY_TOKEN)\b/i, reason: "mentions sensitive secret env vars" },
+  { pattern: /\b(DISCORD_TOKEN|OPENROUTER_API_KEY|GITHUB_TOKEN|DATABASE_URL|TASK_SIGNING_SECRET)\b/i, reason: "mentions sensitive secret env vars" },
   { pattern: /\b(api[_-]?key|access[_-]?token|password|private[_-]?key|secret)\b/i, reason: "appears to request or embed credentials" },
   { pattern: /disable (permission|privacy|access) (check|filter|control)/i, reason: "attempts to disable core permission controls" },
   { pattern: /\b(turn|shut) off\b.*\b(permission|privacy|access)\b.*\b(filter|filtering|check|control)s?\b/i, reason: "attempts to disable core permission controls" },

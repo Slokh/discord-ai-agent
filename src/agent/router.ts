@@ -4,6 +4,7 @@ import {
   cleanResponse,
   createSkillFromRequest,
   createAgentUpdateFromRequest,
+  cancelAgentTask,
   findDiscordChannels,
   findDiscordRoles,
   findDiscordUsers,
@@ -13,11 +14,14 @@ import {
   getDiscordStats,
   getRecentAgentMemory,
   getPinnedMessages,
+  getAgentTaskStatus,
+  getDeploymentStatus,
   inspectAgentLogs,
-  inspectRailwayLogs,
   getRecentDiscordMessages,
+  listAgentTasks,
   listTools,
   reportStatus,
+  retryAgentTask,
   searchDiscordAttachments,
   summarizeDiscordHistory,
   summarizeCurrentThread,
@@ -555,20 +559,6 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     };
   }
 
-  if (route.name === "inspectRailwayLogs") {
-    return {
-      content: cleanResponse(
-        await inspectRailwayLogs(ctx, {
-          service: stringArgument(route.arguments, "service"),
-          since: stringArgument(route.arguments, "since"),
-          lines: numberArgument(route.arguments, "lines"),
-          filter: stringArgument(route.arguments, "filter")
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
-  }
-
   if (route.name === "createSkillDraft") {
     return {
       content: cleanResponse(
@@ -591,6 +581,52 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     return {
       content: cleanResponse(await createAgentUpdateFromRequest(ctx, stringArgument(route.arguments, "request") ?? originalText), ctx.config.maxReplyChars)
     };
+  }
+
+  if (route.name === "getAgentTaskStatus") {
+    return {
+      content: cleanResponse(
+        await getAgentTaskStatus(ctx, {
+          taskId: stringArgument(route.arguments, "taskId"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "listAgentTasks") {
+    return {
+      content: cleanResponse(
+        await listAgentTasks(ctx, {
+          statuses: stringArrayArgument(route.arguments, "statuses"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "retryAgentTask") {
+    return {
+      content: cleanResponse(await retryAgentTask(ctx, { taskId: stringArgument(route.arguments, "taskId") }), ctx.config.maxReplyChars)
+    };
+  }
+
+  if (route.name === "cancelAgentTask") {
+    return {
+      content: cleanResponse(
+        await cancelAgentTask(ctx, {
+          taskId: stringArgument(route.arguments, "taskId"),
+          reason: stringArgument(route.arguments, "reason")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getDeploymentStatus") {
+    return { content: cleanResponse(await getDeploymentStatus(ctx), ctx.config.maxReplyChars) };
   }
 
   if (route.name === "generateImage") {
@@ -1226,7 +1262,7 @@ function chatMessages(
         "For recent/current/latest Discord-history questions, choose and pass an explicit date window that fits the user request instead of searching all indexed history. " +
         "When a user names a Discord person/channel/role without an exact mention or ID, use findDiscordUsers/findDiscordChannels/findDiscordRoles before filtered history searches. Resolver tools are intermediate; never stop after a resolver if the user asked what someone said, did, or has been up to. " +
         "For requests to link, show, or list a person's messages, use searchDiscordHistory with authorQueries/authorIds; do not search for the username as ordinary message text. " +
-        "Top-level Discord mentions start fresh by default. Reply messages include their reply-chain context. If a top-level user asks what you previously said, did, generated, or opened, call getRecentAgentMemory instead of guessing from absent context. " +
+        "Top-level Discord mentions include recent channel memory by default. Reply messages additionally include their reply-chain context. If a user asks what you previously said, did, generated, or opened, call getRecentAgentMemory instead of guessing from absent context. " +
         "Use getRecentAgentMemory only for Discord AI Agent's own previous replies/tool results in the current channel, not for factual server-history questions. " +
         "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext only for a specific Discord message link/ID or explicit surrounding-context request, searchDiscordAttachments for files/images, getPinnedMessages for pins, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, and activity over time. " +
         "For ad hoc Discord data-analysis questions that require inferring a repeated text format, extracting values, deduping, or doing exact math over many messages, use analyzeDiscordData instead of searchDiscordHistory. Give it the user's task and a broad keyword query; it will sample visible messages, infer the extraction plan, and run the aggregation. " +
@@ -1242,10 +1278,9 @@ function chatMessages(
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +
         "For undo/delete/forget/remove requests about your previous replies, call undoConversationTurns. " +
         "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. " +
-        "For owner debugging of Railway deployment logs, startup failures, worker crashes, missing traces, or hosting/runtime errors, call inspectRailwayLogs. " +
         "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
         "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, run a coding PR update, or undo/delete/forget prior agent turns. " +
-        "Use prior reply-session context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
+        "Use prior channel memory and reply-chain context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
@@ -1319,8 +1354,8 @@ function sessionMessagesForPrompt(sessionMessages: ConversationMessage[]): ChatM
     {
       role: "system",
       content:
-        "Recent persistent memory for this Discord reply session follows. It may include earlier user mentions, Discord AI Agent replies, and local tool results from this reply-root only. " +
-        "Use it for continuity inside this reply chain and references like 'that'. " +
+        "Recent persistent memory for this Discord channel follows. It may include earlier user mentions, Discord AI Agent replies, and local tool results from this channel. " +
+        "Use it for continuity and references like 'that'. " +
         "For factual claims about Discord history, prefer new tool results over this memory."
     },
     ...sessionMessages.map(sessionMessageToChatMessage)

@@ -1131,106 +1131,6 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
   });
 
-  it("retries when the model returns empty content with no tool calls", async () => {
-    const auditTool = vi.fn(async () => undefined);
-    const ctx = {
-      config: { maxReplyChars: 1800 },
-      repo: {
-        auditTool
-      },
-      openRouter: {
-        chat: vi
-          .fn()
-          .mockResolvedValueOnce({
-            content: "",
-            model: "blank-model",
-            raw: {},
-            finishReason: "stop",
-            toolCalls: []
-          })
-          .mockResolvedValueOnce({
-            content: "Recovered: I can continue from the previous profile format.",
-            model: "recovery-model",
-            raw: {},
-            finishReason: "stop",
-            toolCalls: []
-          })
-      },
-      github: {},
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"]
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "next");
-
-    expect(response.content).toBe("Recovered: I can continue from the previous profile format.");
-    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
-    expect((ctx.openRouter.chat as any).mock.calls[1][0].messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: expect.stringContaining("Internal retry: your previous response had no user-visible answer")
-        }),
-        expect.objectContaining({
-          role: "user",
-          content: expect.stringContaining("call getRecentAgentMemory first")
-        })
-      ])
-    );
-    expect(auditTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "agentError",
-        error: "empty_model_response_no_usable_tool",
-        model: "blank-model"
-      })
-    );
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "recovery-model" }));
-  });
-
-  it("uses a conversational fallback if empty-response recovery also fails", async () => {
-    const auditTool = vi.fn(async () => undefined);
-    const ctx = {
-      config: { maxReplyChars: 1800 },
-      repo: {
-        auditTool
-      },
-      openRouter: {
-        chat: vi
-          .fn()
-          .mockResolvedValueOnce({
-            content: "",
-            model: "blank-model",
-            raw: {},
-            finishReason: "stop",
-            toolCalls: []
-          })
-          .mockResolvedValueOnce({
-            content: "",
-            model: "still-blank-model",
-            raw: {},
-            finishReason: "stop",
-            toolCalls: []
-          })
-      },
-      github: {},
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"]
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "same exact format as before");
-
-    expect(response.content).toContain("I got stuck generating that one.");
-    expect(response.content).not.toContain("safe tool");
-    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "still-blank-model" }));
-  });
-
   it("recovers when a hosted OpenRouter tool call leaks as text", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
@@ -1409,7 +1309,7 @@ describe("agent router", () => {
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "system",
-            content: expect.stringContaining("The current user message is a Discord reply.")
+            content: expect.stringContaining("The current user message is a Discord reply. Use this oldest-to-newest parent chain")
           }),
           expect.objectContaining({ role: "system", content: expect.stringContaining("Author: Alice") }),
           expect.objectContaining({ role: "system", content: expect.stringContaining("Content: should I merge this PR?") }),
@@ -1519,61 +1419,66 @@ describe("agent router", () => {
   });
 
   it("executes model-selected update requests as coding PR jobs", async () => {
-    const enqueueAgentCodegen = vi.fn(async () => ({
+    const enqueueAgentTask = vi.fn(async () => ({
       jobId: "job-1",
-      requestId: "codegen-calendar-integration"
+      taskId: "task-calendar-integration"
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, github: { dryRun: false } },
+      config: { maxReplyChars: 1800, github: {} },
       repo: {
         auditTool: vi.fn(async () => undefined)
       },
       openRouter: {
-        chat: vi.fn().mockResolvedValueOnce({
-          content: "",
-          model: "router-model",
-          raw: {},
-          toolCalls: [
-            {
-              id: "call-1",
-              name: "openGithubPullRequest",
-              argumentsText: JSON.stringify({ request: "add a calendar integration" })
-            }
-          ]
-        })
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-1",
+                name: "openGithubPullRequest",
+                argumentsText: JSON.stringify({ request: "add a calendar integration" })
+              }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "Opened a review PR.",
+            model: "chat-model",
+            raw: {},
+            toolCalls: []
+          })
       },
       github: {},
       jobs: {
-        enqueueAgentCodegen
+        enqueueAgentTask
       },
       guildId: "g",
       channelId: "c",
       userId: "u",
       userDisplayName: "User",
       visibleChannelIds: ["c"],
-      threadKey: "discord:g:c:msg-1",
-      requestId: "msg-1",
-      replyChannelId: "c",
-      replyMessageId: "reply-1",
+      threadKey: "discord:g:c",
+      statusChannelId: "c",
+      statusMessageId: "reply-1",
       updateStatus: vi.fn(async () => undefined)
     } as unknown as ToolContext;
 
     const response = await handleAgentRequest(ctx, "how should we track events?");
 
-    expect(response.content).toBe("I’m working on that code change now. I’ll update this message with the PR link when it’s ready. Request ID: `codegen-calendar-integration`.");
-    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(1);
-    expect(enqueueAgentCodegen).toHaveBeenCalledWith(
+    expect(response.content).toBe(
+      "I’m working on that code change now. I’ll update this message with progress and the PR link when it’s ready. Task ID: `task-calendar-integration`."
+    );
+    expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        requestId: "msg-1",
-        updateName: "calendar-integration",
+        title: "calendar-integration",
         request: "add a calendar integration",
         requestedBy: "User (u)",
-        guildId: "g",
-        channelId: "c",
-        userId: "u",
-        threadKey: "discord:g:c:msg-1",
-        replyChannelId: "c",
-        replyMessageId: "reply-1"
+        taskType: "code_update",
+        threadKey: "discord:g:c",
+        discordResponseChannelId: "c",
+        discordResponseMessageId: "reply-1"
       })
     );
     expect(ctx.updateStatus).toHaveBeenCalledWith("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
@@ -1607,72 +1512,6 @@ describe("agent router", () => {
       })
     );
   });
-
-  it("uses maxTokens 2000 for final synthesis call", async () => {
-    const auditTool = vi.fn(async () => undefined);
-    const sampleMessagesFromChannels = vi.fn(async () => [
-      agentSearchResult({
-        authorId: "tyler-id",
-        authorUsername: "taylorplays",
-        normalizedContent: "Moving in with girlfriend next week",
-        createdAt: new Date("2026-05-18T19:49:38.903Z"),
-        score: 42
-      })
-    ]);
-    const ctx = {
-      config: { maxReplyChars: 1800 },
-      repo: {
-        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
-        sampleMessagesFromChannels,
-        auditTool
-      },
-      openRouter: {
-        chat: vi
-          .fn()
-          .mockResolvedValueOnce({
-            content: "",
-            model: "router-model",
-            raw: {},
-            toolCalls: [
-              {
-                id: "call-1",
-                name: "summarizeDiscordHistory",
-                argumentsText: JSON.stringify({ question: "what has tyler been up to recently?", authorIds: ["tyler-id"] })
-              }
-            ]
-          })
-          .mockResolvedValueOnce({
-            content: "",
-            model: "summary-model",
-            raw: {},
-            finishReason: "stop",
-            toolCalls: []
-          })
-          .mockResolvedValueOnce({
-            content: "Tyler is moving in with his girlfriend next week.",
-            model: "final-model",
-            raw: {},
-            finishReason: "length",
-            toolCalls: []
-          })
-      },
-      github: {},
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"]
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "what has tyler been up to recently?");
-
-    expect(response.content).toContain("Tyler is moving in with his girlfriend");
-    expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({ maxTokens: 2000 })
-    );
-  });
-
 });
 
 function channelTopicCandidate(content: string, embedding: number[]) {

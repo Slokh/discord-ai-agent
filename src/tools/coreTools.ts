@@ -4,6 +4,8 @@ import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
 import type {
+  AgentTaskRecord,
+  AgentTaskStatus,
   ConversationMessage,
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
@@ -15,11 +17,12 @@ import type {
   DiscordStats,
   DiscordUserLookupResult,
   SearchResult,
+  SandboxCommandEvent,
+  TaskEvent,
   ToolAuditLog,
   TraceEvent
 } from "../db/repositories.js";
 import { renderToolList } from "./registry.js";
-import { fetchRailwayLogs, type RailwayLogEntry } from "../railway/logs.js";
 
 export type HistoryAnswerOptions = {
   authorIds?: string[];
@@ -874,7 +877,6 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
       request,
       content: markdown,
       source: "database",
-      dryRun: false,
       merged: false,
       policyReasons: policy.reasons
     });
@@ -913,21 +915,7 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
 export async function undoConversationTurns(ctx: ToolContext, count?: number): Promise<string> {
   const threadKey = ctx.threadKey ?? `discord:${ctx.guildId}:${ctx.channelId}`;
   const undoCount = boundedLimit(count, 1, 1, MAX_UNDO_TURNS);
-  let undoResult = await ctx.repo.deleteMostRecentConversationTurns({ threadKey, count: undoCount });
-  let target = "thread";
-  if (undoResult.deletedRows === 0) {
-    const fallback = (ctx.repo as unknown as {
-      deleteMostRecentConversationTurnsForChannel?: (input: {
-        guildId: string;
-        channelId: string;
-        count: number;
-      }) => Promise<typeof undoResult>;
-    }).deleteMostRecentConversationTurnsForChannel;
-    if (fallback) {
-      undoResult = await fallback.call(ctx.repo, { guildId: ctx.guildId, channelId: ctx.channelId, count: undoCount });
-      target = "channel";
-    }
-  }
+  const undoResult = await ctx.repo.deleteMostRecentConversationTurns({ threadKey, count: undoCount });
   const deletedDiscordReplies =
     ctx.deleteDiscordMessageIds && undoResult.assistantDiscordMessageIds.length > 0
       ? await ctx.deleteDiscordMessageIds(undoResult.assistantDiscordMessageIds)
@@ -938,7 +926,7 @@ export async function undoConversationTurns(ctx: ToolContext, count?: number): P
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "undoConversationTurns",
-    argumentsSummary: summarizeForAudit({ threadKey, count: undoCount, target }),
+    argumentsSummary: summarizeForAudit({ threadKey, count: undoCount }),
     resultSummary: summarizeForAudit({
       deletedTurns: undoResult.deletedTurns,
       deletedMemoryRows: undoResult.deletedRows,
@@ -957,33 +945,24 @@ export async function getRecentAgentMemory(
   ctx: ToolContext,
   input: { limit?: number; includeToolResults?: boolean } = {}
 ): Promise<string> {
+  const threadKey = ctx.threadKey ?? `discord:${ctx.guildId}:${ctx.channelId}`;
   const limit = boundedLimit(input.limit, 12, 1, 30);
   const includeToolResults = input.includeToolResults ?? true;
-  const loader = (ctx.repo as unknown as {
-    recentConversationMessagesForChannel?: (input: {
-      guildId: string;
-      channelId: string;
-      limit: number;
-      includeTools?: boolean;
-    }) => Promise<ConversationMessage[]>;
-  }).recentConversationMessagesForChannel;
-
-  if (!loader) return "Recent agent memory is unavailable in this runtime.";
   const messages = (
-    await loader.call(ctx.repo, {
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      limit,
-      includeTools: includeToolResults
+    await ctx.repo.recentConversationMessages({
+      threadKey,
+      limit
     })
-  ).filter((message) => !ctx.requestId || message.discordMessageId !== ctx.requestId);
+  )
+    .filter((message) => includeToolResults || message.role !== "tool")
+    .filter((message) => !ctx.requestId || message.discordMessageId !== ctx.requestId);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "getRecentAgentMemory",
-    argumentsSummary: summarizeForAudit({ limit, includeToolResults }),
+    argumentsSummary: summarizeForAudit({ threadKey, limit, includeToolResults }),
     resultSummary: summarizeForAudit({ resultCount: messages.length })
   });
 
@@ -999,14 +978,7 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
   ).slice(0, 48) || "agent-update";
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
-  const result = ctx.config.github.dryRun
-    ? await ctx.github.createAgentUpdateDryRun({
-        title: `Update Discord AI Agent: ${updateName}`,
-        updateName,
-        request: request.trim(),
-        requestedBy
-      })
-    : await enqueueAgentCodegenJob(ctx, { request, updateName, requestedBy });
+  const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy });
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -1014,47 +986,347 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     userId: ctx.userId,
     toolName: "openGithubPullRequest",
     argumentsSummary: summarizeForAudit({ request, updateName }),
-    resultSummary: summarizeForAudit(agentCodegenAuditSummary(result))
+    resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
-  if (result.dryRun === true) {
-    return `I drafted a Railway codegen job in dry-run mode for \`${result.requestId}\`${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real coding jobs.`;
-  }
-  return `I’m working on that code change now. I’ll update this message with the PR link when it’s ready. Request ID: \`${result.requestId}\`.`;
+  return formatAgentTaskResult(result);
 }
 
-async function enqueueAgentCodegenJob(
+async function enqueueAgentCodeUpdateTask(
   ctx: ToolContext,
-  input: { request: string; updateName: string; requestedBy: string }
-): Promise<{ dryRun: false; requestId: string; jobId: string | null }> {
+  input: { request: string; updateName: string; requestedBy: string; retriedFromTaskId?: string | null }
+): Promise<{ taskId: string; jobId: string | null; job?: AgentTaskRecord }> {
   if (!ctx.jobs) {
-    throw new Error("Railway codegen queue is unavailable in this process.");
+    throw new Error("Agent task queue is unavailable in this process.");
   }
   await ctx.updateStatus?.("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
-  const enqueued = await ctx.jobs.enqueueAgentCodegen({
-    requestId: ctx.requestId,
+  return ctx.jobs.enqueueAgentTask({
     request: input.request.trim(),
-    updateName: input.updateName,
+    title: input.updateName,
     requestedBy: input.requestedBy,
+    taskType: "code_update",
+    threadKey: ctx.threadKey,
+    discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
+    discordResponseMessageId: ctx.statusMessageId,
+    retriedFromTaskId: input.retriedFromTaskId ?? undefined
+  });
+}
+
+export function formatAgentTaskResult(input: {
+  taskId: string;
+  jobId: string | null;
+  job?: AgentTaskRecord;
+  timedOut?: boolean;
+  taskEvents?: TaskEvent[];
+  commandEvents?: SandboxCommandEvent[];
+}) {
+  if (input.timedOut) {
+    const status = input.job?.status ? ` Current status: \`${input.job.status}\`.` : "";
+    return `I’m still working on that code change and do not have the final result yet.${status} Task ID: \`${input.taskId}\`.`;
+  }
+
+  const job = input.job;
+  if (!job) {
+    return `I’m working on that code change now. I’ll update this message with progress and the PR link when it’s ready. Task ID: \`${input.taskId}\`.`;
+  }
+
+  if (job.status === "succeeded" && job.prUrl) {
+    const draftNote = job.draft ? " It opened as a draft because verification did not fully pass." : "";
+    return [`Done: ${job.prUrl}${draftNote}`, formatAgentTaskTimingSummary(input.taskEvents)].filter(Boolean).join("\n");
+  }
+
+  if (job.status === "no_changes") {
+    return [
+      `I tried to make that change, but the sandbox did not produce a code diff, so no PR was opened. Task ID: \`${input.taskId}\`.`,
+      formatLastCommandFailure(input.commandEvents)
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (job.status === "cancelled") {
+    return [
+      `That code change task was cancelled. Task ID: \`${input.taskId}\`.`,
+      job.error ? truncateForDiscord(job.error, 500) : "",
+      formatLastCommandFailure(input.commandEvents)
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (job.status === "failed") {
+    return [
+      `I tried to make that change, but the sandbox failed: ${truncateForDiscord(job.error ?? "unknown error", 900)}`,
+      formatLastCommandFailure(input.commandEvents)
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return `I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`;
+}
+
+function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined) {
+  const event = events?.find((candidate) => candidate.exitCode !== 0) ?? events?.[0];
+  if (!event) return "";
+  const tail = event.errorTail || event.outputTail;
+  const detail = tail ? `\n${truncateForDiscord(tail.trim(), 900)}` : "";
+  const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;
+  const duration = event.durationMs == null ? "" : ` ${event.durationMs}ms`;
+  return `Last sandbox command: \`${event.command ?? event.step}\`${exit}${duration}${detail}`;
+}
+
+function formatAgentTaskTimingSummary(events: TaskEvent[] | undefined) {
+  if (!events?.length) return "";
+  const terminalMetadata = events.find((event) => event.eventName === "task.completed")?.metadata;
+  const timings = recordFromUnknown(terminalMetadata?.timingsMs) ?? timingsFromProgressEvents(events);
+  const cache = recordFromUnknown(terminalMetadata?.cache) ?? cacheFromProgressEvents(events);
+  const timingLine = formatCompactTimingLine(timings);
+  const cacheLine = formatCompactCacheLine(cache);
+  return [timingLine, cacheLine].filter(Boolean).join("\n");
+}
+
+function timingsFromProgressEvents(events: TaskEvent[]) {
+  const timings: Record<string, number> = {};
+  for (const event of events) {
+    const step = stringFromUnknown(event.metadata.step);
+    const durationMs = numberFromUnknown(event.metadata.durationMs);
+    if (!step || durationMs == null || !step.endsWith("_complete")) continue;
+    timings[step.replace(/_complete$/, "")] = durationMs;
+  }
+  return Object.keys(timings).length ? timings : undefined;
+}
+
+function cacheFromProgressEvents(events: TaskEvent[]) {
+  const cache: Record<string, unknown> = {};
+  for (const event of events.slice().reverse()) {
+    const cacheType = stringFromUnknown(event.metadata.cacheType);
+    const cacheStatus = stringFromUnknown(event.metadata.cacheStatus);
+    if (cacheType === "repo" && cacheStatus) cache.repo = cacheStatus;
+    if (cacheType === "dependencies" && cacheStatus) {
+      cache.dependencies = cacheStatus;
+      cache.dependencyCacheKey = stringFromUnknown(event.metadata.lockHash);
+      if (event.metadata.reason === "dependency_files_changed_after_codex") cache.dependencyRefreshAfterCodex = true;
+    }
+    const taskCache = recordFromUnknown(event.metadata.cache);
+    if (taskCache) Object.assign(cache, taskCache);
+  }
+  return Object.keys(cache).length ? cache : undefined;
+}
+
+function formatCompactTimingLine(timings: Record<string, unknown> | undefined) {
+  if (!timings) return "";
+  const parts = [
+    ["total", timings.total],
+    ["startup", timings.sandboxStartup],
+    ["repo", timings.repo],
+    ["deps", timings.dependencies],
+    ["deps2", timings.dependenciesPostCodex],
+    ["codex", timings.codex],
+    ["verify", timings.verify],
+    ["scan", timings.scan],
+    ["push", timings.push],
+    ["PR", timings.pr]
+  ]
+    .map(([label, value]) => {
+      const ms = numberFromUnknown(value);
+      return ms == null ? null : `${label}=${formatDurationMs(ms)}`;
+    })
+    .filter(Boolean);
+  return parts.length ? `Timings: ${parts.join(" | ")}` : "";
+}
+
+function formatCompactCacheLine(cache: Record<string, unknown> | undefined) {
+  if (!cache) return "";
+  const repo = stringFromUnknown(cache.repo);
+  const dependencies = stringFromUnknown(cache.dependencies);
+  const dependencyRefresh = cache.dependencyRefreshAfterCodex ? " | refreshed deps after Codex" : "";
+  const key = stringFromUnknown(cache.dependencyCacheKey);
+  const keySuffix = key ? ` ${key.slice(0, 18)}` : "";
+  const parts = [repo ? `repo=${repo}` : "", dependencies ? `deps=${dependencies}${keySuffix}` : ""].filter(Boolean);
+  return parts.length ? `Cache: ${parts.join(" | ")}${dependencyRefresh}` : "";
+}
+
+function agentTaskAuditSummary(result: unknown) {
+  if (!result || typeof result !== "object") return result;
+  const typed = result as { taskId?: string; jobId?: string | null; job?: AgentTaskRecord };
+  return {
+    taskId: typed.taskId,
+    jobId: typed.jobId,
+    status: typed.job?.status,
+    prUrl: typed.job?.prUrl,
+    draft: typed.job?.draft,
+    verifyPassed: typed.job?.verifyPassed,
+    error: typed.job?.error
+  };
+}
+
+export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: string; limit?: number } = {}): Promise<string> {
+  const task = await resolveVisibleAgentTask(ctx, input.taskId, {
+    statuses: undefined,
+    limit: 1
+  });
+  if (!task) return input.taskId ? `No visible agent task matched \`${input.taskId}\`.` : "No recent agent task matched this channel.";
+
+  const limit = clampInteger(input.limit, 1, 20, 8);
+  const [events, commandEvents] = await Promise.all([
+    ctx.repo.getTaskEvents({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      traceId: task.taskId,
+      limit
+    }),
+    ctx.repo.getSandboxCommandEvents({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      taskId: task.taskId,
+      limit
+    })
+  ]);
+
+  await ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
-    threadKey: ctx.threadKey,
-    replyChannelId: ctx.replyChannelId,
-    replyMessageId: ctx.replyMessageId
+    toolName: "getAgentTaskStatus",
+    argumentsSummary: summarizeForAudit({ taskId: input.taskId, limit }),
+    resultSummary: summarizeForAudit({ taskId: task.taskId, status: task.status, events: events.length, commandEvents: commandEvents.length })
   });
-  return { dryRun: false, ...enqueued };
+
+  return [
+    "Agent task status:",
+    formatAgentTaskLine(task),
+    task.request ? `Request: ${truncateForDiscord(task.request, 800)}` : "",
+    task.error ? `Error: ${truncateForDiscord(task.error, 800)}` : "",
+    task.prUrl ? `PR: ${task.prUrl}` : "",
+    "",
+    formatTaskEvents(events),
+    "",
+    formatSandboxCommandEvents(commandEvents)
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
 }
 
-function agentCodegenAuditSummary(result: unknown) {
-  if (!result || typeof result !== "object") return result;
-  if ("dryRun" in result && result.dryRun) return result;
-  const typed = result as { requestId?: string; jobId?: string | null };
-  return {
-    dryRun: false,
-    requestId: typed.requestId,
-    jobId: typed.jobId
-  };
+export async function listAgentTasks(ctx: ToolContext, input: { statuses?: string[]; limit?: number } = {}): Promise<string> {
+  const statuses = normalizeAgentTaskStatuses(input.statuses);
+  const limit = clampInteger(input.limit, 1, 20, 10);
+  const tasks = await ctx.repo.listAgentTasks({
+    guildId: ctx.guildId,
+    visibleChannelIds: ctx.visibleChannelIds,
+    statuses,
+    limit
+  });
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "listAgentTasks",
+    argumentsSummary: summarizeForAudit({ statuses, limit }),
+    resultSummary: summarizeForAudit({ tasks: tasks.length })
+  });
+
+  if (tasks.length === 0) return "No visible agent tasks matched.";
+  return ["Recent agent tasks:", ...tasks.map(formatAgentTaskLine)].join("\n");
+}
+
+export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string } = {}): Promise<string> {
+  const task = await resolveVisibleAgentTask(ctx, input.taskId, {
+    statuses: ["failed", "no_changes", "cancelled"],
+    limit: 1
+  });
+  if (!task) return input.taskId ? `No retryable visible agent task matched \`${input.taskId}\`.` : "No recent failed, no-change, or cancelled agent task matched.";
+
+  const requestedBy = `${ctx.userDisplayName} (${ctx.userId}) retrying ${task.taskId}`;
+  const result = await enqueueAgentCodeUpdateTask(ctx, {
+    request: task.request,
+    updateName: `${task.title}-retry`,
+    requestedBy,
+    retriedFromTaskId: task.taskId
+  });
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "retryAgentTask",
+    argumentsSummary: summarizeForAudit({ taskId: task.taskId }),
+    resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
+  });
+
+  return formatAgentTaskResult(result);
+}
+
+export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string; reason?: string } = {}): Promise<string> {
+  const task = await resolveVisibleAgentTask(ctx, input.taskId, {
+    statuses: ["queued", "running"],
+    limit: 1
+  });
+  if (!task) return input.taskId ? `No active visible agent task matched \`${input.taskId}\`.` : "No active agent task matched.";
+
+  const cancelled = await ctx.repo.cancelAgentTask({
+    taskId: task.taskId,
+    reason: input.reason ?? `Cancelled by ${ctx.userDisplayName} (${ctx.userId}).`
+  });
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "cancelAgentTask",
+    argumentsSummary: summarizeForAudit({ taskId: task.taskId, reason: input.reason }),
+    resultSummary: summarizeForAudit({ cancelled })
+  });
+
+  if (!cancelled) return `Task \`${task.taskId}\` was not cancelled, likely because it already finished.`;
+  return `Cancelled agent task \`${task.taskId}\`. The sandbox cleanup reconciler will remove any remaining Kubernetes resources.`;
+}
+
+export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
+  const [health, taskMetrics, recentTasks] = await Promise.all([
+    ctx.repo.health(),
+    ctx.repo.getAgentTaskMetrics(),
+    ctx.repo.listAgentTasks({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      limit: 5
+    })
+  ]);
+
+  const revision =
+    process.env.GITHUB_SHA ??
+    process.env.RENDER_GIT_COMMIT ??
+    process.env.RAILWAY_GIT_COMMIT_SHA ??
+    process.env.K_REVISION ??
+    process.env.HOSTNAME ??
+    "unknown";
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "getDeploymentStatus",
+    argumentsSummary: "deployment status",
+    resultSummary: summarizeForAudit({ revision, recentTasks: recentTasks.length })
+  });
+
+  return [
+    "Deployment status:",
+    `- Revision: ${revision}`,
+    `- Uptime: ${formatDurationSeconds(process.uptime())}`,
+    `- Node: ${process.version}`,
+    `- Repository: ${ctx.config.github.repository || "not configured"}`,
+    `- Base branch: ${ctx.config.github.baseBranch}`,
+    `- Indexed messages: ${health.messages}`,
+    `- Embeddings: ${health.embeddings}`,
+    `- Tool calls logged: ${health.toolCalls}`,
+    `- Agent tasks: ${taskMetrics.tasksByStatus.map((row) => `${row.status}=${row.count}`).join(", ") || "none"}`,
+    `- Codegen timings: ${formatCodegenMetricSummary(taskMetrics.codegenPhaseDurations)}`,
+    `- Sandbox cache: ${formatCacheMetricSummary(taskMetrics.sandboxCacheEvents)}`,
+    recentTasks.length ? "Recent tasks:" : "Recent tasks: none",
+    ...recentTasks.map((task) => `- ${formatAgentTaskLine(task)}`)
+  ].join("\n");
 }
 
 export async function reportStatus(ctx: ToolContext): Promise<string> {
@@ -1099,8 +1371,20 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
 export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: string; limit?: number } = {}): Promise<string> {
   const limit = clampInteger(input.limit, 1, 50, 20);
   const traceId = input.traceId?.trim() || undefined;
-  const [events, toolLogs] = await Promise.all([
+  const [events, taskEvents, commandEvents, toolLogs] = await Promise.all([
     ctx.repo.getTraceEvents({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      traceId,
+      limit
+    }),
+    ctx.repo.getTaskEvents({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      traceId,
+      limit
+    }),
+    ctx.repo.getSandboxCommandEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
       traceId,
@@ -1120,10 +1404,15 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     userId: ctx.userId,
     toolName: "inspectAgentLogs",
     argumentsSummary: summarizeForAudit({ traceId, limit }),
-    resultSummary: summarizeForAudit({ traceEvents: events.length, toolLogs: toolLogs.length })
+    resultSummary: summarizeForAudit({
+      traceEvents: events.length,
+      taskEvents: taskEvents.length,
+      commandEvents: commandEvents.length,
+      toolLogs: toolLogs.length
+    })
   });
 
-  if (events.length === 0 && toolLogs.length === 0) {
+  if (events.length === 0 && taskEvents.length === 0 && commandEvents.length === 0 && toolLogs.length === 0) {
     return traceId ? `No Discord AI Agent trace or tool logs matched traceId=${traceId}.` : "No recent Discord AI Agent trace or tool logs matched visible channels.";
   }
 
@@ -1132,58 +1421,14 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     "",
     formatTraceEvents(events),
     "",
+    formatTaskEvents(taskEvents),
+    "",
+    formatSandboxCommandEvents(commandEvents),
+    "",
     formatToolAuditLogs(toolLogs)
   ]
     .filter((line) => line !== "")
     .join("\n");
-}
-
-export async function inspectRailwayLogs(
-  ctx: ToolContext,
-  input: { service?: string; since?: string; lines?: number; filter?: string } = {}
-): Promise<string> {
-  if (!ctx.config.railway.logOwnerUserIds.includes(ctx.userId)) {
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "inspectRailwayLogs",
-      argumentsSummary: summarizeForAudit(input),
-      error: "unauthorized"
-    });
-    return "Railway log access is owner-only.";
-  }
-
-  let result: Awaited<ReturnType<typeof fetchRailwayLogs>>;
-  try {
-    result = await fetchRailwayLogs(ctx.config.railway, input);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "inspectRailwayLogs",
-      argumentsSummary: summarizeForAudit(input),
-      error: message
-    });
-    return `Railway log lookup failed: ${message}`;
-  }
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "inspectRailwayLogs",
-    argumentsSummary: summarizeForAudit({
-      service: result.service,
-      since: result.since,
-      lines: result.lines,
-      filter: result.filter
-    }),
-    resultSummary: summarizeForAudit({ entries: result.entries.length, stderr: result.stderr || undefined })
-  });
-
-  return formatRailwayLogs(result);
 }
 
 function formatDiscordUserMatches(results: DiscordUserLookupResult[]) {
@@ -1213,6 +1458,20 @@ function formatTraceEvents(events: TraceEvent[]) {
   ].join("\n");
 }
 
+function formatTaskEvents(events: TaskEvent[]) {
+  if (events.length === 0) return "Task events: none.";
+  return [
+    "Task events:",
+    ...events
+      .slice()
+      .reverse()
+      .map((event) => {
+        const summary = event.summary ? ` - ${truncateForDiscord(event.summary, 180)}` : "";
+        return `- ${event.createdAt.toISOString()} ${event.level} ${event.eventName} task=${event.taskId}${summary}`;
+      })
+  ].join("\n");
+}
+
 function formatToolAuditLogs(logs: ToolAuditLog[]) {
   if (logs.length === 0) return "Tool audit logs: none.";
   return [
@@ -1232,32 +1491,132 @@ function formatToolAuditLogs(logs: ToolAuditLog[]) {
   ].join("\n");
 }
 
-function formatRailwayLogs(result: {
-  service: string;
-  since: string;
-  lines: number;
-  filter: string | null;
-  entries: RailwayLogEntry[];
-  stderr: string;
-}) {
-  const header = `Railway logs for ${result.service} since ${result.since}${result.filter ? ` filter=${result.filter}` : ""}:`;
-  if (result.entries.length === 0) {
-    return [header, result.stderr ? `stderr: ${truncateForDiscord(result.stderr, 500)}` : "No log lines returned."].join("\n");
+async function resolveVisibleAgentTask(
+  ctx: ToolContext,
+  taskId: string | undefined,
+  options: { statuses?: AgentTaskStatus[]; limit: number }
+): Promise<AgentTaskRecord | undefined> {
+  if (taskId?.trim()) {
+    const task = await ctx.repo.getAgentTask(taskId.trim());
+    if (!task || !isAgentTaskVisible(ctx, task)) return undefined;
+    if (options.statuses?.length && !options.statuses.includes(task.status)) return undefined;
+    return task;
   }
-
-  return [
-    header,
-    ...result.entries.slice(-result.lines).map((entry) => {
-      const fields = [
-        entry.level,
-        entry.traceId ? `trace=${entry.traceId}` : null,
-        entry.requestId && entry.requestId !== entry.traceId ? `request=${entry.requestId}` : null,
-        entry.messageId && entry.messageId !== entry.traceId ? `message=${entry.messageId}` : null,
-        entry.durationMs == null ? null : `${entry.durationMs}ms`
-      ].filter(Boolean);
-      return `- ${entry.timestamp ?? "(no timestamp)"}${fields.length ? ` ${fields.join(" ")}` : ""}: ${truncateForDiscord(entry.message, 260)}`;
+  return (
+    await ctx.repo.listAgentTasks({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      channelId: ctx.channelId,
+      statuses: options.statuses,
+      limit: options.limit
     })
+  )[0];
+}
+
+function isAgentTaskVisible(ctx: ToolContext, task: AgentTaskRecord) {
+  return task.guildId === ctx.guildId && (!task.channelId || ctx.visibleChannelIds.includes(task.channelId));
+}
+
+function normalizeAgentTaskStatuses(statuses: string[] | undefined): AgentTaskStatus[] | undefined {
+  if (!statuses?.length) return undefined;
+  const allowed: AgentTaskStatus[] = ["queued", "running", "succeeded", "failed", "no_changes", "cancelled"];
+  const normalized = uniqueStrings(statuses.map((status) => status.trim()).filter(Boolean)).filter((status): status is AgentTaskStatus =>
+    allowed.includes(status as AgentTaskStatus)
+  );
+  return normalized.length ? normalized : undefined;
+}
+
+function formatRecentAgentMemory(messages: ConversationMessage[]) {
+  return [
+    "Recent Discord AI Agent memory in this channel:",
+    ...messages.map((message, index) => {
+      const role = message.role === "tool" ? `tool:${typeof message.metadata.toolName === "string" ? message.metadata.toolName : "unknown"}` : message.role;
+      const author = message.authorDisplayName || message.authorId || "unknown";
+      const timestamp = message.createdAt.toISOString();
+      const url = typeof message.metadata.discordUrl === "string" ? `\n${message.metadata.discordUrl}` : "";
+      const content = truncateForDiscord(message.content, 500);
+      return `[${index + 1}] ${timestamp} ${role} ${author}\n${content}${url}`;
+    })
+  ].join("\n\n");
+}
+
+function formatAgentTaskLine(task: AgentTaskRecord) {
+  const parts = [
+    `\`${task.taskId}\``,
+    task.status,
+    task.currentStep ? `step=${task.currentStep}` : null,
+    task.prUrl ? `PR=${task.prUrl}` : null,
+    task.retriedFromTaskId ? `retryOf=${task.retriedFromTaskId}` : null,
+    task.notificationError ? `notifyError=${truncateForDiscord(task.notificationError, 80)}` : null,
+    `updated=${task.updatedAt.toISOString()}`
+  ].filter(Boolean);
+  return `${parts.join(" | ")}\n  ${truncateForDiscord(task.title, 180)}`;
+}
+
+function formatCodegenMetricSummary(rows: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>) {
+  if (rows.length === 0) return "none yet";
+  const preferred = ["repo", "dependencies", "dependenciesPostCodex", "codex", "verify", "scan", "push", "pr", "total"];
+  const byPhase = new Map(rows.map((row) => [row.phase, row]));
+  return preferred
+    .map((phase) => byPhase.get(phase))
+    .filter((row): row is { phase: string; count: number; avgMs: number; maxMs: number } => Boolean(row))
+    .map((row) => `${row.phase} avg=${formatDurationMs(row.avgMs)} max=${formatDurationMs(row.maxMs)}`)
+    .join(", ");
+}
+
+function formatCacheMetricSummary(rows: Array<{ cacheType: string; cacheStatus: string; count: number }>) {
+  if (rows.length === 0) return "none yet";
+  return rows.map((row) => `${row.cacheType}.${row.cacheStatus}=${row.count}`).join(", ");
+}
+
+function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {
+  if (events.length === 0) return "Sandbox commands: none.";
+  return [
+    "Sandbox commands:",
+    ...events
+      .slice()
+      .reverse()
+      .map((event) => {
+        const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;
+        const duration = event.durationMs == null ? "" : ` ${event.durationMs}ms`;
+        const tail = (event.errorTail || event.outputTail).trim();
+        return `- ${event.createdAt.toISOString()} ${event.step}${exit}${duration} ${truncateForDiscord(event.command ?? "", 160)}${
+          tail ? `\n  ${truncateForDiscord(tail, 300)}` : ""
+        }`;
+      })
   ].join("\n");
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function stringFromUnknown(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberFromUnknown(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function formatDurationMs(ms: number) {
+  const rounded = Math.max(0, Math.round(ms));
+  if (rounded < 1000) return `${rounded}ms`;
+  const seconds = rounded / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
+function formatDurationSeconds(seconds: number) {
+  const total = Math.max(0, Math.trunc(seconds));
+  const days = Math.floor(total / 86_400);
+  const hours = Math.floor((total % 86_400) / 3_600);
+  const minutes = Math.floor((total % 3_600) / 60);
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m ${total % 60}s`;
 }
 
 function clampInteger(value: number | undefined, min: number, max: number, fallback: number) {
@@ -1296,20 +1655,6 @@ function formatMessageList(results: SearchResult[], emptyMessage: string) {
       return `[${index + 1}] ${author} channel=${result.channelId} at ${result.createdAt.toISOString()}\n${content}\n${result.link}`;
     })
     .join("\n\n");
-}
-
-function formatRecentAgentMemory(messages: ConversationMessage[]) {
-  return [
-    "Recent Discord AI Agent memory in this channel:",
-    ...messages.map((message, index) => {
-      const role = message.role === "tool" ? `tool:${typeof message.metadata.toolName === "string" ? message.metadata.toolName : "unknown"}` : message.role;
-      const author = message.authorDisplayName || message.authorId || "unknown";
-      const timestamp = message.createdAt.toISOString();
-      const url = typeof message.metadata.discordUrl === "string" ? `\n${message.metadata.discordUrl}` : "";
-      const content = truncateForDiscord(message.content, 500);
-      return `[${index + 1}] ${timestamp} ${role} ${author}\n${content}${url}`;
-    })
-  ].join("\n\n");
 }
 
 function formatAttachmentResults(results: DiscordAttachmentSearchResult[]) {
@@ -2146,28 +2491,6 @@ function noHistoryResultsMessage(crawl: Array<{ status: string; channels: number
     `Crawl status: ${active.map((row) => `${row.status}=${row.channels} channels/${row.messages} messages`).join(", ")}.`
   ].join("\n");
 }
-
-export function describeSkillPullRequestResult(result: {
-  dryRun: boolean;
-  filePath: string;
-  branchName: string;
-  prUrl?: string;
-  merged?: boolean;
-  autoMergeQueued?: boolean;
-  autoMergeError?: string;
-  policyReasons?: string[];
-  dryRunPath?: string;
-  content: string;
-}) {
-  if (result.policyReasons?.length) {
-    return `I drafted a skill, but it failed policy checks: ${result.policyReasons.join("; ")}`;
-  }
-  if (result.dryRun) {
-    return `I drafted \`${result.filePath}\` in dry-run mode${result.dryRunPath ? ` at \`${result.dryRunPath}\`` : ""}. Disable dry-run mode when you want real PRs.`;
-  }
-  return `I opened a skill PR for human review: ${result.prUrl}`;
-}
-
 
 export function extractHistorySearchSyntax(message: string) {
   const authorIds: string[] = [];

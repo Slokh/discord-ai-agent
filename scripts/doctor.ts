@@ -1,22 +1,22 @@
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
-import { parseGitHubRepository } from "../src/skills/github.js";
+import { parseGitHubRepository } from "../src/github/repository.js";
 
 async function main() {
   const config = loadConfig();
   const checks: Array<[string, boolean, string]> = [];
 
   checks.push(["Discord token", Boolean(config.discord.token), "required to log in the bot"]);
-  checks.push(["Discord client ID", Boolean(config.discord.clientId), "configured in code for the Discord AI Agent bot application"]);
-  checks.push(["Discord guild ID", Boolean(config.discord.guildId), "configured in code for the personal server"]);
+  checks.push(["Discord client ID", Boolean(config.discord.clientId), "configured for the Discord bot application"]);
+  checks.push(["Discord guild ID", Boolean(config.discord.guildId), "configured for the target Discord server"]);
   checks.push(["OpenRouter API key", Boolean(config.openRouter.apiKey), "required for chat, embeddings, and images"]);
-  checks.push(["GitHub token", Boolean(config.github.token) || config.github.dryRun, "required for skill PRs and Railway codegen PRs"]);
   checks.push([
-    "Railway log access",
-    true,
-    config.railway.token ? "enabled for owner-only log inspection" : "disabled; set RAILWAY_TOKEN on the bot service to enable"
+    "GitHub task credential",
+    Boolean(config.github.token || (config.github.appId && config.github.appPrivateKey && config.github.appInstallationId)),
+    "required for sandbox code-update PRs"
   ]);
-  const githubRepository = checkGitHubRepository(config.github.repository, config.github.dryRun);
+  checks.push(["Task signing secret", Boolean(config.execution.taskSigningSecret), "required for Kubernetes sandbox callbacks"]);
+  const githubRepository = checkGitHubRepository(config.github.repository);
   checks.push(["GitHub repository", githubRepository.ok, githubRepository.detail]);
 
   const pool = createPool(config);
@@ -38,7 +38,10 @@ async function main() {
       "tool_audit_logs",
       "trace_events",
       "skills",
-      "skill_changes"
+      "skill_changes",
+      "agent_tasks",
+      "task_events",
+      "sandbox_runs"
     ];
     const tables = await pool.query(
       `
@@ -88,8 +91,7 @@ async function main() {
   if (failed) process.exitCode = 1;
 }
 
-function checkGitHubRepository(repository: string | undefined, dryRun: boolean) {
-  if (dryRun) return { ok: true, detail: "skipped because dry-run mode is enabled" };
+function checkGitHubRepository(repository: string | undefined) {
   try {
     parseGitHubRepository(repository);
     return { ok: true, detail: "real owner/repo configured" };

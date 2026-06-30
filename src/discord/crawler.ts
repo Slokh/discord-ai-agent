@@ -33,6 +33,7 @@ type CrawlEmbeddingQueueStatus = "queued" | "deduped" | "empty" | "bot" | "priva
 export class DiscordCrawler {
   private embeddingQueue?: EmbeddingQueue;
   private warnedMissingEmbeddingQueue = false;
+  private activeCrawlRunId?: string;
 
   constructor(
     private readonly input: {
@@ -64,19 +65,85 @@ export class DiscordCrawler {
     });
 
     const channels = await this.discoverCrawlableChannels(guild);
+    const runId = `crawl-${guild.id}-${Date.now()}`;
+    this.activeCrawlRunId = runId;
+    const crawlStartedAt = Date.now();
+    await this.input.repo.upsertProcessRun({
+      runId,
+      traceId: runId,
+      kind: "crawl",
+      status: "running",
+      title: `Discord crawl: ${guild.name}`,
+      summary: `Discovered ${channels.length} crawlable channels and threads.`,
+      guildId: guild.id,
+      requester: "system",
+      source: "discord_crawler",
+      metadata: { channelCount: channels.length }
+    });
     await Promise.all(channels.map((channel) => this.input.repo.ensureCrawlCursor({ guildId: guild.id, channelId: channel.id })));
     logger.info({ channelCount: channels.length }, "Starting full Discord crawl");
 
-    for (const channel of channels) {
-      await this.crawlChannel(channel).catch(async (error) => {
-        logger.error({ err: error, channelId: channel.id }, "Channel crawl failed");
-        await this.input.repo.updateCrawlCursor({
-          guildId: guild.id,
-          channelId: channel.id,
-          status: "error",
-          error: error instanceof Error ? error.message : String(error)
+    try {
+      for (const channel of channels) {
+        const channelStartedAt = Date.now();
+        await this.input.repo.recordProcessRunSpan({
+          runId,
+          spanId: `channel-${channel.id}`,
+          name: channel.name ? `#${channel.name}` : channel.id,
+          status: "running",
+          startedAt: new Date(channelStartedAt),
+          metadata: { channelId: channel.id, channelType: channel.type, isThread: "isThread" in channel ? Boolean(channel.isThread()) : false }
         });
+        await this.crawlChannel(channel)
+          .then(async () => {
+            await this.input.repo.recordProcessRunSpan({
+              runId,
+              spanId: `channel-${channel.id}`,
+              name: channel.name ? `#${channel.name}` : channel.id,
+              status: "succeeded",
+              startedAt: new Date(channelStartedAt),
+              completedAt: new Date(),
+              durationMs: Date.now() - channelStartedAt,
+              metadata: { channelId: channel.id }
+            });
+          })
+          .catch(async (error) => {
+            logger.error({ err: error, channelId: channel.id }, "Channel crawl failed");
+            await this.input.repo.recordProcessRunSpan({
+              runId,
+              spanId: `channel-${channel.id}`,
+              name: channel.name ? `#${channel.name}` : channel.id,
+              status: "failed",
+              startedAt: new Date(channelStartedAt),
+              completedAt: new Date(),
+              durationMs: Date.now() - channelStartedAt,
+              metadata: { channelId: channel.id, error: error instanceof Error ? error.message : String(error) }
+            });
+            await this.input.repo.updateCrawlCursor({
+              guildId: guild.id,
+              channelId: channel.id,
+              status: "error",
+              error: error instanceof Error ? error.message : String(error)
+            });
+          });
+      }
+      const crawlStatus = await this.input.repo.getCrawlStatus(guild.id);
+      await this.input.repo.storeProcessRunArtifact({
+        runId,
+        kind: "crawl_summary",
+        name: "Crawl summary",
+        content: JSON.stringify({ guildId: guild.id, channelCount: channels.length, crawlStatus }, null, 2),
+        contentType: "application/json",
+        metadata: { channelCount: channels.length }
       });
+      await this.input.repo.updateProcessRun({
+        runId,
+        status: crawlStatus.some((row) => row.status === "error") ? "failed" : "succeeded",
+        summary: `Crawl finished in ${Date.now() - crawlStartedAt}ms.`,
+        metadata: { crawlStatus, durationMs: Date.now() - crawlStartedAt }
+      });
+    } finally {
+      this.activeCrawlRunId = undefined;
     }
   }
 
@@ -159,6 +226,7 @@ export class DiscordCrawler {
         status: "running",
         crawledCountIncrement: messages.length
       });
+      await this.recordCrawlPageEvent(channel.id, messages.length, embeddingQueueStats);
       logger.debug({ channelId: channel.id, pageSize: messages.length, embeddingQueueStats }, "Crawl page stored");
 
       if (page.size < this.input.config.crawlBatchSize || !before) break;
@@ -215,6 +283,7 @@ export class DiscordCrawler {
         status: "running",
         crawledCountIncrement: messages.length
       });
+      await this.recordCrawlPageEvent(channel.id, messages.length, embeddingQueueStats);
       logger.debug({ channelId: channel.id, pageSize: messages.length, embeddingQueueStats }, "Crawl backfill page stored");
 
       if (page.size < this.input.config.crawlBatchSize) break;
@@ -299,6 +368,18 @@ export class DiscordCrawler {
       logger.warn({ err: error, messageId: message.id }, "Failed to enqueue message embedding; message remains searchable by keyword");
       return "error";
     }
+  }
+
+  private async recordCrawlPageEvent(channelId: string, pageSize: number, embeddingQueueStats: Record<CrawlEmbeddingQueueStatus, number>) {
+    if (!this.activeCrawlRunId) return;
+    await this.input.repo
+      .recordProcessRunEvent({
+        runId: this.activeCrawlRunId,
+        eventName: "crawl.page.stored",
+        summary: `Stored ${pageSize} messages from ${channelId}`,
+        metadata: { channelId, pageSize, embeddingQueueStats }
+      })
+      .catch((error) => logger.warn({ err: error, channelId }, "Failed to record crawl page event"));
   }
 }
 

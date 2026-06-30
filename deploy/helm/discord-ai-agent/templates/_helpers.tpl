@@ -40,6 +40,13 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
 {{- end -}}
 
+{{- define "discord-ai-agent.controlUiPublicEnv" -}}
+{{- if .Values.config.controlUiPublicUrl }}
+- name: CONTROL_UI_PUBLIC_URL
+  value: {{ .Values.config.controlUiPublicUrl | quote }}
+{{- end }}
+{{- end -}}
+
 {{- define "discord-ai-agent.databaseEnv" -}}
 - name: DATABASE_URL
   valueFrom:

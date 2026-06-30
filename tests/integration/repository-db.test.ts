@@ -67,6 +67,78 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.isUserInteractionBlocked({ guildId, userId })).resolves.toBe(false);
   });
 
+  it("stores process runs, spans, events, and redacted artifact chunks", async () => {
+    const runId = `run-${randomUUID()}`;
+    const traceId = `trace-${randomUUID()}`;
+
+    const run = await repo.upsertProcessRun({
+      runId,
+      traceId,
+      kind: "prompt",
+      status: "running",
+      title: "test prompt run",
+      summary: "started",
+      requester: "test",
+      source: "test"
+    });
+    expect(run.runId).toBe(runId);
+
+    await repo.recordProcessRunSpan({
+      runId,
+      spanId: "model",
+      name: "Model call",
+      status: "succeeded",
+      durationMs: 123,
+      metadata: { model: "test/model" }
+    });
+    await repo.recordProcessRunEvent({
+      runId,
+      traceId,
+      eventName: "model.complete",
+      summary: "Model completed",
+      durationMs: 123
+    });
+    const artifact = await repo.storeProcessRunArtifact({
+      runId,
+      kind: "raw_json",
+      name: "raw",
+      content: `{"token":"ghp_${"a".repeat(40)}"}`,
+      contentType: "application/json"
+    });
+
+    expect(artifact?.preview).toContain("[REDACTED]");
+    const content = await repo.getProcessRunArtifact({ runId, artifactId: artifact!.artifactId });
+    expect(content?.content).toContain("[REDACTED]");
+    expect(content?.content).not.toContain("ghp_");
+
+    const largeArtifact = await repo.storeProcessRunArtifact({
+      runId,
+      kind: "command_log",
+      name: "large log",
+      content: "x".repeat(2 * 1024 * 1024 + 1),
+      contentType: "text/plain"
+    });
+    expect(largeArtifact?.expiresAt).toBeInstanceOf(Date);
+    expect(largeArtifact?.metadata).toEqual(expect.objectContaining({ retention: expect.objectContaining({ reason: "large_artifact" }) }));
+
+    const expiredArtifact = await repo.storeProcessRunArtifact({
+      runId,
+      kind: "command_log",
+      name: "expired log",
+      content: "expired content",
+      contentType: "text/plain",
+      expiresAt: new Date(Date.now() - 1000)
+    });
+    expect(expiredArtifact?.artifactId).toBeDefined();
+    await expect(repo.getProcessRunArtifact({ runId, artifactId: expiredArtifact!.artifactId })).resolves.toBeUndefined();
+    await expect(repo.cleanupExpiredProcessRunArtifacts()).resolves.toBeGreaterThanOrEqual(1);
+
+    await repo.updateProcessRun({ runId, status: "succeeded", summary: "done" });
+    await expect(repo.getProcessRunSpans(runId)).resolves.toHaveLength(1);
+    await expect(repo.getProcessRunEvents({ runId })).resolves.toHaveLength(1);
+    await expect(repo.getProcessRun(runId)).resolves.toEqual(expect.objectContaining({ status: "succeeded", completedAt: expect.any(Date) }));
+  });
+
   it("scrubs user profile metadata and prevents future rehydration after privacy deletion", async () => {
     const userId = `user-${randomUUID()}`;
 
@@ -1666,6 +1738,7 @@ async function cleanupTestRows(pool: DbPool) {
         OR trace_id LIKE 'trace-%'
     `
   );
+  await pool.query("DELETE FROM process_runs WHERE run_id LIKE 'run-%' OR trace_id LIKE 'trace-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM skill_changes WHERE skill_name LIKE 'skill-%' OR requester_id LIKE 'user-%'");
   await pool.query("DELETE FROM skills WHERE name LIKE 'skill-%'");
   await pool.query("DELETE FROM conversation_messages WHERE thread_key LIKE 'discord:guild-%'");

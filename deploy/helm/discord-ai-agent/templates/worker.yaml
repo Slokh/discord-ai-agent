@@ -28,6 +28,7 @@ spec:
             - name: DISCORD_AI_AGENT_PROCESS_ROLE
               value: worker
             {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.controlUiPublicEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.discordEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}

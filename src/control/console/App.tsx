@@ -26,6 +26,7 @@ type StatusFilter = "all" | "active" | "done" | "attention";
 type DetailTab = "overview" | "timeline" | "calls" | "terminal" | "artifacts" | "raw";
 type TerminalStream = TerminalEntry["stream"];
 type HistoryMode = "push" | "replace";
+type LatencyRow = RunSnapshot["spans"][number] & { durationMs: number };
 
 type ConsoleUrlState = {
   runId: string;
@@ -342,7 +343,7 @@ export function App() {
                 <Tabs active={tab} aria-label="Run detail sections" onChange={(nextTab) => updateConsoleState({ tab: nextTab as DetailTab })} tabs={detailTabs} />
                 {tab === "overview" && <Overview snapshot={snapshot} />}
                 {tab === "timeline" && <Timeline snapshot={snapshot} />}
-                {tab === "calls" && <Calls events={snapshot.events} />}
+                {tab === "calls" && <Calls snapshot={snapshot} />}
                 {tab === "terminal" && <TerminalView terminal={snapshot.terminal} query={terminalQuery} onQueryChange={setTerminalQuery} />}
                 {tab === "artifacts" && <Artifacts runId={snapshot.run.runId} artifacts={snapshot.artifacts} />}
                 {tab === "raw" && <Raw snapshot={snapshot} />}
@@ -464,82 +465,99 @@ function RunJumpPalette({
 }
 
 function Overview({ snapshot }: { snapshot: RunSnapshot }) {
-  const maxDuration = Math.max(1, ...snapshot.spans.map((span) => span.durationMs ?? 0));
-  const slowest = [...snapshot.spans].sort((left, right) => (right.durationMs ?? 0) - (left.durationMs ?? 0)).slice(0, 3);
+  const latencyRows = latencyBreakdown(snapshot);
+  const totalDuration = latencyTotal(snapshot);
+  const slowest = latencyRows[0] ?? null;
+  const signalEvents = snapshot.events.filter((event) => event.level === "error" || event.level === "warn").slice(-4).reverse();
   return (
     <div className="overview-grid">
       <section className="panel insight-panel">
         <div className="panel-title">
           <Activity />
-          <h3>What Happened</h3>
+          <h3>Summary</h3>
         </div>
         <div className="diagnostics">
-          {snapshot.diagnostics.length ? snapshot.diagnostics.map((item) => <p key={item}>{item}</p>) : <p>No diagnostics yet. Watch the timeline and calls tabs as events stream in.</p>}
+          {snapshot.diagnostics.length ? snapshot.diagnostics.map((item) => <p key={item}>{item}</p>) : <p>No diagnostics recorded yet.</p>}
         </div>
       </section>
       <section className="panel metrics-panel">
+        <Metric label="Status" value={snapshot.run.status} tone={snapshot.run.status === "failed" ? "bad" : snapshot.run.status === "succeeded" ? "good" : "normal"} />
         <Metric label="Duration" value={formatDuration(snapshot.run.durationMs)} />
+        <Metric label="Slowest" value={slowest ? `${slowest.name} (${formatDuration(slowest.durationMs)})` : "none"} tone={slowest ? "info" : "normal"} />
         <Metric label="Events" value={snapshot.events.length} />
-        <Metric label="Artifacts" value={snapshot.artifacts.length} />
-        <Metric label="Terminal" value={`${snapshot.terminal.lineCount} lines`} />
       </section>
-      <section className="panel">
-        <div className="panel-title">
-          <SlidersHorizontal />
-          <h3>Run Essentials</h3>
-        </div>
-        <dl className="facts">
-          <Fact label="Status" value={snapshot.run.status} />
-          <Fact label="Current step" value={snapshot.run.currentStep ?? "none"} />
-          <Fact label="Source" value={snapshot.run.source} />
-          <Fact label="Run id" value={snapshot.run.runId} copy />
-          {snapshot.run.messageId && <Fact label="Message id" value={snapshot.run.messageId} copy />}
-        </dl>
-      </section>
-      <section className="panel">
+      <section className="panel wide">
         <div className="panel-title">
           <Clock3 />
-          <h3>Slowest Phases</h3>
+          <h3>Latency</h3>
         </div>
-        {slowest.length === 0 ? (
-          <Empty label="No spans recorded yet" />
+        <LatencyBreakdown rows={latencyRows} totalDuration={totalDuration} />
+      </section>
+      <section className="panel">
+        <div className="panel-title">
+          <AlertCircle />
+          <h3>Signals</h3>
+        </div>
+        {signalEvents.length === 0 ? (
+          <Empty label="No warnings or errors" />
         ) : (
-          <div className="phase-list">
-            {slowest.map((span) => (
-              <div key={span.id} className="phase-item">
-                <span>{span.name}</span>
-                <strong>{formatDuration(span.durationMs)}</strong>
+          <div className="signal-list">
+            {signalEvents.map((event) => (
+              <div key={event.id} className={`signal-item ${event.level}`}>
+                <strong>{humanizeEventName(event.name)}</strong>
+                <span>{event.summary ?? event.source}</span>
+                <small>{formatOffset(snapshot.run.startedAt, event.createdAt)}</small>
               </div>
             ))}
           </div>
         )}
       </section>
-      <section className="panel wide">
+      <section className="panel">
         <div className="panel-title">
-          <Clock3 />
-          <h3>Critical Path</h3>
+          <SlidersHorizontal />
+          <h3>Details</h3>
         </div>
-        <div className="waterfall">
-          {snapshot.spans.length === 0 ? (
-            <Empty label="No spans recorded yet" />
-          ) : (
-            snapshot.spans.map((span) => (
-              <div className="waterfall-row" key={span.id}>
-                <div className="waterfall-label">
-                  <span>{span.name}</span>
-                  <div>
-                    <StatusTag status={span.status} />
-                    <small>{formatDuration(span.durationMs)}</small>
-                  </div>
-                </div>
-                <div className="waterfall-track">
-                  <div className={`waterfall-bar ${span.status}`} style={{ width: `${Math.max(4, ((span.durationMs ?? 0) / maxDuration) * 100)}%` }} />
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+        <dl className="facts">
+          <Fact label="Current step" value={snapshot.run.currentStep ?? "none"} />
+          <Fact label="Source" value={snapshot.run.source} />
+          <Fact label="Run id" value={snapshot.run.runId} copy />
+          {snapshot.run.messageId && <Fact label="Message id" value={snapshot.run.messageId} copy />}
+          <Fact label="Artifacts" value={String(snapshot.artifacts.length)} />
+          <Fact label="Terminal" value={`${snapshot.terminal.lineCount} lines`} />
+        </dl>
       </section>
+    </div>
+  );
+}
+
+function LatencyBreakdown({ rows, totalDuration }: { rows: LatencyRow[]; totalDuration: number }) {
+  if (rows.length === 0) return <Empty label="No timed spans recorded yet" />;
+  const maxDuration = Math.max(1, ...rows.map((row) => row.durationMs));
+  return (
+    <div className="latency-table" role="table" aria-label="Latency by run phase">
+      <div className="latency-row latency-head" role="row">
+        <span>Step</span>
+        <span>Duration</span>
+        <span>Share</span>
+      </div>
+      {rows.map((row) => {
+        const share = totalDuration > 0 ? row.durationMs / totalDuration : 0;
+        return (
+          <div className="latency-row" role="row" key={row.id}>
+            <div className="latency-step">
+              <strong>{row.name}</strong>
+              <small>{row.source}</small>
+            </div>
+            <strong>{formatDuration(row.durationMs)}</strong>
+            <div className="latency-share">
+              <span>{formatPercent(share)}</span>
+              <div className="latency-track">
+                <div className={`latency-bar ${row.status}`} style={{ width: `${Math.max(3, (row.durationMs / maxDuration) * 100)}%` }} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -553,6 +571,7 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
     if (source !== "all" && event.source !== source) return false;
     return true;
   });
+  const timedEvents = eventsWithTiming(events, snapshot.run.startedAt);
 
   return (
     <section className="panel detail-panel">
@@ -583,21 +602,27 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
         <Empty label="No events match these filters" />
       ) : (
         <ol className="timeline">
-          {events.map((event) => (
+          {timedEvents.map(({ event, gapMs, offset }) => (
             <li key={event.id} className={`timeline-event ${event.level}`}>
               <div className="timeline-rail">
                 <div className="timeline-dot" />
               </div>
               <article className="timeline-card">
                 <div className="timeline-title">
-                  <strong>{humanizeEventName(event.name)}</strong>
-                  <Tag intent={intentForLevel(event.level)}>{event.source}</Tag>
-                  {event.durationMs != null && <small>{formatDuration(event.durationMs)}</small>}
+                  <div>
+                    <strong>{humanizeEventName(event.name)}</strong>
+                    <span>{event.source}</span>
+                  </div>
+                  <div className="time-stack">
+                    <strong>{offset}</strong>
+                    {gapMs != null && <small>{formatSignedDuration(gapMs)}</small>}
+                  </div>
                 </div>
                 <p>{event.summary ?? "No summary"}</p>
                 <div className="timeline-meta">
                   <span>{formatDate(event.createdAt)}</span>
-                  <span>{formatOffset(snapshot.run.startedAt, event.createdAt)}</span>
+                  {event.durationMs != null && <span>took {formatDuration(event.durationMs)}</span>}
+                  <span className={`level-text ${event.level}`}>{event.level}</span>
                 </div>
                 {Object.keys(event.metadata).length > 0 && (
                   <details>
@@ -614,8 +639,9 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
   );
 }
 
-function Calls({ events }: { events: RunEvent[] }) {
+function Calls({ snapshot }: { snapshot: RunSnapshot }) {
   const [kind, setKind] = useState<"all" | "model" | "tool" | "errors">("all");
+  const events = snapshot.events;
   const calls = events
     .map((event) => ({ event, kind: callKind(event) }))
     .filter((item) => item.kind === "model" || item.kind === "tool" || item.event.level === "error")
@@ -631,7 +657,7 @@ function Calls({ events }: { events: RunEvent[] }) {
       <div className="panel-heading">
         <div className="panel-title">
           <Wrench />
-          <h3>Model and tool calls</h3>
+          <h3>Calls</h3>
         </div>
         <div className="filter-row compact" aria-label="Call filters">
           {(["all", "model", "tool", "errors"] as const).map((value) => (
@@ -654,7 +680,8 @@ function Calls({ events }: { events: RunEvent[] }) {
                   <p>{event.summary ?? "No summary"}</p>
                 </div>
                 <div className="call-badges">
-                  <Tag intent={intentForLevel(event.level)}>{event.source}</Tag>
+                  <span>{event.source}</span>
+                  <small>{formatOffset(snapshot.run.startedAt, event.createdAt)}</small>
                   {event.durationMs != null && <small>{formatDuration(event.durationMs)}</small>}
                 </div>
               </div>
@@ -1018,13 +1045,6 @@ function isTerminal(status: RunStatus) {
   return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
 }
 
-function intentForLevel(level: RunEvent["level"]) {
-  if (level === "error") return "negative";
-  if (level === "warn") return "warning";
-  if (level === "debug") return "neutral";
-  return "info";
-}
-
 function callKind(event: RunEvent) {
   if (event.source === "tool" || /tool|discordhistory|discordstats|generateimage|inspect|fetch|search/i.test(event.name)) return "tool";
   if (/model|openrouter|chat|embed|image|completion/i.test(event.name)) return "model";
@@ -1058,12 +1078,30 @@ function shareableCurrentUrl() {
   return window.location.href;
 }
 
+function latencyBreakdown(snapshot: RunSnapshot): LatencyRow[] {
+  return snapshot.spans
+    .filter((span): span is LatencyRow => typeof span.durationMs === "number" && Number.isFinite(span.durationMs))
+    .sort((left, right) => right.durationMs - left.durationMs);
+}
+
+function latencyTotal(snapshot: RunSnapshot) {
+  if (typeof snapshot.run.durationMs === "number" && Number.isFinite(snapshot.run.durationMs) && snapshot.run.durationMs > 0) {
+    return snapshot.run.durationMs;
+  }
+  return snapshot.spans.reduce((total, span) => total + (span.durationMs ?? 0), 0);
+}
+
 function formatDuration(value: number | null | undefined) {
   if (value == null) return "live";
   const seconds = value / 1000;
   if (seconds < 60) return `${seconds.toFixed(3)}s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
+function formatPercent(value: number) {
+  if (!Number.isFinite(value)) return "0%";
+  return `${Math.round(value * 100)}%`;
 }
 
 function formatRelative(value: string) {
@@ -1074,6 +1112,18 @@ function formatRelative(value: string) {
   return `${Math.floor(ms / (24 * 60 * 60_000))}d`;
 }
 
+function eventsWithTiming(events: RunEvent[], startedAt: string) {
+  return events.map((event, index) => {
+    const previous = index > 0 ? events[index - 1] : null;
+    const gapMs = previous ? new Date(event.createdAt).getTime() - new Date(previous.createdAt).getTime() : null;
+    return {
+      event,
+      gapMs: gapMs != null && Number.isFinite(gapMs) && gapMs >= 0 ? gapMs : null,
+      offset: formatOffset(startedAt, event.createdAt)
+    };
+  });
+}
+
 function formatDate(value: string) {
   return new Date(value).toLocaleString();
 }
@@ -1082,6 +1132,10 @@ function formatOffset(startedAt: string, eventAt: string) {
   const offset = new Date(eventAt).getTime() - new Date(startedAt).getTime();
   if (!Number.isFinite(offset) || offset < 0) return "before start";
   return `+${formatDuration(offset)}`;
+}
+
+function formatSignedDuration(value: number) {
+  return `+${formatDuration(value)} since prior`;
 }
 
 function formatBytes(value: number) {

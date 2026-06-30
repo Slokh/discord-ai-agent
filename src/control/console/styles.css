@@ -1208,3 +1208,406 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+
+/* Minimal console theme. Keep color for state and selection only. */
+:root {
+  --page: #080808;
+  --pane: #0d0d0d;
+  --pane-2: #121212;
+  --pane-3: #1a1a1a;
+  --pane-hot: #171717;
+  --border: #2a2a2a;
+  --border-strong: #444;
+  --text: #f1f1f1;
+  --muted: #b5b5b5;
+  --faint: #777;
+  --accent: #f1f1f1;
+  --accent-strong: #fff;
+  --good: #83d18f;
+  --warn: #d8b45f;
+  --bad: #e98992;
+  --info: #a8b4cf;
+  --terminal: #070707;
+  --shadow: none;
+  --shadow-soft: none;
+}
+
+body,
+.run-console {
+  background: var(--page);
+}
+
+.run-sidebar,
+.run-header,
+.panel,
+.metric,
+.search-field,
+.terminal-search,
+.select-control,
+.toggle-row,
+.filter,
+.run-item,
+.meta-pill,
+[role="tablist"],
+[role="tab"][aria-selected="true"],
+.diagnostics p,
+.notice,
+.facts > div,
+.metadata-grid > div,
+.phase-item,
+.mini-controls select,
+.timeline-card,
+.terminal-source,
+.stream-toggle,
+.terminal-output,
+.artifact-content pre,
+.artifact-item,
+.call-item,
+.call-icon,
+.jump-panel,
+.jump-input-row,
+.jump-error {
+  background: var(--pane-2);
+  box-shadow: none;
+}
+
+.run-sidebar {
+  background: var(--pane);
+}
+
+.run-header,
+.panel {
+  background: var(--pane);
+}
+
+.run-header,
+.panel,
+[role="tablist"],
+.run-item,
+.metric,
+.search-field,
+.select-control,
+.toggle-row,
+.filter,
+.meta-pill,
+.timeline-card,
+.call-item,
+.artifact-item,
+.terminal-output,
+.artifact-content pre,
+.jump-panel {
+  border-color: var(--border);
+}
+
+.eyebrow,
+.panel-title svg,
+.jump-input-row svg {
+  color: var(--muted);
+}
+
+h2 {
+  font-size: clamp(24px, 3.2vw, 36px);
+}
+
+.filter:hover,
+.run-item:hover,
+.run-item.selected {
+  background: var(--pane-hot);
+  transform: none;
+}
+
+.filter.active,
+[role="tab"][aria-selected="true"],
+.toggle-row.active,
+.stream-toggle.active,
+.artifact-item.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--page);
+}
+
+.filter.active {
+  color: var(--page);
+}
+
+[role="tab"][aria-selected="true"] svg,
+.filter.active svg,
+.toggle-row.active small,
+.toggle-row.active span,
+.stream-toggle.active,
+.artifact-item.active small {
+  color: var(--page);
+}
+
+.metric.info,
+.metric.good {
+  border-color: var(--border);
+}
+
+.metric.info strong,
+.metric.good strong {
+  color: var(--text);
+}
+
+.metric.bad strong {
+  color: var(--bad);
+}
+
+.run-item.selected {
+  border-color: var(--accent);
+  background: var(--pane-2);
+}
+
+.run-item::before {
+  width: 2px;
+}
+
+.run-item.status-succeeded::before {
+  background: var(--good);
+}
+
+.run-item.status-failed::before,
+.run-item.status-cancelled::before {
+  background: var(--bad);
+}
+
+.run-item.status-running::before,
+.run-item.status-queued::before {
+  background: var(--info);
+}
+
+.run-item.status-no_changes::before {
+  background: var(--warn);
+}
+
+.latency-table {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.latency-row {
+  align-items: center;
+  background: var(--pane-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 96px minmax(160px, 240px);
+  min-width: 0;
+  padding: 10px;
+}
+
+.latency-head {
+  background: transparent;
+  border: 0;
+  color: var(--faint);
+  font-size: 11px;
+  padding-bottom: 2px;
+  padding-top: 0;
+  text-transform: uppercase;
+}
+
+.latency-step {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.latency-step strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.latency-step small,
+.latency-share span {
+  color: var(--faint);
+}
+
+.latency-share {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 44px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.latency-track {
+  background: var(--pane-3);
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.latency-bar {
+  background: var(--accent);
+  border-radius: inherit;
+  height: 100%;
+}
+
+.latency-bar.failed {
+  background: var(--accent);
+}
+
+.latency-bar.running,
+.latency-bar.queued {
+  background: var(--accent);
+}
+
+.signal-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.signal-item {
+  background: var(--pane-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.signal-item.error {
+  border-color: color-mix(in oklab, var(--bad) 58%, var(--border));
+}
+
+.signal-item.warn {
+  border-color: color-mix(in oklab, var(--warn) 58%, var(--border));
+}
+
+.signal-item span,
+.signal-item small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.timeline-dot {
+  background: var(--accent);
+  border: 0;
+  box-shadow: none;
+  height: 8px;
+  width: 8px;
+}
+
+.timeline-rail::after {
+  background: var(--border);
+}
+
+.terminal-output,
+.artifact-content pre {
+  color: #d9dee4;
+}
+
+.timeline-title {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.timeline-title > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.timeline-title > div:first-child strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeline-title > div:first-child span,
+.level-text {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.level-text.error {
+  color: var(--bad);
+}
+
+.level-text.warn {
+  color: var(--warn);
+}
+
+.time-stack {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+  min-width: max-content;
+  text-align: right;
+}
+
+.time-stack strong,
+.latency-row > strong,
+.metric strong,
+.run-item-bottom span:last-child,
+.meta-pill strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.time-stack small {
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.timeline-card,
+.timeline-event.error .timeline-card,
+.timeline-event.warn .timeline-card,
+.call-item,
+.call-item.error,
+.terminal-source,
+.stream-toggle,
+.stream-toggle.active,
+.terminal-output,
+.artifact-content pre,
+.artifact-item,
+.artifact-item.active,
+.call-icon,
+.call-icon.model,
+.call-item.error .call-icon {
+  background-image: none;
+}
+
+.call-badges {
+  align-items: end;
+  color: var(--faint);
+  display: grid;
+  font-size: 12px;
+  gap: 3px;
+  justify-items: end;
+  min-width: max-content;
+}
+
+.call-badges small,
+.call-badges span {
+  color: var(--faint);
+}
+
+.jump-overlay {
+  background: rgb(0 0 0 / 0.56);
+}
+
+.jump-panel {
+  border-color: var(--border-strong);
+}
+
+@media (max-width: 640px) {
+  .latency-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .latency-head {
+    display: none;
+  }
+
+  .latency-share {
+    grid-column: 1 / -1;
+  }
+}

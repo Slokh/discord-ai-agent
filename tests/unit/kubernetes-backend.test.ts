@@ -130,6 +130,34 @@ describe("KubernetesExecutionBackend", () => {
     );
   });
 
+  it("trims Kubernetes job names after truncating long task titles", async () => {
+    await withEnv(
+      {
+        OPENROUTER_API_KEY: "sk-test",
+        GITHUB_TOKEN: "github-token",
+        GITHUB_REPOSITORY: "example/discord-ai-agent",
+        TASK_SIGNING_SECRET: "task-secret",
+        KUBERNETES_NAMESPACE: "discord-ai-agent"
+      },
+      async () => {
+        const clients = fakeClients();
+        const backend = new KubernetesExecutionBackend(loadConfig(), clients);
+
+        await backend.start({
+          ...agentTask(),
+          taskId: "task-1521299407214084337",
+          title: "animated-emoji-a-loading-1521299407214084337-bef"
+        });
+
+        const job = vi.mocked(clients.batch.createNamespacedJob).mock.calls[0]?.[0].body;
+        const jobName = job?.metadata?.name;
+
+        expect(jobName).toBe("agent-task-animated-emoji-a-loading-1521299407214084337");
+        expect(jobName).toMatch(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/);
+      }
+    );
+  });
+
   it("treats Kubernetes 404 response shapes as gone", async () => {
     const clients = fakeClients({
       readNamespacedJob: vi.fn(async () => {

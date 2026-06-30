@@ -1625,6 +1625,72 @@ describe("agent router", () => {
       })
     );
   });
+
+  it("uses maxTokens 2000 for final synthesis call", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const sampleMessagesFromChannels = vi.fn(async () => [
+      agentSearchResult({
+        authorId: "tyler-id",
+        authorUsername: "taylorplays",
+        normalizedContent: "Moving in with girlfriend next week",
+        createdAt: new Date("2026-05-18T19:49:38.903Z"),
+        score: 42
+      })
+    ]);
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        sampleMessagesFromChannels,
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-1",
+                name: "summarizeDiscordHistory",
+                argumentsText: JSON.stringify({ question: "what has tyler been up to recently?", authorIds: ["tyler-id"] })
+              }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "",
+            model: "summary-model",
+            raw: {},
+            finishReason: "stop",
+            toolCalls: []
+          })
+          .mockResolvedValueOnce({
+            content: "Tyler is moving in with his girlfriend next week.",
+            model: "final-model",
+            raw: {},
+            finishReason: "length",
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what has tyler been up to recently?");
+
+    expect(response.content).toContain("Tyler is moving in with his girlfriend");
+    expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ maxTokens: 2000 })
+    );
+  });
+
 });
 
 function channelTopicCandidate(content: string, embedding: number[]) {

@@ -5,6 +5,9 @@ import { redactSensitiveText } from "../observability/redaction.js";
 
 const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
 const LARGE_ARTIFACT_RETENTION_DAYS = 14;
+const VECTOR_SEARCH_STATEMENT_TIMEOUT_MS = 8_000;
+const VECTOR_SEARCH_MAX_CANDIDATES = 1_000;
+const FILTERED_VECTOR_SEARCH_MAX_CANDIDATES = 2_000;
 
 export type PersistedAttachment = {
   id: string;
@@ -1301,60 +1304,73 @@ export class DiscordAiAgentRepository {
   }): Promise<SearchResult[]> {
     if (input.visibleChannelIds.length === 0 || input.embedding.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds, input.authorId);
-    const restrictiveFilterCount =
-      (authorIds.length > 0 ? 1 : 0) + (input.dateFrom ? 1 : 0) + (input.dateTo ? 1 : 0) + (input.visibleChannelIds.length <= 20 ? 1 : 0);
-    const candidateLimit = Math.min(Math.max(input.limit * (restrictiveFilterCount > 0 ? 500 : 50), restrictiveFilterCount > 0 ? 5000 : 500), 20_000);
-    const result = await this.pool.query(
-      `
-        WITH nearest AS MATERIALIZED (
-          SELECT
-            message_id,
-            embedding <=> $3::vector AS distance
-          FROM message_embeddings
-          ORDER BY embedding <=> $3::vector
-          LIMIT $8
-        )
-        SELECT
-          m.id AS message_id,
-          m.guild_id,
-          m.channel_id,
-          m.author_id,
-          u.username AS author_username,
-          m.content,
-          m.normalized_content,
-          m.created_at,
-          1 - nearest.distance AS score
-        FROM nearest
-        JOIN messages m ON m.id = nearest.message_id
-        JOIN discord_users u ON u.id = m.author_id
-        JOIN channels c ON c.id = m.channel_id
-        LEFT JOIN channels parent ON parent.id = c.parent_id
-        WHERE m.guild_id = $1
-          AND m.channel_id = ANY($2::text[])
-          AND m.deleted_at IS NULL
-          AND m.normalized_content <> ''
-          AND coalesce(u.is_bot, false) = false
-          AND c.is_excluded = false
-          AND coalesce(parent.is_excluded, false) = false
-          AND (cardinality($5::text[]) = 0 OR m.author_id = ANY($5::text[]))
-          AND ($6::timestamptz IS NULL OR m.created_at >= $6)
-          AND ($7::timestamptz IS NULL OR m.created_at <= $7)
-          AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
-        ORDER BY nearest.distance, m.created_at DESC
-        LIMIT $4
-      `,
-      [
-        input.guildId,
-        input.visibleChannelIds,
-        vectorLiteral(input.embedding),
-        input.limit,
-        authorIds,
-        input.dateFrom ?? null,
-        input.dateTo ?? null,
-        candidateLimit
-      ]
+    const hasResultFilters = authorIds.length > 0 || input.dateFrom != null || input.dateTo != null;
+    const candidateLimit = Math.min(
+      Math.max(input.limit * (hasResultFilters ? 100 : 30), hasResultFilters ? 500 : 250),
+      hasResultFilters ? FILTERED_VECTOR_SEARCH_MAX_CANDIDATES : VECTOR_SEARCH_MAX_CANDIDATES
     );
-    return result.rows.map(rowToSearchResult);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT set_config('statement_timeout', $1, true)", [`${VECTOR_SEARCH_STATEMENT_TIMEOUT_MS}ms`]);
+      const result = await client.query(
+        `
+          WITH nearest AS MATERIALIZED (
+            SELECT
+              message_id,
+              embedding <=> $3::vector AS distance
+            FROM message_embeddings
+            ORDER BY embedding <=> $3::vector
+            LIMIT $8
+          )
+          SELECT
+            m.id AS message_id,
+            m.guild_id,
+            m.channel_id,
+            m.author_id,
+            u.username AS author_username,
+            m.content,
+            m.normalized_content,
+            m.created_at,
+            1 - nearest.distance AS score
+          FROM nearest
+          JOIN messages m ON m.id = nearest.message_id
+          JOIN discord_users u ON u.id = m.author_id
+          JOIN channels c ON c.id = m.channel_id
+          LEFT JOIN channels parent ON parent.id = c.parent_id
+          WHERE m.guild_id = $1
+            AND m.channel_id = ANY($2::text[])
+            AND m.deleted_at IS NULL
+            AND m.normalized_content <> ''
+            AND coalesce(u.is_bot, false) = false
+            AND c.is_excluded = false
+            AND coalesce(parent.is_excluded, false) = false
+            AND (cardinality($5::text[]) = 0 OR m.author_id = ANY($5::text[]))
+            AND ($6::timestamptz IS NULL OR m.created_at >= $6)
+            AND ($7::timestamptz IS NULL OR m.created_at <= $7)
+            AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
+          ORDER BY nearest.distance, m.created_at DESC
+          LIMIT $4
+        `,
+        [
+          input.guildId,
+          input.visibleChannelIds,
+          vectorLiteral(input.embedding),
+          input.limit,
+          authorIds,
+          input.dateFrom ?? null,
+          input.dateTo ?? null,
+          candidateLimit
+        ]
+      );
+      await client.query("COMMIT");
+      return result.rows.map(rowToSearchResult);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async recentMessages(input: { guildId: string; channelId: string; limit: number; includeBots?: boolean }): Promise<SearchResult[]> {

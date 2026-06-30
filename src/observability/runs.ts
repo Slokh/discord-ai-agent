@@ -90,15 +90,54 @@ export type RunSnapshot = {
   generatedAt: Date;
 };
 
-export async function listRunSummaries(repo: DiscordAiAgentRepository, input: { limit?: number } = {}): Promise<RunSummary[]> {
+export type RunResolution = {
+  run: RunSummary;
+  messageId: string;
+};
+
+export async function listRunSummaries(repo: DiscordAiAgentRepository, input: { limit?: number; includeEmbeddings?: boolean } = {}): Promise<RunSummary[]> {
   const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
-  const [processRuns, tasks] = await Promise.all([repo.listProcessRuns({ limit }), repo.listRecentAgentTasks(limit)]);
+  const [processRuns, tasks] = await Promise.all([
+    repo.listProcessRuns({ limit, includeEmbeddings: input.includeEmbeddings ?? true }),
+    repo.listRecentAgentTasks(limit)
+  ]);
   const byId = new Map<string, RunSummary>();
   for (const run of processRuns) byId.set(run.runId, summaryFromProcessRun(run));
   for (const task of tasks) {
     if (!byId.has(task.taskId)) byId.set(task.taskId, summaryFromTask(task));
   }
   return [...byId.values()].sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime()).slice(0, limit);
+}
+
+export async function resolveRunReference(repo: DiscordAiAgentRepository, input: string): Promise<RunResolution | undefined> {
+  const messageId = extractDiscordMessageId(input);
+  if (!messageId) return undefined;
+
+  const processRun = await repo.findProcessRunByDiscordMessageId(messageId);
+  if (processRun) return { run: summaryFromProcessRun(processRun), messageId };
+
+  const task = await repo.findAgentTaskByDiscordMessageId(messageId);
+  if (task) return { run: summaryFromTask(task), messageId };
+
+  return undefined;
+}
+
+export function extractDiscordMessageId(input: string): string | null {
+  const value = input.trim();
+  if (/^\d{15,25}$/.test(value)) return value;
+
+  try {
+    const url = new URL(value);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const channelsIndex = parts.indexOf("channels");
+    const messageId = channelsIndex >= 0 ? parts[channelsIndex + 3] : parts.at(-1);
+    if (messageId && /^\d{15,25}$/.test(messageId)) return messageId;
+  } catch {
+    // Fall through to a permissive pasted-text scan below.
+  }
+
+  const matches = value.match(/\d{15,25}/g);
+  return matches?.at(-1) ?? null;
 }
 
 export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: string): Promise<RunSnapshot | undefined> {
@@ -454,9 +493,8 @@ function durationBetween(start: Date | null | undefined, end: Date | null | unde
 
 function formatDuration(value: number | null | undefined) {
   if (value == null) return "unknown";
-  if (value < 1000) return `${value}ms`;
   const seconds = value / 1000;
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  if (seconds < 60) return `${seconds.toFixed(3)}s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${Math.round(seconds % 60)}s`;
 }

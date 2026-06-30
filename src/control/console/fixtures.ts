@@ -126,7 +126,7 @@ export const fixtureSnapshots: RunSnapshot[] = [
     events: [event("embedding.message batch", "info", "Running embedding.message batch", 1, "process")],
     artifacts: [artifact("artifact-embedding", "embedding_summary", "Embedding internals", 741)],
     terminal: terminal([]),
-    diagnostics: ["Most time was spent in OpenRouter embed batch 2: 8.9s.", "Currently active at openrouter.embed.", "Embedding backlog at run time: 18200."],
+    diagnostics: ["Most time was spent in OpenRouter embed batch 2: 8.900s.", "Currently active at openrouter.embed.", "Embedding backlog at run time: 18200."],
     raw: {},
     generatedAt: now.toISOString()
   }

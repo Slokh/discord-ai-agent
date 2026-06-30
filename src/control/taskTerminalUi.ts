@@ -1203,10 +1203,10 @@ function nullish(value, fallback) {
 }
 
 function formatDuration(ms) {
-  if (!Number.isFinite(Number(ms))) return "unknown";
-  if (ms < 1000) return ms + "ms";
-  if (ms < 60000) return (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + "s";
-  return Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s";
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return "unknown";
+  if (value < 60000) return (value / 1000).toFixed(3) + "s";
+  return Math.floor(value / 60000) + "m " + Math.round((value % 60000) / 1000) + "s";
 }
 
 function formatAge(value) {

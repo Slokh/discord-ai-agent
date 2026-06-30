@@ -42,6 +42,9 @@ async function main() {
       github: {
         repository: config.github.repository,
         baseBranch: config.github.baseBranch
+      },
+      overlays: {
+        dirs: config.overlays.dirs
       }
     },
     "Starting Discord AI Agent"

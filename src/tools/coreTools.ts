@@ -1,4 +1,5 @@
 import { buildHistoryRetrievalQuery, searchDiscordHistory, formatSearchResults } from "../memory/search.js";
+import { describeOverlays } from "../overlays/loader.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
@@ -832,7 +833,7 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
   const request = instruction;
   if (!instruction) return "I need a durable instruction before I can save a skill.";
 
-  const skills = await loadSkills({ repo: ctx.repo });
+  const skills = await loadSkills({ repo: ctx.repo, overlayDirs: overlayDirsFromConfig(ctx) });
   const existingSkill = skills.find((skill) => skill.name === skillName);
   const existingSkills = renderSkillsForPrompt(skills, 4000);
 
@@ -1330,7 +1331,7 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
 }
 
 export async function reportStatus(ctx: ToolContext): Promise<string> {
-  const [health, crawl, embeddingBacklog, blockedUsers] = await Promise.all([
+  const [health, crawl, embeddingBacklog, blockedUsers, overlays] = await Promise.all([
     ctx.repo.health(),
     ctx.repo.getCrawlStatus(ctx.guildId),
     ctx.repo.embeddingBacklog({
@@ -1338,7 +1339,8 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
       model: ctx.config.openRouter.embeddingModel,
       botUserId: ctx.config.discord.clientId
     }),
-    ctx.repo.interactionBlockCount(ctx.guildId)
+    ctx.repo.interactionBlockCount(ctx.guildId),
+    describeOverlays(overlayDirsFromConfig(ctx))
   ]);
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -1352,6 +1354,7 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
       embeddingBacklog,
       blockedUsers,
       toolCalls: health.toolCalls,
+      overlays,
       crawl
     })
   });
@@ -1362,10 +1365,25 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
     `- Embeddings pending/backfill: ${embeddingBacklog}`,
     `- Conversation sessions: ${Number(health.conversationSessions ?? 0)}`,
     `- Interaction-blocked users: ${blockedUsers}`,
+    `- Filesystem overlays: ${formatOverlayStatus(overlays)}`,
     `- Tool calls logged: ${health.toolCalls}`,
     `- Estimated model cost logged: $${Number(health.estimatedCostUsd ?? 0).toFixed(4)}`,
     `- Crawl: ${crawl.map((row) => `${row.status}=${row.channels} channels/${row.messages} messages`).join(", ") || "not started"}`
   ].join("\n");
+}
+
+function formatOverlayStatus(overlays: Awaited<ReturnType<typeof describeOverlays>>) {
+  if (overlays.length === 0) return "none";
+  return overlays
+    .map((overlay) => {
+      const state = overlay.exists ? `${overlay.systemPrompt ? "prompt" : "no prompt"}, ${overlay.skillCount} skills` : "missing";
+      return `${overlay.root} (${state})`;
+    })
+    .join("; ");
+}
+
+function overlayDirsFromConfig(ctx: ToolContext): string[] {
+  return ctx.config.overlays?.dirs ?? [];
 }
 
 export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: string; limit?: number } = {}): Promise<string> {

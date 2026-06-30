@@ -52,6 +52,7 @@ Postgres with `pgvector` is the source of truth for Discord history, embeddings,
 - Image generation
 - OpenRouter-hosted web search, web fetch, and datetime tools
 - Private DB-backed skills
+- Private filesystem overlays for deployment-local prompts and skills
 - Code-update PRs through isolated Kubernetes sandbox tasks
 - Structured logs and trace/task event inspection
 
@@ -203,6 +204,7 @@ Common optional settings:
 | `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
+| `OVERLAY_DIRS` | unset | Optional colon-separated private overlay directories; later directories override earlier overlay skills |
 | `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
 | `SANDBOX_CACHE_DIR` | `/var/cache/discord-ai-agent` | Sandbox repo/npm/dependency cache path |
 | `SANDBOX_CACHE_PVC_NAME` | unset | Optional Kubernetes PVC mounted at `SANDBOX_CACHE_DIR` |
@@ -228,6 +230,29 @@ npm run skills -- import .discord-ai-agent/skills-export.json
 npm run skills -- disable movie-night
 npm run skills -- delete movie-night
 ```
+
+## Private Overlays
+
+Use a private overlay when you want deployment-local behavior without committing server-specific details to a public fork. Set `OVERLAY_DIRS` to one or more directories, separated by your platform path delimiter (`:` on Linux/macOS). Directories are loaded in order.
+
+Supported overlay layout:
+
+```text
+my-discord-overlay/
+  services/sandbox/SYSTEM_PROMPT.md
+  skills/simple-skill.md
+  .agents/skills/structured-skill/SKILL.md
+```
+
+`services/sandbox/SYSTEM_PROMPT.md` is appended to the agent prompt as private deployment instructions. Skills can use either the simple `skills/*.md` format or the Centaur-style `.agents/skills/<name>/SKILL.md` format.
+
+Skill precedence is:
+
+1. public repo skills in `skills/`
+2. filesystem overlay skills from `OVERLAY_DIRS`
+3. live database skills created by `@ai learn this...`
+
+This keeps the open-source runtime generic while your private overlay owns server aliases, server tone, recurring bits, and any private instructions.
 
 ## Security Model
 

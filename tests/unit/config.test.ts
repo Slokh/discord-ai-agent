@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import path from "node:path";
 import { assertExecutionConfig, assertOpenRouterConfig, loadConfig } from "../../src/config/env.js";
 
 describe("config", () => {
@@ -10,6 +11,7 @@ describe("config", () => {
         "BOT_NAME",
         "RUN_MIGRATIONS",
         "GITHUB_REPOSITORY",
+        "OVERLAY_DIRS",
         "INTERNAL_API_HOST",
         "INTERNAL_API_PORT",
         "CONTROL_PLANE_INTERNAL_URL",
@@ -28,6 +30,7 @@ describe("config", () => {
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
         expect(config.github.repository).toBe("owner/repo");
+        expect(config.overlays.dirs).toEqual([]);
         expect(config.internalApi.host).toBe("0.0.0.0");
         expect(config.internalApi.port).toBe(8080);
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
@@ -59,6 +62,12 @@ describe("config", () => {
   it("allows configuring the Discord response timeout", () => {
     withEnv({ DISCORD_AGENT_RESPONSE_TIMEOUT_MS: "900000" }, () => {
       expect(loadConfig().discordAgentResponseTimeoutMs).toBe(900_000);
+    });
+  });
+
+  it("parses ordered private overlay directories", () => {
+    withEnv({ OVERLAY_DIRS: ["private-overlay", "private-overlay", "nested/overlay"].join(path.delimiter) }, () => {
+      expect(loadConfig().overlays.dirs).toEqual([path.resolve("private-overlay"), path.resolve("nested/overlay")]);
     });
   });
 

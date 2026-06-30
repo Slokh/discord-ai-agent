@@ -30,6 +30,7 @@ import {
 import type { ChatMessage } from "../models/openrouter.js";
 import type { ConversationMessage, ServerOverlay } from "../db/repositories.js";
 import type { AgentFile, AgentResponse, DiscordReplyContext, ToolContext } from "../tools/types.js";
+import { loadOverlaySystemPrompts, type LoadedOverlayPrompt } from "../overlays/loader.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { openRouterServerToolDefinitionsForModel, toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
@@ -72,9 +73,11 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
 
-  const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
+  const overlayDirs = overlayDirsFromConfig(ctx);
+  const overlayPrompts = await loadOverlaySystemPrompts(overlayDirs);
+  const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo, overlayDirs }));
   const serverOverlay = await loadServerOverlay(ctx);
-  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay);
+  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay, overlayPrompts);
   const files: AgentFile[] = [];
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
@@ -94,6 +97,8 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       hasReplyContext: Boolean(ctx.replyContext),
       replyContextMessageId: ctx.replyContext?.messageId,
       hasServerOverlay: Boolean(serverOverlay?.enabled && serverOverlay.systemPrompt.trim()),
+      overlayPromptCount: overlayPrompts.length,
+      overlayDirCount: overlayDirs.length,
       visibleChannelCount: ctx.visibleChannelIds.length,
       mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0
@@ -108,6 +113,8 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       hasReplyContext: Boolean(ctx.replyContext),
       replyContextMessageId: ctx.replyContext?.messageId,
       hasServerOverlay: Boolean(serverOverlay?.enabled && serverOverlay.systemPrompt.trim()),
+      overlayPromptCount: overlayPrompts.length,
+      overlayDirCount: overlayDirs.length,
       visibleChannelCount: ctx.visibleChannelIds.length,
       mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0
@@ -1247,7 +1254,8 @@ function chatMessages(
   skills: string,
   sessionMessages: ConversationMessage[] = [],
   replyContext?: DiscordReplyContext,
-  serverOverlay?: ServerOverlay
+  serverOverlay?: ServerOverlay,
+  overlayPrompts: LoadedOverlayPrompt[] = []
 ): ChatMessage[] {
   return [
     {
@@ -1284,11 +1292,25 @@ function chatMessages(
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
+    ...fileSystemOverlayMessagesForPrompt(overlayPrompts),
     ...serverOverlayMessagesForPrompt(serverOverlay),
     ...sessionMessagesForPrompt(sessionMessages),
     ...replyContextMessagesForPrompt(replyContext),
     { role: "user" as const, content: text }
   ];
+}
+
+function fileSystemOverlayMessagesForPrompt(overlayPrompts: LoadedOverlayPrompt[]): ChatMessage[] {
+  return overlayPrompts.map((overlay) => ({
+    role: "system",
+    content:
+      "Private filesystem overlay instructions follow. They are deployment-local configuration, not public repo defaults.\n" +
+      overlay.content
+  }));
+}
+
+function overlayDirsFromConfig(ctx: ToolContext): string[] {
+  return ctx.config.overlays?.dirs ?? [];
 }
 
 async function loadServerOverlay(ctx: ToolContext): Promise<ServerOverlay | undefined> {

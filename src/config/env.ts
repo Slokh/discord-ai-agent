@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { z } from "zod";
 import { parseGitHubRepository } from "../github/repository.js";
 
@@ -31,6 +32,21 @@ function defaultLogLevel(nodeEnv = process.env.NODE_ENV) {
   return "debug";
 }
 
+function parsePathList(value: string | undefined) {
+  if (!value) return [];
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const rawDir of value.split(path.delimiter)) {
+    const dir = rawDir.trim();
+    if (!dir) continue;
+    const resolved = path.resolve(dir);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    dirs.push(resolved);
+  }
+  return dirs;
+}
+
 const defaults = {
   nodeEnv: "development",
   logLevel: defaultLogLevel(),
@@ -52,6 +68,7 @@ const defaults = {
   githubAppId: "",
   githubAppPrivateKey: "",
   githubAppInstallationId: "",
+  overlayDirs: [] as string[],
   internalApiHost: "0.0.0.0",
   internalApiPort: 8080,
   controlPlaneInternalUrl: "http://discord-ai-agent-api:8080",
@@ -106,6 +123,7 @@ const envSchema = z.object({
   GITHUB_APP_ID: z.string().default(defaults.githubAppId),
   GITHUB_APP_PRIVATE_KEY: z.string().default(defaults.githubAppPrivateKey),
   GITHUB_APP_INSTALLATION_ID: z.string().default(defaults.githubAppInstallationId),
+  OVERLAY_DIRS: z.string().optional(),
   INTERNAL_API_HOST: z.string().default(defaults.internalApiHost),
   INTERNAL_API_PORT: z.coerce.number().int().positive().default(defaults.internalApiPort),
   CONTROL_PLANE_INTERNAL_URL: z.string().url().default(defaults.controlPlaneInternalUrl),
@@ -177,6 +195,9 @@ export function loadConfig() {
       appId: parsed.data.GITHUB_APP_ID,
       appPrivateKey: parsed.data.GITHUB_APP_PRIVATE_KEY,
       appInstallationId: parsed.data.GITHUB_APP_INSTALLATION_ID
+    },
+    overlays: {
+      dirs: parsePathList(parsed.data.OVERLAY_DIRS)
     },
     internalApi: {
       host: parsed.data.INTERNAL_API_HOST,

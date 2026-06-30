@@ -3,6 +3,14 @@ import regen from "regen-ui/vite";
 import { defineConfig } from "vite";
 
 const apiTarget = process.env.CONSOLE_API_TARGET || "http://localhost:8080";
+const apiAuthHeader = process.env.CONSOLE_API_AUTH_PASSWORD
+  ? `Basic ${Buffer.from(`admin:${process.env.CONSOLE_API_AUTH_PASSWORD}`).toString("base64")}`
+  : process.env.CONSOLE_API_AUTH_HEADER;
+const apiProxy = {
+  target: apiTarget,
+  changeOrigin: true,
+  headers: apiAuthHeader ? { Authorization: apiAuthHeader } : undefined
+};
 
 export default defineConfig({
   root: "src/control/console",
@@ -15,8 +23,8 @@ export default defineConfig({
     port: 5174,
     strictPort: false,
     proxy: {
-      "/api": apiTarget,
-      "/logout": apiTarget
+      "/api": apiProxy,
+      "/logout": apiProxy
     }
   },
   build: {

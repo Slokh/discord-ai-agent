@@ -300,6 +300,7 @@ function kubernetesName(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 56);
+    .slice(0, 56)
+    .replace(/^-+|-+$/g, "");
   return normalized || "agent-task";
 }

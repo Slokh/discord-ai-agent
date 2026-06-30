@@ -201,9 +201,9 @@ export function App() {
         </header>
 
         <section className="summary-strip" aria-label="Run summary">
-          <Metric label="Active" value={summary.active} />
+          <Metric label="Active" value={summary.active} tone={summary.active > 0 ? "info" : "normal"} />
           <Metric label="Failed" value={summary.failed} tone={summary.failed > 0 ? "bad" : "normal"} />
-          <Metric label="Code" value={summary.codegen} />
+          <Metric label="Code" value={summary.codegen} tone={summary.codegen > 0 ? "good" : "normal"} />
         </section>
 
         <label className="search-field">
@@ -685,7 +685,7 @@ function Raw({ snapshot }: { snapshot: RunSnapshot }) {
 
 function RunListItem({ run, selected, onSelect }: { run: RunSummary; selected: boolean; onSelect: () => void }) {
   return (
-    <button className={selected ? "run-item selected" : "run-item"} onClick={onSelect} type="button">
+    <button className={`run-item status-${run.status} kind-${run.kind}${selected ? " selected" : ""}`} onClick={onSelect} type="button">
       <div className="run-item-top">
         <StatusTag status={run.status} />
         <span>{run.kind}</span>
@@ -710,7 +710,7 @@ function StatusTag({ status }: { status: RunStatus }) {
   );
 }
 
-function Metric({ label, value, tone = "normal" }: { label: string; value: string | number; tone?: "normal" | "bad" }) {
+function Metric({ label, value, tone = "normal" }: { label: string; value: string | number; tone?: "normal" | "bad" | "good" | "info" }) {
   return (
     <div className={`metric ${tone}`}>
       <span>{label}</span>

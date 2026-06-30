@@ -90,9 +90,12 @@ export type RunSnapshot = {
   generatedAt: Date;
 };
 
-export async function listRunSummaries(repo: DiscordAiAgentRepository, input: { limit?: number } = {}): Promise<RunSummary[]> {
+export async function listRunSummaries(repo: DiscordAiAgentRepository, input: { limit?: number; includeEmbeddings?: boolean } = {}): Promise<RunSummary[]> {
   const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
-  const [processRuns, tasks] = await Promise.all([repo.listProcessRuns({ limit }), repo.listRecentAgentTasks(limit)]);
+  const [processRuns, tasks] = await Promise.all([
+    repo.listProcessRuns({ limit, includeEmbeddings: input.includeEmbeddings ?? true }),
+    repo.listRecentAgentTasks(limit)
+  ]);
   const byId = new Map<string, RunSummary>();
   for (const run of processRuns) byId.set(run.runId, summaryFromProcessRun(run));
   for (const task of tasks) {

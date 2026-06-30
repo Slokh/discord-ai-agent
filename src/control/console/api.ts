@@ -3,9 +3,13 @@ import type { RunSnapshot, RunSummary } from "./types.js";
 
 const useFixtures = import.meta.env.MODE === "fixture";
 
-export async function fetchRuns(): Promise<RunSummary[]> {
-  if (useFixtures) return fixtureRuns;
-  const response = await fetch("/api/runs?limit=200", { credentials: "include" });
+export async function fetchRuns(input: { includeEmbeddings?: boolean } = {}): Promise<RunSummary[]> {
+  if (useFixtures) return input.includeEmbeddings ? fixtureRuns : fixtureRuns.filter((run) => run.kind !== "embedding");
+  const params = new URLSearchParams({
+    limit: "200",
+    includeEmbeddings: input.includeEmbeddings ? "1" : "0"
+  });
+  const response = await fetch(`/api/runs?${params}`, { credentials: "include" });
   if (!response.ok) throw new Error(`Failed to load runs (${response.status})`);
   const body = (await response.json()) as { runs: RunSummary[] };
   return body.runs;

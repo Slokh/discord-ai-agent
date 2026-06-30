@@ -44,6 +44,23 @@ describe("internal API run endpoints", () => {
     await reader.cancel();
     expect(Buffer.from(chunk.value ?? new Uint8Array()).toString("utf8")).toContain("event: snapshot");
   });
+
+  it("excludes embedding runs from the list unless requested", async () => {
+    const listInputs: Array<{ includeEmbeddings?: boolean }> = [];
+    runtime = await startInternalApi({
+      config: testConfig(),
+      repo: fakeRepo({ onListProcessRuns: (input) => listInputs.push({ includeEmbeddings: input.includeEmbeddings }) })
+    });
+    const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
+
+    const defaultList = await fetch(`${runtime.url}/api/runs`, { headers: auth });
+    expect(defaultList.status).toBe(200);
+    expect(listInputs.at(-1)).toEqual({ includeEmbeddings: false });
+
+    const expandedList = await fetch(`${runtime.url}/api/runs?includeEmbeddings=1`, { headers: auth });
+    expect(expandedList.status).toBe(200);
+    expect(listInputs.at(-1)).toEqual({ includeEmbeddings: true });
+  });
 });
 
 function testConfig(): AppConfig {
@@ -56,7 +73,7 @@ function testConfig(): AppConfig {
   };
 }
 
-function fakeRepo() {
+function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: boolean }) => void } = {}) {
   const run: ProcessRunRecord = {
     runId: "run-1",
     traceId: "trace-1",
@@ -106,7 +123,10 @@ function fakeRepo() {
   };
 
   return {
-    listProcessRuns: async () => [run],
+    listProcessRuns: async (input: { includeEmbeddings?: boolean }) => {
+      options.onListProcessRuns?.(input);
+      return [run];
+    },
     listRecentAgentTasks: async () => [],
     getProcessRun: async (runId: string) => (runId === "run-1" ? run : undefined),
     getAgentTask: async () => undefined,

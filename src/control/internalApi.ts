@@ -111,8 +111,9 @@ async function handleRequest(input: {
   if (method === "GET" && url.pathname === "/api/runs") {
     if (!authorizedUi(input.config, input.request, input.response, url)) return;
     const limit = parseLimit(url.searchParams.get("limit"), 100, 200);
+    const includeEmbeddings = parseBoolean(url.searchParams.get("includeEmbeddings"));
     sendJson(input.response, 200, {
-      runs: await listRunSummaries(input.repo, { limit }),
+      runs: await listRunSummaries(input.repo, { limit, includeEmbeddings }),
       generatedAt: new Date().toISOString()
     });
     return;
@@ -506,6 +507,10 @@ function parseLimit(value: string | null, fallback: number, max: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(max, Math.trunc(parsed)));
+}
+
+function parseBoolean(value: string | null) {
+  return /^(1|true|yes)$/i.test(value ?? "");
 }
 
 function sendJson(response: http.ServerResponse, status: number, body: Record<string, unknown>) {

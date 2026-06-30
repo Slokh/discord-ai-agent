@@ -3465,7 +3465,9 @@ export class DiscordAiAgentRepository {
     return result.rowCount ?? 0;
   }
 
-  async listProcessRuns(input: { limit?: number; kind?: ProcessRunKind | null; status?: ProcessRunStatus | null } = {}): Promise<ProcessRunRecord[]> {
+  async listProcessRuns(
+    input: { limit?: number; kind?: ProcessRunKind | null; status?: ProcessRunStatus | null; includeEmbeddings?: boolean } = {}
+  ): Promise<ProcessRunRecord[]> {
     const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
     const result = await this.pool.query(
       `
@@ -3476,10 +3478,11 @@ export class DiscordAiAgentRepository {
         FROM process_runs
         WHERE ($2::text IS NULL OR kind = $2)
           AND ($3::text IS NULL OR status = $3)
+          AND ($4::boolean OR kind <> 'embedding')
         ORDER BY updated_at DESC, started_at DESC
         LIMIT $1
       `,
-      [limit, input.kind ?? null, input.status ?? null]
+      [limit, input.kind ?? null, input.status ?? null, input.includeEmbeddings ?? true]
     );
     return result.rows.map(rowToProcessRun);
   }

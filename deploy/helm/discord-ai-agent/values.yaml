@@ -17,7 +17,7 @@ sandbox:
   taskTimeoutSeconds: 1800
   ttlSecondsAfterFinished: 3600
   cache:
-    enabled: true
+    enabled: false
     mountPath: /var/cache/discord-ai-agent
     size: 20Gi
     accessModes:

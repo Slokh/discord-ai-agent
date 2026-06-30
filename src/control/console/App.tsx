@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ClipboardEvent, ReactNode } from "react";
 import {
   Activity,
   AlertCircle,
@@ -19,7 +19,7 @@ import {
   XCircle
 } from "lucide-react";
 import { Button, Copy, Status, Tabs, Tag } from "regen-ui";
-import { fetchArtifact, fetchRuns, fetchRunSnapshot, subscribeToRun } from "./api.js";
+import { fetchArtifact, fetchRuns, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
 import type { EventLevel, RunArtifact, RunEvent, RunKind, RunSnapshot, RunStatus, RunSummary, TerminalEntry } from "./types.js";
 
 type StatusFilter = "all" | "active" | "done" | "attention";
@@ -69,6 +69,11 @@ export function App() {
   const [tab, setTab] = useState<DetailTab>(() => readConsoleUrlState().tab);
   const [includeEmbeddings, setIncludeEmbeddings] = useState(() => readConsoleUrlState().includeEmbeddings);
   const [terminalQuery, setTerminalQuery] = useState("");
+  const [jumpOpen, setJumpOpen] = useState(false);
+  const [jumpValue, setJumpValue] = useState("");
+  const [jumpError, setJumpError] = useState<string | null>(null);
+  const [jumpResolving, setJumpResolving] = useState(false);
+  const jumpInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentUrlState = useCallback(
     (): ConsoleUrlState => ({ runId: selectedRunId, tab, filter, kind, query, includeEmbeddings }),
@@ -120,6 +125,28 @@ export function App() {
     const interval = setInterval(() => void loadRuns(), 10_000);
     return () => clearInterval(interval);
   }, [loadRuns]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && key === "k") {
+        event.preventDefault();
+        setJumpOpen(true);
+        setJumpValue("");
+        setJumpError(null);
+      }
+      if (event.key === "Escape") {
+        setJumpOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (!jumpOpen) return;
+    window.setTimeout(() => jumpInputRef.current?.focus(), 0);
+  }, [jumpOpen]);
 
   useEffect(() => {
     if (!selectedRunId) {
@@ -187,17 +214,63 @@ export function App() {
     });
   }
 
+  async function jumpToRun(rawQuery = jumpValue) {
+    const queryValue = rawQuery.trim();
+    if (!queryValue || jumpResolving) return;
+    setJumpResolving(true);
+    setJumpError(null);
+    try {
+      const resolution = await resolveRunReference(queryValue);
+      setRuns((current) => {
+        if (current.some((run) => run.runId === resolution.run.runId)) return current;
+        return [resolution.run, ...current];
+      });
+      updateConsoleState({
+        runId: resolution.run.runId,
+        includeEmbeddings: includeEmbeddings || resolution.run.kind === "embedding"
+      });
+      setJumpOpen(false);
+      setJumpValue("");
+    } catch (resolveError) {
+      setJumpError(resolveError instanceof Error ? resolveError.message : String(resolveError));
+    } finally {
+      setJumpResolving(false);
+    }
+  }
+
+  function pasteJump(event: ClipboardEvent<HTMLInputElement>) {
+    const pasted = event.clipboardData.getData("text");
+    if (!pasted.trim()) return;
+    event.preventDefault();
+    setJumpValue(pasted);
+    void jumpToRun(pasted);
+  }
+
   return (
-    <main className="run-console">
-      <aside className="run-sidebar">
+    <>
+      <main className="run-console">
+        <aside className="run-sidebar">
         <header className="sidebar-header">
           <div>
             <p className="eyebrow">Agent Ops</p>
             <h1>Runs</h1>
           </div>
-          <Button.Icon title="Refresh runs" variant="surface" onClick={() => void loadRuns()}>
-            <RefreshCw />
-          </Button.Icon>
+          <div className="sidebar-actions">
+            <Button.Icon
+              title="Jump to run (Cmd+K)"
+              variant="surface"
+              onClick={() => {
+                setJumpOpen(true);
+                setJumpValue("");
+                setJumpError(null);
+              }}
+            >
+              <Search />
+            </Button.Icon>
+            <Button.Icon title="Refresh runs" variant="surface" onClick={() => void loadRuns()}>
+              <RefreshCw />
+            </Button.Icon>
+          </div>
         </header>
 
         <section className="summary-strip" aria-label="Run summary">
@@ -250,9 +323,9 @@ export function App() {
             filteredRuns.map((run) => <RunListItem key={run.runId} run={run} selected={run.runId === selectedRunId} onSelect={() => selectRun(run.runId)} />)
           )}
         </section>
-      </aside>
+        </aside>
 
-      <section className="run-workspace">
+        <section className="run-workspace">
         {error && (
           <div className="notice bad">
             <AlertCircle />
@@ -279,8 +352,24 @@ export function App() {
             )}
           </>
         )}
-      </section>
-    </main>
+        </section>
+      </main>
+      {jumpOpen && (
+        <RunJumpPalette
+          value={jumpValue}
+          resolving={jumpResolving}
+          error={jumpError}
+          inputRef={jumpInputRef}
+          onChange={(value) => {
+            setJumpValue(value);
+            setJumpError(null);
+          }}
+          onClose={() => setJumpOpen(false)}
+          onPaste={pasteJump}
+          onSubmit={() => void jumpToRun()}
+        />
+      )}
+    </>
   );
 }
 
@@ -319,6 +408,58 @@ function RunHeader({ run, loading }: { run: RunSummary; loading: boolean }) {
         )}
       </div>
     </header>
+  );
+}
+
+function RunJumpPalette({
+  value,
+  resolving,
+  error,
+  inputRef,
+  onChange,
+  onClose,
+  onPaste,
+  onSubmit
+}: {
+  value: string;
+  resolving: boolean;
+  error: string | null;
+  inputRef: { current: HTMLInputElement | null };
+  onChange: (value: string) => void;
+  onClose: () => void;
+  onPaste: (event: ClipboardEvent<HTMLInputElement>) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="jump-overlay" role="presentation" onMouseDown={onClose}>
+      <section className="jump-panel" role="dialog" aria-modal="true" aria-label="Jump to run" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="jump-input-row">
+          <Search />
+          <input
+            ref={inputRef}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onPaste={onPaste}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onSubmit();
+              if (event.key === "Escape") onClose();
+            }}
+            placeholder="Paste Discord message link or message id"
+          />
+          {resolving ? <Status type="loading" /> : <kbd>Enter</kbd>}
+        </div>
+        <div className="jump-help">
+          <span>Paste a Discord `/channels/.../.../...` link or raw message id.</span>
+          <kbd>Esc</kbd>
+        </div>
+        {error && (
+          <div className="jump-error">
+            <AlertCircle />
+            <span>{error}</span>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 

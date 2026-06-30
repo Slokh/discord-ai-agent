@@ -25,6 +25,17 @@ describe("internal API run endpoints", () => {
     expect(list.status).toBe(200);
     await expect(list.json()).resolves.toEqual(expect.objectContaining({ runs: [expect.objectContaining({ runId: "run-1" })] }));
 
+    const resolved = await fetch(
+      `${runtime.url}/api/runs/resolve?query=${encodeURIComponent("https://discord.com/channels/111111111111111111/222222222222222222/1521541635580756031")}`,
+      {
+        headers: auth
+      }
+    );
+    expect(resolved.status).toBe(200);
+    await expect(resolved.json()).resolves.toEqual(
+      expect.objectContaining({ messageId: "1521541635580756031", run: expect.objectContaining({ runId: "run-1" }) })
+    );
+
     const detail = await fetch(`${runtime.url}/api/runs/run-1`, { headers: auth });
     expect(detail.status).toBe(200);
     await expect(detail.json()).resolves.toEqual(expect.objectContaining({ run: expect.objectContaining({ runId: "run-1" }) }));
@@ -84,7 +95,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     guildId: null,
     channelId: null,
     userId: null,
-    messageId: null,
+    messageId: "1521541635580756031",
     requester: "test",
     source: "test",
     metadata: {},
@@ -127,6 +138,8 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
       options.onListProcessRuns?.(input);
       return [run];
     },
+    findProcessRunByDiscordMessageId: async (messageId: string) => (messageId === "1521541635580756031" ? run : undefined),
+    findAgentTaskByDiscordMessageId: async () => undefined,
     listRecentAgentTasks: async () => [],
     getProcessRun: async (runId: string) => (runId === "run-1" ? run : undefined),
     getAgentTask: async () => undefined,

@@ -6,7 +6,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
 import { verifyTaskBearerToken } from "../execution/token.js";
 import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execution/types.js";
-import { getRunSnapshot, listRunSummaries } from "../observability/runs.js";
+import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../observability/runs.js";
 import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
@@ -116,6 +116,21 @@ async function handleRequest(input: {
       runs: await listRunSummaries(input.repo, { limit, includeEmbeddings }),
       generatedAt: new Date().toISOString()
     });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/runs/resolve") {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const query = url.searchParams.get("query") ?? url.searchParams.get("messageId") ?? "";
+    const resolution = await resolveRunReference(input.repo, query);
+    if (!resolution) {
+      sendJson(input.response, 404, { error: "run_not_found" });
+      return;
+    }
+    sendJson(input.response, 200, {
+      ...resolution,
+      generatedAt: new Date().toISOString()
+    } as unknown as Record<string, unknown>);
     return;
   }
 

@@ -16,9 +16,19 @@ describe("internal API UI authorization", () => {
     expect(verifyUiAuthorization({ password: "secret-password", authorization: "Bearer secret-password" })).toBe(true);
   });
 
+  it("accepts the configured password through the persisted UI cookie", () => {
+    expect(
+      verifyUiAuthorization({
+        password: "secret-password",
+        cookie: "other=value; discord_ai_agent_ui_auth=secret-password"
+      })
+    ).toBe(true);
+  });
+
   it("rejects missing, wrong, or malformed credentials", () => {
     expect(verifyUiAuthorization({ password: "secret-password" })).toBe(false);
     expect(verifyUiAuthorization({ password: "secret-password", authorization: "Bearer wrong" })).toBe(false);
+    expect(verifyUiAuthorization({ password: "secret-password", cookie: "discord_ai_agent_ui_auth=wrong" })).toBe(false);
     expect(verifyUiAuthorization({ password: "secret-password", authorization: "Basic nope" })).toBe(false);
     expect(
       verifyUiAuthorization({

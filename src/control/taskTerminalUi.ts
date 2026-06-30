@@ -3,15 +3,34 @@ export function renderTaskListPage() {
     title: "Agent Tasks",
     body: `
       <main class="shell">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">Discord AI Agent</p>
+        <header class="app-header">
+          <div class="title-block">
+            <p class="eyebrow">Agent Ops</p>
             <h1>Agent Tasks</h1>
           </div>
-          <button id="refresh" type="button">Refresh</button>
+          <div class="header-actions">
+            <button id="refresh" class="button primary" type="button">Refresh</button>
+            <a class="button" href="/logout">Sign out</a>
+          </div>
         </header>
-        <section id="status" class="notice">Loading recent tasks...</section>
-        <section id="tasks" class="task-list"></section>
+
+        <section id="summary" class="metrics-grid" aria-label="Task summary"></section>
+
+        <section class="toolbar" aria-label="Task filters">
+          <div class="segmented" role="tablist" aria-label="Status filter">
+            <button class="segment active" type="button" data-filter="all">All</button>
+            <button class="segment" type="button" data-filter="active">Active</button>
+            <button class="segment" type="button" data-filter="done">Done</button>
+            <button class="segment" type="button" data-filter="attention">Needs Review</button>
+          </div>
+          <label class="search-box">
+            <span>Search</span>
+            <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="title, request, task id">
+          </label>
+          <div id="status" class="live-note">Loading...</div>
+        </section>
+
+        <section id="tasks" class="task-table" aria-live="polite"></section>
       </main>
       <script>
         ${taskListScript()}
@@ -24,28 +43,58 @@ export function renderTaskTerminalPage(taskId: string) {
   return htmlPage({
     title: `Agent Task ${taskId}`,
     body: `
-      <main class="shell">
-        <header class="topbar">
-          <div>
+      <main class="shell wide">
+        <header class="app-header">
+          <div class="title-block">
             <p class="eyebrow"><a href="/tasks">Agent Tasks</a></p>
             <h1 id="title">Agent Task</h1>
+            <p id="titleMeta" class="title-meta"></p>
           </div>
-          <button id="refresh" type="button">Refresh</button>
+          <div class="header-actions">
+            <button id="copyLink" class="button" type="button">Copy Link</button>
+            <button id="refresh" class="button primary" type="button">Refresh</button>
+            <a class="button" href="/logout">Sign out</a>
+          </div>
         </header>
-        <section id="summary" class="summary-grid"></section>
-        <section class="panel">
-          <h2>Terminal</h2>
-          <pre id="terminal" class="terminal">Loading task output...</pre>
+
+        <section id="overview" class="metrics-grid compact" aria-label="Task overview"></section>
+
+        <section class="request-panel">
+          <div class="section-label">Request</div>
+          <p id="requestText"></p>
         </section>
-        <section class="two-column">
-          <div class="panel">
-            <h2>Timeline</h2>
-            <ol id="timeline" class="timeline"></ol>
-          </div>
-          <div class="panel">
-            <h2>Sandbox</h2>
-            <div id="sandbox" class="details"></div>
-          </div>
+
+        <section class="workspace-grid">
+          <section class="terminal-card">
+            <div class="panel-heading">
+              <div>
+                <div class="section-label">Terminal</div>
+                <div id="terminalStatus" class="terminal-status">Loading output...</div>
+              </div>
+              <label class="toggle">
+                <input id="autoScroll" type="checkbox" checked>
+                <span>Auto-scroll</span>
+              </label>
+            </div>
+            <pre id="terminal" class="terminal">Loading task output...</pre>
+          </section>
+
+          <aside class="side-card">
+            <div class="tabs" role="tablist" aria-label="Task details">
+              <button class="tab active" type="button" data-panel="timeline">Timeline</button>
+              <button class="tab" type="button" data-panel="sandbox">Sandbox</button>
+              <button class="tab" type="button" data-panel="commands">Commands</button>
+            </div>
+            <div id="timelinePanel" class="tab-panel active">
+              <ol id="timeline" class="timeline"></ol>
+            </div>
+            <div id="sandboxPanel" class="tab-panel">
+              <div id="sandbox" class="details"></div>
+            </div>
+            <div id="commandsPanel" class="tab-panel">
+              <div id="commands" class="command-list"></div>
+            </div>
+          </aside>
         </section>
       </main>
       <script>
@@ -66,17 +115,22 @@ function htmlPage(input: { title: string; body: string }) {
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0b0f14;
-      --panel: #111821;
-      --panel-2: #0f151d;
-      --border: #253142;
-      --text: #d8e1ec;
-      --muted: #8fa0b3;
-      --accent: #7cc7ff;
-      --good: #7be29a;
-      --bad: #ff8f8f;
-      --warn: #ffd27a;
-      --terminal: #05080c;
+      --bg: #090b0e;
+      --surface: #101418;
+      --surface-2: #151a20;
+      --surface-3: #1b222a;
+      --line: #27313b;
+      --line-strong: #3a4653;
+      --text: #edf3f8;
+      --muted: #9aa8b6;
+      --faint: #6f7d8b;
+      --accent: #8fd6bd;
+      --blue: #8db7ff;
+      --green: #82d996;
+      --amber: #f4c76c;
+      --red: #ff8f94;
+      --terminal: #050607;
+      --shadow: 0 18px 60px rgba(0, 0, 0, 0.32);
     }
 
     * {
@@ -86,9 +140,11 @@ function htmlPage(input: { title: string; body: string }) {
     body {
       margin: 0;
       min-height: 100vh;
-      background: var(--bg);
+      background:
+        linear-gradient(180deg, rgba(143, 214, 189, 0.08), transparent 320px),
+        var(--bg);
       color: var(--text);
-      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
     a {
@@ -96,177 +152,399 @@ function htmlPage(input: { title: string; body: string }) {
       text-decoration: none;
     }
 
-    button {
-      appearance: none;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: #17202b;
-      color: var(--text);
-      cursor: pointer;
+    button,
+    input {
       font: inherit;
-      min-height: 36px;
-      padding: 0 12px;
     }
 
-    button:hover {
-      border-color: var(--accent);
+    button {
+      cursor: pointer;
     }
 
     .shell {
-      width: min(1280px, calc(100vw - 32px));
+      width: min(1180px, calc(100vw - 32px));
       margin: 0 auto;
-      padding: 24px 0 36px;
+      padding: 28px 0 42px;
     }
 
-    .topbar {
+    .shell.wide {
+      width: min(1440px, calc(100vw - 32px));
+    }
+
+    .app-header {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
-      gap: 16px;
+      gap: 18px;
       margin-bottom: 18px;
     }
 
-    .eyebrow {
-      margin: 0 0 4px;
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
+    .title-block {
+      min-width: 0;
     }
 
-    h1, h2 {
-      margin: 0;
+    .eyebrow,
+    .section-label,
+    .metric-label,
+    .field-label {
+      color: var(--faint);
+      font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       letter-spacing: 0;
+      margin: 0 0 7px;
+      text-transform: uppercase;
     }
 
     h1 {
-      font-size: clamp(24px, 3vw, 34px);
-      line-height: 1.1;
+      font-size: clamp(28px, 4vw, 44px);
+      letter-spacing: 0;
+      line-height: 1;
+      margin: 0;
     }
 
-    h2 {
-      font-size: 14px;
-      margin-bottom: 12px;
+    .title-meta {
       color: var(--muted);
-      text-transform: uppercase;
+      margin: 10px 0 0;
+      overflow-wrap: anywhere;
     }
 
-    .notice,
-    .panel,
-    .task-card,
-    .summary-card {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--panel);
-    }
-
-    .notice {
-      padding: 12px 14px;
-      color: var(--muted);
-      margin-bottom: 14px;
-    }
-
-    .task-list {
-      display: grid;
-      gap: 10px;
-    }
-
-    .task-card {
-      display: grid;
-      gap: 8px;
-      padding: 14px;
-    }
-
-    .task-card-header,
-    .meta-row {
+    .header-actions {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
     }
 
-    .task-title {
+    .button {
+      align-items: center;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 7px;
       color: var(--text);
-      font-weight: 700;
-      overflow-wrap: anywhere;
-    }
-
-    .request,
-    .meta-row,
-    .details,
-    .timeline {
-      color: var(--muted);
-    }
-
-    .request {
-      margin: 0;
-      max-width: 80ch;
-      overflow-wrap: anywhere;
-    }
-
-    .status-pill {
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      color: var(--muted);
-      font: 12px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      padding: 6px 8px;
+      display: inline-flex;
+      min-height: 36px;
+      padding: 0 12px;
       white-space: nowrap;
     }
 
-    .status-running,
-    .status-queued {
-      border-color: var(--warn);
-      color: var(--warn);
+    .button:hover,
+    .segment:hover,
+    .tab:hover {
+      border-color: var(--line-strong);
+      color: var(--text);
     }
 
-    .status-succeeded {
-      border-color: var(--good);
-      color: var(--good);
+    .button.primary {
+      background: #dff8ec;
+      border-color: #dff8ec;
+      color: #06100b;
+      font-weight: 700;
     }
 
-    .status-failed,
-    .status-no_changes,
-    .status-cancelled {
-      border-color: var(--bad);
-      color: var(--bad);
-    }
-
-    .summary-grid {
+    .metrics-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
       margin-bottom: 14px;
     }
 
-    .summary-card {
-      min-height: 84px;
-      padding: 12px;
+    .metrics-grid.compact {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
     }
 
-    .summary-label {
-      color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 6px;
-      text-transform: uppercase;
+    .metric-card,
+    .toolbar,
+    .task-table,
+    .request-panel,
+    .terminal-card,
+    .side-card {
+      background: rgba(16, 20, 24, 0.94);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
     }
 
-    .summary-value {
+    .metric-card {
+      min-height: 86px;
+      padding: 14px;
+    }
+
+    .metric-value {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      min-height: 28px;
       overflow-wrap: anywhere;
     }
 
-    .panel {
-      padding: 14px;
+    .metric-value.large {
+      font-size: 26px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .metric-sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    .toolbar {
+      align-items: center;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: auto minmax(240px, 1fr) auto;
+      margin-bottom: 12px;
+      padding: 10px;
+    }
+
+    .segmented,
+    .tabs {
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: inline-flex;
+      gap: 2px;
+      padding: 3px;
+    }
+
+    .segment,
+    .tab {
+      appearance: none;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--muted);
+      min-height: 30px;
+      padding: 0 10px;
+    }
+
+    .segment.active,
+    .tab.active {
+      background: var(--surface-3);
+      border-color: var(--line);
+      color: var(--text);
+    }
+
+    .search-box {
+      align-items: center;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--faint);
+      display: grid;
+      gap: 8px;
+      grid-template-columns: auto 1fr;
+      min-height: 38px;
+      padding: 0 10px;
+    }
+
+    .search-box span {
+      font-size: 12px;
+    }
+
+    .search-box input {
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      min-width: 0;
+      outline: 0;
+    }
+
+    .live-note {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .task-table {
+      overflow: hidden;
+    }
+
+    .table-heading,
+    .task-row {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(220px, 1.45fr) minmax(160px, 0.9fr) minmax(120px, 0.7fr) minmax(96px, 0.6fr);
+      padding: 12px 14px;
+    }
+
+    .table-heading {
+      background: rgba(21, 26, 32, 0.78);
+      border-bottom: 1px solid var(--line);
+      color: var(--faint);
+      font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      text-transform: uppercase;
+    }
+
+    .task-row {
+      border-bottom: 1px solid rgba(39, 49, 59, 0.72);
+      color: var(--text);
+      min-height: 76px;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .task-row:hover {
+      background: rgba(27, 34, 42, 0.72);
+    }
+
+    .task-row:last-child {
+      border-bottom: 0;
+    }
+
+    .task-main,
+    .task-step,
+    .task-time,
+    .task-pr {
+      min-width: 0;
+    }
+
+    .task-title {
+      color: var(--text);
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .task-request {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .task-step,
+    .task-time,
+    .task-pr,
+    .empty-state {
+      color: var(--muted);
+    }
+
+    .task-step strong {
+      color: var(--text);
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .task-step span,
+    .task-time span {
+      display: block;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .empty-state {
+      padding: 34px 18px;
+      text-align: center;
+    }
+
+    .status-pill {
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      display: inline-flex;
+      font: 12px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      gap: 6px;
+      min-height: 26px;
+      padding: 0 9px;
+      white-space: nowrap;
+    }
+
+    .status-pill::before {
+      background: currentColor;
+      border-radius: 999px;
+      content: "";
+      height: 6px;
+      width: 6px;
+    }
+
+    .tone-active {
+      border-color: rgba(244, 199, 108, 0.58);
+      color: var(--amber);
+    }
+
+    .tone-success {
+      border-color: rgba(130, 217, 150, 0.58);
+      color: var(--green);
+    }
+
+    .tone-danger {
+      border-color: rgba(255, 143, 148, 0.58);
+      color: var(--red);
+    }
+
+    .tone-neutral {
+      color: var(--muted);
+    }
+
+    .request-panel {
       margin-bottom: 14px;
+      padding: 14px;
+    }
+
+    .request-panel p {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .workspace-grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: minmax(0, 1.55fr) minmax(360px, 0.85fr);
+      align-items: start;
+    }
+
+    .terminal-card,
+    .side-card {
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .panel-heading {
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+    }
+
+    .terminal-status {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .toggle {
+      align-items: center;
+      color: var(--muted);
+      display: inline-flex;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .toggle input {
+      accent-color: var(--accent);
     }
 
     .terminal {
       background: var(--terminal);
-      border: 1px solid #1a2330;
-      border-radius: 6px;
-      color: #d9f0ff;
-      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      border: 0;
+      color: #e7f7ff;
+      font: 12px/1.48 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       margin: 0;
-      max-height: 68vh;
-      min-height: 360px;
+      max-height: 70vh;
+      min-height: 560px;
       overflow: auto;
       padding: 14px;
       tab-size: 2;
@@ -274,10 +552,26 @@ function htmlPage(input: { title: string; body: string }) {
       word-break: break-word;
     }
 
-    .two-column {
-      display: grid;
-      grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
-      gap: 14px;
+    .tabs {
+      border-bottom: 1px solid var(--line);
+      border-left: 0;
+      border-radius: 0;
+      border-right: 0;
+      border-top: 0;
+      display: flex;
+      padding: 8px;
+      width: 100%;
+    }
+
+    .tab-panel {
+      display: none;
+      max-height: 72vh;
+      overflow: auto;
+      padding: 14px;
+    }
+
+    .tab-panel.active {
+      display: block;
     }
 
     .timeline {
@@ -289,53 +583,103 @@ function htmlPage(input: { title: string; body: string }) {
     }
 
     .timeline-item {
-      border-left: 2px solid var(--border);
-      padding-left: 10px;
+      border-left: 2px solid var(--line);
+      padding-left: 11px;
     }
 
     .timeline-time,
+    .command-meta,
     .detail-label {
-      color: var(--muted);
-      font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: var(--faint);
+      font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       text-transform: uppercase;
     }
 
-    .timeline-summary {
+    .timeline-summary,
+    .command-title {
       color: var(--text);
-      margin: 2px 0;
+      margin: 3px 0;
+      overflow-wrap: anywhere;
     }
 
     .metadata {
       color: var(--muted);
       font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      margin: 4px 0 0;
+      margin: 5px 0 0;
       white-space: pre-wrap;
       word-break: break-word;
     }
 
-    .details {
+    .details,
+    .command-list {
       display: grid;
       gap: 10px;
     }
 
-    .detail-card {
-      background: var(--panel-2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
+    .detail-card,
+    .command-card {
+      background: rgba(21, 26, 32, 0.68);
+      border: 1px solid var(--line);
+      border-radius: 7px;
       padding: 10px;
       overflow-wrap: anywhere;
     }
 
-    @media (max-width: 900px) {
-      .summary-grid,
-      .two-column {
+    .detail-card {
+      display: grid;
+      gap: 10px;
+    }
+
+    @media (max-width: 1080px) {
+      .metrics-grid,
+      .metrics-grid.compact,
+      .workspace-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .workspace-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .shell {
+        width: min(100vw - 20px, 1180px);
+        padding-top: 18px;
+      }
+
+      .app-header,
+      .header-actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .metrics-grid,
+      .metrics-grid.compact,
+      .toolbar,
+      .table-heading,
+      .task-row {
         grid-template-columns: 1fr;
       }
 
-      .task-card-header,
-      .meta-row {
-        align-items: flex-start;
-        flex-direction: column;
+      .table-heading {
+        display: none;
+      }
+
+      .toolbar {
+        align-items: stretch;
+      }
+
+      .segmented {
+        overflow-x: auto;
+      }
+
+      .live-note {
+        text-align: left;
+      }
+
+      .terminal {
+        min-height: 420px;
       }
     }
   </style>
@@ -348,76 +692,204 @@ ${input.body}
 
 function taskListScript() {
   return String.raw`
+const state = { tasks: [], filter: "all", query: "" };
 const statusEl = document.getElementById("status");
+const summaryEl = document.getElementById("summary");
 const tasksEl = document.getElementById("tasks");
 const refreshEl = document.getElementById("refresh");
+const searchEl = document.getElementById("search");
+const filterEls = Array.from(document.querySelectorAll("[data-filter]"));
 
 refreshEl.addEventListener("click", refresh);
+searchEl.addEventListener("input", () => {
+  state.query = searchEl.value.trim().toLowerCase();
+  render();
+});
+for (const button of filterEls) {
+  button.addEventListener("click", () => {
+    state.filter = button.dataset.filter || "all";
+    for (const item of filterEls) item.classList.toggle("active", item === button);
+    render();
+  });
+}
+
 refresh();
 setInterval(refresh, 5000);
 
 async function refresh() {
   try {
-    const response = await fetch("/api/tasks?limit=50", { cache: "no-store" });
+    const response = await fetch("/api/tasks?limit=100", { cache: "no-store" });
     if (!response.ok) throw new Error(await response.text());
     const data = await response.json();
-    renderTasks(data.tasks || []);
-    statusEl.textContent = "Showing " + (data.tasks || []).length + " recent tasks. Auto-refreshing every 5s.";
+    state.tasks = data.tasks || [];
+    render();
+    statusEl.textContent = "Updated " + formatTime(new Date());
   } catch (error) {
-    statusEl.textContent = "Failed to load tasks: " + error.message;
+    statusEl.textContent = "Load failed: " + error.message;
   }
+}
+
+function render() {
+  renderSummary(state.tasks);
+  renderTasks(filteredTasks());
+}
+
+function renderSummary(tasks) {
+  const active = tasks.filter((task) => isActiveTaskStatus(task.status)).length;
+  const done = tasks.filter((task) => task.status === "succeeded").length;
+  const attention = tasks.filter((task) => isAttentionStatus(task.status)).length;
+  const latest = tasks[0]?.updatedAt ? formatAge(tasks[0].updatedAt) : "none";
+  summaryEl.replaceChildren(
+    metric("Active", active, "running or queued"),
+    metric("Done", done, "recent successes"),
+    metric("Needs Review", attention, "failed, cancelled, or no diff"),
+    metric("Latest", latest, "most recent update")
+  );
 }
 
 function renderTasks(tasks) {
   tasksEl.replaceChildren();
+  const header = document.createElement("div");
+  header.className = "table-heading";
+  for (const label of ["Task", "Step", "Updated", "Result"]) {
+    const cell = document.createElement("div");
+    cell.textContent = label;
+    header.append(cell);
+  }
+  tasksEl.append(header);
+
   if (!tasks.length) {
     const empty = document.createElement("div");
-    empty.className = "notice";
-    empty.textContent = "No agent tasks yet.";
+    empty.className = "empty-state";
+    empty.textContent = "No matching tasks.";
     tasksEl.append(empty);
     return;
   }
+
   for (const task of tasks) {
-    const card = document.createElement("article");
-    card.className = "task-card";
+    const row = document.createElement("a");
+    row.className = "task-row";
+    row.href = taskHref(task);
 
-    const header = document.createElement("div");
-    header.className = "task-card-header";
-
-    const link = document.createElement("a");
-    link.className = "task-title";
-    link.href = "/tasks/" + encodeURIComponent(task.taskId);
-    link.textContent = task.title || task.taskId;
-
-    const pill = statusPill(task.status);
-    header.append(link, pill);
-
-    const request = document.createElement("p");
-    request.className = "request";
+    const main = document.createElement("div");
+    main.className = "task-main";
+    main.append(statusPill(task.status));
+    const title = document.createElement("div");
+    title.className = "task-title";
+    title.textContent = task.title || task.taskId;
+    const request = document.createElement("div");
+    request.className = "task-request";
     request.textContent = task.request || "";
+    main.append(title, request);
 
-    const meta = document.createElement("div");
-    meta.className = "meta-row";
-    meta.textContent = [
-      task.currentStep ? "step " + task.currentStep : null,
-      task.statusMessage || null,
-      task.updatedAt ? "updated " + formatDate(task.updatedAt) : null
-    ].filter(Boolean).join(" | ");
+    const step = document.createElement("div");
+    step.className = "task-step";
+    const stepName = document.createElement("strong");
+    stepName.textContent = task.currentStep || "unknown";
+    const message = document.createElement("span");
+    message.textContent = task.statusMessage || "No status message";
+    step.append(stepName, message);
 
-    card.append(header, request, meta);
-    tasksEl.append(card);
+    const time = document.createElement("div");
+    time.className = "task-time";
+    const updated = document.createElement("strong");
+    updated.textContent = formatAge(task.updatedAt);
+    const created = document.createElement("span");
+    created.textContent = "created " + formatDate(task.createdAt);
+    time.append(updated, created);
+
+    const result = document.createElement("div");
+    result.className = "task-pr";
+    if (task.prUrl) {
+      const pr = document.createElement("span");
+      pr.className = "button";
+      pr.textContent = task.draft ? "Draft PR" : "PR";
+      result.append(pr);
+    } else {
+      result.textContent = task.error || "pending";
+    }
+
+    row.append(main, step, time, result);
+    tasksEl.append(row);
   }
+}
+
+function filteredTasks() {
+  return state.tasks.filter((task) => {
+    if (state.filter === "active" && !isActiveTaskStatus(task.status)) return false;
+    if (state.filter === "done" && task.status !== "succeeded") return false;
+    if (state.filter === "attention" && !isAttentionStatus(task.status)) return false;
+    if (!state.query) return true;
+    const haystack = [task.taskId, task.title, task.request, task.currentStep, task.statusMessage, task.prUrl]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(state.query);
+  });
+}
+
+function metric(label, value, sub) {
+  const card = document.createElement("article");
+  card.className = "metric-card";
+  const labelEl = document.createElement("div");
+  labelEl.className = "metric-label";
+  labelEl.textContent = label;
+  const valueEl = document.createElement("div");
+  valueEl.className = "metric-value large";
+  valueEl.textContent = String(value);
+  const subEl = document.createElement("div");
+  subEl.className = "metric-sub";
+  subEl.textContent = sub;
+  card.append(labelEl, valueEl, subEl);
+  return card;
+}
+
+function taskHref(task) {
+  return "/tasks/" + encodeURIComponent(task.taskId);
 }
 
 function statusPill(status) {
   const pill = document.createElement("span");
-  pill.className = "status-pill status-" + String(status || "unknown").replace(/[^a-z_]/g, "");
-  pill.textContent = status || "unknown";
+  pill.className = "status-pill " + statusTone(status);
+  pill.textContent = statusLabel(status);
   return pill;
 }
 
+function statusLabel(status) {
+  return status || "unknown";
+}
+
+function statusTone(status) {
+  if (status === "queued" || status === "running") return "tone-active";
+  if (status === "succeeded") return "tone-success";
+  if (isAttentionStatus(status)) return "tone-danger";
+  return "tone-neutral";
+}
+
+function isActiveTaskStatus(status) {
+  return status === "queued" || status === "running";
+}
+
+function isAttentionStatus(status) {
+  return status === "failed" || status === "cancelled" || status === "no_changes";
+}
+
+function formatAge(value) {
+  if (!value) return "unknown";
+  const ms = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(ms)) return "unknown";
+  if (ms < 60000) return Math.max(0, Math.round(ms / 1000)) + "s ago";
+  if (ms < 3600000) return Math.round(ms / 60000) + "m ago";
+  if (ms < 86400000) return Math.round(ms / 3600000) + "h ago";
+  return Math.round(ms / 86400000) + "d ago";
+}
+
+function formatTime(value) {
+  return value.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
 function formatDate(value) {
-  if (!value) return "";
+  if (!value) return "unknown";
   return new Date(value).toLocaleString();
 }
 `;
@@ -427,14 +899,27 @@ function taskTerminalScript() {
   return String.raw`
 const taskId = window.AGENT_TASK_ID;
 const titleEl = document.getElementById("title");
-const summaryEl = document.getElementById("summary");
+const titleMetaEl = document.getElementById("titleMeta");
+const requestTextEl = document.getElementById("requestText");
+const overviewEl = document.getElementById("overview");
 const terminalEl = document.getElementById("terminal");
+const terminalStatusEl = document.getElementById("terminalStatus");
 const timelineEl = document.getElementById("timeline");
 const sandboxEl = document.getElementById("sandbox");
+const commandsEl = document.getElementById("commands");
 const refreshEl = document.getElementById("refresh");
+const copyLinkEl = document.getElementById("copyLink");
+const autoScrollEl = document.getElementById("autoScroll");
+const tabEls = Array.from(document.querySelectorAll("[data-panel]"));
 
 let lastTerminalText = "";
+
 refreshEl.addEventListener("click", refresh);
+copyLinkEl.addEventListener("click", copyTaskLink);
+for (const tab of tabEls) {
+  tab.addEventListener("click", () => activatePanel(tab.dataset.panel || "timeline"));
+}
+
 refresh();
 setInterval(refresh, 2500);
 
@@ -445,6 +930,7 @@ async function refresh() {
     const snapshot = await response.json();
     renderSnapshot(snapshot);
   } catch (error) {
+    terminalStatusEl.textContent = "Load failed";
     terminalEl.textContent = "Failed to load task: " + error.message;
   }
 }
@@ -452,43 +938,59 @@ async function refresh() {
 function renderSnapshot(snapshot) {
   const task = snapshot.task;
   titleEl.textContent = task.title || task.taskId;
-  renderSummary(task);
+  titleMetaEl.replaceChildren(statusPill(task.status), textNode(" " + task.taskId));
+  requestTextEl.textContent = task.request || "";
+  renderOverview(snapshot);
   renderTerminal(snapshot);
   renderTimeline(snapshot.events || []);
-  renderSandbox(snapshot);
+  renderSandbox(snapshot.runs || []);
+  renderCommands(snapshot.commands || []);
 }
 
-function renderSummary(task) {
-  summaryEl.replaceChildren(
-    summaryCard("Status", task.status || "unknown", statusPill(task.status)),
-    summaryCard("Current Step", [task.currentStep, task.statusMessage].filter(Boolean).join(" | ") || "none"),
-    summaryCard("Pull Request", task.prUrl || "not opened yet", task.prUrl ? link(task.prUrl, task.prUrl) : null),
-    summaryCard("Task ID", task.taskId || "")
+function renderOverview(snapshot) {
+  const task = snapshot.task;
+  const runs = snapshot.runs || [];
+  const latestRun = runs[runs.length - 1];
+  overviewEl.replaceChildren(
+    metric("Status", statusLabel(task.status), statusPill(task.status)),
+    metric("Step", task.currentStep || "unknown", task.statusMessage || ""),
+    metric("Elapsed", elapsed(task), task.completedAt ? "completed " + formatAge(task.completedAt) : "started " + formatAge(task.startedAt || task.createdAt)),
+    metric("Pull Request", task.prUrl ? "opened" : "not opened", task.prUrl ? link(task.prUrl, task.draft ? "Draft PR" : "Open PR") : null),
+    metric("Sandbox", latestRun?.backendJobName || "pending", latestRun?.status || "")
   );
 }
 
-function summaryCard(label, value, replacement) {
+function metric(label, value, replacement) {
   const card = document.createElement("article");
-  card.className = "summary-card";
+  card.className = "metric-card";
   const labelEl = document.createElement("div");
-  labelEl.className = "summary-label";
+  labelEl.className = "metric-label";
   labelEl.textContent = label;
   const valueEl = document.createElement("div");
-  valueEl.className = "summary-value";
-  if (replacement) valueEl.append(replacement);
+  valueEl.className = "metric-value";
+  if (replacement && typeof replacement !== "string") valueEl.append(replacement);
   else valueEl.textContent = value;
-  card.append(labelEl, valueEl);
+  const subEl = document.createElement("div");
+  subEl.className = "metric-sub";
+  if (typeof replacement === "string") subEl.textContent = replacement;
+  card.append(labelEl, valueEl, subEl);
   return card;
 }
 
 function renderTerminal(snapshot) {
   const text = terminalText(snapshot);
-  const shouldStickToBottom = terminalEl.scrollTop + terminalEl.clientHeight >= terminalEl.scrollHeight - 24;
+  const shouldStickToBottom = autoScrollEl.checked && terminalEl.scrollTop + terminalEl.clientHeight >= terminalEl.scrollHeight - 24;
   if (text !== lastTerminalText) {
     terminalEl.textContent = text;
     lastTerminalText = text;
-    if (shouldStickToBottom) terminalEl.scrollTop = terminalEl.scrollHeight;
+    if (shouldStickToBottom || autoScrollEl.checked) terminalEl.scrollTop = terminalEl.scrollHeight;
   }
+  const task = snapshot.task;
+  terminalStatusEl.textContent = [
+    task.currentStep ? "step " + task.currentStep : null,
+    task.statusMessage || null,
+    "updated " + formatTime(new Date())
+  ].filter(Boolean).join(" | ");
 }
 
 function terminalText(snapshot) {
@@ -505,12 +1007,8 @@ function terminalText(snapshot) {
 
   for (const command of snapshot.commands || []) {
     lines.push("[" + formatDate(command.createdAt) + "] $ " + (command.command || command.step));
-    if (command.outputTail) {
-      lines.push(command.outputTail.trimEnd());
-    }
-    if (command.errorTail) {
-      lines.push(command.errorTail.trimEnd());
-    }
+    if (command.outputTail) lines.push(command.outputTail.trimEnd());
+    if (command.errorTail) lines.push(command.errorTail.trimEnd());
     lines.push("[exit " + nullish(command.exitCode, "?") + " after " + formatDuration(command.durationMs) + "]");
     lines.push("");
   }
@@ -525,31 +1023,15 @@ function terminalText(snapshot) {
   }
 
   if (!(snapshot.commands || []).length && !live) {
-    lines.push("No command output has been recorded yet. The sandbox may still be starting.");
+    lines.push("No command output recorded yet.");
   }
   return lines.join("\n");
-}
-
-function latestLiveOutput(events) {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    const metadata = event.metadata || {};
-    if (metadata.stdoutTail || metadata.stderrTail) return event;
-  }
-  return null;
-}
-
-function isActiveTaskStatus(status) {
-  return status === "queued" || status === "running";
 }
 
 function renderTimeline(events) {
   timelineEl.replaceChildren();
   if (!events.length) {
-    const empty = document.createElement("li");
-    empty.className = "timeline-item";
-    empty.textContent = "No task events yet.";
-    timelineEl.append(empty);
+    timelineEl.append(emptyItem("No task events yet."));
     return;
   }
   for (const event of events) {
@@ -573,14 +1055,10 @@ function renderTimeline(events) {
   }
 }
 
-function renderSandbox(snapshot) {
+function renderSandbox(runs) {
   sandboxEl.replaceChildren();
-  const runs = snapshot.runs || [];
   if (!runs.length) {
-    const empty = document.createElement("div");
-    empty.className = "detail-card";
-    empty.textContent = "No sandbox run has been recorded yet.";
-    sandboxEl.append(empty);
+    sandboxEl.append(emptyCard("No sandbox run has been recorded yet."));
     return;
   }
   for (const run of runs) {
@@ -591,8 +1069,86 @@ function renderSandbox(snapshot) {
     card.append(detail("Job", [run.namespace, run.backendJobName].filter(Boolean).join("/") || "unknown"));
     card.append(detail("Status", run.status));
     card.append(detail("Image", run.image || "unknown"));
+    card.append(detail("Started", formatDate(run.startedAt)));
     sandboxEl.append(card);
   }
+}
+
+function renderCommands(commands) {
+  commandsEl.replaceChildren();
+  if (!commands.length) {
+    commandsEl.append(emptyCard("No completed commands yet."));
+    return;
+  }
+  for (const command of commands) {
+    const card = document.createElement("div");
+    card.className = "command-card";
+    const meta = document.createElement("div");
+    meta.className = "command-meta";
+    meta.textContent = [command.step, "exit " + nullish(command.exitCode, "?"), formatDuration(command.durationMs)].filter(Boolean).join(" | ");
+    const title = document.createElement("div");
+    title.className = "command-title";
+    title.textContent = command.command || command.step;
+    card.append(meta, title);
+    commandsEl.append(card);
+  }
+}
+
+function activatePanel(name) {
+  for (const tab of tabEls) tab.classList.toggle("active", tab.dataset.panel === name);
+  for (const panel of document.querySelectorAll(".tab-panel")) panel.classList.remove("active");
+  document.getElementById(name + "Panel")?.classList.add("active");
+  localStorage.setItem("agentTaskPanel", name);
+}
+
+activatePanel(localStorage.getItem("agentTaskPanel") || "timeline");
+
+async function copyTaskLink() {
+  const href = location.origin + "/tasks/" + encodeURIComponent(taskId);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(href).catch(() => undefined);
+  }
+  copyLinkEl.textContent = "Copied";
+  setTimeout(() => {
+    copyLinkEl.textContent = "Copy Link";
+  }, 1200);
+}
+
+function latestLiveOutput(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    const metadata = event.metadata || {};
+    if (metadata.stdoutTail || metadata.stderrTail) return event;
+  }
+  return null;
+}
+
+function statusPill(status) {
+  const pill = document.createElement("span");
+  pill.className = "status-pill " + statusTone(status);
+  pill.textContent = statusLabel(status);
+  return pill;
+}
+
+function statusLabel(status) {
+  return status || "unknown";
+}
+
+function statusTone(status) {
+  if (status === "queued" || status === "running") return "tone-active";
+  if (status === "succeeded") return "tone-success";
+  if (status === "failed" || status === "cancelled" || status === "no_changes") return "tone-danger";
+  return "tone-neutral";
+}
+
+function isActiveTaskStatus(status) {
+  return status === "queued" || status === "running";
+}
+
+function elapsed(task) {
+  const start = new Date(task.startedAt || task.createdAt).getTime();
+  const end = task.completedAt ? new Date(task.completedAt).getTime() : Date.now();
+  return formatDuration(Math.max(0, end - start));
 }
 
 function detail(label, value) {
@@ -601,16 +1157,23 @@ function detail(label, value) {
   labelEl.className = "detail-label";
   labelEl.textContent = label;
   const valueEl = document.createElement("div");
-  valueEl.textContent = value || "";
+  valueEl.textContent = value || "unknown";
   wrapper.append(labelEl, valueEl);
   return wrapper;
 }
 
-function statusPill(status) {
-  const pill = document.createElement("span");
-  pill.className = "status-pill status-" + String(status || "unknown").replace(/[^a-z_]/g, "");
-  pill.textContent = status || "unknown";
-  return pill;
+function emptyItem(text) {
+  const item = document.createElement("li");
+  item.className = "timeline-item";
+  item.textContent = text;
+  return item;
+}
+
+function emptyCard(text) {
+  const card = document.createElement("div");
+  card.className = "detail-card";
+  card.textContent = text;
+  return card;
 }
 
 function link(href, label) {
@@ -620,6 +1183,10 @@ function link(href, label) {
   anchor.target = "_blank";
   anchor.rel = "noreferrer";
   return anchor;
+}
+
+function textNode(value) {
+  return document.createTextNode(value);
 }
 
 function compactMetadata(metadata) {
@@ -642,8 +1209,22 @@ function formatDuration(ms) {
   return Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s";
 }
 
+function formatAge(value) {
+  if (!value) return "unknown";
+  const ms = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(ms)) return "unknown";
+  if (ms < 60000) return Math.max(0, Math.round(ms / 1000)) + "s ago";
+  if (ms < 3600000) return Math.round(ms / 60000) + "m ago";
+  if (ms < 86400000) return Math.round(ms / 3600000) + "h ago";
+  return Math.round(ms / 86400000) + "d ago";
+}
+
+function formatTime(value) {
+  return value.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
 function formatDate(value) {
-  if (!value) return "";
+  if (!value) return "unknown";
   return new Date(value).toLocaleString();
 }
 `;

@@ -13,6 +13,7 @@ describe("config", () => {
         "INTERNAL_API_HOST",
         "INTERNAL_API_PORT",
         "CONTROL_UI_AUTH_PASSWORD",
+        "CONTROL_UI_PUBLIC_URL",
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
         "KUBERNETES_NAMESPACE",
@@ -32,6 +33,7 @@ describe("config", () => {
         expect(config.internalApi.host).toBe("0.0.0.0");
         expect(config.internalApi.port).toBe(8080);
         expect(config.controlUi.authPassword).toBe("");
+        expect(config.controlUi.publicUrl).toBeNull();
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
@@ -61,6 +63,12 @@ describe("config", () => {
   it("allows configuring the Discord response timeout", () => {
     withEnv({ DISCORD_AGENT_RESPONSE_TIMEOUT_MS: "900000" }, () => {
       expect(loadConfig().discordAgentResponseTimeoutMs).toBe(900_000);
+    });
+  });
+
+  it("normalizes the public control UI URL", () => {
+    withEnv({ CONTROL_UI_PUBLIC_URL: "https://agent.example/" }, () => {
+      expect(loadConfig().controlUi.publicUrl).toBe("https://agent.example");
     });
   });
 

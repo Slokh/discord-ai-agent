@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   verify:
@@ -56,63 +55,3 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify:db
-
-  deploy-eks:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != '' && vars.ECR_REPOSITORY != ''
-    runs-on: ubuntu-latest
-    needs:
-      - verify
-      - verify-db
-    env:
-      AWS_REGION: ${{ vars.AWS_REGION }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
-      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-      HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
-      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
-      API_SERVICE_TYPE: ${{ vars.API_SERVICE_TYPE }}
-      API_TLS_CERTIFICATE_ARN: ${{ vars.API_TLS_CERTIFICATE_ARN }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-      - id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-      - uses: azure/setup-helm@v4
-      - name: Build and push images
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
-          docker push "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
-      - name: Deploy Helm chart
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
-          helm_args=(
-            --namespace "$K8S_NAMESPACE"
-            --create-namespace
-            --set "image.repository=$REGISTRY/$ECR_REPOSITORY"
-            --set "image.tag=$IMAGE_TAG"
-            --set "sandbox.image=$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
-            --set "config.githubRepository=$GITHUB_REPOSITORY"
-          )
-          if [ -n "${API_SERVICE_TYPE:-}" ]; then
-            helm_args+=(--set "api.publicService.type=$API_SERVICE_TYPE")
-          fi
-          if [ -n "${API_TLS_CERTIFICATE_ARN:-}" ]; then
-            helm_args+=(
-              --set "api.publicService.enabled=true"
-              --set-string "api.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-cert=$API_TLS_CERTIFICATE_ARN"
-              --set-string "api.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-ports=https"
-              --set-string "api.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-backend-protocol=http"
-            )
-          fi
-          helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
-            "${helm_args[@]}"

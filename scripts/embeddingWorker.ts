@@ -30,8 +30,8 @@ async function main() {
       crawlConfiguredGuild: async () => undefined
     },
     embedding: {
-      embedMessages: async (messageIds) => {
-        await embedStoredMessages({ repo, openRouter, config, messageIds });
+      embedMessages: async (messageIds, context) => {
+        return embedStoredMessages({ repo, openRouter, config, messageIds, runId: context?.runId });
       },
       embedMessage: async (messageId) => {
         await embedStoredMessage({ repo, openRouter, config, messageId });

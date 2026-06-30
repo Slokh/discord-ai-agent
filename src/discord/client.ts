@@ -268,6 +268,39 @@ async function handleMessageCreate(
       mentionKind: mentionContext.kind
     }
   });
+  await input.repo
+    .upsertProcessRun({
+      runId: message.id,
+      traceId: message.id,
+      kind: "discord",
+      status: "running",
+      title: `Discord mention from ${message.author.username}`,
+      summary: previewText(text),
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author.id,
+      messageId: message.id,
+      requester: message.member?.displayName ?? message.author.username,
+      source: "discord",
+      metadata: {
+        prompt: text,
+        rawContentPreview: previewText(message.content),
+        mentionKind: mentionContext.kind,
+        discordUrl: message.url
+      },
+      links: { discordMessage: message.url }
+    })
+    .catch((error) => requestLogger.warn({ err: error }, "Failed to create Discord run"));
+  await input.repo
+    .storeProcessRunArtifact({
+      runId: message.id,
+      kind: "prompt",
+      name: "Discord user prompt",
+      content: text,
+      contentType: "text/plain",
+      metadata: { discordUrl: message.url, rawContent: message.content }
+    })
+    .catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord prompt artifact"));
   const thinking = await message.reply("Thinking...");
   requestLogger.debug({ replyMessageId: thinking.id }, "Sent thinking reply");
   await recordTraceEvent(input.repo, {
@@ -307,6 +340,18 @@ async function handleMessageCreate(
     metadata: { threadKey, sessionMessageCount: priorSessionMessages.length },
     durationMs: durationMs(sessionStartedAt)
   });
+  await input.repo
+    .recordProcessRunSpan({
+      runId: message.id,
+      spanId: "memory.session",
+      name: "Load channel memory",
+      status: "succeeded",
+      startedAt: new Date(sessionStartedAt),
+      completedAt: new Date(),
+      durationMs: durationMs(sessionStartedAt),
+      metadata: { threadKey, sessionMessageCount: priorSessionMessages.length }
+    })
+    .catch((error) => requestLogger.warn({ err: error }, "Failed to record memory span"));
   await input.repo.appendConversationMessage({
     threadKey,
     role: "user",
@@ -358,8 +403,21 @@ async function handleMessageCreate(
     },
     durationMs: durationMs(permissionStartedAt)
   });
+  await input.repo
+    .recordProcessRunSpan({
+      runId: message.id,
+      spanId: "permissions.visibility",
+      name: "Resolve Discord permissions",
+      status: "succeeded",
+      startedAt: new Date(permissionStartedAt),
+      completedAt: new Date(),
+      durationMs: durationMs(permissionStartedAt),
+      metadata: { visibleChannelCount: visibleChannelIds.length, mentionedChannelIds }
+    })
+    .catch((error) => requestLogger.warn({ err: error }, "Failed to record permission span"));
 
   try {
+    const agentStartedAt = Date.now();
     const response = await withTimeout(
       handleAgentRequest(
         {
@@ -397,6 +455,22 @@ async function handleMessageCreate(
       input.config.discordAgentResponseTimeoutMs,
       "Discord AI Agent agent request"
     );
+    await input.repo
+      .recordProcessRunSpan({
+        runId: message.id,
+        spanId: "agent.request",
+        name: "Run model-led agent",
+        status: "succeeded",
+        startedAt: new Date(agentStartedAt),
+        completedAt: new Date(),
+        durationMs: durationMs(agentStartedAt),
+        metadata: {
+          responseChars: response.content.length,
+          fileCount: response.files?.length ?? 0,
+          memoryEventCount: response.memoryEvents?.length ?? 0
+        }
+      })
+      .catch((error) => requestLogger.warn({ err: error }, "Failed to record agent span"));
 
     requestLogger.info(
       {
@@ -454,6 +528,33 @@ async function handleMessageCreate(
       metadata: { replyMessageId: finalReply.id },
       durationMs: durationMs(messageStartedAt)
     });
+    await input.repo
+      .storeProcessRunArtifact({
+        runId: message.id,
+        kind: "response",
+        name: "Discord final response",
+        content: response.content,
+        contentType: "text/plain",
+        metadata: {
+          replyMessageId: finalReply.id,
+          discordUrl: finalReply.url,
+          files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+        }
+      })
+      .catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord response artifact"));
+    await input.repo
+      .updateProcessRun({
+        runId: message.id,
+        status: "succeeded",
+        summary: `Replied with ${response.content.length} characters.`,
+        links: { discordReply: finalReply.url },
+        metadata: {
+          replyMessageId: finalReply.id,
+          durationMs: durationMs(messageStartedAt),
+          responseChars: response.content.length
+        }
+      })
+      .catch((error) => requestLogger.warn({ err: error }, "Failed to complete Discord run"));
   } catch (error) {
     if (isOpenRouterContentFilterError(error)) {
       requestLogger.warn(
@@ -494,6 +595,14 @@ async function handleMessageCreate(
         },
         durationMs: durationMs(messageStartedAt)
       });
+      await input.repo
+        .updateProcessRun({
+          runId: message.id,
+          status: "failed",
+          summary: "Provider content filter blocked the request",
+          metadata: { error: error.message, deletedMemoryRows }
+        })
+        .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark content-filtered run"));
       return;
     }
 
@@ -520,6 +629,37 @@ async function handleMessageCreate(
       metadata: { replyMessageId: finalReply.id },
       durationMs: durationMs(messageStartedAt)
     });
+    await input.repo
+      .recordProcessRunSpan({
+        runId: message.id,
+        spanId: "agent.request",
+        name: "Run model-led agent",
+        status: "failed",
+        startedAt: new Date(messageStartedAt),
+        completedAt: new Date(),
+        durationMs: durationMs(messageStartedAt),
+        metadata: { error: error instanceof Error ? error.message : String(error) }
+      })
+      .catch((runError) => requestLogger.warn({ err: runError }, "Failed to record failed agent span"));
+    await input.repo
+      .storeProcessRunArtifact({
+        runId: message.id,
+        kind: "response",
+        name: "Discord error response",
+        content: errorContent,
+        contentType: "text/plain",
+        metadata: { replyMessageId: finalReply.id, error: true }
+      })
+      .catch((runError) => requestLogger.warn({ err: runError }, "Failed to store Discord error artifact"));
+    await input.repo
+      .updateProcessRun({
+        runId: message.id,
+        status: "failed",
+        summary: error instanceof Error ? error.message : String(error),
+        links: { discordReply: finalReply.url },
+        metadata: { error: error instanceof Error ? error.message : String(error), durationMs: durationMs(messageStartedAt) }
+      })
+      .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark Discord run failed"));
     await input.repo.appendConversationMessage({
       threadKey,
       role: "assistant",

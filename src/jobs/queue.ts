@@ -1,4 +1,5 @@
 import PgBoss from "pg-boss";
+import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
@@ -26,7 +27,7 @@ export type CrawlJobRunner = {
 
 export type EmbeddingJobRunner = {
   embedMessage?: (messageId: string) => Promise<void>;
-  embedMessages?: (messageIds: string[]) => Promise<void>;
+  embedMessages?: (messageIds: string[], context?: { runId?: string }) => Promise<unknown>;
 };
 
 export type AgentTaskRunner = {
@@ -89,6 +90,7 @@ export async function startJobs(input: {
       async (jobs) => {
         const startedAt = Date.now();
         const messageIds = jobs.map((job) => job.data.messageId).filter(Boolean);
+        const runId = `embedding-${Date.now()}-${randomUUID().slice(0, 8)}`;
         logger.info(
           {
             queue: EMBED_MESSAGE_JOB,
@@ -99,14 +101,63 @@ export async function startJobs(input: {
           },
           "Running embedding.message batch"
         );
-        if (input.embedding!.embedMessages) {
-          await input.embedding!.embedMessages(messageIds);
-        } else if (input.embedding!.embedMessage) {
-          for (const messageId of messageIds) {
-            await input.embedding!.embedMessage(messageId);
+        await input.repo
+          ?.upsertProcessRun({
+            runId,
+            traceId: uniqueStrings(jobs.map((job) => job.data.traceId).filter(Boolean))[0] ?? runId,
+            kind: "embedding",
+            status: "running",
+            title: `Embedding batch (${messageIds.length} messages)`,
+            summary: `Processing ${messageIds.length} message embedding jobs.`,
+            requester: "system",
+            source: "pgboss.embedding",
+            metadata: {
+              queue: EMBED_MESSAGE_JOB,
+              jobCount: jobs.length,
+              messageCount: messageIds.length,
+              jobIds: jobs.map((job) => job.id)
+            }
+          })
+          .catch((error) => logger.warn({ err: error, runId }, "Failed to create embedding run"));
+        try {
+          let result: unknown;
+          if (input.embedding!.embedMessages) {
+            result = await input.embedding!.embedMessages(messageIds, { runId });
+          } else if (input.embedding!.embedMessage) {
+            for (const messageId of messageIds) {
+              await input.embedding!.embedMessage(messageId);
+            }
+          } else {
+            throw new Error("Embedding worker requested without embedMessage or embedMessages runner.");
           }
-        } else {
-          throw new Error("Embedding worker requested without embedMessage or embedMessages runner.");
+          await input.repo
+            ?.storeProcessRunArtifact({
+              runId,
+              kind: "embedding_summary",
+              name: "Embedding batch summary",
+              content: JSON.stringify({ messageIds, result }, null, 2),
+              contentType: "application/json",
+              metadata: { messageCount: messageIds.length }
+            })
+            .catch((error) => logger.warn({ err: error, runId }, "Failed to store embedding artifact"));
+          await input.repo
+            ?.updateProcessRun({
+              runId,
+              status: "succeeded",
+              summary: `Embedded batch in ${durationMs(startedAt)}ms.`,
+              metadata: { result, durationMs: durationMs(startedAt) }
+            })
+            .catch((error) => logger.warn({ err: error, runId }, "Failed to complete embedding run"));
+        } catch (error) {
+          await input.repo
+            ?.updateProcessRun({
+              runId,
+              status: "failed",
+              summary: error instanceof Error ? error.message : String(error),
+              metadata: { error: error instanceof Error ? error.message : String(error), durationMs: durationMs(startedAt) }
+            })
+            .catch((runError) => logger.warn({ err: runError, runId }, "Failed to fail embedding run"));
+          throw error;
         }
         for (const job of jobs) {
           logger.info(

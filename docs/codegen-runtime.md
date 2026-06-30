@@ -46,8 +46,8 @@ By default, the API service is cluster-internal. Open it locally with:
 kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080
 ```
 
-Then visit `http://localhost:8080/tasks`.
+Then visit `http://localhost:8080/runs`.
 
-If you expose the API service on a public hostname, set `CONTROL_UI_AUTH_PASSWORD` in the runtime Secret first. Browser access uses Basic auth with username `admin`; scripts may also use `Authorization: Bearer $CONTROL_UI_AUTH_PASSWORD`.
+If you expose the API service on a public hostname, set `CONTROL_UI_AUTH_PASSWORD` in the runtime Secret first. Browser access uses Basic auth with username `admin`; scripts may also use `Authorization: Bearer $CONTROL_UI_AUTH_PASSWORD`. Set `CONTROL_UI_PUBLIC_URL` to that public base URL so Discord code-update progress messages include a direct `/runs/<taskId>` console link.
 
-To share a pre-authenticated link, append `?auth=$CONTROL_UI_AUTH_PASSWORD` to any task viewer URL. The server validates the token, stores an HttpOnly cookie for 30 days, then redirects to the same URL without the auth query parameter.
+To share a pre-authenticated link, append `?auth=$CONTROL_UI_AUTH_PASSWORD` to any run-console URL. The server validates the token, stores an HttpOnly cookie for 30 days, then redirects to the same URL without the auth query parameter.

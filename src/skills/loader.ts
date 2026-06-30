@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadOverlaySkills } from "../overlays/loader.js";
 
 export type LoadedSkill = {
   name: string;
   path: string;
   content: string;
-  source: "repo" | "database";
+  source: "repo" | "overlay" | "database";
   version?: number;
 };
 
@@ -13,12 +14,19 @@ export type DatabaseSkillStore = {
   listEnabledDatabaseSkills(): Promise<Array<{ name: string; content: string; version: number }>>;
 };
 
-export async function loadSkills(input: { skillsDir?: string; repo?: DatabaseSkillStore } = {}): Promise<LoadedSkill[]> {
+export async function loadSkills(input: { skillsDir?: string; overlayDirs?: string[]; repo?: DatabaseSkillStore } = {}): Promise<LoadedSkill[]> {
   const skillsDir = input.skillsDir ?? path.resolve(process.cwd(), "skills");
   const byName = new Map<string, LoadedSkill>();
 
   for (const skill of await loadRepoSkills(skillsDir)) {
     byName.set(skill.name, skill);
+  }
+
+  for (const skill of await loadOverlaySkills(input.overlayDirs ?? [])) {
+    byName.set(skill.name, {
+      ...skill,
+      source: "overlay"
+    });
   }
 
   if (input.repo && typeof input.repo.listEnabledDatabaseSkills === "function") {

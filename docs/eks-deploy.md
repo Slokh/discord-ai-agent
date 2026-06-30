@@ -73,6 +73,16 @@ helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
   --set config.githubRepository="owner/repo"
 ```
 
+If you package or mount a private overlay directory into the app image/pod, point the runtime at it:
+
+```bash
+helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
+  --namespace discord-ai-agent \
+  --set config.overlayDirs="/app/overlay/org"
+```
+
+The overlay directory can contain `services/sandbox/SYSTEM_PROMPT.md`, `skills/*.md`, and `.agents/skills/*/SKILL.md`. The chart only passes `OVERLAY_DIRS`; your image, init container, or external deployment layer is responsible for making that path exist.
+
 Check rollout:
 
 ```bash

@@ -36,6 +36,7 @@ config:
   openRouterImageModel: google/gemini-3.1-flash-image
   embeddingDimensions: "1536"
   discordAgentResponseTimeoutMs: "1800000"
+  overlayDirs: ""
   databaseUrlSecretKey: DATABASE_URL
   discordTokenSecretKey: DISCORD_TOKEN
   discordClientIdSecretKey: DISCORD_CLIENT_ID

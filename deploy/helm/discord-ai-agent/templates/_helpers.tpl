@@ -38,6 +38,10 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.embeddingDimensions | quote }}
 - name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS
   value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
+{{- if .Values.config.overlayDirs }}
+- name: OVERLAY_DIRS
+  value: {{ .Values.config.overlayDirs | quote }}
+{{- end }}
 {{- end -}}
 
 {{- define "discord-ai-agent.databaseEnv" -}}

@@ -4,7 +4,7 @@ import { logger } from "../util/logger.js";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 30_000;
 
-type SandboxRunBackend = Pick<KubernetesExecutionBackend, "observeRun" | "cleanupRun">;
+type SandboxRunBackend = Pick<KubernetesExecutionBackend, "observeRun" | "cleanupRun"> & Partial<Pick<KubernetesExecutionBackend, "reconcileWarmPool">>;
 
 export type SandboxReconcilerRuntime = {
   stop: () => void;
@@ -48,6 +48,7 @@ export function startSandboxReconciler(input: {
 export async function runSandboxReconciliationOnce(repo: DiscordAiAgentRepository, backend: SandboxRunBackend) {
   await reconcileActiveRuns(repo, backend);
   await cleanupTerminalRuns(repo, backend);
+  await reconcileWarmPool(backend);
 }
 
 async function reconcileActiveRuns(repo: DiscordAiAgentRepository, backend: SandboxRunBackend) {
@@ -90,5 +91,14 @@ async function cleanupTerminalRuns(repo: DiscordAiAgentRepository, backend: Sand
     } catch (error) {
       logger.warn({ err: error, taskId: run.taskId, sandboxRunId: run.sandboxRunId }, "Failed to clean up sandbox run resources");
     }
+  }
+}
+
+async function reconcileWarmPool(backend: SandboxRunBackend) {
+  if (!backend.reconcileWarmPool) return;
+  try {
+    await backend.reconcileWarmPool();
+  } catch (error) {
+    logger.warn({ err: error }, "Failed to reconcile warm sandbox pool");
   }
 }

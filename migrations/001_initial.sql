@@ -367,3 +367,34 @@ CREATE TABLE IF NOT EXISTS sandbox_command_events (
 
 CREATE INDEX IF NOT EXISTS sandbox_command_events_task_created_idx
   ON sandbox_command_events(task_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS warm_sandboxes (
+  sandbox_id text PRIMARY KEY,
+  backend text NOT NULL,
+  repo_key text NOT NULL,
+  namespace text,
+  pod_name text,
+  image text,
+  status text NOT NULL DEFAULT 'creating' CHECK (status IN ('creating', 'ready', 'leased', 'failed', 'draining')),
+  lease_task_id text REFERENCES agent_tasks(task_id) ON DELETE SET NULL,
+  lease_owner text,
+  leased_at timestamptz,
+  lease_expires_at timestamptz,
+  last_heartbeat_at timestamptz,
+  last_used_at timestamptz,
+  metadata jsonb NOT NULL DEFAULT '{}',
+  last_error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS warm_sandboxes_ready_idx
+  ON warm_sandboxes(repo_key, created_at)
+  WHERE status = 'ready';
+
+CREATE INDEX IF NOT EXISTS warm_sandboxes_lease_idx
+  ON warm_sandboxes(status, lease_expires_at)
+  WHERE status = 'leased';
+
+CREATE INDEX IF NOT EXISTS warm_sandboxes_repo_status_idx
+  ON warm_sandboxes(repo_key, status, updated_at DESC);

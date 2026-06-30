@@ -19,7 +19,11 @@ describe("config", () => {
         "KUBERNETES_NAMESPACE",
         "SANDBOX_IMAGE",
         "SANDBOX_CACHE_DIR",
-        "SANDBOX_CACHE_PVC_NAME"
+        "SANDBOX_CACHE_PVC_NAME",
+        "SANDBOX_WARM_POOL_ENABLED",
+        "SANDBOX_WARM_POOL_SIZE",
+        "SANDBOX_WARM_POOL_LEASE_SECONDS",
+        "SANDBOX_WARM_POOL_IDLE_TTL_SECONDS"
       ],
       () => {
         const config = loadConfig();
@@ -39,6 +43,12 @@ describe("config", () => {
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
         expect(config.execution.kubernetes.cacheDir).toBe("/var/cache/discord-ai-agent");
         expect(config.execution.kubernetes.cachePvcName).toBeNull();
+        expect(config.execution.kubernetes.warmPool).toEqual({
+          enabled: false,
+          size: 0,
+          leaseSeconds: 1800,
+          idleTtlSeconds: 10_800
+        });
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
@@ -69,6 +79,25 @@ describe("config", () => {
     withEnv({ OVERLAY_DIRS: ["private-overlay", "private-overlay", "nested/overlay"].join(path.delimiter) }, () => {
       expect(loadConfig().overlays.dirs).toEqual([path.resolve("private-overlay"), path.resolve("nested/overlay")]);
     });
+  });
+
+  it("parses Kubernetes warm sandbox pool settings", () => {
+    withEnv(
+      {
+        SANDBOX_WARM_POOL_ENABLED: "true",
+        SANDBOX_WARM_POOL_SIZE: "3",
+        SANDBOX_WARM_POOL_LEASE_SECONDS: "2400",
+        SANDBOX_WARM_POOL_IDLE_TTL_SECONDS: "14400"
+      },
+      () => {
+        expect(loadConfig().execution.kubernetes.warmPool).toEqual({
+          enabled: true,
+          size: 3,
+          leaseSeconds: 2400,
+          idleTtlSeconds: 14_400
+        });
+      }
+    );
   });
 
   it("rejects placeholder GitHub repositories for sandbox execution", () => {

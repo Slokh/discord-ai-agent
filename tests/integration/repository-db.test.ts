@@ -449,6 +449,44 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
   });
 
+  it("claims, heartbeats, and releases warm sandboxes with a task lease", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const repoKey = `example/repo-${randomUUID()}#main`;
+    const sandboxId = `warm-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Task Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId,
+      channelId: `channel-${randomUUID()}`,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "warm lease test",
+      request: "simulate a warm sandbox lease",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+
+    await repo.upsertWarmSandbox({
+      sandboxId,
+      backend: "kubernetes-sandbox",
+      repoKey,
+      namespace: "discord-ai-agent",
+      podName: "warm-pod",
+      image: "sandbox:test",
+      status: "ready"
+    });
+
+    const claimed = await repo.claimReadyWarmSandbox({ repoKey, taskId, leaseOwner: "test", leaseSeconds: 120 });
+    expect(claimed).toEqual(expect.objectContaining({ sandboxId, status: "leased", leaseTaskId: taskId }));
+    await expect(repo.claimReadyWarmSandbox({ repoKey, taskId, leaseOwner: "test", leaseSeconds: 120 })).resolves.toBeUndefined();
+    await expect(repo.heartbeatWarmSandbox({ sandboxId, taskId, leaseSeconds: 120 })).resolves.toBe(true);
+
+    const released = await repo.releaseWarmSandbox({ sandboxId, taskId, status: "ready", metadata: { releasedBy: "test" } });
+    expect(released).toEqual(expect.objectContaining({ sandboxId, status: "ready", leaseTaskId: null, metadata: expect.objectContaining({ releasedBy: "test" }) }));
+  });
+
   it("tracks agent task notifications, command output, cancellation, and history", async () => {
     const taskId = `task-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
@@ -1643,6 +1681,7 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM conversation_messages WHERE thread_key LIKE 'discord:guild-%'");
   await pool.query("DELETE FROM conversation_sessions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM crawl_cursors WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
+  await pool.query("DELETE FROM warm_sandboxes WHERE sandbox_id LIKE 'warm-%' OR repo_key LIKE 'example/repo-%'");
   await pool.query("DELETE FROM agent_tasks WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR task_id LIKE 'task-%'");
   await pool.query("DELETE FROM durable_workflows WHERE guild_id LIKE 'guild-%' OR id LIKE 'workflow-%'");
   await pool.query("DELETE FROM server_overlays WHERE guild_id LIKE 'guild-%'");

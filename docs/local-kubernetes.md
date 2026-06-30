@@ -98,6 +98,16 @@ Expected behavior:
 - `@ai what happened to the last update?` shows task events and sandbox command output.
 - `@ai show recent update tasks` lists recent task history.
 
+The warm sandbox pool is off by default. To exercise the reusable-pod path locally, install the chart with:
+
+```bash
+helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
+  --set sandbox.warmPool.enabled=true \
+  --set sandbox.warmPool.size=1
+```
+
+The first request may still use a cold Job while the warm Pod becomes ready. Later requests should show `warm_pool_hit` in task progress when a ready warm Pod is claimed.
+
 Optional cache checks:
 
 ```bash

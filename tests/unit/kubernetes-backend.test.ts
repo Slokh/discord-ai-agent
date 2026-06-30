@@ -130,6 +130,118 @@ describe("KubernetesExecutionBackend", () => {
     );
   });
 
+  it("launches a task in a claimed warm sandbox pod when the pool has capacity", async () => {
+    await withEnv(
+      {
+        OPENROUTER_API_KEY: "sk-test",
+        GITHUB_TOKEN: "github-token",
+        GITHUB_REPOSITORY: "example/discord-ai-agent",
+        GITHUB_BASE_BRANCH: "main",
+        TASK_SIGNING_SECRET: "task-secret",
+        KUBERNETES_NAMESPACE: "discord-ai-agent",
+        SANDBOX_WARM_POOL_ENABLED: "true",
+        SANDBOX_WARM_POOL_SIZE: "1"
+      },
+      async () => {
+        const clients = fakeClients();
+        const exec = {
+          exec: vi.fn(async (_namespace, _podName, _containerName, _command, stdout, _stderr, _stdin, _tty, statusCallback) => {
+            stdout?.write("started\n");
+            statusCallback?.({ status: "Success" });
+            return { once: vi.fn() } as any;
+          })
+        };
+        const warmStore = fakeWarmStore({
+          countWarmSandboxes: vi.fn(async () => 1),
+          claimReadyWarmSandbox: vi.fn(async () => warmSandbox())
+        });
+        const backend = new KubernetesExecutionBackend(loadConfig(), { ...clients, exec }, { warmStore });
+
+        const result = await backend.start(agentTask());
+
+        expect(result).toEqual(
+          expect.objectContaining({
+            backendJobName: "warm-pod-1",
+            metadata: expect.objectContaining({ warmPool: "hit", warmSandboxId: "warm-1" })
+          })
+        );
+        expect(exec.exec).toHaveBeenCalledWith(
+          "discord-ai-agent",
+          "warm-pod-1",
+          "sandbox",
+          expect.any(Array),
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          false,
+          expect.any(Function)
+        );
+        expect(clients.batch.createNamespacedJob).not.toHaveBeenCalled();
+        expect(clients.core.createNamespacedSecret).not.toHaveBeenCalled();
+        expect(warmStore.heartbeatWarmSandbox).toHaveBeenCalledWith(
+          expect.objectContaining({ sandboxId: "warm-1", taskId: "task-00005678" })
+        );
+      }
+    );
+  });
+
+  it("releases warm sandboxes during cleanup instead of deleting job resources", async () => {
+    const clients = fakeClients();
+    const warmStore = fakeWarmStore();
+    const backend = new KubernetesExecutionBackend(loadConfig(), clients, { warmStore });
+
+    await backend.cleanupRun({
+      ...sandboxRun(),
+      backendJobName: "warm-pod-1",
+      metadata: { warmSandboxId: "warm-1" }
+    });
+
+    expect(warmStore.releaseWarmSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandboxId: "warm-1",
+        taskId: "task-00005678",
+        status: "ready"
+      })
+    );
+    expect(clients.batch.deleteNamespacedJob).not.toHaveBeenCalled();
+    expect(clients.core.deleteNamespacedSecret).not.toHaveBeenCalled();
+    expect(clients.core.deleteNamespacedConfigMap).not.toHaveBeenCalled();
+  });
+
+  it("pre-warms sandbox pods during warm pool reconciliation", async () => {
+    await withEnv(
+      {
+        GITHUB_REPOSITORY: "example/discord-ai-agent",
+        GITHUB_BASE_BRANCH: "main",
+        SANDBOX_WARM_POOL_ENABLED: "true",
+        SANDBOX_WARM_POOL_SIZE: "1"
+      },
+      async () => {
+        const clients = fakeClients();
+        const warmStore = fakeWarmStore({ countWarmSandboxes: vi.fn(async () => 0) });
+        const backend = new KubernetesExecutionBackend(
+          loadConfig(),
+          { ...clients, exec: { exec: vi.fn() } },
+          { warmStore }
+        );
+
+        await backend.reconcileWarmPool();
+
+        expect(warmStore.upsertWarmSandbox).toHaveBeenCalledWith(expect.objectContaining({ status: "creating" }));
+        expect(clients.core.createNamespacedPod).toHaveBeenCalledWith(
+          expect.objectContaining({
+            namespace: "discord-ai-agent",
+            body: expect.objectContaining({
+              metadata: expect.objectContaining({
+                labels: expect.objectContaining({ "discord-ai-agent/sandbox-role": "warm-pool" })
+              })
+            })
+          })
+        );
+      }
+    );
+  });
+
   it("treats Kubernetes 404 response shapes as gone", async () => {
     const clients = fakeClients({
       readNamespacedJob: vi.fn(async () => {
@@ -163,8 +275,54 @@ function fakeClients(
       createNamespacedConfigMap: vi.fn(async () => ({})),
       replaceNamespacedConfigMap: vi.fn(async () => ({})),
       deleteNamespacedConfigMap: vi.fn(async () => ({})),
+      createNamespacedPod: vi.fn(async () => ({})),
+      readNamespacedPod: vi.fn(async () => ({
+        status: {
+          phase: "Running",
+          containerStatuses: [{ name: "sandbox", ready: true, image: "sandbox:latest", imageID: "sandbox:latest", restartCount: 0 }]
+        }
+      })),
+      deleteNamespacedPod: vi.fn(async () => ({})),
       ...coreOverrides
     }
+  };
+}
+
+function fakeWarmStore(overrides: Record<string, unknown> = {}) {
+  return {
+    upsertWarmSandbox: vi.fn(async () => warmSandbox()),
+    listWarmSandboxes: vi.fn(async () => []),
+    countWarmSandboxes: vi.fn(async () => 0),
+    markWarmSandboxReady: vi.fn(async () => warmSandbox()),
+    claimReadyWarmSandbox: vi.fn(async () => undefined),
+    heartbeatWarmSandbox: vi.fn(async () => true),
+    releaseWarmSandbox: vi.fn(async () => warmSandbox()),
+    markWarmSandboxFailed: vi.fn(async () => warmSandbox({ status: "failed" })),
+    listExpiredWarmSandboxLeases: vi.fn(async () => []),
+    ...overrides
+  } as any;
+}
+
+function warmSandbox(overrides: Record<string, unknown> = {}) {
+  return {
+    sandboxId: "warm-1",
+    backend: "kubernetes-sandbox",
+    repoKey: "example/discord-ai-agent#main",
+    namespace: "discord-ai-agent",
+    podName: "warm-pod-1",
+    image: "discord-ai-agent-sandbox:latest",
+    status: "ready",
+    leaseTaskId: null,
+    leaseOwner: null,
+    leasedAt: null,
+    leaseExpiresAt: null,
+    lastHeartbeatAt: null,
+    lastUsedAt: null,
+    metadata: {},
+    lastError: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-01T00:00:00Z"),
+    ...overrides
   };
 }
 

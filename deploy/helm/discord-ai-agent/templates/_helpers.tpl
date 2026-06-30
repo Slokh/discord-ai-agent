@@ -98,6 +98,14 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 - name: SANDBOX_CACHE_PVC_NAME
   value: {{ include "discord-ai-agent.fullname" . }}-sandbox-cache
 {{- end }}
+- name: SANDBOX_WARM_POOL_ENABLED
+  value: {{ .Values.sandbox.warmPool.enabled | quote }}
+- name: SANDBOX_WARM_POOL_SIZE
+  value: {{ .Values.sandbox.warmPool.size | quote }}
+- name: SANDBOX_WARM_POOL_LEASE_SECONDS
+  value: {{ .Values.sandbox.warmPool.leaseSeconds | quote }}
+- name: SANDBOX_WARM_POOL_IDLE_TTL_SECONDS
+  value: {{ .Values.sandbox.warmPool.idleTtlSeconds | quote }}
 {{- end -}}
 
 {{- define "discord-ai-agent.discordEnv" -}}

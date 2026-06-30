@@ -375,6 +375,28 @@ export type SandboxCommandEvent = {
   createdAt: Date;
 };
 
+export type WarmSandboxStatus = "creating" | "ready" | "leased" | "failed" | "draining";
+
+export type WarmSandboxRecord = {
+  sandboxId: string;
+  backend: string;
+  repoKey: string;
+  namespace: string | null;
+  podName: string | null;
+  image: string | null;
+  status: WarmSandboxStatus;
+  leaseTaskId: string | null;
+  leaseOwner: string | null;
+  leasedAt: Date | null;
+  leaseExpiresAt: Date | null;
+  lastHeartbeatAt: Date | null;
+  lastUsedAt: Date | null;
+  metadata: Record<string, unknown>;
+  lastError: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type ServerOverlay = {
   guildId: string;
   enabled: boolean;
@@ -2687,6 +2709,204 @@ export class DiscordAiAgentRepository {
     );
   }
 
+  async upsertWarmSandbox(input: {
+    sandboxId: string;
+    backend: string;
+    repoKey: string;
+    namespace?: string | null;
+    podName?: string | null;
+    image?: string | null;
+    status?: WarmSandboxStatus;
+    metadata?: Record<string, unknown>;
+  }): Promise<WarmSandboxRecord> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO warm_sandboxes(
+          sandbox_id, backend, repo_key, namespace, pod_name, image, status, metadata, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, coalesce($7, 'creating'), $8, now())
+        ON CONFLICT(sandbox_id) DO UPDATE SET
+          backend = EXCLUDED.backend,
+          repo_key = EXCLUDED.repo_key,
+          namespace = EXCLUDED.namespace,
+          pod_name = EXCLUDED.pod_name,
+          image = EXCLUDED.image,
+          status = EXCLUDED.status,
+          metadata = warm_sandboxes.metadata || EXCLUDED.metadata,
+          updated_at = now()
+        RETURNING *
+      `,
+      [
+        input.sandboxId,
+        input.backend,
+        input.repoKey,
+        input.namespace ?? null,
+        input.podName ?? null,
+        input.image ?? null,
+        input.status ?? "creating",
+        JSON.stringify(input.metadata ?? {})
+      ]
+    );
+    return rowToWarmSandbox(result.rows[0]);
+  }
+
+  async listWarmSandboxes(input: { repoKey?: string; statuses?: WarmSandboxStatus[]; limit?: number } = {}): Promise<WarmSandboxRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM warm_sandboxes
+        WHERE ($1::text IS NULL OR repo_key = $1)
+          AND (coalesce(array_length($2::text[], 1), 0) = 0 OR status = ANY($2::text[]))
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT $3
+      `,
+      [input.repoKey ?? null, input.statuses ?? [], Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)))]
+    );
+    return result.rows.map(rowToWarmSandbox);
+  }
+
+  async countWarmSandboxes(input: { repoKey: string; statuses: WarmSandboxStatus[] }): Promise<number> {
+    const result = await this.pool.query(
+      `
+        SELECT count(*)::int AS count
+        FROM warm_sandboxes
+        WHERE repo_key = $1
+          AND status = ANY($2::text[])
+      `,
+      [input.repoKey, input.statuses]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async markWarmSandboxReady(input: { sandboxId: string; metadata?: Record<string, unknown> }): Promise<WarmSandboxRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        UPDATE warm_sandboxes
+        SET status = 'ready',
+            lease_task_id = NULL,
+            lease_owner = NULL,
+            leased_at = NULL,
+            lease_expires_at = NULL,
+            last_heartbeat_at = now(),
+            metadata = metadata || $2::jsonb,
+            last_error = NULL,
+            updated_at = now()
+        WHERE sandbox_id = $1
+          AND status IN ('creating', 'ready', 'leased')
+        RETURNING *
+      `,
+      [input.sandboxId, JSON.stringify(input.metadata ?? {})]
+    );
+    return result.rows[0] ? rowToWarmSandbox(result.rows[0]) : undefined;
+  }
+
+  async claimReadyWarmSandbox(input: {
+    repoKey: string;
+    taskId: string;
+    leaseOwner: string;
+    leaseSeconds: number;
+  }): Promise<WarmSandboxRecord | undefined> {
+    const leaseSeconds = Math.max(60, Math.trunc(input.leaseSeconds));
+    const result = await this.pool.query(
+      `
+        WITH candidate AS (
+          SELECT sandbox_id
+          FROM warm_sandboxes
+          WHERE repo_key = $1
+            AND status = 'ready'
+          ORDER BY coalesce(last_used_at, created_at) ASC, created_at ASC
+          FOR UPDATE SKIP LOCKED
+          LIMIT 1
+        )
+        UPDATE warm_sandboxes ws
+        SET status = 'leased',
+            lease_task_id = $2,
+            lease_owner = $3,
+            leased_at = now(),
+            lease_expires_at = now() + ($4::int * interval '1 second'),
+            last_heartbeat_at = now(),
+            updated_at = now()
+        FROM candidate
+        WHERE ws.sandbox_id = candidate.sandbox_id
+        RETURNING ws.*
+      `,
+      [input.repoKey, input.taskId, input.leaseOwner, leaseSeconds]
+    );
+    return result.rows[0] ? rowToWarmSandbox(result.rows[0]) : undefined;
+  }
+
+  async heartbeatWarmSandbox(input: { sandboxId: string; taskId?: string | null; leaseSeconds?: number }): Promise<boolean> {
+    const leaseSeconds = Math.max(60, Math.trunc(input.leaseSeconds ?? 1800));
+    const result = await this.pool.query(
+      `
+        UPDATE warm_sandboxes
+        SET last_heartbeat_at = now(),
+            lease_expires_at = CASE WHEN status = 'leased' THEN now() + ($3::int * interval '1 second') ELSE lease_expires_at END,
+            updated_at = now()
+        WHERE sandbox_id = $1
+          AND ($2::text IS NULL OR lease_task_id = $2)
+          AND status IN ('ready', 'leased')
+      `,
+      [input.sandboxId, input.taskId ?? null, leaseSeconds]
+    );
+    return Boolean(result.rowCount && result.rowCount > 0);
+  }
+
+  async releaseWarmSandbox(input: {
+    sandboxId: string;
+    taskId?: string | null;
+    status?: Extract<WarmSandboxStatus, "ready" | "failed" | "draining">;
+    error?: string | null;
+    metadata?: Record<string, unknown>;
+  }): Promise<WarmSandboxRecord | undefined> {
+    const status = input.status ?? "ready";
+    const result = await this.pool.query(
+      `
+        UPDATE warm_sandboxes
+        SET status = $3,
+            lease_task_id = NULL,
+            lease_owner = NULL,
+            leased_at = NULL,
+            lease_expires_at = NULL,
+            last_heartbeat_at = now(),
+            last_used_at = now(),
+            metadata = metadata || $5::jsonb,
+            last_error = CASE WHEN $3 = 'failed' THEN $4 ELSE NULL END,
+            updated_at = now()
+        WHERE sandbox_id = $1
+          AND ($2::text IS NULL OR lease_task_id = $2 OR lease_task_id IS NULL)
+        RETURNING *
+      `,
+      [input.sandboxId, input.taskId ?? null, status, input.error ?? null, JSON.stringify(input.metadata ?? {})]
+    );
+    return result.rows[0] ? rowToWarmSandbox(result.rows[0]) : undefined;
+  }
+
+  async markWarmSandboxFailed(input: { sandboxId: string; error: string; metadata?: Record<string, unknown> }): Promise<WarmSandboxRecord | undefined> {
+    return this.releaseWarmSandbox({
+      sandboxId: input.sandboxId,
+      status: "failed",
+      error: input.error,
+      metadata: input.metadata
+    });
+  }
+
+  async listExpiredWarmSandboxLeases(limit = 50): Promise<WarmSandboxRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM warm_sandboxes
+        WHERE status = 'leased'
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at < now()
+        ORDER BY lease_expires_at ASC
+        LIMIT $1
+      `,
+      [Math.max(1, Math.min(200, Math.trunc(limit)))]
+    );
+    return result.rows.map(rowToWarmSandbox);
+  }
+
   async getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> {
     const result = await this.pool.query(
       `
@@ -3327,12 +3547,14 @@ export class DiscordAiAgentRepository {
   async getAgentTaskMetrics(): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     sandboxRunsByStatus: Array<{ status: string; count: number }>;
+    warmSandboxesByStatus: Array<{ status: string; count: number }>;
     codegenPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
     sandboxCacheEvents: Array<{ cacheType: string; cacheStatus: string; count: number }>;
   }> {
-    const [tasks, sandboxRuns, phaseDurations, cacheEvents] = await Promise.all([
+    const [tasks, sandboxRuns, warmSandboxes, phaseDurations, cacheEvents] = await Promise.all([
       this.pool.query("SELECT status, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
       this.pool.query("SELECT status, count(*)::int AS count FROM sandbox_runs GROUP BY status ORDER BY status"),
+      this.pool.query("SELECT status, count(*)::int AS count FROM warm_sandboxes GROUP BY status ORDER BY status"),
       this.pool.query(`
         SELECT
           regexp_replace(metadata->>'step', '_complete$', '') AS phase,
@@ -3362,6 +3584,7 @@ export class DiscordAiAgentRepository {
     return {
       tasksByStatus: tasks.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
       sandboxRunsByStatus: sandboxRuns.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
+      warmSandboxesByStatus: warmSandboxes.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
       codegenPhaseDurations: phaseDurations.rows.map((row) => ({
         phase: String(row.phase),
         count: Number(row.count),
@@ -3454,6 +3677,28 @@ function rowToSandboxRun(row: any): SandboxRunRecord {
     startedAt: row.started_at == null ? null : new Date(row.started_at),
     completedAt: row.completed_at == null ? null : new Date(row.completed_at),
     cleanedUpAt: row.cleaned_up_at == null ? null : new Date(row.cleaned_up_at),
+    updatedAt: new Date(row.updated_at)
+  };
+}
+
+function rowToWarmSandbox(row: any): WarmSandboxRecord {
+  return {
+    sandboxId: String(row.sandbox_id),
+    backend: String(row.backend),
+    repoKey: String(row.repo_key),
+    namespace: row.namespace == null ? null : String(row.namespace),
+    podName: row.pod_name == null ? null : String(row.pod_name),
+    image: row.image == null ? null : String(row.image),
+    status: row.status as WarmSandboxStatus,
+    leaseTaskId: row.lease_task_id == null ? null : String(row.lease_task_id),
+    leaseOwner: row.lease_owner == null ? null : String(row.lease_owner),
+    leasedAt: row.leased_at == null ? null : new Date(row.leased_at),
+    leaseExpiresAt: row.lease_expires_at == null ? null : new Date(row.lease_expires_at),
+    lastHeartbeatAt: row.last_heartbeat_at == null ? null : new Date(row.last_heartbeat_at),
+    lastUsedAt: row.last_used_at == null ? null : new Date(row.last_used_at),
+    metadata: row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {},
+    lastError: row.last_error == null ? null : String(row.last_error),
+    createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at)
   };
 }

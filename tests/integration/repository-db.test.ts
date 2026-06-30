@@ -470,6 +470,20 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       backend: "kubernetes-sandbox"
     });
 
+    await repo.recordSandboxRun({
+      taskId,
+      sandboxRunId,
+      backend: "kubernetes-sandbox",
+      namespace: "discord-ai-agent",
+      backendJobName: "agent-task-cancel-test",
+      image: "sandbox:test"
+    });
+    await repo.markAgentTaskProgress({
+      taskId,
+      step: "codex_activity",
+      statusMessage: "codex is still running.",
+      metadata: { command: "codex exec -", stderrTail: "live stderr tail", durationMs: 30_000 }
+    });
     await repo.recordSandboxCommandEvent({
       taskId,
       sandboxRunId,
@@ -483,6 +497,16 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     await expect(repo.getSandboxCommandEvents({ guildId, visibleChannelIds: [channelId], taskId, limit: 10 })).resolves.toEqual([
       expect.objectContaining({ taskId, sandboxRunId, step: "verify", exitCode: 1, errorTail: "stderr tail" })
+    ]);
+    await expect(repo.listRecentAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
+    await expect(repo.getTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({ taskId, summary: "codex is still running.", metadata: expect.objectContaining({ stderrTail: "live stderr tail" }) })
+    ]);
+    await expect(repo.getSandboxCommandEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({ taskId, sandboxRunId, step: "verify", exitCode: 1, errorTail: "stderr tail" })
+    ]);
+    await expect(repo.getSandboxRunsForTask(taskId)).resolves.toEqual([
+      expect.objectContaining({ taskId, sandboxRunId, backendJobName: "agent-task-cancel-test" })
     ]);
     await expect(repo.cancelAgentTask({ taskId, reason: "user changed their mind" })).resolves.toBe(true);
     await repo.markAgentTaskSucceeded({

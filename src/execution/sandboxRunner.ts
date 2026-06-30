@@ -7,6 +7,7 @@ import { Octokit } from "@octokit/rest";
 import { slugify } from "../util/text.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
+const MAX_ACTIVITY_COMMAND_OUTPUT = 12_000;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
 
 type SandboxEnv = {
@@ -831,13 +832,16 @@ async function runCommand(
 
   let stdout = "";
   let stderr = "";
+  const commandLine = `${command} ${redactedArgs(command, args).join(" ")}`.trim();
   const activityTimer =
     options.taskEnv && shouldEmitCommandActivity(step)
       ? setInterval(() => {
           void progress(options.taskEnv!, `${step}_activity`, `${step} is still running after ${formatDuration(Date.now() - startedAt)}.`, {
-            command,
+            command: commandLine,
             stdoutChars: stdout.length,
             stderrChars: stderr.length,
+            stdoutTail: tail(stdout, MAX_ACTIVITY_COMMAND_OUTPUT),
+            stderrTail: tail(stderr, MAX_ACTIVITY_COMMAND_OUTPUT),
             durationMs: Date.now() - startedAt
           }).catch(() => undefined);
         }, 30_000)
@@ -869,7 +873,7 @@ async function runCommand(
   }
   await recordCommand(options.taskEnv, {
     step,
-    command: `${command} ${redactedArgs(command, args).join(" ")}`.trim(),
+    command: commandLine,
     exitCode,
     outputTail: stdout,
     errorTail: stderr,
@@ -905,6 +909,10 @@ function appendLimited(current: string, next: string) {
   const combined = current + next;
   if (combined.length <= MAX_CAPTURED_COMMAND_OUTPUT) return combined;
   return combined.slice(combined.length - MAX_CAPTURED_COMMAND_OUTPUT);
+}
+
+function tail(value: string, maxChars: number) {
+  return value.length <= maxChars ? value : value.slice(value.length - maxChars);
 }
 
 function sha256(value: string) {

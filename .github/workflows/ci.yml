@@ -69,6 +69,8 @@ jobs:
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
       HELM_RELEASE: ${{ vars.HELM_RELEASE || 'discord-ai-agent' }}
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
+      API_SERVICE_TYPE: ${{ vars.API_SERVICE_TYPE }}
+      API_TLS_CERTIFICATE_ARN: ${{ vars.API_TLS_CERTIFICATE_ARN }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -93,10 +95,24 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+          helm_args=(
+            --namespace "$K8S_NAMESPACE"
+            --create-namespace
+            --set "image.repository=$REGISTRY/$ECR_REPOSITORY"
+            --set "image.tag=$IMAGE_TAG"
+            --set "sandbox.image=$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
+            --set "config.githubRepository=$GITHUB_REPOSITORY"
+          )
+          if [ -n "${API_SERVICE_TYPE:-}" ]; then
+            helm_args+=(--set "api.publicService.type=$API_SERVICE_TYPE")
+          fi
+          if [ -n "${API_TLS_CERTIFICATE_ARN:-}" ]; then
+            helm_args+=(
+              --set "api.publicService.enabled=true"
+              --set-string "api.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-cert=$API_TLS_CERTIFICATE_ARN"
+              --set-string "api.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-ports=https"
+              --set-string "api.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-backend-protocol=http"
+            )
+          fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
-            --namespace "$K8S_NAMESPACE" \
-            --create-namespace \
-            --set image.repository="$REGISTRY/$ECR_REPOSITORY" \
-            --set image.tag="$IMAGE_TAG" \
-            --set sandbox.image="$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" \
-            --set config.githubRepository="$GITHUB_REPOSITORY"
+            "${helm_args[@]}"

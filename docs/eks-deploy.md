@@ -39,7 +39,8 @@ kubectl -n discord-ai-agent create secret generic discord-ai-agent-env \
   --from-literal=GITHUB_APP_ID='...' \
   --from-literal=GITHUB_APP_PRIVATE_KEY='...' \
   --from-literal=GITHUB_APP_INSTALLATION_ID='...' \
-  --from-literal=TASK_SIGNING_SECRET="$(openssl rand -hex 32)"
+  --from-literal=TASK_SIGNING_SECRET="$(openssl rand -hex 32)" \
+  --from-literal=CONTROL_UI_AUTH_PASSWORD="$(openssl rand -base64 32)"
 ```
 
 For production, prefer creating the Secret from your normal secret manager rather than shell literals.
@@ -143,6 +144,30 @@ helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
 ```
 
 The default allowed hosts cover GitHub, OpenRouter, and npm package downloads. Add more hosts only for tools the sandbox actually needs.
+
+## Public Task Viewer
+
+The codegen task viewer is available at `/tasks` on the API service. Keep the default cluster-internal service for the lowest-cost setup, then open it with:
+
+```bash
+kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080
+```
+
+If you expose it with a public hostname, use HTTPS and keep `CONTROL_UI_AUTH_PASSWORD` set. Browser login uses username `admin` and the configured password.
+
+For an AWS LoadBalancer service with ACM TLS termination, set:
+
+```bash
+helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
+  --namespace discord-ai-agent \
+  --set api.publicService.enabled=true \
+  --set api.publicService.type=LoadBalancer \
+  --set-string 'api.publicService.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-ssl-cert=arn:aws:acm:REGION:ACCOUNT:certificate/CERT_ID' \
+  --set-string 'api.publicService.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-ssl-ports=https' \
+  --set-string 'api.publicService.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-backend-protocol=http'
+```
+
+Then create a Route53 alias or CNAME for the LoadBalancer hostname.
 
 ## Debugging
 

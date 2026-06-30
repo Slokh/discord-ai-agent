@@ -919,9 +919,8 @@ function shareableCurrentUrl() {
 
 function formatDuration(value: number | null | undefined) {
   if (value == null) return "live";
-  if (value < 1000) return `${value}ms`;
   const seconds = value / 1000;
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  if (seconds < 60) return `${seconds.toFixed(3)}s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${Math.round(seconds % 60)}s`;
 }

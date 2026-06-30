@@ -71,6 +71,7 @@ jobs:
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'discord-ai-agent' }}
       API_SERVICE_TYPE: ${{ vars.API_SERVICE_TYPE }}
       API_TLS_CERTIFICATE_ARN: ${{ vars.API_TLS_CERTIFICATE_ARN }}
+      CONTROL_UI_PUBLIC_URL: ${{ vars.CONTROL_UI_PUBLIC_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -113,6 +114,9 @@ jobs:
               --set-string "api.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-ssl-ports=https"
               --set-string "api.publicService.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-backend-protocol=http"
             )
+          fi
+          if [ -n "${CONTROL_UI_PUBLIC_URL:-}" ]; then
+            helm_args+=(--set-string "config.controlUiPublicUrl=$CONTROL_UI_PUBLIC_URL")
           fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
             "${helm_args[@]}"

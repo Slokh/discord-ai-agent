@@ -51,6 +51,7 @@ spec:
             {{- include "discord-ai-agent.runtimeMigrationEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.internalApiEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.controlUiPublicEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
 ---

@@ -6,14 +6,16 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
 import { verifyTaskBearerToken } from "../execution/token.js";
 import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execution/types.js";
-import { renderTaskListPage, renderTaskTerminalPage } from "./taskTerminalUi.js";
+import { getRunSnapshot, listRunSummaries } from "../observability/runs.js";
+import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
-const MAX_BODY_BYTES = 128 * 1024;
+const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const UI_AUTH_COOKIE_NAME = "discord_ai_agent_ui_auth";
 const UI_AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 export type InternalApiRuntime = {
   close: () => Promise<void>;
+  url: string;
 };
 
 export async function startInternalApi(input: { config: AppConfig; repo: DiscordAiAgentRepository }): Promise<InternalApiRuntime> {
@@ -30,9 +32,12 @@ export async function startInternalApi(input: { config: AppConfig; repo: Discord
   await new Promise<void>((resolve) => {
     server.listen(input.config.internalApi.port, input.config.internalApi.host, resolve);
   });
-  logger.info({ host: input.config.internalApi.host, port: input.config.internalApi.port }, "Internal task callback API is listening");
+  const address = server.address();
+  const actualPort = address && typeof address === "object" ? address.port : input.config.internalApi.port;
+  logger.info({ host: input.config.internalApi.host, port: actualPort }, "Internal task callback API is listening");
 
   return {
+    url: `http://127.0.0.1:${actualPort}`,
     close: () =>
       new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -56,26 +61,115 @@ async function handleRequest(input: {
 
   if (method === "GET" && url.pathname === "/logout") {
     clearUiAuthCookie(input.response, input.request);
-    sendRedirect(input.response, "/tasks");
+    sendRedirect(input.response, "/runs");
+    return;
+  }
+
+  if (method === "GET" && url.pathname.startsWith("/console/")) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const asset = await readRunConsoleAsset(url.pathname);
+    if (!asset) {
+      sendJson(input.response, 404, { error: "asset_not_found" });
+      return;
+    }
+    sendBuffer(input.response, 200, asset.body, asset.contentType);
     return;
   }
 
   if (method === "GET" && url.pathname === "/") {
     if (!authorizedUi(input.config, input.request, input.response, url, { redirectOnQueryAuth: true })) return;
-    sendRedirect(input.response, "/tasks");
+    sendRedirect(input.response, "/runs");
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/runs") {
+    if (!authorizedUi(input.config, input.request, input.response, url, { redirectOnQueryAuth: true })) return;
+    sendHtml(input.response, 200, await renderRunConsolePage());
+    return;
+  }
+
+  const runPageMatch = url.pathname.match(/^\/runs\/([^/]+)$/);
+  if (method === "GET" && runPageMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url, { redirectOnQueryAuth: true })) return;
+    sendHtml(input.response, 200, await renderRunConsolePage());
     return;
   }
 
   if (method === "GET" && url.pathname === "/tasks") {
     if (!authorizedUi(input.config, input.request, input.response, url, { redirectOnQueryAuth: true })) return;
-    sendHtml(input.response, 200, renderTaskListPage());
+    sendRedirect(input.response, "/runs");
     return;
   }
 
   const taskPageMatch = url.pathname.match(/^\/tasks\/([^/]+)$/);
   if (method === "GET" && taskPageMatch) {
     if (!authorizedUi(input.config, input.request, input.response, url, { redirectOnQueryAuth: true })) return;
-    sendHtml(input.response, 200, renderTaskTerminalPage(decodeURIComponent(taskPageMatch[1] ?? "")));
+    sendRedirect(input.response, `/runs/${encodeURIComponent(decodeURIComponent(taskPageMatch[1] ?? ""))}`);
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/runs") {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const limit = parseLimit(url.searchParams.get("limit"), 100, 200);
+    sendJson(input.response, 200, {
+      runs: await listRunSummaries(input.repo, { limit }),
+      generatedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  const runSnapshotMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
+  if (method === "GET" && runSnapshotMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const runId = decodeURIComponent(runSnapshotMatch[1] ?? "");
+    const snapshot = await getRunSnapshot(input.repo, runId);
+    if (!snapshot) {
+      sendJson(input.response, 404, { error: "run_not_found" });
+      return;
+    }
+    sendJson(input.response, 200, snapshot as unknown as Record<string, unknown>);
+    return;
+  }
+
+  const runEventsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
+  if (method === "GET" && runEventsMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const runId = decodeURIComponent(runEventsMatch[1] ?? "");
+    const snapshot = await getRunSnapshot(input.repo, runId);
+    if (!snapshot) {
+      sendJson(input.response, 404, { error: "run_not_found" });
+      return;
+    }
+    sendJson(input.response, 200, {
+      events: snapshot.events,
+      generatedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  const runArtifactMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/);
+  if (method === "GET" && runArtifactMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const runId = decodeURIComponent(runArtifactMatch[1] ?? "");
+    const artifactId = decodeURIComponent(runArtifactMatch[2] ?? "");
+    const artifact = await input.repo.getProcessRunArtifact({ runId, artifactId });
+    if (!artifact) {
+      sendJson(input.response, 404, { error: "artifact_not_found" });
+      return;
+    }
+    sendText(input.response, 200, artifact.content, artifact.contentType);
+    return;
+  }
+
+  const runStreamMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/stream$/);
+  if (method === "GET" && runStreamMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    await streamRunSnapshots({
+      repo: input.repo,
+      request: input.request,
+      response: input.response,
+      runId: decodeURIComponent(runStreamMatch[1] ?? "")
+    });
     return;
   }
 
@@ -185,6 +279,26 @@ async function handleRequest(input: {
       durationMs: body.durationMs
     });
     sendJson(input.response, 200, { ok: true });
+    return;
+  }
+
+  const artifactMatch = url.pathname.match(/^\/internal\/tasks\/([^/]+)\/artifacts$/);
+  if (method === "POST" && artifactMatch) {
+    const taskId = decodeURIComponent(artifactMatch[1] ?? "");
+    if (!authorized(input.config, input.request, taskId)) {
+      sendJson(input.response, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = parseArtifactEvent(await readJsonBody(input.request));
+    const artifact = await input.repo.storeProcessRunArtifact({
+      runId: taskId,
+      kind: body.kind,
+      name: body.name,
+      content: body.content,
+      contentType: body.contentType,
+      metadata: body.metadata
+    });
+    sendJson(input.response, 200, { ok: true, artifactId: artifact?.artifactId ?? null });
     return;
   }
 
@@ -339,6 +453,50 @@ function parseCommandEvent(value: unknown): {
   };
 }
 
+function parseArtifactEvent(value: unknown): {
+  kind:
+    | "prompt"
+    | "command_log"
+    | "diff"
+    | "pr_body"
+    | "model_transcript"
+    | "tool_transcript"
+    | "crawl_summary"
+    | "embedding_summary"
+    | "raw_json"
+    | "response"
+    | "diagnostic";
+  name: string;
+  content: string;
+  contentType: string;
+  metadata: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object") throw new Error("Artifact event body must be an object.");
+  const body = value as Record<string, unknown>;
+  const kind = typeof body.kind === "string" ? body.kind : "raw_json";
+  const allowedKinds = new Set([
+    "prompt",
+    "command_log",
+    "diff",
+    "pr_body",
+    "model_transcript",
+    "tool_transcript",
+    "crawl_summary",
+    "embedding_summary",
+    "raw_json",
+    "response",
+    "diagnostic"
+  ]);
+  if (!allowedKinds.has(kind)) throw new Error("Invalid artifact kind.");
+  return {
+    kind: kind as ReturnType<typeof parseArtifactEvent>["kind"],
+    name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 200) : kind,
+    content: typeof body.content === "string" ? body.content : JSON.stringify(body.content ?? "", null, 2),
+    contentType: typeof body.contentType === "string" && body.contentType.trim() ? body.contentType.trim() : "text/plain",
+    metadata: body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? (body.metadata as Record<string, unknown>) : {}
+  };
+}
+
 function stringOrNull(value: unknown) {
   return typeof value === "string" ? value : null;
 }
@@ -362,9 +520,18 @@ function sendHtml(response: http.ServerResponse, status: number, body: string) {
   response.end(body);
 }
 
-function sendText(response: http.ServerResponse, status: number, body: string) {
+function sendText(response: http.ServerResponse, status: number, body: string, contentType = "text/plain; version=0.0.4") {
   if (response.headersSent) return;
-  response.writeHead(status, { "content-type": "text/plain; version=0.0.4" });
+  response.writeHead(status, { "content-type": contentType });
+  response.end(body);
+}
+
+function sendBuffer(response: http.ServerResponse, status: number, body: Buffer, contentType: string) {
+  if (response.headersSent) return;
+  response.writeHead(status, {
+    "content-type": contentType,
+    "cache-control": "public, max-age=31536000, immutable"
+  });
   response.end(body);
 }
 
@@ -372,6 +539,50 @@ function sendRedirect(response: http.ServerResponse, location: string) {
   if (response.headersSent) return;
   response.writeHead(302, { location });
   response.end();
+}
+
+async function streamRunSnapshots(input: {
+  repo: DiscordAiAgentRepository;
+  request: http.IncomingMessage;
+  response: http.ServerResponse;
+  runId: string;
+}) {
+  input.response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive"
+  });
+
+  let closed = false;
+  input.request.on("close", () => {
+    closed = true;
+  });
+
+  const sendSnapshot = async () => {
+    if (closed || input.response.destroyed) return;
+    const snapshot = await getRunSnapshot(input.repo, input.runId);
+    if (!snapshot) {
+      input.response.write(`event: error\ndata: ${JSON.stringify({ error: "run_not_found" })}\n\n`);
+      input.response.end();
+      closed = true;
+      return;
+    }
+    input.response.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+  };
+
+  await sendSnapshot();
+  const interval = setInterval(() => {
+    void sendSnapshot().catch((error) => {
+      logger.warn({ err: error, runId: input.runId }, "Failed to stream run snapshot");
+    });
+  }, 2000);
+  interval.unref?.();
+
+  await new Promise<void>((resolve) => {
+    input.request.on("close", resolve);
+    input.response.on("close", resolve);
+  });
+  clearInterval(interval);
 }
 
 function setUiAuthCookie(response: http.ServerResponse, password: string, request: http.IncomingMessage) {

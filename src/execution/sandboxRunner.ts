@@ -119,6 +119,15 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     await progress(env, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, env);
 
+    const codexPrompt = codeUpdatePrompt(env);
+    await recordArtifact(env, {
+      kind: "prompt",
+      name: "Codex prompt",
+      content: codexPrompt,
+      contentType: "text/plain",
+      metadata: { model: env.openRouterChatModel }
+    });
+
     await timedPhase(env, timings, "codex", "Running Codex to implement the requested change.", async () => {
       await runCommand(
         process.env.CODEX_BIN || "codex",
@@ -126,7 +135,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
         {
           cwd: checkoutDir,
           env: codexEnv(env, gitEnv, workRoot, toolShimDir),
-          input: codeUpdatePrompt(env),
+          input: codexPrompt,
           taskEnv: env,
           step: "codex"
         }
@@ -138,6 +147,22 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     if (!status.stdout.trim()) {
       throw new Error("Agent task produced no diff; no PR will be opened.");
     }
+    const diffStat = await runCommand("git", ["diff", "--stat"], { cwd: checkoutDir, taskEnv: env, step: "diff_stat" });
+    await recordArtifact(env, {
+      kind: "diff",
+      name: "Git diff stat",
+      content: diffStat.stdout,
+      contentType: "text/plain",
+      metadata: { command: "git diff --stat" }
+    });
+    const diffPatch = await runCommand("git", ["diff", "--no-ext-diff"], { cwd: checkoutDir, taskEnv: env, step: "diff_patch" });
+    await recordArtifact(env, {
+      kind: "diff",
+      name: "Git patch",
+      content: diffPatch.stdout,
+      contentType: "text/x-diff",
+      metadata: { command: "git diff --no-ext-diff" }
+    });
 
     const dependencyStateAfterCodex = await readDependencyManifestState(checkoutDir);
     const dependencyFilesChanged = changedDependencyManifestFiles(dependencyStateBeforeCodex, dependencyStateAfterCodex);
@@ -192,6 +217,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
 
     const draft = verify.exitCode !== 0;
     const octokit = new Octokit({ auth: env.githubToken });
+    const initialPrBody = pullRequestBody({ env, verifyPassed: verify.exitCode === 0, timings, cacheSummary });
     const pr = await timedPhase(env, timings, "pr", "Opening the GitHub pull request.", async () =>
       octokit.pulls.create({
         owner,
@@ -200,21 +226,29 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
         head: branchName,
         base: env.githubBaseBranch,
         draft,
-        body: pullRequestBody({ env, verifyPassed: verify.exitCode === 0, timings, cacheSummary })
+        body: initialPrBody
       }), { draft }
     );
 
     timings.total = Date.now() - totalStartedAt;
+    const finalPrBody = pullRequestBody({ env, verifyPassed: verify.exitCode === 0, timings, cacheSummary });
     await octokit.pulls
       .update({
         owner,
         repo,
         pull_number: pr.data.number,
-        body: pullRequestBody({ env, verifyPassed: verify.exitCode === 0, timings, cacheSummary })
+        body: finalPrBody
       })
       .catch((error) => {
         console.error("Failed to update PR body with final timings", error);
       });
+    await recordArtifact(env, {
+      kind: "pr_body",
+      name: "Pull request body",
+      content: finalPrBody,
+      contentType: "text/markdown",
+      metadata: { prUrl: pr.data.html_url, draft, verifyPassed: verify.exitCode === 0 }
+    });
     await progress(env, "task_complete", "Code update task finished.", {
       durationMs: timings.total,
       timingsMs: timings,
@@ -850,12 +884,12 @@ async function runCommand(
 
   child.stdout.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
-    stdout = appendLimited(stdout, text);
+    stdout += text;
     process.stdout.write(text);
   });
   child.stderr.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
-    stderr = appendLimited(stderr, text);
+    stderr += text;
     process.stderr.write(text);
   });
 
@@ -875,9 +909,18 @@ async function runCommand(
     step,
     command: commandLine,
     exitCode,
-    outputTail: stdout,
-    errorTail: stderr,
+    outputTail: tail(stdout, MAX_CAPTURED_COMMAND_OUTPUT),
+    errorTail: tail(stderr, MAX_CAPTURED_COMMAND_OUTPUT),
     durationMs: Date.now() - startedAt
+  });
+  await recordArtifact(options.taskEnv, {
+    kind: "command_log",
+    name: `${step} command log`,
+    content: [`$ ${commandLine}`, stdout.trimEnd(), stderr.trimEnd(), `[exit ${exitCode} in ${formatDuration(Date.now() - startedAt)}]`]
+      .filter(Boolean)
+      .join("\n"),
+    contentType: "text/plain",
+    metadata: { step, command: commandLine, exitCode }
   });
   if (exitCode !== 0 && !options.allowFailure) {
     throw new Error(`${command} ${args.join(" ")} failed with exit code ${exitCode}: ${stderr || stdout}`);
@@ -905,10 +948,31 @@ async function recordCommand(
   });
 }
 
-function appendLimited(current: string, next: string) {
-  const combined = current + next;
-  if (combined.length <= MAX_CAPTURED_COMMAND_OUTPUT) return combined;
-  return combined.slice(combined.length - MAX_CAPTURED_COMMAND_OUTPUT);
+async function recordArtifact(
+  env: SandboxEnv | undefined,
+  body: {
+    kind:
+      | "prompt"
+      | "command_log"
+      | "diff"
+      | "pr_body"
+      | "model_transcript"
+      | "tool_transcript"
+      | "crawl_summary"
+      | "embedding_summary"
+      | "raw_json"
+      | "response"
+      | "diagnostic";
+    name: string;
+    content: string;
+    contentType: string;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  if (!env) return;
+  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/artifacts`, body).catch((error) => {
+    console.error("Failed to post sandbox artifact", error);
+  });
 }
 
 function tail(value: string, maxChars: number) {

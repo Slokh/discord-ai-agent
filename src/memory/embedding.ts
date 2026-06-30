@@ -50,6 +50,7 @@ export async function embedStoredMessages(input: {
   openRouter: OpenRouterClient;
   config: AppConfig;
   messageIds: string[];
+  runId?: string;
 }): Promise<BatchEmbeddingResult> {
   const startedAt = Date.now();
   const messageIds = [...new Set(input.messageIds)].filter(Boolean);
@@ -63,7 +64,15 @@ export async function embedStoredMessages(input: {
     };
   }
 
+  const loadStartedAt = Date.now();
   const messages = await input.repo.getMessagesForEmbedding(messageIds);
+  await recordEmbeddingSpan(input.repo, input.runId, {
+    spanId: "db.load_messages",
+    name: "Load messages for embedding",
+    startedAt: loadStartedAt,
+    durationMs: durationMs(loadStartedAt),
+    metadata: { requestedMessages: messageIds.length, loadedMessages: messages.length }
+  });
   const messagesById = new Map(messages.map((message) => [message.id, message]));
   const skipReasons: Record<string, number> = {};
   const chunks: Array<{ messageId: string; text: string }> = [];
@@ -87,12 +96,24 @@ export async function embedStoredMessages(input: {
 
   const embeddingsByMessageId = new Map<string, number[][]>();
   const chunkBatches = chunkArray(chunks, MAX_EMBEDDING_TEXTS_PER_REQUEST);
-  await mapWithConcurrency(chunkBatches, MAX_PARALLEL_EMBEDDING_REQUESTS, async (chunkBatch) => {
+  await mapWithConcurrency(chunkBatches, MAX_PARALLEL_EMBEDDING_REQUESTS, async (chunkBatch, batchIndex) => {
+    const embedStartedAt = Date.now();
     const embeddings = await input.openRouter.embed(
       chunkBatch.map((chunk) => chunk.text),
       input.config.openRouter.embeddingModel,
       input.config.embeddingDimensions
     );
+    await recordEmbeddingSpan(input.repo, input.runId, {
+      spanId: `openrouter.embed.${batchIndex}`,
+      name: `OpenRouter embed batch ${batchIndex + 1}`,
+      startedAt: embedStartedAt,
+      durationMs: durationMs(embedStartedAt),
+      metadata: {
+        textCount: chunkBatch.length,
+        model: input.config.openRouter.embeddingModel,
+        dimensions: input.config.embeddingDimensions
+      }
+    });
     if (embeddings.length !== chunkBatch.length) {
       throw new Error(`OpenRouter embedding response count mismatch: got ${embeddings.length}, expected ${chunkBatch.length}.`);
     }
@@ -111,11 +132,19 @@ export async function embedStoredMessages(input: {
     const inputText = message ? embeddingInputText(message.normalizedContent) : "";
     if (embedding) items.push({ messageId, embedding, inputText, inputSha256: sha256Hex(inputText) });
   }
+  const storeStartedAt = Date.now();
   await input.repo.storeMessageEmbeddings({
     model: input.config.openRouter.embeddingModel,
     dimensions: input.config.embeddingDimensions,
     inputVersion: MESSAGE_EMBEDDING_INPUT_VERSION,
     items
+  });
+  await recordEmbeddingSpan(input.repo, input.runId, {
+    spanId: "db.store_embeddings",
+    name: "Store message embeddings",
+    startedAt: storeStartedAt,
+    durationMs: durationMs(storeStartedAt),
+    metadata: { embedded: items.length, model: input.config.openRouter.embeddingModel }
   });
 
   const result = {
@@ -135,6 +164,17 @@ export async function embedStoredMessages(input: {
     },
     "Message embedding batch stored"
   );
+  await recordEmbeddingArtifact(input.repo, input.runId, {
+    requestedMessages: messageIds.length,
+    embedded: result.embedded,
+    skipped: result.skipped,
+    skipReasons: result.skipReasons,
+    textChunks: chunks.length,
+    chunkBatches: chunkBatches.length,
+    model: input.config.openRouter.embeddingModel,
+    dimensions: input.config.embeddingDimensions,
+    durationMs: durationMs(startedAt)
+  });
   return result;
 }
 
@@ -243,6 +283,44 @@ function chunkArray<T>(items: T[], size: number): T[][] {
 
 function emptyBatchEmbeddingResult(): BatchEmbeddingResult {
   return { embedded: 0, skipped: 0, skipReasons: {} };
+}
+
+async function recordEmbeddingSpan(
+  repo: DiscordAiAgentRepository,
+  runId: string | undefined,
+  input: { spanId: string; name: string; startedAt: number; durationMs: number; metadata?: Record<string, unknown> }
+) {
+  if (!runId) return;
+  const recorder = (repo as unknown as { recordProcessRunSpan?: DiscordAiAgentRepository["recordProcessRunSpan"] }).recordProcessRunSpan;
+  if (!recorder) return;
+  await recorder
+    .call(repo, {
+      runId,
+      spanId: input.spanId,
+      name: input.name,
+      status: "succeeded",
+      startedAt: new Date(input.startedAt),
+      completedAt: new Date(input.startedAt + input.durationMs),
+      durationMs: input.durationMs,
+      metadata: input.metadata
+    })
+    .catch(() => undefined);
+}
+
+async function recordEmbeddingArtifact(repo: DiscordAiAgentRepository, runId: string | undefined, summary: Record<string, unknown>) {
+  if (!runId) return;
+  const recorder = (repo as unknown as { storeProcessRunArtifact?: DiscordAiAgentRepository["storeProcessRunArtifact"] }).storeProcessRunArtifact;
+  if (!recorder) return;
+  await recorder
+    .call(repo, {
+      runId,
+      kind: "embedding_summary",
+      name: "Embedding internals",
+      content: JSON.stringify(summary, null, 2),
+      contentType: "application/json",
+      metadata: summary
+    })
+    .catch(() => undefined);
 }
 
 async function mapWithConcurrency<T>(

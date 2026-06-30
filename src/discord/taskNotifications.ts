@@ -67,7 +67,8 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
       messageId: task.taskId
     },
     async () => {
-      const rendered = renderAgentTaskMessage(task);
+      const runConsoleUrl = agentTaskRunConsoleUrl(input.config, task.taskId);
+      const rendered = renderAgentTaskMessage(task, undefined, undefined, { runConsoleUrl });
       if (!shouldRenderAgentTask(task, rendered)) {
         if (!rendered.terminal && task.lastRenderedSignature === rendered.signature) {
           await input.repo.markAgentTaskRendered({ taskId: task.taskId, signature: rendered.signature, terminal: false });
@@ -78,7 +79,9 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
       const startedAt = Date.now();
       try {
         const message = await fetchTaskReply(input.client, task);
-        const renderedWithDetails = rendered.terminal ? renderAgentTaskMessage(task, ...(await taskDetails(input.repo, task))) : rendered;
+        const renderedWithDetails = rendered.terminal
+          ? renderAgentTaskMessage(task, ...(await taskDetails(input.repo, task)), { runConsoleUrl })
+          : rendered;
         const content = cleanResponse(renderedWithDetails.content, input.config.maxReplyChars);
         const edited = await message.edit(content);
         await input.repo.markAgentTaskRendered({
@@ -127,12 +130,14 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
 export function renderAgentTaskMessage(
   task: AgentTaskRecord,
   taskEvents?: TaskEvent[],
-  commandEvents?: SandboxCommandEvent[]
+  commandEvents?: SandboxCommandEvent[],
+  options: { runConsoleUrl?: string | null } = {}
 ): { content: string; signature: string; terminal: boolean } {
   const terminal = isTerminalAgentTaskStatus(task.status);
-  const content = terminal
+  const baseContent = terminal
     ? formatAgentTaskResult({ taskId: task.taskId, jobId: task.pgBossJobId, job: task, taskEvents, commandEvents })
     : progressAgentTaskMessage(task);
+  const content = appendRunConsoleLink(baseContent, options.runConsoleUrl);
   return {
     content,
     terminal,
@@ -145,6 +150,7 @@ export function renderAgentTaskMessage(
       draft: task.draft,
       verifyPassed: task.verifyPassed,
       error: task.error,
+      runConsoleUrl: options.runConsoleUrl,
       terminalDetails: terminal ? content : undefined
     })
   };
@@ -167,6 +173,16 @@ function progressAgentTaskMessage(task: AgentTaskRecord) {
         : "Preparing the code change."
       : rawDetail;
   return [detail, "", `Update: \`${task.title}\``, `Task ID: \`${task.taskId}\``].join("\n");
+}
+
+export function agentTaskRunConsoleUrl(config: AppConfig, taskId: string) {
+  if (!config.controlUi.publicUrl) return null;
+  return `${config.controlUi.publicUrl}/runs/${encodeURIComponent(taskId)}`;
+}
+
+function appendRunConsoleLink(content: string, runConsoleUrl: string | null | undefined) {
+  if (!runConsoleUrl) return content;
+  return [content, "", `Run console: ${runConsoleUrl}`].join("\n");
 }
 
 function isTerminalAgentTaskStatus(status: AgentTaskRecord["status"]) {

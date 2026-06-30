@@ -1,5 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { DbPool } from "./pool.js";
 import { currentTraceContext } from "../util/trace.js";
+import { redactSensitiveText } from "../observability/redaction.js";
+
+const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
+const LARGE_ARTIFACT_RETENTION_DAYS = 14;
 
 export type PersistedAttachment = {
   id: string;
@@ -307,6 +312,85 @@ export type ToolAuditLog = {
   model: string | null;
   estimatedCostUsd: number | null;
   createdAt: Date;
+};
+
+export type ProcessRunKind = "codegen" | "discord" | "crawl" | "embedding" | "prompt" | "workflow" | "ops";
+export type ProcessRunStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
+export type ProcessRunArtifactKind =
+  | "prompt"
+  | "command_log"
+  | "diff"
+  | "pr_body"
+  | "model_transcript"
+  | "tool_transcript"
+  | "crawl_summary"
+  | "embedding_summary"
+  | "raw_json"
+  | "response"
+  | "diagnostic";
+
+export type ProcessRunRecord = {
+  runId: string;
+  traceId: string | null;
+  kind: ProcessRunKind;
+  status: ProcessRunStatus;
+  title: string;
+  summary: string | null;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+  messageId: string | null;
+  requester: string | null;
+  source: string;
+  metadata: Record<string, unknown>;
+  links: Record<string, unknown>;
+  startedAt: Date;
+  completedAt: Date | null;
+  updatedAt: Date;
+};
+
+export type ProcessRunSpanRecord = {
+  id: number;
+  runId: string;
+  spanId: string;
+  parentSpanId: string | null;
+  name: string;
+  status: ProcessRunStatus;
+  startedAt: Date;
+  completedAt: Date | null;
+  durationMs: number | null;
+  metadata: Record<string, unknown>;
+  updatedAt: Date;
+};
+
+export type ProcessRunEventRecord = {
+  id: number;
+  runId: string;
+  traceId: string | null;
+  level: TraceEventLevel;
+  eventName: string;
+  summary: string | null;
+  metadata: Record<string, unknown>;
+  durationMs: number | null;
+  createdAt: Date;
+};
+
+export type ProcessRunArtifactRecord = {
+  artifactId: string;
+  runId: string;
+  kind: ProcessRunArtifactKind;
+  name: string;
+  contentType: string;
+  sizeBytes: number;
+  preview: string;
+  redacted: boolean;
+  expiresAt: Date | null;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
+export type ProcessRunArtifactContent = ProcessRunArtifactRecord & {
+  content: string;
 };
 
 export type AgentTaskStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
@@ -2369,6 +2453,27 @@ export class DiscordAiAgentRepository {
         input.backend ?? null
       ]
     );
+    await this.upsertProcessRun({
+      runId: input.taskId,
+      traceId: input.traceId,
+      kind: "codegen",
+      status: "queued",
+      title: input.title,
+      summary: "Waiting for a Kubernetes sandbox to start.",
+      guildId: input.guildId,
+      channelId: input.channelId,
+      userId: input.userId,
+      requester: input.requestedBy,
+      source: "agent_task",
+      metadata: {
+        taskType: input.taskType,
+        request: input.request,
+        threadKey: input.threadKey,
+        retriedFromTaskId: input.retriedFromTaskId,
+        discordResponseChannelId: input.discordResponseChannelId,
+        discordResponseMessageId: input.discordResponseMessageId
+      }
+    }).catch(() => undefined);
   }
 
   async markAgentTaskRunning(input: { taskId: string; backend?: string | null; step?: string | null; statusMessage?: string | null }) {
@@ -2386,6 +2491,12 @@ export class DiscordAiAgentRepository {
       `,
       [input.taskId, input.backend ?? null, input.step ?? null, input.statusMessage ?? null]
     );
+    await this.updateProcessRun({
+      runId: input.taskId,
+      status: "running",
+      summary: input.statusMessage ?? "Running agent task.",
+      metadata: { backend: input.backend ?? undefined, currentStep: input.step ?? undefined }
+    }).catch(() => undefined);
   }
 
   async markAgentTaskProgress(input: {
@@ -2418,6 +2529,18 @@ export class DiscordAiAgentRepository {
       `,
       [input.taskId, input.step, input.statusMessage, input.backend ?? null, JSON.stringify(input.metadata ?? {})]
     );
+    await this.updateProcessRun({
+      runId: input.taskId,
+      status: "running",
+      summary: input.statusMessage,
+      metadata: { backend: input.backend ?? undefined, currentStep: input.step }
+    }).catch(() => undefined);
+    await this.recordProcessRunEvent({
+      runId: input.taskId,
+      eventName: "task.progress",
+      summary: input.statusMessage,
+      metadata: { step: input.step, ...(input.metadata ?? {}) }
+    }).catch(() => undefined);
   }
 
   async recordSandboxRun(input: {
@@ -2517,6 +2640,13 @@ export class DiscordAiAgentRepository {
       `,
       [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
     );
+    await this.updateProcessRun({
+      runId: input.taskId,
+      status: "succeeded",
+      summary: "Opened pull request.",
+      links: { pullRequest: input.prUrl, branch: input.branchName },
+      metadata: { draft: input.draft, verifyPassed: input.verifyPassed, ...(input.metadata ?? {}) }
+    }).catch(() => undefined);
   }
 
   async markAgentTaskFailed(input: {
@@ -2556,6 +2686,12 @@ export class DiscordAiAgentRepository {
       `,
       [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
     );
+    await this.updateProcessRun({
+      runId: input.taskId,
+      status: input.status ?? "failed",
+      summary: input.error,
+      metadata: { error: input.error, ...(input.metadata ?? {}) }
+    }).catch(() => undefined);
   }
 
   async getAgentTask(taskId: string): Promise<AgentTaskRecord | undefined> {
@@ -2790,6 +2926,21 @@ export class DiscordAiAgentRepository {
         input.durationMs == null ? null : Math.trunc(input.durationMs)
       ]
     );
+    await this.recordProcessRunEvent({
+      runId: input.taskId,
+      eventName: "sandbox.command",
+      level: input.exitCode === 0 || input.exitCode == null ? "info" : "error",
+      summary: `${input.step}${input.exitCode == null ? "" : ` exited ${input.exitCode}`}`,
+      durationMs: input.durationMs ?? null,
+      metadata: {
+        sandboxRunId: input.sandboxRunId ?? null,
+        step: input.step,
+        command: input.command ?? null,
+        exitCode: input.exitCode ?? null,
+        stdoutChars: input.outputTail?.length ?? 0,
+        stderrChars: input.errorTail?.length ?? 0
+      }
+    }).catch(() => undefined);
   }
 
   async getSandboxCommandEvents(input: {
@@ -3048,6 +3199,384 @@ export class DiscordAiAgentRepository {
     return Boolean(result.rowCount && result.rowCount > 0);
   }
 
+  async upsertProcessRun(input: {
+    runId: string;
+    traceId?: string | null;
+    kind: ProcessRunKind;
+    status?: ProcessRunStatus;
+    title: string;
+    summary?: string | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    messageId?: string | null;
+    requester?: string | null;
+    source?: string | null;
+    metadata?: Record<string, unknown>;
+    links?: Record<string, unknown>;
+    startedAt?: Date | null;
+    completedAt?: Date | null;
+  }): Promise<ProcessRunRecord> {
+    const trace = currentTraceContext();
+    const result = await this.pool.query(
+      `
+        INSERT INTO process_runs(
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at, completed_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3, coalesce($4, 'running'), $5, $6, $7, $8,
+          $9, $10, $11, coalesce($12, 'app'), $13, $14, coalesce($15, now()), $16, now()
+        )
+        ON CONFLICT(run_id) DO UPDATE SET
+          trace_id = coalesce(EXCLUDED.trace_id, process_runs.trace_id),
+          kind = EXCLUDED.kind,
+          status = EXCLUDED.status,
+          title = EXCLUDED.title,
+          summary = coalesce(EXCLUDED.summary, process_runs.summary),
+          guild_id = coalesce(EXCLUDED.guild_id, process_runs.guild_id),
+          channel_id = coalesce(EXCLUDED.channel_id, process_runs.channel_id),
+          user_id = coalesce(EXCLUDED.user_id, process_runs.user_id),
+          message_id = coalesce(EXCLUDED.message_id, process_runs.message_id),
+          requester = coalesce(EXCLUDED.requester, process_runs.requester),
+          source = EXCLUDED.source,
+          metadata = process_runs.metadata || EXCLUDED.metadata,
+          links = process_runs.links || EXCLUDED.links,
+          started_at = least(process_runs.started_at, EXCLUDED.started_at),
+          completed_at = coalesce(EXCLUDED.completed_at, process_runs.completed_at),
+          updated_at = now()
+        RETURNING
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+      `,
+      [
+        input.runId,
+        input.traceId ?? trace?.traceId ?? null,
+        input.kind,
+        input.status ?? null,
+        input.title,
+        input.summary ?? null,
+        input.guildId ?? trace?.guildId ?? null,
+        input.channelId ?? trace?.channelId ?? null,
+        input.userId ?? trace?.userId ?? null,
+        input.messageId ?? trace?.messageId ?? null,
+        input.requester ?? null,
+        input.source ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        JSON.stringify(input.links ?? {}),
+        input.startedAt ?? null,
+        input.completedAt ?? null
+      ]
+    );
+    return rowToProcessRun(result.rows[0]);
+  }
+
+  async updateProcessRun(input: {
+    runId: string;
+    status?: ProcessRunStatus;
+    summary?: string | null;
+    metadata?: Record<string, unknown>;
+    links?: Record<string, unknown>;
+    completedAt?: Date | null;
+  }): Promise<ProcessRunRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        UPDATE process_runs
+        SET status = coalesce($2, status),
+            summary = coalesce($3, summary),
+            metadata = metadata || $4::jsonb,
+            links = links || $5::jsonb,
+            completed_at = CASE
+              WHEN $6::timestamptz IS NOT NULL THEN $6::timestamptz
+              WHEN $2::text IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN coalesce(completed_at, now())
+              ELSE completed_at
+            END,
+            updated_at = now()
+        WHERE run_id = $1
+        RETURNING
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+      `,
+      [
+        input.runId,
+        input.status ?? null,
+        input.summary ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        JSON.stringify(input.links ?? {}),
+        input.completedAt ?? null
+      ]
+    );
+    return result.rows[0] ? rowToProcessRun(result.rows[0]) : undefined;
+  }
+
+  async recordProcessRunSpan(input: {
+    runId: string;
+    spanId: string;
+    parentSpanId?: string | null;
+    name: string;
+    status?: ProcessRunStatus;
+    startedAt?: Date | null;
+    completedAt?: Date | null;
+    durationMs?: number | null;
+    metadata?: Record<string, unknown>;
+  }): Promise<ProcessRunSpanRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO process_run_spans(
+          run_id, span_id, parent_span_id, name, status, started_at, completed_at,
+          duration_ms, metadata, updated_at
+        )
+        SELECT $1, $2, $3, $4, coalesce($5, 'running'), coalesce($6, now()), $7, $8, $9::jsonb, now()
+        WHERE EXISTS (SELECT 1 FROM process_runs WHERE run_id = $1)
+        ON CONFLICT(run_id, span_id) DO UPDATE SET
+          parent_span_id = coalesce(EXCLUDED.parent_span_id, process_run_spans.parent_span_id),
+          name = EXCLUDED.name,
+          status = EXCLUDED.status,
+          started_at = least(process_run_spans.started_at, EXCLUDED.started_at),
+          completed_at = coalesce(EXCLUDED.completed_at, process_run_spans.completed_at),
+          duration_ms = coalesce(EXCLUDED.duration_ms, process_run_spans.duration_ms),
+          metadata = process_run_spans.metadata || EXCLUDED.metadata,
+          updated_at = now()
+        RETURNING
+          id, run_id, span_id, parent_span_id, name, status, started_at,
+          completed_at, duration_ms, metadata, updated_at
+      `,
+      [
+        input.runId,
+        input.spanId,
+        input.parentSpanId ?? null,
+        input.name,
+        input.status ?? null,
+        input.startedAt ?? null,
+        input.completedAt ?? null,
+        input.durationMs == null ? null : Math.trunc(input.durationMs),
+        JSON.stringify(input.metadata ?? {})
+      ]
+    );
+    return result.rows[0] ? rowToProcessRunSpan(result.rows[0]) : undefined;
+  }
+
+  async recordProcessRunEvent(input: {
+    runId: string;
+    traceId?: string | null;
+    level?: TraceEventLevel;
+    eventName: string;
+    summary?: string | null;
+    metadata?: Record<string, unknown>;
+    durationMs?: number | null;
+  }): Promise<ProcessRunEventRecord | undefined> {
+    const trace = currentTraceContext();
+    const result = await this.pool.query(
+      `
+        INSERT INTO process_run_events(run_id, trace_id, level, event_name, summary, metadata, duration_ms)
+        SELECT $1, $2, coalesce($3, 'info'), $4, $5, $6::jsonb, $7
+        WHERE EXISTS (SELECT 1 FROM process_runs WHERE run_id = $1)
+        RETURNING id, run_id, trace_id, level, event_name, summary, metadata, duration_ms, created_at
+      `,
+      [
+        input.runId,
+        input.traceId ?? trace?.traceId ?? null,
+        input.level ?? null,
+        input.eventName,
+        input.summary ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        input.durationMs == null ? null : Math.trunc(input.durationMs)
+      ]
+    );
+    return result.rows[0] ? rowToProcessRunEvent(result.rows[0]) : undefined;
+  }
+
+  async storeProcessRunArtifact(input: {
+    runId: string;
+    kind: ProcessRunArtifactKind;
+    name: string;
+    content: string;
+    contentType?: string | null;
+    metadata?: Record<string, unknown>;
+    expiresAt?: Date | null;
+  }): Promise<ProcessRunArtifactRecord | undefined> {
+    const redacted = redactSensitiveText(input.content);
+    const content = redacted.text;
+    const sizeBytes = Buffer.byteLength(content, "utf8");
+    const expiresAt = input.expiresAt ?? defaultArtifactExpiresAt(sizeBytes);
+    const artifactId = `artifact-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const chunks = chunkString(content, 60_000);
+    const result = await this.pool.query(
+      `
+        INSERT INTO process_run_artifacts(
+          artifact_id, run_id, kind, name, content_type, size_bytes, preview,
+          redacted, expires_at, metadata, created_at
+        )
+        SELECT $1, $2, $3, $4, coalesce($5, 'text/plain'), $6, $7, true, $8, $9::jsonb, now()
+        WHERE EXISTS (SELECT 1 FROM process_runs WHERE run_id = $2)
+        RETURNING
+          artifact_id, run_id, kind, name, content_type, size_bytes, preview,
+          redacted, expires_at, metadata, created_at
+      `,
+      [
+        artifactId,
+        input.runId,
+        input.kind,
+        input.name,
+        input.contentType ?? null,
+        sizeBytes,
+        content.slice(0, 2000),
+        expiresAt,
+        JSON.stringify({
+          ...(input.metadata ?? {}),
+          redactionCount: redacted.redactionCount,
+          redactionKinds: redacted.redactionKinds,
+          retention: expiresAt ? { reason: "large_artifact", days: LARGE_ARTIFACT_RETENTION_DAYS } : null
+        })
+      ]
+    );
+    if (!result.rows[0]) return undefined;
+    if (chunks.length > 0) {
+      await this.pool.query(
+        `
+          INSERT INTO process_run_artifact_chunks(artifact_id, chunk_index, content)
+          SELECT $1, item.index, item.content
+          FROM jsonb_to_recordset($2::jsonb) AS item(index integer, content text)
+        `,
+        [artifactId, JSON.stringify(chunks.map((contentChunk, index) => ({ index, content: contentChunk })))]
+      );
+    }
+    return rowToProcessRunArtifact(result.rows[0]);
+  }
+
+  async cleanupExpiredProcessRunArtifacts(limit = 500): Promise<number> {
+    const result = await this.pool.query(
+      `
+        WITH expired AS (
+          SELECT artifact_id
+          FROM process_run_artifacts
+          WHERE expires_at IS NOT NULL
+            AND expires_at <= now()
+          ORDER BY expires_at ASC, artifact_id ASC
+          LIMIT $1
+        )
+        DELETE FROM process_run_artifacts
+        WHERE artifact_id IN (SELECT artifact_id FROM expired)
+      `,
+      [Math.max(1, Math.min(5000, Math.trunc(limit)))]
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async listProcessRuns(input: { limit?: number; kind?: ProcessRunKind | null; status?: ProcessRunStatus | null } = {}): Promise<ProcessRunRecord[]> {
+    const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+        FROM process_runs
+        WHERE ($2::text IS NULL OR kind = $2)
+          AND ($3::text IS NULL OR status = $3)
+        ORDER BY updated_at DESC, started_at DESC
+        LIMIT $1
+      `,
+      [limit, input.kind ?? null, input.status ?? null]
+    );
+    return result.rows.map(rowToProcessRun);
+  }
+
+  async getProcessRun(runId: string): Promise<ProcessRunRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+        FROM process_runs
+        WHERE run_id = $1
+      `,
+      [runId]
+    );
+    return result.rows[0] ? rowToProcessRun(result.rows[0]) : undefined;
+  }
+
+  async getProcessRunSpans(runId: string): Promise<ProcessRunSpanRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          id, run_id, span_id, parent_span_id, name, status, started_at,
+          completed_at, duration_ms, metadata, updated_at
+        FROM process_run_spans
+        WHERE run_id = $1
+        ORDER BY started_at ASC, id ASC
+      `,
+      [runId]
+    );
+    return result.rows.map(rowToProcessRunSpan);
+  }
+
+  async getProcessRunEvents(input: { runId: string; afterId?: number | null; limit?: number }): Promise<ProcessRunEventRecord[]> {
+    const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 300)));
+    const result = await this.pool.query(
+      `
+        SELECT id, run_id, trace_id, level, event_name, summary, metadata, duration_ms, created_at
+        FROM process_run_events
+        WHERE run_id = $1
+          AND ($2::bigint IS NULL OR id > $2)
+        ORDER BY id ASC
+        LIMIT $3
+      `,
+      [input.runId, input.afterId ?? null, limit]
+    );
+    return result.rows.map(rowToProcessRunEvent);
+  }
+
+  async getProcessRunArtifacts(runId: string): Promise<ProcessRunArtifactRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          artifact_id, run_id, kind, name, content_type, size_bytes, preview,
+          redacted, expires_at, metadata, created_at
+        FROM process_run_artifacts
+        WHERE run_id = $1
+          AND (expires_at IS NULL OR expires_at > now())
+        ORDER BY created_at ASC, artifact_id ASC
+      `,
+      [runId]
+    );
+    return result.rows.map(rowToProcessRunArtifact);
+  }
+
+  async getProcessRunArtifact(input: { runId: string; artifactId: string }): Promise<ProcessRunArtifactContent | undefined> {
+    const [artifact, chunks] = await Promise.all([
+      this.pool.query(
+        `
+          SELECT
+            artifact_id, run_id, kind, name, content_type, size_bytes, preview,
+            redacted, expires_at, metadata, created_at
+          FROM process_run_artifacts
+          WHERE run_id = $1
+            AND artifact_id = $2
+            AND (expires_at IS NULL OR expires_at > now())
+        `,
+        [input.runId, input.artifactId]
+      ),
+      this.pool.query(
+        `
+          SELECT content
+          FROM process_run_artifact_chunks
+          WHERE artifact_id = $1
+          ORDER BY chunk_index ASC
+        `,
+        [input.artifactId]
+      )
+    ]);
+    if (!artifact.rows[0]) return undefined;
+    return {
+      ...rowToProcessRunArtifact(artifact.rows[0]),
+      content: chunks.rows.map((row) => String(row.content ?? "")).join("")
+    };
+  }
+
   async auditTool(input: {
     traceId?: string | null;
     guildId?: string | null;
@@ -3148,6 +3677,23 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToTraceEvent);
   }
 
+  async getTraceEventsForTrace(input: { traceId: string; limit?: number }): Promise<TraceEvent[]> {
+    const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 300)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          id, trace_id, request_id, guild_id, channel_id, user_id, message_id,
+          event_name, level, summary, metadata, duration_ms, created_at
+        FROM trace_events
+        WHERE trace_id = $1
+        ORDER BY created_at ASC, id ASC
+        LIMIT $2
+      `,
+      [input.traceId, limit]
+    );
+    return result.rows.map(rowToTraceEvent);
+  }
+
   async getToolAuditLogs(input: {
     guildId: string;
     visibleChannelIds: string[];
@@ -3168,6 +3714,23 @@ export class DiscordAiAgentRepository {
         LIMIT $4
       `,
       [input.guildId, input.traceId ?? null, input.visibleChannelIds, limit]
+    );
+    return result.rows.map(rowToToolAuditLog);
+  }
+
+  async getToolAuditLogsForTrace(input: { traceId: string; limit?: number }): Promise<ToolAuditLog[]> {
+    const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 100)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          id, trace_id, guild_id, channel_id, user_id, tool_name, arguments_summary,
+          result_summary, error, model, estimated_cost_usd, created_at
+        FROM tool_audit_logs
+        WHERE trace_id = $1
+        ORDER BY created_at ASC, id ASC
+        LIMIT $2
+      `,
+      [input.traceId, limit]
     );
     return result.rows.map(rowToToolAuditLog);
   }
@@ -3666,6 +4229,78 @@ function rowToToolAuditLog(row: any): ToolAuditLog {
     estimatedCostUsd: row.estimated_cost_usd == null ? null : Number(row.estimated_cost_usd),
     createdAt: new Date(row.created_at)
   };
+}
+
+function rowToProcessRun(row: any): ProcessRunRecord {
+  return {
+    runId: String(row.run_id),
+    traceId: row.trace_id == null ? null : String(row.trace_id),
+    kind: String(row.kind) as ProcessRunKind,
+    status: String(row.status) as ProcessRunStatus,
+    title: String(row.title ?? ""),
+    summary: row.summary == null ? null : String(row.summary),
+    guildId: row.guild_id == null ? null : String(row.guild_id),
+    channelId: row.channel_id == null ? null : String(row.channel_id),
+    userId: row.user_id == null ? null : String(row.user_id),
+    messageId: row.message_id == null ? null : String(row.message_id),
+    requester: row.requester == null ? null : String(row.requester),
+    source: String(row.source ?? "app"),
+    metadata: jsonObject(row.metadata),
+    links: jsonObject(row.links),
+    startedAt: new Date(row.started_at),
+    completedAt: row.completed_at == null ? null : new Date(row.completed_at),
+    updatedAt: new Date(row.updated_at)
+  };
+}
+
+function rowToProcessRunSpan(row: any): ProcessRunSpanRecord {
+  return {
+    id: Number(row.id),
+    runId: String(row.run_id),
+    spanId: String(row.span_id),
+    parentSpanId: row.parent_span_id == null ? null : String(row.parent_span_id),
+    name: String(row.name),
+    status: String(row.status) as ProcessRunStatus,
+    startedAt: new Date(row.started_at),
+    completedAt: row.completed_at == null ? null : new Date(row.completed_at),
+    durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+    metadata: jsonObject(row.metadata),
+    updatedAt: new Date(row.updated_at)
+  };
+}
+
+function rowToProcessRunEvent(row: any): ProcessRunEventRecord {
+  return {
+    id: Number(row.id),
+    runId: String(row.run_id),
+    traceId: row.trace_id == null ? null : String(row.trace_id),
+    level: String(row.level ?? "info") as TraceEventLevel,
+    eventName: String(row.event_name),
+    summary: row.summary == null ? null : String(row.summary),
+    metadata: jsonObject(row.metadata),
+    durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+    createdAt: new Date(row.created_at)
+  };
+}
+
+function rowToProcessRunArtifact(row: any): ProcessRunArtifactRecord {
+  return {
+    artifactId: String(row.artifact_id),
+    runId: String(row.run_id),
+    kind: String(row.kind) as ProcessRunArtifactKind,
+    name: String(row.name),
+    contentType: String(row.content_type ?? "text/plain"),
+    sizeBytes: Number(row.size_bytes ?? 0),
+    preview: String(row.preview ?? ""),
+    redacted: Boolean(row.redacted),
+    expiresAt: row.expires_at == null ? null : new Date(row.expires_at),
+    metadata: jsonObject(row.metadata),
+    createdAt: new Date(row.created_at)
+  };
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function rowToTaskEvent(row: any): TaskEvent {
@@ -4402,6 +5037,20 @@ function rowToSandboxCommandEvent(row: any): SandboxCommandEvent {
     durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
     createdAt: new Date(row.created_at)
   };
+}
+
+function chunkString(value: string, size: number) {
+  if (!value) return [];
+  const chunks: string[] = [];
+  for (let index = 0; index < value.length; index += size) {
+    chunks.push(value.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function defaultArtifactExpiresAt(sizeBytes: number) {
+  if (sizeBytes <= LARGE_ARTIFACT_BYTES) return null;
+  return new Date(Date.now() + LARGE_ARTIFACT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 }
 
 function rowToServerOverlay(row: any): ServerOverlay {

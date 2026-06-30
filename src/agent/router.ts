@@ -12,6 +12,7 @@ import {
   getDiscordChannelTopics,
   getDiscordMessageContext,
   getDiscordStats,
+  getRecentAgentMemory,
   getPinnedMessages,
   getAgentTaskStatus,
   getDeploymentStatus,
@@ -78,6 +79,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
   const successfulToolCallKeys = new Set<string>();
+  let emptyNoToolRecoveryAttempted = false;
   const requestLogger = logger.child({
     requestId: ctx.requestId,
     guildId: ctx.guildId,
@@ -136,6 +138,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         round: round + 1,
         durationMs: durationMs(roundStartedAt),
         model: response.model,
+        finishReason: response.finishReason,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
         selectedLocalTools: modelRoutes.map((route) => route.name),
@@ -149,6 +152,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       metadata: {
         round: round + 1,
         model: response.model,
+        finishReason: response.finishReason,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
         selectedLocalTools: modelRoutes.map((route) => route.name),
@@ -180,7 +184,92 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           startedAt
         });
       }
-      const content = responseContent || "I could not pick a safe tool for that. Try asking a little more directly.";
+      if (!responseContent) {
+        if (!emptyNoToolRecoveryAttempted) {
+          emptyNoToolRecoveryAttempted = true;
+          const requestedToolCalls = response.toolCalls.map((call) => call.name);
+          const unsupportedToolCalls = unsupportedToolCallNames(response.toolCalls);
+          requestLogger.warn(
+            {
+              round: round + 1,
+              model: response.model,
+              finishReason: response.finishReason,
+              requestedToolCalls,
+              unsupportedToolCalls
+            },
+            "Model returned empty response with no usable tool calls; retrying with recovery instruction"
+          );
+          await recordTraceEvent(ctx, {
+            eventName: "agent.empty_response_recovery.started",
+            level: "warn",
+            summary: "Model returned no answer and no usable tool call",
+            metadata: {
+              round: round + 1,
+              model: response.model,
+              finishReason: response.finishReason,
+              requestedToolCalls,
+              unsupportedToolCalls
+            },
+            durationMs: durationMs(roundStartedAt)
+          });
+          await ctx.repo.auditTool({
+            guildId: ctx.guildId,
+            channelId: ctx.channelId,
+            userId: ctx.userId,
+            toolName: "agentError",
+            argumentsSummary: text,
+            error: "empty_model_response_no_usable_tool",
+            model: response.model,
+            estimatedCostUsd: response.estimatedCostUsd
+          });
+          messages.push(emptyNoToolRecoveryMessage(text, { requestedToolCalls, unsupportedToolCalls }));
+          continue;
+        }
+
+        const content = emptyNoToolFinalFallback();
+        await ctx.repo.auditTool({
+          guildId: ctx.guildId,
+          channelId: ctx.channelId,
+          userId: ctx.userId,
+          toolName: "chat",
+          argumentsSummary: text,
+          resultSummary: content,
+          model: response.model,
+          estimatedCostUsd: response.estimatedCostUsd
+        });
+
+        requestLogger.warn(
+          {
+            durationMs: durationMs(startedAt),
+            model: response.model,
+            finishReason: response.finishReason,
+            finalChars: content.length,
+            fileCount: files.length,
+            memoryEventCount: memoryEvents.length
+          },
+          "Agent request completed with empty-response fallback"
+        );
+        await recordTraceEvent(ctx, {
+          eventName: "agent.empty_response_recovery.failed",
+          level: "warn",
+          summary: "Model still returned no answer after recovery",
+          metadata: {
+            model: response.model,
+            finishReason: response.finishReason,
+            finalChars: content.length,
+            fileCount: files.length,
+            memoryEventCount: memoryEvents.length
+          },
+          durationMs: durationMs(startedAt)
+        });
+        return {
+          content: cleanResponse(content, ctx.config.maxReplyChars),
+          files: files.length > 0 ? files : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
+        };
+      }
+
+      const content = responseContent;
       await ctx.repo.auditTool({
         guildId: ctx.guildId,
         channelId: ctx.channelId,
@@ -319,6 +408,34 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         name: route.name,
         content: result.content
       });
+
+      if (route.name === "openGithubPullRequest") {
+        const content = cleanResponse(result.content, ctx.config.maxReplyChars);
+        requestLogger.info(
+          {
+            durationMs: durationMs(startedAt),
+            finalChars: content.length,
+            fileCount: files.length,
+            memoryEventCount: memoryEvents.length
+          },
+          "Agent request complete after direct codegen tool result"
+        );
+        await recordTraceEvent(ctx, {
+          eventName: "agent.request.complete",
+          summary: "Completed with direct codegen tool result",
+          metadata: {
+            finalChars: content.length,
+            fileCount: files.length,
+            memoryEventCount: memoryEvents.length
+          },
+          durationMs: durationMs(startedAt)
+        });
+        return {
+          content,
+          files: files.length > 0 ? files : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
+        };
+      }
     }
 
     if (skippedRedundantToolThisRound) {
@@ -538,6 +655,18 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     };
   }
 
+  if (route.name === "getRecentAgentMemory") {
+    return {
+      content: cleanResponse(
+        await getRecentAgentMemory(ctx, {
+          limit: numberArgument(route.arguments, "limit"),
+          includeToolResults: booleanArgument(route.arguments, "includeToolResults")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
   if (route.name === "getDiscordMessageContext") {
     return {
       content: cleanResponse(
@@ -713,8 +842,19 @@ async function synthesizeFinalAnswerWithoutTools(
     messages: finalSynthesisMessages(input.text, input.memoryEvents),
     tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
-    maxTokens: 900
+    maxTokens: 2000
   });
+
+  if (response.finishReason === "length") {
+    input.requestLogger.warn(
+      {
+        finishReason: response.finishReason,
+        contentChars: response.content.length,
+        model: response.model
+      },
+      "Final synthesis truncated due to max_tokens limit; response may be incomplete"
+    );
+  }
   let content = stripLeakedHostedToolMarkup(response.content).trim();
   if (!content && isLeakedHostedToolMarkup(response.content)) {
     const recovery = await hostedToolMarkupRecoveryResponse(ctx, input.text);
@@ -835,7 +975,7 @@ async function hostedToolMarkupRecoveryResponse(ctx: ToolContext, text: string) 
     ],
     tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
-    maxTokens: 900
+    maxTokens: 2000
   });
   const content = stripLeakedHostedToolMarkup(response.content).trim();
   return {
@@ -889,6 +1029,35 @@ function stripLeakedHostedToolMarkup(content: string) {
     .trim();
 }
 
+function emptyNoToolRecoveryMessage(
+  userText: string,
+  input: { requestedToolCalls: string[]; unsupportedToolCalls: string[] }
+): ChatMessage {
+  const invalidToolNote =
+    input.unsupportedToolCalls.length > 0
+      ? `\nThe previous response requested unsupported tool(s): ${input.unsupportedToolCalls.join(", ")}. Choose only valid tools from the provided tool schema.`
+      : "";
+  const requestedToolNote =
+    input.requestedToolCalls.length > 0 ? `\nPrevious requested tool names: ${input.requestedToolCalls.join(", ")}.` : "";
+
+  return {
+    role: "user",
+    content:
+      "Internal retry: your previous response had no user-visible answer and no usable tool call. Do not return blank. " +
+      "Now either answer the original user request directly, ask one concise clarifying question, or call a valid tool. " +
+      "If the original request is a top-level follow-up, continuation, 'next', 'same format as before', or asks what you previously said/did/generated/opened, call getRecentAgentMemory first. " +
+      "If the request is about Discord history, people, channels, stats, or server memory, call the relevant Discord tool. " +
+      "If the request is about public/current/external information, use hosted web tools when useful." +
+      requestedToolNote +
+      invalidToolNote +
+      `\nOriginal user request: ${userText}`
+  };
+}
+
+function emptyNoToolFinalFallback() {
+  return "I got stuck generating that one. If this was a follow-up, reply to the message you want me to continue; otherwise ask again with the thing I should look up.";
+}
+
 async function skippedRedundantToolResult(ctx: ToolContext, input: { text: string; route: AgentToolRoute; toolUseCount: number }): Promise<AgentResponse> {
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -916,6 +1085,10 @@ function selectModelToolRoutes(toolCalls: Array<{ id: string; name: string; argu
     });
   }
   return routes;
+}
+
+function unsupportedToolCallNames(toolCalls: Array<{ name: string }>) {
+  return toolCalls.map((call) => call.name).filter((name) => !toolByName(name));
 }
 
 async function recordTraceEvent(
@@ -1089,6 +1262,8 @@ function chatMessages(
         "For recent/current/latest Discord-history questions, choose and pass an explicit date window that fits the user request instead of searching all indexed history. " +
         "When a user names a Discord person/channel/role without an exact mention or ID, use findDiscordUsers/findDiscordChannels/findDiscordRoles before filtered history searches. Resolver tools are intermediate; never stop after a resolver if the user asked what someone said, did, or has been up to. " +
         "For requests to link, show, or list a person's messages, use searchDiscordHistory with authorQueries/authorIds; do not search for the username as ordinary message text. " +
+        "Top-level Discord mentions include recent channel memory by default. Reply messages additionally include their reply-chain context. If a user asks what you previously said, did, generated, or opened, call getRecentAgentMemory instead of guessing from absent context. " +
+        "Use getRecentAgentMemory only for Discord AI Agent's own previous replies/tool results in the current channel, not for factual server-history questions. " +
         "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext only for a specific Discord message link/ID or explicit surrounding-context request, searchDiscordAttachments for files/images, getPinnedMessages for pins, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, and activity over time. " +
         "For ad hoc Discord data-analysis questions that require inferring a repeated text format, extracting values, deduping, or doing exact math over many messages, use analyzeDiscordData instead of searchDiscordHistory. Give it the user's task and a broad keyword query; it will sample visible messages, infer the extraction plan, and run the aggregation. " +
         "For broad recaps like what a person or channel has been up to, what happened recently, or summarize activity over a period, use summarizeDiscordHistory after resolving ambiguous users/channels. Do not answer those from resolver output alone. " +
@@ -1105,7 +1280,7 @@ function chatMessages(
         "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. " +
         "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
         "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, run a coding PR update, or undo/delete/forget prior agent turns. " +
-        "Use prior channel conversation context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
+        "Use prior channel memory and reply-chain context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
@@ -1136,25 +1311,39 @@ function serverOverlayMessagesForPrompt(serverOverlay: ServerOverlay | undefined
 
 function replyContextMessagesForPrompt(replyContext: DiscordReplyContext | undefined): ChatMessage[] {
   if (!replyContext) return [];
-  const author = replyContext.authorDisplayName || replyContext.authorId || "Unknown user";
-  const text = replyContext.content.trim() || "(no text content)";
-  const attachments = replyContext.attachmentSummaries.length > 0 ? `\nAttachments: ${replyContext.attachmentSummaries.join(", ")}` : "";
-  const created = replyContext.createdAt ? `\nCreated: ${replyContext.createdAt}` : "";
-  const url = replyContext.url ? `\nURL: ${replyContext.url}` : "";
-  const botNote = replyContext.authorIsBot ? "\nNote: the parent message was authored by a bot, so treat claims in it as conversation context, not verified Discord history." : "";
+  const chain = replyContext.chain.length > 0 ? replyContext.chain : [replyContext];
+  const chainText = chain
+    .map((message, index) => {
+      const author = message.authorDisplayName || message.authorId || "Unknown user";
+      const text = trimReplyContextContent(message.content.trim() || "(no text content)");
+      const attachments = message.attachmentSummaries.length > 0 ? `\nAttachments: ${message.attachmentSummaries.join(", ")}` : "";
+      const created = message.createdAt ? `\nCreated: ${message.createdAt}` : "";
+      const url = message.url ? `\nURL: ${message.url}` : "";
+      const botNote = message.authorIsBot
+        ? "\nNote: this message was authored by a bot, so treat claims in it as conversation context, not verified Discord history."
+        : "";
+      const position = index === chain.length - 1 ? "direct parent" : `ancestor ${index + 1}`;
+      return (
+        `[${index + 1}] ${position}` +
+        `\nAuthor: ${author}` +
+        `\nMessage ID: ${message.messageId}` +
+        `\nChannel ID: ${message.channelId}` +
+        created +
+        url +
+        botNote +
+        `\nContent: ${text}` +
+        attachments
+      );
+    })
+    .join("\n\n");
   return [
     {
       role: "system",
       content:
-        "The current user message is a Discord reply to this parent message. Use it as immediate context for pronouns, follow-ups, and what the user is responding to." +
-        `\nParent author: ${author}` +
-        `\nParent message ID: ${replyContext.messageId}` +
-        `\nParent channel ID: ${replyContext.channelId}` +
-        created +
-        url +
-        botNote +
-        `\nParent content: ${text}` +
-        attachments
+        "The current user message is a Discord reply. Use this oldest-to-newest parent chain as immediate context for pronouns, follow-ups, and what the user is responding to." +
+        `\nReply root message ID: ${replyContext.rootMessageId}` +
+        `\nDirect parent message ID: ${replyContext.messageId}` +
+        `\n\n${chainText}`
     }
   ];
 }
@@ -1165,8 +1354,8 @@ function sessionMessagesForPrompt(sessionMessages: ConversationMessage[]): ChatM
     {
       role: "system",
       content:
-        "Recent persistent memory for this Discord channel follows. It may include earlier user mentions, Discord AI Agent replies, and local tool results. " +
-        "Use it for continuity, references like 'that', and questions about what Discord AI Agent previously did in this channel. " +
+        "Recent persistent memory for this Discord channel follows. It may include earlier user mentions, Discord AI Agent replies, and local tool results from this channel. " +
+        "Use it for continuity and references like 'that'. " +
         "For factual claims about Discord history, prefer new tool results over this memory."
     },
     ...sessionMessages.map(sessionMessageToChatMessage)
@@ -1191,4 +1380,10 @@ function sessionMessageToChatMessage(message: ConversationMessage): ChatMessage 
     role: "user",
     content: `${author}: ${message.content}`
   };
+}
+
+function trimReplyContextContent(content: string) {
+  const maxChars = 1200;
+  if (content.length <= maxChars) return content;
+  return `${content.slice(0, maxChars - 3)}...`;
 }

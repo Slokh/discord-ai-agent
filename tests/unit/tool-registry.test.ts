@@ -9,6 +9,7 @@ describe("toolRegistry", () => {
       "findDiscordChannels",
       "findDiscordRoles",
       "searchDiscordHistory",
+      "getRecentAgentMemory",
       "getRecentDiscordMessages",
       "getDiscordMessageContext",
       "searchDiscordAttachments",

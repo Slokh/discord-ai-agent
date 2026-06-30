@@ -20,12 +20,13 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { handleAgentRequest } from "../agent/router.js";
 import { cleanResponse } from "../tools/coreTools.js";
-import type { DiscordReplyContext } from "../tools/types.js";
+import type { DiscordReplyContext, DiscordReplyContextMessage } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
 
 const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
+const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 8;
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -576,85 +577,117 @@ async function resolveDiscordReplyContext(input: {
   visibleChannelIds: string[];
   requestLogger: Logger;
 }): Promise<DiscordReplyContext | undefined> {
-  const reference = input.message.reference;
-  if (!reference?.messageId) return undefined;
+  const directFirstChain: DiscordReplyContextMessage[] = [];
+  const seenMessageIds = new Set<string>();
+  let cursor: Message = input.message;
 
-  const referencedChannelId = reference.channelId ?? input.message.channelId;
-  if (!input.visibleChannelIds.includes(referencedChannelId)) {
-    input.requestLogger.warn(
-      { referencedMessageId: reference.messageId, referencedChannelId },
-      "Skipping Discord reply context because requester cannot view the referenced channel"
-    );
-    await recordTraceEvent(input.repo, {
-      eventName: "discord.reply_context.skipped",
-      level: "warn",
-      summary: "Referenced channel is not visible to requester",
-      metadata: { referencedMessageId: reference.messageId, referencedChannelId }
-    });
-    return undefined;
-  }
+  for (let depth = 0; depth < REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT; depth += 1) {
+    const reference = cursor.reference;
+    if (!reference?.messageId) break;
+    if (seenMessageIds.has(reference.messageId)) break;
 
-  try {
-    const parent = await input.message.fetchReference();
-    if (!parent.inGuild()) return undefined;
+    const referencedChannelId = reference.channelId ?? cursor.channelId;
+    if (!input.visibleChannelIds.includes(referencedChannelId)) {
+      input.requestLogger.warn(
+        { referencedMessageId: reference.messageId, referencedChannelId, depth },
+        "Skipping Discord reply context because requester cannot view a referenced channel"
+      );
+      await recordTraceEvent(input.repo, {
+        eventName: "discord.reply_context.skipped",
+        level: "warn",
+        summary: "Referenced channel is not visible to requester",
+        metadata: { referencedMessageId: reference.messageId, referencedChannelId, depth }
+      });
+      break;
+    }
+
+    let parent: Message;
+    try {
+      parent = await cursor.fetchReference();
+    } catch (error) {
+      input.requestLogger.warn(
+        { err: error, referencedMessageId: reference.messageId, referencedChannelId, depth },
+        "Failed to fetch Discord reply chain parent"
+      );
+      await recordTraceEvent(input.repo, {
+        eventName: "discord.reply_context.fetch_failed",
+        level: "warn",
+        summary: error instanceof Error ? error.message : String(error),
+        metadata: { referencedMessageId: reference.messageId, referencedChannelId, depth }
+      });
+      break;
+    }
+
+    if (!parent.inGuild()) break;
     if (!input.visibleChannelIds.includes(parent.channelId)) {
       input.requestLogger.warn(
-        { referencedMessageId: parent.id, referencedChannelId: parent.channelId },
-        "Skipping Discord reply context after fetch because requester cannot view the parent channel"
+        { referencedMessageId: parent.id, referencedChannelId: parent.channelId, depth },
+        "Stopping Discord reply context chain because requester cannot view the fetched parent channel"
       );
-      return undefined;
+      break;
     }
 
     await persistDiscordMessage(input.repo, parent).catch((error) => {
       input.requestLogger.warn({ err: error, referencedMessageId: parent.id }, "Failed to persist Discord reply parent message");
     });
 
-    const context: DiscordReplyContext = {
-      messageId: parent.id,
-      channelId: parent.channelId,
-      guildId: parent.guildId,
-      authorId: parent.author?.id ?? null,
-      authorDisplayName: parent.member?.displayName ?? parent.author?.globalName ?? parent.author?.username ?? null,
-      authorIsBot: Boolean(parent.author?.bot),
-      content: parent.content ?? "",
-      attachmentSummaries: [...parent.attachments.values()].map((attachment) =>
-        [attachment.name ?? attachment.id, attachment.contentType, attachment.size ? `${attachment.size} bytes` : ""].filter(Boolean).join(" ")
-      ),
-      createdAt: parent.createdAt?.toISOString?.() ?? null,
-      url: parent.url ?? null
-    };
-
-    input.requestLogger.info(
-      {
-        referencedMessageId: context.messageId,
-        referencedChannelId: context.channelId,
-        referencedAuthorId: context.authorId,
-        referencedContentPreview: previewText(context.content),
-        attachmentCount: context.attachmentSummaries.length
-      },
-      "Resolved Discord reply parent context"
-    );
-    await recordTraceEvent(input.repo, {
-      eventName: "discord.reply_context.resolved",
-      summary: previewText(context.content) || "Resolved Discord reply parent",
-      metadata: {
-        referencedMessageId: context.messageId,
-        referencedChannelId: context.channelId,
-        referencedAuthorId: context.authorId,
-        attachmentCount: context.attachmentSummaries.length
-      }
-    });
-    return context;
-  } catch (error) {
-    input.requestLogger.warn({ err: error, referencedMessageId: reference.messageId, referencedChannelId }, "Failed to fetch Discord reply parent");
-    await recordTraceEvent(input.repo, {
-      eventName: "discord.reply_context.fetch_failed",
-      level: "warn",
-      summary: error instanceof Error ? error.message : String(error),
-      metadata: { referencedMessageId: reference.messageId, referencedChannelId }
-    });
-    return undefined;
+    seenMessageIds.add(parent.id);
+    directFirstChain.push(discordReplyContextMessageFromMessage(parent));
+    cursor = parent;
   }
+
+  if (directFirstChain.length === 0) return undefined;
+  const chain = [...directFirstChain].reverse();
+  const directParent = directFirstChain[0];
+  const rootMessageId = chain[0]?.messageId ?? directParent.messageId;
+  const context: DiscordReplyContext = {
+    ...directParent,
+    rootMessageId,
+    chain
+  };
+
+  input.requestLogger.info(
+    {
+      referencedMessageId: context.messageId,
+      rootMessageId,
+      replyChainLength: chain.length,
+      referencedChannelId: context.channelId,
+      referencedAuthorId: context.authorId,
+      referencedContentPreview: previewText(context.content),
+      attachmentCount: context.attachmentSummaries.length
+    },
+    "Resolved Discord reply chain context"
+  );
+  await recordTraceEvent(input.repo, {
+    eventName: "discord.reply_context.resolved",
+    summary: previewText(context.content) || "Resolved Discord reply chain",
+    metadata: {
+      referencedMessageId: context.messageId,
+      rootMessageId,
+      replyChainLength: chain.length,
+      referencedChannelId: context.channelId,
+      referencedAuthorId: context.authorId,
+      attachmentCount: context.attachmentSummaries.length
+    }
+  });
+  return context;
+}
+
+function discordReplyContextMessageFromMessage(message: Message): DiscordReplyContextMessage {
+  return {
+    messageId: message.id,
+    channelId: message.channelId,
+    guildId: message.guildId,
+    authorId: message.author?.id ?? null,
+    authorDisplayName: message.member?.displayName ?? message.author?.globalName ?? message.author?.username ?? null,
+    authorIsBot: Boolean(message.author?.bot),
+    content: message.content ?? "",
+    attachmentSummaries: [...message.attachments.values()].map((attachment) =>
+      [attachment.name ?? attachment.id, attachment.contentType, attachment.size ? `${attachment.size} bytes` : ""].filter(Boolean).join(" ")
+    ),
+    createdAt: message.createdAt?.toISOString?.() ?? null,
+    url: message.url ?? null
+  };
 }
 
 function discordMessageTraceContext(

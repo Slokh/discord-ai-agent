@@ -305,6 +305,7 @@ export type AgentTaskRecord = {
   guildId: string | null;
   channelId: string | null;
   userId: string | null;
+  threadKey: string | null;
   discordResponseChannelId: string | null;
   discordResponseMessageId: string | null;
   retriedFromTaskId: string | null;
@@ -328,6 +329,9 @@ export type AgentTaskRecord = {
   notifiedAt: Date | null;
   notificationError: string | null;
   progressUpdatedAt: Date | null;
+  lastRenderedSignature: string | null;
+  lastRenderedAt: Date | null;
+  terminalRenderedAt: Date | null;
   updatedAt: Date;
 };
 
@@ -2145,6 +2149,7 @@ export class DiscordAiAgentRepository {
     guildId?: string | null;
     channelId?: string | null;
     userId?: string | null;
+    threadKey?: string | null;
     discordResponseChannelId?: string | null;
     discordResponseMessageId?: string | null;
     retriedFromTaskId?: string | null;
@@ -2158,16 +2163,17 @@ export class DiscordAiAgentRepository {
       `
         INSERT INTO agent_tasks(
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
           task_type, title, request, requested_by, backend, status, current_step, status_message, progress_updated_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'queued', 'queued', 'Waiting for a Kubernetes sandbox to start.', now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'queued', 'queued', 'Waiting for a Kubernetes sandbox to start.', now(), now())
         ON CONFLICT(task_id) DO UPDATE SET
           pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_tasks.pgboss_job_id),
           trace_id = coalesce(EXCLUDED.trace_id, agent_tasks.trace_id),
           guild_id = coalesce(EXCLUDED.guild_id, agent_tasks.guild_id),
           channel_id = coalesce(EXCLUDED.channel_id, agent_tasks.channel_id),
           user_id = coalesce(EXCLUDED.user_id, agent_tasks.user_id),
+          thread_key = coalesce(EXCLUDED.thread_key, agent_tasks.thread_key),
           discord_response_channel_id = coalesce(EXCLUDED.discord_response_channel_id, agent_tasks.discord_response_channel_id),
           discord_response_message_id = coalesce(EXCLUDED.discord_response_message_id, agent_tasks.discord_response_message_id),
           retried_from_task_id = coalesce(EXCLUDED.retried_from_task_id, agent_tasks.retried_from_task_id),
@@ -2189,6 +2195,7 @@ export class DiscordAiAgentRepository {
         input.guildId ?? null,
         input.channelId ?? null,
         input.userId ?? null,
+        input.threadKey ?? null,
         input.discordResponseChannelId ?? null,
         input.discordResponseMessageId ?? null,
         input.retriedFromTaskId ?? null,
@@ -2393,11 +2400,11 @@ export class DiscordAiAgentRepository {
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
-          progress_updated_at, updated_at
+          progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
         FROM agent_tasks
         WHERE task_id = $1
       `,
@@ -2419,11 +2426,11 @@ export class DiscordAiAgentRepository {
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
-          progress_updated_at, updated_at
+          progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
         FROM agent_tasks
         WHERE guild_id = $1
           AND ($2::text[] IS NULL OR channel_id IS NULL OR channel_id = ANY($2::text[]))
@@ -2442,11 +2449,11 @@ export class DiscordAiAgentRepository {
       `
         SELECT
           task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
-          discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
           task_type, title, request, requested_by, status, backend, current_step,
           status_message, branch_name, pr_url, draft, verify_passed, error,
           created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
-          progress_updated_at, updated_at
+          progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
         FROM agent_tasks
         WHERE status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
           AND notified_at IS NULL
@@ -2471,6 +2478,57 @@ export class DiscordAiAgentRepository {
         WHERE task_id = $1
       `,
       [taskId]
+    );
+  }
+
+  async listRenderableAgentTasks(limit = 20): Promise<AgentTaskRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          task_type, title, request, requested_by, status, backend, current_step,
+          status_message, branch_name, pr_url, draft, verify_passed, error,
+          created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
+          progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
+        FROM agent_tasks
+        WHERE notification_error IS NULL
+          AND discord_response_channel_id IS NOT NULL
+          AND discord_response_message_id IS NOT NULL
+          AND (
+            (status IN ('succeeded', 'failed', 'no_changes', 'cancelled') AND terminal_rendered_at IS NULL)
+            OR
+            (
+              status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+              AND (
+                last_rendered_at IS NULL
+                OR coalesce(progress_updated_at, updated_at) > last_rendered_at
+              )
+            )
+          )
+        ORDER BY
+          CASE WHEN status IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN 0 ELSE 1 END,
+          coalesce(progress_updated_at, updated_at) ASC
+        LIMIT $1
+      `,
+      [Math.max(1, Math.min(100, Math.trunc(limit)))]
+    );
+    return result.rows.map(rowToAgentTask);
+  }
+
+  async markAgentTaskRendered(input: { taskId: string; signature: string; terminal: boolean }) {
+    await this.pool.query(
+      `
+        UPDATE agent_tasks
+        SET last_rendered_signature = $2,
+            last_rendered_at = now(),
+            terminal_rendered_at = CASE WHEN $3 THEN now() ELSE terminal_rendered_at END,
+            notified_at = CASE WHEN $3 THEN now() ELSE notified_at END,
+            notification_error = NULL,
+            updated_at = now()
+        WHERE task_id = $1
+      `,
+      [input.taskId, input.signature, input.terminal]
     );
   }
 
@@ -4056,6 +4114,7 @@ function rowToAgentTask(row: any): AgentTaskRecord {
     guildId: row.guild_id == null ? null : String(row.guild_id),
     channelId: row.channel_id == null ? null : String(row.channel_id),
     userId: row.user_id == null ? null : String(row.user_id),
+    threadKey: row.thread_key == null ? null : String(row.thread_key),
     discordResponseChannelId: row.discord_response_channel_id == null ? null : String(row.discord_response_channel_id),
     discordResponseMessageId: row.discord_response_message_id == null ? null : String(row.discord_response_message_id),
     retriedFromTaskId: row.retried_from_task_id == null ? null : String(row.retried_from_task_id),
@@ -4079,6 +4138,9 @@ function rowToAgentTask(row: any): AgentTaskRecord {
     notifiedAt: row.notified_at == null ? null : new Date(row.notified_at),
     notificationError: row.notification_error == null ? null : String(row.notification_error),
     progressUpdatedAt: row.progress_updated_at == null ? null : new Date(row.progress_updated_at),
+    lastRenderedSignature: row.last_rendered_signature == null ? null : String(row.last_rendered_signature),
+    lastRenderedAt: row.last_rendered_at == null ? null : new Date(row.last_rendered_at),
+    terminalRenderedAt: row.terminal_rendered_at == null ? null : new Date(row.terminal_rendered_at),
     updatedAt: new Date(row.updated_at)
   };
 }

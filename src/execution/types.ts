@@ -10,6 +10,7 @@ export type AgentTaskJob = {
   guildId?: string;
   channelId?: string;
   userId?: string;
+  threadKey?: string;
   discordResponseChannelId?: string;
   discordResponseMessageId?: string;
   retriedFromTaskId?: string;

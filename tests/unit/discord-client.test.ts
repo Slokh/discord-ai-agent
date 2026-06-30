@@ -86,6 +86,7 @@ describe("discordChannelThreadKey", () => {
   it("keys persistent conversation memory by Discord channel", () => {
     expect(discordChannelThreadKey("guild-a", "channel-b")).toBe("discord:guild-a:channel-b");
   });
+
 });
 
 describe("persistReactionMessage", () => {

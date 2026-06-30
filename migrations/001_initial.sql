@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   guild_id text,
   channel_id text,
   user_id text,
+  thread_key text,
   discord_response_channel_id text,
   discord_response_message_id text,
   retried_from_task_id text REFERENCES agent_tasks(task_id) ON DELETE SET NULL,
@@ -287,6 +288,9 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
   notified_at timestamptz,
   notification_error text,
   progress_updated_at timestamptz,
+  last_rendered_signature text,
+  last_rendered_at timestamptz,
+  terminal_rendered_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -301,6 +305,12 @@ CREATE INDEX IF NOT EXISTS agent_tasks_notification_idx
   WHERE status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
     AND notified_at IS NULL
     AND notification_error IS NULL
+    AND discord_response_channel_id IS NOT NULL
+    AND discord_response_message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS agent_tasks_render_idx
+  ON agent_tasks(coalesce(progress_updated_at, updated_at), status)
+  WHERE notification_error IS NULL
     AND discord_response_channel_id IS NOT NULL
     AND discord_response_message_id IS NOT NULL;
 

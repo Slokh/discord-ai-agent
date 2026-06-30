@@ -6,6 +6,7 @@ import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
 import type {
   AgentTaskRecord,
   AgentTaskStatus,
+  ConversationMessage,
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
   DiscordChannelTopicCandidate,
@@ -36,8 +37,6 @@ export type HistoryAnswerOptions = {
 
 const MAX_UNDO_TURNS = 10;
 const MS_PER_DAY = 86_400_000;
-const AGENT_TASK_WAIT_TIMEOUT_MS = 25 * 60 * 1000;
-const AGENT_TASK_POLL_INTERVAL_MS = 2_000;
 
 type ChannelTopicCluster = {
   size: number;
@@ -942,6 +941,35 @@ export async function undoConversationTurns(ctx: ToolContext, count?: number): P
   )} from memory.`;
 }
 
+export async function getRecentAgentMemory(
+  ctx: ToolContext,
+  input: { limit?: number; includeToolResults?: boolean } = {}
+): Promise<string> {
+  const threadKey = ctx.threadKey ?? `discord:${ctx.guildId}:${ctx.channelId}`;
+  const limit = boundedLimit(input.limit, 12, 1, 30);
+  const includeToolResults = input.includeToolResults ?? true;
+  const messages = (
+    await ctx.repo.recentConversationMessages({
+      threadKey,
+      limit
+    })
+  )
+    .filter((message) => includeToolResults || message.role !== "tool")
+    .filter((message) => !ctx.requestId || message.discordMessageId !== ctx.requestId);
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "getRecentAgentMemory",
+    argumentsSummary: summarizeForAudit({ threadKey, limit, includeToolResults }),
+    resultSummary: summarizeForAudit({ resultCount: messages.length })
+  });
+
+  if (messages.length === 0) return "I do not have recent agent memory for this channel.";
+  return formatRecentAgentMemory(messages);
+}
+
 export async function createAgentUpdateFromRequest(ctx: ToolContext, request: string): Promise<string> {
   const updateName = slugify(
     request
@@ -951,10 +979,6 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
   const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy });
-  const [taskEvents, commandEvents] = await Promise.all([
-    loadTaskEventsForResult(ctx, result.taskId, result.job),
-    loadTaskCommandEventsForResult(ctx, result.taskId, result.job)
-  ]);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -965,63 +989,27 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
-  return formatAgentTaskResult({ ...result, taskEvents, commandEvents });
+  return formatAgentTaskResult(result);
 }
 
 async function enqueueAgentCodeUpdateTask(
   ctx: ToolContext,
   input: { request: string; updateName: string; requestedBy: string; retriedFromTaskId?: string | null }
-): Promise<{ taskId: string; jobId: string | null; job?: AgentTaskRecord; timedOut?: boolean }> {
+): Promise<{ taskId: string; jobId: string | null; job?: AgentTaskRecord }> {
   if (!ctx.jobs) {
     throw new Error("Agent task queue is unavailable in this process.");
   }
   await ctx.updateStatus?.("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
-  const enqueued = await ctx.jobs.enqueueAgentTask({
+  return ctx.jobs.enqueueAgentTask({
     request: input.request.trim(),
     title: input.updateName,
     requestedBy: input.requestedBy,
     taskType: "code_update",
+    threadKey: ctx.threadKey,
     discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
     discordResponseMessageId: ctx.statusMessageId,
     retriedFromTaskId: input.retriedFromTaskId ?? undefined
   });
-  const job = await waitForAgentTaskResult(ctx, enqueued.taskId);
-  return { ...enqueued, ...job };
-}
-
-async function waitForAgentTaskResult(
-  ctx: ToolContext,
-  taskId: string
-): Promise<{ job?: AgentTaskRecord; timedOut?: boolean }> {
-  const deadline = Date.now() + AGENT_TASK_WAIT_TIMEOUT_MS;
-  let lastProgressKey: string | undefined;
-
-  while (Date.now() < deadline) {
-    const job = await ctx.repo.getAgentTask(taskId);
-    if (job) {
-      if (isTerminalAgentTaskStatus(job.status)) {
-        return { job };
-      }
-      const progressKey = `${job.status}:${job.currentStep ?? ""}:${job.statusMessage ?? ""}`;
-      if (progressKey !== lastProgressKey) {
-        lastProgressKey = progressKey;
-        await ctx.updateStatus?.(agentTaskProgressMessage(job));
-      }
-    }
-    await sleep(AGENT_TASK_POLL_INTERVAL_MS);
-  }
-
-  const job = await ctx.repo.getAgentTask(taskId);
-  return { job, timedOut: true };
-}
-
-function isTerminalAgentTaskStatus(status: AgentTaskRecord["status"]) {
-  return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
-}
-
-function agentTaskProgressMessage(job: AgentTaskRecord) {
-  const detail = job.statusMessage ?? (job.status === "running" ? "Working on the code change now." : "Preparing the code change.");
-  return `${detail}\n\nUpdate: \`${job.title}\`${job.currentStep ? `\nStep: \`${job.currentStep}\`` : ""}`;
 }
 
 export function formatAgentTaskResult(input: {
@@ -1039,7 +1027,7 @@ export function formatAgentTaskResult(input: {
 
   const job = input.job;
   if (!job) {
-    return `I started the code change, but I could not find its result row. Task ID: \`${input.taskId}\`.`;
+    return `I’m working on that code change now. I’ll update this message with progress and the PR link when it’s ready. Task ID: \`${input.taskId}\`.`;
   }
 
   if (job.status === "succeeded" && job.prUrl) {
@@ -1086,26 +1074,6 @@ function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined) {
   const exit = event.exitCode == null ? "" : ` exit=${event.exitCode}`;
   const duration = event.durationMs == null ? "" : ` ${event.durationMs}ms`;
   return `Last sandbox command: \`${event.command ?? event.step}\`${exit}${duration}${detail}`;
-}
-
-async function loadTaskCommandEventsForResult(ctx: ToolContext, taskId: string, job?: AgentTaskRecord) {
-  if (!job || !isTerminalAgentTaskStatus(job.status)) return [];
-  return ctx.repo.getSandboxCommandEvents({
-    guildId: ctx.guildId,
-    visibleChannelIds: ctx.visibleChannelIds,
-    taskId,
-    limit: 8
-  });
-}
-
-async function loadTaskEventsForResult(ctx: ToolContext, taskId: string, job?: AgentTaskRecord) {
-  if (!job || !isTerminalAgentTaskStatus(job.status)) return [];
-  return ctx.repo.getTaskEvents({
-    guildId: ctx.guildId,
-    visibleChannelIds: ctx.visibleChannelIds,
-    traceId: taskId,
-    limit: 30
-  });
 }
 
 function formatAgentTaskTimingSummary(events: TaskEvent[] | undefined) {
@@ -1181,21 +1149,16 @@ function formatCompactCacheLine(cache: Record<string, unknown> | undefined) {
 
 function agentTaskAuditSummary(result: unknown) {
   if (!result || typeof result !== "object") return result;
-  const typed = result as { taskId?: string; jobId?: string | null; timedOut?: boolean; job?: AgentTaskRecord };
+  const typed = result as { taskId?: string; jobId?: string | null; job?: AgentTaskRecord };
   return {
     taskId: typed.taskId,
     jobId: typed.jobId,
-    timedOut: typed.timedOut,
     status: typed.job?.status,
     prUrl: typed.job?.prUrl,
     draft: typed.job?.draft,
     verifyPassed: typed.job?.verifyPassed,
     error: typed.job?.error
   };
-}
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: string; limit?: number } = {}): Promise<string> {
@@ -1282,10 +1245,6 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
     requestedBy,
     retriedFromTaskId: task.taskId
   });
-  const [taskEvents, commandEvents] = await Promise.all([
-    loadTaskEventsForResult(ctx, result.taskId, result.job),
-    loadTaskCommandEventsForResult(ctx, result.taskId, result.job)
-  ]);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -1296,7 +1255,7 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
-  return formatAgentTaskResult({ ...result, taskEvents, commandEvents });
+  return formatAgentTaskResult(result);
 }
 
 export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string; reason?: string } = {}): Promise<string> {
@@ -1565,6 +1524,20 @@ function normalizeAgentTaskStatuses(statuses: string[] | undefined): AgentTaskSt
     allowed.includes(status as AgentTaskStatus)
   );
   return normalized.length ? normalized : undefined;
+}
+
+function formatRecentAgentMemory(messages: ConversationMessage[]) {
+  return [
+    "Recent Discord AI Agent memory in this channel:",
+    ...messages.map((message, index) => {
+      const role = message.role === "tool" ? `tool:${typeof message.metadata.toolName === "string" ? message.metadata.toolName : "unknown"}` : message.role;
+      const author = message.authorDisplayName || message.authorId || "unknown";
+      const timestamp = message.createdAt.toISOString();
+      const url = typeof message.metadata.discordUrl === "string" ? `\n${message.metadata.discordUrl}` : "";
+      const content = truncateForDiscord(message.content, 500);
+      return `[${index + 1}] ${timestamp} ${role} ${author}\n${content}${url}`;
+    })
+  ].join("\n\n");
 }
 
 function formatAgentTaskLine(task: AgentTaskRecord) {

@@ -390,7 +390,7 @@ function RunHeader({ run, loading }: { run: RunSummary; loading: boolean }) {
           <MetaPill icon={<Clock3 />} label="Duration" value={formatDuration(run.durationMs)} />
           <MetaPill icon={<Activity />} label="Updated" value={formatRelative(run.updatedAt)} />
           {run.requester && <MetaPill icon={<Bot />} label="Requester" value={run.requester} />}
-          {run.traceId && <MetaPill icon={<Link2 />} label="Trace" value={shortId(run.traceId)} />}
+          {run.traceId && <MetaPill icon={<Link2 />} label="Trace" value={shortId(run.traceId)} copyValue={run.traceId} />}
         </div>
       </div>
     </header>
@@ -872,12 +872,13 @@ function Metric({ label, value, tone = "normal" }: { label: string; value: strin
   );
 }
 
-function MetaPill({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+function MetaPill({ icon, label, value, copyValue }: { icon: ReactNode; label: string; value: string; copyValue?: string }) {
   return (
     <span className="meta-pill">
       {icon}
       <span>{label}</span>
       <strong>{value}</strong>
+      {copyValue && <Copy value={copyValue} title={`Copy ${label}`} />}
     </span>
   );
 }

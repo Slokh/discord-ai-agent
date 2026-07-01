@@ -890,7 +890,7 @@ async function writeSandboxToolShims(toolShimDir: string): Promise<string[]> {
   return Object.keys(shims);
 }
 
-async function writeCodexConfig(workRoot: string, checkoutDir: string, env: SandboxEnv) {
+export async function writeCodexConfig(workRoot: string, checkoutDir: string, env: SandboxEnv) {
   const codexHome = path.join(workRoot, ".codex");
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(
@@ -902,6 +902,8 @@ async function writeCodexConfig(workRoot: string, checkoutDir: string, env: Sand
       'sandbox_mode = "danger-full-access"',
       'preferred_auth_method = "apikey"',
       'model_verbosity = "low"',
+      'model_reasoning_effort = "high"',
+      'model_reasoning_summary = "auto"',
       "",
       "[model_providers.openrouter]",
       'name = "OpenRouter"',

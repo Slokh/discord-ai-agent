@@ -12,7 +12,8 @@ import {
   codeUpdateRecoveryPrompt,
   evaluateCodegenWatchdog,
   renderCodegenContextPack,
-  repairWorktreeRemoteForBranchPush
+  repairWorktreeRemoteForBranchPush,
+  writeCodexConfig
 } from "../../src/execution/sandboxRunner.js";
 
 const execFileAsync = promisify(execFile);
@@ -51,6 +52,26 @@ describe("sandboxRunner", () => {
       "z-ai/glm-5.2",
       "-"
     ]);
+  });
+
+  it("enables reasoning effort and summaries in the Codex config", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-config-"));
+    try {
+      const env = {
+        taskId: "task-1",
+        openRouterChatModel: "z-ai/glm-5.2"
+      };
+      await writeCodexConfig(tempDir, "/tmp/work/repo", env as any);
+      const config = await fs.readFile(
+        path.join(tempDir, ".codex", "config.toml"),
+        "utf8"
+      );
+      expect(config).toContain('model_reasoning_effort = "high"');
+      expect(config).toContain('model_reasoning_summary = "auto"');
+      expect(config).not.toContain('model_reasoning_effort = "none"');
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("builds a concise codegen context pack from the repository guide and project map", async () => {

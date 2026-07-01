@@ -113,6 +113,14 @@ helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
   --set sandbox.cache.enabled=true
 ```
 
+For GitHub Actions deploys, set repository variables instead:
+
+- `CODEGEN_WORKER_ENABLED=true`
+- `SANDBOX_CACHE_ENABLED=true`
+- optional `CODEGEN_WORKER_REPLICAS`
+- optional `SANDBOX_CACHE_SIZE`
+- optional `SANDBOX_CACHE_STORAGE_CLASS`
+
 That deployment consumes only `agent.task`, uses the `local-process` backend, registers a lease in Postgres, and keeps repo/dependency/Codex caches warm on the mounted sandbox cache volume. The regular worker automatically stops consuming code-update task jobs while continuing crawl, embedding, and Discord request work.
 
 ## Sandbox Cache

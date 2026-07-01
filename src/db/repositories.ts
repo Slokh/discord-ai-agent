@@ -2464,6 +2464,49 @@ export class DiscordAiAgentRepository {
       [input.taskId, input.step, input.statusMessage, input.backend ?? null, JSON.stringify(input.metadata ?? {})]
     );
     if ((result.rowCount ?? 0) === 0) return;
+    await this.pool
+      .query(
+        `
+          WITH target AS (
+            SELECT session_id, execution_id, trace_id
+            FROM codegen_executions
+            WHERE task_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+          ),
+          next_sequence AS (
+            SELECT
+              target.session_id,
+              target.execution_id,
+              target.trace_id,
+              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+            FROM target
+            LEFT JOIN codegen_events ON codegen_events.execution_id = target.execution_id
+            GROUP BY target.session_id, target.execution_id, target.trace_id
+          )
+          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          SELECT
+            session_id,
+            execution_id,
+            trace_id,
+            sequence,
+            CASE
+              WHEN $2 ~* 'failed|error' THEN 'error'
+              WHEN $2 ~* 'git|branch|push|pr|diff|commit' THEN 'git'
+              WHEN $2 ~* 'command|verify|scan|dependencies|repo|checkout|test|lint|typecheck' THEN 'command'
+              WHEN $2 ~* 'artifact|prompt' THEN 'artifact'
+              WHEN $2 ~* 'codex|model|harness' THEN 'harness'
+              ELSE 'status'
+            END,
+            CASE WHEN $2 ~* 'failed|error' THEN 'error' ELSE 'info' END,
+            'codegen.progress',
+            $3,
+            jsonb_build_object('step', $2) || $4::jsonb
+          FROM next_sequence
+        `,
+        [input.taskId, input.step, input.statusMessage, JSON.stringify(input.metadata ?? {})]
+      )
+      .catch(() => undefined);
     await this.updateProcessRun({
       runId: input.taskId,
       status: "running",
@@ -2582,6 +2625,47 @@ export class DiscordAiAgentRepository {
       links: { pullRequest: input.prUrl, branch: input.branchName },
       metadata: { draft: input.draft, verifyPassed: input.verifyPassed, ...(input.metadata ?? {}) }
     }).catch(() => undefined);
+    await this.pool
+      .query(
+        `
+          WITH updated_execution AS (
+            UPDATE codegen_executions
+            SET status = 'succeeded',
+                branch_name = $2,
+                pr_url = $3,
+                draft = $4,
+                verify_passed = $5,
+                error = NULL,
+                metadata = metadata || $6::jsonb,
+                completed_at = coalesce(completed_at, now()),
+                updated_at = now()
+            WHERE task_id = $1
+            RETURNING session_id, execution_id, trace_id
+          ),
+          session_update AS (
+            UPDATE codegen_sessions
+            SET status = 'succeeded',
+                completed_at = coalesce(completed_at, now()),
+                updated_at = now()
+            WHERE session_id IN (SELECT session_id FROM updated_execution)
+          ),
+          next_sequence AS (
+            SELECT
+              updated_execution.session_id,
+              updated_execution.execution_id,
+              updated_execution.trace_id,
+              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+            FROM updated_execution
+            LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+          )
+          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          SELECT session_id, execution_id, trace_id, sequence, 'git', 'info', 'codegen.completed', 'Opened pull request.', $6::jsonb
+          FROM next_sequence
+        `,
+        [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
+      )
+      .catch(() => undefined);
   }
 
   async markAgentTaskFailed(input: {
@@ -2627,6 +2711,52 @@ export class DiscordAiAgentRepository {
       summary: input.error,
       metadata: { error: input.error, ...(input.metadata ?? {}) }
     }).catch(() => undefined);
+    await this.pool
+      .query(
+        `
+          WITH updated_execution AS (
+            UPDATE codegen_executions
+            SET status = $2,
+                error = $3,
+                metadata = metadata || $4::jsonb,
+                completed_at = coalesce(completed_at, now()),
+                updated_at = now()
+            WHERE task_id = $1
+            RETURNING session_id, execution_id, trace_id
+          ),
+          session_update AS (
+            UPDATE codegen_sessions
+            SET status = $2,
+                completed_at = coalesce(completed_at, now()),
+                updated_at = now()
+            WHERE session_id IN (SELECT session_id FROM updated_execution)
+          ),
+          next_sequence AS (
+            SELECT
+              updated_execution.session_id,
+              updated_execution.execution_id,
+              updated_execution.trace_id,
+              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+            FROM updated_execution
+            LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+          )
+          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          SELECT
+            session_id,
+            execution_id,
+            trace_id,
+            sequence,
+            CASE WHEN $2 = 'cancelled' THEN 'status' ELSE 'error' END,
+            CASE WHEN $2 = 'cancelled' THEN 'info' ELSE 'error' END,
+            'codegen.completed',
+            $3,
+            jsonb_build_object('status', $2, 'error', $3) || $4::jsonb
+          FROM next_sequence
+        `,
+        [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
+      )
+      .catch(() => undefined);
   }
 
   async getAgentTask(taskId: string): Promise<AgentTaskRecord | undefined> {

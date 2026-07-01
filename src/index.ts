@@ -3,6 +3,7 @@ import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, ass
 import { startInternalApi } from "./control/internalApi.js";
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
+import { CodegenRepository } from "./db/codegenRepository.js";
 import { DiscordAiAgentRepository } from "./db/repositories.js";
 import { KubernetesExecutionBackend } from "./execution/backend.js";
 import { startSandboxReconciler } from "./execution/reconciler.js";
@@ -59,6 +60,7 @@ async function main() {
   const pool = createPool(config);
   logger.debug("Postgres pool created");
   const repo = new DiscordAiAgentRepository(pool);
+  const codegenRepo = new CodegenRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsWorker ? new KubernetesExecutionBackend(config) : undefined;
 
@@ -98,6 +100,7 @@ async function main() {
   const jobs = await startJobs({
     config,
     repo,
+    codegenRepo,
     crawler,
     agentTask: executionBackend
       ? {

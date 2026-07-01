@@ -26,9 +26,8 @@ sandbox:
 
 codegen:
   # kubernetes-job keeps one isolated Kubernetes Job per code update.
-  # local-process runs codegen inside the long-lived worker process so the repo,
-  # dependency, and Codex caches stay warm between tasks. Keep worker.replicas at
-  # 1 unless the sandbox cache PVC supports ReadWriteMany.
+  # Prefer codegenWorker.enabled=true for warm local-process codegen so normal
+  # worker queues stay separate from code execution.
   executionBackend: kubernetes-job
 
 secret:
@@ -82,6 +81,21 @@ worker:
   # storage or a DB-backed cache/sandbox lease model before scaling codegen workers.
   replicas: 1
   terminationGracePeriodSeconds: 120
+  queues:
+    crawl: true
+    embedding: true
+    task: true
+    discordAgent: true
+  resources: {}
+
+codegenWorker:
+  # Optional dedicated warm codegen worker pool. When enabled, this Deployment
+  # runs only the agent.task queue with local-process warm execution and the
+  # regular worker stops consuming task jobs.
+  enabled: false
+  replicas: 1
+  terminationGracePeriodSeconds: 120
+  executionBackend: local-process
   resources: {}
 
 migrations:

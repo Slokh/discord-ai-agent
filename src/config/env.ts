@@ -72,6 +72,10 @@ const defaults = {
   sandboxTtlSecondsAfterFinished: 3600,
   sandboxCacheDir: "/var/cache/discord-ai-agent",
   sandboxCachePvcName: "",
+  workerCrawlEnabled: true,
+  workerEmbeddingEnabled: true,
+  workerTaskEnabled: true,
+  workerDiscordAgentEnabled: true,
   crawlBatchSize: 100,
   crawlFetchRetries: 3,
   crawlRetryBaseMs: 1000,
@@ -131,6 +135,11 @@ const envSchema = z.object({
   SANDBOX_TTL_SECONDS_AFTER_FINISHED: z.coerce.number().int().positive().default(defaults.sandboxTtlSecondsAfterFinished),
   SANDBOX_CACHE_DIR: z.string().default(defaults.sandboxCacheDir),
   SANDBOX_CACHE_PVC_NAME: z.string().default(defaults.sandboxCachePvcName),
+
+  WORKER_CRAWL_ENABLED: booleanFromEnv.default(defaults.workerCrawlEnabled),
+  WORKER_EMBEDDING_ENABLED: booleanFromEnv.default(defaults.workerEmbeddingEnabled),
+  WORKER_TASK_ENABLED: booleanFromEnv.default(defaults.workerTaskEnabled),
+  WORKER_DISCORD_AGENT_ENABLED: booleanFromEnv.default(defaults.workerDiscordAgentEnabled),
 
   CRAWL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(defaults.crawlBatchSize),
   CRAWL_FETCH_RETRIES: z.coerce.number().int().min(0).max(10).default(defaults.crawlFetchRetries),
@@ -215,6 +224,12 @@ export function loadConfig() {
         cacheDir: parsed.data.SANDBOX_CACHE_DIR,
         cachePvcName: parsed.data.SANDBOX_CACHE_PVC_NAME.trim() || null
       }
+    },
+    worker: {
+      crawlEnabled: parsed.data.WORKER_CRAWL_ENABLED ?? defaults.workerCrawlEnabled,
+      embeddingEnabled: parsed.data.WORKER_EMBEDDING_ENABLED ?? defaults.workerEmbeddingEnabled,
+      taskEnabled: parsed.data.WORKER_TASK_ENABLED ?? defaults.workerTaskEnabled,
+      discordAgentEnabled: parsed.data.WORKER_DISCORD_AGENT_ENABLED ?? defaults.workerDiscordAgentEnabled
     },
     crawlBatchSize: parsed.data.CRAWL_BATCH_SIZE,
     crawlFetchRetries: parsed.data.CRAWL_FETCH_RETRIES,

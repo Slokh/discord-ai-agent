@@ -1,27 +1,28 @@
+{{- if .Values.codegenWorker.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "discord-ai-agent.fullname" . }}-worker
+  name: {{ include "discord-ai-agent.fullname" . }}-codegen-worker
   labels:
     {{- include "discord-ai-agent.labels" . | nindent 4 }}
-    app.kubernetes.io/component: worker
+    app.kubernetes.io/component: codegen-worker
 spec:
-  replicas: {{ .Values.worker.replicas }}
+  replicas: {{ .Values.codegenWorker.replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
-      app.kubernetes.io/component: worker
+      app.kubernetes.io/component: codegen-worker
   template:
     metadata:
       labels:
         {{- include "discord-ai-agent.labels" . | nindent 8 }}
-        app.kubernetes.io/component: worker
+        app.kubernetes.io/component: codegen-worker
     spec:
-      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.codegenWorker.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-worker
       containers:
-        - name: worker
+        - name: codegen-worker
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["node", "dist/src/index.js", "worker"]
@@ -30,32 +31,32 @@ spec:
               value: worker
             {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
             - name: WORKER_CRAWL_ENABLED
-              value: {{ .Values.worker.queues.crawl | quote }}
+              value: "false"
             - name: WORKER_EMBEDDING_ENABLED
-              value: {{ .Values.worker.queues.embedding | quote }}
+              value: "false"
             - name: WORKER_TASK_ENABLED
-              value: {{ and .Values.worker.queues.task (not .Values.codegenWorker.enabled) | quote }}
+              value: "true"
             - name: WORKER_DISCORD_AGENT_ENABLED
-              value: {{ .Values.worker.queues.discordAgent | quote }}
+              value: "false"
             - name: CODEGEN_EXECUTION_BACKEND
-              value: {{ .Values.codegen.executionBackend | quote }}
+              value: {{ .Values.codegenWorker.executionBackend | quote }}
             {{- include "discord-ai-agent.controlUiPublicEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
-            {{- include "discord-ai-agent.discordEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.githubEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.internalApiEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.sandboxLauncherEnv" . | nindent 12 }}
           resources:
-            {{- toYaml .Values.worker.resources | nindent 12 }}
-          {{- if and .Values.sandbox.cache.enabled (eq .Values.codegen.executionBackend "local-process") }}
+            {{- toYaml .Values.codegenWorker.resources | nindent 12 }}
+          {{- if and .Values.sandbox.cache.enabled (eq .Values.codegenWorker.executionBackend "local-process") }}
           volumeMounts:
             - name: sandbox-cache
               mountPath: {{ .Values.sandbox.cache.mountPath | quote }}
           {{- end }}
-      {{- if and .Values.sandbox.cache.enabled (eq .Values.codegen.executionBackend "local-process") }}
+      {{- if and .Values.sandbox.cache.enabled (eq .Values.codegenWorker.executionBackend "local-process") }}
       volumes:
         - name: sandbox-cache
           persistentVolumeClaim:
             claimName: {{ include "discord-ai-agent.fullname" . }}-sandbox-cache
       {{- end }}
+{{- end }}

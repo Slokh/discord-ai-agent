@@ -69,15 +69,15 @@ If Codex changes `package.json` or `package-lock.json`, the sandbox refreshes de
 Set `CODEGEN_EXECUTION_BACKEND` to choose the backend:
 
 - `kubernetes-job`: safest isolation boundary and current default.
-- `local-process`: lower latency mode for a dedicated codegen worker pod. In Helm, set `codegen.executionBackend=local-process`; when `sandbox.cache.enabled=true`, the worker mounts the sandbox cache PVC directly.
+- `local-process`: lower latency mode for a dedicated codegen worker pod. In Helm, enable `codegenWorker.enabled=true`; that deployment consumes only `agent.task`, sets `CODEGEN_EXECUTION_BACKEND=local-process`, and mounts the sandbox cache PVC when `sandbox.cache.enabled=true`.
 
-Use `local-process` only for a worker pod you already treat as the code execution boundary. Keep `worker.replicas=1` unless the cache PVC supports `ReadWriteMany`.
+Use `local-process` only for a pod you already treat as the code execution boundary. When `codegenWorker.enabled=true`, the regular worker stops consuming code-update task jobs so crawl, embedding, and Discord request work stay separate from warm codegen execution.
 
 ## Warm Runtime Direction
 
 The next Centaur-like steps are:
 
-1. Expand lease-backed scheduling from the local-process worker slot into true warm Kubernetes sandbox pods.
+1. Move from the dedicated warm codegen worker pod to true warm sandbox pods that keep a harness server alive behind the same lease table.
 2. Keep a Codex app-server process warm per worker and reuse threads/sessions across recovery turns instead of spawning app-server per task.
 3. Add queue routing/fallback so a task uses a warm worker when one is available and falls back to `kubernetes-job` when the warm pool is saturated.
 4. Move credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.

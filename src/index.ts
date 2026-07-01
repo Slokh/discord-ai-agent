@@ -21,10 +21,15 @@ async function main() {
   const startsApi = config.processRole === "all" || config.processRole === "api";
   const startsBot = config.processRole === "all" || config.processRole === "bot";
   const startsWorker = config.processRole === "all" || config.processRole === "worker";
-  if (startsBot || startsWorker) assertDiscordConfig(config);
-  if (startsBot || startsWorker) assertOpenRouterConfig(config);
+  const startsCrawlWorker = startsWorker && config.worker.crawlEnabled;
+  const startsEmbeddingWorker = startsWorker && config.worker.embeddingEnabled;
+  const startsTaskWorker = startsWorker && config.worker.taskEnabled;
+  const startsDiscordAgentWorker = startsWorker && config.worker.discordAgentEnabled;
+  const startsDiscordClient = startsBot || startsCrawlWorker || startsDiscordAgentWorker;
+  if (startsBot || startsCrawlWorker || startsDiscordAgentWorker) assertDiscordConfig(config);
+  if (startsBot || startsEmbeddingWorker || startsTaskWorker || startsDiscordAgentWorker) assertOpenRouterConfig(config);
   if (startsApi) assertTaskCallbackConfig(config);
-  if (startsWorker) assertExecutionConfig(config);
+  if (startsTaskWorker) assertExecutionConfig(config);
 
   logger.info(
     {
@@ -44,6 +49,12 @@ async function main() {
       github: {
         repository: config.github.repository,
         baseBranch: config.github.baseBranch
+      },
+      worker: {
+        crawlEnabled: startsCrawlWorker,
+        embeddingEnabled: startsEmbeddingWorker,
+        taskEnabled: startsTaskWorker,
+        discordAgentEnabled: startsDiscordAgentWorker
       }
     },
     "Starting Discord AI Agent"
@@ -62,10 +73,10 @@ async function main() {
   const repo = new DiscordAiAgentRepository(pool);
   const codegenRepo = new CodegenRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
-  const executionBackend = startsWorker ? createExecutionBackend(config) : undefined;
+  const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
 
   const client =
-    startsBot || startsWorker
+    startsDiscordClient
       ? new Client({
           intents: [
             GatewayIntentBits.Guilds,
@@ -95,8 +106,10 @@ async function main() {
           throw new Error("Discord crawler is unavailable in the API-only process.");
         }
       };
-  const startsEmbeddingWorker = startsWorker;
-  logger.info({ startsApi, startsBot, startsWorker, startsEmbeddingWorker }, "Starting job runtime");
+  logger.info(
+    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsDiscordAgentWorker },
+    "Starting job runtime"
+  );
   const jobs = await startJobs({
     config,
     repo,
@@ -124,13 +137,16 @@ async function main() {
             }
           }
         : undefined,
-    crawlWorker: startsWorker,
+    crawlWorker: startsCrawlWorker,
     embeddingWorker: startsEmbeddingWorker,
-    taskWorker: startsWorker,
-    discordAgentWorker: startsWorker
+    taskWorker: startsTaskWorker,
+    discordAgentWorker: startsDiscordAgentWorker
   });
   jobRuntimeRef.current = jobs;
-  logger.info({ startsApi, startsBot, startsWorker, startsEmbeddingWorker }, "Job runtime ready");
+  logger.info(
+    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsDiscordAgentWorker },
+    "Job runtime ready"
+  );
   const internalApi = startsApi ? await startInternalApi({ config, repo, codegenRepo }) : null;
   const staleRunReconciler = startsApi
     ? startStaleRunReconciler({
@@ -138,7 +154,7 @@ async function main() {
         staleAfterMs: Math.max(config.discordAgentResponseTimeoutMs + 60_000, 10 * 60 * 1000)
       })
     : null;
-  const sandboxReconciler = startsWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
+  const sandboxReconciler = startsTaskWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
   const runtime = startsBot && client && crawler instanceof DiscordCrawler ? createDiscordAiAgentBot({ config, repo, openRouter, crawler, jobs, client }) : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
 
@@ -165,8 +181,8 @@ async function main() {
   if (runtime) {
     logger.info("Logging into Discord as bot process");
     await runtime.login();
-  } else if (startsWorker && client) {
-    logger.info("Logging into Discord as worker process");
+  } else if (startsDiscordClient && client) {
+    logger.info("Logging into Discord as Discord-enabled worker process");
     await client.login(config.discord.token);
     logger.info("Discord AI Agent worker is online");
   } else if (startsApi) {

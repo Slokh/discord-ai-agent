@@ -2295,7 +2295,7 @@ export class DiscordAiAgentRepository {
     const whereSql = `WHERE ${conditions.join("\n          AND ")}`;
     const result = await this.pool.query(
       `
-        WITH filtered AS (
+        WITH filtered AS MATERIALIZED (
           SELECT
             ${discordStatsEffectiveChannelIdSql()} AS channel_id,
             ${discordStatsEffectiveChannelNameSql()} AS channel_name,
@@ -2303,7 +2303,7 @@ export class DiscordAiAgentRepository {
             u.username AS author_username,
             m.normalized_content,
             m.created_at,
-            e.embedding::text AS embedding_text
+            e.message_id IS NOT NULL AS has_embedding
           FROM messages m
           JOIN discord_users u ON u.id = m.author_id
           JOIN channels c ON c.id = m.channel_id
@@ -2325,23 +2325,28 @@ export class DiscordAiAgentRepository {
             sc.channel_message_count,
             row_number() OVER (
               PARTITION BY f.channel_id
-              ORDER BY (f.embedding_text IS NULL), md5(f.message_id)
+              ORDER BY (NOT f.has_embedding), md5(f.message_id)
             ) AS sample_rank
           FROM filtered f
           JOIN selected_channels sc ON sc.channel_id = f.channel_id
+        ),
+        sampled AS (
+          SELECT *
+          FROM ranked_messages
+          WHERE sample_rank <= ${samplesPerChannelPlaceholder}
         )
         SELECT
-          channel_id,
-          channel_name,
-          message_id,
-          author_username,
-          normalized_content,
-          created_at,
-          embedding_text,
-          channel_message_count
-        FROM ranked_messages
-        WHERE sample_rank <= ${samplesPerChannelPlaceholder}
-        ORDER BY channel_message_count DESC, channel_id, sample_rank
+          sampled.channel_id,
+          sampled.channel_name,
+          sampled.message_id,
+          sampled.author_username,
+          sampled.normalized_content,
+          sampled.created_at,
+          e.embedding::text AS embedding_text,
+          sampled.channel_message_count
+        FROM sampled
+        LEFT JOIN message_embeddings e ON e.message_id = sampled.message_id
+        ORDER BY sampled.channel_message_count DESC, sampled.channel_id, sampled.sample_rank
       `,
       params
     );

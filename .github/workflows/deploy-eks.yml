@@ -26,6 +26,11 @@ jobs:
       API_SERVICE_TYPE: ${{ vars.API_SERVICE_TYPE }}
       API_TLS_CERTIFICATE_ARN: ${{ vars.API_TLS_CERTIFICATE_ARN }}
       CONTROL_UI_PUBLIC_URL: ${{ vars.CONTROL_UI_PUBLIC_URL }}
+      CODEGEN_WORKER_ENABLED: ${{ vars.CODEGEN_WORKER_ENABLED }}
+      CODEGEN_WORKER_REPLICAS: ${{ vars.CODEGEN_WORKER_REPLICAS }}
+      SANDBOX_CACHE_ENABLED: ${{ vars.SANDBOX_CACHE_ENABLED }}
+      SANDBOX_CACHE_SIZE: ${{ vars.SANDBOX_CACHE_SIZE }}
+      SANDBOX_CACHE_STORAGE_CLASS: ${{ vars.SANDBOX_CACHE_STORAGE_CLASS }}
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +77,27 @@ jobs:
           fi
           if [ -n "${CONTROL_UI_PUBLIC_URL:-}" ]; then
             helm_args+=(--set-string "config.controlUiPublicUrl=$CONTROL_UI_PUBLIC_URL")
+          fi
+          is_true() {
+            case "${1:-}" in
+              1|true|TRUE|yes|YES|on|ON) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if is_true "$CODEGEN_WORKER_ENABLED"; then
+            helm_args+=(--set "codegenWorker.enabled=true")
+          fi
+          if [ -n "${CODEGEN_WORKER_REPLICAS:-}" ]; then
+            helm_args+=(--set "codegenWorker.replicas=$CODEGEN_WORKER_REPLICAS")
+          fi
+          if is_true "$SANDBOX_CACHE_ENABLED"; then
+            helm_args+=(--set "sandbox.cache.enabled=true")
+          fi
+          if [ -n "${SANDBOX_CACHE_SIZE:-}" ]; then
+            helm_args+=(--set-string "sandbox.cache.size=$SANDBOX_CACHE_SIZE")
+          fi
+          if [ -n "${SANDBOX_CACHE_STORAGE_CLASS:-}" ]; then
+            helm_args+=(--set-string "sandbox.cache.storageClassName=$SANDBOX_CACHE_STORAGE_CLASS")
           fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
             "${helm_args[@]}"

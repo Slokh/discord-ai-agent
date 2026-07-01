@@ -1003,7 +1003,7 @@ function sendUiUnauthorized(response: http.ServerResponse) {
   response.end("Authentication required.");
 }
 
-async function renderMetrics(repo: DiscordAiAgentRepository) {
+export async function renderMetrics(repo: DiscordAiAgentRepository) {
   const [health, taskMetrics] = await Promise.all([repo.health(), repo.getAgentTaskMetrics()]);
   const lines = [
     "# HELP discord_ai_agent_messages_indexed Indexed non-deleted Discord messages.",
@@ -1021,6 +1021,12 @@ async function renderMetrics(repo: DiscordAiAgentRepository) {
     "# HELP discord_ai_agent_sandbox_runs_total Sandbox runs by status.",
     "# TYPE discord_ai_agent_sandbox_runs_total gauge",
     ...taskMetrics.sandboxRunsByStatus.map((row) => `discord_ai_agent_sandbox_runs_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),
+    "# HELP discord_ai_agent_codegen_sandbox_leases_total Codegen sandbox leases by backend and status.",
+    "# TYPE discord_ai_agent_codegen_sandbox_leases_total gauge",
+    ...taskMetrics.codegenSandboxLeases.map(
+      (row) =>
+        `discord_ai_agent_codegen_sandbox_leases_total{backend=${quoteMetricLabel(row.backend)},status=${quoteMetricLabel(row.status)}} ${row.count}`
+    ),
     "# HELP discord_ai_agent_codegen_phase_duration_avg_ms Average code-update phase duration in milliseconds.",
     "# TYPE discord_ai_agent_codegen_phase_duration_avg_ms gauge",
     ...taskMetrics.codegenPhaseDurations.map((row) => `discord_ai_agent_codegen_phase_duration_avg_ms{phase=${quoteMetricLabel(row.phase)}} ${row.avgMs}`),

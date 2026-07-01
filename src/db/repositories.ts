@@ -4453,12 +4453,22 @@ export class DiscordAiAgentRepository {
   async getAgentTaskMetrics(): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     sandboxRunsByStatus: Array<{ status: string; count: number }>;
+    codegenSandboxLeases: Array<{ backend: string; status: string; count: number }>;
     codegenPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
     sandboxCacheEvents: Array<{ cacheType: string; cacheStatus: string; count: number }>;
   }> {
-    const [tasks, sandboxRuns, phaseDurations, cacheEvents] = await Promise.all([
+    const [tasks, sandboxRuns, codegenSandboxLeases, phaseDurations, cacheEvents] = await Promise.all([
       this.pool.query("SELECT status, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
       this.pool.query("SELECT status, count(*)::int AS count FROM sandbox_runs GROUP BY status ORDER BY status"),
+      this.pool.query(`
+        SELECT
+          coalesce(nullif(metadata->>'backend', ''), 'unknown') AS backend,
+          status,
+          count(*)::int AS count
+        FROM codegen_sandbox_leases
+        GROUP BY backend, status
+        ORDER BY backend, status
+      `),
       this.pool.query(`
         SELECT
           regexp_replace(metadata->>'step', '_complete$', '') AS phase,
@@ -4488,6 +4498,11 @@ export class DiscordAiAgentRepository {
     return {
       tasksByStatus: tasks.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
       sandboxRunsByStatus: sandboxRuns.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
+      codegenSandboxLeases: codegenSandboxLeases.rows.map((row) => ({
+        backend: String(row.backend),
+        status: String(row.status),
+        count: Number(row.count)
+      })),
       codegenPhaseDurations: phaseDurations.rows.map((row) => ({
         phase: String(row.phase),
         count: Number(row.count),

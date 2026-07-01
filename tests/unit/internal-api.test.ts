@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { verifyUiAuthorization } from "../../src/control/internalApi.js";
+import { renderMetrics, verifyUiAuthorization } from "../../src/control/internalApi.js";
 
 describe("internal API UI authorization", () => {
   it("allows UI access when no password is configured", () => {
@@ -36,5 +36,25 @@ describe("internal API UI authorization", () => {
         authorization: `Basic ${Buffer.from("not-admin:secret-password").toString("base64")}`
       })
     ).toBe(false);
+  });
+});
+
+describe("internal API metrics", () => {
+  it("renders codegen sandbox lease metrics", async () => {
+    const repo = {
+      health: async () => ({ messages: 2, embeddings: 1, toolCalls: 3 }),
+      getAgentTaskMetrics: async () => ({
+        tasksByStatus: [],
+        sandboxRunsByStatus: [],
+        codegenSandboxLeases: [{ backend: "local-process-sandbox", status: "idle", count: 1 }],
+        codegenPhaseDurations: [],
+        sandboxCacheEvents: []
+      })
+    };
+
+    const metrics = await renderMetrics(repo as any);
+
+    expect(metrics).toContain("# HELP discord_ai_agent_codegen_sandbox_leases_total Codegen sandbox leases by backend and status.");
+    expect(metrics).toContain('discord_ai_agent_codegen_sandbox_leases_total{backend="local-process-sandbox",status="idle"} 1');
   });
 });

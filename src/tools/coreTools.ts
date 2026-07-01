@@ -1277,6 +1277,7 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
     `- Embeddings: ${health.embeddings}`,
     `- Tool calls logged: ${health.toolCalls}`,
     `- Agent tasks: ${taskMetrics.tasksByStatus.map((row) => `${row.status}=${row.count}`).join(", ") || "none"}`,
+    `- Codegen leases: ${formatLeaseMetricSummary(taskMetrics.codegenSandboxLeases)}`,
     `- Codegen timings: ${formatCodegenMetricSummary(taskMetrics.codegenPhaseDurations)}`,
     `- Sandbox cache: ${formatCacheMetricSummary(taskMetrics.sandboxCacheEvents)}`,
     recentTasks.length ? "Recent tasks:" : "Recent tasks: none",
@@ -1524,6 +1525,11 @@ function formatCodegenMetricSummary(rows: Array<{ phase: string; count: number; 
 function formatCacheMetricSummary(rows: Array<{ cacheType: string; cacheStatus: string; count: number }>) {
   if (rows.length === 0) return "none yet";
   return rows.map((row) => `${row.cacheType}.${row.cacheStatus}=${row.count}`).join(", ");
+}
+
+function formatLeaseMetricSummary(rows: Array<{ backend: string; status: string; count: number }>) {
+  if (rows.length === 0) return "none yet";
+  return rows.map((row) => `${row.backend}.${row.status}=${row.count}`).join(", ");
 }
 
 function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {

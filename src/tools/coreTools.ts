@@ -3,7 +3,7 @@ import { MESSAGE_EMBEDDING_INPUT_VERSION } from "../memory/embedding.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
-import type { AgentFile, DiscordRoleSnapshot, ToolContext } from "./types.js";
+import type { AgentFile, ToolContext } from "./types.js";
 import type {
   AgentTaskRecord,
   AgentTaskStatus,
@@ -11,10 +11,6 @@ import type {
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
   DiscordChannelTopicCandidate,
-  DiscordPatternStats,
-  DiscordPatternStatsDedupeOrder,
-  DiscordPatternStatsDistinctBy,
-  DiscordPatternStatsSort,
   DiscordStats,
   DiscordUserLookupResult,
   SearchResult,
@@ -44,23 +40,6 @@ type ChannelTopicCluster = {
   examples: DiscordChannelTopicCandidate[];
 };
 
-type DiscordDataAnalysisPlan = {
-  pattern?: string;
-  query?: string;
-  groupBy?: DiscordPatternStats["groupBy"];
-  metric?: DiscordPatternStats["metric"];
-  sort?: DiscordPatternStatsSort;
-  captureIndex?: number;
-  numericCaptureIndex?: number;
-  numericValueMap?: Record<string, number>;
-  distinctBy?: DiscordPatternStatsDistinctBy[];
-  dedupeOrder?: DiscordPatternStatsDedupeOrder;
-  minMatches?: number;
-  limit?: number;
-  explanation?: string;
-  unsupportedReason?: string;
-};
-
 export async function listTools(ctx: ToolContext): Promise<string> {
   const content = renderToolList();
   await ctx.repo.auditTool({
@@ -76,7 +55,7 @@ export async function listTools(ctx: ToolContext): Promise<string> {
 
 export async function findDiscordUsers(ctx: ToolContext, query: string, limit?: number): Promise<string> {
   const resolvedLimit = boundedLimit(limit, 8, 1, 20);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const results = await ctx.repo.findDiscordUsers({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
@@ -96,7 +75,7 @@ export async function findDiscordUsers(ctx: ToolContext, query: string, limit?: 
 
 export async function findDiscordChannels(ctx: ToolContext, query: string, limit?: number): Promise<string> {
   const resolvedLimit = boundedLimit(limit, 8, 1, 20);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const results = await ctx.repo.findDiscordChannels({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
@@ -112,26 +91,6 @@ export async function findDiscordChannels(ctx: ToolContext, query: string, limit
     resultSummary: summarizeForAudit({ resultCount: results.length })
   });
   return formatDiscordChannelMatches(results);
-}
-
-export async function findDiscordRoles(ctx: ToolContext, query: string, limit?: number): Promise<string> {
-  const resolvedLimit = boundedLimit(limit, 8, 1, 20);
-  const normalized = normalizeRoleQuery(query);
-  const roles = [...(ctx.discordRoles ?? [])]
-    .map((role) => ({ role, score: roleLookupScore(role, normalized) }))
-    .filter((entry) => normalized === "" || entry.score > 0)
-    .sort((a, b) => b.score - a.score || (b.role.position ?? 0) - (a.role.position ?? 0) || a.role.name.localeCompare(b.role.name))
-    .slice(0, resolvedLimit)
-    .map((entry) => entry.role);
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "findDiscordRoles",
-    argumentsSummary: summarizeForAudit({ query, limit: resolvedLimit }),
-    resultSummary: summarizeForAudit({ resultCount: roles.length })
-  });
-  return formatDiscordRoleMatches(roles);
 }
 
 export async function answerFromHistory(ctx: ToolContext, question: string, options: HistoryAnswerOptions = {}): Promise<string> {
@@ -164,6 +123,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     syntaxFilters.dateTo != null;
   const query = (syntaxFilters.query || (hasSyntaxFilters ? "" : question)).trim();
   const effectiveQuery = buildHistoryRetrievalQuery(query);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const results = await searchDiscordHistory({
     repo: ctx.repo,
     openRouter: ctx.openRouter,
@@ -171,6 +131,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     search: {
       guildId: ctx.guildId,
       userVisibleChannelIds: ctx.visibleChannelIds,
+      visibleIndexedChannelIds: visibleIndexedChannels,
       query,
       limit: boundedLimit(options.limit, ctx.config.maxHistoryResults, 1, 25),
       authorIds: uniqueStrings(authorIds),
@@ -216,7 +177,7 @@ export async function getRecentDiscordMessages(
   input: { channelIds?: string[]; authorIds?: string[]; limit?: number } = {}
 ): Promise<string> {
   const limit = boundedLimit(input.limit, 25, 1, 80);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const requestedChannelIds = normalizeIds(input.channelIds).length > 0 ? normalizeIds(input.channelIds) : [ctx.channelId];
   const messages = await ctx.repo.recentMessagesFromChannels({
     guildId: ctx.guildId,
@@ -242,7 +203,7 @@ export async function getDiscordMessageContext(
 ): Promise<string> {
   const messageId = extractDiscordMessageId(input.messageIdOrUrl);
   if (!messageId) return "I could not find a Discord message ID in that input.";
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const messages = await ctx.repo.messageContext({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
@@ -266,7 +227,7 @@ export async function searchDiscordAttachments(
   input: { query?: string; channelIds?: string[]; authorIds?: string[]; contentType?: string; limit?: number } = {}
 ): Promise<string> {
   const limit = boundedLimit(input.limit, 10, 1, 30);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const attachments = await ctx.repo.searchDiscordAttachments({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
@@ -285,27 +246,6 @@ export async function searchDiscordAttachments(
     resultSummary: summarizeForAudit({ resultCount: attachments.length })
   });
   return formatAttachmentResults(attachments);
-}
-
-export async function getPinnedMessages(ctx: ToolContext, input: { channelIds?: string[]; limit?: number } = {}): Promise<string> {
-  const limit = boundedLimit(input.limit, 20, 1, 50);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
-  const requestedChannelIds = normalizeIds(input.channelIds).length > 0 ? normalizeIds(input.channelIds) : [ctx.channelId];
-  const messages = await ctx.repo.pinnedMessages({
-    guildId: ctx.guildId,
-    visibleChannelIds: visibleIndexedChannels,
-    channelIds: requestedChannelIds,
-    limit
-  });
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "getPinnedMessages",
-    argumentsSummary: summarizeForAudit({ channelIds: requestedChannelIds, limit }),
-    resultSummary: summarizeForAudit({ resultCount: messages.length })
-  });
-  return formatMessageList(messages, "I did not find indexed pinned messages in those visible channels.");
 }
 
 export async function getDiscordStats(
@@ -327,7 +267,7 @@ export async function getDiscordStats(
   } = {}
 ): Promise<string> {
   const resolvedLimit = boundedLimit(input.limit, 10, 1, 100);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const authorIds = uniqueStrings([
     ...normalizeIds(input.authorIds),
     ...(await resolveAuthorQueries(ctx, input.authorQueries ?? []))
@@ -362,195 +302,6 @@ export async function getDiscordStats(
   return formatDiscordStats(stats);
 }
 
-export async function analyzeDiscordData(
-  ctx: ToolContext,
-  input: {
-    task?: string;
-    query?: string;
-    authorIds?: string[];
-    channelIds?: string[];
-    authorQueries?: string[];
-    channelQueries?: string[];
-    dateFrom?: string;
-    dateTo?: string;
-    includeBots?: boolean;
-    sampleLimit?: number;
-    resultLimit?: number;
-  } = {}
-): Promise<string> {
-  const task = input.task?.trim();
-  if (!task) return "I need an analysis question to run over Discord history.";
-  const sampleLimit = boundedLimit(input.sampleLimit, 80, 20, 120);
-  const resultLimit = boundedLimit(input.resultLimit, 10, 1, 100);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
-  const authorIds = uniqueStrings([
-    ...normalizeIds(input.authorIds),
-    ...(await resolveAuthorQueries(ctx, input.authorQueries ?? []))
-  ]);
-  const channelIds = uniqueStrings([
-    ...normalizeIds(input.channelIds),
-    ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
-  ]);
-  const dateFrom = coerceDateStart(input.dateFrom);
-  const dateTo = coerceDateEnd(input.dateTo);
-  const query = normalizeAnalysisQuery(input.query, task);
-  const sampleMessages = query
-    ? await ctx.repo.keywordSearch({
-        guildId: ctx.guildId,
-        visibleChannelIds: visibleIndexedChannels,
-        query,
-        limit: sampleLimit,
-        authorIds,
-        channelIds,
-        dateFrom,
-        dateTo
-      })
-    : await ctx.repo.sampleMessagesFromChannels({
-        guildId: ctx.guildId,
-        visibleChannelIds: visibleIndexedChannels,
-        channelIds,
-        authorIds,
-        dateFrom,
-        dateTo,
-        limit: sampleLimit,
-        includeBots: Boolean(input.includeBots)
-      });
-
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "analyzeDiscordDataSample",
-    argumentsSummary: summarizeForAudit({ ...input, task, query, authorIds, channelIds, sampleLimit }),
-    resultSummary: summarizeForAudit({ sampleCount: sampleMessages.length })
-  });
-
-  if (sampleMessages.length === 0) {
-    return query
-      ? `I did not find indexed Discord messages matching "${query}" in channels you can access.`
-      : "I did not find enough indexed Discord messages in channels you can access to analyze.";
-  }
-
-  const plan = await inferDiscordDataAnalysisPlan(ctx, {
-    task,
-    query,
-    sampleMessages,
-    resultLimit
-  });
-  if (plan.unsupportedReason || !plan.pattern) {
-    const reason = plan.unsupportedReason ?? "the sampled messages do not have a clear repeated structured format to aggregate.";
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "analyzeDiscordDataPlan",
-      argumentsSummary: summarizeForAudit({ task, query }),
-      resultSummary: summarizeForAudit({ unsupportedReason: reason, plan })
-    });
-    return `I sampled ${sampleMessages.length} matching messages, but I could not infer a reliable structured analysis plan: ${reason}`;
-  }
-
-  const minMatches = boundedLimit(plan.minMatches ?? defaultDiscordDataAnalysisMinMatches(task, plan), 1, 1, 100_000);
-  const resolvedLimit = boundedLimit(plan.limit, resultLimit, 1, 100);
-  try {
-    const stats = await ctx.repo.discordPatternStats({
-      guildId: ctx.guildId,
-      visibleChannelIds: visibleIndexedChannels,
-      pattern: plan.pattern,
-      authorIds,
-      channelIds,
-      dateFrom,
-      dateTo,
-      includeBots: Boolean(input.includeBots),
-      query,
-      groupBy: discordPatternStatsGroupBy(plan.groupBy),
-      metric: discordPatternStatsMetric(plan.metric),
-      sort: discordPatternStatsSort(plan.sort),
-      captureIndex: plan.captureIndex,
-      numericCaptureIndex: plan.numericCaptureIndex,
-      numericValueMap: plan.numericValueMap,
-      distinctBy: discordPatternStatsDistinctBy(plan.distinctBy),
-      dedupeOrder: discordPatternStatsDedupeOrder(plan.dedupeOrder),
-      minMatches,
-      limit: resolvedLimit
-    });
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "analyzeDiscordData",
-      argumentsSummary: summarizeForAudit({ ...input, task, query, authorIds, channelIds, plan, minMatches, limit: resolvedLimit }),
-      resultSummary: summarizeForAudit(stats)
-    });
-    return formatDiscordDataAnalysis({ task, query, sampleCount: sampleMessages.length, plan, stats });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "analyzeDiscordData",
-      argumentsSummary: summarizeForAudit({ ...input, task, query, authorIds, channelIds, plan, minMatches, limit: resolvedLimit }),
-      error: message
-    });
-    return `I sampled matching Discord messages, but the inferred analysis plan failed while running: ${truncateForDiscord(message, 300)}`;
-  }
-}
-
-async function inferDiscordDataAnalysisPlan(
-  ctx: ToolContext,
-  input: {
-    task: string;
-    query: string;
-    sampleMessages: SearchResult[];
-    resultLimit: number;
-  }
-): Promise<DiscordDataAnalysisPlan> {
-  const response = await ctx.openRouter.chat({
-    messages: [
-      {
-        role: "system",
-        content:
-          "You infer a safe, declarative analysis plan for indexed Discord messages. " +
-          "Return only compact JSON, no Markdown. Do not answer the user. " +
-          "Use the sample to identify a repeated structured text pattern, capture useful fields, choose grouping, dedupe, metric, and sort. " +
-          "The executor uses PostgreSQL regular expressions, so prefer [[:space:]] over \\s. " +
-          "Schema: {\"pattern\":string,\"query\"?:string,\"groupBy\":\"overall|user|channel|capture|day|week|month|year\",\"metric\":\"matches|uniqueAuthors|numericAverage|numericMin|numericMax|numericSum|numericCount\",\"sort\":\"valueDesc|valueAsc|matchesDesc|matchesAsc|dateAsc|dateDesc|labelAsc\",\"captureIndex\"?:number,\"numericCaptureIndex\"?:number,\"numericValueMap\"?:object,\"distinctBy\"?:Array<\"author\"|\"channel\"|\"capture\">,\"dedupeOrder\"?:\"earliest|latest|numericAsc|numericDesc\",\"minMatches\"?:number,\"limit\"?:number,\"explanation\"?:string,\"unsupportedReason\"?:string}. " +
-          "For score shares where lower is better, use numericAverage and valueAsc. For higher-is-better scores, use valueDesc. " +
-          "For per-person repeated puzzle/result leaderboards, groupBy=user, captureIndex should identify the puzzle/result id, numericCaptureIndex should identify the score, distinctBy should usually be [\"author\",\"capture\"], and dedupeOrder should choose the best duplicate score. " +
-          "For user leaderboards over repeated score shares, use minMatches 20 unless the user asks to include tiny samples. " +
-          `Use limit ${input.resultLimit} unless the task implies otherwise. If no reliable structured pattern exists, return unsupportedReason.`
-      },
-      {
-        role: "user",
-        content:
-          `Task: ${input.task}\n` +
-          `Initial keyword query: ${input.query || "(none)"}\n` +
-          `Sample count: ${input.sampleMessages.length}\n\n` +
-          formatAnalysisSample(input.sampleMessages)
-      }
-    ],
-    temperature: 0.1,
-    maxTokens: 700
-  });
-
-  let plan = normalizeDiscordDataAnalysisPlan(parseJsonObject(response.content));
-  if (!plan.pattern && !plan.unsupportedReason) {
-    plan = fallbackDiscordDataAnalysisPlan(input);
-  }
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "analyzeDiscordDataPlan",
-    argumentsSummary: summarizeForAudit({ task: input.task, query: input.query, sampleCount: input.sampleMessages.length }),
-    resultSummary: summarizeForAudit(plan),
-    model: response.model,
-    estimatedCostUsd: response.estimatedCostUsd
-  });
-  return plan;
-}
-
 export async function getDiscordChannelTopics(
   ctx: ToolContext,
   input: {
@@ -571,7 +322,7 @@ export async function getDiscordChannelTopics(
   const samplesPerChannel = boundedLimit(input.samplesPerChannel, 90, 20, 200);
   const minChannelMessages = boundedLimit(input.minChannelMessages, 100, 1, 10_000);
   const minMessageChars = boundedLimit(input.minMessageChars, 12, 1, 200);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const channelIds = uniqueStrings([
     ...normalizeIds(input.channelIds),
     ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
@@ -655,7 +406,7 @@ export async function summarizeDiscordHistory(
   const sampleLimit = boundedLimit(input.sampleLimit, 60, 10, 120);
   const explicitDateTo = coerceDateEnd(input.dateTo);
   const dateFrom = coerceDateStart(input.dateFrom);
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   const authorIds = uniqueStrings([
     ...normalizeIds(input.authorIds),
     ...(await resolveAuthorQueries(ctx, input.authorQueries ?? []))
@@ -727,7 +478,7 @@ export async function summarizeDiscordHistory(
 }
 
 export async function summarizeCurrentThread(ctx: ToolContext): Promise<string> {
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   if (!visibleIndexedChannels.includes(ctx.channelId)) {
     await ctx.repo.auditTool({
       guildId: ctx.guildId,
@@ -1639,16 +1390,6 @@ function formatDiscordChannelMatches(results: DiscordChannelLookupResult[]) {
   ].join("\n");
 }
 
-function formatDiscordRoleMatches(results: DiscordRoleSnapshot[]) {
-  if (results.length === 0) return "No Discord roles matched.";
-  return [
-    "Discord role matches:",
-    ...results.map((role, index) => {
-      return `[${index + 1}] ${role.name} id=${role.id}${role.managed ? " managed=true" : ""}${role.memberCount == null ? "" : ` members=${role.memberCount}`}`;
-    })
-  ].join("\n");
-}
-
 function formatMessageList(results: SearchResult[], emptyMessage: string) {
   if (results.length === 0) return emptyMessage;
   return results
@@ -1788,228 +1529,6 @@ function topicSnippet(content: string) {
   return truncateForDiscord(content.replace(/https?:\/\/\S+/gi, "[link]").replace(/\s+/g, " ").trim(), 180);
 }
 
-function formatAnalysisSample(messages: SearchResult[]) {
-  return messages
-    .slice(0, 80)
-    .map((message, index) => {
-      const author = message.authorUsername ? `@${message.authorUsername}` : message.authorId;
-      return `[${index + 1}] ${author} channel=${message.channelId} at ${message.createdAt.toISOString()}\n${truncateForDiscord(message.normalizedContent, 500)}`;
-    })
-    .join("\n\n");
-}
-
-function inferAnalysisQuery(task: string) {
-  const cleaned = task
-    .toLowerCase()
-    .replace(/["'`“”‘’]/g, "")
-    .replace(/[?!.,;:()[\]{}]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const knownStructuredTerms = [
-    "wordle",
-    "rngdle",
-    "putt",
-    "framed",
-    "connections",
-    "mini",
-    "crossword",
-    "fantasy",
-    "score",
-    "scores",
-    "prediction",
-    "predictions",
-    "rating",
-    "ratings"
-  ];
-  const found = knownStructuredTerms.find((term) => new RegExp(`\\b${term}\\b`, "i").test(cleaned));
-  if (found) return found;
-  const words = cleaned
-    .split(" ")
-    .filter((word) => word.length >= 4 && !analysisQueryStopWords.has(word))
-    .slice(0, 4);
-  return words.join(" ");
-}
-
-function normalizeAnalysisQuery(query: string | undefined, task: string) {
-  const inferred = inferAnalysisQuery(task);
-  const trimmed = query?.trim() ?? "";
-  if (!trimmed) return inferred;
-  const wordish = trimmed
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean);
-  const hasPatternSyntax = /[/*()[\]{}|+?\\]/.test(trimmed);
-  if (hasPatternSyntax || wordish.length > 3) return inferred || wordish[0] || "";
-  return trimmed;
-}
-
-const analysisQueryStopWords = new Set([
-  "this",
-  "that",
-  "there",
-  "discord",
-  "server",
-  "messages",
-  "message",
-  "player",
-  "players",
-  "rank",
-  "ranking",
-  "leaderboard",
-  "best",
-  "worst",
-  "most",
-  "least",
-  "average",
-  "count",
-  "counts",
-  "what",
-  "who",
-  "which",
-  "where",
-  "when",
-  "have",
-  "been",
-  "with",
-  "from",
-  "about",
-  "show",
-  "tell"
-]);
-
-function parseJsonObject(content: string): Record<string, unknown> {
-  const trimmed = content.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]?.trim();
-  const candidate = fenced ?? trimmed.match(/\{[\s\S]*\}/)?.[0] ?? "{}";
-  try {
-    const value = JSON.parse(candidate);
-    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function normalizeDiscordDataAnalysisPlan(value: Record<string, unknown>): DiscordDataAnalysisPlan {
-  const plan: DiscordDataAnalysisPlan = {};
-  const pattern = stringValue(value.pattern);
-  if (pattern) plan.pattern = normalizePostgresRegexPattern(pattern);
-  const query = stringValue(value.query);
-  if (query) plan.query = query;
-  const groupBy = stringValue(value.groupBy);
-  if (groupBy) plan.groupBy = discordPatternStatsGroupBy(groupBy);
-  const metric = stringValue(value.metric);
-  if (metric) plan.metric = discordPatternStatsMetric(metric);
-  const sort = stringValue(value.sort);
-  if (sort) plan.sort = discordPatternStatsSort(sort);
-  const captureIndex = numberValue(value.captureIndex);
-  if (captureIndex != null) plan.captureIndex = captureIndex;
-  const numericCaptureIndex = numberValue(value.numericCaptureIndex);
-  if (numericCaptureIndex != null) plan.numericCaptureIndex = numericCaptureIndex;
-  if (value.numericValueMap && typeof value.numericValueMap === "object" && !Array.isArray(value.numericValueMap)) {
-    const entries = Object.entries(value.numericValueMap)
-      .map(([key, nested]) => [key, numberValue(nested)] as const)
-      .filter((entry): entry is readonly [string, number] => entry[0].trim().length > 0 && entry[1] != null);
-    if (entries.length > 0) plan.numericValueMap = Object.fromEntries(entries);
-  }
-  if (Array.isArray(value.distinctBy)) {
-    plan.distinctBy = discordPatternStatsDistinctBy(value.distinctBy.filter((item): item is string => typeof item === "string"));
-  }
-  const dedupeOrder = stringValue(value.dedupeOrder);
-  if (dedupeOrder) plan.dedupeOrder = discordPatternStatsDedupeOrder(dedupeOrder);
-  const minMatches = numberValue(value.minMatches);
-  if (minMatches != null) plan.minMatches = minMatches;
-  const limit = numberValue(value.limit);
-  if (limit != null) plan.limit = limit;
-  const explanation = stringValue(value.explanation);
-  if (explanation) plan.explanation = explanation;
-  const unsupportedReason = stringValue(value.unsupportedReason);
-  if (unsupportedReason) plan.unsupportedReason = unsupportedReason;
-  return repairDiscordDataAnalysisPlan(plan);
-}
-
-function fallbackDiscordDataAnalysisPlan(input: { task: string; query: string; sampleMessages: SearchResult[]; resultLimit: number }): DiscordDataAnalysisPlan {
-  const queryTerm = input.query
-    .trim()
-    .split(/\s+/)
-    .find((word) => /^[a-z0-9][a-z0-9_-]{2,}$/i.test(word));
-  if (!queryTerm) return { unsupportedReason: "the planner returned no JSON and there was no clear keyword to infer a score-share format from." };
-
-  const escapedTerm = escapeRegexLiteral(queryTerm);
-  const jsPattern = new RegExp(`\\b${escapedTerm}\\b\\s+([0-9][0-9,]*)\\s+([0-9Xx])\\/([0-9]+)`, "i");
-  const matches = input.sampleMessages.filter((message) => jsPattern.test(message.normalizedContent));
-  if (matches.length < 3) {
-    return {
-      unsupportedReason: `the planner returned no JSON and only ${matches.length} sampled messages matched a generic "${queryTerm} <id> <score>/<max>" score-share shape.`
-    };
-  }
-
-  return {
-    pattern: `${escapePostgresRegexLiteral(queryTerm)}[[:space:]]+([[:digit:],]+)[[:space:]]+([0-9Xx])/[[:digit:]]+[*]?`,
-    query: queryTerm,
-    groupBy: "user",
-    metric: "numericAverage",
-    sort: "valueAsc",
-    captureIndex: 1,
-    numericCaptureIndex: 2,
-    numericValueMap: { X: 7, x: 7 },
-    distinctBy: ["author", "capture"],
-    dedupeOrder: "numericAsc",
-    minMatches: 20,
-    limit: input.resultLimit,
-    explanation: `Fallback planner inferred a repeated "${queryTerm} <id> <score>/<max>" score-share format from ${matches.length} sampled messages.`
-  };
-}
-
-function repairDiscordDataAnalysisPlan(plan: DiscordDataAnalysisPlan): DiscordDataAnalysisPlan {
-  if (
-    plan.groupBy === "user" &&
-    plan.metric === "numericAverage" &&
-    plan.distinctBy?.includes("author") &&
-    plan.distinctBy.includes("capture") &&
-    plan.numericCaptureIndex != null &&
-    plan.captureIndex === plan.numericCaptureIndex &&
-    plan.numericCaptureIndex > 1
-  ) {
-    return { ...plan, captureIndex: 1 };
-  }
-  return plan;
-}
-
-function normalizePostgresRegexPattern(pattern: string) {
-  return pattern
-    .replace(/\\d/g, "[[:digit:]]")
-    .replace(/\\s/g, "[[:space:]]")
-    .replace(/\\w/g, "[[:alnum:]_]");
-}
-
-function escapeRegexLiteral(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function escapePostgresRegexLiteral(value: string) {
-  return value.replace(/[\\.[\]{}()*+?^$|]/g, "\\$&");
-}
-
-function defaultDiscordDataAnalysisMinMatches(task: string, plan: DiscordDataAnalysisPlan) {
-  const rankingTask = /\b(top|best|leaderboard|rank|ranking|average|player|players)\b/i.test(task);
-  const userNumericRanking = plan.groupBy === "user" && plan.metric === "numericAverage";
-  const dedupesByCapture = plan.distinctBy?.includes("author") && plan.distinctBy.includes("capture");
-  return rankingTask && userNumericRanking && dedupesByCapture ? 20 : 1;
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function numberValue(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
-  return undefined;
-}
-
 function formatDiscordStats(stats: DiscordStats) {
   const metric = discordStatsMetricLabel(stats.metric);
   const groupedBy = discordStatsGroupByLabel(stats.groupBy);
@@ -2048,73 +1567,6 @@ function formatDiscordStats(stats: DiscordStats) {
       : ["  none"])
   );
   return lines.join("\n");
-}
-
-function formatDiscordDataAnalysis(input: {
-  task: string;
-  query: string;
-  sampleCount: number;
-  plan: DiscordDataAnalysisPlan;
-  stats: DiscordPatternStats;
-}) {
-  return [
-    "Discord data analysis:",
-    `- Task: ${truncateForDiscord(input.task, 220)}`,
-    `- Query: ${input.query || "(none)"}`,
-    `- Sampled messages for planning: ${formatStatNumber(input.sampleCount)}`,
-    ...(input.plan.explanation ? [`- Inferred plan: ${truncateForDiscord(input.plan.explanation, 260)}`] : []),
-    ...formatDiscordPatternStats(input.stats).split("\n").slice(1)
-  ].join("\n");
-}
-
-function formatDiscordPatternStats(stats: DiscordPatternStats) {
-  const lines = [
-    "Discord pattern executor:",
-    `- Pattern: ${truncateForDiscord(stats.pattern, 220)}`,
-    ...(stats.query ? [`- Keyword filter: ${stats.query}`] : []),
-    `- Metric: ${discordPatternStatsMetricLabel(stats.metric)}`,
-    `- Grouped by: ${discordPatternStatsGroupByLabel(stats.groupBy)}`,
-    `- Matches after filters/dedupe: ${formatStatNumber(stats.totalMatches)}`,
-    `- Groups: ${formatStatNumber(stats.totalGroups)}`,
-    `- Minimum matches per group: ${formatStatNumber(stats.minMatches)}`
-  ];
-  if (stats.captureIndex != null) lines.push(`- Capture group: ${stats.captureIndex}`);
-  if (stats.numericCaptureIndex != null) lines.push(`- Numeric capture group: ${stats.numericCaptureIndex}`);
-
-  lines.push(
-    "Results:",
-    ...(stats.rows.length
-      ? stats.rows.map((row, index) => `  ${index + 1}. ${formatDiscordPatternStatsRowLabel(row)}: ${formatDiscordPatternStatsRowValue(stats, row)}`)
-      : ["  none"])
-  );
-  return lines.join("\n");
-}
-
-function formatDiscordPatternStatsRowLabel(row: DiscordPatternStats["rows"][number]) {
-  if (row.authorUsername) return `@${row.authorUsername}`;
-  if (row.authorId) return row.authorId;
-  if (row.channelName) return `#${row.channelName}`;
-  if (row.channelId) return row.channelId;
-  if (row.captureValue) return row.captureValue;
-  return row.label;
-}
-
-function formatDiscordPatternStatsRowValue(stats: DiscordPatternStats, row: DiscordPatternStats["rows"][number]) {
-  const parts = [`${formatStatNumber(row.value)} ${discordPatternStatsMetricLabel(stats.metric)}`];
-  parts.push(`${formatStatNumber(row.matchCount)} matches`);
-  if (row.distinctAuthors > 1 || stats.groupBy !== "user") parts.push(`${formatStatNumber(row.distinctAuthors)} authors`);
-  if (row.numericCount > 0) {
-    const numericParts = [
-      `n=${formatStatNumber(row.numericCount)}`,
-      row.numericAverage == null ? undefined : `avg=${formatStatNumber(row.numericAverage)}`,
-      row.numericMin == null ? undefined : `min=${formatStatNumber(row.numericMin)}`,
-      row.numericMax == null ? undefined : `max=${formatStatNumber(row.numericMax)}`
-    ].filter(Boolean);
-    parts.push(numericParts.join(" "));
-  }
-  if (row.firstMatchedAt) parts.push(`first=${row.firstMatchedAt.toISOString().slice(0, 10)}`);
-  if (row.lastMatchedAt) parts.push(`last=${row.lastMatchedAt.toISOString().slice(0, 10)}`);
-  return parts.join("; ");
 }
 
 function formatDiscordStatsRowLabel(row: DiscordStats["rows"][number]) {
@@ -2190,66 +1642,6 @@ function discordStatsSort(value: string | undefined) {
   return allowed.includes(value ?? "") ? (value as "countDesc" | "countAsc" | "dateAsc" | "dateDesc" | "labelAsc") : undefined;
 }
 
-function discordPatternStatsGroupBy(value: string | undefined): DiscordPatternStats["groupBy"] {
-  const allowed: DiscordPatternStats["groupBy"][] = ["overall", "user", "channel", "capture", "day", "week", "month", "year"];
-  return allowed.includes(value as DiscordPatternStats["groupBy"]) ? (value as DiscordPatternStats["groupBy"]) : "overall";
-}
-
-function discordPatternStatsMetric(value: string | undefined): DiscordPatternStats["metric"] {
-  const normalized = value?.trim();
-  const aliases: Record<string, DiscordPatternStats["metric"]> = {
-    count: "matches",
-    average: "numericAverage",
-    avg: "numericAverage",
-    min: "numericMin",
-    max: "numericMax",
-    sum: "numericSum"
-  };
-  if (normalized && aliases[normalized]) return aliases[normalized];
-  const allowed: DiscordPatternStats["metric"][] = [
-    "matches",
-    "uniqueAuthors",
-    "numericAverage",
-    "numericMin",
-    "numericMax",
-    "numericSum",
-    "numericCount"
-  ];
-  return allowed.includes(normalized as DiscordPatternStats["metric"]) ? (normalized as DiscordPatternStats["metric"]) : "matches";
-}
-
-function discordPatternStatsSort(value: string | undefined): DiscordPatternStatsSort | undefined {
-  const allowed = ["valueDesc", "valueAsc", "matchesDesc", "matchesAsc", "dateAsc", "dateDesc", "labelAsc"];
-  return allowed.includes(value ?? "")
-    ? (value as "valueDesc" | "valueAsc" | "matchesDesc" | "matchesAsc" | "dateAsc" | "dateDesc" | "labelAsc")
-    : undefined;
-}
-
-function discordPatternStatsDistinctBy(values: string[] | undefined): DiscordPatternStatsDistinctBy[] {
-  const allowed = new Set(["author", "channel", "capture"]);
-  return [...new Set((values ?? []).filter((value): value is "author" | "channel" | "capture" => allowed.has(value)))];
-}
-
-function discordPatternStatsDedupeOrder(value: string | undefined): DiscordPatternStatsDedupeOrder | undefined {
-  const allowed = ["earliest", "latest", "numericAsc", "numericDesc"];
-  return allowed.includes(value ?? "") ? (value as "earliest" | "latest" | "numericAsc" | "numericDesc") : undefined;
-}
-
-function discordPatternStatsMetricLabel(metric: DiscordPatternStats["metric"]) {
-  if (metric === "uniqueAuthors") return "unique authors";
-  if (metric === "numericAverage") return "numeric average";
-  if (metric === "numericMin") return "numeric minimum";
-  if (metric === "numericMax") return "numeric maximum";
-  if (metric === "numericSum") return "numeric sum";
-  if (metric === "numericCount") return "numeric values";
-  return "matches";
-}
-
-function discordPatternStatsGroupByLabel(groupBy: DiscordPatternStats["groupBy"]) {
-  if (groupBy === "capture") return "capture";
-  return groupBy;
-}
-
 function formatDiscordStatsRowValue(stats: DiscordStats, row: DiscordStats["rows"][number]) {
   if (stats.metric === "messagesPerActiveDay") {
     const activeDays = row.activeDays || 1;
@@ -2288,7 +1680,7 @@ function channelTypeLabel(type: number) {
 
 async function resolveAuthorQueries(ctx: ToolContext, queries: string[]) {
   const ids: string[] = [];
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   for (const query of uniqueStrings(queries.map(cleanLookupValue)).filter(Boolean)) {
     const matches = await ctx.repo.findDiscordUsers({
       guildId: ctx.guildId,
@@ -2301,9 +1693,16 @@ async function resolveAuthorQueries(ctx: ToolContext, queries: string[]) {
   return uniqueStrings(ids);
 }
 
+async function visibleIndexedChannelIdsForRequest(ctx: ToolContext) {
+  if (ctx.visibleIndexedChannelIds) return ctx.visibleIndexedChannelIds;
+  const visibleIndexedChannelIds = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  ctx.visibleIndexedChannelIds = visibleIndexedChannelIds;
+  return visibleIndexedChannelIds;
+}
+
 async function resolveChannelQueries(ctx: ToolContext, queries: string[]) {
   const ids: string[] = [];
-  const visibleIndexedChannels = await ctx.repo.getVisibleIndexedChannelIds(ctx.guildId, ctx.visibleChannelIds);
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   for (const query of uniqueStrings(queries.map(cleanLookupValue)).filter(Boolean)) {
     const matches = await ctx.repo.findDiscordChannels({
       guildId: ctx.guildId,
@@ -2314,24 +1713,6 @@ async function resolveChannelQueries(ctx: ToolContext, queries: string[]) {
     ids.push(...matches.map((match) => match.id));
   }
   return uniqueStrings(ids);
-}
-
-function roleLookupScore(role: DiscordRoleSnapshot, normalizedQuery: string) {
-  if (!normalizedQuery) return 0;
-  const name = role.name.toLowerCase();
-  if (role.id === normalizedQuery) return 100;
-  if (name === normalizedQuery) return 90;
-  if (name.startsWith(normalizedQuery)) return 70;
-  if (name.includes(normalizedQuery)) return 50;
-  return 0;
-}
-
-function normalizeRoleQuery(query: string) {
-  return query
-    .trim()
-    .replace(/^<@&(\d+)>$/, "$1")
-    .replace(/^@/, "")
-    .toLowerCase();
 }
 
 function boundedLimit(value: unknown, fallback: number, min: number, max: number) {

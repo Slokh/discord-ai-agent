@@ -6,6 +6,7 @@ import { normalizeMessageContent } from "./normalize.js";
 export type HistorySearchInput = {
   guildId: string;
   userVisibleChannelIds: string[];
+  visibleIndexedChannelIds?: string[];
   query: string;
   limit?: number;
   authorId?: string;
@@ -23,10 +24,9 @@ export async function searchDiscordHistory(input: {
 }): Promise<SearchResult[]> {
   const limit = input.search.limit ?? input.config.maxHistoryResults;
   const normalizedQuery = buildHistoryRetrievalQuery(input.search.query);
-  const visibleIndexedChannels = await input.repo.getVisibleIndexedChannelIds(
-    input.search.guildId,
-    input.search.userVisibleChannelIds
-  );
+  const visibleIndexedChannels =
+    input.search.visibleIndexedChannelIds ??
+    (await input.repo.getVisibleIndexedChannelIds(input.search.guildId, input.search.userVisibleChannelIds));
   const searchChannelIds = await resolveSearchChannelIds({
     repo: input.repo,
     guildId: input.search.guildId,

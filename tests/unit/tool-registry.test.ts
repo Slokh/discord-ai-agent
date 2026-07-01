@@ -7,15 +7,12 @@ describe("toolRegistry", () => {
       "listTools",
       "findDiscordUsers",
       "findDiscordChannels",
-      "findDiscordRoles",
       "searchDiscordHistory",
       "getRecentAgentMemory",
       "getRecentDiscordMessages",
       "getDiscordMessageContext",
       "searchDiscordAttachments",
-      "getPinnedMessages",
       "getDiscordStats",
-      "analyzeDiscordData",
       "getDiscordChannelTopics",
       "summarizeDiscordHistory",
       "summarizeDiscordThread",
@@ -96,21 +93,6 @@ describe("toolRegistry", () => {
                 groupBy: expect.objectContaining({ enum: expect.arrayContaining(["channel", "thread", "message", "month", "hourOfDay"]) }),
                 metric: expect.objectContaining({ enum: expect.arrayContaining(["messages", "attachments", "reactions", "messagesPerChannelDay"]) }),
                 sort: expect.objectContaining({ enum: expect.arrayContaining(["countDesc", "countAsc"]) })
-              })
-            })
-          })
-        }),
-        expect.objectContaining({
-          type: "function",
-          function: expect.objectContaining({
-            name: "analyzeDiscordData",
-            parameters: expect.objectContaining({
-              required: ["task"],
-              properties: expect.objectContaining({
-                task: expect.objectContaining({ type: "string" }),
-                query: expect.objectContaining({ type: "string" }),
-                sampleLimit: expect.objectContaining({ type: "number" }),
-                resultLimit: expect.objectContaining({ type: "number" })
               })
             })
           })

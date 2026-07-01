@@ -4,15 +4,12 @@ export type ToolName =
   | "listTools"
   | "findDiscordUsers"
   | "findDiscordChannels"
-  | "findDiscordRoles"
   | "searchDiscordHistory"
   | "getRecentAgentMemory"
   | "getRecentDiscordMessages"
   | "getDiscordMessageContext"
   | "searchDiscordAttachments"
-  | "getPinnedMessages"
   | "getDiscordStats"
-  | "analyzeDiscordData"
   | "getDiscordChannelTopics"
   | "summarizeDiscordHistory"
   | "summarizeDiscordThread"
@@ -99,27 +96,6 @@ export const toolRegistry: ToolRegistryEntry[] = [
         query: {
           type: "string",
           description: "Channel/thread/forum name, channel mention, or Discord channel ID to resolve."
-        },
-        limit: {
-          type: "number",
-          description: "Maximum matches to return. Defaults to 8."
-        }
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "findDiscordRoles",
-    description: "Intermediate resolver: find Discord roles by role name or ID from the current guild before using role information in another answer.",
-    userVisible: true,
-    mutates: false,
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "Role name, role mention, or Discord role ID to resolve."
         },
         limit: {
           type: "number",
@@ -289,27 +265,6 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
-    name: "getPinnedMessages",
-    description: "Get indexed pinned messages from the current channel or specified visible channels.",
-    userVisible: true,
-    mutates: false,
-    parameters: {
-      type: "object",
-      properties: {
-        channelIds: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional visible channel/thread IDs. Defaults to the current channel."
-        },
-        limit: {
-          type: "number",
-          description: "Maximum pinned messages. Defaults to 20."
-        }
-      },
-      additionalProperties: false
-    }
-  },
-  {
     name: "getDiscordStats",
     description:
       "Compute permission-filtered Discord analytics over indexed visible messages. Use this for counts, rankings, lowest/highest rankings, activity over time, messages by channel/user, normalized messages-per-day comparisons, attachment stats, reaction totals, and active-day summaries.",
@@ -380,68 +335,6 @@ export const toolRegistry: ToolRegistryEntry[] = [
           description: "Maximum grouped rows/top items to return. Defaults to 10."
         }
       },
-      additionalProperties: false
-    }
-  },
-  {
-    name: "analyzeDiscordData",
-    description:
-      "Run model-planned, permission-filtered analysis over indexed Discord messages. Use this for ad hoc questions that need extracting a repeated text format, deduping, doing exact math, or building a leaderboard from many messages.",
-    userVisible: true,
-    mutates: false,
-    parameters: {
-      type: "object",
-      properties: {
-        task: {
-          type: "string",
-          description: "The user's analysis question, including what should be calculated and how the result should be interpreted."
-        },
-        query: {
-          type: "string",
-          description: "Broad keyword query used to fetch a permission-filtered sample for plan inference, such as wordle, fantasy, prediction, rating, or score."
-        },
-        authorIds: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional Discord user IDs to filter to."
-        },
-        channelIds: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional Discord channel/thread IDs to filter to."
-        },
-        authorQueries: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional user names/usernames to resolve and filter to when exact IDs are not known."
-        },
-        channelQueries: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional channel names to resolve and filter to when exact IDs are not known."
-        },
-        dateFrom: {
-          type: "string",
-          description: "Inclusive UTC date lower bound as YYYY-MM-DD."
-        },
-        dateTo: {
-          type: "string",
-          description: "Inclusive UTC date upper bound as YYYY-MM-DD."
-        },
-        includeBots: {
-          type: "boolean",
-          description: "Whether to include bot-authored messages. Defaults to false."
-        },
-        sampleLimit: {
-          type: "number",
-          description: "Maximum sample messages to show the planner. Defaults to 80."
-        },
-        resultLimit: {
-          type: "number",
-          description: "Maximum result rows/top items to return. Defaults to 10."
-        }
-      },
-      required: ["task"],
       additionalProperties: false
     }
   },
@@ -876,15 +769,12 @@ function defaultToolExamples(name: ToolName): string[] {
     listTools: "@ai tools",
     findDiscordUsers: "@ai find user tyler",
     findDiscordChannels: "@ai find channel movies",
-    findDiscordRoles: "@ai find role admin",
     searchDiscordHistory: "@ai what did we say about job hunting?",
     getRecentAgentMemory: "@ai what did you just say?",
     getRecentDiscordMessages: "@ai what just happened in here?",
     getDiscordMessageContext: "@ai show the context around this message link",
     searchDiscordAttachments: "@ai find the image of nachos",
-    getPinnedMessages: "@ai what is pinned in this channel?",
     getDiscordStats: "@ai rank channels by messages per day",
-    analyzeDiscordData: "@ai who is the top Wordle player?",
     getDiscordChannelTopics: "@ai what are the main recurring topics in each channel?",
     summarizeDiscordHistory: "@ai what has tyler been up to recently?",
     summarizeDiscordThread: "@ai summarize this thread",

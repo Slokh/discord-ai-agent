@@ -163,53 +163,6 @@ export type DiscordStatsRow = {
   channelAgeDays: number | null;
 };
 
-export type DiscordPatternStatsMetric =
-  | "matches"
-  | "uniqueAuthors"
-  | "numericAverage"
-  | "numericMin"
-  | "numericMax"
-  | "numericSum"
-  | "numericCount";
-export type DiscordPatternStatsGroupBy = "overall" | "user" | "channel" | "capture" | "day" | "week" | "month" | "year";
-export type DiscordPatternStatsSort = "valueDesc" | "valueAsc" | "matchesDesc" | "matchesAsc" | "dateAsc" | "dateDesc" | "labelAsc";
-export type DiscordPatternStatsDistinctBy = "author" | "channel" | "capture";
-export type DiscordPatternStatsDedupeOrder = "earliest" | "latest" | "numericAsc" | "numericDesc";
-
-export type DiscordPatternStats = {
-  pattern: string;
-  query: string | null;
-  metric: DiscordPatternStatsMetric;
-  groupBy: DiscordPatternStatsGroupBy;
-  captureIndex: number | null;
-  numericCaptureIndex: number | null;
-  totalMatches: number;
-  totalGroups: number;
-  minMatches: number;
-  rows: DiscordPatternStatsRow[];
-};
-
-export type DiscordPatternStatsRow = {
-  key: string;
-  label: string;
-  value: number;
-  matchCount: number;
-  distinctAuthors: number;
-  numericCount: number;
-  numericAverage: number | null;
-  numericMin: number | null;
-  numericMax: number | null;
-  numericSum: number | null;
-  authorId: string | null;
-  authorUsername: string | null;
-  channelId: string | null;
-  channelName: string | null;
-  captureValue: string | null;
-  periodStart: Date | null;
-  firstMatchedAt: Date | null;
-  lastMatchedAt: Date | null;
-};
-
 export type DiscordChannelTopicCandidate = {
   channelId: string;
   channelName: string | null;
@@ -1490,7 +1443,7 @@ export class DiscordAiAgentRepository {
             (
               least(length(m.normalized_content), 180)
               + CASE WHEN m.normalized_content ~* '\\m(i|i''m|im|me|my|mine|we|we''re|our|ours)\\M' THEN 60 ELSE 0 END
-              - CASE WHEN m.normalized_content ~* '(https?://|wordle|rngdle|putt\\.day)' THEN 40 ELSE 0 END
+              - CASE WHEN m.normalized_content ~* '^https?://\\S+$' THEN 40 ELSE 0 END
             )::float AS sample_score
           FROM messages m
           JOIN discord_users u ON u.id = m.author_id
@@ -1897,44 +1850,6 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToDiscordAttachmentSearchResult);
   }
 
-  async pinnedMessages(input: { guildId: string; visibleChannelIds: string[]; channelIds?: string[]; limit: number }): Promise<SearchResult[]> {
-    const requestedChannelIds = normalizeFilterIds(input.channelIds);
-    const searchChannelIds =
-      requestedChannelIds.length === 0
-        ? input.visibleChannelIds
-        : requestedChannelIds.filter((channelId) => input.visibleChannelIds.includes(channelId));
-    if (searchChannelIds.length === 0) return [];
-    const result = await this.pool.query(
-      `
-        SELECT
-          m.id AS message_id,
-          m.guild_id,
-          m.channel_id,
-          m.author_id,
-          u.username AS author_username,
-          m.content,
-          m.normalized_content,
-          m.created_at,
-          1::float AS score
-        FROM messages m
-        JOIN discord_users u ON u.id = m.author_id
-        JOIN channels c ON c.id = m.channel_id
-        LEFT JOIN channels parent ON parent.id = c.parent_id
-        WHERE m.guild_id = $1
-          AND m.channel_id = ANY($2::text[])
-          AND m.deleted_at IS NULL
-          AND coalesce((m.raw->>'pinned')::boolean, false) = true
-          AND c.is_excluded = false
-          AND coalesce(parent.is_excluded, false) = false
-          AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
-        ORDER BY m.created_at DESC
-        LIMIT $3
-      `,
-      [input.guildId, searchChannelIds, input.limit]
-    );
-    return result.rows.map(rowToSearchResult).reverse();
-  }
-
   async discordStats(input: {
     guildId: string;
     visibleChannelIds: string[];
@@ -1956,17 +1871,28 @@ export class DiscordAiAgentRepository {
       return emptyDiscordStats(metric, groupBy);
     }
 
-    const base = buildDiscordStatsBaseQuery(input, {
-      includeAttachmentStats: metric === "attachments" || groupBy === "overall",
-      includeReactionStats: metric === "reactions" || groupBy === "overall"
+    const includeOverallBreakdowns = groupBy === "overall";
+    const totalsBase = buildDiscordStatsBaseQuery(input, {
+      includeAttachmentStats: metric === "attachments" || includeOverallBreakdowns,
+      includeReactionStats: metric === "reactions" || includeOverallBreakdowns
+    });
+    const rowsBase = buildDiscordStatsBaseQuery(input, {
+      includeAttachmentStats: metric === "attachments",
+      includeReactionStats: metric === "reactions"
+    });
+    const topBase = buildDiscordStatsBaseQuery(input, {
+      includeAttachmentStats: false,
+      includeReactionStats: false
     });
     const grouping = discordStatsGrouping(groupBy);
     const metricSql = discordStatsMetricSql(metric);
     const channelCreatedAtSql = grouping.channelCreatedAtSql;
     const channelAgeDaysSql = discordStatsChannelAgeDaysSql(channelCreatedAtSql);
-    const rowParams = [...base.params, input.limit];
+    const rowParams = [...rowsBase.params, input.limit];
+    const topParams = [...topBase.params, input.limit];
     const limitPlaceholder = `$${rowParams.length}`;
-    const [totals, attachmentTotals, users, channels] = await Promise.all([
+    const topLimitPlaceholder = `$${topParams.length}`;
+    const [totals, rows, users, channels] = await Promise.all([
       this.pool.query(
         `
           SELECT
@@ -1976,61 +1902,67 @@ export class DiscordAiAgentRepository {
             count(DISTINCT m.author_id)::int AS users,
             count(DISTINCT m.channel_id)::int AS channels,
             count(DISTINCT date_trunc('day', m.created_at))::int AS active_days
-          ${base.fromSql}
-          ${base.whereSql}
+          ${totalsBase.fromSql}
+          ${totalsBase.whereSql}
         `,
-        base.params
+        totalsBase.params
       ),
-      this.pool.query(
-        `
-          SELECT
-            ${grouping.keySql} AS key,
-            ${grouping.labelSql} AS label,
-            min(m.guild_id) AS guild_id,
-            ${grouping.authorIdSql} AS author_id,
-            ${grouping.authorUsernameSql} AS author_username,
-            ${grouping.channelIdSql} AS channel_id,
-            ${grouping.channelNameSql} AS channel_name,
-            ${grouping.messageIdSql} AS message_id,
-            ${grouping.periodStartSql} AS period_start,
-            count(*)::int AS message_count,
-            count(DISTINCT date_trunc('day', m.created_at))::int AS active_days,
-            min(${channelCreatedAtSql}) AS channel_created_at,
-            ${channelAgeDaysSql} AS channel_age_days,
-            ${metricSql} AS value
-          ${base.fromSql}
-          ${base.whereSql}
-          ${grouping.groupBySql.length ? `GROUP BY ${grouping.groupBySql.join(", ")}` : ""}
-          ${discordStatsOrderBy(input.sort ?? defaultDiscordStatsSort(groupBy))}
-          LIMIT ${limitPlaceholder}
-        `,
-        rowParams
-      ),
-      this.pool.query(
-        `
-          SELECT m.author_id, u.username AS author_username, count(*)::int AS message_count
-          ${base.fromSql}
-          ${base.whereSql}
-          GROUP BY m.author_id, u.username
-          ORDER BY message_count DESC, m.author_id
-          LIMIT ${limitPlaceholder}
-        `,
-        rowParams
-      ),
-      this.pool.query(
-        `
-          SELECT
-            ${discordStatsEffectiveChannelIdSql()} AS channel_id,
-            ${discordStatsEffectiveChannelNameSql()} AS channel_name,
-            count(*)::int AS message_count
-          ${base.fromSql}
-          ${base.whereSql}
-          GROUP BY ${discordStatsEffectiveChannelIdSql()}, ${discordStatsEffectiveChannelNameSql()}
-          ORDER BY message_count DESC, channel_id
-          LIMIT ${limitPlaceholder}
-        `,
-        rowParams
-      )
+      groupBy === "overall"
+        ? Promise.resolve({ rows: [] })
+        : this.pool.query(
+            `
+              SELECT
+                ${grouping.keySql} AS key,
+                ${grouping.labelSql} AS label,
+                min(m.guild_id) AS guild_id,
+                ${grouping.authorIdSql} AS author_id,
+                ${grouping.authorUsernameSql} AS author_username,
+                ${grouping.channelIdSql} AS channel_id,
+                ${grouping.channelNameSql} AS channel_name,
+                ${grouping.messageIdSql} AS message_id,
+                ${grouping.periodStartSql} AS period_start,
+                count(*)::int AS message_count,
+                count(DISTINCT date_trunc('day', m.created_at))::int AS active_days,
+                min(${channelCreatedAtSql}) AS channel_created_at,
+                ${channelAgeDaysSql} AS channel_age_days,
+                ${metricSql} AS value
+              ${rowsBase.fromSql}
+              ${rowsBase.whereSql}
+              ${grouping.groupBySql.length ? `GROUP BY ${grouping.groupBySql.join(", ")}` : ""}
+              ${discordStatsOrderBy(input.sort ?? defaultDiscordStatsSort(groupBy))}
+              LIMIT ${limitPlaceholder}
+            `,
+            rowParams
+          ),
+      includeOverallBreakdowns
+        ? this.pool.query(
+            `
+              SELECT m.author_id, u.username AS author_username, count(*)::int AS message_count
+              ${topBase.fromSql}
+              ${topBase.whereSql}
+              GROUP BY m.author_id, u.username
+              ORDER BY message_count DESC, m.author_id
+              LIMIT ${topLimitPlaceholder}
+            `,
+            topParams
+          )
+        : Promise.resolve({ rows: [] }),
+      includeOverallBreakdowns
+        ? this.pool.query(
+            `
+              SELECT
+                ${discordStatsEffectiveChannelIdSql()} AS channel_id,
+                ${discordStatsEffectiveChannelNameSql()} AS channel_name,
+                count(*)::int AS message_count
+              ${topBase.fromSql}
+              ${topBase.whereSql}
+              GROUP BY ${discordStatsEffectiveChannelIdSql()}, ${discordStatsEffectiveChannelNameSql()}
+              ORDER BY message_count DESC, channel_id
+              LIMIT ${topLimitPlaceholder}
+            `,
+            topParams
+          )
+        : Promise.resolve({ rows: [] })
     ]);
 
     return {
@@ -2042,7 +1974,7 @@ export class DiscordAiAgentRepository {
       activeDays: Number(totals.rows[0]?.active_days ?? 0),
       metric,
       groupBy,
-      rows: attachmentTotals.rows.map(rowToDiscordStatsRow),
+      rows: rows.rows.map(rowToDiscordStatsRow),
       topUsers: users.rows.map((row) => ({
         authorId: String(row.author_id),
         authorUsername: row.author_username == null ? null : String(row.author_username),
@@ -2053,191 +1985,6 @@ export class DiscordAiAgentRepository {
         channelName: row.channel_name == null ? null : String(row.channel_name),
         messageCount: Number(row.message_count ?? 0)
       }))
-    };
-  }
-
-  async discordPatternStats(input: {
-    guildId: string;
-    visibleChannelIds: string[];
-    pattern: string;
-    limit: number;
-    authorIds?: string[];
-    channelIds?: string[];
-    dateFrom?: Date;
-    dateTo?: Date;
-    includeBots?: boolean;
-    query?: string;
-    groupBy?: DiscordPatternStatsGroupBy;
-    metric?: DiscordPatternStatsMetric;
-    sort?: DiscordPatternStatsSort;
-    captureIndex?: number;
-    numericCaptureIndex?: number;
-    numericValueMap?: Record<string, number>;
-    distinctBy?: DiscordPatternStatsDistinctBy[];
-    dedupeOrder?: DiscordPatternStatsDedupeOrder;
-    minMatches?: number;
-  }): Promise<DiscordPatternStats> {
-    const groupBy = input.groupBy ?? "overall";
-    const metric = input.metric ?? "matches";
-    const captureIndex = safeCaptureIndex(input.captureIndex);
-    const numericCaptureIndex = safeCaptureIndex(input.numericCaptureIndex);
-    const minMatches = Math.max(1, Math.trunc(input.minMatches ?? 1));
-    const empty = () => emptyDiscordPatternStats({
-      pattern: input.pattern,
-      query: input.query ?? null,
-      metric,
-      groupBy,
-      captureIndex,
-      numericCaptureIndex,
-      minMatches
-    });
-
-    if (input.visibleChannelIds.length === 0 || input.pattern.trim() === "") return empty();
-    const requestedChannelIds = normalizeFilterIds(input.channelIds);
-    const visibleRequestedChannelIds = requestedChannelIds.filter((channelId) => input.visibleChannelIds.includes(channelId));
-    if (requestedChannelIds.length > 0 && visibleRequestedChannelIds.length === 0) return empty();
-
-    const params: unknown[] = [input.guildId, input.visibleChannelIds, input.pattern.trim()];
-    const addParam = (value: unknown) => {
-      params.push(value);
-      return `$${params.length}`;
-    };
-
-    const conditions = [
-      "m.guild_id = $1",
-      "m.channel_id = ANY($2::text[])",
-      "m.deleted_at IS NULL",
-      "m.normalized_content <> ''",
-      "c.is_excluded = false",
-      "coalesce(parent.is_excluded, false) = false",
-      "NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)"
-    ];
-
-    if (!input.includeBots) {
-      conditions.push("coalesce(u.is_bot, false) = false");
-    }
-
-    const authorIds = normalizeFilterIds(input.authorIds);
-    if (authorIds.length > 0) {
-      conditions.push(`m.author_id = ANY(${addParam(authorIds)}::text[])`);
-    }
-
-    if (visibleRequestedChannelIds.length > 0) {
-      const placeholder = addParam(visibleRequestedChannelIds);
-      conditions.push(`(m.channel_id = ANY(${placeholder}::text[]) OR (c.parent_id = ANY(${placeholder}::text[]) AND c.type IN (10, 11)))`);
-    }
-
-    if (input.dateFrom) {
-      conditions.push(`m.created_at >= ${addParam(input.dateFrom)}::timestamptz`);
-    }
-
-    if (input.dateTo) {
-      conditions.push(`m.created_at <= ${addParam(input.dateTo)}::timestamptz`);
-    }
-
-    const query = input.query?.trim();
-    if (query) {
-      conditions.push(`to_tsvector('english', m.normalized_content) @@ plainto_tsquery('english', ${addParam(query)})`);
-    }
-
-    const captureValueSql = captureIndex == null ? "NULL::text" : `nullif(rx.match[${captureIndex}], '')`;
-    const rawNumericValueSql = numericCaptureIndex == null ? "NULL::text" : `nullif(rx.match[${numericCaptureIndex}], '')`;
-    const numericValueSql = discordPatternNumericValueSql(input.numericValueMap, addParam);
-    const distinctColumns = discordPatternDistinctColumns(input.distinctBy ?? []);
-    const dedupeOrderBy = discordPatternDedupeOrderBy(input.dedupeOrder ?? "earliest");
-    const dedupeSql =
-      distinctColumns.length > 0
-        ? `SELECT DISTINCT ON (${distinctColumns.join(", ")}) *
-           FROM matched
-           ORDER BY ${distinctColumns.join(", ")}, ${dedupeOrderBy}`
-        : "SELECT * FROM matched";
-    const grouping = discordPatternStatsGrouping(groupBy);
-    const metricSql = discordPatternStatsMetricSql(metric);
-    const groupedParams = [...params, minMatches, input.limit];
-    const minMatchesPlaceholder = `$${params.length + 1}`;
-    const limitPlaceholder = `$${params.length + 2}`;
-
-    const result = await this.pool.query(
-      `
-        WITH matched AS (
-          SELECT
-            m.id AS message_id,
-            m.author_id,
-            u.username AS author_username,
-            m.channel_id,
-            c.name AS channel_name,
-            coalesce(parent.id, m.channel_id) AS effective_channel_id,
-            coalesce(parent.name, c.name) AS effective_channel_name,
-            m.normalized_content,
-            m.created_at,
-            extracted.capture_value,
-            numeric_extract.numeric_value
-          FROM messages m
-          JOIN discord_users u ON u.id = m.author_id
-          JOIN channels c ON c.id = m.channel_id
-          LEFT JOIN channels parent ON parent.id = c.parent_id
-          CROSS JOIN LATERAL regexp_match(m.normalized_content, $3, 'i') AS rx(match)
-          CROSS JOIN LATERAL (
-            SELECT
-              ${captureValueSql} AS capture_value,
-              ${rawNumericValueSql} AS raw_numeric_value
-          ) extracted
-          CROSS JOIN LATERAL (
-            SELECT ${numericValueSql} AS numeric_value
-          ) numeric_extract
-          WHERE ${conditions.join("\n            AND ")}
-        ),
-        deduped AS (
-          ${dedupeSql}
-        ),
-        grouped AS (
-          SELECT
-            ${grouping.keySql} AS key,
-            ${grouping.labelSql} AS label,
-            ${grouping.authorIdSql} AS author_id,
-            ${grouping.authorUsernameSql} AS author_username,
-            ${grouping.channelIdSql} AS channel_id,
-            ${grouping.channelNameSql} AS channel_name,
-            ${grouping.captureValueSql} AS capture_value,
-            ${grouping.periodStartSql} AS period_start,
-            count(*)::int AS match_count,
-            count(DISTINCT author_id)::int AS distinct_authors,
-            count(numeric_value)::int AS numeric_count,
-            avg(numeric_value)::float AS numeric_average,
-            min(numeric_value)::float AS numeric_min,
-            max(numeric_value)::float AS numeric_max,
-            sum(numeric_value)::float AS numeric_sum,
-            min(created_at) AS first_matched_at,
-            max(created_at) AS last_matched_at,
-            ${metricSql} AS value
-          FROM deduped
-          ${grouping.groupBySql.length ? `GROUP BY ${grouping.groupBySql.join(", ")}` : ""}
-          HAVING count(*) >= ${minMatchesPlaceholder}
-        ),
-        totals AS (
-          SELECT count(*)::int AS total_matches FROM deduped
-        )
-        SELECT grouped.*, totals.total_matches, count(*) OVER ()::int AS total_groups
-        FROM grouped
-        CROSS JOIN totals
-        ${discordPatternStatsOrderBy(input.sort ?? defaultDiscordPatternStatsSort(metric))}
-        LIMIT ${limitPlaceholder}
-      `,
-      groupedParams
-    );
-
-    const firstRow = result.rows[0];
-    return {
-      pattern: input.pattern.trim(),
-      query: query ?? null,
-      metric,
-      groupBy,
-      captureIndex,
-      numericCaptureIndex,
-      totalMatches: Number(firstRow?.total_matches ?? 0),
-      totalGroups: Number(firstRow?.total_groups ?? 0),
-      minMatches,
-      rows: result.rows.map(rowToDiscordPatternStatsRow)
     };
   }
 
@@ -4703,142 +4450,6 @@ function discordStatsOrderBy(sort: DiscordStatsSort) {
   return "ORDER BY value DESC, label ASC";
 }
 
-function safeCaptureIndex(value: number | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  const integer = Math.trunc(value);
-  return integer >= 1 && integer <= 20 ? integer : null;
-}
-
-function discordPatternNumericValueSql(numericValueMap: Record<string, number> | undefined, addParam: (value: unknown) => string) {
-  const cleanedSql = "regexp_replace(extracted.raw_numeric_value, '[,[:space:]]', '', 'g')";
-  const entries = Object.entries(numericValueMap ?? {})
-    .map(([key, value]) => [key.trim().toLowerCase(), value] as const)
-    .filter(([key, value]) => key.length > 0 && Number.isFinite(value))
-    .slice(0, 20);
-  const cases = entries
-    .map(([key, value]) => `WHEN lower(trim(extracted.raw_numeric_value)) = ${addParam(key)} THEN ${addParam(value)}::double precision`)
-    .join("\n              ");
-  return `
-              CASE
-                WHEN extracted.raw_numeric_value IS NULL THEN NULL::double precision
-                ${cases}
-                WHEN ${cleanedSql} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${cleanedSql}::double precision
-                ELSE NULL::double precision
-              END
-            `;
-}
-
-function discordPatternDistinctColumns(distinctBy: DiscordPatternStatsDistinctBy[]) {
-  const columns: string[] = [];
-  for (const value of new Set(distinctBy)) {
-    if (value === "author") columns.push("author_id");
-    else if (value === "channel") columns.push("effective_channel_id");
-    else if (value === "capture") columns.push("capture_value");
-  }
-  return columns;
-}
-
-function discordPatternDedupeOrderBy(order: DiscordPatternStatsDedupeOrder) {
-  if (order === "latest") return "created_at DESC, message_id DESC";
-  if (order === "numericAsc") return "numeric_value ASC NULLS LAST, created_at ASC, message_id ASC";
-  if (order === "numericDesc") return "numeric_value DESC NULLS LAST, created_at ASC, message_id ASC";
-  return "created_at ASC, message_id ASC";
-}
-
-function discordPatternStatsMetricSql(metric: DiscordPatternStatsMetric) {
-  if (metric === "uniqueAuthors") return "count(DISTINCT author_id)::int";
-  if (metric === "numericAverage") return "avg(numeric_value)::float";
-  if (metric === "numericMin") return "min(numeric_value)::float";
-  if (metric === "numericMax") return "max(numeric_value)::float";
-  if (metric === "numericSum") return "sum(numeric_value)::float";
-  if (metric === "numericCount") return "count(numeric_value)::int";
-  return "count(*)::int";
-}
-
-function discordPatternStatsGrouping(groupBy: DiscordPatternStatsGroupBy) {
-  const nullText = "NULL::text";
-  const nullTime = "NULL::timestamptz";
-  if (groupBy === "user") {
-    return {
-      keySql: "author_id",
-      labelSql: "coalesce(author_username, author_id)",
-      authorIdSql: "author_id",
-      authorUsernameSql: "author_username",
-      channelIdSql: nullText,
-      channelNameSql: nullText,
-      captureValueSql: nullText,
-      periodStartSql: nullTime,
-      groupBySql: ["author_id", "author_username"]
-    };
-  }
-  if (groupBy === "channel") {
-    return {
-      keySql: "effective_channel_id",
-      labelSql: "coalesce(effective_channel_name, effective_channel_id)",
-      authorIdSql: nullText,
-      authorUsernameSql: nullText,
-      channelIdSql: "effective_channel_id",
-      channelNameSql: "effective_channel_name",
-      captureValueSql: nullText,
-      periodStartSql: nullTime,
-      groupBySql: ["effective_channel_id", "effective_channel_name"]
-    };
-  }
-  if (groupBy === "capture") {
-    return {
-      keySql: "coalesce(capture_value, '')",
-      labelSql: "coalesce(capture_value, '(empty capture)')",
-      authorIdSql: nullText,
-      authorUsernameSql: nullText,
-      channelIdSql: nullText,
-      channelNameSql: nullText,
-      captureValueSql: "capture_value",
-      periodStartSql: nullTime,
-      groupBySql: ["capture_value"]
-    };
-  }
-  if (groupBy === "day" || groupBy === "week" || groupBy === "month" || groupBy === "year") {
-    const periodExpr = `date_trunc('${groupBy}', created_at)`;
-    const format = groupBy === "day" ? "YYYY-MM-DD" : groupBy === "week" ? "IYYY-\"W\"IW" : groupBy === "month" ? "YYYY-MM" : "YYYY";
-    return {
-      keySql: `to_char(${periodExpr}, '${format}')`,
-      labelSql: `to_char(${periodExpr}, '${format}')`,
-      authorIdSql: nullText,
-      authorUsernameSql: nullText,
-      channelIdSql: nullText,
-      channelNameSql: nullText,
-      captureValueSql: nullText,
-      periodStartSql: periodExpr,
-      groupBySql: [periodExpr]
-    };
-  }
-  return {
-    keySql: "'overall'",
-    labelSql: "'All matching messages'",
-    authorIdSql: nullText,
-    authorUsernameSql: nullText,
-    channelIdSql: nullText,
-    channelNameSql: nullText,
-    captureValueSql: nullText,
-    periodStartSql: nullTime,
-    groupBySql: []
-  };
-}
-
-function defaultDiscordPatternStatsSort(metric: DiscordPatternStatsMetric): DiscordPatternStatsSort {
-  return metric === "numericAverage" || metric === "numericMin" ? "valueAsc" : "valueDesc";
-}
-
-function discordPatternStatsOrderBy(sort: DiscordPatternStatsSort) {
-  if (sort === "valueAsc") return "ORDER BY value ASC NULLS LAST, match_count DESC, label ASC";
-  if (sort === "matchesDesc") return "ORDER BY match_count DESC, value DESC NULLS LAST, label ASC";
-  if (sort === "matchesAsc") return "ORDER BY match_count ASC, value ASC NULLS LAST, label ASC";
-  if (sort === "dateAsc") return "ORDER BY period_start ASC NULLS LAST, label ASC";
-  if (sort === "dateDesc") return "ORDER BY period_start DESC NULLS LAST, label ASC";
-  if (sort === "labelAsc") return "ORDER BY label ASC";
-  return "ORDER BY value DESC NULLS LAST, match_count DESC, label ASC";
-}
-
 function rowToDiscordStatsRow(row: any): DiscordStatsRow {
   return {
     key: String(row.key),
@@ -4858,29 +4469,6 @@ function rowToDiscordStatsRow(row: any): DiscordStatsRow {
     activeDays: Number(row.active_days ?? 0),
     channelCreatedAt: row.channel_created_at == null ? null : new Date(row.channel_created_at),
     channelAgeDays: row.channel_age_days == null ? null : Number(row.channel_age_days)
-  };
-}
-
-function rowToDiscordPatternStatsRow(row: any): DiscordPatternStatsRow {
-  return {
-    key: String(row.key),
-    label: String(row.label),
-    value: Number(row.value ?? 0),
-    matchCount: Number(row.match_count ?? 0),
-    distinctAuthors: Number(row.distinct_authors ?? 0),
-    numericCount: Number(row.numeric_count ?? 0),
-    numericAverage: row.numeric_average == null ? null : Number(row.numeric_average),
-    numericMin: row.numeric_min == null ? null : Number(row.numeric_min),
-    numericMax: row.numeric_max == null ? null : Number(row.numeric_max),
-    numericSum: row.numeric_sum == null ? null : Number(row.numeric_sum),
-    authorId: row.author_id == null ? null : String(row.author_id),
-    authorUsername: row.author_username == null ? null : String(row.author_username),
-    channelId: row.channel_id == null ? null : String(row.channel_id),
-    channelName: row.channel_name == null ? null : String(row.channel_name),
-    captureValue: row.capture_value == null ? null : String(row.capture_value),
-    periodStart: row.period_start == null ? null : new Date(row.period_start),
-    firstMatchedAt: row.first_matched_at == null ? null : new Date(row.first_matched_at),
-    lastMatchedAt: row.last_matched_at == null ? null : new Date(row.last_matched_at)
   };
 }
 
@@ -4918,29 +4506,6 @@ function emptyDiscordStats(metric: DiscordStatsMetric, groupBy: DiscordStatsGrou
     rows: [],
     topUsers: [],
     topChannels: []
-  };
-}
-
-function emptyDiscordPatternStats(input: {
-  pattern: string;
-  query: string | null;
-  metric: DiscordPatternStatsMetric;
-  groupBy: DiscordPatternStatsGroupBy;
-  captureIndex: number | null;
-  numericCaptureIndex: number | null;
-  minMatches: number;
-}): DiscordPatternStats {
-  return {
-    pattern: input.pattern.trim(),
-    query: input.query,
-    metric: input.metric,
-    groupBy: input.groupBy,
-    captureIndex: input.captureIndex,
-    numericCaptureIndex: input.numericCaptureIndex,
-    totalMatches: 0,
-    totalGroups: 0,
-    minMatches: input.minMatches,
-    rows: []
   };
 }
 

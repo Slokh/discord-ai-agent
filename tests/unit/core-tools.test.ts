@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  analyzeDiscordData,
   answerFromHistory,
   createSkillFromRequest,
   extractHistorySearchSyntax,
-  findDiscordRoles,
   findDiscordUsers,
   formatAgentTaskResult,
   generateImage,
@@ -194,23 +192,6 @@ describe("Discord lookup tools", () => {
     });
   });
 
-  it("finds roles from the live Discord role snapshot", async () => {
-    const ctx = {
-      repo: { auditTool: vi.fn(async () => undefined) },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-      discordRoles: [
-        { id: "1", name: "admin", position: 2, managed: false, memberCount: 2 },
-        { id: "2", name: "cool people", position: 1, managed: false, memberCount: 5 }
-      ]
-    } as unknown as ToolContext;
-
-    const response = await findDiscordRoles(ctx, "cool");
-
-    expect(response).toContain("cool people id=2");
-    expect(response).not.toContain("admin");
-  });
 });
 
 describe("getDiscordStats", () => {
@@ -400,127 +381,6 @@ describe("getDiscordStats", () => {
 
     expect(response).toContain("Metric: messages per channel day");
     expect(response).toContain("#lounge: 84.2531 messages/channel day (336,715 messages over 3,996 days since 2015-08-15)");
-  });
-});
-
-describe("analyzeDiscordData", () => {
-  it("infers and runs generic extracted data analytics from sampled messages", async () => {
-    const chat = vi.fn(async () => ({
-      content: JSON.stringify({
-        pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
-        query: "wordle",
-        groupBy: "user",
-        metric: "numericAverage",
-        sort: "valueAsc",
-        captureIndex: 1,
-        numericCaptureIndex: 2,
-        numericValueMap: { X: 7 },
-        distinctBy: ["author", "capture"],
-        dedupeOrder: "numericAsc",
-        minMatches: 20,
-        explanation: "Parse Wordle puzzle id and score, dedupe by user+puzzle, and rank by average score."
-      }),
-      model: "planner-model",
-      raw: {},
-      toolCalls: []
-    }));
-    const ctx = {
-      repo: {
-        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
-        keywordSearch: vi.fn(async () => [
-          {
-            messageId: "message-1",
-            guildId: "guild",
-            channelId: "channel",
-            authorId: "user-1",
-            authorUsername: "fixtureuser",
-            content: "Wordle 1 3/6",
-            normalizedContent: "Wordle 1 3/6",
-            createdAt: new Date("2026-01-01T00:00:00Z"),
-            score: 1,
-            link: "https://discord.com/channels/guild/channel/message-1"
-          }
-        ]),
-        discordPatternStats: vi.fn(async () => ({
-          pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
-          query: "wordle",
-          metric: "numericAverage",
-          groupBy: "user",
-          captureIndex: 1,
-          numericCaptureIndex: 2,
-          totalMatches: 34,
-          totalGroups: 1,
-          minMatches: 20,
-          rows: [
-            {
-              key: "user-1",
-              label: "fixtureuser",
-              value: 3.848,
-              matchCount: 34,
-              distinctAuthors: 1,
-              numericCount: 34,
-              numericAverage: 3.848,
-              numericMin: 2,
-              numericMax: 7,
-              numericSum: 130.832,
-              authorId: "user-1",
-              authorUsername: "fixtureuser",
-              channelId: null,
-              channelName: null,
-              captureValue: null,
-              periodStart: null,
-              firstMatchedAt: new Date("2025-01-01T00:00:00Z"),
-              lastMatchedAt: new Date("2026-06-01T00:00:00Z")
-            }
-          ]
-        })),
-        auditTool: vi.fn(async () => undefined)
-      },
-      openRouter: { chat },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-      visibleChannelIds: ["channel"]
-    } as unknown as ToolContext;
-
-    const response = await analyzeDiscordData(ctx, { task: "who is the top wordle player in this discord", query: "wordle" });
-
-    expect(response).toContain("Discord data analysis:");
-    expect(response).toContain("Inferred plan: Parse Wordle puzzle id");
-    expect(response).toContain("Metric: numeric average");
-    expect(response).toContain("@fixtureuser: 3.848 numeric average");
-    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        guildId: "guild",
-        visibleChannelIds: ["channel"],
-        query: "wordle",
-        limit: 80
-      })
-    );
-    expect(chat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining("Return only compact JSON") }),
-          expect.objectContaining({ content: expect.stringContaining("Wordle 1 3/6") })
-        ])
-      })
-    );
-    expect(ctx.repo.discordPatternStats).toHaveBeenCalledWith(
-      expect.objectContaining({
-        guildId: "guild",
-        visibleChannelIds: ["channel"],
-        pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
-        groupBy: "user",
-        metric: "numericAverage",
-        sort: "valueAsc",
-        captureIndex: 1,
-        numericCaptureIndex: 2,
-        numericValueMap: { X: 7 },
-        distinctBy: ["author", "capture"],
-        dedupeOrder: "numericAsc",
-        minMatches: 20
-      })
-    );
   });
 });
 

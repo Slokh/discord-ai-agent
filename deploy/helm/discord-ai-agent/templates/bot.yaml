@@ -7,6 +7,8 @@ metadata:
     app.kubernetes.io/component: bot
 spec:
   replicas: {{ .Values.bot.replicas }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "discord-ai-agent.name" . }}
@@ -18,6 +20,7 @@ spec:
         {{- include "discord-ai-agent.labels" . | nindent 8 }}
         app.kubernetes.io/component: bot
     spec:
+      terminationGracePeriodSeconds: {{ .Values.bot.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-app
       containers:
         - name: bot

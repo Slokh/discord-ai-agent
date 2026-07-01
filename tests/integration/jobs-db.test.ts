@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import PgBoss from "pg-boss";
 import { loadConfig } from "../../src/config/env.js";
-import { AGENT_TASK_JOB, CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
+import { AGENT_TASK_JOB, CRAWL_GUILD_JOB, DISCORD_AGENT_REQUEST_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
 
@@ -240,6 +240,94 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     await runtime.boss.deleteJob(AGENT_TASK_JOB, jobId!);
+    await runtime.stop();
+  });
+
+  it("processes queued Discord agent requests when the Discord worker is enabled", async () => {
+    const config = testConfig();
+    const processedRunIds: string[] = [];
+    const runtime = await startJobs({
+      config,
+      pgBossSchema: "pgboss_test",
+      crawlWorker: false,
+      embeddingWorker: false,
+      taskWorker: false,
+      discordAgentWorker: true,
+      crawler: {
+        crawlConfiguredGuild: async () => undefined
+      },
+      discordAgent: {
+        run: async (job) => {
+          processedRunIds.push(job.runId);
+        }
+      }
+    });
+    runtimes.push(runtime);
+
+    const jobId = await runtime.enqueueDiscordAgentRequest({
+      runId: "discord-run-worker",
+      traceId: "discord-run-worker",
+      guildId: "guild",
+      channelId: "channel",
+      messageId: "message",
+      userId: "user",
+      responseChannelId: "channel",
+      responseMessageId: "thinking",
+      text: "hello",
+      rawContent: "<@bot> hello",
+      mentionKind: "user",
+      botRoleIds: [],
+      requesterDisplayName: "Tester",
+      enqueuedAt: new Date().toISOString()
+    });
+    expect(jobId).toEqual(expect.any(String));
+
+    await waitFor(() => processedRunIds.includes("discord-run-worker"), 10_000);
+    await runtime.stop();
+  });
+
+  it("can enqueue Discord agent requests without running the Discord worker", async () => {
+    const config = testConfig();
+    const processedRunIds: string[] = [];
+    const runtime = await startJobs({
+      config,
+      pgBossSchema: "pgboss_test",
+      crawlWorker: false,
+      embeddingWorker: false,
+      taskWorker: false,
+      discordAgentWorker: false,
+      crawler: {
+        crawlConfiguredGuild: async () => undefined
+      },
+      discordAgent: {
+        run: async (job) => {
+          processedRunIds.push(job.runId);
+        }
+      }
+    });
+    runtimes.push(runtime);
+
+    const jobId = await runtime.enqueueDiscordAgentRequest({
+      runId: "discord-run-pending",
+      traceId: "discord-run-pending",
+      guildId: "guild",
+      channelId: "channel",
+      messageId: "message",
+      userId: "user",
+      responseChannelId: "channel",
+      responseMessageId: "thinking",
+      text: "hello",
+      rawContent: "<@bot> hello",
+      mentionKind: "user",
+      botRoleIds: [],
+      requesterDisplayName: "Tester",
+      enqueuedAt: new Date().toISOString()
+    });
+    expect(jobId).toEqual(expect.any(String));
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(processedRunIds).toEqual([]);
+    await runtime.boss.deleteJob(DISCORD_AGENT_REQUEST_JOB, jobId!);
     await runtime.stop();
   });
 

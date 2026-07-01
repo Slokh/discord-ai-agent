@@ -18,6 +18,7 @@ spec:
         {{- include "discord-ai-agent.labels" . | nindent 8 }}
         app.kubernetes.io/component: worker
     spec:
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-worker
       containers:
         - name: worker

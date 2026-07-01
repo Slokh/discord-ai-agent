@@ -139,6 +139,54 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.getProcessRun(runId)).resolves.toEqual(expect.objectContaining({ status: "succeeded", completedAt: expect.any(Date) }));
   });
 
+  it("marks stale Discord process runs failed and closes running spans", async () => {
+    const runId = `run-${randomUUID()}`;
+    const traceId = `trace-${randomUUID()}`;
+    await repo.upsertProcessRun({
+      runId,
+      traceId,
+      kind: "discord",
+      status: "running",
+      title: "stale Discord run",
+      summary: "still running",
+      source: "test",
+      startedAt: new Date("2026-01-01T00:00:00.000Z")
+    });
+    await repo.recordProcessRunSpan({
+      runId,
+      spanId: "agent.model.round.1",
+      name: "LLM round 1",
+      status: "running",
+      startedAt: new Date("2026-01-01T00:00:01.000Z")
+    });
+
+    const marked = await repo.markStaleProcessRuns({
+      kind: "discord",
+      staleBefore: new Date(Date.now() + 1000),
+      summary: "stale cleanup"
+    });
+
+    expect(marked.map((run) => run.runId)).toContain(runId);
+    await expect(repo.getProcessRun(runId)).resolves.toEqual(
+      expect.objectContaining({
+        status: "failed",
+        summary: "stale cleanup",
+        completedAt: expect.any(Date),
+        metadata: expect.objectContaining({ stale: true })
+      })
+    );
+    await expect(repo.getProcessRunSpans(runId)).resolves.toEqual([
+      expect.objectContaining({
+        status: "failed",
+        completedAt: expect.any(Date),
+        durationMs: expect.any(Number)
+      })
+    ]);
+    await expect(repo.getProcessRunEvents({ runId })).resolves.toEqual([
+      expect.objectContaining({ eventName: "process_run.stale_failed", level: "warn" })
+    ]);
+  });
+
   it("scrubs user profile metadata and prevents future rehydration after privacy deletion", async () => {
     const userId = `user-${randomUUID()}`;
 

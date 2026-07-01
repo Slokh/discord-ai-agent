@@ -258,7 +258,7 @@ describe("LocalProcessExecutionBackend", () => {
         const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
         const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
         child.stdout.emit("data", Buffer.from("stdout before failure\n"));
-        child.stderr.emit("data", Buffer.from("GITHUB_TOKEN=github_pat_secretsecretsecretsecretsecret\n"));
+        child.stderr.emit("data", Buffer.from("GITHUB_TOKEN=secretsecretsecretsecretsecret\n"));
         expect(stdoutWrite).toHaveBeenCalledWith("stdout before failure\n");
         expect(stderrWrite).toHaveBeenCalledWith("GITHUB_TOKEN=[REDACTED]\n");
         stdoutWrite.mockRestore();

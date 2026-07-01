@@ -9,9 +9,10 @@ import { startSandboxReconciler } from "./execution/reconciler.js";
 import { OpenRouterClient } from "./models/openrouter.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
-import { createDiscordAiAgentBot } from "./discord/client.js";
+import { createDiscordAiAgentBot, runQueuedDiscordAgentRequest } from "./discord/client.js";
 import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
 import { startJobs } from "./jobs/queue.js";
+import { startStaleRunReconciler } from "./observability/staleRuns.js";
 import { logger } from "./util/logger.js";
 
 async function main() {
@@ -112,25 +113,45 @@ async function main() {
         await embedStoredMessage({ repo, openRouter, config, messageId });
       }
     },
+    discordAgent:
+      client && startsWorker
+        ? {
+            run: async (job, context) => {
+              await runQueuedDiscordAgentRequest({ config, repo, openRouter, jobs: context.jobs, client }, job);
+            }
+          }
+        : undefined,
     crawlWorker: startsWorker,
     embeddingWorker: startsEmbeddingWorker,
-    taskWorker: startsWorker
+    taskWorker: startsWorker,
+    discordAgentWorker: startsWorker
   });
   jobRuntimeRef.current = jobs;
   logger.info({ startsApi, startsBot, startsWorker, startsEmbeddingWorker }, "Job runtime ready");
   const internalApi = startsApi ? await startInternalApi({ config, repo }) : null;
+  const staleRunReconciler = startsApi
+    ? startStaleRunReconciler({
+        repo,
+        staleAfterMs: Math.max(config.discordAgentResponseTimeoutMs + 60_000, 10 * 60 * 1000)
+      })
+    : null;
   const sandboxReconciler = startsWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
   const runtime = startsBot && client && crawler instanceof DiscordCrawler ? createDiscordAiAgentBot({ config, repo, openRouter, crawler, jobs, client }) : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
 
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info("Shutting down Discord AI Agent");
     taskNotifier?.stop();
-    runtime?.destroy();
-    if (!runtime) client?.destroy();
+    await runtime?.drain(30_000).catch((error) => logger.warn({ err: error }, "Timed out draining Discord bot handlers"));
     sandboxReconciler?.stop();
+    staleRunReconciler?.stop();
     await internalApi?.close().catch(() => undefined);
     await jobs.stop().catch(() => undefined);
+    runtime?.destroy();
+    if (!runtime) client?.destroy();
     await pool.end().catch(() => undefined);
     process.exit(0);
   };

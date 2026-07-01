@@ -14,7 +14,7 @@ import {
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { isOpenRouterContentFilterError, type OpenRouterClient } from "../models/openrouter.js";
-import { embeddingPriorityForMessageTimestamp, type JobRuntime } from "../jobs/queue.js";
+import { embeddingPriorityForMessageTimestamp, type DiscordAgentRequestJob, type JobRuntime } from "../jobs/queue.js";
 import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
@@ -31,6 +31,7 @@ const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 8;
 export type DiscordAiAgentBotRuntime = {
   client: Client;
   login: () => Promise<void>;
+  drain: (timeoutMs?: number) => Promise<void>;
   destroy: () => void;
 };
 
@@ -54,6 +55,8 @@ export function createDiscordAiAgentBot(input: {
       ],
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
     });
+  let acceptingMessages = true;
+  const activeMessageHandlers = new Set<Promise<void>>();
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(
@@ -71,11 +74,21 @@ export function createDiscordAiAgentBot(input: {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    await runWithTrace(discordMessageTraceContext(message), async () => {
+    if (!acceptingMessages) {
+      logger.info({ messageId: message.id, channelId: message.channelId }, "Ignoring Discord message while bot is draining");
+      return;
+    }
+    const handler = runWithTrace(discordMessageTraceContext(message), async () => {
       await handleMessageCreate(input, client, message).catch((error) => {
         logger.error({ err: error, messageId: message.id }, "Message handler failed");
       });
     });
+    activeMessageHandlers.add(handler);
+    try {
+      await handler;
+    } finally {
+      activeMessageHandlers.delete(handler);
+    }
   });
 
   client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
@@ -158,7 +171,16 @@ export function createDiscordAiAgentBot(input: {
       if (!input.config.discord.token) throw new Error("DISCORD_TOKEN is required.");
       await client.login(input.config.discord.token);
     },
-    destroy: () => client.destroy()
+    drain: async (timeoutMs = 30_000) => {
+      acceptingMessages = false;
+      if (activeMessageHandlers.size === 0) return;
+      logger.info({ activeMessageHandlers: activeMessageHandlers.size, timeoutMs }, "Waiting for active Discord message handlers to drain");
+      await waitForActiveHandlers(activeMessageHandlers, timeoutMs);
+    },
+    destroy: () => {
+      acceptingMessages = false;
+      client.destroy();
+    }
   };
 }
 
@@ -233,7 +255,7 @@ async function handleMessageCreate(
         channelId: message.channelId,
         authorId: message.author.id,
         contentPreview: previewText(message.content),
-        mentionKind: mentionContext.kind,
+        mentionKind: mentionContext.kind ?? "unknown",
         botRoleIds: mentionContext.botRoleIds
       },
       "Ignoring Discord AI Agent mention from interaction-blocked user"
@@ -285,7 +307,7 @@ async function handleMessageCreate(
       metadata: {
         prompt: text,
         rawContentPreview: previewText(message.content),
-        mentionKind: mentionContext.kind,
+        mentionKind: mentionContext.kind ?? "unknown",
         discordUrl: message.url
       },
       links: { discordMessage: message.url }
@@ -308,6 +330,61 @@ async function handleMessageCreate(
     summary: "Sent Thinking reply",
     metadata: { replyMessageId: thinking.id }
   });
+  if (input.jobs) {
+    const enqueuedAt = new Date();
+    try {
+      const jobId = await input.jobs.enqueueDiscordAgentRequest({
+        runId: message.id,
+        traceId: message.id,
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: message.author.id,
+        responseChannelId: thinking.channelId,
+        responseMessageId: thinking.id,
+        text,
+        rawContent: message.content,
+        mentionKind: mentionContext.kind ?? "unknown",
+        botRoleIds: mentionContext.botRoleIds,
+        requesterDisplayName: message.member?.displayName ?? message.author.username,
+        enqueuedAt: enqueuedAt.toISOString()
+      });
+      await input.repo
+        .updateProcessRun({
+          runId: message.id,
+          status: "queued",
+          summary: "Queued Discord mention for worker processing.",
+          links: { discordReply: thinking.url },
+          metadata: {
+            pgbossJobId: jobId,
+            responseChannelId: thinking.channelId,
+            responseMessageId: thinking.id,
+            queuedAt: enqueuedAt.toISOString()
+          }
+        })
+        .catch((error) => requestLogger.warn({ err: error }, "Failed to mark Discord run queued"));
+      await recordTraceEvent(input.repo, {
+        eventName: "discord.agent_request.enqueued",
+        summary: "Queued Discord mention for worker processing",
+        metadata: { jobId, responseMessageId: thinking.id }
+      });
+      return;
+    } catch (error) {
+      requestLogger.error({ err: error }, "Failed to enqueue Discord agent request");
+      const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
+      const finalReply = await thinking.edit(errorContent);
+      await input.repo
+        .updateProcessRun({
+          runId: message.id,
+          status: "failed",
+          summary: error instanceof Error ? error.message : String(error),
+          links: { discordReply: finalReply.url },
+          metadata: { error: error instanceof Error ? error.message : String(error), enqueueFailed: true }
+        })
+        .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark Discord enqueue failure"));
+      return;
+    }
+  }
   const threadKey = discordChannelThreadKey(message.guildId, message.channelId);
   const userDisplayName = message.member?.displayName ?? message.author.username;
   const sessionStartedAt = Date.now();
@@ -675,6 +752,434 @@ async function handleMessageCreate(
   }
 }
 
+export async function runQueuedDiscordAgentRequest(
+  input: {
+    config: AppConfig;
+    repo: DiscordAiAgentRepository;
+    openRouter: OpenRouterClient;
+    jobs?: JobRuntime;
+    client: Client;
+  },
+  job: DiscordAgentRequestJob
+) {
+  await waitForDiscordClientReady(input.client);
+  const existingRun = await input.repo.getProcessRun(job.runId).catch(() => undefined);
+  if (existingRun && isTerminalProcessRunStatus(existingRun.status)) {
+    logger.info({ runId: job.runId, status: existingRun.status }, "Skipping queued Discord request because run is already terminal");
+    return;
+  }
+
+  const [message, thinking] = await Promise.all([
+    fetchDiscordMessage(input.client, job.channelId, job.messageId),
+    fetchDiscordMessage(input.client, job.responseChannelId, job.responseMessageId)
+  ]);
+  if (!message.inGuild()) throw new Error("Queued Discord request source message is no longer a guild message.");
+  await executeDiscordAgentRequest(input, input.client, message, thinking, {
+    requestId: job.runId,
+    text: job.text,
+    rawContent: job.rawContent,
+    botRoleIds: job.botRoleIds,
+    messageStartedAt: parseDateMs(job.enqueuedAt) ?? Date.now()
+  });
+}
+
+async function executeDiscordAgentRequest(
+  input: {
+    config: AppConfig;
+    repo: DiscordAiAgentRepository;
+    openRouter: OpenRouterClient;
+    jobs?: JobRuntime;
+  },
+  client: Client,
+  message: Message,
+  thinking: Message,
+  request: {
+    requestId: string;
+    text: string;
+    rawContent: string;
+    botRoleIds: string[];
+    messageStartedAt: number;
+  }
+) {
+  if (!message.guildId || !message.guild) throw new Error("Discord agent request message is not attached to a guild.");
+  const guildId = message.guildId;
+  const guild = message.guild;
+  const botUserId = client.user?.id ?? "";
+  const requestLogger = logger.child({
+    traceId: request.requestId,
+    requestId: request.requestId,
+    guildId,
+    channelId: message.channelId,
+    messageId: message.id,
+    userId: message.author.id
+  });
+  const threadKey = discordChannelThreadKey(guildId, message.channelId);
+  const userDisplayName = message.member?.displayName ?? message.author.username;
+  const sessionStartedAt = Date.now();
+  await input.repo.ensureConversationSession({
+    threadKey,
+    guildId,
+    channelId: message.channelId,
+    metadata: {
+      kind: "discord_channel",
+      channelId: message.channelId
+    }
+  });
+  requestLogger.debug({ threadKey }, "Ensured conversation session");
+
+  const priorSessionMessages = await input.repo.recentConversationMessages({
+    threadKey,
+    limit: SESSION_CONTEXT_MESSAGE_LIMIT
+  });
+  requestLogger.info(
+    {
+      threadKey,
+      sessionMessageCount: priorSessionMessages.length,
+      durationMs: durationMs(sessionStartedAt)
+    },
+    "Loaded channel conversation memory"
+  );
+  await recordTraceEvent(input.repo, {
+    eventName: "memory.session.loaded",
+    summary: `Loaded ${priorSessionMessages.length} channel memory messages`,
+    metadata: { threadKey, sessionMessageCount: priorSessionMessages.length },
+    durationMs: durationMs(sessionStartedAt)
+  });
+  await input.repo
+    .recordProcessRunSpan({
+      runId: request.requestId,
+      spanId: "memory.session",
+      name: "Load channel memory",
+      status: "succeeded",
+      startedAt: new Date(sessionStartedAt),
+      completedAt: new Date(),
+      durationMs: durationMs(sessionStartedAt),
+      metadata: { threadKey, sessionMessageCount: priorSessionMessages.length }
+    })
+    .catch((error) => requestLogger.warn({ err: error }, "Failed to record memory span"));
+  await input.repo.appendConversationMessage({
+    threadKey,
+    role: "user",
+    discordMessageId: message.id,
+    authorId: message.author.id,
+    authorDisplayName: userDisplayName,
+    content: request.text,
+    createdAt: message.createdAt,
+    metadata: {
+      discordUrl: message.url,
+      rawContent: request.rawContent
+    }
+  });
+  requestLogger.debug({ threadKey }, "Stored user turn in channel memory");
+
+  const permissionStartedAt = Date.now();
+  const member = message.member ?? (await guild.members.fetch(message.author.id));
+  const mentionedChannelIds = explicitChannelMentionIds(request.rawContent);
+  const referencedChannelId = message.reference?.channelId ?? null;
+  const visibleChannelIds = await visibleChannelIdsForMember(guild, member, [
+    message.channelId,
+    ...mentionedChannelIds,
+    ...(referencedChannelId ? [referencedChannelId] : [])
+  ]);
+  const replyContext = await resolveDiscordReplyContext({
+    repo: input.repo,
+    message,
+    visibleChannelIds,
+    requestLogger
+  });
+  requestLogger.info(
+    {
+      visibleChannelCount: visibleChannelIds.length,
+      mentionedChannelIds,
+      mentionedUserIds: explicitUserMentionIds(request.rawContent, botUserId),
+      replyContextMessageId: replyContext?.messageId,
+      durationMs: durationMs(permissionStartedAt)
+    },
+    "Resolved requester visibility"
+  );
+  await recordTraceEvent(input.repo, {
+    eventName: "permissions.visibility.resolved",
+    summary: `Resolved ${visibleChannelIds.length} visible channels`,
+    metadata: {
+      visibleChannelCount: visibleChannelIds.length,
+      mentionedChannelIds,
+      mentionedUserIds: explicitUserMentionIds(request.rawContent, client.user?.id),
+      replyContextMessageId: replyContext?.messageId
+    },
+    durationMs: durationMs(permissionStartedAt)
+  });
+  await input.repo
+    .recordProcessRunSpan({
+      runId: request.requestId,
+      spanId: "permissions.visibility",
+      name: "Resolve Discord permissions",
+      status: "succeeded",
+      startedAt: new Date(permissionStartedAt),
+      completedAt: new Date(),
+      durationMs: durationMs(permissionStartedAt),
+      metadata: { visibleChannelCount: visibleChannelIds.length, mentionedChannelIds }
+    })
+    .catch((error) => requestLogger.warn({ err: error }, "Failed to record permission span"));
+
+  try {
+    const agentStartedAt = Date.now();
+    const response = await withTimeout(
+      handleAgentRequest(
+        {
+          config: input.config,
+          repo: input.repo,
+          openRouter: input.openRouter,
+          jobs: input.jobs,
+          guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          userDisplayName,
+          visibleChannelIds,
+          mentionedUserIds: explicitUserMentionIds(request.rawContent, botUserId),
+          mentionedChannelIds,
+          threadKey,
+          sessionMessages: priorSessionMessages,
+          replyContext,
+          requestId: request.requestId,
+          statusChannelId: thinking.channelId,
+          statusMessageId: thinking.id,
+          updateStatus: async (content) => {
+            await thinking.edit(cleanResponse(content, input.config.maxReplyChars));
+          },
+          deleteDiscordMessageIds: async (messageIds) => {
+            let deleted = 0;
+            for (const messageId of messageIds) {
+              if (await deleteDiscordMessageById(message, messageId)) deleted += 1;
+            }
+            return deleted;
+          }
+        },
+        request.text
+      ),
+      input.config.discordAgentResponseTimeoutMs,
+      "Discord AI Agent agent request"
+    );
+    await input.repo
+      .recordProcessRunSpan({
+        runId: request.requestId,
+        spanId: "agent.request",
+        name: "Run model-led agent",
+        status: "succeeded",
+        startedAt: new Date(agentStartedAt),
+        completedAt: new Date(),
+        durationMs: durationMs(agentStartedAt),
+        metadata: {
+          responseChars: response.content.length,
+          fileCount: response.files?.length ?? 0,
+          memoryEventCount: response.memoryEvents?.length ?? 0
+        }
+      })
+      .catch((error) => requestLogger.warn({ err: error }, "Failed to record agent span"));
+
+    requestLogger.info(
+      {
+        responseChars: response.content.length,
+        fileCount: response.files?.length ?? 0,
+        memoryEventCount: response.memoryEvents?.length ?? 0
+      },
+      "Agent response ready"
+    );
+    await recordTraceEvent(input.repo, {
+      eventName: "agent.response.ready",
+      summary: `Agent returned ${response.content.length} chars`,
+      metadata: {
+        responseChars: response.content.length,
+        fileCount: response.files?.length ?? 0,
+        memoryEventCount: response.memoryEvents?.length ?? 0
+      }
+    });
+    const finalReply = await thinking.edit({
+      content: response.content,
+      files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
+    });
+    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with final response");
+
+    for (const memoryEvent of response.memoryEvents ?? []) {
+      await input.repo.appendConversationMessage({
+        threadKey,
+        role: memoryEvent.role,
+        content: memoryEvent.content,
+        authorId: client.user?.id ?? null,
+        authorDisplayName: client.user?.username ?? null,
+        metadata: memoryEvent.metadata
+      });
+    }
+    if (response.memoryEvents?.length) {
+      requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Stored tool results in channel memory");
+    }
+
+    await input.repo.appendConversationMessage({
+      threadKey,
+      role: "assistant",
+      discordMessageId: finalReply.id,
+      authorId: client.user?.id ?? null,
+      authorDisplayName: client.user?.username ?? null,
+      content: response.content,
+      metadata: {
+        discordUrl: finalReply.url,
+        files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+      }
+    });
+    requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention handled");
+    await recordTraceEvent(input.repo, {
+      eventName: "discord.mention.handled",
+      summary: "Discord mention handled",
+      metadata: { replyMessageId: finalReply.id },
+      durationMs: durationMs(request.messageStartedAt)
+    });
+    await input.repo
+      .storeProcessRunArtifact({
+        runId: request.requestId,
+        kind: "response",
+        name: "Discord final response",
+        content: response.content,
+        contentType: "text/plain",
+        metadata: {
+          replyMessageId: finalReply.id,
+          discordUrl: finalReply.url,
+          files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+        }
+      })
+      .catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord response artifact"));
+    await input.repo
+      .updateProcessRun({
+        runId: request.requestId,
+        status: "succeeded",
+        summary: `Replied with ${response.content.length} characters.`,
+        links: { discordReply: finalReply.url },
+        metadata: {
+          replyMessageId: finalReply.id,
+          durationMs: durationMs(request.messageStartedAt),
+          responseChars: response.content.length
+        }
+      })
+      .catch((error) => requestLogger.warn({ err: error }, "Failed to complete Discord run"));
+  } catch (error) {
+    if (isOpenRouterContentFilterError(error)) {
+      requestLogger.warn(
+        {
+          err: error,
+          model: error.model,
+          status: error.status,
+          finishReason: error.finishReason
+        },
+        "Agent request blocked by OpenRouter content filter"
+      );
+      const filteredContent = cleanResponse(
+        "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
+        input.config.maxReplyChars
+      );
+      const finalReply = await thinking.edit(filteredContent);
+      const deletedMemoryRows = await input.repo
+        .deleteConversationMessagesByDiscordMessageIds({
+          threadKey,
+          discordMessageIds: [message.id]
+        })
+        .catch((deleteError) => {
+          requestLogger.warn({ err: deleteError }, "Failed to remove content-filtered user turn from channel memory");
+          return 0;
+        });
+      requestLogger.info(
+        { replyMessageId: finalReply.id, deletedMemoryRows, durationMs: durationMs(request.messageStartedAt) },
+        "Content-filtered Discord mention handled without storing assistant memory"
+      );
+      await recordTraceEvent(input.repo, {
+        eventName: "discord.mention.content_filtered",
+        level: "warn",
+        summary: "Provider content filter blocked the request",
+        metadata: {
+          replyMessageId: finalReply.id,
+          deletedMemoryRows,
+          error: error.message
+        },
+        durationMs: durationMs(request.messageStartedAt)
+      });
+      await input.repo
+        .updateProcessRun({
+          runId: request.requestId,
+          status: "failed",
+          summary: "Provider content filter blocked the request",
+          metadata: { error: error.message, deletedMemoryRows }
+        })
+        .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark content-filtered run"));
+      return;
+    }
+
+    requestLogger.error({ err: error }, "Agent request failed");
+    if (isTimeoutError(error)) {
+      await input.repo
+        .auditTool({
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          toolName: "agentError",
+          argumentsSummary: request.text,
+          error: error.message
+        })
+        .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
+    }
+    const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
+    const finalReply = await thinking.edit(errorContent);
+    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with error response");
+    await recordTraceEvent(input.repo, {
+      eventName: "discord.mention.failed",
+      level: "error",
+      summary: error instanceof Error ? error.message : String(error),
+      metadata: { replyMessageId: finalReply.id },
+      durationMs: durationMs(request.messageStartedAt)
+    });
+    await input.repo
+      .recordProcessRunSpan({
+        runId: request.requestId,
+        spanId: "agent.request",
+        name: "Run model-led agent",
+        status: "failed",
+        startedAt: new Date(request.messageStartedAt),
+        completedAt: new Date(),
+        durationMs: durationMs(request.messageStartedAt),
+        metadata: { error: error instanceof Error ? error.message : String(error) }
+      })
+      .catch((runError) => requestLogger.warn({ err: runError }, "Failed to record failed agent span"));
+    await input.repo
+      .storeProcessRunArtifact({
+        runId: request.requestId,
+        kind: "response",
+        name: "Discord error response",
+        content: errorContent,
+        contentType: "text/plain",
+        metadata: { replyMessageId: finalReply.id, error: true }
+      })
+      .catch((runError) => requestLogger.warn({ err: runError }, "Failed to store Discord error artifact"));
+    await input.repo
+      .updateProcessRun({
+        runId: request.requestId,
+        status: "failed",
+        summary: error instanceof Error ? error.message : String(error),
+        links: { discordReply: finalReply.url },
+        metadata: { error: error instanceof Error ? error.message : String(error), durationMs: durationMs(request.messageStartedAt) }
+      })
+      .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark Discord run failed"));
+    await input.repo.appendConversationMessage({
+      threadKey,
+      role: "assistant",
+      discordMessageId: finalReply.id,
+      authorId: client.user?.id ?? null,
+      authorDisplayName: client.user?.username ?? null,
+      content: errorContent,
+      metadata: {
+        discordUrl: finalReply.url,
+        error: true
+      }
+    });
+    requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention failed");
+  }
+}
+
 function queueIncomingMessageEmbedding(
   input: { jobs?: JobRuntime },
   message: Message,
@@ -853,6 +1358,45 @@ async function recordTraceEvent(
   await recorder.call(repo, input).catch((error) => {
     logger.warn({ err: error, eventName: input.eventName }, "Failed to record trace event");
   });
+}
+
+async function waitForActiveHandlers(activeHandlers: Set<Promise<void>>, timeoutMs: number) {
+  if (activeHandlers.size === 0) return;
+  await Promise.race([
+    Promise.allSettled([...activeHandlers]),
+    new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, timeoutMs);
+      timeout.unref?.();
+    })
+  ]);
+}
+
+async function waitForDiscordClientReady(client: Client, timeoutMs = 30_000) {
+  if (client.isReady()) return;
+  await Promise.race([
+    new Promise<void>((resolve) => client.once(Events.ClientReady, () => resolve())),
+    new Promise<never>((_resolve, reject) => {
+      const timeout = setTimeout(() => reject(new TimeoutError(`Discord client was not ready after ${timeoutMs}ms.`)), timeoutMs);
+      timeout.unref?.();
+    })
+  ]);
+}
+
+async function fetchDiscordMessage(client: Client, channelId: string, messageId: string): Promise<Message> {
+  const channel = await client.channels.fetch(channelId);
+  const messages = (channel as any)?.messages;
+  if (!messages?.fetch) throw new Error(`Discord channel ${channelId} cannot fetch messages.`);
+  return (await messages.fetch(messageId)) as Message;
+}
+
+function isTerminalProcessRunStatus(status: string) {
+  return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
+}
+
+function parseDateMs(value: string | undefined) {
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
 }
 
 class TimeoutError extends Error {

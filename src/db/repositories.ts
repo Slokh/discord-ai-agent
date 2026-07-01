@@ -3241,6 +3241,73 @@ export class DiscordAiAgentRepository {
     return result.rows[0] ? rowToProcessRun(result.rows[0]) : undefined;
   }
 
+  async markStaleProcessRuns(input: {
+    kind?: ProcessRunKind;
+    staleBefore: Date;
+    limit?: number;
+    summary?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<ProcessRunRecord[]> {
+    const limit = Math.max(1, Math.min(1000, Math.trunc(input.limit ?? 100)));
+    const result = await this.pool.query(
+      `
+        WITH stale AS (
+          SELECT run_id
+          FROM process_runs
+          WHERE status IN ('queued', 'running')
+            AND ($1::text IS NULL OR kind = $1)
+            AND updated_at < $2
+          ORDER BY updated_at ASC, started_at ASC
+          LIMIT $3
+        ),
+        failed_spans AS (
+          UPDATE process_run_spans
+          SET status = 'failed',
+              completed_at = coalesce(completed_at, now()),
+              duration_ms = coalesce(
+                duration_ms,
+                least(2147483647, greatest(0, floor(extract(epoch from (now() - started_at)) * 1000)))::int
+              ),
+              metadata = metadata || $5::jsonb,
+              updated_at = now()
+          WHERE run_id IN (SELECT run_id FROM stale)
+            AND status IN ('queued', 'running')
+          RETURNING run_id
+        )
+        UPDATE process_runs
+        SET status = 'failed',
+            summary = coalesce($4, summary),
+            metadata = metadata || $5::jsonb,
+            completed_at = coalesce(completed_at, now()),
+            updated_at = now()
+        WHERE run_id IN (SELECT run_id FROM stale)
+        RETURNING
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+      `,
+      [
+        input.kind ?? null,
+        input.staleBefore,
+        limit,
+        input.summary ?? "Marked failed because the run stopped reporting progress.",
+        JSON.stringify({ stale: true, ...(input.metadata ?? {}) })
+      ]
+    );
+    const runs = result.rows.map(rowToProcessRun);
+    for (const run of runs) {
+      await this.recordProcessRunEvent({
+        runId: run.runId,
+        traceId: run.traceId,
+        level: "warn",
+        eventName: "process_run.stale_failed",
+        summary: input.summary ?? "Marked failed because the run stopped reporting progress.",
+        metadata: { staleBefore: input.staleBefore.toISOString(), ...(input.metadata ?? {}) }
+      }).catch(() => undefined);
+    }
+    return runs;
+  }
+
   async recordProcessRunSpan(input: {
     runId: string;
     spanId: string;

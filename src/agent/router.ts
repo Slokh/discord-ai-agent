@@ -125,12 +125,49 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       },
       "Agent model round starting"
     );
-    const response = await ctx.openRouter.chat({
-      messages,
-      tools: toolDefinitionsForModel(),
-      temperature: 0.2,
-      maxTokens: 900
+    const roundSpanId = `agent.model.round.${round + 1}`;
+    await recordTraceEvent(ctx, {
+      eventName: "agent.model.round.started",
+      summary: `Round ${round + 1}: waiting for model response`,
+      metadata: {
+        round: round + 1,
+        messageCount: messages.length,
+        fileCount: files.length,
+        memoryEventCount: memoryEvents.length
+      }
     });
+    await recordProcessRunSpan(ctx, {
+      spanId: roundSpanId,
+      name: `LLM round ${round + 1}`,
+      status: "running",
+      startedAt: new Date(roundStartedAt),
+      metadata: {
+        round: round + 1,
+        messageCount: messages.length,
+        fileCount: files.length,
+        memoryEventCount: memoryEvents.length
+      }
+    });
+    let response;
+    try {
+      response = await ctx.openRouter.chat({
+        messages,
+        tools: toolDefinitionsForModel(),
+        temperature: 0.2,
+        maxTokens: 900
+      });
+    } catch (error) {
+      await recordProcessRunSpan(ctx, {
+        spanId: roundSpanId,
+        name: `LLM round ${round + 1}`,
+        status: "failed",
+        startedAt: new Date(roundStartedAt),
+        completedAt: new Date(),
+        durationMs: durationMs(roundStartedAt),
+        metadata: { error: error instanceof Error ? error.message : String(error) }
+      });
+      throw error;
+    }
 
     const modelRoutes = selectModelToolRoutes(response.toolCalls);
     const requestedToolRequests = response.toolCalls.map(traceToolRequestMetadata);
@@ -150,6 +187,22 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       },
       "Agent model round complete"
     );
+    await recordProcessRunSpan(ctx, {
+      spanId: roundSpanId,
+      name: `LLM round ${round + 1}`,
+      status: "succeeded",
+      startedAt: new Date(roundStartedAt),
+      completedAt: new Date(),
+      durationMs: durationMs(roundStartedAt),
+      metadata: {
+        model: response.model,
+        finishReason: response.finishReason,
+        outputChars: response.content.length,
+        requestedToolCalls: response.toolCalls.map((call) => call.name),
+        selectedLocalTools: modelRoutes.map((route) => route.name),
+        estimatedCostUsd: response.estimatedCostUsd
+      }
+    });
     await recordTraceEvent(ctx, {
       eventName: "agent.model.round.complete",
       summary: `Round ${round + 1}: ${modelRoutes.map((route) => route.name).join(", ") || "no local tools"}`,
@@ -1288,6 +1341,21 @@ async function loadServerOverlay(ctx: ToolContext): Promise<ServerOverlay | unde
   const loader = (ctx.repo as unknown as { getServerOverlay?: (guildId: string) => Promise<ServerOverlay | undefined> }).getServerOverlay;
   if (!loader) return undefined;
   return await loader.call(ctx.repo, ctx.guildId);
+}
+
+async function recordProcessRunSpan(
+  ctx: ToolContext,
+  input: Omit<Parameters<ToolContext["repo"]["recordProcessRunSpan"]>[0], "runId">
+) {
+  const runId = ctx.requestId;
+  if (!runId) return;
+  const recorder = (ctx.repo as unknown as {
+    recordProcessRunSpan?: (span: Parameters<ToolContext["repo"]["recordProcessRunSpan"]>[0]) => Promise<unknown>;
+  }).recordProcessRunSpan;
+  if (!recorder) return;
+  await recorder.call(ctx.repo, { runId, ...input }).catch((error: unknown) => {
+    logger.warn({ err: error, runId, spanId: input.spanId }, "Failed to record process run span");
+  });
 }
 
 function serverOverlayMessagesForPrompt(serverOverlay: ServerOverlay | undefined): ChatMessage[] {

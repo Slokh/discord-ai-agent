@@ -82,6 +82,14 @@ export type DiscordUserAlias = {
   updatedAt: Date;
 };
 
+export type DiscordUserReferenceTerms = {
+  userId: string;
+  username: string | null;
+  globalName: string | null;
+  aliases: string[];
+  terms: string[];
+};
+
 export type DiscordChannelLookupResult = {
   id: string;
   guildId: string;
@@ -1188,6 +1196,7 @@ export class DiscordAiAgentRepository {
     limit: number;
     authorId?: string;
     authorIds?: string[];
+    aboutUserTerms?: string[];
     channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
@@ -1195,6 +1204,7 @@ export class DiscordAiAgentRepository {
     if (input.visibleChannelIds.length === 0 || !input.query.trim()) return [];
     const authorIds = normalizeFilterIds(input.authorIds, input.authorId);
     const channelIds = normalizeFilterIds(input.channelIds);
+    const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
     const result = await this.pool.query(
       `
         SELECT
@@ -1220,6 +1230,14 @@ export class DiscordAiAgentRepository {
           AND coalesce(parent.is_excluded, false) = false
           AND (cardinality($5::text[]) = 0 OR m.author_id = ANY($5::text[]))
           AND (
+            cardinality($9::text[]) = 0
+            OR EXISTS (
+              SELECT 1
+              FROM unnest($9::text[]) AS about(term)
+              WHERE position(about.term in lower(m.normalized_content)) > 0
+            )
+          )
+          AND (
             cardinality($8::text[]) = 0
             OR m.channel_id = ANY($8::text[])
             OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
@@ -1239,7 +1257,8 @@ export class DiscordAiAgentRepository {
         authorIds,
         input.dateFrom ?? null,
         input.dateTo ?? null,
-        channelIds
+        channelIds,
+        aboutUserTerms
       ]
     );
     return result.rows.map(rowToSearchResult);
@@ -1252,6 +1271,7 @@ export class DiscordAiAgentRepository {
     limit: number;
     authorId?: string;
     authorIds?: string[];
+    aboutUserTerms?: string[];
     channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
@@ -1259,7 +1279,8 @@ export class DiscordAiAgentRepository {
     if (input.visibleChannelIds.length === 0 || input.embedding.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds, input.authorId);
     const channelIds = normalizeFilterIds(input.channelIds);
-    const hasResultFilters = authorIds.length > 0 || channelIds.length > 0 || input.dateFrom != null || input.dateTo != null;
+    const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
+    const hasResultFilters = authorIds.length > 0 || aboutUserTerms.length > 0 || channelIds.length > 0 || input.dateFrom != null || input.dateTo != null;
     const candidateLimit = Math.min(
       Math.max(input.limit * (hasResultFilters ? 100 : 30), hasResultFilters ? 500 : 250),
       hasResultFilters ? FILTERED_VECTOR_SEARCH_MAX_CANDIDATES : VECTOR_SEARCH_MAX_CANDIDATES
@@ -1268,8 +1289,77 @@ export class DiscordAiAgentRepository {
     try {
       await client.query("BEGIN");
       await client.query("SELECT set_config('statement_timeout', $1, true)", [`${VECTOR_SEARCH_STATEMENT_TIMEOUT_MS}ms`]);
-      const result = await client.query(
-        `
+      const result = hasResultFilters
+        ? await client.query(
+            `
+          WITH filtered_messages AS MATERIALIZED (
+            SELECT
+              m.id AS message_id,
+              m.guild_id,
+              m.channel_id,
+              m.author_id,
+              u.username AS author_username,
+              m.content,
+              m.normalized_content,
+              m.created_at
+            FROM messages m
+            JOIN discord_users u ON u.id = m.author_id
+            JOIN channels c ON c.id = m.channel_id
+            LEFT JOIN channels parent ON parent.id = c.parent_id
+            WHERE m.guild_id = $1
+              AND m.channel_id = ANY($2::text[])
+              AND m.deleted_at IS NULL
+              AND m.normalized_content <> ''
+              AND coalesce(u.is_bot, false) = false
+              AND c.is_excluded = false
+              AND coalesce(parent.is_excluded, false) = false
+              AND (cardinality($5::text[]) = 0 OR m.author_id = ANY($5::text[]))
+              AND (
+                cardinality($9::text[]) = 0
+                OR EXISTS (
+                  SELECT 1
+                  FROM unnest($9::text[]) AS about(term)
+                  WHERE position(about.term in lower(m.normalized_content)) > 0
+                )
+              )
+              AND (
+                cardinality($8::text[]) = 0
+                OR m.channel_id = ANY($8::text[])
+                OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
+              )
+              AND ($6::timestamptz IS NULL OR m.created_at >= $6)
+              AND ($7::timestamptz IS NULL OR m.created_at <= $7)
+              AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
+          )
+          SELECT
+            fm.message_id,
+            fm.guild_id,
+            fm.channel_id,
+            fm.author_id,
+            fm.author_username,
+            fm.content,
+            fm.normalized_content,
+            fm.created_at,
+            1 - (e.embedding <=> $3::vector) AS score
+          FROM filtered_messages fm
+          JOIN message_embeddings e ON e.message_id = fm.message_id
+          ORDER BY e.embedding <=> $3::vector, fm.created_at DESC
+          LIMIT $4
+        `,
+            [
+              input.guildId,
+              input.visibleChannelIds,
+              vectorLiteral(input.embedding),
+              input.limit,
+              authorIds,
+              input.dateFrom ?? null,
+              input.dateTo ?? null,
+              channelIds,
+              aboutUserTerms
+            ]
+          )
+        : await client.query(
+            `
           WITH nearest AS MATERIALIZED (
             SELECT
               message_id,
@@ -1323,7 +1413,7 @@ export class DiscordAiAgentRepository {
           channelIds,
           candidateLimit
         ]
-      );
+          );
       await client.query("COMMIT");
       return result.rows.map(rowToSearchResult);
     } catch (error) {
@@ -1373,6 +1463,7 @@ export class DiscordAiAgentRepository {
     channelIds?: string[];
     limit: number;
     authorIds?: string[];
+    aboutUserTerms?: string[];
     dateFrom?: Date;
     dateTo?: Date;
     includeBots?: boolean;
@@ -1380,6 +1471,7 @@ export class DiscordAiAgentRepository {
     const requestedChannelIds = normalizeFilterIds(input.channelIds);
     if (input.visibleChannelIds.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds);
+    const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
     const result = await this.pool.query(
       `
         SELECT
@@ -1405,6 +1497,14 @@ export class DiscordAiAgentRepository {
           AND coalesce(parent.is_excluded, false) = false
           AND (cardinality($4::text[]) = 0 OR m.author_id = ANY($4::text[]))
           AND (
+            cardinality($9::text[]) = 0
+            OR EXISTS (
+              SELECT 1
+              FROM unnest($9::text[]) AS about(term)
+              WHERE position(about.term in lower(m.normalized_content)) > 0
+            )
+          )
+          AND (
             cardinality($8::text[]) = 0
             OR m.channel_id = ANY($8::text[])
             OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
@@ -1423,7 +1523,8 @@ export class DiscordAiAgentRepository {
         input.dateFrom ?? null,
         input.dateTo ?? null,
         Boolean(input.includeBots),
-        requestedChannelIds
+        requestedChannelIds,
+        aboutUserTerms
       ]
     );
     return result.rows.map(rowToSearchResult).reverse();
@@ -1435,6 +1536,7 @@ export class DiscordAiAgentRepository {
     channelIds?: string[];
     limit: number;
     authorIds?: string[];
+    aboutUserTerms?: string[];
     dateFrom?: Date;
     dateTo?: Date;
     includeBots?: boolean;
@@ -1442,6 +1544,7 @@ export class DiscordAiAgentRepository {
     const requestedChannelIds = normalizeFilterIds(input.channelIds);
     if (input.visibleChannelIds.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds);
+    const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
     const result = await this.pool.query(
       `
         WITH filtered AS (
@@ -1471,6 +1574,14 @@ export class DiscordAiAgentRepository {
             AND c.is_excluded = false
             AND coalesce(parent.is_excluded, false) = false
             AND (cardinality($4::text[]) = 0 OR m.author_id = ANY($4::text[]))
+            AND (
+              cardinality($9::text[]) = 0
+              OR EXISTS (
+                SELECT 1
+                FROM unnest($9::text[]) AS about(term)
+                WHERE position(about.term in lower(m.normalized_content)) > 0
+              )
+            )
             AND (
               cardinality($8::text[]) = 0
               OR m.channel_id = ANY($8::text[])
@@ -1518,10 +1629,32 @@ export class DiscordAiAgentRepository {
         input.dateFrom ?? null,
         input.dateTo ?? null,
         Boolean(input.includeBots),
-        requestedChannelIds
+        requestedChannelIds,
+        aboutUserTerms
       ]
     );
     return result.rows.map(rowToSearchResult);
+  }
+
+  async getDiscordUserReferenceTerms(input: { guildId: string; userIds: string[] }): Promise<DiscordUserReferenceTerms[]> {
+    const userIds = normalizeFilterIds(input.userIds);
+    if (userIds.length === 0) return [];
+    const result = await this.pool.query(
+      `
+        SELECT
+          u.id,
+          u.username,
+          u.global_name,
+          coalesce(array_agg(a.alias ORDER BY a.alias) FILTER (WHERE a.alias IS NOT NULL), ARRAY[]::text[]) AS aliases
+        FROM discord_users u
+        LEFT JOIN discord_user_aliases a ON a.guild_id = $1 AND a.user_id = u.id
+        WHERE u.id = ANY($2::text[])
+          AND u.deleted_at IS NULL
+        GROUP BY u.id, u.username, u.global_name
+      `,
+      [input.guildId, userIds]
+    );
+    return result.rows.map(rowToDiscordUserReferenceTerms);
   }
 
   async findDiscordUsers(input: {
@@ -4564,6 +4697,20 @@ function rowToDiscordUserAlias(row: any): DiscordUserAlias {
   };
 }
 
+function rowToDiscordUserReferenceTerms(row: any): DiscordUserReferenceTerms {
+  const userId = String(row.id);
+  const username = row.username == null ? null : String(row.username);
+  const globalName = row.global_name == null ? null : String(row.global_name);
+  const aliases = Array.isArray(row.aliases) ? row.aliases.map(String) : [];
+  return {
+    userId,
+    username,
+    globalName,
+    aliases,
+    terms: normalizeAboutUserTerms([`@user:${userId}`, username ?? "", globalName ?? "", ...aliases])
+  };
+}
+
 function rowToDiscordChannelLookupResult(row: any): DiscordChannelLookupResult {
   return {
     id: String(row.id),
@@ -4599,6 +4746,16 @@ function rowToDiscordAttachmentSearchResult(row: any): DiscordAttachmentSearchRe
 
 function normalizeFilterIds(ids?: string[], singleId?: string | null): string[] {
   return [...new Set([...(ids ?? []), singleId ?? ""].map((id) => id.trim()).filter(Boolean))];
+}
+
+function normalizeAboutUserTerms(terms?: string[]): string[] {
+  return [
+    ...new Set(
+      (terms ?? [])
+        .map((term) => term.trim().toLowerCase())
+        .filter((term) => term.length >= 2)
+    )
+  ];
 }
 
 function normalizeLookupQuery(query: string, options: { stripChannelPrefix?: boolean } = {}) {

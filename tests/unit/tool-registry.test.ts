@@ -73,6 +73,8 @@ describe("toolRegistry", () => {
               properties: expect.objectContaining({
                 authorIds: expect.objectContaining({ type: "array" }),
                 authorQueries: expect.objectContaining({ type: "array" }),
+                aboutUserIds: expect.objectContaining({ type: "array" }),
+                aboutUserQueries: expect.objectContaining({ type: "array" }),
                 channelIds: expect.objectContaining({ type: "array" })
               })
             })
@@ -117,6 +119,8 @@ describe("toolRegistry", () => {
               required: ["question"],
               properties: expect.objectContaining({
                 authorIds: expect.objectContaining({ type: "array" }),
+                aboutUserIds: expect.objectContaining({ type: "array" }),
+                aboutUserQueries: expect.objectContaining({ type: "array" }),
                 sampleLimit: expect.objectContaining({ type: "number" })
               })
             })

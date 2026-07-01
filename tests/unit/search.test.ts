@@ -150,6 +150,135 @@ describe("searchDiscordHistory", () => {
       })
     );
   });
+
+  it("allows vector search for narrowed queries even when keyword fills the requested limit", async () => {
+    const keywordResults = [result("a", 1), result("b", 0.9)];
+    const repo = {
+      getVisibleIndexedChannelIds: async () => ["c"],
+      keywordSearch: vi.fn(async () => keywordResults),
+      vectorSearch: vi.fn(async () => [result("vector", 0.8)])
+    };
+    const openRouter = {
+      embed: vi.fn(async () => [[0.1, 0.2]])
+    };
+
+    const results = await searchDiscordHistory({
+      repo: repo as any,
+      openRouter: openRouter as any,
+      config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      search: {
+        guildId: "g",
+        userVisibleChannelIds: ["c"],
+        query: "birthday",
+        authorIds: ["user-id"],
+        limit: 2
+      }
+    });
+
+    expect(results.map((item) => item.messageId)).toEqual(["a", "b"]);
+    expect(openRouter.embed).toHaveBeenCalledWith(["birthday"], "embed", undefined);
+    expect(repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ authorIds: ["user-id"] }));
+  });
+
+  it("skips table-wide vector search for unfiltered keyword misses", async () => {
+    const repo = {
+      getVisibleIndexedChannelIds: async () => ["c1", "c2"],
+      keywordSearch: vi.fn(async () => []),
+      vectorSearch: vi.fn(async () => [result("vector", 0.8)])
+    };
+    const openRouter = {
+      embed: vi.fn(async () => [[0.1, 0.2]])
+    };
+
+    const results = await searchDiscordHistory({
+      repo: repo as any,
+      openRouter: openRouter as any,
+      config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      search: {
+        guildId: "g",
+        userVisibleChannelIds: ["c1", "c2"],
+        query: "sampleuser birthday",
+        limit: 10
+      }
+    });
+
+    expect(results).toEqual([]);
+    expect(openRouter.embed).not.toHaveBeenCalled();
+    expect(repo.vectorSearch).not.toHaveBeenCalled();
+  });
+
+  it("allows vector search for narrowed keyword misses", async () => {
+    const vectorResults = [result("semantic", 0.8)];
+    const repo = {
+      getVisibleIndexedChannelIds: async () => ["c"],
+      keywordSearch: vi.fn(async () => []),
+      vectorSearch: vi.fn(async () => vectorResults)
+    };
+    const openRouter = {
+      embed: vi.fn(async () => [[0.1, 0.2]])
+    };
+
+    const results = await searchDiscordHistory({
+      repo: repo as any,
+      openRouter: openRouter as any,
+      config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      search: {
+        guildId: "g",
+        userVisibleChannelIds: ["c"],
+        query: "life update",
+        authorIds: ["user-id"],
+        limit: 10
+      }
+    });
+
+    expect(results.map((item) => item.messageId)).toEqual(["semantic"]);
+    expect(openRouter.embed).toHaveBeenCalledWith(["life update"], "embed", undefined);
+    expect(repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ authorIds: ["user-id"] }));
+  });
+
+  it("treats about-user terms as a narrowing filter for keyword, recent, and vector search", async () => {
+    const keywordResults = [result("birthday", 1)];
+    const repo = {
+      getVisibleIndexedChannelIds: async () => ["c"],
+      keywordSearch: vi.fn(async () => keywordResults),
+      vectorSearch: vi.fn(async () => [result("semantic", 0.8)]),
+      recentMessagesFromChannels: vi.fn(async () => [result("recent", 1)])
+    };
+    const openRouter = {
+      embed: vi.fn(async () => [[0.1, 0.2]])
+    };
+
+    await searchDiscordHistory({
+      repo: repo as any,
+      openRouter: openRouter as any,
+      config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      search: {
+        guildId: "g",
+        userVisibleChannelIds: ["c"],
+        query: "birthday",
+        aboutUserTerms: ["@user:123", "casey"],
+        limit: 10
+      }
+    });
+
+    expect(repo.keywordSearch).toHaveBeenCalledWith(expect.objectContaining({ aboutUserTerms: ["@user:123", "casey"] }));
+    expect(repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ aboutUserTerms: ["@user:123", "casey"] }));
+
+    await searchDiscordHistory({
+      repo: repo as any,
+      openRouter: openRouter as any,
+      config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      search: {
+        guildId: "g",
+        userVisibleChannelIds: ["c"],
+        query: "",
+        aboutUserTerms: ["casey"],
+        limit: 10
+      }
+    });
+
+    expect(repo.recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ aboutUserTerms: ["casey"] }));
+  });
 });
 
 describe("buildHistoryRetrievalQuery", () => {

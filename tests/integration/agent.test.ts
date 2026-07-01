@@ -3,6 +3,54 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("grounds first-person requests to the current Discord requester", async () => {
+    const chat = vi.fn(async () => ({
+      content: "ok",
+      model: "chat-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "requester-id",
+      userDisplayName: "Casey",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          role: "user",
+          authorId: "someone-else",
+          authorDisplayName: "Luke",
+          content: "something from earlier",
+          metadata: {},
+          createdAt: new Date()
+        }
+      ]
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "when is my birthday");
+
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("Current Discord requester: Casey (user ID requester-id)")
+          }),
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("First-person pronouns in the latest user request")
+          })
+        ])
+      })
+    );
+  });
+
   it("lets the model route status requests to reportStatus", async () => {
     const ctx = {
       config: { maxReplyChars: 1800, openRouter: { embeddingModel: "test/embed" }, discord: { clientId: "bot" } },
@@ -742,6 +790,70 @@ describe("agent router", () => {
     );
     expect(ctx.repo.keywordSearch).not.toHaveBeenCalled();
     expect(ctx.repo.vectorSearch).not.toHaveBeenCalled();
+  });
+
+  it("passes about-user filters from model-selected history searches", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const keywordSearch = vi.fn(async () => [
+      agentSearchResult({
+        authorId: "friend-id",
+        authorUsername: "friend",
+        normalizedContent: "happy birthday casey"
+      })
+    ]);
+    const ctx = {
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        getDiscordUserReferenceTerms: vi.fn(async () => [
+          {
+            userId: "casey-id",
+            username: "caseyuser",
+            globalName: "Casey",
+            aliases: ["case"],
+            terms: ["@user:casey-id", "caseyuser", "casey", "case"]
+          }
+        ]),
+        keywordSearch,
+        vectorSearch: vi.fn(async () => []),
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-1",
+                name: "searchDiscordHistory",
+                argumentsText: JSON.stringify({ query: "birthday", aboutUserIds: ["casey-id"], limit: 10 })
+              }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "Looks like people have wished you happy birthday.",
+            model: "final-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "when is my birthday?");
+
+    expect(response.content).toBe("Looks like people have wished you happy birthday.");
+    expect(ctx.repo.getDiscordUserReferenceTerms).toHaveBeenCalledWith({ guildId: "g", userIds: ["casey-id"] });
+    expect(keywordSearch).toHaveBeenCalledWith(expect.objectContaining({ aboutUserTerms: ["@user:casey-id", "caseyuser", "casey", "case"] }));
   });
 
   it("allows broad history scans after narrower keyword searches with the same filters", async () => {

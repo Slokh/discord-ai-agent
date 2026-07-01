@@ -678,6 +678,29 @@ describe("answerFromHistory", () => {
     expect(ctx.repo.recentMessagesFromChannels).not.toHaveBeenCalled();
   });
 
+  it("uses about-user filters for subject requests instead of author filters", async () => {
+    const result = searchResult({ normalizedContent: "happy birthday casey" });
+    const ctx = historyAnswerContext({
+      keywordResults: [result],
+      userMatches: [{ id: "casey-id", username: "caseyuser", globalName: "Casey", aliases: ["case"], isBot: false, messageCount: 10, lastMessageAt: null, score: 90 }]
+    });
+
+    const response = await answerFromHistory(ctx, "birthday", {
+      aboutUserQueries: ["casey"],
+      requestText: "when is my birthday"
+    });
+
+    expect(response).toContain("happy birthday casey");
+    expect(ctx.repo.findDiscordUsers).toHaveBeenCalledWith(expect.objectContaining({ query: "casey" }));
+    expect(ctx.repo.getDiscordUserReferenceTerms).toHaveBeenCalledWith({ guildId: "guild", userIds: ["casey-id"] });
+    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorIds: [],
+        aboutUserTerms: ["@user:casey-id", "caseyuser", "casey", "case"]
+      })
+    );
+  });
+
   it("uses the same link guidance for normal uses of the word source", async () => {
     const result = searchResult({ normalizedContent: "open source tools are useful" });
     const ctx = historyAnswerContext({
@@ -721,6 +744,15 @@ function historyAnswerContext(input: { keywordResults: any[]; recentResults?: an
     repo: {
       getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
       findDiscordUsers: vi.fn(async () => input.userMatches ?? []),
+      getDiscordUserReferenceTerms: vi.fn(async ({ userIds }: { userIds: string[] }) =>
+        userIds.map((userId) => ({
+          userId,
+          username: userId === "casey-id" ? "caseyuser" : userId,
+          globalName: userId === "casey-id" ? "Casey" : null,
+          aliases: userId === "casey-id" ? ["case"] : [],
+          terms: userId === "casey-id" ? ["@user:casey-id", "caseyuser", "casey", "case"] : [`@user:${userId}`, userId]
+        }))
+      ),
       keywordSearch: vi.fn(async () => input.keywordResults),
       vectorSearch: vi.fn(async () => []),
       recentMessagesFromChannels: vi.fn(async () => input.recentResults ?? []),

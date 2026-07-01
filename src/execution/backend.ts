@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import * as k8s from "@kubernetes/client-node";
 import type { AppConfig } from "../config/env.js";
 import { assertExecutionConfig } from "../config/env.js";
@@ -9,12 +10,15 @@ import { taskBearerToken } from "./token.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "./types.js";
 
 export type ExecutionContext = {
+  sandboxId?: string | null;
   progress?: (event: { step: string; message: string; metadata?: Record<string, unknown> }) => Promise<void> | void;
 };
 
 export type ExecutionBackend = {
   name: string;
   start: (job: AgentTaskJob, context?: ExecutionContext) => Promise<AgentTaskStartResult>;
+  observeRun: (run: SandboxRunRecord) => Promise<ObservedSandboxRun>;
+  cleanupRun: (run: SandboxRunRecord) => Promise<void>;
 };
 
 export type ObservedSandboxRun = {
@@ -35,6 +39,22 @@ export type KubernetesExecutionClients = {
     | "deleteNamespacedConfigMap"
   >;
 };
+
+type LocalProcessState = {
+  exited: boolean;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  error?: string;
+  child: ReturnType<typeof spawn>;
+};
+
+type SpawnProcess = typeof spawn;
+
+export function createExecutionBackend(config: AppConfig): ExecutionBackend {
+  return config.execution.codegenBackend === "local-process"
+    ? new LocalProcessExecutionBackend(config)
+    : new KubernetesExecutionBackend(config);
+}
 
 export class KubernetesExecutionBackend implements ExecutionBackend {
   readonly name = "kubernetes-sandbox";
@@ -277,6 +297,145 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
   }
 }
 
+export class LocalProcessExecutionBackend implements ExecutionBackend {
+  readonly name = "local-process-sandbox";
+
+  private readonly runs = new Map<string, LocalProcessState>();
+  private readonly spawnProcess: SpawnProcess;
+
+  constructor(
+    private readonly config: AppConfig,
+    options: { spawnProcess?: SpawnProcess; githubTokenResolver?: typeof resolveGitHubTaskToken; now?: () => number } = {}
+  ) {
+    this.spawnProcess = options.spawnProcess ?? spawn;
+    this.githubTokenResolver = options.githubTokenResolver ?? resolveGitHubTaskToken;
+    this.now = options.now ?? Date.now;
+  }
+
+  private readonly githubTokenResolver: typeof resolveGitHubTaskToken;
+  private readonly now: () => number;
+
+  async start(job: AgentTaskJob, context: ExecutionContext = {}): Promise<AgentTaskStartResult> {
+    assertExecutionConfig(this.config);
+    const sandboxRunId = `run-${randomUUID()}`;
+    const backendJobName = localProcessName(`agent-task-${slugify(job.title)}-${job.taskId.slice(-8)}`);
+    const startedAtMs = this.now();
+    const taskToken = taskBearerToken({ taskId: job.taskId, secret: this.config.execution.taskSigningSecret });
+    const githubToken = await this.githubTokenResolver(this.config);
+
+    await context.progress?.({
+      step: "sandbox_prepare",
+      message: "Preparing a warm local codegen worker process.",
+      metadata: { sandboxId: context.sandboxId ?? null, sandboxRunId, backendJobName, cacheDir: this.config.execution.kubernetes.cacheDir }
+    });
+
+    const child = this.spawnProcess(process.execPath, ["dist/src/execution/sandboxRunner.js"], {
+      cwd: process.cwd(),
+      env: buildSandboxRunnerEnv({
+        config: this.config,
+        job,
+        sandboxRunId,
+        taskToken,
+        githubToken,
+        startedAtMs,
+        baseEnv: process.env
+      }),
+      stdio: ["ignore", "inherit", "inherit"]
+    });
+    const state: LocalProcessState = { child, exited: false, exitCode: null, signal: null };
+    this.runs.set(sandboxRunId, state);
+    child.once("error", (error) => {
+      state.exited = true;
+      state.exitCode = 1;
+      state.error = error instanceof Error ? error.message : String(error);
+    });
+    child.once("exit", (code, signal) => {
+      state.exited = true;
+      state.exitCode = code;
+      state.signal = signal;
+    });
+    child.unref();
+
+    await context.progress?.({
+      step: "sandbox_start",
+      message: "Started the warm local codegen worker process.",
+      metadata: { sandboxId: context.sandboxId ?? null, sandboxRunId, backendJobName, pid: child.pid, cacheDir: this.config.execution.kubernetes.cacheDir }
+    });
+
+    return {
+      sandboxRunId,
+      backendJobName,
+      namespace: null,
+      image: "local-process"
+    };
+  }
+
+  async observeRun(run: SandboxRunRecord): Promise<ObservedSandboxRun> {
+    const state = this.runs.get(run.sandboxRunId);
+    if (!state) {
+      return { status: "gone", reason: "Local codegen process is not tracked by this worker." };
+    }
+    if (!state.exited) {
+      return {
+        status: "running",
+        metadata: { pid: state.child.pid ?? null }
+      };
+    }
+    if (state.exitCode === 0) {
+      return {
+        status: "succeeded",
+        reason: "Local codegen process exited without sending a terminal callback.",
+        metadata: { exitCode: state.exitCode, signal: state.signal }
+      };
+    }
+    return {
+      status: "failed",
+      reason: state.error ?? `Local codegen process exited with code ${state.exitCode ?? "null"}${state.signal ? ` and signal ${state.signal}` : ""}.`,
+      metadata: { exitCode: state.exitCode, signal: state.signal, error: state.error ?? null }
+    };
+  }
+
+  async cleanupRun(run: SandboxRunRecord): Promise<void> {
+    const state = this.runs.get(run.sandboxRunId);
+    this.runs.delete(run.sandboxRunId);
+    if (!state || state.exited) return;
+    state.child.kill("SIGTERM");
+  }
+}
+
+export function buildSandboxRunnerEnv(input: {
+  config: AppConfig & {
+    execution: AppConfig["execution"] & { taskSigningSecret: string };
+    openRouter: AppConfig["openRouter"] & { apiKey: string };
+  };
+  job: AgentTaskJob;
+  sandboxRunId: string;
+  taskToken: string;
+  githubToken: string;
+  startedAtMs: number;
+  baseEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  return {
+    ...(input.baseEnv ?? process.env),
+    TASK_ID: input.job.taskId,
+    TRACE_ID: input.job.traceId ?? input.job.taskId,
+    SANDBOX_RUN_ID: input.sandboxRunId,
+    TASK_TITLE: input.job.title,
+    TASK_REQUEST: input.job.request,
+    REQUESTED_BY: input.job.requestedBy,
+    CONTROL_PLANE_INTERNAL_URL: input.config.execution.controlPlaneInternalUrl,
+    GITHUB_TOKEN: input.githubToken,
+    GITHUB_REPOSITORY: input.config.github.repository,
+    GITHUB_BASE_BRANCH: input.config.github.baseBranch,
+    OPENROUTER_API_KEY: input.config.openRouter.apiKey,
+    OPENROUTER_CHAT_MODEL: input.config.openRouter.chatModel,
+    OPENROUTER_CODEGEN_MODEL: input.config.openRouter.codegenModel,
+    AGENT_TASK_TOKEN: input.taskToken,
+    SANDBOX_CACHE_DIR: input.config.execution.kubernetes.cacheDir,
+    SANDBOX_STARTED_AT_MS: String(input.startedAtMs)
+  };
+}
+
 function isKubernetesConflict(error: unknown) {
   return kubernetesErrorStatus(error) === 409;
 }
@@ -302,6 +461,16 @@ function kubernetesName(value: string) {
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 56)
+    .replace(/^-+|-+$/g, "");
+  return normalized || "agent-task";
+}
+
+function localProcessName(value: string) {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80)
     .replace(/^-+|-+$/g, "");
   return normalized || "agent-task";
 }

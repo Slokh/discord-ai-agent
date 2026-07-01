@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
+import { CodegenRepository } from "../../src/db/codegenRepository.js";
 import { createPool, type DbPool } from "../../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
 
@@ -9,10 +10,12 @@ const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () => {
   let pool: DbPool;
   let repo: DiscordAiAgentRepository;
+  let codegenRepo: CodegenRepository;
 
   beforeAll(() => {
     pool = createPool(loadConfig());
     repo = new DiscordAiAgentRepository(pool);
+    codegenRepo = new CodegenRepository(pool);
   });
 
   afterEach(async () => {
@@ -137,6 +140,181 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.getProcessRunSpans(runId)).resolves.toHaveLength(1);
     await expect(repo.getProcessRunEvents({ runId })).resolves.toHaveLength(1);
     await expect(repo.getProcessRun(runId)).resolves.toEqual(expect.objectContaining({ status: "succeeded", completedAt: expect.any(Date) }));
+  });
+
+  it("stores durable codegen sessions, executions, events, artifacts, and sandbox leases", async () => {
+    const sessionId = `codegen-session-${randomUUID()}`;
+    const executionId = `codegen-execution-${randomUUID()}`;
+    const traceId = `trace-${randomUUID()}`;
+    const sandboxId = `codegen-sandbox-${randomUUID()}`;
+
+    const session = await codegenRepo.upsertSession({
+      sessionId,
+      traceId,
+      threadKey: "discord:guild-test:channel-test",
+      guildId: "guild-test",
+      channelId: "channel-test",
+      userId: "user-test",
+      title: "test codegen",
+      request: "make a tiny change",
+      requestedBy: "tester",
+      model: "gpt-5.5",
+      provider: "openai"
+    });
+    expect(session).toEqual(expect.objectContaining({ sessionId, status: "queued", model: "gpt-5.5" }));
+
+    const message = await codegenRepo.appendMessage({
+      sessionId,
+      clientMessageId: "discord-message-1",
+      role: "user",
+      parts: [{ type: "text", text: "make a tiny change" }],
+      metadata: { source: "integration-test" }
+    });
+    expect(message).toEqual(expect.objectContaining({ sessionId, clientMessageId: "discord-message-1", role: "user" }));
+    await expect(codegenRepo.listMessages({ sessionId })).resolves.toEqual([expect.objectContaining({ messageId: message.messageId })]);
+
+    const execution = await codegenRepo.createExecution({
+      executionId,
+      sessionId,
+      traceId,
+      status: "running",
+      model: "gpt-5.5",
+      provider: "openai",
+      reasoningEffort: "low"
+    });
+    expect(execution).toEqual(expect.objectContaining({ executionId, sessionId, status: "running", attempt: 1 }));
+
+    const event = await codegenRepo.recordEvent({
+      sessionId,
+      executionId,
+      traceId,
+      kind: "harness",
+      eventName: "turn.started",
+      summary: "Turn started",
+      metadata: { turnId: "turn-1" }
+    });
+    expect(event.sequence).toBe(1);
+
+    const artifact = await codegenRepo.storeArtifact({
+      sessionId,
+      executionId,
+      kind: "prompt",
+      name: "Prompt",
+      content: `token=ghp_${"a".repeat(40)}`,
+      contentType: "text/plain"
+    });
+    expect(artifact.preview).toContain("[REDACTED]");
+    await expect(codegenRepo.getArtifact({ artifactId: artifact.artifactId })).resolves.toEqual(
+      expect.objectContaining({ content: expect.not.stringContaining("ghp_") })
+    );
+
+    await codegenRepo.upsertSandboxLease({ sandboxId, repo: "Slokh/discord-ai-agent" });
+    const lease = await codegenRepo.acquireSandboxLease({
+      repo: "Slokh/discord-ai-agent",
+      executionId,
+      leaseOwner: "worker-1",
+      sandboxId
+    });
+    expect(lease).toEqual(expect.objectContaining({ sandboxId, status: "leased", executionId }));
+    await expect(codegenRepo.heartbeatSandboxLease({ sandboxId, metadata: { heartbeat: "ok" } })).resolves.toEqual(
+      expect.objectContaining({ sandboxId, status: "leased" })
+    );
+    await expect(codegenRepo.releaseSandboxLease({ sandboxId, executionId })).resolves.toEqual(
+      expect.objectContaining({ sandboxId, status: "idle", executionId: null })
+    );
+    await expect(codegenRepo.disableSandboxLease({ sandboxId, reason: "test complete" })).resolves.toEqual(
+      expect.objectContaining({ sandboxId, status: "disabled" })
+    );
+
+    await expect(
+      codegenRepo.updateExecution({
+        executionId,
+        status: "succeeded",
+        branchName: "discord-ai-agent/update-test",
+        prUrl: "https://github.com/Slokh/discord-ai-agent/pull/1",
+        draft: false,
+        verifyPassed: true,
+        codexThreadId: "codex-thread-1"
+      })
+    ).resolves.toEqual(expect.objectContaining({ status: "succeeded", prUrl: "https://github.com/Slokh/discord-ai-agent/pull/1" }));
+  });
+
+  it("mirrors agent task callbacks into durable codegen executions", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const sessionId = `codegen-session-${taskId}`;
+    const executionId = `codegen-execution-${taskId}`;
+    const traceId = `trace-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId,
+      guildId,
+      channelId,
+      userId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      taskType: "code_update",
+      title: "Bridge test",
+      request: "change a file",
+      requestedBy: "tester",
+      backend: "kubernetes-sandbox"
+    });
+    await codegenRepo.upsertSession({
+      sessionId,
+      traceId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "Bridge test",
+      request: "change a file",
+      requestedBy: "tester"
+    });
+    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running" });
+
+    await repo.markAgentTaskProgress({
+      taskId,
+      backend: "kubernetes-sandbox",
+      step: "verify",
+      statusMessage: "Running tests.",
+      metadata: { command: "npm test" }
+    });
+
+    const progress = await pool.query(
+      "SELECT kind, event_name, summary, metadata FROM codegen_events WHERE execution_id = $1 ORDER BY sequence",
+      [executionId]
+    );
+    expect(progress.rows).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        event_name: "codegen.progress",
+        summary: "Running tests."
+      })
+    ]);
+    expect(progress.rows[0].metadata).toEqual(expect.objectContaining({ step: "verify", command: "npm test" }));
+
+    await repo.markAgentTaskSucceeded({
+      taskId,
+      branchName: "kartik/bridge-test",
+      prUrl: "https://github.com/Slokh/discord-ai-agent/pull/999",
+      draft: false,
+      verifyPassed: true,
+      metadata: { changedFiles: 1 }
+    });
+
+    const terminal = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM codegen_executions WHERE execution_id = $1", [
+      executionId
+    ]);
+    expect(terminal.rows[0]).toEqual(
+      expect.objectContaining({
+        status: "succeeded",
+        branch_name: "kartik/bridge-test",
+        pr_url: "https://github.com/Slokh/discord-ai-agent/pull/999",
+        verify_passed: true
+      })
+    );
   });
 
   it("marks stale Discord process runs failed and closes running spans", async () => {
@@ -1756,6 +1934,13 @@ async function cleanupTestRows(pool: DbPool) {
         OR trace_id LIKE 'trace-%'
     `
   );
+  await pool.query("DELETE FROM codegen_sandbox_leases WHERE sandbox_id LIKE 'codegen-sandbox-%' OR execution_id LIKE 'codegen-execution-%'");
+  await pool.query("DELETE FROM codegen_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%')");
+  await pool.query("DELETE FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%'");
+  await pool.query("DELETE FROM codegen_events WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%'");
+  await pool.query("DELETE FROM codegen_executions WHERE execution_id LIKE 'codegen-execution-%' OR session_id LIKE 'codegen-session-%'");
+  await pool.query("DELETE FROM codegen_messages WHERE session_id LIKE 'codegen-session-%'");
+  await pool.query("DELETE FROM codegen_sessions WHERE session_id LIKE 'codegen-session-%' OR trace_id LIKE 'trace-%'");
   await pool.query("DELETE FROM process_runs WHERE run_id LIKE 'run-%' OR trace_id LIKE 'trace-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM skill_changes WHERE skill_name LIKE 'skill-%' OR requester_id LIKE 'user-%'");
   await pool.query("DELETE FROM skills WHERE name LIKE 'skill-%'");

@@ -18,6 +18,7 @@ describe("config", () => {
         "CONTROL_UI_PUBLIC_URL",
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
+        "CODEGEN_EXECUTION_BACKEND",
         "KUBERNETES_NAMESPACE",
         "SANDBOX_IMAGE",
         "SANDBOX_CACHE_DIR",
@@ -40,6 +41,7 @@ describe("config", () => {
         expect(config.controlUi.publicUrl).toBeNull();
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
+        expect(config.execution.codegenBackend).toBe("kubernetes-job");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
         expect(config.execution.kubernetes.cacheDir).toBe("/var/cache/discord-ai-agent");
@@ -75,6 +77,12 @@ describe("config", () => {
       const config = loadConfig();
       expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
       expect(config.openRouter.codegenModel).toBe("openai/gpt-5.5");
+    });
+  });
+
+  it("allows selecting the local-process codegen backend", () => {
+    withEnv({ CODEGEN_EXECUTION_BACKEND: "local-process" }, () => {
+      expect(loadConfig().execution.codegenBackend).toBe("local-process");
     });
   });
 

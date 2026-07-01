@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Octokit } from "@octokit/rest";
+import { CodexAppServerClient, providerForModel, type CodexAppServerNotification } from "./codexAppServer.js";
 import { slugify } from "../util/text.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
@@ -85,7 +86,7 @@ type CodegenAnchorMatch = {
 
 type CodexAttemptSummary = {
   attempt: number;
-  command: "exec" | "resume";
+  command: "app-server" | "exec" | "resume";
   exitCode: number;
   durationMs: number;
   producedDiff: boolean;
@@ -115,6 +116,18 @@ type CodexWatchdogResult = {
   durationMs?: number;
   firstDiffSeenAtMs?: number;
   lastOutputAtMs?: number;
+};
+
+type CodexAppServerAttemptResult = {
+  exitCode: number;
+  threadId?: string;
+  terminalMethod?: string;
+  durationMs: number;
+  notifications: CodexAppServerNotification[];
+  transcript: string;
+  stderrTail: string;
+  error?: string;
+  watchdog?: CodexWatchdogResult;
 };
 
 type CommandResult = {
@@ -253,7 +266,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
           producedDiff: codexSummary.attempts.some((attempt) => attempt.producedDiff)
         }
       });
-    }, { model: env.openRouterCodegenModel, harness: "codex-exec-json" });
+    }, { model: env.openRouterCodegenModel, harness: "codex-app-server", fallbackHarness: "codex-exec-json" });
 
     await progress(env, "diff", "Checking whether Codex produced a real code diff.");
     const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir, taskEnv: env, step: "diff" });
@@ -943,6 +956,282 @@ export function codexConfigToml(input: { checkoutDir: string; model: string }) {
 }
 
 async function runCodexWithRecovery(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+}): Promise<CodexRunSummary> {
+  try {
+    return await runCodexAppServerWithRecovery(input);
+  } catch (error) {
+    const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
+    if (gitStatus.trim()) {
+      await progress(input.env, "codex_app_server_salvaged_diff", "Codex app-server failed after producing a code diff; continuing to verification.", {
+        error: conciseError(error),
+        gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+      });
+      return {
+        attempts: [
+          {
+            attempt: 1,
+            command: "app-server",
+            exitCode: 1,
+            durationMs: 0,
+            producedDiff: true,
+            stderrTail: conciseError(error),
+            stdoutTail: tail(gitStatus, MAX_RECOVERY_TAIL)
+          }
+        ]
+      };
+    }
+    await progress(input.env, "codex_app_server_fallback", "Codex app-server failed before producing a diff; falling back to codex exec.", {
+      error: conciseError(error)
+    });
+    return runCodexExecWithRecovery(input);
+  }
+}
+
+async function runCodexAppServerWithRecovery(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+}): Promise<CodexRunSummary> {
+  const attempts: CodexAttemptSummary[] = [];
+  const totalAttempts = CODEX_MAX_ATTEMPTS;
+  let threadId: string | undefined;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    const prompt =
+      attempt === 1
+        ? codeUpdatePrompt(input.env, input.contextPack)
+        : codeUpdateRecoveryPrompt(input.env, {
+            attempt,
+            totalAttempts,
+            attempts,
+            gitStatus: await gitStatusPorcelain(input.checkoutDir).catch((error) => `Unable to read git status: ${conciseError(error)}`),
+            contextPack: input.contextPack
+          });
+    await recordArtifact(input.env, {
+      kind: "prompt",
+      name: attempt === 1 ? "Codex app-server prompt" : `Codex app-server recovery prompt ${attempt}`,
+      content: prompt,
+      contentType: "text/plain",
+      metadata: { model: input.env.openRouterCodegenModel, attempt, command: "app-server", harness: "codex-app-server", threadId }
+    });
+    await progress(input.env, `codex_app_server_attempt_${attempt}`, `Starting Codex app-server attempt ${attempt}/${totalAttempts}.`, {
+      attempt,
+      totalAttempts,
+      model: input.env.openRouterCodegenModel,
+      harness: "codex-app-server",
+      threadId
+    });
+
+    const result = await runCodexAppServerAttempt({
+      ...input,
+      attempt,
+      totalAttempts,
+      prompt,
+      threadId
+    });
+    threadId = result.threadId ?? threadId;
+    const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
+    const producedDiff = Boolean(gitStatus.trim());
+    const summary: CodexAttemptSummary = {
+      attempt,
+      command: "app-server",
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      producedDiff,
+      watchdogReason: result.watchdog?.reason,
+      stdoutTail: tail(result.transcript, MAX_RECOVERY_TAIL),
+      stderrTail: tail([result.error, result.stderrTail].filter(Boolean).join("\n"), MAX_RECOVERY_TAIL)
+    };
+    attempts.push(summary);
+    await progress(
+      input.env,
+      producedDiff ? `codex_app_server_attempt_${attempt}_diff` : `codex_app_server_attempt_${attempt}_no_diff`,
+      producedDiff
+        ? `Codex app-server attempt ${attempt} produced a code diff.`
+        : `Codex app-server attempt ${attempt} finished without a code diff${attempt < totalAttempts ? "; retrying with a direct nudge." : "."}`,
+      {
+        attempt,
+        totalAttempts,
+        exitCode: result.exitCode,
+        terminalMethod: result.terminalMethod,
+        durationMs: result.durationMs,
+        watchdogReason: result.watchdog?.reason,
+        notificationCount: result.notifications.length,
+        threadId,
+        gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+      }
+    );
+
+    if (producedDiff) return { attempts };
+    if (attempt < totalAttempts) continue;
+  }
+
+  throw new Error(
+    [
+      "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
+      ...attempts.map(
+        (attempt) =>
+          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+      )
+    ].join("\n")
+  );
+}
+
+async function runCodexAppServerAttempt(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+  attempt: number;
+  totalAttempts: number;
+  prompt: string;
+  threadId?: string;
+}): Promise<CodexAppServerAttemptResult> {
+  const codexBinary = process.env.CODEX_BIN || "codex";
+  const commandLine = `${codexBinary} app-server --listen stdio://`;
+  const startedAt = Date.now();
+  const notifications: CodexAppServerNotification[] = [];
+  const transcriptLines: string[] = [];
+  let lastNotificationAt = startedAt;
+  let threadId = input.threadId;
+  let terminalMethod: string | undefined;
+  let exitCode = 0;
+  let errorText = "";
+  let reportedNotifications = 0;
+  const client = CodexAppServerClient.spawn({
+    command: codexBinary,
+    args: ["app-server", "--listen", "stdio://"],
+    cwd: input.checkoutDir,
+    env: codexEnv(input.env, input.gitEnv, input.workRoot, input.toolShimDir),
+    model: input.env.openRouterCodegenModel,
+    provider: providerForModel(input.env.openRouterCodegenModel),
+    reasoningEffort: "low"
+  });
+  const watchdog = startCodexAppServerWatchdog({
+    env: input.env,
+    startedAt,
+    command: commandLine,
+    checkoutDir: input.checkoutDir,
+    attempt: input.attempt,
+    totalAttempts: input.totalAttempts,
+    firstDiffDeadlineMs: codegenFirstDiffDeadlineMs(input.contextPack),
+    idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
+    maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
+    pollMs: CODEX_WATCHDOG_POLL_MS,
+    activityState: () => ({
+      lastNotificationAt,
+      notificationCount: notifications.length,
+      transcriptTail: tail(transcriptLines.join("\n"), MAX_ACTIVITY_COMMAND_OUTPUT)
+    }),
+    close: () => client.close()
+  });
+
+  try {
+    await client.initialize();
+    threadId = threadId
+      ? await client.resumeThread({ threadId, cwd: input.checkoutDir, provider: providerForModel(input.env.openRouterCodegenModel) })
+      : await client.startThread({ cwd: input.checkoutDir, provider: providerForModel(input.env.openRouterCodegenModel) });
+    await progress(input.env, "codex_app_server_thread", "Codex app-server thread is ready.", {
+      threadId,
+      attempt: input.attempt,
+      resumed: Boolean(input.threadId)
+    });
+    const turn = await client.runTurn({
+      threadId,
+      text: input.prompt,
+      model: input.env.openRouterCodegenModel,
+      reasoningEffort: "low",
+      onNotification: async (notification) => {
+        notifications.push(notification);
+        lastNotificationAt = Date.now();
+        const summary = codexNotificationSummary(notification);
+        transcriptLines.push(formatCodexNotificationTranscriptLine(notification, summary));
+        if (summary.report && reportedNotifications < 30) {
+          reportedNotifications += 1;
+          await progress(input.env, `codex_app_server_${sanitizeStepName(notification.method)}`, summary.message, {
+            attempt: input.attempt,
+            threadId,
+            method: notification.method,
+            ...summary.metadata
+          }).catch(() => undefined);
+        }
+      }
+    });
+    terminalMethod = turn.terminalMethod;
+    exitCode = terminalMethod === "turn/completed" ? 0 : 1;
+  } catch (error) {
+    errorText = conciseError(error);
+    exitCode = watchdog.result().killed ? 143 : 1;
+  } finally {
+    watchdog.stop();
+    await client.close().catch(() => undefined);
+  }
+
+  const durationMs = Date.now() - startedAt;
+  const transcript = transcriptLines.join("\n");
+  const stderrTail = client.stderrTail();
+  await recordCommand(input.env, {
+    step: `codex_app_server_attempt_${input.attempt}`,
+    command: commandLine,
+    exitCode,
+    outputTail: tail(transcript, MAX_CAPTURED_COMMAND_OUTPUT),
+    errorTail: tail([errorText, stderrTail].filter(Boolean).join("\n"), MAX_CAPTURED_COMMAND_OUTPUT),
+    durationMs,
+    metadata: {
+      harness: "codex-app-server",
+      threadId,
+      terminalMethod,
+      notificationCount: notifications.length,
+      watchdog: watchdog.result()
+    }
+  });
+  await recordArtifact(input.env, {
+    kind: "command_log",
+    name: `Codex app-server attempt ${input.attempt} transcript`,
+    content: [
+      `$ ${commandLine}`,
+      transcript,
+      stderrTail ? `stderr:\n${stderrTail}` : "",
+      errorText ? `error:\n${errorText}` : "",
+      `[exit ${exitCode} in ${formatDuration(durationMs)}]`
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    contentType: "application/jsonl",
+    metadata: {
+      harness: "codex-app-server",
+      threadId,
+      terminalMethod,
+      notificationCount: notifications.length,
+      watchdog: watchdog.result()
+    }
+  });
+
+  return {
+    exitCode,
+    threadId,
+    terminalMethod,
+    durationMs,
+    notifications,
+    transcript,
+    stderrTail,
+    error: errorText || undefined,
+    watchdog: watchdog.result()
+  };
+}
+
+async function runCodexExecWithRecovery(input: {
   env: SandboxEnv;
   checkoutDir: string;
   gitEnv: NodeJS.ProcessEnv;
@@ -1749,7 +2038,7 @@ function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean; timing
     "- Runtime: Kubernetes sandbox job",
     `- Chat model: \`${input.env.openRouterChatModel}\``,
     `- Codegen model: \`${input.env.openRouterCodegenModel}\``,
-    "- Harness: `codex-exec-json`",
+    "- Harness: `codex-app-server` with `codex-exec-json` fallback",
     "",
     "Timing:",
     "",
@@ -1999,6 +2288,168 @@ function startCodexWatchdog(input: {
     stop,
     result: () => result
   };
+}
+
+function startCodexAppServerWatchdog(input: {
+  env: SandboxEnv;
+  startedAt: number;
+  command: string;
+  checkoutDir: string;
+  attempt: number;
+  totalAttempts: number;
+  firstDiffDeadlineMs?: number;
+  idleWithoutDiffMs?: number;
+  maxRuntimeMs?: number;
+  pollMs?: number;
+  activityState: () => { lastNotificationAt: number; notificationCount: number; transcriptTail: string };
+  close: () => Promise<void>;
+}) {
+  let stopped = false;
+  let checking = false;
+  const result: CodexWatchdogResult = { killed: false };
+  const pollMs = input.pollMs ?? CODEX_WATCHDOG_POLL_MS;
+
+  const stop = () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+
+  const close = async (reason: string, message: string, metadata: Record<string, unknown>) => {
+    if (result.killed || stopped) return;
+    const activity = input.activityState();
+    result.killed = true;
+    result.reason = reason;
+    result.durationMs = Date.now() - input.startedAt;
+    result.lastOutputAtMs = Math.max(0, activity.lastNotificationAt - input.startedAt);
+    await progress(input.env, `codex_app_server_watchdog_${reason}`, message, {
+      ...metadata,
+      attempt: input.attempt,
+      totalAttempts: input.totalAttempts,
+      command: input.command,
+      durationMs: result.durationMs,
+      lastOutputAtMs: result.lastOutputAtMs
+    }).catch(() => undefined);
+    await input.close().catch(() => undefined);
+  };
+
+  const timer = setInterval(() => {
+    if (checking || stopped || result.killed) return;
+    checking = true;
+    void (async () => {
+      try {
+        const durationMs = Date.now() - input.startedAt;
+        const activity = input.activityState();
+        const status = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
+        const producedDiff = Boolean(status.trim());
+        if (producedDiff && result.firstDiffSeenAtMs == null) {
+          result.firstDiffSeenAtMs = durationMs;
+          await progress(input.env, "codex_app_server_first_diff", "Codex app-server produced its first visible code diff.", {
+            attempt: input.attempt,
+            durationMs,
+            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
+          }).catch(() => undefined);
+        }
+        const idleMs = Date.now() - activity.lastNotificationAt;
+        const decision = evaluateCodegenWatchdog({
+          elapsedMs: durationMs,
+          idleMs,
+          hasDiff: producedDiff,
+          reconnectSeen: false,
+          reconnectStallMs: null,
+          noFirstDiffTimeoutMs: input.firstDiffDeadlineMs,
+          idleTimeoutMs: input.idleWithoutDiffMs,
+          maxRuntimeMs: input.maxRuntimeMs
+        });
+        if (decision) {
+          await close(decision.reason, decision.message, {
+            idleMs,
+            action: decision.action,
+            notificationCount: activity.notificationCount,
+            transcriptTail: activity.transcriptTail,
+            hasDiff: producedDiff,
+            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
+          });
+        }
+      } finally {
+        checking = false;
+      }
+    })();
+  }, pollMs);
+  timer.unref?.();
+
+  return {
+    stop,
+    result: () => result
+  };
+}
+
+function codexNotificationSummary(notification: CodexAppServerNotification): {
+  message: string;
+  report: boolean;
+  metadata: Record<string, unknown>;
+} {
+  const method = notification.method;
+  const itemType = jsonStringAt(notification.raw, ["params", "item", "type"]) ?? jsonStringAt(notification.raw, ["params", "type"]);
+  const itemId = jsonStringAt(notification.raw, ["params", "item", "id"]) ?? jsonStringAt(notification.raw, ["params", "itemId"]);
+  const command = jsonStringAt(notification.raw, ["params", "command"]) ?? jsonStringAt(notification.raw, ["params", "cmd"]);
+  const metadata: Record<string, unknown> = {
+    itemType,
+    itemId,
+    command,
+    paramsPreview: compactJson(notification.params)
+  };
+  if (method === "turn/started") return { message: "Codex turn started.", report: true, metadata };
+  if (method === "turn/completed") return { message: "Codex turn completed.", report: true, metadata };
+  if (method === "turn/failed") return { message: "Codex turn failed.", report: true, metadata };
+  if (method === "error") {
+    return {
+      message: jsonStringAt(notification.raw, ["params", "error", "message"]) ?? "Codex app-server emitted an error.",
+      report: true,
+      metadata
+    };
+  }
+  if (method === "item/started") {
+    return { message: `Codex started ${itemType ?? "an item"}.`, report: true, metadata };
+  }
+  if (method === "item/completed") {
+    return { message: `Codex completed ${itemType ?? "an item"}.`, report: true, metadata };
+  }
+  if (method === "turn/diff/updated") return { message: "Codex reported a diff update.", report: true, metadata };
+  if (method === "thread/tokenUsage/updated") return { message: "Codex token usage updated.", report: true, metadata };
+  if (method === "model/rerouted") return { message: "Codex rerouted the model.", report: true, metadata };
+  return { message: `Codex notification: ${method}.`, report: false, metadata };
+}
+
+function formatCodexNotificationTranscriptLine(
+  notification: CodexAppServerNotification,
+  summary: ReturnType<typeof codexNotificationSummary>
+) {
+  return JSON.stringify({
+    timestamp: new Date().toISOString(),
+    method: notification.method,
+    message: summary.message,
+    metadata: summary.metadata
+  });
+}
+
+function sanitizeStepName(value: string) {
+  const cleaned = value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned || "event";
+}
+
+function compactJson(value: unknown, maxChars = 1200) {
+  if (value == null) return null;
+  const text = JSON.stringify(value);
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}...`;
+}
+
+function jsonStringAt(value: unknown, keys: string[]): string | undefined {
+  let current = value;
+  for (const key of keys) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === "string" ? current : undefined;
 }
 
 async function recordArtifact(

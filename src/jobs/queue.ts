@@ -1,11 +1,19 @@
 import PgBoss from "pg-boss";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
-import type { AgentTaskJob } from "../execution/types.js";
+import type { CodegenRepository } from "../db/codegenRepository.js";
+import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
 import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
+import {
+  createCodegenLeaseScheduler,
+  registerCodegenWorkerLease,
+  startCodegenLeaseHeartbeat,
+  waitForCodegenSandboxLease,
+  type CodegenLeaseScheduler
+} from "./codegenLeaseScheduler.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
@@ -34,7 +42,7 @@ export type EmbeddingJobRunner = {
 
 export type AgentTaskRunner = {
   name?: string;
-  start: (job: AgentTaskJob, context?: ExecutionContext) => Promise<{ sandboxRunId: string; backendJobName: string }>;
+  start: (job: AgentTaskJob, context?: ExecutionContext) => Promise<AgentTaskStartResult>;
 };
 
 export type DiscordAgentRequestJob = {
@@ -82,6 +90,7 @@ export async function startJobs(input: {
   discordAgentWorker?: boolean;
   pgBossSchema?: string;
   repo?: DiscordAiAgentRepository;
+  codegenRepo?: CodegenRepository;
 }): Promise<JobRuntime> {
   const crawlWorkerEnabled = input.crawlWorker ?? input.worker !== false;
   const embeddingWorkerEnabled = input.embeddingWorker ?? input.worker !== false;
@@ -127,6 +136,26 @@ export async function startJobs(input: {
     },
     "pg-boss ready"
   );
+  const agentTaskBackendName = input.agentTask?.name ?? "kubernetes-sandbox";
+  const codegenLeaseScheduler =
+    taskWorkerEnabled && input.agentTask && input.codegenRepo ? createCodegenLeaseScheduler(input.config, agentTaskBackendName) : null;
+  let stopCodegenLeaseHeartbeat: (() => Promise<void>) | undefined;
+  if (codegenLeaseScheduler && input.codegenRepo) {
+    await registerCodegenWorkerLease(input.codegenRepo, codegenLeaseScheduler);
+    stopCodegenLeaseHeartbeat = startCodegenLeaseHeartbeat({
+      repo: input.codegenRepo,
+      scheduler: codegenLeaseScheduler,
+      onError: (error) => logger.warn({ err: error, sandboxId: codegenLeaseScheduler.sandboxId }, "Codegen worker lease heartbeat failed")
+    });
+    logger.info(
+      {
+        sandboxId: codegenLeaseScheduler.sandboxId,
+        leaseOwner: codegenLeaseScheduler.leaseOwner,
+        repo: codegenLeaseScheduler.repo
+      },
+      "Registered warm codegen worker lease"
+    );
+  }
 
   const runtime: JobRuntime = {
     boss,
@@ -209,6 +238,64 @@ export async function startJobs(input: {
         requestedBy: data.requestedBy,
         backend: backendName
       });
+      await input.codegenRepo
+        ?.upsertSession({
+          sessionId: codegenSessionIdForTask(data),
+          traceId: data.traceId,
+          threadKey: data.threadKey,
+          guildId: data.guildId,
+          channelId: data.channelId,
+          userId: data.userId,
+          title: data.title,
+          request: data.request,
+          requestedBy: data.requestedBy,
+          status: "queued",
+          harness: "codex",
+          model: input.config.openRouter.codegenModel,
+          provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+          metadata: { taskId, retriedFromTaskId: data.retriedFromTaskId }
+        })
+        .catch((error) => logger.warn({ err: error, taskId }, "Failed to create codegen session mirror"));
+      await input.codegenRepo
+        ?.appendMessage({
+          messageId: codegenMessageIdForTask(data),
+          sessionId: codegenSessionIdForTask(data),
+          clientMessageId: taskId,
+          role: "user",
+          parts: [{ type: "text", text: data.request }],
+          metadata: {
+            taskId,
+            traceId: data.traceId,
+            requestedBy: data.requestedBy,
+            retriedFromTaskId: data.retriedFromTaskId ?? null,
+            source: "agent.task.enqueue"
+          }
+        })
+        .catch((error) => logger.warn({ err: error, taskId }, "Failed to append codegen session user message"));
+      await input.codegenRepo
+        ?.recordEvent({
+          sessionId: codegenSessionIdForTask(data),
+          traceId: data.traceId,
+          kind: "status",
+          eventName: "codegen.message.appended",
+          summary: "Persisted code-update request as a durable codegen message.",
+          metadata: { taskId, messageId: codegenMessageIdForTask(data), role: "user" }
+        })
+        .catch((error) => logger.warn({ err: error, taskId }, "Failed to record codegen message event"));
+      await input.codegenRepo
+        ?.createExecution({
+          executionId: codegenExecutionIdForTask(data),
+          sessionId: codegenSessionIdForTask(data),
+          taskId,
+          traceId: data.traceId,
+          status: "queued",
+          harness: "codex-app-server",
+          model: input.config.openRouter.codegenModel,
+          provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+          reasoningEffort: "low",
+          metadata: { backend: backendName, pgbossJobId: null }
+        })
+        .catch((error) => logger.warn({ err: error, taskId }, "Failed to create codegen execution mirror"));
       let id: string | null;
       try {
         id =
@@ -240,10 +327,25 @@ export async function startJobs(input: {
         requestedBy: data.requestedBy,
         backend: backendName
       });
+      await input.codegenRepo
+        ?.createExecution({
+          executionId: codegenExecutionIdForTask(data),
+          sessionId: codegenSessionIdForTask(data),
+          taskId,
+          traceId: data.traceId,
+          status: "queued",
+          harness: "codex-app-server",
+          model: input.config.openRouter.codegenModel,
+          provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+          reasoningEffort: "low",
+          metadata: { backend: backendName, pgbossJobId: id }
+        })
+        .catch((error) => logger.warn({ err: error, taskId }, "Failed to update codegen execution enqueue metadata"));
       logger.info({ queue: AGENT_TASK_JOB, taskId, jobId: id }, "Agent task enqueue complete");
       return { jobId: id, taskId };
     },
     stop: async () => {
+      await stopCodegenLeaseHeartbeat?.();
       await boss.stop({ graceful: true, wait: true, timeout: 100_000 });
     }
   };
@@ -376,14 +478,51 @@ export async function startJobs(input: {
               "Starting agent.task sandbox"
             );
             const backendName = input.agentTask?.name ?? "kubernetes-sandbox";
+            const sessionId = codegenSessionIdForTask(job.data);
+            const executionId = codegenExecutionIdForTask(job.data);
             await input.repo?.markAgentTaskRunning({
               taskId: job.data.taskId,
               backend: backendName,
               step: "sandbox_start",
-              statusMessage: "Starting Kubernetes sandbox."
+              statusMessage: "Starting codegen sandbox."
             });
+            const acquiredLease = await acquireLeaseForAgentTask({
+              scheduler: codegenLeaseScheduler,
+              codegenRepo: input.codegenRepo,
+              repo: input.repo,
+              sessionId,
+              executionId,
+              traceId: job.data.traceId,
+              taskId: job.data.taskId,
+              backendName
+            });
+            await input.codegenRepo
+              ?.updateExecution({
+                executionId,
+                status: "running",
+                sandboxId: acquiredLease?.sandboxId ?? null,
+                metadata: {
+                  backend: backendName,
+                  workerStartedAt: new Date(startedAt).toISOString(),
+                  pgbossJobId: job.id,
+                  leaseOwner: acquiredLease?.leaseOwner ?? null
+                }
+              })
+              .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to mark codegen execution running"));
+            await input.codegenRepo
+              ?.recordEvent({
+                sessionId,
+                executionId,
+                traceId: job.data.traceId,
+                kind: "status",
+                eventName: "codegen.execution.started",
+                summary: "Starting codegen execution.",
+                metadata: { backend: backendName, pgbossJobId: job.id, sandboxId: acquiredLease?.sandboxId ?? null }
+              })
+              .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to record codegen execution start"));
             try {
               const result = await input.agentTask!.start(job.data, {
+                sandboxId: acquiredLease?.sandboxId ?? null,
                 progress: async (event) => {
                   await input.repo?.markAgentTaskProgress({
                     taskId: job.data.taskId,
@@ -392,21 +531,41 @@ export async function startJobs(input: {
                     statusMessage: event.message,
                     metadata: { backend: backendName, ...event.metadata }
                   });
+                  await input.codegenRepo
+                    ?.recordEvent({
+                      sessionId,
+                      executionId,
+                      traceId: job.data.traceId,
+                      kind: codegenEventKindForStep(event.step),
+                      eventName: "codegen.progress",
+                      summary: event.message,
+                      metadata: { step: event.step, backend: backendName, sandboxId: acquiredLease?.sandboxId ?? null, ...event.metadata }
+                    })
+                    .catch((error) => logger.warn({ err: error, taskId: job.data.taskId, step: event.step }, "Failed to record codegen progress"));
                 }
               });
+              await input.codegenRepo
+                ?.updateExecution({
+                  executionId,
+                  sandboxId: acquiredLease?.sandboxId ?? null,
+                  sandboxRunId: result.sandboxRunId,
+                  metadata: { backendJobName: result.backendJobName, leaseOwner: acquiredLease?.leaseOwner ?? null }
+                })
+                .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to attach sandbox run to codegen execution"));
               await input.repo?.recordSandboxRun({
                 taskId: job.data.taskId,
                 sandboxRunId: result.sandboxRunId,
                 backend: backendName,
                 backendJobName: result.backendJobName,
-                namespace: input.config.execution.kubernetes.namespace,
-                image: input.config.execution.kubernetes.sandboxImage
+                namespace: result.namespace ?? input.config.execution.kubernetes.namespace,
+                image: result.image ?? input.config.execution.kubernetes.sandboxImage,
+                metadata: { sandboxId: acquiredLease?.sandboxId ?? null, leaseOwner: acquiredLease?.leaseOwner ?? null }
               });
               await input.repo?.markAgentTaskProgress({
                 taskId: job.data.taskId,
                 backend: backendName,
                 step: "sandbox_running",
-                statusMessage: "Kubernetes sandbox is running the task.",
+                statusMessage: "Codegen sandbox is running the task.",
                 metadata: result
               });
               logger.info(
@@ -427,6 +586,22 @@ export async function startJobs(input: {
                 status: isNoChangesTaskError(message) ? "no_changes" : "failed",
                 error: message
               });
+              await input.codegenRepo
+                ?.updateExecution({
+                  executionId,
+                  status: isNoChangesTaskError(message) ? "no_changes" : "failed",
+                  error: message
+                })
+                .catch((codegenError) => logger.warn({ err: codegenError, taskId: job.data.taskId }, "Failed to mark codegen execution failed"));
+              if (acquiredLease && input.codegenRepo) {
+                await input.codegenRepo
+                  .releaseSandboxLease({
+                    sandboxId: acquiredLease.sandboxId,
+                    executionId,
+                    metadata: { releasedBy: "agent.task.start_failed", taskId: job.data.taskId }
+                  })
+                  .catch((releaseError) => logger.warn({ err: releaseError, taskId: job.data.taskId }, "Failed to release codegen lease after start failure"));
+              }
               logger.error(
                 {
                   err: error,
@@ -541,6 +716,61 @@ export async function startJobs(input: {
   }
 
   return runtime;
+}
+
+function codegenSessionIdForTask(job: Pick<AgentTaskJob, "taskId" | "retriedFromTaskId">) {
+  return `codegen-session-${job.retriedFromTaskId ?? job.taskId}`;
+}
+
+function codegenExecutionIdForTask(job: Pick<AgentTaskJob, "taskId">) {
+  return `codegen-execution-${job.taskId}`;
+}
+
+function codegenMessageIdForTask(job: Pick<AgentTaskJob, "taskId">) {
+  return `codegen-message-${job.taskId}`;
+}
+
+async function acquireLeaseForAgentTask(input: {
+  scheduler: CodegenLeaseScheduler | null;
+  codegenRepo?: CodegenRepository;
+  repo?: DiscordAiAgentRepository;
+  sessionId: string;
+  executionId: string;
+  traceId?: string | null;
+  taskId: string;
+  backendName: string;
+}) {
+  if (!input.scheduler || !input.codegenRepo) return undefined;
+  return waitForCodegenSandboxLease({
+    repo: input.codegenRepo,
+    scheduler: input.scheduler,
+    sessionId: input.sessionId,
+    executionId: input.executionId,
+    traceId: input.traceId,
+    taskId: input.taskId,
+    onWait: async ({ waitedMs, attempt }) => {
+      await input.repo?.markAgentTaskProgress({
+        taskId: input.taskId,
+        backend: input.backendName,
+        step: "sandbox_wait",
+        statusMessage: "Waiting for the warm codegen worker to become available.",
+        metadata: { sandboxId: input.scheduler?.sandboxId ?? null, waitedMs, attempt }
+      });
+    }
+  });
+}
+
+function providerForCodegenModel(model: string) {
+  return model.includes("/") ? "openrouter" : "openai";
+}
+
+function codegenEventKindForStep(step: string): "harness" | "model" | "tool" | "command" | "git" | "status" | "error" | "artifact" {
+  if (/codex|harness|model/i.test(step)) return "harness";
+  if (/git|branch|push|pr|diff|commit/i.test(step)) return "git";
+  if (/command|verify|scan|dependencies|repo|checkout/i.test(step)) return "command";
+  if (/failed|error/i.test(step)) return "error";
+  if (/artifact|prompt/i.test(step)) return "artifact";
+  return "status";
 }
 
 function formatDurationSeconds(value: number) {

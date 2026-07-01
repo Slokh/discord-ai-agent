@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig, type AppConfig } from "../../src/config/env.js";
 import { startInternalApi, type InternalApiRuntime } from "../../src/control/internalApi.js";
 import type {
+  CodegenEventRecord,
+  CodegenExecutionRecord,
+  CodegenMessageRecord,
+  CodegenSessionRecord
+} from "../../src/db/codegenRepository.js";
+import type {
   DiscordAiAgentRepository,
   ProcessRunArtifactContent,
   ProcessRunArtifactRecord,
@@ -71,6 +77,71 @@ describe("internal API run endpoints", () => {
     const expandedList = await fetch(`${runtime.url}/api/runs?includeEmbeddings=1`, { headers: auth });
     expect(expandedList.status).toBe(200);
     expect(listInputs.at(-1)).toEqual({ includeEmbeddings: true });
+  });
+
+  it("serves a Centaur-style codegen session control-plane API", async () => {
+    const codegenRepo = fakeCodegenRepo();
+    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), codegenRepo: codegenRepo as never });
+    const auth = {
+      authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}`,
+      "content-type": "application/json"
+    };
+    const threadKey = "discord:111:222:333";
+    const encodedThreadKey = encodeURIComponent(threadKey);
+
+    const create = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ request: "make codegen faster", requestedBy: "kartik", model: "z-ai/glm-5.2" })
+    });
+    expect(create.status).toBe(200);
+    await expect(create.json()).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        session: expect.objectContaining({ threadKey, request: "make codegen faster", model: "z-ai/glm-5.2" })
+      })
+    );
+
+    const append = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}/messages`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ role: "user", text: "please implement the runtime plan", clientMessageId: "discord-message-1" })
+    });
+    expect(append.status).toBe(200);
+    await expect(append.json()).resolves.toEqual(expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }));
+
+    const execute = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}/execute`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ reasoningEffort: "low" })
+    });
+    expect(execute.status).toBe(202);
+    await expect(execute.json()).resolves.toEqual(
+      expect.objectContaining({ execution: expect.objectContaining({ status: "queued", reasoningEffort: "low" }) })
+    );
+
+    const detail = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}`, { headers: auth });
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toEqual(
+      expect.objectContaining({
+        messages: [expect.objectContaining({ clientMessageId: "discord-message-1" })],
+        executions: [expect.objectContaining({ status: "queued" })],
+        events: expect.arrayContaining([expect.objectContaining({ eventName: "codegen.execution.queued" })])
+      })
+    );
+
+    const events = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}/events`, { headers: auth });
+    expect(events.status).toBe(200);
+    await expect(events.json()).resolves.toEqual(
+      expect.objectContaining({ events: expect.arrayContaining([expect.objectContaining({ eventName: "codegen.message.appended" })]) })
+    );
+
+    const stream = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}/stream`, { headers: auth });
+    expect(stream.status).toBe(200);
+    const reader = stream.body!.getReader();
+    const chunk = await reader.read();
+    await reader.cancel();
+    expect(Buffer.from(chunk.value ?? new Uint8Array()).toString("utf8")).toContain("event: codegen.event");
   });
 });
 
@@ -150,4 +221,159 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     getTraceEventsForTrace: async () => [],
     getToolAuditLogsForTrace: async () => []
   } as unknown as DiscordAiAgentRepository;
+}
+
+function fakeCodegenRepo() {
+  const sessions = new Map<string, CodegenSessionRecord>();
+  const messages = new Map<string, CodegenMessageRecord[]>();
+  const executions = new Map<string, CodegenExecutionRecord[]>();
+  const events = new Map<string, CodegenEventRecord[]>();
+  let eventId = 1;
+
+  return {
+    getSession: async (input: { sessionId?: string | null; threadKey?: string | null }) =>
+      [...sessions.values()].find((session) =>
+        input.sessionId ? session.sessionId === input.sessionId : input.threadKey ? session.threadKey === input.threadKey : false
+      ),
+    upsertSession: async (input: {
+      sessionId: string;
+      traceId?: string | null;
+      threadKey?: string | null;
+      guildId?: string | null;
+      channelId?: string | null;
+      userId?: string | null;
+      title: string;
+      request: string;
+      requestedBy: string;
+      status?: CodegenSessionRecord["status"];
+      harness?: string | null;
+      model?: string | null;
+      provider?: string | null;
+      codexThreadId?: string | null;
+      metadata?: Record<string, unknown>;
+    }) => {
+      const now = new Date("2026-06-30T12:00:00Z");
+      const existing = sessions.get(input.sessionId);
+      const session: CodegenSessionRecord = {
+        sessionId: input.sessionId,
+        traceId: input.traceId ?? existing?.traceId ?? null,
+        threadKey: input.threadKey ?? existing?.threadKey ?? null,
+        guildId: input.guildId ?? existing?.guildId ?? null,
+        channelId: input.channelId ?? existing?.channelId ?? null,
+        userId: input.userId ?? existing?.userId ?? null,
+        title: input.title,
+        request: input.request,
+        requestedBy: input.requestedBy,
+        status: input.status ?? existing?.status ?? "queued",
+        harness: input.harness ?? existing?.harness ?? "codex",
+        model: input.model ?? existing?.model ?? null,
+        provider: input.provider ?? existing?.provider ?? null,
+        codexThreadId: input.codexThreadId ?? existing?.codexThreadId ?? null,
+        metadata: { ...(existing?.metadata ?? {}), ...(input.metadata ?? {}) },
+        createdAt: existing?.createdAt ?? now,
+        startedAt: existing?.startedAt ?? null,
+        completedAt: existing?.completedAt ?? null,
+        updatedAt: now
+      };
+      sessions.set(input.sessionId, session);
+      return session;
+    },
+    appendMessage: async (input: {
+      messageId?: string | null;
+      sessionId: string;
+      clientMessageId?: string | null;
+      role: CodegenMessageRecord["role"];
+      parts: unknown[];
+      metadata?: Record<string, unknown>;
+    }) => {
+      const message: CodegenMessageRecord = {
+        messageId: input.messageId ?? `message-${messages.size + 1}`,
+        sessionId: input.sessionId,
+        clientMessageId: input.clientMessageId ?? null,
+        role: input.role,
+        parts: input.parts,
+        metadata: input.metadata ?? {},
+        createdAt: new Date("2026-06-30T12:00:01Z")
+      };
+      messages.set(input.sessionId, [...(messages.get(input.sessionId) ?? []), message]);
+      return message;
+    },
+    listMessages: async (input: { sessionId: string }) => messages.get(input.sessionId) ?? [],
+    createExecution: async (input: {
+      executionId: string;
+      sessionId: string;
+      taskId?: string | null;
+      traceId?: string | null;
+      attempt?: number;
+      status?: CodegenExecutionRecord["status"];
+      harness?: string | null;
+      model?: string | null;
+      provider?: string | null;
+      reasoningEffort?: string | null;
+      sandboxId?: string | null;
+      sandboxRunId?: string | null;
+      metadata?: Record<string, unknown>;
+    }) => {
+      const execution: CodegenExecutionRecord = {
+        executionId: input.executionId,
+        sessionId: input.sessionId,
+        taskId: input.taskId ?? null,
+        traceId: input.traceId ?? null,
+        attempt: input.attempt ?? 1,
+        status: input.status ?? "queued",
+        harness: input.harness ?? "codex-app-server",
+        model: input.model ?? null,
+        provider: input.provider ?? null,
+        reasoningEffort: input.reasoningEffort ?? null,
+        sandboxId: input.sandboxId ?? null,
+        sandboxRunId: input.sandboxRunId ?? null,
+        branchName: null,
+        prUrl: null,
+        draft: null,
+        verifyPassed: null,
+        error: null,
+        metadata: input.metadata ?? {},
+        createdAt: new Date("2026-06-30T12:00:02Z"),
+        startedAt: null,
+        completedAt: null,
+        updatedAt: new Date("2026-06-30T12:00:02Z")
+      };
+      executions.set(input.sessionId, [execution, ...(executions.get(input.sessionId) ?? [])]);
+      return execution;
+    },
+    listExecutions: async (input: { sessionId: string }) => executions.get(input.sessionId) ?? [],
+    recordEvent: async (input: {
+      sessionId: string;
+      executionId?: string | null;
+      traceId?: string | null;
+      kind: CodegenEventRecord["kind"];
+      level?: CodegenEventRecord["level"];
+      eventName: string;
+      summary?: string | null;
+      metadata?: Record<string, unknown>;
+      durationMs?: number | null;
+    }) => {
+      const event: CodegenEventRecord = {
+        id: eventId++,
+        sessionId: input.sessionId,
+        executionId: input.executionId ?? null,
+        traceId: input.traceId ?? null,
+        sequence: (events.get(input.sessionId)?.length ?? 0) + 1,
+        kind: input.kind,
+        level: input.level ?? "info",
+        eventName: input.eventName,
+        summary: input.summary ?? null,
+        metadata: input.metadata ?? {},
+        durationMs: input.durationMs ?? null,
+        createdAt: new Date("2026-06-30T12:00:03Z")
+      };
+      events.set(input.sessionId, [...(events.get(input.sessionId) ?? []), event]);
+      return event;
+    },
+    listEvents: async (input: { sessionId: string; executionId?: string | null; afterEventId?: number | null; limit?: number | null }) =>
+      (events.get(input.sessionId) ?? [])
+        .filter((event) => (input.executionId ? event.executionId === input.executionId : true))
+        .filter((event) => event.id > (input.afterEventId ?? 0))
+        .slice(0, input.limit ?? 200)
+  };
 }

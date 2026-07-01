@@ -38,6 +38,7 @@ type SandboxEnv = {
   githubBaseBranch: string;
   openRouterApiKey: string;
   openRouterChatModel: string;
+  openRouterCodegenModel: string;
   sandboxCacheDir: string;
   sandboxStartedAtMs: number | null;
 };
@@ -252,7 +253,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
           producedDiff: codexSummary.attempts.some((attempt) => attempt.producedDiff)
         }
       });
-    }, { model: env.openRouterChatModel });
+    }, { model: env.openRouterCodegenModel, harness: "codex-exec-json" });
 
     await progress(env, "diff", "Checking whether Codex produced a real code diff.");
     const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir, taskEnv: env, step: "diff" });
@@ -397,6 +398,7 @@ function loadSandboxEnv(): SandboxEnv {
     githubBaseBranch: requiredEnv("GITHUB_BASE_BRANCH"),
     openRouterApiKey: requiredEnv("OPENROUTER_API_KEY"),
     openRouterChatModel: requiredEnv("OPENROUTER_CHAT_MODEL"),
+    openRouterCodegenModel: process.env.OPENROUTER_CODEGEN_MODEL?.trim() || requiredEnv("OPENROUTER_CHAT_MODEL"),
     sandboxCacheDir: process.env.SANDBOX_CACHE_DIR || path.join(os.tmpdir(), "discord-ai-agent-cache"),
     sandboxStartedAtMs: numberEnv("SANDBOX_STARTED_AT_MS")
   };
@@ -908,29 +910,36 @@ async function writeSandboxToolShims(toolShimDir: string): Promise<string[]> {
 async function writeCodexConfig(workRoot: string, checkoutDir: string, env: SandboxEnv) {
   const codexHome = path.join(workRoot, ".codex");
   await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(
-    path.join(codexHome, "config.toml"),
-    [
-      `model = ${JSON.stringify(env.openRouterChatModel)}`,
-      'model_provider = "openrouter"',
-      'approval_policy = "never"',
-      'sandbox_mode = "danger-full-access"',
-      'preferred_auth_method = "apikey"',
-      'model_verbosity = "low"',
-      "",
-      "[model_providers.openrouter]",
-      'name = "OpenRouter"',
-      'base_url = "https://openrouter.ai/api/v1"',
-      'env_key = "OPENROUTER_API_KEY"',
-      'wire_api = "responses"',
-      "requires_openai_auth = false",
-      "",
-      `[projects.${JSON.stringify(checkoutDir)}]`,
-      'trust_level = "trusted"',
-      ""
-    ].join("\n"),
-    "utf8"
-  );
+  await fs.writeFile(path.join(codexHome, "config.toml"), codexConfigToml({ checkoutDir, model: env.openRouterCodegenModel }), "utf8");
+}
+
+export function codexConfigToml(input: { checkoutDir: string; model: string }) {
+  return [
+    `model = ${JSON.stringify(input.model)}`,
+    'model_provider = "openrouter"',
+    'approval_policy = "never"',
+    'sandbox_mode = "danger-full-access"',
+    'preferred_auth_method = "apikey"',
+    'model_reasoning_effort = "low"',
+    'model_verbosity = "low"',
+    'personality = "pragmatic"',
+    'service_tier = "fast"',
+    "",
+    "[features]",
+    "fast_mode = true",
+    "runtime_metrics = true",
+    "",
+    "[model_providers.openrouter]",
+    'name = "OpenRouter"',
+    'base_url = "https://openrouter.ai/api/v1"',
+    'env_key = "OPENROUTER_API_KEY"',
+    'wire_api = "responses"',
+    "requires_openai_auth = false",
+    "",
+    `[projects.${JSON.stringify(input.checkoutDir)}]`,
+    'trust_level = "trusted"',
+    ""
+  ].join("\n");
 }
 
 async function runCodexWithRecovery(input: {
@@ -962,16 +971,17 @@ async function runCodexWithRecovery(input: {
       name: attempt === 1 ? "Codex prompt" : `Codex recovery prompt ${attempt}`,
       content: prompt,
       contentType: "text/plain",
-      metadata: { model: input.env.openRouterChatModel, attempt, command }
+      metadata: { model: input.env.openRouterCodegenModel, attempt, command, harness: "codex-exec-json" }
     });
     await progress(input.env, `codex_attempt_${attempt}`, `Starting Codex ${command} attempt ${attempt}/${totalAttempts}.`, {
       attempt,
       totalAttempts,
       command,
-      model: input.env.openRouterChatModel
+      model: input.env.openRouterCodegenModel,
+      harness: "codex-exec-json"
     });
 
-    const result = await runCommand(codexBinary, codexAttemptArgs({ command, model: input.env.openRouterChatModel }), {
+    const result = await runCommand(codexBinary, codexAttemptArgs({ command, model: input.env.openRouterCodegenModel }), {
       cwd: input.checkoutDir,
       env: codexEnv(input.env, input.gitEnv, input.workRoot, input.toolShimDir),
       input: prompt,
@@ -1589,6 +1599,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
 export function codexExecArgs(input: { checkoutDir: string; model: string }) {
   return [
     "exec",
+    "--json",
     "-C",
     input.checkoutDir,
     "--dangerously-bypass-approvals-and-sandbox",
@@ -1599,7 +1610,7 @@ export function codexExecArgs(input: { checkoutDir: string; model: string }) {
 }
 
 export function codexResumeExecArgs(input: { model: string }) {
-  return ["exec", "resume", "--last", "--dangerously-bypass-approvals-and-sandbox", "-m", input.model, "-"];
+  return ["exec", "resume", "--last", "--json", "--dangerously-bypass-approvals-and-sandbox", "-m", input.model, "-"];
 }
 
 function codexAttemptArgs(input: { command: "exec" | "resume"; model: string }) {
@@ -1736,7 +1747,9 @@ function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean; timing
     `- Task ID: \`${input.env.taskId}\``,
     `- Sandbox run: \`${input.env.sandboxRunId}\``,
     "- Runtime: Kubernetes sandbox job",
-    `- Model: \`${input.env.openRouterChatModel}\``,
+    `- Chat model: \`${input.env.openRouterChatModel}\``,
+    `- Codegen model: \`${input.env.openRouterCodegenModel}\``,
+    "- Harness: `codex-exec-json`",
     "",
     "Timing:",
     "",

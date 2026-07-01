@@ -79,6 +79,8 @@ describe("KubernetesExecutionBackend", () => {
         GITHUB_REPOSITORY: "example/discord-ai-agent",
         TASK_SIGNING_SECRET: "task-secret",
         KUBERNETES_NAMESPACE: "discord-ai-agent",
+        OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
+        OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
         SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
         SANDBOX_CACHE_PVC_NAME: "discord-ai-agent-sandbox-cache"
       },
@@ -92,6 +94,8 @@ describe("KubernetesExecutionBackend", () => {
           expect.objectContaining({
             body: expect.objectContaining({
               data: expect.objectContaining({
+                OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
+                OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
                 SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
                 SANDBOX_STARTED_AT_MS: expect.any(String)
               })

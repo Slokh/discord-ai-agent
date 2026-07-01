@@ -9,6 +9,8 @@ describe("config", () => {
         "DISCORD_GUILD_ID",
         "BOT_NAME",
         "RUN_MIGRATIONS",
+        "OPENROUTER_CHAT_MODEL",
+        "OPENROUTER_CODEGEN_MODEL",
         "GITHUB_REPOSITORY",
         "INTERNAL_API_HOST",
         "INTERNAL_API_PORT",
@@ -29,6 +31,8 @@ describe("config", () => {
         expect(config.discord.botName).toBe("ai");
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
+        expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
+        expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
         expect(config.github.repository).toBe("owner/repo");
         expect(config.internalApi.host).toBe("0.0.0.0");
         expect(config.internalApi.port).toBe(8080);
@@ -63,6 +67,14 @@ describe("config", () => {
   it("allows configuring the Discord response timeout", () => {
     withEnv({ DISCORD_AGENT_RESPONSE_TIMEOUT_MS: "900000" }, () => {
       expect(loadConfig().discordAgentResponseTimeoutMs).toBe(900_000);
+    });
+  });
+
+  it("allows codegen to use a different model than normal chat", () => {
+    withEnv({ OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2", OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5" }, () => {
+      const config = loadConfig();
+      expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
+      expect(config.openRouter.codegenModel).toBe("openai/gpt-5.5");
     });
   });
 

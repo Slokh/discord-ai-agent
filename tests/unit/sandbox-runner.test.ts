@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCodegenContextPack,
   codegenFirstDiffDeadlineMs,
+  codexConfigToml,
   codexExecArgs,
   codexResumeExecArgs,
   codeUpdatePrompt,
@@ -31,6 +32,7 @@ describe("sandboxRunner", () => {
 
     expect(args).toEqual([
       "exec",
+      "--json",
       "-C",
       "/tmp/work/repo",
       "--dangerously-bypass-approvals-and-sandbox",
@@ -47,11 +49,31 @@ describe("sandboxRunner", () => {
       "exec",
       "resume",
       "--last",
+      "--json",
       "--dangerously-bypass-approvals-and-sandbox",
       "-m",
       "z-ai/glm-5.2",
       "-"
     ]);
+  });
+
+  it("writes a Centaur-like Codex harness profile", () => {
+    const config = codexConfigToml({ checkoutDir: "/tmp/work/repo", model: "openai/gpt-5.5" });
+
+    expect(config).toContain('model = "openai/gpt-5.5"');
+    expect(config).toContain('approval_policy = "never"');
+    expect(config).toContain('sandbox_mode = "danger-full-access"');
+    expect(config).toContain('model_reasoning_effort = "low"');
+    expect(config).toContain('model_verbosity = "low"');
+    expect(config).toContain('personality = "pragmatic"');
+    expect(config).toContain('service_tier = "fast"');
+    expect(config).toContain("[features]");
+    expect(config).toContain("fast_mode = true");
+    expect(config).toContain("runtime_metrics = true");
+    expect(config).toContain("[model_providers.openrouter]");
+    expect(config).toContain('wire_api = "responses"');
+    expect(config).toContain('[projects."/tmp/work/repo"]');
+    expect(config).toContain('trust_level = "trusted"');
   });
 
   it("builds a concise codegen context pack from the repository guide and project map", async () => {

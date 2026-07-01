@@ -99,6 +99,7 @@ const envSchema = z.object({
   OPENROUTER_APP_TITLE: z.string().default(defaults.openRouterAppTitle),
   OPENROUTER_HTTP_REFERER: z.string().default(defaults.openRouterHttpReferer),
   OPENROUTER_CHAT_MODEL: z.string().default(defaults.openRouterChatModel),
+  OPENROUTER_CODEGEN_MODEL: z.string().optional(),
   OPENROUTER_EMBEDDING_MODEL: z.string().default(defaults.openRouterEmbeddingModel),
   OPENROUTER_IMAGE_MODEL: z.string().default(defaults.openRouterImageModel),
 
@@ -151,6 +152,8 @@ export function loadConfig() {
     const formatted = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n");
     throw new Error(`Invalid environment configuration:\n${formatted}`);
   }
+  const chatModel = parsed.data.OPENROUTER_CHAT_MODEL;
+  const codegenModel = parsed.data.OPENROUTER_CODEGEN_MODEL?.trim() || chatModel;
 
   return {
     nodeEnv: parsed.data.NODE_ENV,
@@ -170,7 +173,8 @@ export function loadConfig() {
       baseUrl: parsed.data.OPENROUTER_BASE_URL.replace(/\/$/, ""),
       appTitle: parsed.data.OPENROUTER_APP_TITLE,
       httpReferer: parsed.data.OPENROUTER_HTTP_REFERER,
-      chatModel: parsed.data.OPENROUTER_CHAT_MODEL,
+      chatModel,
+      codegenModel,
       embeddingModel: parsed.data.OPENROUTER_EMBEDDING_MODEL,
       imageModel: parsed.data.OPENROUTER_IMAGE_MODEL
     },

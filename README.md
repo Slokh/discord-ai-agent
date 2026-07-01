@@ -196,6 +196,7 @@ Common optional settings:
 | --- | --- | --- |
 | `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
 | `OPENROUTER_CHAT_MODEL` | `z-ai/glm-5.2` | Main agent model |
+| `OPENROUTER_CODEGEN_MODEL` | same as `OPENROUTER_CHAT_MODEL` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
 | `GITHUB_REPOSITORY` | `owner/repo` | Repo for code-update PRs |

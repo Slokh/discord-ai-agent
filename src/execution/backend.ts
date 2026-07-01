@@ -95,6 +95,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         GITHUB_REPOSITORY: this.config.github.repository,
         GITHUB_BASE_BRANCH: this.config.github.baseBranch,
         OPENROUTER_CHAT_MODEL: this.config.openRouter.chatModel,
+        OPENROUTER_CODEGEN_MODEL: this.config.openRouter.codegenModel,
         SANDBOX_CACHE_DIR: this.config.execution.kubernetes.cacheDir,
         SANDBOX_STARTED_AT_MS: String(Date.now())
       });

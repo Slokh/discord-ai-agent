@@ -32,6 +32,8 @@ config:
   githubRepository: owner/repo
   githubBaseBranch: main
   openRouterChatModel: z-ai/glm-5.2
+  # Optional. Defaults to openRouterChatModel when empty.
+  openRouterCodegenModel: ""
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
   embeddingDimensions: "1536"

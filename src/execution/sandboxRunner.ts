@@ -15,6 +15,7 @@ const MAX_CODEGEN_ANCHORS = 12;
 const MAX_ANCHOR_MATCHES_PER_ANCHOR = 5;
 const MAX_ANCHOR_MATCHES_TOTAL = 30;
 const MAX_ANCHOR_TARGET_FILES = 8;
+const MAX_ANCHOR_SCAN_FILE_BYTES = 512_000;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
 const CODEX_MAX_ATTEMPTS = 2;
 const CODEX_FIRST_DIFF_DEADLINE_MS = 8 * 60 * 1000;
@@ -1598,15 +1599,69 @@ async function rgFixedString(checkoutDir: string, anchor: string) {
         "."
       ],
       { cwd: checkoutDir, maxBuffer: 512_000 },
-      (error, stdout) => {
+      async (error, stdout) => {
         if (error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-          resolve("");
+          resolve(await nodeFixedStringSearch(checkoutDir, anchor));
           return;
         }
         resolve(stdout.toString());
       }
     );
   });
+}
+
+async function nodeFixedStringSearch(checkoutDir: string, anchor: string) {
+  const lines: string[] = [];
+  await scanAnchorDirectory(checkoutDir, checkoutDir, anchor, lines);
+  return lines.join("\n");
+}
+
+async function scanAnchorDirectory(rootDir: string, currentDir: string, anchor: string, matches: string[]) {
+  let entries: Array<import("node:fs").Dirent>;
+  try {
+    entries = await fs.readdir(currentDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name);
+    const relativePath = normalizeRgRelativePath(path.relative(rootDir, fullPath));
+    if (!relativePath || isLowValueAnchorMatch(relativePath)) continue;
+
+    if (entry.isDirectory()) {
+      await scanAnchorDirectory(rootDir, fullPath, anchor, matches);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+
+    await scanAnchorFile(rootDir, fullPath, anchor, matches);
+  }
+}
+
+async function scanAnchorFile(rootDir: string, filePath: string, anchor: string, matches: string[]) {
+  let stat: import("node:fs").Stats;
+  try {
+    stat = await fs.stat(filePath);
+  } catch {
+    return;
+  }
+  if (stat.size > MAX_ANCHOR_SCAN_FILE_BYTES) return;
+
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch {
+    return;
+  }
+  if (!content.includes(anchor)) return;
+
+  const relativePath = normalizeRgRelativePath(path.relative(rootDir, filePath));
+  const contentLines = content.split(/\r?\n/);
+  for (const [index, line] of contentLines.entries()) {
+    if (line.includes(anchor)) matches.push(`${relativePath}:${index + 1}:${line}`);
+  }
 }
 
 function parseRgMatchLine(line: string, anchor: string): CodegenAnchorMatch | null {
@@ -1629,6 +1684,10 @@ function normalizeRgRelativePath(file: string) {
 
 function isLowValueAnchorMatch(file: string) {
   return (
+    file === ".git" ||
+    file === "node_modules" ||
+    file === "dist" ||
+    file === "coverage" ||
     file.startsWith(".git/") ||
     file.startsWith("node_modules/") ||
     file.startsWith("dist/") ||

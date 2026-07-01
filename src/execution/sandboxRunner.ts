@@ -10,9 +10,14 @@ const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const MAX_ACTIVITY_COMMAND_OUTPUT = 12_000;
 const MAX_CONTEXT_TEXT = 16_000;
 const MAX_RECOVERY_TAIL = 10_000;
+const MAX_CODEGEN_ANCHORS = 12;
+const MAX_ANCHOR_MATCHES_PER_ANCHOR = 5;
+const MAX_ANCHOR_MATCHES_TOTAL = 30;
+const MAX_ANCHOR_TARGET_FILES = 8;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
 const CODEX_MAX_ATTEMPTS = 2;
 const CODEX_FIRST_DIFF_DEADLINE_MS = 8 * 60 * 1000;
+const CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS = 4 * 60 * 1000;
 const CODEX_IDLE_WITHOUT_DIFF_MS = 6 * 60 * 1000;
 const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
 const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
@@ -50,6 +55,9 @@ type CacheSummary = {
 
 export type CodegenContextPack = {
   repoGuidePath?: string;
+  requestAnchors?: string[];
+  anchorMatches?: CodegenAnchorMatch[];
+  anchorTargetFiles?: Array<{ path: string; reason: string }>;
   focus?: string;
   rationale?: string;
   likelyMechanisms?: string[];
@@ -65,6 +73,13 @@ export type CodegenContextPack = {
     files: string[];
     checks: string[];
   }>;
+};
+
+type CodegenAnchorMatch = {
+  anchor: string;
+  file: string;
+  line: number;
+  preview: string;
 };
 
 type CodexAttemptSummary = {
@@ -939,7 +954,8 @@ async function runCodexWithRecovery(input: {
             attempt,
             totalAttempts,
             attempts,
-            gitStatus: await gitStatusPorcelain(input.checkoutDir).catch((error) => `Unable to read git status: ${conciseError(error)}`)
+            gitStatus: await gitStatusPorcelain(input.checkoutDir).catch((error) => `Unable to read git status: ${conciseError(error)}`),
+            contextPack: input.contextPack
           });
     await recordArtifact(input.env, {
       kind: "prompt",
@@ -966,7 +982,7 @@ async function runCodexWithRecovery(input: {
         checkoutDir: input.checkoutDir,
         attempt,
         totalAttempts,
-        firstDiffDeadlineMs: CODEX_FIRST_DIFF_DEADLINE_MS,
+        firstDiffDeadlineMs: codegenFirstDiffDeadlineMs(input.contextPack),
         idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
         reconnectStallMs: CODEX_RECONNECT_STALL_MS,
         maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
@@ -1101,7 +1117,10 @@ const CODEGEN_CONTEXT_RULES: CodegenContextRule[] = [
 
 export async function buildCodegenContextPack(checkoutDir: string, taskRequest = ""): Promise<CodegenContextPack> {
   const repoGuidePath = (await pathExists(path.join(checkoutDir, "AGENTS.md"))) ? "AGENTS.md" : undefined;
-  const focusedRule = selectCodegenContextRule(taskRequest);
+  const requestAnchors = extractCodegenRequestAnchors(taskRequest);
+  const anchorMatches = await findCodegenAnchorMatches(checkoutDir, requestAnchors);
+  const anchorTargetFiles = anchorTargetFilesFromMatches(anchorMatches);
+  const focusedRule = selectCodegenContextRule(taskRequest, anchorMatches);
   const projectMap = await existingProjectMap(checkoutDir, [
     {
       area: "Code-update task lifecycle",
@@ -1135,31 +1154,256 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       checks: ["tests/unit/observability.test.ts", "tests/unit/internal-api-runs.test.ts", "tests/unit/run-console-timeline.test.ts"]
     }
   ]);
+  const focusedSuggestedFiles = await existingSuggestedFiles(checkoutDir, focusedRule.suggestedFiles);
+  const firstMoveRules = [
+    "Read AGENTS.md first when present.",
+    ...(anchorTargetFiles.length
+      ? [
+          "Exact request anchors were found; inspect the top anchor target file first and make the first edit there before reading broad project-map files.",
+          "Do not spend more than three targeted file reads before the first code diff when anchor targets exist."
+        ]
+      : []),
+    "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
+    "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
+    "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",
+    "Stop when the requested behavior is implemented and the most relevant checks have run."
+  ];
 
   return {
     repoGuidePath,
     ...focusedRule,
-    suggestedFiles: await existingSuggestedFiles(checkoutDir, focusedRule.suggestedFiles),
+    requestAnchors,
+    anchorMatches,
+    anchorTargetFiles,
+    suggestedFiles: mergeSuggestedFiles(anchorTargetFiles, focusedSuggestedFiles),
     sandboxContract: [
       "You are already inside an isolated Kubernetes sandbox with full filesystem/network access for this task.",
       "The checkout is a writable task branch. Edit files directly in the current repository.",
       "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after verification.",
       "Use helper CLIs when useful: agent-task-context, agent-cache-info, agent-progress <step> <message>.",
+      "Use apply_patch for focused file edits when available; otherwise use the smallest reliable edit command.",
       "Prefer rg for search, then read only the files needed for the next concrete edit."
     ],
-    firstMoveRules: [
-      "Read AGENTS.md first when present.",
-      "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
-      "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
-      "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",
-      "Stop when the requested behavior is implemented and the most relevant checks have run."
-    ],
+    firstMoveRules,
     projectMap
   };
 }
 
-function selectCodegenContextRule(taskRequest: string): CodegenContextRule {
+function extractCodegenRequestAnchors(taskRequest: string) {
+  const anchors: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (value: string, options: { exact?: boolean } = {}) => {
+    const cleaned = value.trim().replace(/\s+/g, " ");
+    if (!isUsefulCodegenAnchor(cleaned, options)) return;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    anchors.push(cleaned);
+  };
+
+  for (const regex of [/"([^"\n]{3,120})"/g, /`([^`\n]{3,120})`/g, /(?:^|[^A-Za-z])'([^'\n]{3,120})'(?![A-Za-z])/g, /“([^”]{3,120})”/g, /‘([^’]{3,120})’/g]) {
+    for (const match of taskRequest.matchAll(regex)) add(match[1] ?? "", { exact: true });
+  }
+
+  for (const match of taskRequest.matchAll(/\b(?:src|tests|scripts|docs|infra|k8s|migrations|skills|\.github)\/[A-Za-z0-9._/-]+\b/g)) {
+    add(match[0], { exact: true });
+  }
+
+  for (const match of taskRequest.matchAll(/(?:^|\s)(\/[a-z][a-z0-9/_:-]{2,})\b/g)) {
+    add(match[1] ?? "", { exact: true });
+  }
+
+  for (const match of taskRequest.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b/g)) {
+    add(match[0]);
+  }
+
+  for (const match of taskRequest.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*\b/g)) {
+    add(match[0]);
+  }
+
+  for (const match of taskRequest.matchAll(/\b[A-Z][A-Z0-9_]{3,}\b/g)) {
+    add(match[0]);
+  }
+
+  return anchors.slice(0, MAX_CODEGEN_ANCHORS);
+}
+
+function isUsefulCodegenAnchor(value: string, options: { exact?: boolean }) {
+  if (value.length < 3 || value.length > 120) return false;
+  if (/^https?:\/\//i.test(value)) return false;
+  if (/^\d+$/.test(value)) return false;
+  if (options.exact) return true;
+  const normalized = value.toLowerCase();
+  const genericTerms = new Set([
+    "agent",
+    "agents",
+    "bot",
+    "bots",
+    "code",
+    "discord",
+    "finish",
+    "loading",
+    "message",
+    "messages",
+    "progress",
+    "reply",
+    "request",
+    "requests",
+    "status",
+    "thinking",
+    "update",
+    "updates"
+  ]);
+  return !genericTerms.has(normalized);
+}
+
+async function findCodegenAnchorMatches(checkoutDir: string, anchors: string[]): Promise<CodegenAnchorMatch[]> {
+  const matches: CodegenAnchorMatch[] = [];
+  for (const anchor of anchors) {
+    const output = await rgFixedString(checkoutDir, anchor);
+    const parsed = output
+      .split("\n")
+      .map((line) => parseRgMatchLine(line, anchor))
+      .filter((match): match is CodegenAnchorMatch => Boolean(match))
+      .filter((match) => !isLowValueAnchorMatch(match.file))
+      .slice(0, MAX_ANCHOR_MATCHES_PER_ANCHOR);
+    matches.push(...parsed);
+    if (matches.length >= MAX_ANCHOR_MATCHES_TOTAL) break;
+  }
+  return matches.slice(0, MAX_ANCHOR_MATCHES_TOTAL);
+}
+
+async function rgFixedString(checkoutDir: string, anchor: string) {
+  return new Promise<string>((resolve) => {
+    execFile(
+      "rg",
+      [
+        "--fixed-strings",
+        "--line-number",
+        "--no-heading",
+        "--color",
+        "never",
+        "--glob",
+        "!node_modules/**",
+        "--glob",
+        "!dist/**",
+        "--glob",
+        "!coverage/**",
+        "--glob",
+        "!*.map",
+        "--glob",
+        "!package-lock.json",
+        "--",
+        anchor,
+        "."
+      ],
+      { cwd: checkoutDir, maxBuffer: 512_000 },
+      (error, stdout) => {
+        if (error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+          resolve("");
+          return;
+        }
+        resolve(stdout.toString());
+      }
+    );
+  });
+}
+
+function parseRgMatchLine(line: string, anchor: string): CodegenAnchorMatch | null {
+  const match = /^(.+?):(\d+):(.*)$/.exec(line);
+  if (!match) return null;
+  const file = normalizeRgRelativePath(match[1] ?? "");
+  const lineNumber = Number(match[2]);
+  if (!file || !Number.isFinite(lineNumber)) return null;
+  return {
+    anchor,
+    file,
+    line: lineNumber,
+    preview: (match[3] ?? "").trim().slice(0, 220)
+  };
+}
+
+function normalizeRgRelativePath(file: string) {
+  return file.replace(/^\.\//, "");
+}
+
+function isLowValueAnchorMatch(file: string) {
+  return (
+    file.startsWith(".git/") ||
+    file.startsWith("node_modules/") ||
+    file.startsWith("dist/") ||
+    file.startsWith("coverage/") ||
+    file.endsWith(".map") ||
+    file === "package-lock.json"
+  );
+}
+
+function anchorTargetFilesFromMatches(matches: CodegenAnchorMatch[]) {
+  const byFile = new Map<string, { anchors: Set<string>; lines: number[]; score: number }>();
+  for (const match of matches) {
+    const current = byFile.get(match.file) ?? { anchors: new Set<string>(), lines: [], score: sourceFileScore(match.file) };
+    current.anchors.add(match.anchor);
+    current.lines.push(match.line);
+    current.score += anchorMatchScore(match);
+    byFile.set(match.file, current);
+  }
+
+  return [...byFile.entries()]
+    .sort((left, right) => right[1].score - left[1].score || left[0].localeCompare(right[0]))
+    .slice(0, MAX_ANCHOR_TARGET_FILES)
+    .map(([file, value]) => {
+      const anchors = [...value.anchors].slice(0, 3).map((anchor) => JSON.stringify(anchor)).join(", ");
+      const lines = uniqueNumbers(value.lines).slice(0, 4).join(", ");
+      return {
+        path: file,
+        reason: `Exact request anchor${value.anchors.size === 1 ? "" : "s"} ${anchors} matched at line${value.lines.length === 1 ? "" : "s"} ${lines}.`
+      };
+    });
+}
+
+function sourceFileScore(file: string) {
+  if (file.startsWith("src/")) return 6;
+  if (file.startsWith("tests/")) return 4;
+  if (file.endsWith(".ts") || file.endsWith(".tsx")) return 3;
+  if (file === "AGENTS.md" || file.endsWith(".md")) return 1;
+  return 0;
+}
+
+function anchorMatchScore(match: CodegenAnchorMatch) {
+  let score = 2;
+  if (/[{};]|=>|\b(?:await|const|let|function|return|class|import|export)\b/.test(match.preview)) score += 3;
+  if (match.preview.length <= 140) score += 1;
+  if (/\b(?:description|schema|prompt|instructions?)\b/i.test(match.preview) && match.preview.length > 140) score -= 2;
+  return score;
+}
+
+function mergeSuggestedFiles(
+  anchorTargetFiles: Array<{ path: string; reason: string }>,
+  suggestedFiles: Array<{ path: string; reason: string }>
+) {
+  const seen = new Set<string>();
+  return [...anchorTargetFiles, ...suggestedFiles].filter((file) => {
+    if (seen.has(file.path)) return false;
+    seen.add(file.path);
+    return true;
+  });
+}
+
+function uniqueNumbers(values: number[]) {
+  return [...new Set(values)].sort((left, right) => left - right);
+}
+
+function selectCodegenContextRule(taskRequest: string, anchorMatches: CodegenAnchorMatch[] = []): CodegenContextRule {
   const text = taskRequest.toLowerCase();
+  const anchorFiles = new Set(anchorMatches.map((match) => match.file));
+  const hasDiscordClientAnchor = [...anchorFiles].some((file) => file === "src/discord/client.ts" || file.startsWith("src/discord/"));
+  const hasTaskLifecycleAnchor = [...anchorFiles].some((file) =>
+    ["src/discord/taskNotifications.ts", "src/tools/coreTools.ts", "src/jobs/queue.ts", "src/db/repositories.ts"].includes(file)
+  );
+  if (hasDiscordClientAnchor && !hasTaskLifecycleAnchor && includesAny(text, ["thinking", "reply", "reaction", "message", "discord"])) {
+    return CODEGEN_CONTEXT_RULES[1]!;
+  }
   const hasCodeUpdateTerm = includesAny(text, [
     "code update",
     "coding agent",
@@ -1210,6 +1454,30 @@ async function existingRelativePaths(checkoutDir: string, relativePaths: string[
 
 export function renderCodegenContextPack(context: CodegenContextPack) {
   const lines = [
+    ...(context.requestAnchors?.length || context.anchorTargetFiles?.length
+      ? [
+          "Concrete request anchors:",
+          ...(context.requestAnchors?.length ? context.requestAnchors.map((anchor) => `- ${anchor}`) : ["- none found"]),
+          "",
+          ...(context.anchorTargetFiles?.length
+            ? [
+                "Target files from exact request evidence:",
+                ...context.anchorTargetFiles.map((file) => `- ${file.path}: ${file.reason}`),
+                "",
+                "Anchor guidance:",
+                "- Concrete request anchors outrank broad lifecycle guesses. Inspect these target files first and make the first focused edit there unless the code proves they are unrelated.",
+                ""
+              ]
+            : []),
+          ...(context.anchorMatches?.length
+            ? [
+                "Anchor match samples:",
+                ...context.anchorMatches.slice(0, 12).map((match) => `- ${match.file}:${match.line} (${match.anchor}): ${match.preview}`),
+                ""
+              ]
+            : [])
+        ]
+      : []),
     ...(context.focus
       ? [
           `Focus: ${context.focus}`,
@@ -1282,11 +1550,20 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     contextText ? "Codegen preflight context:" : undefined,
     contextText || undefined,
     contextText
-      ? "Use the preflight context as a starting map, not as proof. Inspect the suggested first files before broad searching, then make the suggested first edit and first implementable invariant true."
+      ? "Use the preflight context as a starting map, not as proof. If exact request anchor target files are present, inspect those before lifecycle files. Concrete anchors from the request outrank broad lifecycle guesses. Make the suggested first edit and first implementable invariant true."
       : undefined,
+    "",
+    "Patch-first budget:",
+    "- Read AGENTS.md if present, then inspect only the smallest snippets needed to make the first edit.",
+    "- When exact request anchor targets are present, read the top target file around the matched line and patch that owner before reading broad project-map files.",
+    "- If no anchor targets exist, read the likely entry point, one helper/adapter, and one closest test, then edit.",
+    "- Use `apply_patch` for the first focused edit when available. The first patch can be small and imperfect; refine it after tests or caller reads.",
+    "- Do not inspect status plumbing, queue code, observability UI, or extra tests before the first edit unless one of those files is the top target or required by the code you are changing.",
+    "- If you are unsure, make a small reversible implementation edit in the best target file and refine it after tests or callers reveal more.",
     "",
     "Implementation workflow:",
     "- First inspection pass: read the likely entry point, the closest existing helper/adapter, and the closest tests. Avoid broad repository archaeology before the first edit.",
+    "- If the preflight found exact quoted text, paths, symbols, env vars, routes, or tool names from the request, treat those matches as the first inspection result and patch the owning file unless it is clearly unrelated.",
     "- User wording may describe product behavior instead of exact code symbols. If literal searches miss, map the phrase to the closest existing mechanism in the lifecycle, such as a Discord reply edit, status callback, reaction, queue state, or persisted run status.",
     "- If the request changes user-visible behavior, map the lifecycle before editing: trigger -> temporary state -> progress/update paths -> success response -> error/timeout/cancellation -> cleanup.",
     "- If the behavior spans more than one path, introduce or reuse a small abstraction that owns the lifecycle instead of patching each call site independently.",
@@ -1298,6 +1575,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     "Stall avoidance:",
     "- Do not repeatedly reread the same file or expand into unrelated UI, observability, deployment, or queue code unless the lifecycle map shows it is required.",
     "- After a few targeted searches, stop searching for exact request vocabulary and act on the closest mechanism you found.",
+    "- Do not leave the checkout clean after you understand the target. Create a diff, then inspect more only to refine it.",
     "- Produce a real code diff promptly; pure analysis without edits will be stopped and retried.",
     "",
     "Requested update:",
@@ -1328,17 +1606,28 @@ function codexAttemptArgs(input: { command: "exec" | "resume"; model: string }) 
   return input.command === "exec" ? codexExecArgs({ checkoutDir: ".", model: input.model }) : codexResumeExecArgs({ model: input.model });
 }
 
+export function codegenFirstDiffDeadlineMs(contextPack?: Pick<CodegenContextPack, "anchorTargetFiles">) {
+  return contextPack?.anchorTargetFiles?.length ? CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS : CODEX_FIRST_DIFF_DEADLINE_MS;
+}
+
 export function codeUpdateRecoveryPrompt(
   env: SandboxEnv,
-  input: { attempt: number; totalAttempts: number; attempts: CodexAttemptSummary[]; gitStatus: string }
+  input: { attempt: number; totalAttempts: number; attempts: CodexAttemptSummary[]; gitStatus: string; contextPack?: CodegenContextPack }
 ) {
   const previous = input.attempts.at(-1);
+  const anchorTargetText = recoveryAnchorTargetText(input.contextPack);
   return [
     "Continue the same code-update task in this existing sandbox checkout.",
     "",
     "The previous Codex attempt did not leave a code diff. Do not restart broad analysis.",
     "You have enough context to act: make the smallest focused test or implementation edit now, then run the most relevant check.",
-    "If you need one more file, inspect it briefly and edit immediately after.",
+    "If you need one more file, inspect it briefly and edit immediately after. Do not run more than one read/search command before the first patch on this attempt.",
+    "Use apply_patch for the recovery edit when available; otherwise use the smallest reliable edit command. A small first diff is better than more clean-checkout analysis.",
+    anchorTargetText ? "Patch-first targets from the original request anchors:" : undefined,
+    anchorTargetText || undefined,
+    anchorTargetText
+      ? "On this recovery attempt, edit one of these files before additional broad searching unless the file is clearly unrelated."
+      : undefined,
     "",
     `Task ID: ${env.taskId}`,
     `Attempt: ${input.attempt}/${input.totalAttempts}`,
@@ -1363,7 +1652,18 @@ export function codeUpdateRecoveryPrompt(
       : "",
     "",
     "Finish with a real code diff. Do not commit, push, or open a PR yourself."
-  ].join("\n");
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function recoveryAnchorTargetText(contextPack?: CodegenContextPack) {
+  const targets = contextPack?.anchorTargetFiles ?? [];
+  if (!targets.length) return "";
+  return targets
+    .slice(0, 5)
+    .map((file) => `- ${file.path}: ${file.reason}`)
+    .join("\n");
 }
 
 export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWatchdogDecision | null {

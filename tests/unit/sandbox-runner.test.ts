@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   buildCodegenContextPack,
+  codegenFirstDiffDeadlineMs,
   codexExecArgs,
   codexResumeExecArgs,
   codeUpdatePrompt,
@@ -161,6 +162,70 @@ describe("sandboxRunner", () => {
     expect(contextPack.suggestedFirstEdit).toContain("focused task notification or repository test");
   });
 
+  it("prioritizes exact request anchors before broad lifecycle guesses", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-anchor-context-"));
+    try {
+      await fs.mkdir(path.join(tempDir, "src", "discord"), { recursive: true });
+      await fs.mkdir(path.join(tempDir, "src", "tools"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "src", "discord", "client.ts"),
+        'export async function reply() { return message.reply("Thinking..."); }\n',
+        "utf8"
+      );
+      await fs.writeFile(path.join(tempDir, "src", "tools", "coreTools.ts"), "export {}\n", "utf8");
+      const taskRequest =
+        'Replace the "Thinking..." placeholder reply behavior with a loading reaction. When processing a prompt, instead of sending a "Thinking..." message, react to the user\'s original message with the animated loading emoji <a:loading:1521299407214084337>. Once the final response is ready, remove the loading reaction from the user\'s message and reply as normal.';
+
+      const contextPack = await buildCodegenContextPack(tempDir, taskRequest);
+      const renderedContext = renderCodegenContextPack(contextPack);
+      const prompt = codeUpdatePrompt(
+        {
+          taskId: "task-1",
+          requestedBy: "kartik",
+          taskRequest
+        },
+        contextPack
+      );
+      const recovery = codeUpdateRecoveryPrompt(
+        {
+          taskId: "task-1",
+          requestedBy: "kartik",
+          taskRequest
+        } as any,
+        {
+          attempt: 2,
+          totalAttempts: 2,
+          attempts: [],
+          gitStatus: "",
+          contextPack
+        }
+      );
+
+      expect(contextPack.requestAnchors).toContain("Thinking...");
+      expect(contextPack.requestAnchors?.some((anchor) => anchor.includes("message and reply as normal"))).toBe(false);
+      expect(contextPack.anchorMatches).toEqual(
+        expect.arrayContaining([expect.objectContaining({ anchor: "Thinking...", file: "src/discord/client.ts", line: 1 })])
+      );
+      expect(contextPack.anchorTargetFiles?.[0]?.path).toBe("src/discord/client.ts");
+      expect(contextPack.suggestedFiles?.[0]?.path).toBe("src/discord/client.ts");
+      expect(contextPack.focus).toBe("discord_interaction_lifecycle");
+      expect(renderedContext).toContain("Concrete request anchors:");
+      expect(renderedContext).toContain("Target files from exact request evidence:");
+      expect(renderedContext).toContain("Concrete request anchors outrank broad lifecycle guesses");
+      expect(renderedContext).toContain("Do not spend more than three targeted file reads before the first code diff");
+      expect(prompt).toContain("If exact request anchor target files are present");
+      expect(prompt).toContain("Patch-first budget:");
+      expect(prompt).toContain("Use `apply_patch` for the first focused edit when available");
+      expect(prompt).toContain("patch that owner before reading broad project-map files");
+      expect(recovery).toContain("Patch-first targets from the original request anchors:");
+      expect(recovery).toContain("Do not run more than one read/search command before the first patch");
+      expect(recovery).toContain("Use apply_patch for the recovery edit when available");
+      expect(recovery).toContain("src/discord/client.ts");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("includes the focused context pack in the Codex prompt", async () => {
     const contextPack = await buildCodegenContextPack(process.cwd(), "Fix code update loading status after completion.");
     const renderedContext = renderCodegenContextPack(contextPack);
@@ -176,7 +241,7 @@ describe("sandboxRunner", () => {
     expect(renderedContext).toContain("Focus: agent_task_status_lifecycle");
     expect(prompt).toContain("Codegen preflight context:");
     expect(prompt).toContain("Focus: agent_task_status_lifecycle");
-    expect(prompt).toContain("Inspect the suggested first files before broad searching");
+    expect(prompt).toContain("Concrete anchors from the request outrank broad lifecycle guesses");
     expect(prompt).toContain("First implementable invariant:");
     expect(prompt).toContain("Suggested first edit:");
   });
@@ -203,6 +268,13 @@ describe("sandboxRunner", () => {
         reconnectStallMs: null
       })
     ).toEqual(expect.objectContaining({ action: "continue", reason: "idle_after_diff" }));
+  });
+
+  it("uses a shorter no-first-diff deadline when exact request anchors found target files", () => {
+    expect(codegenFirstDiffDeadlineMs()).toBe(8 * 60 * 1000);
+    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] })).toBe(
+      4 * 60 * 1000
+    );
   });
 
   it("treats reconnect stalls as retryable before a diff and salvageable after a diff", () => {

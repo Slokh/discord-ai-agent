@@ -26,16 +26,16 @@ type DetailTab = "overview" | "timeline" | "terminal" | "artifacts" | "raw";
 type TerminalStream = TerminalEntry["stream"];
 type HistoryMode = "push" | "replace";
 type LatencyRow = RunSnapshot["spans"][number] & { durationMs: number };
-type TimelinePhaseId = "initial" | "setup" | "execution" | "cleanup" | "response";
 type TimedRunEvent = { event: RunEvent; gapMs: number | null; offset: string };
 type TimelineStepKind = FlowItemKind | "span" | "event";
-type TimelineStep = {
+export type TimelineStep = {
   id: string;
   kind: TimelineStepKind;
   title: string;
   summary: string;
   createdAt: string;
   durationMs: number | null;
+  durationStartedAt: string | null;
   gapMs: number | null;
   offset: string;
   source: string;
@@ -44,11 +44,19 @@ type TimelineStep = {
   metadata: Record<string, unknown>;
   artifact?: RunArtifact;
 };
-type TimelinePhase = {
-  id: TimelinePhaseId;
-  label: string;
-  description: string;
+export type TimelineToolRequest = {
+  id?: string | null;
+  name: string;
+  argumentsText?: string | null;
+};
+export type TimelineStepGroup = {
+  id: string;
+  parent: TimelineStep;
+  children: TimelineStep[];
+};
+type TimelineTrace = {
   steps: TimelineStep[];
+  groups: TimelineStepGroup[];
   durationMs: number;
   status: RunStatus;
   slowest: { name: string; durationMs: number } | null;
@@ -93,14 +101,6 @@ const terminalStreamLabels: Record<TerminalStream, string> = {
   stdout: "stdout",
   stderr: "stderr",
   exit: "Exits"
-};
-
-const phaseDefinitions: Record<TimelinePhaseId, { label: string; description: string }> = {
-  initial: { label: "Initial Message", description: "Request intake and user-visible trigger" },
-  setup: { label: "Setup", description: "Context, permissions, sandbox, dependencies, and preflight work" },
-  execution: { label: "Execution", description: "Model, tool, command, crawl, and embedding work" },
-  cleanup: { label: "Cleanup", description: "Verification, persistence, git, PR, and finalization work" },
-  response: { label: "Response", description: "Discord edits, replies, failures, and final user-facing output" }
 };
 
 export function App() {
@@ -620,7 +620,7 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
   });
   const timelineStartedAt = timelineStart(snapshot.run.startedAt, events, spans, flows);
   const timedEvents = eventsWithTiming(events, timelineStartedAt);
-  const phases = timelinePhases({ events: timedEvents, spans, flows, startedAt: timelineStartedAt });
+  const trace = timelineTrace({ events: timedEvents, spans, flows, startedAt: timelineStartedAt });
 
   return (
     <section className="panel detail-panel">
@@ -647,72 +647,301 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
           </select>
         </div>
       </div>
-      {phases.length === 0 ? (
+      {trace.groups.length === 0 ? (
         <Empty label="No timeline items match these filters" />
       ) : (
-        <div className="phase-groups">
-          {phases.map((phase) => (
-            <details key={phase.id} className={`phase-group ${phase.status}`} open={phase.status === "failed" || phase.status === "running" || phase.id === "execution" || phase.id === "response"}>
-              <summary className="phase-summary">
-                <div>
-                  <strong>{phase.label}</strong>
-                  <span>{phase.description}</span>
-                </div>
-                <div className="time-stack">
-                  <strong>{formatDuration(phase.durationMs)}</strong>
-                  <small>{phase.steps.length} steps</small>
-                  {phase.slowest && <small title={phase.slowest.name}>slowest {formatDuration(phase.slowest.durationMs)}</small>}
-                </div>
-              </summary>
-              <ol className="phase-timeline">
-                {phase.steps.map((step) => (
-                  <li key={step.id} className={`phase-step ${step.kind} ${step.level ?? step.status ?? ""}`}>
-                    <div className="timeline-rail">
-                      <div className="timeline-dot" />
-                    </div>
-                    <article className="timeline-card">
-                      <div className="timeline-title">
-                        <span className={`timeline-icon ${step.kind}`}>{timelineStepIcon(step.kind)}</span>
-                        <div className="timeline-step-main">
-                          <strong>{step.title}</strong>
-                          <span>{step.source}</span>
-                        </div>
-                        <div className="time-stack">
-                          <strong>{step.offset}</strong>
-                          {step.gapMs != null && <small>{formatSignedDuration(step.gapMs)}</small>}
-                        </div>
-                      </div>
-                      <p>{step.summary}</p>
-                      <div className="timeline-meta">
-                        <span className={`timeline-kind ${step.kind}`}>{timelineStepLabel(step.kind)}</span>
-                        <span>{formatDate(step.createdAt)}</span>
-                        {step.durationMs != null && <span>took {formatDuration(step.durationMs)}</span>}
-                        {step.level && <span className={`level-text ${step.level}`}>{step.level}</span>}
-                        {step.status && <span className={`level-text ${step.status}`}>{step.status}</span>}
-                        {step.artifact && <span>{formatBytes(step.artifact.sizeBytes)}</span>}
-                      </div>
-                      {step.artifact && (
-                        <div className="flow-artifact-meta">
-                          <span>{step.artifact.kind}</span>
-                          <span>{step.artifact.contentType}</span>
-                          {step.artifact.redacted && <span>redacted</span>}
-                        </div>
-                      )}
-                      {Object.keys(step.metadata).length > 0 && (
-                        <details>
-                          <summary>Metadata</summary>
-                          <MetadataPreview metadata={step.metadata} />
-                        </details>
-                      )}
-                    </article>
-                  </li>
-                ))}
-              </ol>
-            </details>
-          ))}
+        <div className="timeline-trace">
+          <div className={`timeline-summary-strip ${trace.status}`}>
+            <div>
+              <strong>{formatDuration(trace.durationMs)}</strong>
+              <span>measured duration</span>
+            </div>
+            <div>
+              <strong>{trace.groups.length}</strong>
+              <span>top-level steps</span>
+            </div>
+            {trace.slowest && (
+              <div title={trace.slowest.name}>
+                <strong>{formatDuration(trace.slowest.durationMs)}</strong>
+                <span>slowest step</span>
+              </div>
+            )}
+          </div>
+          <ol className="timeline-list flat-timeline">
+            {trace.groups.map((group) => (
+              <TimelineGroupItem key={group.id} group={group} />
+            ))}
+          </ol>
         </div>
       )}
     </section>
+  );
+}
+
+function TimelineGroupItem({ group }: { group: TimelineStepGroup }) {
+  return (
+    <li className={`timeline-step ${group.parent.kind} ${group.parent.level ?? group.parent.status ?? ""}`}>
+      <div className="timeline-rail">
+        <div className="timeline-dot" />
+      </div>
+      <article className="timeline-card">
+        <TimelineStepHeader step={group.parent} />
+        <TimelineStepDetails step={group.parent} />
+        <TimelineStepMeta step={group.parent} />
+        {group.parent.artifact && <ArtifactMeta artifact={group.parent.artifact} />}
+        {group.children.length > 0 && (
+          <div className="timeline-children">
+            {group.children.map((child) => (
+              <article key={child.id} className={`timeline-child ${child.kind} ${child.level ?? child.status ?? ""}`}>
+                <TimelineStepHeader step={child} child />
+                <TimelineStepDetails step={child} />
+                <TimelineStepMeta step={child} />
+                {child.artifact && <ArtifactMeta artifact={child.artifact} />}
+                {Object.keys(child.metadata).length > 0 && (
+                  <details>
+                    <summary>Metadata</summary>
+                    <MetadataPreview metadata={child.metadata} />
+                  </details>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+        {Object.keys(group.parent.metadata).length > 0 && (
+          <details>
+            <summary>Metadata</summary>
+            <MetadataPreview metadata={group.parent.metadata} />
+          </details>
+        )}
+      </article>
+    </li>
+  );
+}
+
+function TimelineStepDetails({ step }: { step: TimelineStep }) {
+  const toolRequests = timelineToolRequests(step);
+  if (isModelRoundTimelineStep(step) && toolRequests.length > 0) return <RequestedTools requests={toolRequests} />;
+  const summary = timelineStepSummaryText(step);
+  return summary ? <p>{summary}</p> : null;
+}
+
+function RequestedTools({ requests }: { requests: TimelineToolRequest[] }) {
+  return (
+    <div className="requested-tools">
+      <div className="requested-tools-heading">
+        <Wrench />
+        <span>Requested tools</span>
+      </div>
+      <div className="requested-tool-list">
+        {requests.map((request, index) => (
+          <div className="requested-tool" key={`${request.id ?? request.name}-${index}`}>
+            <div className="requested-tool-name">
+              <span>{index + 1}</span>
+              <strong>{request.name}</strong>
+            </div>
+            <ToolArguments argumentsText={request.argumentsText} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ToolArguments({ argumentsText }: { argumentsText?: string | null }) {
+  const parsed = parseToolArgumentsText(argumentsText);
+  if (!argumentsText?.trim()) return <span className="tool-args-empty">no args</span>;
+  if (parsed && Object.keys(parsed).length > 0) {
+    return (
+      <div className="tool-args">
+        {Object.entries(parsed).map(([key, value]) => (
+          <span className="tool-arg" key={key}>
+            <b>{key}</b>
+            <span>{formatToolArgumentValue(value)}</span>
+          </span>
+        ))}
+      </div>
+    );
+  }
+  return <code className="tool-args-raw">{argumentsText.trim()}</code>;
+}
+
+export function timelineStepSummaryText(step: Pick<TimelineStep, "title" | "summary" | "metadata">) {
+  const modelSummary = modelRoundSummaryText(step);
+  if (modelSummary) return modelSummary;
+  return timelineSummaryText(step.summary);
+}
+
+export function timelineSummaryText(summary: string) {
+  const trimmed = summary.trim();
+  if (!trimmed) return "";
+  if (/^no summary(?: recorded)?\.?$/i.test(trimmed)) return "";
+  if (/^sent thinking reply\.?$/i.test(trimmed)) return "";
+  if (/^thinking\.\.\.$/i.test(trimmed)) return "";
+  if (/^[\w -]+ work took \d+(?:\.\d+)?s\.?$/i.test(trimmed)) return "";
+  if (/^[\w -]+ work took \d+m \d+s\.?$/i.test(trimmed)) return "";
+  return trimmed;
+}
+
+function modelRoundSummaryText(step: Pick<TimelineStep, "title" | "summary" | "metadata">) {
+  if (!isModelRoundTimelineStep(step)) return "";
+  const usableTools = timelineToolRequests(step).map((request) => request.name);
+  if (usableTools.length > 0) return `Requested tools: ${formatToolCallList(usableTools)}`;
+  const outputChars = typeof step.metadata.outputChars === "number" ? step.metadata.outputChars : null;
+  if (outputChars != null && outputChars > 0) return `Returned text: ${outputChars} chars`;
+  if (outputChars === 0) return "No tool calls or text returned";
+  const finishReason = typeof step.metadata.finishReason === "string" ? step.metadata.finishReason : "";
+  if (finishReason) return `Finished: ${finishReason}`;
+  return timelineSummaryText(step.summary);
+}
+
+function stringArrayMetadata(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+export function timelineToolRequests(step: Pick<TimelineStep, "title" | "metadata">): TimelineToolRequest[] {
+  if (!isModelRoundTimelineStep(step)) return [];
+  const structuredSelected = toolRequestArrayMetadata(step.metadata.selectedLocalToolRequests);
+  if (structuredSelected.length > 0) return structuredSelected;
+  const enrichedRequests = toolRequestArrayMetadata(step.metadata.timelineToolRequests);
+  if (enrichedRequests.length > 0) return enrichedRequests;
+  const structuredRequested = toolRequestArrayMetadata(step.metadata.requestedToolRequests);
+  if (structuredRequested.length > 0) return structuredRequested;
+  const selectedTools = stringArrayMetadata(step.metadata.selectedLocalTools).map((name) => ({ name }));
+  if (selectedTools.length > 0) return selectedTools;
+  return stringArrayMetadata(step.metadata.requestedToolCalls).map((name) => ({ name }));
+}
+
+function toolRequestArrayMetadata(value: unknown): TimelineToolRequest[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): TimelineToolRequest[] => {
+    if (typeof item === "string" && item.trim()) return [{ name: item.trim() }];
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!name) return [];
+    const id = typeof record.id === "string" && record.id.trim() ? record.id : null;
+    return [
+      {
+        ...(id ? { id } : {}),
+        name,
+        argumentsText: toolRequestArgumentsText(record)
+      }
+    ];
+  });
+}
+
+function toolRequestArgumentsText(record: Record<string, unknown>) {
+  for (const key of ["argumentsText", "argumentsPreview", "argumentsSummary"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  const value = record.arguments;
+  if (value == null) return null;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatToolCallList(tools: string[]) {
+  const counts = new Map<string, number>();
+  for (const tool of tools) counts.set(tool, (counts.get(tool) ?? 0) + 1);
+  return [...counts.entries()].map(([tool, count]) => (count > 1 ? `${tool} x${count}` : tool)).join(", ");
+}
+
+function parseToolArgumentsText(argumentsText?: string | null): Record<string, unknown> | null {
+  if (!argumentsText?.trim()) return null;
+  try {
+    const parsed = JSON.parse(argumentsText);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function formatToolArgumentValue(value: unknown) {
+  if (value == null) return "null";
+  if (typeof value === "string") return value.length > 90 ? `${value.slice(0, 87)}...` : value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  const text = JSON.stringify(value);
+  return text.length > 90 ? `${text.slice(0, 87)}...` : text;
+}
+
+function isModelRoundTimelineStep(step: Pick<TimelineStep, "title">) {
+  return /\bagent model round complete\b/.test(normalizedTimelineName(step.title));
+}
+
+export function timelineTitleText(step: Pick<TimelineStep, "title" | "summary" | "kind" | "source">) {
+  const title = normalizedTimelineName(step.title);
+  const toolName = toolNameFromSummary(step.summary);
+  if (/\b(discord mention received|discord user prompt|user prompt)\b/.test(title)) return "User prompt";
+  if (/\b(discord thinking sent|thinking reply sent)\b/.test(title)) return "Acknowledgement sent";
+  if (/\b(load channel memory|load memory)\b/.test(title)) return "Load conversation memory";
+  if (/\b(resolve discord permissions|permissions visibility resolved)\b/.test(title)) return "Check user access";
+  if (/\b(discord reply context resolved|reply context resolved)\b/.test(title)) return "Load reply context";
+  if (/\bagent model round complete\b/.test(title)) {
+    const round = step.summary.match(/^Round\s+(\d+)/i)?.[1];
+    return round ? `LLM call ${round}` : "LLM call";
+  }
+  if (/\bagent tool complete\b/.test(title)) return toolName ? `Tool call: ${toolName}` : "Tool call";
+  if (/\bget discord channel topics\b/.test(title)) return "Channel topics query";
+  if (/\bcompose channel topics\b/.test(title)) return "Topic summary composed";
+  if (/\bget discord stats\b/.test(title)) return "Discord stats query";
+  if (/\bmodel tool router\b/.test(title)) return "Tool selection";
+  if (/\bagent tool started\b/.test(title)) return toolName ? `Start tool: ${toolName}` : "Start tool";
+  if (/\bagent request started\b/.test(title)) return "Start agent run";
+  if (/\bagent response ready\b/.test(title)) return "Answer ready";
+  if (/\bagent final synthesis started\b/.test(title)) return "Compose final answer";
+  if (/\b(discord final response|final response)\b/.test(title)) return "Final answer sent";
+  if (/\bchat\b/.test(title) && step.source === "tool") return "LLM response";
+  return step.title;
+}
+
+function toolNameFromSummary(summary: string) {
+  const match = summary.match(/^([A-Za-z][\w.-]*)(?::|\b)/);
+  return match?.[1] ?? "";
+}
+
+function TimelineStepHeader({ step, child = false }: { step: TimelineStep; child?: boolean }) {
+  return (
+    <div className={child ? "timeline-child-title" : "timeline-title"}>
+      <span className={`timeline-icon ${step.kind}`}>{timelineStepIcon(step.kind)}</span>
+      <div className="timeline-step-main">
+        <strong>{timelineTitleText(step)}</strong>
+        <span>{step.source}</span>
+      </div>
+      {step.durationMs != null && (
+        <div className="time-stack">
+          <strong>{formatDuration(step.durationMs)}</strong>
+          <small>duration</small>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimelineStepMeta({ step }: { step: TimelineStep }) {
+  return (
+    <div className="timeline-meta">
+      <span className={`timeline-kind ${step.kind}`}>{timelineStepLabel(step.kind)}</span>
+      <span>{formatDate(step.createdAt)}</span>
+      {step.level && <span className={`level-text ${step.level}`}>{step.level}</span>}
+      {step.status && <span className={`level-text ${step.status}`}>{step.status}</span>}
+      {step.artifact && <span>{formatBytes(step.artifact.sizeBytes)}</span>}
+    </div>
+  );
+}
+
+function ArtifactMeta({ artifact }: { artifact: RunArtifact }) {
+  return (
+    <div className="flow-artifact-meta">
+      <span>{artifact.kind}</span>
+      <span>{artifact.contentType}</span>
+      {artifact.redacted && <span>redacted</span>}
+    </div>
   );
 }
 
@@ -1064,29 +1293,23 @@ function isTerminal(status: RunStatus) {
   return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
 }
 
-function timelinePhases({ events, spans, flows, startedAt }: { events: TimedRunEvent[]; spans: RunSpan[]; flows: FlowItem[]; startedAt: string }): TimelinePhase[] {
-  const buckets = new Map<TimelinePhaseId, TimelineStep[]>();
+function timelineTrace({ events, spans, flows, startedAt }: { events: TimedRunEvent[]; spans: RunSpan[]; flows: FlowItem[]; startedAt: string }): TimelineTrace {
+  const steps: TimelineStep[] = [];
   const flowEventIds = new Set(flows.map((flow) => flow.id.match(/^event-(.+)$/)?.[1]).filter(Boolean));
-  for (const phaseId of Object.keys(phaseDefinitions) as TimelinePhaseId[]) buckets.set(phaseId, []);
   for (const span of spans) {
     if (isEnvelopeSpan(span)) continue;
-    buckets.get(phaseForText(span.name, span.source))?.push(timelineStepFromSpan(span, startedAt));
+    steps.push(timelineStepFromSpan(span, startedAt));
   }
   for (const flow of flows) {
-    buckets.get(phaseForText(flow.title, flow.source, flow.summary))?.push(timelineStepFromFlow(flow, startedAt));
+    steps.push(timelineStepFromFlow(flow, startedAt));
   }
   for (const event of events) {
     if (flowEventIds.has(event.event.id)) continue;
     if (isLowSignalTimelineEvent(event.event)) continue;
     if (isDuplicateSpanEvent(event.event, spans)) continue;
-    buckets.get(phaseForText(event.event.name, event.event.source, event.event.summary))?.push(timelineStepFromEvent(event));
+    steps.push(timelineStepFromEvent(event));
   }
-  return (Object.keys(phaseDefinitions) as TimelinePhaseId[])
-    .map((id) => {
-      const steps = buckets.get(id)!;
-      return buildTimelinePhase(id, steps);
-    })
-    .filter((phase) => phase.steps.length > 0);
+  return buildTimelineTrace(steps);
 }
 
 function timelineStart(defaultStartedAt: string, events: RunEvent[], spans: RunSpan[], flows: FlowItem[]) {
@@ -1102,16 +1325,16 @@ function timelineStart(defaultStartedAt: string, events: RunEvent[], spans: RunS
   return new Date(Math.min(...times)).toISOString();
 }
 
-function buildTimelinePhase(id: TimelinePhaseId, steps: TimelineStep[]): TimelinePhase {
+function buildTimelineTrace(steps: TimelineStep[]): TimelineTrace {
   const sortedSteps = withStepGaps(steps);
-  const durations = sortedSteps.map((step) => ({ name: step.title, durationMs: step.durationMs ?? 0 })).filter((item) => item.durationMs > 0);
-  const durationMs = stepRangeDuration(sortedSteps);
+  const groups = groupTimelineSteps(sortedSteps);
+  const countedSteps = groups.map((group) => group.parent);
+  const durations = countedSteps.map((step) => ({ name: timelineTitleText(step), durationMs: step.durationMs ?? 0 })).filter((item) => item.durationMs > 0);
+  const durationMs = summedStepDuration(countedSteps);
   const slowest = durations.length > 0 ? durations.reduce((current, item) => (item.durationMs > current.durationMs ? item : current), durations[0]!) : null;
   return {
-    id,
-    label: phaseDefinitions[id].label,
-    description: phaseDefinitions[id].description,
     steps: sortedSteps,
+    groups,
     durationMs,
     status: phaseStatus(sortedSteps),
     slowest
@@ -1126,6 +1349,7 @@ function timelineStepFromSpan(span: RunSpan, startedAt: string): TimelineStep {
     summary: spanSummary(span),
     createdAt: span.startedAt,
     durationMs: span.durationMs,
+    durationStartedAt: span.startedAt,
     gapMs: null,
     offset: formatOffset(startedAt, span.startedAt),
     source: span.source,
@@ -1143,6 +1367,7 @@ function timelineStepFromFlow(flow: FlowItem, startedAt: string): TimelineStep {
     summary: flow.summary,
     createdAt: flow.createdAt,
     durationMs: flow.durationMs,
+    durationStartedAt: durationStartedAtForCompletedStep(flow.createdAt, flow.durationMs),
     gapMs: null,
     offset: formatOffset(startedAt, flow.createdAt),
     source: flow.source,
@@ -1157,10 +1382,11 @@ function timelineStepFromEvent({ event, offset }: TimedRunEvent): TimelineStep {
   return {
     id: `event-${event.id}`,
     kind: event.level === "error" ? "error" : "event",
-    title: humanizeEventName(event.name),
+    title: timelineEventTitle(event.name),
     summary: event.summary ?? "No summary recorded.",
     createdAt: event.createdAt,
     durationMs: event.durationMs,
+    durationStartedAt: durationStartedAtForCompletedStep(event.createdAt, event.durationMs),
     gapMs: null,
     offset,
     source: event.source,
@@ -1170,13 +1396,21 @@ function timelineStepFromEvent({ event, offset }: TimedRunEvent): TimelineStep {
   };
 }
 
+function timelineEventTitle(name: string) {
+  const text = normalizedTimelineName(name);
+  if (/\bdiscord mention received\b/.test(text)) return "User prompt";
+  if (/\bdiscord thinking sent\b/.test(text)) return "Thinking reply sent";
+  return humanizeEventName(name);
+}
+
 function withStepGaps(steps: TimelineStep[]) {
   const sortedSteps = [...steps].sort((left, right) => {
       const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
       if (Number.isFinite(timeDelta) && timeDelta !== 0) return timeDelta;
       return timelineStepOrder(left.kind) - timelineStepOrder(right.kind);
     });
-  return compactTimelineSteps(sortedSteps)
+  const enrichedSteps = enrichModelRoundToolRequests(sortedSteps);
+  return compactTimelineSteps(enrichedSteps)
     .map((step, index, sortedSteps) => {
       const previous = index > 0 ? sortedSteps[index - 1] : null;
       const gapMs = previous ? new Date(step.createdAt).getTime() - new Date(previous.createdAt).getTime() : null;
@@ -1187,8 +1421,61 @@ function withStepGaps(steps: TimelineStep[]) {
     });
 }
 
-function compactTimelineSteps(steps: TimelineStep[]) {
+export function enrichModelRoundToolRequests(steps: TimelineStep[]) {
+  const modelSteps = steps.filter(isModelRoundTimelineStep);
+  if (modelSteps.length === 0) return steps;
+  return steps.map((step) => {
+    if (!isModelRoundTimelineStep(step) || timelineToolRequests(step).some((request) => request.argumentsText?.trim())) return step;
+    const toolRequests = toolStartRequestsForModelRound(step, steps, modelSteps);
+    if (toolRequests.length === 0) return step;
+    return {
+      ...step,
+      metadata: {
+        ...step.metadata,
+        timelineToolRequests: toolRequests
+      }
+    };
+  });
+}
+
+function toolStartRequestsForModelRound(modelStep: TimelineStep, steps: TimelineStep[], modelSteps: TimelineStep[]) {
+  const modelCompletedAt = new Date(modelStep.createdAt).getTime();
+  if (!Number.isFinite(modelCompletedAt)) return [];
+  const nextModel = modelSteps.find((candidate) => {
+    if (candidate.id === modelStep.id) return false;
+    return timelineStepStartMs(candidate) > modelCompletedAt;
+  });
+  const nextModelStartedAt = nextModel ? timelineStepStartMs(nextModel) : Number.POSITIVE_INFINITY;
+  return steps
+    .filter((step) => {
+      if (!isToolStartedTimelineStep(step)) return false;
+      const startedAt = new Date(step.createdAt).getTime();
+      return Number.isFinite(startedAt) && startedAt >= modelCompletedAt && startedAt < nextModelStartedAt;
+    })
+    .map(toolRequestFromStartedStep)
+    .filter((request): request is TimelineToolRequest => request != null);
+}
+
+function isToolStartedTimelineStep(step: TimelineStep) {
+  return /\bagent tool started\b/.test(normalizedTimelineName(step.title));
+}
+
+function toolRequestFromStartedStep(step: TimelineStep): TimelineToolRequest | null {
+  const metadataName = typeof step.metadata.toolName === "string" ? step.metadata.toolName.trim() : "";
+  const name = metadataName || step.summary.trim();
+  if (!name) return null;
+  const argumentsText = typeof step.metadata.argumentsPreview === "string" ? step.metadata.argumentsPreview : toolRequestArgumentsText(step.metadata);
+  return {
+    name,
+    argumentsText
+  };
+}
+
+export function compactTimelineSteps(steps: TimelineStep[]) {
   return steps.filter((step) => {
+    if (isEnvelopeTimelineStep(step)) return false;
+    if (isRedundantTimelineStep(step, steps)) return false;
+    if (isDuplicateTimedStep(step, steps)) return false;
     if (step.kind !== "span") return true;
     if (step.source !== "command") return true;
     const stepName = normalizedTimelineName(step.title);
@@ -1201,6 +1488,177 @@ function compactTimelineSteps(steps: TimelineStep[]) {
       if (Math.abs(candidateStartedAt - stepStartedAt) > 1_500) return false;
       return (candidate.durationMs ?? 0) >= (step.durationMs ?? 0);
     });
+  });
+}
+
+function isRedundantTimelineStep(step: TimelineStep, steps: TimelineStep[]) {
+  if (step.level === "error") return false;
+  const text = normalizedTimelineName(`${step.title} ${step.source}`);
+  if (isPromptArtifactDuplicate(step, steps)) return true;
+  if (isFinalResponseDuplicate(step, steps)) return true;
+  if (/\bagent request started\b/.test(text) && hasModelRoundStep(steps)) return true;
+  if (/\bagent response ready\b/.test(text) && hasFinalResponseStep(steps)) return true;
+  if (/\bagent final synthesis started\b/.test(text) && hasFinalResponseStep(steps)) return true;
+  if (/\bmodel tool router\b/.test(text) && hasModelRoundStep(steps)) return true;
+  if (/\bagent tool started\b/.test(text) && hasCompletedToolStep(step, steps)) return true;
+  return false;
+}
+
+function isPromptArtifactDuplicate(step: TimelineStep, steps: TimelineStep[]) {
+  const text = normalizedTimelineName(`${step.title} ${step.source}`);
+  if (step.kind !== "artifact" || !/\b(discord user prompt|user prompt)\b/.test(text)) return false;
+  const summary = normalizedTimelineName(step.summary);
+  return steps.some((candidate) => {
+    if (candidate.id === step.id) return false;
+    const candidateText = normalizedTimelineName(candidate.title);
+    if (!/\b(discord mention received|user prompt|message received)\b/.test(candidateText)) return false;
+    return summariesMatch(summary, normalizedTimelineName(candidate.summary));
+  });
+}
+
+function isFinalResponseDuplicate(step: TimelineStep, steps: TimelineStep[]) {
+  const text = normalizedTimelineName(`${step.title} ${step.source}`);
+  if (!/\bchat\b/.test(text)) return false;
+  const summary = normalizedTimelineName(step.summary);
+  return steps.some((candidate) => {
+    if (candidate.id === step.id) return false;
+    const candidateText = normalizedTimelineName(candidate.title);
+    if (!/\b(discord final response|final response)\b/.test(candidateText)) return false;
+    return summariesMatch(summary, normalizedTimelineName(candidate.summary));
+  });
+}
+
+function hasFinalResponseStep(steps: TimelineStep[]) {
+  return steps.some((step) => /\b(discord final response|final response)\b/.test(normalizedTimelineName(step.title)));
+}
+
+function hasModelRoundStep(steps: TimelineStep[]) {
+  return steps.some((step) => /\bagent model round complete\b/.test(normalizedTimelineName(step.title)) && (step.durationMs ?? 0) > 0);
+}
+
+function hasCompletedToolStep(step: TimelineStep, steps: TimelineStep[]) {
+  const toolName = normalizedTimelineName(step.summary);
+  return steps.some((candidate) => {
+    if (candidate.id === step.id || (candidate.durationMs ?? 0) <= 0) return false;
+    const candidateText = normalizedTimelineName(candidate.title);
+    if (!/\bagent tool complete\b/.test(candidateText)) return false;
+    if (!toolName) return true;
+    return normalizedTimelineName(candidate.summary).includes(toolName);
+  });
+}
+
+function summariesMatch(left: string, right: string) {
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+export function groupTimelineSteps(steps: TimelineStep[]): TimelineStepGroup[] {
+  const parentSteps = steps.filter(isTimelineParentStep);
+  const childrenByParent = new Map<string, TimelineStep[]>();
+  const assignedChildren = new Set<string>();
+
+  for (const child of steps) {
+    if (isTimelineParentStep(child)) continue;
+    const parent = bestTimelineParent(child, parentSteps);
+    if (!parent) continue;
+    assignedChildren.add(child.id);
+    const children = childrenByParent.get(parent.id) ?? [];
+    children.push(child);
+    childrenByParent.set(parent.id, children);
+  }
+
+  const groups: TimelineStepGroup[] = parentSteps.map((parent) => ({
+    id: parent.id,
+    parent,
+    children: childrenByParent.get(parent.id) ?? []
+  }));
+
+  for (const step of steps) {
+    if (assignedChildren.has(step.id) || parentSteps.some((parent) => parent.id === step.id)) continue;
+    groups.push({ id: step.id, parent: step, children: [] });
+  }
+
+  return groups.sort((left, right) => timelineStepStartMs(left.parent) - timelineStepStartMs(right.parent));
+}
+
+function isTimelineParentStep(step: TimelineStep) {
+  return (step.durationMs ?? 0) > 0;
+}
+
+function bestTimelineParent(child: TimelineStep, parents: TimelineStep[]) {
+  const childAt = new Date(child.createdAt).getTime();
+  if (!Number.isFinite(childAt)) return null;
+  const toleranceMs = 1_000;
+  const candidates = parents
+    .map((parent) => {
+      if (!shouldNestTimelineChild(child, parent)) return null;
+      const interval = stepTimingInterval(parent);
+      if (!interval) return null;
+      const exact = childAt >= interval.startedAt && childAt <= interval.endedAt;
+      const nearby = childAt >= interval.startedAt - toleranceMs && childAt <= interval.endedAt + toleranceMs;
+      if (!exact && !nearby) return null;
+      return {
+        parent,
+        exact,
+        durationMs: interval.endedAt - interval.startedAt,
+        distanceMs: exact ? 0 : Math.min(Math.abs(childAt - interval.startedAt), Math.abs(childAt - interval.endedAt))
+      };
+    })
+    .filter((candidate): candidate is { parent: TimelineStep; exact: boolean; durationMs: number; distanceMs: number } => candidate != null)
+    .sort((left, right) => {
+      if (left.exact !== right.exact) return left.exact ? -1 : 1;
+      if (left.durationMs !== right.durationMs) return left.durationMs - right.durationMs;
+      return left.distanceMs - right.distanceMs;
+    });
+  return candidates[0]?.parent ?? null;
+}
+
+function shouldNestTimelineChild(child: TimelineStep, parent: TimelineStep) {
+  if (isTopLevelTimelineMarker(child)) return false;
+  if (child.kind === "input" || child.kind === "response" || child.kind === "artifact") return false;
+  const childText = normalizedTimelineName(`${child.title} ${child.source}`);
+  const parentText = normalizedTimelineName(`${parent.title} ${parent.source}`);
+  const parentIsTool = /\btool\b/.test(parentText);
+  const parentIsModel = /\b(model|chat|completion|synthesis)\b/.test(parentText);
+  if (child.kind === "tool") return parentIsTool;
+  if (child.kind === "model") return parentIsModel;
+  if (/\b(model|chat|completion|synthesis)\b/.test(childText)) return parentIsModel;
+  if (/\btool\b/.test(childText)) return parentIsTool;
+  if (child.source === parent.source) return true;
+  return /\b(context|permission|resolve|reply)\b/.test(childText) && /\b(context|permission|resolve|reply)\b/.test(parentText);
+}
+
+function isTopLevelTimelineMarker(step: TimelineStep) {
+  const text = normalizedTimelineName(step.title);
+  return /\b(discord mention received|discord user prompt|discord thinking sent|agent request started|agent response ready|discord final response|final response|response ready)\b/.test(text);
+}
+
+function timelineStepStartMs(step: TimelineStep) {
+  const interval = stepTimingInterval(step);
+  if (interval) return interval.startedAt;
+  const createdAt = new Date(step.createdAt).getTime();
+  return Number.isFinite(createdAt) ? createdAt : Number.MAX_SAFE_INTEGER;
+}
+
+function isEnvelopeTimelineStep(step: TimelineStep) {
+  if (step.level === "error") return false;
+  const text = normalizedTimelineName(`${step.title} ${step.source} ${metadataValue(step.metadata.spanId)}`);
+  if (step.kind === "span" && /\b(run model led agent|agent request|sandbox command|run total|task total|sandbox lifetime)\b/.test(text)) return true;
+  return (step.durationMs ?? 0) > 0 && /\b(agent request complete|discord mention handled)\b/.test(text);
+}
+
+function isDuplicateTimedStep(step: TimelineStep, steps: TimelineStep[]) {
+  if (step.kind === "span" || step.level === "error" || (step.durationMs ?? 0) <= 0) return false;
+  const stepInterval = stepTimingInterval(step);
+  if (!stepInterval) return false;
+  return steps.some((candidate) => {
+    if (candidate.id === step.id || candidate.kind !== "span" || candidate.source !== "process" || (candidate.durationMs ?? 0) <= 0) return false;
+    const candidateInterval = stepTimingInterval(candidate);
+    if (!candidateInterval) return false;
+    const overlap = Math.max(0, Math.min(stepInterval.endedAt, candidateInterval.endedAt) - Math.max(stepInterval.startedAt, candidateInterval.startedAt));
+    const shorterDuration = Math.min(stepInterval.endedAt - stepInterval.startedAt, candidateInterval.endedAt - candidateInterval.startedAt);
+    if (shorterDuration <= 0 || overlap / shorterDuration < 0.8) return false;
+    return Math.abs((step.durationMs ?? 0) - (candidate.durationMs ?? 0)) < 1_000;
   });
 }
 
@@ -1226,22 +1684,28 @@ function phaseStatus(steps: TimelineStep[]): RunStatus {
   return "succeeded";
 }
 
-function stepRangeDuration(steps: TimelineStep[]) {
-  if (steps.length === 0) return 0;
-  const starts = steps.map((step) => new Date(step.createdAt).getTime()).filter(Number.isFinite);
-  const ends = steps.map((step) => new Date(step.createdAt).getTime() + (step.durationMs ?? 0)).filter(Number.isFinite);
-  if (starts.length === 0 || ends.length === 0) return steps.reduce((total, step) => Math.max(total, step.durationMs ?? 0), 0);
-  const startedAt = Math.min(...starts);
-  const endedAt = Math.max(...ends);
-  return endedAt >= startedAt ? endedAt - startedAt : 0;
+export function summedStepDuration(steps: Array<{ durationMs: number | null | undefined }>) {
+  return steps.reduce((total, step) => total + Math.max(0, step.durationMs ?? 0), 0);
+}
+
+function durationStartedAtForCompletedStep(createdAt: string, durationMs: number | null | undefined) {
+  const completedAt = new Date(createdAt).getTime();
+  if (!Number.isFinite(completedAt) || durationMs == null || durationMs <= 0) return null;
+  return new Date(completedAt - durationMs).toISOString();
+}
+
+function stepTimingInterval(step: { createdAt: string; durationMs: number | null | undefined; durationStartedAt?: string | null }) {
+  const startedAt = new Date(step.durationStartedAt ?? step.createdAt).getTime();
+  const durationMs = step.durationMs ?? 0;
+  if (!Number.isFinite(startedAt) || !Number.isFinite(durationMs) || durationMs <= 0) return null;
+  return { startedAt, endedAt: startedAt + durationMs };
 }
 
 function spanSummary(span: RunSpan) {
   const explicitSummary = typeof span.metadata.summary === "string" ? span.metadata.summary : null;
   if (explicitSummary) return explicitSummary;
   if (span.status === "running") return "Still running.";
-  if (span.durationMs != null) return `${titleCase(span.source)} work took ${formatDuration(span.durationMs)}.`;
-  return `${titleCase(span.source)} work has no completed duration yet.`;
+  return "";
 }
 
 function isEnvelopeSpan(span: RunSpan) {
@@ -1270,23 +1734,13 @@ function normalizedTimelineName(value: string) {
   return value.toLowerCase().replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function phaseForText(name: string, source: string, summary?: string | null): TimelinePhaseId {
-  const text = `${name} ${source} ${summary ?? ""}`.toLowerCase().replace(/[._-]+/g, " ");
-  if (/\b(mention received|message received|user prompt|input|request received|task queued|queued)\b/.test(text)) return "initial";
-  if (/\b(verify|test|lint|scan|commit|push|pull request|pr|cleanup|persist|save|finaliz|reconcile)\b/.test(text)) return "cleanup";
-  if (/\b(sandbox|dependency|dependencies|install|clone|checkout|permission|memory|context|preflight|cache|load channel|resolve discord)\b/.test(text)) return "setup";
-  if (/\b(codex|model|openrouter|tool|chat|completion|agent request|search discord|discord history|discord stats|generate image)\b/.test(text)) return "execution";
-  if (/\b(reply|respond|response|completed|failed|cancelled|discord mention failed|message sent|message edit|final answer)\b/.test(text)) return "response";
-  return "execution";
-}
-
 function conversationFlow(snapshot: RunSnapshot): FlowItem[] {
   const eventItems = snapshot.events.filter(isFlowEvent).map((event): FlowItem => {
     const callType = callKind(event);
     return {
       id: `event-${event.id}`,
       kind: event.level === "error" ? "error" : eventKind(event, callType),
-      title: humanizeEventName(event.name),
+      title: timelineEventTitle(event.name),
       summary: event.summary ?? "No summary",
       createdAt: event.createdAt,
       durationMs: event.durationMs,
@@ -1346,7 +1800,7 @@ function timelineStepIcon(kind: TimelineStepKind) {
 }
 
 function timelineStepLabel(kind: TimelineStepKind) {
-  if (kind === "span") return "phase";
+  if (kind === "span") return "span";
   if (kind === "event") return "event";
   return kind;
 }
@@ -1435,10 +1889,6 @@ function formatOffset(startedAt: string, eventAt: string) {
   if (!Number.isFinite(offset)) return "unknown";
   if (offset < 0) return "+0.000s";
   return `+${formatDuration(offset)}`;
-}
-
-function formatSignedDuration(value: number) {
-  return `+${formatDuration(value)} since prior`;
 }
 
 function formatBytes(value: number) {

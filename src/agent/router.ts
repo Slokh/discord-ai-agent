@@ -133,6 +133,8 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
     });
 
     const modelRoutes = selectModelToolRoutes(response.toolCalls);
+    const requestedToolRequests = response.toolCalls.map(traceToolRequestMetadata);
+    const selectedLocalToolRequests = modelRoutes.map(traceToolRequestMetadata);
     requestLogger.info(
       {
         round: round + 1,
@@ -141,7 +143,9 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         finishReason: response.finishReason,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
+        requestedToolRequests,
         selectedLocalTools: modelRoutes.map((route) => route.name),
+        selectedLocalToolRequests,
         estimatedCostUsd: response.estimatedCostUsd
       },
       "Agent model round complete"
@@ -155,7 +159,9 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         finishReason: response.finishReason,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
+        requestedToolRequests,
         selectedLocalTools: modelRoutes.map((route) => route.name),
+        selectedLocalToolRequests,
         estimatedCostUsd: response.estimatedCostUsd
       },
       durationMs: durationMs(roundStartedAt)
@@ -1089,6 +1095,14 @@ function selectModelToolRoutes(toolCalls: Array<{ id: string; name: string; argu
 
 function unsupportedToolCallNames(toolCalls: Array<{ name: string }>) {
   return toolCalls.map((call) => call.name).filter((name) => !toolByName(name));
+}
+
+function traceToolRequestMetadata(call: { id: string; name: string; argumentsText: string }) {
+  return {
+    id: call.id,
+    name: call.name,
+    argumentsText: previewText(call.argumentsText, 2_000)
+  };
 }
 
 async function recordTraceEvent(

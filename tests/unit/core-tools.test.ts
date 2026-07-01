@@ -6,6 +6,7 @@ import {
   findDiscordUsers,
   formatAgentTaskResult,
   generateImage,
+  getDeploymentStatus,
   getDiscordChannelTopics,
   getDiscordStats,
   inspectAgentLogs,
@@ -924,6 +925,39 @@ describe("reportStatus", () => {
     expect(response).toContain("Embeddings pending/backfill: 4");
     expect(response).toContain("Interaction-blocked users: 1");
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "reportStatus" }));
+  });
+});
+
+describe("getDeploymentStatus", () => {
+  it("includes codegen sandbox lease counts", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      repo: {
+        health: vi.fn(async () => ({ messages: 2, embeddings: 1, toolCalls: 3 })),
+        getAgentTaskMetrics: vi.fn(async () => ({
+          tasksByStatus: [{ status: "running", count: 1 }],
+          sandboxRunsByStatus: [],
+          codegenSandboxLeases: [
+            { backend: "local-process-sandbox", status: "idle", count: 1 },
+            { backend: "local-process-sandbox", status: "leased", count: 1 }
+          ],
+          codegenPhaseDurations: [],
+          sandboxCacheEvents: []
+        })),
+        listAgentTasks: vi.fn(async () => []),
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      config: { github: { repository: "Slokh/discord-ai-agent", baseBranch: "main" } }
+    } as unknown as ToolContext;
+
+    const response = await getDeploymentStatus(ctx);
+
+    expect(response).toContain("Codegen leases: local-process-sandbox.idle=1, local-process-sandbox.leased=1");
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDeploymentStatus" }));
   });
 });
 

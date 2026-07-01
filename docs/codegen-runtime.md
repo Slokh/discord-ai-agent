@@ -1,13 +1,33 @@
 # Codegen Runtime
 
-Discord AI Agent uses Kubernetes sandbox Jobs for code-update tasks. The current runtime is cache-first:
+Discord AI Agent supports two code-update execution backends:
 
-- each task gets an isolated Kubernetes Job and branch
+- `kubernetes-job` (default): each task gets an isolated Kubernetes Job and branch
+- `local-process`: a long-lived worker pod starts sandbox runner child processes locally, avoiding per-task Kubernetes Job creation and keeping repo/dependency/Codex caches warm in the worker
+
+Both modes are cache-first:
+
 - a shared PVC keeps the bare Git mirror, npm download cache, and dependency snapshots warm
 - per-task worktrees live on sandbox-local temporary storage and are cleaned after the task
 - phase progress, command output tails, cache hit/miss events, and timings are persisted as task events
 
 This keeps the user-facing flow synchronous while removing the most expensive repeated setup from the request path.
+
+## Durable Session API
+
+The internal API now exposes the codegen control-plane objects directly. This is the migration point from the original `agent.task` callback flow toward a Centaur-style runtime where Discord is only ingress/delivery and the API owns durable execution state.
+
+Authenticated clients can:
+
+- `POST /api/codegen/sessions/:threadKey` to create or reuse a durable codegen session for a Discord channel/thread/task context.
+- `GET /api/codegen/sessions/:threadKey` to replay the session, messages, executions, and events.
+- `POST /api/codegen/sessions/:threadKey/messages` to persist one user/system/assistant/tool turn as structured parts.
+- `GET /api/codegen/sessions/:threadKey/messages` to replay stored turns.
+- `POST /api/codegen/sessions/:threadKey/execute` to create a durable queued execution row.
+- `GET /api/codegen/sessions/:threadKey/events` to replay normalized execution events.
+- `GET /api/codegen/sessions/:threadKey/stream` to follow the replayable event trail over SSE.
+
+The old task callback endpoints remain for the current sandbox runner. New codegen runtime work should attach to the session API first, then route executions to warm sandboxes, harness servers, and Discord delivery from that durable event stream.
 
 ## Harness Profile
 
@@ -18,13 +38,16 @@ The sandbox writes an ephemeral Codex profile with the same posture used by Cent
 - `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` because Kubernetes is the external sandbox boundary
 - `model_reasoning_effort = "low"`, `model_verbosity = "low"`, `personality = "pragmatic"`, and `service_tier = "fast"`
 - Codex `fast_mode` and `runtime_metrics` enabled
-- `codex exec --json` so command output is structured event JSON instead of plain terminal prose
+- `codex app-server` as the primary transport so turn notifications, item updates, token usage, and errors are captured as structured events
+- `codex exec --json` as a fallback if app-server fails before producing a diff
 
-The next runtime migration should preserve this harness profile even if the transport moves from one-shot `codex exec` to a long-lived Codex app-server session.
+The next runtime migration should preserve this harness profile while moving from per-task app-server processes to a long-lived app-server session inside each warm worker.
 
 ## Current Isolation Model
 
-Every code-update request still has its own task branch and sandbox process. The sandbox receives only the task callback token, GitHub task token, OpenRouter key, repo coordinates, and task prompt. The worker reconciler marks tasks failed if a sandbox exits without a terminal callback, then cleans up the Kubernetes Job, Secret, and ConfigMap.
+Every code-update request still has its own task branch and sandbox process. The sandbox receives only the task callback token, GitHub task token, OpenRouter key, repo coordinates, and task prompt. The worker reconciler marks tasks failed if a sandbox exits without a terminal callback.
+
+In `kubernetes-job` mode, the reconciler also cleans up the Kubernetes Job, Secret, and ConfigMap. In `local-process` mode, the long-lived worker tracks the spawned child process and no Kubernetes per-task resources are created.
 
 ## Cache Model
 
@@ -37,16 +60,24 @@ The retained cache contains:
 
 If Codex changes `package.json` or `package-lock.json`, the sandbox refreshes dependencies before verification so tests run with the generated dependency graph.
 
+## Backend Selection
+
+Set `CODEGEN_EXECUTION_BACKEND` to choose the backend:
+
+- `kubernetes-job`: safest isolation boundary and current default.
+- `local-process`: lower latency mode for a dedicated codegen worker pod. In Helm, set `codegen.executionBackend=local-process`; when `sandbox.cache.enabled=true`, the worker mounts the sandbox cache PVC directly.
+
+Use `local-process` only for a worker pod you already treat as the code execution boundary. Keep `worker.replicas=1` unless the cache PVC supports `ReadWriteMany`.
+
 ## Warm Runtime Direction
 
-The next Centaur-like step is a warm codegen runtime instead of one Job per task:
+The next Centaur-like steps are:
 
-1. Add a `codegen_sandboxes` or `warm_sandboxes` table with sandbox ID, repo, status, lease owner, heartbeat, last used time, and cache metadata.
-2. Run long-lived codegen worker Pods that keep the repo mirror, dependency store, Codex home, and optional app-server process warm.
-3. Lease a warm sandbox for each task, create a fresh worktree/branch under that sandbox, execute the harness session, then release or recycle the sandbox.
-4. Keep fallback support for the current Kubernetes Job backend when no warm sandbox is available.
+1. Route Discord code-update requests through the durable session API instead of directly creating an `agent.task`.
+2. Promote `codegen_sandbox_leases` from observability/storage into the scheduler path so workers explicitly lease and heartbeat warm sandboxes.
+3. Keep a Codex app-server process warm per worker and reuse threads/sessions across recovery turns instead of spawning app-server per task.
+4. Add queue routing/fallback so a task uses a warm worker when one is available and falls back to `kubernetes-job` when the warm pool is saturated.
 5. Move credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.
-6. Replace the `codex exec` transport with a Codex app-server adapter once the session/event protocol is owned by this codebase.
 
 The existing `ExecutionBackend` interface, task event stream, cache metrics, and operator scripts are intended to survive that migration.
 

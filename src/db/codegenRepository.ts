@@ -56,6 +56,18 @@ export type CodegenExecutionRecord = {
   updatedAt: Date;
 };
 
+export type CodegenMessageRole = "system" | "user" | "assistant" | "tool";
+
+export type CodegenMessageRecord = {
+  messageId: string;
+  sessionId: string;
+  clientMessageId: string | null;
+  role: CodegenMessageRole;
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 export type CodegenEventKind = "harness" | "model" | "tool" | "command" | "git" | "status" | "error" | "artifact";
 
 export type CodegenEventRecord = {
@@ -107,6 +119,21 @@ export type CodegenSandboxLeaseRecord = {
 
 export class CodegenRepository {
   constructor(private readonly pool: DbPool) {}
+
+  async getSession(input: { sessionId?: string | null; threadKey?: string | null }): Promise<CodegenSessionRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM codegen_sessions
+        WHERE ($1::text IS NOT NULL AND session_id = $1)
+           OR ($1::text IS NULL AND $2::text IS NOT NULL AND thread_key = $2)
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `,
+      [input.sessionId ?? null, input.threadKey ?? null]
+    );
+    return result.rows[0] ? rowToCodegenSession(result.rows[0]) : undefined;
+  }
 
   async upsertSession(input: {
     sessionId: string;
@@ -186,6 +213,54 @@ export class CodegenRepository {
     return rowToCodegenSession(result.rows[0]);
   }
 
+  async appendMessage(input: {
+    messageId?: string | null;
+    sessionId: string;
+    clientMessageId?: string | null;
+    role: CodegenMessageRole;
+    parts: unknown[];
+    metadata?: Record<string, unknown>;
+  }): Promise<CodegenMessageRecord> {
+    const messageId = input.messageId ?? `codegen-message-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const result = await this.pool.query(
+      `
+        INSERT INTO codegen_messages(
+          message_id, session_id, client_message_id, role, parts, metadata
+        )
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
+        ON CONFLICT(message_id) DO UPDATE SET
+          client_message_id = coalesce(EXCLUDED.client_message_id, codegen_messages.client_message_id),
+          role = EXCLUDED.role,
+          parts = EXCLUDED.parts,
+          metadata = codegen_messages.metadata || EXCLUDED.metadata
+        RETURNING *
+      `,
+      [
+        messageId,
+        input.sessionId,
+        input.clientMessageId ?? null,
+        input.role,
+        JSON.stringify(input.parts),
+        JSON.stringify(input.metadata ?? {})
+      ]
+    );
+    return rowToCodegenMessage(result.rows[0]);
+  }
+
+  async listMessages(input: { sessionId: string; limit?: number | null }): Promise<CodegenMessageRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM codegen_messages
+        WHERE session_id = $1
+        ORDER BY created_at ASC, message_id ASC
+        LIMIT $2
+      `,
+      [input.sessionId, Math.max(1, Math.min(500, Math.trunc(input.limit ?? 100)))]
+    );
+    return result.rows.map(rowToCodegenMessage);
+  }
+
   async createExecution(input: {
     executionId: string;
     sessionId: string;
@@ -254,6 +329,20 @@ export class CodegenRepository {
       ]
     );
     return rowToCodegenExecution(result.rows[0]);
+  }
+
+  async listExecutions(input: { sessionId: string; limit?: number | null }): Promise<CodegenExecutionRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM codegen_executions
+        WHERE session_id = $1
+        ORDER BY created_at DESC, execution_id DESC
+        LIMIT $2
+      `,
+      [input.sessionId, Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)))]
+    );
+    return result.rows.map(rowToCodegenExecution);
   }
 
   async updateExecution(input: {
@@ -377,6 +466,32 @@ export class CodegenRepository {
       ]
     );
     return rowToCodegenEvent(result.rows[0]);
+  }
+
+  async listEvents(input: {
+    sessionId: string;
+    executionId?: string | null;
+    afterEventId?: number | null;
+    limit?: number | null;
+  }): Promise<CodegenEventRecord[]> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM codegen_events
+        WHERE session_id = $1
+          AND ($2::text IS NULL OR execution_id = $2)
+          AND ($3::bigint IS NULL OR id > $3)
+        ORDER BY id ASC
+        LIMIT $4
+      `,
+      [
+        input.sessionId,
+        input.executionId ?? null,
+        input.afterEventId == null ? null : Math.trunc(input.afterEventId),
+        Math.max(1, Math.min(1000, Math.trunc(input.limit ?? 200)))
+      ]
+    );
+    return result.rows.map(rowToCodegenEvent);
   }
 
   async storeArtifact(input: {
@@ -605,6 +720,18 @@ function rowToCodegenExecution(row: any): CodegenExecutionRecord {
     startedAt: row.started_at == null ? null : new Date(row.started_at),
     completedAt: row.completed_at == null ? null : new Date(row.completed_at),
     updatedAt: new Date(row.updated_at)
+  };
+}
+
+function rowToCodegenMessage(row: any): CodegenMessageRecord {
+  return {
+    messageId: String(row.message_id),
+    sessionId: String(row.session_id),
+    clientMessageId: row.client_message_id == null ? null : String(row.client_message_id),
+    role: String(row.role) as CodegenMessageRole,
+    parts: Array.isArray(row.parts) ? row.parts : [],
+    metadata: jsonObject(row.metadata),
+    createdAt: new Date(row.created_at)
   };
 }
 

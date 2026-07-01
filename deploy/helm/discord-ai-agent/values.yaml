@@ -24,6 +24,13 @@ sandbox:
       - ReadWriteOnce
     storageClassName: ""
 
+codegen:
+  # kubernetes-job keeps one isolated Kubernetes Job per code update.
+  # local-process runs codegen inside the long-lived worker process so the repo,
+  # dependency, and Codex caches stay warm between tasks. Keep worker.replicas at
+  # 1 unless the sandbox cache PVC supports ReadWriteMany.
+  executionBackend: kubernetes-job
+
 secret:
   existingSecretName: discord-ai-agent-env
 

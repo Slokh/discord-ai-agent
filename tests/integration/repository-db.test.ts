@@ -163,6 +163,16 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     expect(session).toEqual(expect.objectContaining({ sessionId, status: "queued", model: "gpt-5.5" }));
 
+    const message = await codegenRepo.appendMessage({
+      sessionId,
+      clientMessageId: "discord-message-1",
+      role: "user",
+      parts: [{ type: "text", text: "make a tiny change" }],
+      metadata: { source: "integration-test" }
+    });
+    expect(message).toEqual(expect.objectContaining({ sessionId, clientMessageId: "discord-message-1", role: "user" }));
+    await expect(codegenRepo.listMessages({ sessionId })).resolves.toEqual([expect.objectContaining({ messageId: message.messageId })]);
+
     const execution = await codegenRepo.createExecution({
       executionId,
       sessionId,
@@ -1922,6 +1932,7 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%'");
   await pool.query("DELETE FROM codegen_events WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%'");
   await pool.query("DELETE FROM codegen_executions WHERE execution_id LIKE 'codegen-execution-%' OR session_id LIKE 'codegen-session-%'");
+  await pool.query("DELETE FROM codegen_messages WHERE session_id LIKE 'codegen-session-%'");
   await pool.query("DELETE FROM codegen_sessions WHERE session_id LIKE 'codegen-session-%' OR trace_id LIKE 'trace-%'");
   await pool.query("DELETE FROM process_runs WHERE run_id LIKE 'run-%' OR trace_id LIKE 'trace-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM skill_changes WHERE skill_name LIKE 'skill-%' OR requester_id LIKE 'user-%'");

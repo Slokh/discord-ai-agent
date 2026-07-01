@@ -5,7 +5,7 @@ import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
 import { CodegenRepository } from "./db/codegenRepository.js";
 import { DiscordAiAgentRepository } from "./db/repositories.js";
-import { KubernetesExecutionBackend } from "./execution/backend.js";
+import { createExecutionBackend } from "./execution/backend.js";
 import { startSandboxReconciler } from "./execution/reconciler.js";
 import { OpenRouterClient } from "./models/openrouter.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
@@ -62,7 +62,7 @@ async function main() {
   const repo = new DiscordAiAgentRepository(pool);
   const codegenRepo = new CodegenRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
-  const executionBackend = startsWorker ? new KubernetesExecutionBackend(config) : undefined;
+  const executionBackend = startsWorker ? createExecutionBackend(config) : undefined;
 
   const client =
     startsBot || startsWorker
@@ -131,7 +131,7 @@ async function main() {
   });
   jobRuntimeRef.current = jobs;
   logger.info({ startsApi, startsBot, startsWorker, startsEmbeddingWorker }, "Job runtime ready");
-  const internalApi = startsApi ? await startInternalApi({ config, repo }) : null;
+  const internalApi = startsApi ? await startInternalApi({ config, repo, codegenRepo }) : null;
   const staleRunReconciler = startsApi
     ? startStaleRunReconciler({
         repo,

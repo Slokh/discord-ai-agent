@@ -174,7 +174,7 @@ npm run sandbox-cache:clear
 
 For a local Kubernetes full-loop test, see [docs/local-kubernetes.md](docs/local-kubernetes.md).
 For production setup, see [docs/eks-deploy.md](docs/eks-deploy.md).
-For the cache-first runtime and warm-sandbox direction, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
+For the cache-first runtime, durable codegen session API, and warm-sandbox direction, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
 For a reference AWS baseline, see [deploy/terraform/aws](deploy/terraform/aws).
 
 ## Configuration
@@ -204,6 +204,7 @@ Common optional settings:
 | `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
+| `CODEGEN_EXECUTION_BACKEND` | `kubernetes-job` | `kubernetes-job` for per-task isolated Jobs, or `local-process` for a long-lived warm worker process |
 | `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
 | `SANDBOX_CACHE_DIR` | `/var/cache/discord-ai-agent` | Sandbox repo/npm/dependency cache path |
 | `SANDBOX_CACHE_PVC_NAME` | unset | Optional Kubernetes PVC mounted at `SANDBOX_CACHE_DIR` |

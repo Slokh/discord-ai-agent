@@ -1,7 +1,8 @@
 import http from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import { assertTaskCallbackConfig } from "../config/env.js";
+import type { CodegenMessageRole, CodegenRepository } from "../db/codegenRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
 import { verifyTaskBearerToken } from "../execution/token.js";
@@ -12,13 +13,18 @@ import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const UI_AUTH_COOKIE_NAME = "discord_ai_agent_ui_auth";
 const UI_AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+type CodegenApiStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
 
 export type InternalApiRuntime = {
   close: () => Promise<void>;
   url: string;
 };
 
-export async function startInternalApi(input: { config: AppConfig; repo: DiscordAiAgentRepository }): Promise<InternalApiRuntime> {
+export async function startInternalApi(input: {
+  config: AppConfig;
+  repo: DiscordAiAgentRepository;
+  codegenRepo?: CodegenRepository;
+}): Promise<InternalApiRuntime> {
   assertTaskCallbackConfig(input.config);
   const server = http.createServer(async (request, response) => {
     try {
@@ -48,6 +54,7 @@ export async function startInternalApi(input: { config: AppConfig; repo: Discord
 async function handleRequest(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
+  codegenRepo?: CodegenRepository;
   request: http.IncomingMessage;
   response: http.ServerResponse;
 }) {
@@ -186,6 +193,185 @@ async function handleRequest(input: {
       response: input.response,
       runId: decodeURIComponent(runStreamMatch[1] ?? "")
     });
+    return;
+  }
+
+  const codegenMessagesMatch = url.pathname.match(/^\/api\/codegen\/sessions\/([^/]+)\/messages$/);
+  if ((method === "GET" || method === "POST") && codegenMessagesMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!input.codegenRepo) {
+      sendJson(input.response, 503, { error: "codegen_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(codegenMessagesMatch[1] ?? "");
+    const session = await input.codegenRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "codegen_session_not_found" });
+      return;
+    }
+    if (method === "GET") {
+      sendJson(input.response, 200, {
+        messages: await input.codegenRepo.listMessages({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("limit"), 100, 500) }),
+        generatedAt: new Date().toISOString()
+      });
+      return;
+    }
+
+    const body = parseCodegenMessageBody(await readJsonBody(input.request));
+    const message = await input.codegenRepo.appendMessage({
+      sessionId: session.sessionId,
+      messageId: body.messageId ?? deterministicCodegenId("codegen-message", `${session.sessionId}:${body.clientMessageId ?? randomUUID()}`),
+      clientMessageId: body.clientMessageId,
+      role: body.role,
+      parts: body.parts,
+      metadata: body.metadata
+    });
+    await input.codegenRepo.recordEvent({
+      sessionId: session.sessionId,
+      kind: "status",
+      eventName: "codegen.message.appended",
+      summary: `Appended ${body.role} message.`,
+      metadata: { messageId: message.messageId, clientMessageId: message.clientMessageId, role: message.role }
+    });
+    sendJson(input.response, 200, { ok: true, message });
+    return;
+  }
+
+  const codegenExecuteMatch = url.pathname.match(/^\/api\/codegen\/sessions\/([^/]+)\/execute$/);
+  if (method === "POST" && codegenExecuteMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!input.codegenRepo) {
+      sendJson(input.response, 503, { error: "codegen_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(codegenExecuteMatch[1] ?? "");
+    const session = await input.codegenRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "codegen_session_not_found" });
+      return;
+    }
+    const body = parseCodegenExecuteBody(await readJsonBody(input.request));
+    const execution = await input.codegenRepo.createExecution({
+      executionId: body.executionId ?? deterministicCodegenId("codegen-execution", `${session.sessionId}:${Date.now()}:${randomUUID()}`),
+      sessionId: session.sessionId,
+      taskId: body.taskId,
+      traceId: body.traceId ?? session.traceId,
+      attempt: body.attempt,
+      status: "queued",
+      harness: body.harness,
+      model: body.model ?? session.model,
+      provider: body.provider ?? session.provider,
+      reasoningEffort: body.reasoningEffort,
+      sandboxId: body.sandboxId,
+      sandboxRunId: body.sandboxRunId,
+      metadata: body.metadata
+    });
+    await input.codegenRepo.recordEvent({
+      sessionId: session.sessionId,
+      executionId: execution.executionId,
+      traceId: execution.traceId,
+      kind: "status",
+      eventName: "codegen.execution.queued",
+      summary: "Queued codegen execution.",
+      metadata: { executionId: execution.executionId, harness: execution.harness, model: execution.model }
+    });
+    sendJson(input.response, 202, { ok: true, session, execution });
+    return;
+  }
+
+  const codegenEventsMatch = url.pathname.match(/^\/api\/codegen\/sessions\/([^/]+)\/events$/);
+  if (method === "GET" && codegenEventsMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!input.codegenRepo) {
+      sendJson(input.response, 503, { error: "codegen_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(codegenEventsMatch[1] ?? "");
+    const session = await input.codegenRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "codegen_session_not_found" });
+      return;
+    }
+    sendJson(input.response, 200, {
+      events: await input.codegenRepo.listEvents({
+        sessionId: session.sessionId,
+        executionId: url.searchParams.get("executionId"),
+        afterEventId: parseNullableInteger(url.searchParams.get("afterEventId")),
+        limit: parseLimit(url.searchParams.get("limit"), 200, 1000)
+      }),
+      generatedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  const codegenStreamMatch = url.pathname.match(/^\/api\/codegen\/sessions\/([^/]+)\/stream$/);
+  if (method === "GET" && codegenStreamMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!input.codegenRepo) {
+      sendJson(input.response, 503, { error: "codegen_repository_unavailable" });
+      return;
+    }
+    await streamCodegenEvents({
+      codegenRepo: input.codegenRepo,
+      request: input.request,
+      response: input.response,
+      threadKey: decodeURIComponent(codegenStreamMatch[1] ?? ""),
+      executionId: url.searchParams.get("executionId"),
+      afterEventId: parseNullableInteger(url.searchParams.get("afterEventId"))
+    });
+    return;
+  }
+
+  const codegenSessionMatch = url.pathname.match(/^\/api\/codegen\/sessions\/([^/]+)$/);
+  if ((method === "GET" || method === "POST") && codegenSessionMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!input.codegenRepo) {
+      sendJson(input.response, 503, { error: "codegen_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(codegenSessionMatch[1] ?? "");
+    if (method === "GET") {
+      const session = await input.codegenRepo.getSession({ threadKey });
+      if (!session) {
+        sendJson(input.response, 404, { error: "codegen_session_not_found" });
+        return;
+      }
+      const [messages, executions, events] = await Promise.all([
+        input.codegenRepo.listMessages({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("messages"), 100, 500) }),
+        input.codegenRepo.listExecutions({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("executions"), 20, 100) }),
+        input.codegenRepo.listEvents({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("events"), 200, 1000) })
+      ]);
+      sendJson(input.response, 200, { session, messages, executions, events, generatedAt: new Date().toISOString() });
+      return;
+    }
+
+    const body = parseCodegenSessionBody(await readJsonBody(input.request));
+    const session = await input.codegenRepo.upsertSession({
+      sessionId: body.sessionId ?? deterministicCodegenId("codegen-session", threadKey),
+      traceId: body.traceId,
+      threadKey,
+      guildId: body.guildId,
+      channelId: body.channelId,
+      userId: body.userId,
+      title: body.title ?? titleFromRequest(body.request ?? threadKey),
+      request: body.request ?? "",
+      requestedBy: body.requestedBy ?? "api",
+      status: body.status,
+      harness: body.harness,
+      model: body.model,
+      provider: body.provider,
+      codexThreadId: body.codexThreadId,
+      metadata: body.metadata
+    });
+    await input.codegenRepo.recordEvent({
+      sessionId: session.sessionId,
+      traceId: session.traceId,
+      kind: "status",
+      eventName: "codegen.session.upserted",
+      summary: "Codegen session is ready.",
+      metadata: { threadKey: session.threadKey, harness: session.harness, model: session.model }
+    });
+    sendJson(input.response, 200, { ok: true, session });
     return;
   }
 
@@ -516,8 +702,116 @@ function parseArtifactEvent(value: unknown): {
   };
 }
 
+function parseCodegenSessionBody(value: unknown): {
+  sessionId: string | null;
+  traceId: string | null;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+  title: string | null;
+  request: string | null;
+  requestedBy: string | null;
+  status: CodegenApiStatus | undefined;
+  harness: string | null;
+  model: string | null;
+  provider: string | null;
+  codexThreadId: string | null;
+  metadata: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object") throw new Error("Codegen session body must be an object.");
+  const body = value as Record<string, unknown>;
+  const status = body.status;
+  if (status != null && !["queued", "running", "succeeded", "failed", "no_changes", "cancelled"].includes(String(status))) {
+    throw new Error("Invalid codegen session status.");
+  }
+  return {
+    sessionId: stringOrNull(body.sessionId),
+    traceId: stringOrNull(body.traceId),
+    guildId: stringOrNull(body.guildId),
+    channelId: stringOrNull(body.channelId),
+    userId: stringOrNull(body.userId),
+    title: stringOrNull(body.title),
+    request: stringOrNull(body.request),
+    requestedBy: stringOrNull(body.requestedBy),
+    status: status == null ? undefined : (String(status) as CodegenApiStatus),
+    harness: stringOrNull(body.harness),
+    model: stringOrNull(body.model),
+    provider: stringOrNull(body.provider),
+    codexThreadId: stringOrNull(body.codexThreadId),
+    metadata: objectOrEmpty(body.metadata)
+  };
+}
+
+function parseCodegenMessageBody(value: unknown): {
+  messageId: string | null;
+  clientMessageId: string | null;
+  role: CodegenMessageRole;
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object") throw new Error("Codegen message body must be an object.");
+  const body = value as Record<string, unknown>;
+  const role = String(body.role ?? "user");
+  if (role !== "system" && role !== "user" && role !== "assistant" && role !== "tool") {
+    throw new Error("Codegen message role must be system, user, assistant, or tool.");
+  }
+  const parts = Array.isArray(body.parts)
+    ? body.parts
+    : typeof body.text === "string"
+      ? [{ type: "text", text: body.text }]
+      : [];
+  if (parts.length === 0) throw new Error("Codegen message body requires parts or text.");
+  return {
+    messageId: stringOrNull(body.messageId),
+    clientMessageId: stringOrNull(body.clientMessageId),
+    role,
+    parts,
+    metadata: objectOrEmpty(body.metadata)
+  };
+}
+
+function parseCodegenExecuteBody(value: unknown): {
+  executionId: string | null;
+  taskId: string | null;
+  traceId: string | null;
+  attempt: number | undefined;
+  harness: string | null;
+  model: string | null;
+  provider: string | null;
+  reasoningEffort: string | null;
+  sandboxId: string | null;
+  sandboxRunId: string | null;
+  metadata: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object") throw new Error("Codegen execute body must be an object.");
+  const body = value as Record<string, unknown>;
+  return {
+    executionId: stringOrNull(body.executionId),
+    taskId: stringOrNull(body.taskId),
+    traceId: stringOrNull(body.traceId),
+    attempt: typeof body.attempt === "number" && Number.isFinite(body.attempt) ? Math.max(1, Math.trunc(body.attempt)) : undefined,
+    harness: stringOrNull(body.harness),
+    model: stringOrNull(body.model),
+    provider: stringOrNull(body.provider),
+    reasoningEffort: stringOrNull(body.reasoningEffort),
+    sandboxId: stringOrNull(body.sandboxId),
+    sandboxRunId: stringOrNull(body.sandboxRunId),
+    metadata: objectOrEmpty(body.metadata)
+  };
+}
+
+function objectOrEmpty(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 function stringOrNull(value: unknown) {
   return typeof value === "string" ? value : null;
+}
+
+function parseNullableInteger(value: string | null) {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
 }
 
 function parseLimit(value: string | null, fallback: number, max: number) {
@@ -525,6 +819,16 @@ function parseLimit(value: string | null, fallback: number, max: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(max, Math.trunc(parsed)));
+}
+
+function deterministicCodegenId(prefix: string, key: string) {
+  return `${prefix}-${createHash("sha256").update(key).digest("hex").slice(0, 24)}`;
+}
+
+function titleFromRequest(request: string) {
+  const clean = request.trim().replace(/\s+/g, " ");
+  if (!clean) return "Codegen session";
+  return clean.length <= 80 ? clean : `${clean.slice(0, 77)}...`;
 }
 
 function parseBoolean(value: string | null) {
@@ -562,6 +866,63 @@ function sendRedirect(response: http.ServerResponse, location: string) {
   if (response.headersSent) return;
   response.writeHead(302, { location });
   response.end();
+}
+
+async function streamCodegenEvents(input: {
+  codegenRepo: CodegenRepository;
+  request: http.IncomingMessage;
+  response: http.ServerResponse;
+  threadKey: string;
+  executionId: string | null;
+  afterEventId: number | null;
+}) {
+  input.response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive"
+  });
+
+  const session = await input.codegenRepo.getSession({ threadKey: input.threadKey });
+  if (!session) {
+    input.response.write(`event: error\ndata: ${JSON.stringify({ error: "codegen_session_not_found" })}\n\n`);
+    input.response.end();
+    return;
+  }
+
+  let closed = false;
+  let afterEventId = input.afterEventId ?? 0;
+  input.request.on("close", () => {
+    closed = true;
+  });
+
+  const sendEvents = async () => {
+    if (closed || input.response.destroyed) return;
+    const events = await input.codegenRepo.listEvents({
+      sessionId: session.sessionId,
+      executionId: input.executionId,
+      afterEventId,
+      limit: 200
+    });
+    for (const event of events) {
+      afterEventId = Math.max(afterEventId, event.id);
+      input.response.write(`event: codegen.event\ndata: ${JSON.stringify(event)}\n\n`);
+    }
+    input.response.write(`event: heartbeat\ndata: ${JSON.stringify({ afterEventId, generatedAt: new Date().toISOString() })}\n\n`);
+  };
+
+  await sendEvents();
+  const interval = setInterval(() => {
+    void sendEvents().catch((error) => {
+      logger.warn({ err: error, threadKey: input.threadKey, executionId: input.executionId }, "Failed to stream codegen events");
+    });
+  }, 2000);
+  interval.unref?.();
+
+  await new Promise<void>((resolve) => {
+    input.request.on("close", resolve);
+    input.response.on("close", resolve);
+  });
+  clearInterval(interval);
 }
 
 async function streamRunSnapshots(input: {

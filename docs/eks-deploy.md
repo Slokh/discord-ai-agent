@@ -118,10 +118,16 @@ For GitHub Actions deploys, set repository variables instead:
 - `CODEGEN_WORKER_ENABLED=true`
 - `SANDBOX_CACHE_ENABLED=true`
 - optional `CODEGEN_WORKER_REPLICAS`
+- optional `CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS`
+- optional `CODEGEN_LEASE_ACQUIRE_POLL_SECONDS`
+- optional `CODEGEN_LEASE_HEARTBEAT_SECONDS`
+- optional `CODEGEN_LEASE_STALE_SECONDS`
 - optional `SANDBOX_CACHE_SIZE`
 - optional `SANDBOX_CACHE_STORAGE_CLASS`
 
 That deployment consumes only `agent.task`, uses the `local-process` backend, registers a lease in Postgres, and keeps repo/dependency/Codex caches warm on the mounted sandbox cache volume. The regular worker automatically stops consuming code-update task jobs while continuing crawl, embedding, and Discord request work.
+
+The default warm lease settings heartbeat every 15 seconds, mark stale leases after 120 seconds, poll every 5 seconds while waiting, and wait up to 30 minutes for the warm slot. For hobby deployments where queued code updates should fail faster instead of sitting behind a wedged worker, lower `CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS`.
 
 ## Sandbox Cache
 

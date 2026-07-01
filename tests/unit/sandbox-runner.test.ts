@@ -10,6 +10,7 @@ import {
   codexResumeExecArgs,
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
+  evaluateCodegenWatchdog,
   renderCodegenContextPack,
   repairWorktreeRemoteForBranchPush
 } from "../../src/execution/sandboxRunner.js";
@@ -109,7 +110,7 @@ describe("sandboxRunner", () => {
           exitCode: 143,
           durationMs: 480_000,
           producedDiff: false,
-          watchdogReason: "first_diff_deadline",
+          watchdogReason: "no_first_diff",
           stdoutTail: "looked at task notifications",
           stderrTail: ""
         }
@@ -117,7 +118,113 @@ describe("sandboxRunner", () => {
     });
     expect(recovery).toContain("Do not restart broad analysis");
     expect(recovery).toContain("make the smallest focused test or implementation edit now");
-    expect(recovery).toContain("first_diff_deadline");
+    expect(recovery).toContain("no_first_diff");
+  });
+
+  it("guides Codex toward lifecycle-first implementation before broad exploration", () => {
+    const prompt = codeUpdatePrompt({
+      taskId: "task-1",
+      requestedBy: "kartik",
+      taskRequest: "Change the user-visible loading state."
+    });
+
+    expect(prompt).toContain("map the lifecycle before editing");
+    expect(prompt).toContain("User wording may describe product behavior instead of exact code symbols");
+    expect(prompt).toContain("map the phrase to the closest existing mechanism in the lifecycle");
+    expect(prompt).toContain("trigger -> temporary state -> progress/update paths -> success response -> error/timeout/cancellation -> cleanup");
+    expect(prompt).toContain("introduce or reuse a small abstraction that owns the lifecycle");
+    expect(prompt).toContain("Preserve existing invariants that other code may depend on");
+    expect(prompt).toContain("encode the requested behavior as a focused invariant");
+    expect(prompt).toContain("stop searching for exact request vocabulary");
+    expect(prompt).toContain("agent-progress first_edit");
+    expect(prompt).toContain("Produce a real code diff promptly");
+  });
+
+  it("builds a code update status lifecycle context pack from product-language requests", async () => {
+    const contextPack = await buildCodegenContextPack(
+      process.cwd(),
+      "Fix the bug where the bot's loading indicator for code update requests can stick around after the coding agent finishes."
+    );
+
+    expect(contextPack.focus).toBe("agent_task_status_lifecycle");
+    expect(contextPack.likelyMechanisms).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("temporary/status reply"),
+        expect.stringContaining("task notifier"),
+        expect.stringContaining("Terminal task rendering")
+      ])
+    );
+    expect(contextPack.suggestedFiles?.map((file) => file.path)).toEqual(
+      expect.arrayContaining(["src/discord/taskNotifications.ts", "src/tools/coreTools.ts"])
+    );
+    expect(contextPack.firstInvariant).toContain("without leaving stale loading/progress text after completion");
+    expect(contextPack.suggestedFirstEdit).toContain("focused task notification or repository test");
+  });
+
+  it("includes the focused context pack in the Codex prompt", async () => {
+    const contextPack = await buildCodegenContextPack(process.cwd(), "Fix code update loading status after completion.");
+    const renderedContext = renderCodegenContextPack(contextPack);
+    const prompt = codeUpdatePrompt(
+      {
+        taskId: "task-1",
+        requestedBy: "kartik",
+        taskRequest: "Fix code update loading status after completion."
+      },
+      contextPack
+    );
+
+    expect(renderedContext).toContain("Focus: agent_task_status_lifecycle");
+    expect(prompt).toContain("Codegen preflight context:");
+    expect(prompt).toContain("Focus: agent_task_status_lifecycle");
+    expect(prompt).toContain("Inspect the suggested first files before broad searching");
+    expect(prompt).toContain("First implementable invariant:");
+    expect(prompt).toContain("Suggested first edit:");
+  });
+
+  it("fails early when Codex has not produced a diff", () => {
+    expect(
+      evaluateCodegenWatchdog({
+        elapsedMs: 8 * 60 * 1000,
+        idleMs: 30_000,
+        hasDiff: false,
+        reconnectSeen: false,
+        reconnectStallMs: null
+      })
+    ).toEqual(expect.objectContaining({ action: "fail", reason: "no_first_diff" }));
+  });
+
+  it("continues to verification when Codex stalls after producing a diff", () => {
+    expect(
+      evaluateCodegenWatchdog({
+        elapsedMs: 12 * 60 * 1000,
+        idleMs: 6 * 60 * 1000,
+        hasDiff: true,
+        reconnectSeen: false,
+        reconnectStallMs: null
+      })
+    ).toEqual(expect.objectContaining({ action: "continue", reason: "idle_after_diff" }));
+  });
+
+  it("treats reconnect stalls as retryable before a diff and salvageable after a diff", () => {
+    expect(
+      evaluateCodegenWatchdog({
+        elapsedMs: 6 * 60 * 1000,
+        idleMs: 60_000,
+        hasDiff: false,
+        reconnectSeen: true,
+        reconnectStallMs: 3 * 60 * 1000
+      })
+    ).toEqual(expect.objectContaining({ action: "fail", reason: "reconnect_stall" }));
+
+    expect(
+      evaluateCodegenWatchdog({
+        elapsedMs: 6 * 60 * 1000,
+        idleMs: 60_000,
+        hasDiff: true,
+        reconnectSeen: true,
+        reconnectStallMs: 3 * 60 * 1000
+      })
+    ).toEqual(expect.objectContaining({ action: "continue", reason: "reconnect_stall" }));
   });
 
   it("repairs mirror-backed worktree remotes so branch refspec pushes work", async () => {

@@ -71,7 +71,10 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
 
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
   const serverOverlay = await loadServerOverlay(ctx);
-  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay);
+  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay, {
+    userId: ctx.userId,
+    userDisplayName: ctx.userDisplayName
+  });
   const files: AgentFile[] = [];
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
@@ -743,7 +746,9 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
           question: stringArgument(route.arguments, "question") ?? originalText,
           authorIds: stringArrayArgument(route.arguments, "authorIds"),
           channelIds: stringArrayArgument(route.arguments, "channelIds"),
+          aboutUserIds: stringArrayArgument(route.arguments, "aboutUserIds"),
           authorQueries: stringArrayArgument(route.arguments, "authorQueries"),
+          aboutUserQueries: stringArrayArgument(route.arguments, "aboutUserQueries"),
           channelQueries: stringArrayArgument(route.arguments, "channelQueries"),
           dateFrom: stringArgument(route.arguments, "dateFrom"),
           dateTo: stringArgument(route.arguments, "dateTo"),
@@ -759,7 +764,9 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
       await answerFromHistory(ctx, stringArgumentPreservingEmpty(route.arguments, "query") ?? originalText, {
         authorIds: stringArrayArgument(route.arguments, "authorIds"),
         channelIds: stringArrayArgument(route.arguments, "channelIds"),
+        aboutUserIds: stringArrayArgument(route.arguments, "aboutUserIds"),
         authorQueries: stringArrayArgument(route.arguments, "authorQueries"),
+        aboutUserQueries: stringArrayArgument(route.arguments, "aboutUserQueries"),
         channelQueries: stringArrayArgument(route.arguments, "channelQueries"),
         dateFrom: stringArgument(route.arguments, "dateFrom"),
         dateTo: stringArgument(route.arguments, "dateTo"),
@@ -1217,7 +1224,8 @@ function chatMessages(
   skills: string,
   sessionMessages: ConversationMessage[] = [],
   replyContext?: DiscordReplyContext,
-  serverOverlay?: ServerOverlay
+  serverOverlay?: ServerOverlay,
+  requester?: { userId: string; userDisplayName: string }
 ): ChatMessage[] {
   return [
     {
@@ -1231,7 +1239,8 @@ function chatMessages(
         "When naming people from Discord search evidence, only use exact handles or IDs shown in the tool output; do not infer real names or display names. " +
         "For recent/current/latest Discord-history questions, choose and pass an explicit date window that fits the user request instead of searching all indexed history. " +
         "When a user names a Discord person or channel without an exact mention or ID, use findDiscordUsers/findDiscordChannels before filtered history searches. Resolver tools are intermediate; never stop after a resolver if the user asked what someone said, did, or has been up to. " +
-        "For requests to link, show, or list a person's messages, use searchDiscordHistory with authorQueries/authorIds; do not search for the username as ordinary message text. " +
+        "Use authorIds/authorQueries only when the user asks for messages written by someone, like from/by/said by/show X's messages. Use aboutUserIds/aboutUserQueries when the user asks for messages about, mentioning, regarding, or belonging to someone, including first-person subject requests like 'my birthday' or 'when did people mention me'. For 'what did Hunter say about Connor', use author=Hunter and about=Connor. " +
+        "For requests to link, show, or list a person's own messages, use searchDiscordHistory with authorQueries/authorIds; for requests to find messages about a person, use aboutUserQueries/aboutUserIds. Do not search for the username as ordinary message text when a structured person filter fits. " +
         "Top-level Discord mentions include recent channel memory by default. Reply messages additionally include their reply-chain context. If a user asks what you previously said, did, generated, or opened, call getRecentAgentMemory instead of guessing from absent context. " +
         "Use getRecentAgentMemory only for Discord AI Agent's own previous replies/tool results in the current channel, not for factual server-history questions. " +
         "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext only for a specific Discord message link/ID or explicit surrounding-context request, searchDiscordAttachments for files/images, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, reactions, attachments, and activity over time. " +
@@ -1253,11 +1262,25 @@ function chatMessages(
         "Use prior channel memory and reply-chain context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
+    ...requesterMessagesForPrompt(requester),
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
     ...serverOverlayMessagesForPrompt(serverOverlay),
     ...sessionMessagesForPrompt(sessionMessages),
     ...replyContextMessagesForPrompt(replyContext),
     { role: "user" as const, content: text }
+  ];
+}
+
+function requesterMessagesForPrompt(requester?: { userId: string; userDisplayName: string }): ChatMessage[] {
+  if (!requester) return [];
+  const displayName = requester.userDisplayName.trim() || requester.userId;
+  return [
+    {
+      role: "system",
+      content:
+        `Current Discord requester: ${displayName} (user ID ${requester.userId}). ` +
+        "First-person pronouns in the latest user request, including I/me/my/mine, refer to this requester unless the request explicitly names someone else."
+    }
   ];
 }
 

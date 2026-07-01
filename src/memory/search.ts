@@ -11,6 +11,7 @@ export type HistorySearchInput = {
   limit?: number;
   authorId?: string;
   authorIds?: string[];
+  aboutUserTerms?: string[];
   channelIds?: string[];
   dateFrom?: Date;
   dateTo?: Date;
@@ -35,6 +36,13 @@ export async function searchDiscordHistory(input: {
   });
   if (searchChannelIds.length === 0) return [];
   const authorIds = [...new Set([...(input.search.authorIds ?? []), input.search.authorId ?? ""].filter(Boolean))];
+  const aboutUserTerms = [...new Set((input.search.aboutUserTerms ?? []).map((term) => term.trim().toLowerCase()).filter(Boolean))];
+  const hasNarrowingFilters =
+    authorIds.length > 0 ||
+    aboutUserTerms.length > 0 ||
+    (input.search.channelIds?.filter(Boolean).length ?? 0) > 0 ||
+    input.search.dateFrom != null ||
+    input.search.dateTo != null;
 
   if (!normalizedQuery.trim()) {
     return input.repo.recentMessagesFromChannels({
@@ -42,6 +50,7 @@ export async function searchDiscordHistory(input: {
       visibleChannelIds: searchChannelIds,
       limit,
       authorIds,
+      aboutUserTerms,
       dateFrom: input.search.dateFrom,
       dateTo: input.search.dateTo
     });
@@ -53,12 +62,13 @@ export async function searchDiscordHistory(input: {
     query: normalizedQuery,
     limit,
     authorIds,
+    aboutUserTerms,
     dateFrom: input.search.dateFrom,
     dateTo: input.search.dateTo
   });
 
   let vector: SearchResult[] = [];
-  if (input.config.openRouter.apiKey) {
+  if (input.config.openRouter.apiKey && hasNarrowingFilters) {
     try {
       const [embedding] = await input.openRouter.embed(
         [normalizedQuery],
@@ -72,6 +82,7 @@ export async function searchDiscordHistory(input: {
           embedding,
           limit,
           authorIds,
+          aboutUserTerms,
           dateFrom: input.search.dateFrom,
           dateTo: input.search.dateTo
         });

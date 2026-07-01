@@ -24,7 +24,9 @@ import { renderToolList } from "./registry.js";
 export type HistoryAnswerOptions = {
   authorIds?: string[];
   channelIds?: string[];
+  aboutUserIds?: string[];
   authorQueries?: string[];
+  aboutUserQueries?: string[];
   channelQueries?: string[];
   dateFrom?: string | Date;
   dateTo?: string | Date;
@@ -119,6 +121,11 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     ...syntaxFilters.authorIds,
     ...(await resolveAuthorQueries(ctx, [...syntaxFilters.authorQueries, ...(options.authorQueries ?? [])]))
   ];
+  const aboutUserIds = uniqueStrings([
+    ...normalizeIds(options.aboutUserIds),
+    ...(await resolveAuthorQueries(ctx, options.aboutUserQueries ?? []))
+  ]);
+  const aboutUserTerms = await resolveAboutUserTerms(ctx, aboutUserIds);
   const channelIds = [
     ...(ctx.mentionedChannelIds ?? []),
     ...normalizeIds(options.channelIds),
@@ -146,6 +153,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
       query,
       limit: boundedLimit(options.limit, ctx.config.maxHistoryResults, 1, 25),
       authorIds: uniqueStrings(authorIds),
+      aboutUserTerms,
       channelIds: uniqueStrings(channelIds),
       dateFrom: historyFilters.dateFrom,
       dateTo: historyFilters.dateTo
@@ -161,6 +169,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
       question: requestText,
       query,
       authorIds: uniqueStrings(authorIds),
+      aboutUserIds,
       channelIds: uniqueStrings(channelIds),
       dateFrom: historyFilters.dateFrom?.toISOString(),
       dateTo: historyFilters.dateTo?.toISOString()
@@ -406,7 +415,9 @@ export async function summarizeDiscordHistory(
     question: string;
     authorIds?: string[];
     channelIds?: string[];
+    aboutUserIds?: string[];
     authorQueries?: string[];
+    aboutUserQueries?: string[];
     channelQueries?: string[];
     dateFrom?: string;
     dateTo?: string;
@@ -422,6 +433,11 @@ export async function summarizeDiscordHistory(
     ...normalizeIds(input.authorIds),
     ...(await resolveAuthorQueries(ctx, input.authorQueries ?? []))
   ]);
+  const aboutUserIds = uniqueStrings([
+    ...normalizeIds(input.aboutUserIds),
+    ...(await resolveAuthorQueries(ctx, input.aboutUserQueries ?? []))
+  ]);
+  const aboutUserTerms = await resolveAboutUserTerms(ctx, aboutUserIds);
   const channelIds = uniqueStrings([
     ...normalizeIds(input.channelIds),
     ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
@@ -431,6 +447,7 @@ export async function summarizeDiscordHistory(
     visibleIndexedChannels,
     channelIds,
     authorIds,
+    aboutUserTerms,
     dateFrom,
     dateTo: explicitDateTo,
     sampleLimit
@@ -442,7 +459,7 @@ export async function summarizeDiscordHistory(
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "summarizeDiscordHistory",
-    argumentsSummary: summarizeForAudit({ ...input, authorIds, channelIds, dateFrom: dateFrom?.toISOString(), dateTo: explicitDateTo?.toISOString(), sampleLimit }),
+    argumentsSummary: summarizeForAudit({ ...input, authorIds, aboutUserIds, channelIds, dateFrom: dateFrom?.toISOString(), dateTo: explicitDateTo?.toISOString(), sampleLimit }),
     resultSummary: summarizeForAudit({ sampleCount: samples.length, retrievalQuery: evidence.retrievalQuery, counts: evidence.counts })
   });
 
@@ -499,6 +516,7 @@ async function collectDiscordSummaryEvidence(
     visibleIndexedChannels: string[];
     channelIds: string[];
     authorIds: string[];
+    aboutUserTerms: string[];
     dateFrom?: Date;
     dateTo?: Date;
     sampleLimit: number;
@@ -514,6 +532,7 @@ async function collectDiscordSummaryEvidence(
     visibleChannelIds: input.visibleIndexedChannels,
     channelIds: input.channelIds,
     authorIds: input.authorIds,
+    aboutUserTerms: input.aboutUserTerms,
     dateFrom: input.dateFrom,
     dateTo: input.dateTo,
     limit: representativeLimit
@@ -523,6 +542,7 @@ async function collectDiscordSummaryEvidence(
     visibleChannelIds: input.visibleIndexedChannels,
     channelIds: input.channelIds,
     authorIds: input.authorIds,
+    aboutUserTerms: input.aboutUserTerms,
     dateFrom: input.dateFrom,
     dateTo: input.dateTo,
     limit: recentLimit
@@ -533,6 +553,7 @@ async function collectDiscordSummaryEvidence(
         visibleChannelIds: input.visibleIndexedChannels,
         channelIds: input.channelIds,
         authorIds: input.authorIds,
+        aboutUserTerms: input.aboutUserTerms,
         query: retrievalQuery,
         dateFrom: input.dateFrom,
         dateTo: input.dateTo,
@@ -546,6 +567,7 @@ async function collectDiscordSummaryEvidence(
           visibleIndexedChannels: input.visibleIndexedChannels,
           channelIds: input.channelIds,
           authorIds: input.authorIds,
+          aboutUserTerms: input.aboutUserTerms,
           dateFrom: input.dateFrom,
           dateTo: input.dateTo,
           limit: focusedLimit
@@ -586,6 +608,7 @@ async function semanticDiscordSummarySamples(
     visibleIndexedChannels: string[];
     channelIds: string[];
     authorIds: string[];
+    aboutUserTerms: string[];
     dateFrom?: Date;
     dateTo?: Date;
     limit: number;
@@ -603,6 +626,7 @@ async function semanticDiscordSummarySamples(
       visibleChannelIds: input.visibleIndexedChannels,
       channelIds: input.channelIds,
       authorIds: input.authorIds,
+      aboutUserTerms: input.aboutUserTerms,
       embedding,
       dateFrom: input.dateFrom,
       dateTo: input.dateTo,
@@ -665,6 +689,7 @@ export async function summarizeCurrentThread(ctx: ToolContext, input: { question
           visibleIndexedChannels,
           channelIds: [ctx.channelId],
           authorIds: [],
+          aboutUserTerms: [],
           sampleLimit: ctx.config.maxThreadSummaryMessages
         })
       ).samples
@@ -1870,6 +1895,16 @@ async function resolveAuthorQueries(ctx: ToolContext, queries: string[]) {
     ids.push(...matches.map((match) => match.id));
   }
   return uniqueStrings(ids);
+}
+
+async function resolveAboutUserTerms(ctx: ToolContext, userIds: string[]) {
+  const ids = uniqueStrings(userIds);
+  if (ids.length === 0) return [];
+  const references = await ctx.repo.getDiscordUserReferenceTerms({
+    guildId: ctx.guildId,
+    userIds: ids
+  });
+  return uniqueStrings([...ids.map((id) => `@user:${id}`), ...references.flatMap((reference) => reference.terms)]);
 }
 
 async function visibleIndexedChannelIdsForRequest(ctx: ToolContext) {

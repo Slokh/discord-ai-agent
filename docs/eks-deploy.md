@@ -81,6 +81,7 @@ kubectl -n discord-ai-agent get pods
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-api
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-bot
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-worker
+kubectl -n discord-ai-agent logs deploy/discord-ai-agent-codegen-worker
 ```
 
 ## Sandbox Permissions
@@ -88,7 +89,7 @@ kubectl -n discord-ai-agent logs deploy/discord-ai-agent-worker
 The chart creates:
 
 - One app service account for `api`, `bot`, and migrations.
-- One worker service account with sandbox-launcher RBAC.
+- One worker service account with sandbox-launcher RBAC, shared by the regular worker and optional dedicated codegen worker.
 - One sandbox service account for task Jobs.
 - A Role allowing only the worker service account to create sandbox Jobs, Secrets, and ConfigMaps.
 - No RBAC permissions for the sandbox service account.
@@ -103,6 +104,16 @@ The sandbox receives only:
 It does not receive Discord credentials or the database URL.
 
 The worker reconciles active sandbox runs. If a Kubernetes Job fails, disappears, or completes without a terminal callback, the task is marked failed. Once a task is terminal, the worker deletes the per-task Job, Secret, and ConfigMap and records cleanup in Postgres.
+
+For lower-latency code-update work, enable the dedicated warm codegen worker:
+
+```bash
+helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
+  --set codegenWorker.enabled=true \
+  --set sandbox.cache.enabled=true
+```
+
+That deployment consumes only `agent.task`, uses the `local-process` backend, registers a lease in Postgres, and keeps repo/dependency/Codex caches warm on the mounted sandbox cache volume. The regular worker automatically stops consuming code-update task jobs while continuing crawl, embedding, and Discord request work.
 
 ## Sandbox Cache
 

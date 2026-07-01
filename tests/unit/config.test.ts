@@ -22,7 +22,11 @@ describe("config", () => {
         "KUBERNETES_NAMESPACE",
         "SANDBOX_IMAGE",
         "SANDBOX_CACHE_DIR",
-        "SANDBOX_CACHE_PVC_NAME"
+        "SANDBOX_CACHE_PVC_NAME",
+        "WORKER_CRAWL_ENABLED",
+        "WORKER_EMBEDDING_ENABLED",
+        "WORKER_TASK_ENABLED",
+        "WORKER_DISCORD_AGENT_ENABLED"
       ],
       () => {
         const config = loadConfig();
@@ -46,6 +50,12 @@ describe("config", () => {
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
         expect(config.execution.kubernetes.cacheDir).toBe("/var/cache/discord-ai-agent");
         expect(config.execution.kubernetes.cachePvcName).toBeNull();
+        expect(config.worker).toEqual({
+          crawlEnabled: true,
+          embeddingEnabled: true,
+          taskEnabled: true,
+          discordAgentEnabled: true
+        });
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
@@ -84,6 +94,25 @@ describe("config", () => {
     withEnv({ CODEGEN_EXECUTION_BACKEND: "local-process" }, () => {
       expect(loadConfig().execution.codegenBackend).toBe("local-process");
     });
+  });
+
+  it("allows splitting worker queues across deployments", () => {
+    withEnv(
+      {
+        WORKER_CRAWL_ENABLED: "false",
+        WORKER_EMBEDDING_ENABLED: "0",
+        WORKER_TASK_ENABLED: "true",
+        WORKER_DISCORD_AGENT_ENABLED: "no"
+      },
+      () => {
+        expect(loadConfig().worker).toEqual({
+          crawlEnabled: false,
+          embeddingEnabled: false,
+          taskEnabled: true,
+          discordAgentEnabled: false
+        });
+      }
+    );
   });
 
   it("normalizes the public control UI URL", () => {

@@ -282,6 +282,9 @@ describe("agent router", () => {
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         sampleMessagesFromChannels,
+        recentMessagesFromChannels: vi.fn(async () => []),
+        keywordSearch: vi.fn(async () => []),
+        vectorSearch: vi.fn(async () => []),
         auditTool
       },
       openRouter: {
@@ -409,6 +412,9 @@ describe("agent router", () => {
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         sampleMessagesFromChannels,
+        recentMessagesFromChannels: vi.fn(async () => []),
+        keywordSearch: vi.fn(async () => []),
+        vectorSearch: vi.fn(async () => []),
         auditTool
       },
       openRouter: {

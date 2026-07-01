@@ -40,6 +40,17 @@ type ChannelTopicCluster = {
   examples: DiscordChannelTopicCandidate[];
 };
 
+type DiscordSummaryEvidence = {
+  samples: SearchResult[];
+  retrievalQuery: string;
+  counts: {
+    semantic: number;
+    keyword: number;
+    recent: number;
+    representative: number;
+  };
+};
+
 export async function listTools(ctx: ToolContext): Promise<string> {
   const content = renderToolList();
   await ctx.repo.auditTool({
@@ -415,15 +426,16 @@ export async function summarizeDiscordHistory(
     ...normalizeIds(input.channelIds),
     ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
   ]);
-  const samples = await ctx.repo.sampleMessagesFromChannels({
-    guildId: ctx.guildId,
-    visibleChannelIds: visibleIndexedChannels,
+  const evidence = await collectDiscordSummaryEvidence(ctx, {
+    question,
+    visibleIndexedChannels,
     channelIds,
     authorIds,
     dateFrom,
     dateTo: explicitDateTo,
-    limit: sampleLimit
+    sampleLimit
   });
+  const samples = evidence.samples;
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -431,7 +443,7 @@ export async function summarizeDiscordHistory(
     userId: ctx.userId,
     toolName: "summarizeDiscordHistory",
     argumentsSummary: summarizeForAudit({ ...input, authorIds, channelIds, dateFrom: dateFrom?.toISOString(), dateTo: explicitDateTo?.toISOString(), sampleLimit }),
-    resultSummary: summarizeForAudit({ sampleCount: samples.length })
+    resultSummary: summarizeForAudit({ sampleCount: samples.length, retrievalQuery: evidence.retrievalQuery, counts: evidence.counts })
   });
 
   if (samples.length === 0) {
@@ -444,6 +456,7 @@ export async function summarizeDiscordHistory(
         role: "system",
         content:
           "You summarize representative Discord history evidence. The sample is permission-filtered but not exhaustive. " +
+          "The evidence mixes semantic vector matches, keyword hits, recent messages, and time-diverse representative samples. " +
           "Be concise and conversational. Surface concrete updates, plans, decisions, projects, travel, work/school changes, recurring activities, and notable shifts when the evidence supports them. " +
           "Mention routine chatter too, but do not let repetitive game scores, links, or one-liners hide more substantive updates. " +
           "Use exact @handles from the evidence. Include years or dates for concrete examples. Do not include citations, raw URLs, or a Sources section unless the user asks."
@@ -453,6 +466,8 @@ export async function summarizeDiscordHistory(
         content:
           `Question: ${question}\n` +
           `Applied date filter: ${historyEvidenceAppliedDateFilter(dateFrom, explicitDateTo)}\n` +
+          `Retrieval query: ${evidence.retrievalQuery || "(broad summary)"}\n` +
+          `Retrieval mix: semantic=${evidence.counts.semantic}, keyword=${evidence.counts.keyword}, recent=${evidence.counts.recent}, representative=${evidence.counts.representative}\n` +
           `Sample count: ${samples.length}\n\n` +
           formatSearchResults(samples)
       }
@@ -477,7 +492,158 @@ export async function summarizeDiscordHistory(
   return summary;
 }
 
-export async function summarizeCurrentThread(ctx: ToolContext): Promise<string> {
+async function collectDiscordSummaryEvidence(
+  ctx: ToolContext,
+  input: {
+    question: string;
+    visibleIndexedChannels: string[];
+    channelIds: string[];
+    authorIds: string[];
+    dateFrom?: Date;
+    dateTo?: Date;
+    sampleLimit: number;
+  }
+): Promise<DiscordSummaryEvidence> {
+  const retrievalQuery = buildHistoryRetrievalQuery(input.question);
+  const representativeLimit = input.sampleLimit;
+  const recentLimit = Math.min(25, Math.max(8, Math.ceil(input.sampleLimit * 0.35)));
+  const focusedLimit = Math.min(40, Math.max(10, Math.ceil(input.sampleLimit * 0.5)));
+
+  const representativePromise = ctx.repo.sampleMessagesFromChannels({
+    guildId: ctx.guildId,
+    visibleChannelIds: input.visibleIndexedChannels,
+    channelIds: input.channelIds,
+    authorIds: input.authorIds,
+    dateFrom: input.dateFrom,
+    dateTo: input.dateTo,
+    limit: representativeLimit
+  });
+  const recentPromise = ctx.repo.recentMessagesFromChannels({
+    guildId: ctx.guildId,
+    visibleChannelIds: input.visibleIndexedChannels,
+    channelIds: input.channelIds,
+    authorIds: input.authorIds,
+    dateFrom: input.dateFrom,
+    dateTo: input.dateTo,
+    limit: recentLimit
+  });
+  const keywordPromise = retrievalQuery
+    ? ctx.repo.keywordSearch({
+        guildId: ctx.guildId,
+        visibleChannelIds: input.visibleIndexedChannels,
+        channelIds: input.channelIds,
+        authorIds: input.authorIds,
+        query: retrievalQuery,
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+        limit: focusedLimit
+      })
+    : Promise.resolve([]);
+  const semanticPromise =
+    retrievalQuery && ctx.config.openRouter?.apiKey
+      ? semanticDiscordSummarySamples(ctx, {
+          retrievalQuery,
+          visibleIndexedChannels: input.visibleIndexedChannels,
+          channelIds: input.channelIds,
+          authorIds: input.authorIds,
+          dateFrom: input.dateFrom,
+          dateTo: input.dateTo,
+          limit: focusedLimit
+        })
+      : Promise.resolve([]);
+
+  const [representative, recent, keyword, semantic] = await Promise.all([
+    representativePromise,
+    recentPromise,
+    keywordPromise,
+    semanticPromise
+  ]);
+
+  return {
+    samples: mergeDiscordSummarySamples(
+      [
+        { kind: "semantic", results: semantic },
+        { kind: "keyword", results: keyword },
+        { kind: "recent", results: recent },
+        { kind: "representative", results: representative }
+      ],
+      input.sampleLimit
+    ),
+    retrievalQuery,
+    counts: {
+      semantic: semantic.length,
+      keyword: keyword.length,
+      recent: recent.length,
+      representative: representative.length
+    }
+  };
+}
+
+async function semanticDiscordSummarySamples(
+  ctx: ToolContext,
+  input: {
+    retrievalQuery: string;
+    visibleIndexedChannels: string[];
+    channelIds: string[];
+    authorIds: string[];
+    dateFrom?: Date;
+    dateTo?: Date;
+    limit: number;
+  }
+) {
+  try {
+    const [embedding] = await ctx.openRouter.embed(
+      [input.retrievalQuery],
+      ctx.config.openRouter.embeddingModel,
+      ctx.config.embeddingDimensions
+    );
+    if (!embedding) return [];
+    return await ctx.repo.vectorSearch({
+      guildId: ctx.guildId,
+      visibleChannelIds: input.visibleIndexedChannels,
+      channelIds: input.channelIds,
+      authorIds: input.authorIds,
+      embedding,
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+      limit: input.limit
+    });
+  } catch {
+    return [];
+  }
+}
+
+function mergeDiscordSummarySamples(
+  sources: Array<{ kind: keyof DiscordSummaryEvidence["counts"]; results: SearchResult[] }>,
+  limit: number
+) {
+  const weights: Record<keyof DiscordSummaryEvidence["counts"], number> = {
+    semantic: 4,
+    keyword: 3,
+    recent: 2,
+    representative: 1
+  };
+  const byId = new Map<string, SearchResult & { summaryScore: number }>();
+  for (const source of sources) {
+    for (const result of source.results) {
+      const existing = byId.get(result.messageId);
+      const score = weights[source.kind] + Math.max(0, result.score ?? 0);
+      if (existing) {
+        existing.summaryScore += score;
+        continue;
+      }
+      byId.set(result.messageId, { ...result, summaryScore: score });
+    }
+  }
+
+  return [...byId.values()]
+    .sort((a, b) => b.summaryScore - a.summaryScore || b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, limit)
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    .map(({ summaryScore: _summaryScore, ...result }) => result);
+}
+
+export async function summarizeCurrentThread(ctx: ToolContext, input: { question?: string } = {}): Promise<string> {
   const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
   if (!visibleIndexedChannels.includes(ctx.channelId)) {
     await ctx.repo.auditTool({
@@ -491,31 +657,44 @@ export async function summarizeCurrentThread(ctx: ToolContext): Promise<string> 
     return "I cannot summarize this channel because I do not have a current visibility grant for you.";
   }
 
-  const messages = await ctx.repo.recentMessages({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    limit: ctx.config.maxThreadSummaryMessages
-  });
+  const question = input.question?.trim();
+  const messages = question
+    ? (
+        await collectDiscordSummaryEvidence(ctx, {
+          question,
+          visibleIndexedChannels,
+          channelIds: [ctx.channelId],
+          authorIds: [],
+          sampleLimit: ctx.config.maxThreadSummaryMessages
+        })
+      ).samples
+    : await ctx.repo.recentMessages({
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        limit: ctx.config.maxThreadSummaryMessages
+      });
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "summarizeDiscordThread",
-    argumentsSummary: summarizeForAudit({ channelId: ctx.channelId }),
-    resultSummary: summarizeForAudit({ messageCount: messages.length })
+    argumentsSummary: summarizeForAudit({ channelId: ctx.channelId, question }),
+    resultSummary: summarizeForAudit({ messageCount: messages.length, focused: Boolean(question) })
   });
 
   if (messages.length === 0) return "I do not have indexed messages for this channel/thread yet.";
 
-  const transcript = messages
-    .map((message) => `${message.authorUsername ?? message.authorId}: ${message.normalizedContent}`)
-    .join("\n");
+  const transcript = question
+    ? `Question: ${question}\n\n${formatSearchResults(messages)}`
+    : messages.map((message) => `${message.authorUsername ?? message.authorId}: ${message.normalizedContent}`).join("\n");
   const response = await ctx.openRouter.chat({
     messages: [
       {
         role: "system",
-        content: "Summarize this Discord channel/thread concisely. Highlight decisions, open questions, and useful context."
+        content:
+          "Summarize this Discord channel/thread concisely. Highlight decisions, open questions, and useful context. " +
+          "If a question is included, focus on that question using the provided evidence."
       },
       { role: "user", content: transcript }
     ],
@@ -528,7 +707,7 @@ export async function summarizeCurrentThread(ctx: ToolContext): Promise<string> 
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "composeThreadSummary",
-    argumentsSummary: summarizeForAudit({ channelId: ctx.channelId, messageCount: messages.length }),
+    argumentsSummary: summarizeForAudit({ channelId: ctx.channelId, messageCount: messages.length, question }),
     resultSummary: summarizeForAudit(response.content),
     model: response.model,
     estimatedCostUsd: response.estimatedCostUsd

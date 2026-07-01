@@ -10,6 +10,7 @@ import {
   getDiscordStats,
   inspectAgentLogs,
   reportStatus,
+  summarizeDiscordHistory,
   summarizeCurrentThread,
   undoConversationTurns
 } from "../../src/tools/coreTools.js";
@@ -436,6 +437,69 @@ describe("getDiscordChannelTopics", () => {
     );
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDiscordChannelTopics" }));
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "composeChannelTopics", model: "test-chat" }));
+  });
+});
+
+describe("summarizeDiscordHistory", () => {
+  it("builds hybrid semantic, keyword, recent, and representative evidence", async () => {
+    const semanticResult = searchResult({ messageId: "semantic", normalizedContent: "semantic job interview update", score: 0.91 });
+    const keywordResult = searchResult({ messageId: "keyword", normalizedContent: "keyword job hunt update", score: 0.8 });
+    const recentResult = searchResult({ messageId: "recent", normalizedContent: "recent career update", createdAt: new Date("2026-01-01T00:00:00.000Z") });
+    const representativeResult = searchResult({ messageId: "representative", normalizedContent: "representative workplace chatter" });
+    const chat = vi.fn(async () => ({
+      content: "People have been talking about interviews, job hunts, and career updates.",
+      model: "summary-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: { apiKey: "test-key", embeddingModel: "test-embed" },
+        embeddingDimensions: 2
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["jobs"]),
+        findDiscordUsers: vi.fn(async () => []),
+        findDiscordChannels: vi.fn(async () => []),
+        sampleMessagesFromChannels: vi.fn(async () => [representativeResult]),
+        recentMessagesFromChannels: vi.fn(async () => [recentResult]),
+        keywordSearch: vi.fn(async () => [keywordResult]),
+        vectorSearch: vi.fn(async () => [semanticResult]),
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        embed: vi.fn(async () => [[0.1, 0.2]]),
+        chat
+      },
+      github: {},
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      userDisplayName: "User",
+      visibleChannelIds: ["jobs"]
+    } as unknown as ToolContext;
+
+    const response = await summarizeDiscordHistory(ctx, {
+      question: "what have people said about job hunting?",
+      channelIds: ["jobs"],
+      sampleLimit: 20
+    });
+
+    expect(response).toContain("job hunts");
+    expect(ctx.openRouter.embed).toHaveBeenCalledWith(["what have people said about job hunting?"], "test-embed", 2);
+    expect(ctx.repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"], authorIds: [], limit: 10 }));
+    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(expect.objectContaining({ query: "what have people said about job hunting?", channelIds: ["jobs"] }));
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"] }));
+    expect(ctx.repo.sampleMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"], limit: 20 }));
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining("Retrieval mix: semantic=1, keyword=1, recent=1, representative=1") }),
+          expect.objectContaining({ content: expect.stringContaining("semantic job interview update") })
+        ])
+      })
+    );
   });
 });
 
@@ -1011,6 +1075,54 @@ describe("summarizeCurrentThread", () => {
     expect(ctx.openRouter.chat).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([expect.objectContaining({ role: "user", content: expect.stringContaining("we picked nachos") })])
+      })
+    );
+  });
+
+  it("uses hybrid focused evidence when a thread summary has a question", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        sampleMessagesFromChannels: vi.fn(async () => [
+          searchResult({ messageId: "representative-thread", channelId: "channel", normalizedContent: "older deploy context" })
+        ]),
+        recentMessagesFromChannels: vi.fn(async () => [
+          searchResult({ messageId: "recent-thread", channelId: "channel", normalizedContent: "recent deploy update" })
+        ]),
+        keywordSearch: vi.fn(async () => [
+          searchResult({ messageId: "keyword-thread", channelId: "channel", normalizedContent: "deploy keyword hit" })
+        ]),
+        vectorSearch: vi.fn(async () => [
+          searchResult({ messageId: "semantic-thread", channelId: "channel", normalizedContent: "semantic deploy decision" })
+        ]),
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        embed: vi.fn(async () => [[0.1, 0.2]]),
+        chat: vi.fn(async () => ({ content: "Deployment decision summarized.", model: "test", raw: {} }))
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      config: {
+        maxThreadSummaryMessages: 20,
+        openRouter: { apiKey: "test-key", embeddingModel: "test-embed" },
+        embeddingDimensions: 2
+      }
+    } as unknown as ToolContext;
+
+    await expect(summarizeCurrentThread(ctx, { question: "deployment decisions" })).resolves.toBe("Deployment decision summarized.");
+    expect(ctx.repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["channel"] }));
+    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["channel"], query: "deployment decisions" }));
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["channel"] }));
+    expect(ctx.repo.sampleMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["channel"] }));
+    expect(ctx.openRouter.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "user", content: expect.stringContaining("Question: deployment decisions") }),
+          expect.objectContaining({ role: "user", content: expect.stringContaining("semantic deploy decision") })
+        ])
       })
     );
   });

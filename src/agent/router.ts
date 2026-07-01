@@ -630,7 +630,14 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
   }
 
   if (route.name === "summarizeDiscordThread") {
-    return { content: cleanResponse(await summarizeCurrentThread(ctx), ctx.config.maxReplyChars) };
+    return {
+      content: cleanResponse(
+        await summarizeCurrentThread(ctx, {
+          question: stringArgument(route.arguments, "question")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
   }
 
   if (route.name === "getRecentDiscordMessages") {

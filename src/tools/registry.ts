@@ -445,12 +445,18 @@ export const toolRegistry: ToolRegistryEntry[] = [
   },
   {
     name: "summarizeDiscordThread",
-    description: "Summarize indexed messages from the current channel or thread.",
+    description:
+      "Summarize indexed messages from the current channel or thread. With no question, summarize recent chronological context. With a question, use hybrid semantic/keyword/recent evidence from this channel to focus the summary.",
     userVisible: true,
     mutates: false,
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        question: {
+          type: "string",
+          description: "Optional focused question for the summary, such as deployment discussion, decisions, or open issues."
+        }
+      },
       additionalProperties: false
     }
   },

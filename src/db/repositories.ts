@@ -1252,12 +1252,14 @@ export class DiscordAiAgentRepository {
     limit: number;
     authorId?: string;
     authorIds?: string[];
+    channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
   }): Promise<SearchResult[]> {
     if (input.visibleChannelIds.length === 0 || input.embedding.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds, input.authorId);
-    const hasResultFilters = authorIds.length > 0 || input.dateFrom != null || input.dateTo != null;
+    const channelIds = normalizeFilterIds(input.channelIds);
+    const hasResultFilters = authorIds.length > 0 || channelIds.length > 0 || input.dateFrom != null || input.dateTo != null;
     const candidateLimit = Math.min(
       Math.max(input.limit * (hasResultFilters ? 100 : 30), hasResultFilters ? 500 : 250),
       hasResultFilters ? FILTERED_VECTOR_SEARCH_MAX_CANDIDATES : VECTOR_SEARCH_MAX_CANDIDATES
@@ -1274,7 +1276,7 @@ export class DiscordAiAgentRepository {
               embedding <=> $3::vector AS distance
             FROM message_embeddings
             ORDER BY embedding <=> $3::vector
-            LIMIT $8
+            LIMIT $9
           )
           SELECT
             m.id AS message_id,
@@ -1299,6 +1301,11 @@ export class DiscordAiAgentRepository {
             AND c.is_excluded = false
             AND coalesce(parent.is_excluded, false) = false
             AND (cardinality($5::text[]) = 0 OR m.author_id = ANY($5::text[]))
+            AND (
+              cardinality($8::text[]) = 0
+              OR m.channel_id = ANY($8::text[])
+              OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
+            )
             AND ($6::timestamptz IS NULL OR m.created_at >= $6)
             AND ($7::timestamptz IS NULL OR m.created_at <= $7)
             AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
@@ -1313,6 +1320,7 @@ export class DiscordAiAgentRepository {
           authorIds,
           input.dateFrom ?? null,
           input.dateTo ?? null,
+          channelIds,
           candidateLimit
         ]
       );
@@ -1370,11 +1378,7 @@ export class DiscordAiAgentRepository {
     includeBots?: boolean;
   }): Promise<SearchResult[]> {
     const requestedChannelIds = normalizeFilterIds(input.channelIds);
-    const searchChannelIds =
-      requestedChannelIds.length === 0
-        ? input.visibleChannelIds
-        : requestedChannelIds.filter((channelId) => input.visibleChannelIds.includes(channelId));
-    if (searchChannelIds.length === 0) return [];
+    if (input.visibleChannelIds.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds);
     const result = await this.pool.query(
       `
@@ -1400,13 +1404,27 @@ export class DiscordAiAgentRepository {
           AND c.is_excluded = false
           AND coalesce(parent.is_excluded, false) = false
           AND (cardinality($4::text[]) = 0 OR m.author_id = ANY($4::text[]))
+          AND (
+            cardinality($8::text[]) = 0
+            OR m.channel_id = ANY($8::text[])
+            OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
+          )
           AND ($5::timestamptz IS NULL OR m.created_at >= $5)
           AND ($6::timestamptz IS NULL OR m.created_at <= $6)
           AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
         ORDER BY m.created_at DESC
         LIMIT $3
       `,
-      [input.guildId, searchChannelIds, input.limit, authorIds, input.dateFrom ?? null, input.dateTo ?? null, Boolean(input.includeBots)]
+      [
+        input.guildId,
+        input.visibleChannelIds,
+        input.limit,
+        authorIds,
+        input.dateFrom ?? null,
+        input.dateTo ?? null,
+        Boolean(input.includeBots),
+        requestedChannelIds
+      ]
     );
     return result.rows.map(rowToSearchResult).reverse();
   }
@@ -1422,11 +1440,7 @@ export class DiscordAiAgentRepository {
     includeBots?: boolean;
   }): Promise<SearchResult[]> {
     const requestedChannelIds = normalizeFilterIds(input.channelIds);
-    const searchChannelIds =
-      requestedChannelIds.length === 0
-        ? input.visibleChannelIds
-        : requestedChannelIds.filter((channelId) => input.visibleChannelIds.includes(channelId));
-    if (searchChannelIds.length === 0) return [];
+    if (input.visibleChannelIds.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds);
     const result = await this.pool.query(
       `
@@ -1457,6 +1471,11 @@ export class DiscordAiAgentRepository {
             AND c.is_excluded = false
             AND coalesce(parent.is_excluded, false) = false
             AND (cardinality($4::text[]) = 0 OR m.author_id = ANY($4::text[]))
+            AND (
+              cardinality($8::text[]) = 0
+              OR m.channel_id = ANY($8::text[])
+              OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
+            )
             AND ($5::timestamptz IS NULL OR m.created_at >= $5)
             AND ($6::timestamptz IS NULL OR m.created_at <= $6)
             AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
@@ -1491,7 +1510,16 @@ export class DiscordAiAgentRepository {
         ORDER BY created_at ASC
         LIMIT $3
       `,
-      [input.guildId, searchChannelIds, input.limit, authorIds, input.dateFrom ?? null, input.dateTo ?? null, Boolean(input.includeBots)]
+      [
+        input.guildId,
+        input.visibleChannelIds,
+        input.limit,
+        authorIds,
+        input.dateFrom ?? null,
+        input.dateTo ?? null,
+        Boolean(input.includeBots),
+        requestedChannelIds
+      ]
     );
     return result.rows.map(rowToSearchResult);
   }
@@ -1799,11 +1827,7 @@ export class DiscordAiAgentRepository {
     limit: number;
   }): Promise<DiscordAttachmentSearchResult[]> {
     const requestedChannelIds = normalizeFilterIds(input.channelIds);
-    const searchChannelIds =
-      requestedChannelIds.length === 0
-        ? input.visibleChannelIds
-        : requestedChannelIds.filter((channelId) => input.visibleChannelIds.includes(channelId));
-    if (searchChannelIds.length === 0) return [];
+    if (input.visibleChannelIds.length === 0) return [];
     const query = normalizeAttachmentQuery(input.query ?? "");
     const authorIds = normalizeFilterIds(input.authorIds);
     const contentType = input.contentType?.trim().toLowerCase() ?? "";
@@ -1834,6 +1858,11 @@ export class DiscordAiAgentRepository {
           AND c.is_excluded = false
           AND coalesce(parent.is_excluded, false) = false
           AND (cardinality($4::text[]) = 0 OR m.author_id = ANY($4::text[]))
+          AND (
+            cardinality($7::text[]) = 0
+            OR m.channel_id = ANY($7::text[])
+            OR (c.parent_id = ANY($7::text[]) AND c.type IN (10, 11))
+          )
           AND ($5 = '' OR lower(coalesce(a.content_type, '')) LIKE $5 || '%')
           AND (
             $3 = ''
@@ -1845,7 +1874,7 @@ export class DiscordAiAgentRepository {
         ORDER BY m.created_at DESC
         LIMIT $6
       `,
-      [input.guildId, searchChannelIds, query, authorIds, contentType, input.limit]
+      [input.guildId, input.visibleChannelIds, query, authorIds, contentType, input.limit, requestedChannelIds]
     );
     return result.rows.map(rowToDiscordAttachmentSearchResult);
   }

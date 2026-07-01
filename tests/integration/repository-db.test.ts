@@ -212,11 +212,18 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const lease = await codegenRepo.acquireSandboxLease({
       repo: "Slokh/discord-ai-agent",
       executionId,
-      leaseOwner: "worker-1"
+      leaseOwner: "worker-1",
+      sandboxId
     });
     expect(lease).toEqual(expect.objectContaining({ sandboxId, status: "leased", executionId }));
+    await expect(codegenRepo.heartbeatSandboxLease({ sandboxId, metadata: { heartbeat: "ok" } })).resolves.toEqual(
+      expect.objectContaining({ sandboxId, status: "leased" })
+    );
     await expect(codegenRepo.releaseSandboxLease({ sandboxId, executionId })).resolves.toEqual(
       expect.objectContaining({ sandboxId, status: "idle", executionId: null })
+    );
+    await expect(codegenRepo.disableSandboxLease({ sandboxId, reason: "test complete" })).resolves.toEqual(
+      expect.objectContaining({ sandboxId, status: "disabled" })
     );
 
     await expect(

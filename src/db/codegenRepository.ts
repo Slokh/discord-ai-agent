@@ -612,6 +612,7 @@ export class CodegenRepository {
     repo: string;
     executionId: string;
     leaseOwner: string;
+    sandboxId?: string | null;
     staleBefore?: Date | null;
   }): Promise<CodegenSandboxLeaseRecord | undefined> {
     const result = await this.pool.query(
@@ -620,6 +621,7 @@ export class CodegenRepository {
           SELECT sandbox_id
           FROM codegen_sandbox_leases
           WHERE repo = $1
+            AND ($5::text IS NULL OR sandbox_id = $5)
             AND status IN ('idle', 'leased')
             AND (
               status = 'idle'
@@ -641,7 +643,48 @@ export class CodegenRepository {
         WHERE lease.sandbox_id = candidate.sandbox_id
         RETURNING lease.*
       `,
-      [input.repo, input.executionId, input.leaseOwner, input.staleBefore ?? null]
+      [input.repo, input.executionId, input.leaseOwner, input.staleBefore ?? null, input.sandboxId ?? null]
+    );
+    return result.rows[0] ? rowToCodegenSandboxLease(result.rows[0]) : undefined;
+  }
+
+  async heartbeatSandboxLease(input: { sandboxId: string; metadata?: Record<string, unknown> }): Promise<CodegenSandboxLeaseRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        UPDATE codegen_sandbox_leases
+        SET heartbeat_at = now(),
+            metadata = metadata || $2::jsonb,
+            updated_at = now()
+        WHERE sandbox_id = $1
+          AND status IN ('idle', 'leased')
+        RETURNING *
+      `,
+      [input.sandboxId, JSON.stringify(input.metadata ?? {})]
+    );
+    return result.rows[0] ? rowToCodegenSandboxLease(result.rows[0]) : undefined;
+  }
+
+  async disableSandboxLease(input: { sandboxId: string; reason?: string | null; metadata?: Record<string, unknown> }): Promise<CodegenSandboxLeaseRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        UPDATE codegen_sandbox_leases
+        SET status = 'disabled',
+            lease_owner = NULL,
+            execution_id = NULL,
+            heartbeat_at = NULL,
+            metadata = metadata || $2::jsonb,
+            updated_at = now()
+        WHERE sandbox_id = $1
+        RETURNING *
+      `,
+      [
+        input.sandboxId,
+        JSON.stringify({
+          disabledReason: input.reason ?? null,
+          disabledAt: new Date().toISOString(),
+          ...(input.metadata ?? {})
+        })
+      ]
     );
     return result.rows[0] ? rowToCodegenSandboxLease(result.rows[0]) : undefined;
   }

@@ -10,6 +10,7 @@ import { taskBearerToken } from "./token.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "./types.js";
 
 export type ExecutionContext = {
+  sandboxId?: string | null;
   progress?: (event: { step: string; message: string; metadata?: Record<string, unknown> }) => Promise<void> | void;
 };
 
@@ -325,7 +326,7 @@ export class LocalProcessExecutionBackend implements ExecutionBackend {
     await context.progress?.({
       step: "sandbox_prepare",
       message: "Preparing a warm local codegen worker process.",
-      metadata: { sandboxRunId, backendJobName, cacheDir: this.config.execution.kubernetes.cacheDir }
+      metadata: { sandboxId: context.sandboxId ?? null, sandboxRunId, backendJobName, cacheDir: this.config.execution.kubernetes.cacheDir }
     });
 
     const child = this.spawnProcess(process.execPath, ["dist/src/execution/sandboxRunner.js"], {
@@ -358,7 +359,7 @@ export class LocalProcessExecutionBackend implements ExecutionBackend {
     await context.progress?.({
       step: "sandbox_start",
       message: "Started the warm local codegen worker process.",
-      metadata: { sandboxRunId, backendJobName, pid: child.pid, cacheDir: this.config.execution.kubernetes.cacheDir }
+      metadata: { sandboxId: context.sandboxId ?? null, sandboxRunId, backendJobName, pid: child.pid, cacheDir: this.config.execution.kubernetes.cacheDir }
     });
 
     return {

@@ -2649,6 +2649,17 @@ export class DiscordAiAgentRepository {
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
           ),
+          lease_update AS (
+            UPDATE codegen_sandbox_leases
+            SET status = 'idle',
+                lease_owner = NULL,
+                execution_id = NULL,
+                heartbeat_at = NULL,
+                last_used_at = now(),
+                metadata = metadata || jsonb_build_object('releasedBy', 'task.completed', 'releasedTaskId', $1, 'releasedStatus', 'succeeded'),
+                updated_at = now()
+            WHERE execution_id IN (SELECT execution_id FROM updated_execution)
+          ),
           next_sequence AS (
             SELECT
               updated_execution.session_id,
@@ -2730,6 +2741,17 @@ export class DiscordAiAgentRepository {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
+          ),
+          lease_update AS (
+            UPDATE codegen_sandbox_leases
+            SET status = 'idle',
+                lease_owner = NULL,
+                execution_id = NULL,
+                heartbeat_at = NULL,
+                last_used_at = now(),
+                metadata = metadata || jsonb_build_object('releasedBy', 'task.completed', 'releasedTaskId', $1, 'releasedStatus', $2),
+                updated_at = now()
+            WHERE execution_id IN (SELECT execution_id FROM updated_execution)
           ),
           next_sequence AS (
             SELECT
@@ -2960,7 +2982,72 @@ export class DiscordAiAgentRepository {
       `,
       [input.taskId, message]
     );
-    return Boolean(result.rowCount && result.rowCount > 0);
+    const cancelled = Boolean(result.rowCount && result.rowCount > 0);
+    if (cancelled) {
+      await this.updateProcessRun({
+        runId: input.taskId,
+        status: "cancelled",
+        summary: message,
+        metadata: { error: message }
+      }).catch(() => undefined);
+      await this.pool
+        .query(
+          `
+            WITH updated_execution AS (
+              UPDATE codegen_executions
+              SET status = 'cancelled',
+                  error = $2,
+                  completed_at = coalesce(completed_at, now()),
+                  updated_at = now()
+              WHERE task_id = $1
+              RETURNING session_id, execution_id, trace_id
+            ),
+            session_update AS (
+              UPDATE codegen_sessions
+              SET status = 'cancelled',
+                  completed_at = coalesce(completed_at, now()),
+                  updated_at = now()
+              WHERE session_id IN (SELECT session_id FROM updated_execution)
+            ),
+            lease_update AS (
+              UPDATE codegen_sandbox_leases
+              SET status = 'idle',
+                  lease_owner = NULL,
+                  execution_id = NULL,
+                  heartbeat_at = NULL,
+                  last_used_at = now(),
+                  metadata = metadata || jsonb_build_object('releasedBy', 'task.cancelled', 'releasedTaskId', $1, 'releasedStatus', 'cancelled'),
+                  updated_at = now()
+              WHERE execution_id IN (SELECT execution_id FROM updated_execution)
+            ),
+            next_sequence AS (
+              SELECT
+                updated_execution.session_id,
+                updated_execution.execution_id,
+                updated_execution.trace_id,
+                coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+              FROM updated_execution
+              LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+              GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+            )
+            INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+            SELECT
+              session_id,
+              execution_id,
+              trace_id,
+              sequence,
+              'status',
+              'info',
+              'codegen.completed',
+              $2,
+              jsonb_build_object('status', 'cancelled', 'error', $2)
+            FROM next_sequence
+          `,
+          [input.taskId, message]
+        )
+        .catch(() => undefined);
+    }
+    return cancelled;
   }
 
   async recordSandboxCommandEvent(input: {

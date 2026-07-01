@@ -210,7 +210,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           status: "running",
           backend: "test-sandbox-backend",
           currentStep: "sandbox_running",
-          statusMessage: "Kubernetes sandbox is running the task."
+          statusMessage: "Codegen sandbox is running the task."
         })
       );
       const session = await codegenRepo.getSession({ sessionId: `codegen-session-${taskId}` });

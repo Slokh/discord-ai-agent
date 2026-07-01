@@ -51,6 +51,8 @@ Every code-update request still has its own task branch and sandbox process. The
 
 In `kubernetes-job` mode, the reconciler also cleans up the Kubernetes Job, Secret, and ConfigMap. In `local-process` mode, the long-lived worker tracks the spawned child process and no Kubernetes per-task resources are created.
 
+In `local-process` mode, each task worker registers one row in `codegen_sandbox_leases` for its local warm execution slot. The worker heartbeats that row, acquires its own lease before spawning a codegen child process, waits when the slot is already leased, and task terminal updates release the row back to `idle`. This makes the lease table part of scheduling rather than just observability.
+
 ## Cache Model
 
 The retained cache contains:
@@ -75,7 +77,7 @@ Use `local-process` only for a worker pod you already treat as the code executio
 
 The next Centaur-like steps are:
 
-1. Promote `codegen_sandbox_leases` from observability/storage into the scheduler path so workers explicitly lease and heartbeat warm sandboxes.
+1. Expand lease-backed scheduling from the local-process worker slot into true warm Kubernetes sandbox pods.
 2. Keep a Codex app-server process warm per worker and reuse threads/sessions across recovery turns instead of spawning app-server per task.
 3. Add queue routing/fallback so a task uses a warm worker when one is available and falls back to `kubernetes-job` when the warm pool is saturated.
 4. Move credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.

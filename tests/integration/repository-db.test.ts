@@ -569,6 +569,55 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
   });
 
+  it("ignores late agent task progress after terminal failure", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Task Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId,
+      channelId,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "late progress test",
+      request: "simulate a late sandbox heartbeat",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+    await repo.markAgentTaskProgress({
+      taskId,
+      step: "codex_activity",
+      statusMessage: "codex is still running after 1741s.",
+      metadata: { durationMs: 1_741_000 }
+    });
+    await repo.markAgentTaskFailed({
+      taskId,
+      error: "Kubernetes Job failed.",
+      metadata: { observed: { status: "failed" } }
+    });
+    await repo.markAgentTaskProgress({
+      taskId,
+      step: "codex_activity",
+      statusMessage: "codex is still running after 1771s.",
+      metadata: { durationMs: 1_771_000 }
+    });
+
+    await expect(repo.getAgentTask(taskId)).resolves.toMatchObject({
+      taskId,
+      status: "failed",
+      currentStep: "failed",
+      statusMessage: "Kubernetes Job failed.",
+      error: "Kubernetes Job failed."
+    });
+    await expect(repo.getProcessRun(taskId)).resolves.toMatchObject({
+      runId: taskId,
+      status: "failed",
+      summary: "Kubernetes Job failed."
+    });
+  });
+
   it("tracks agent task notifications, command output, cancellation, and history", async () => {
     const taskId = `task-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;

@@ -230,13 +230,39 @@ export async function startJobs(input: {
         })
         .catch((error) => logger.warn({ err: error, taskId }, "Failed to create codegen session mirror"));
       await input.codegenRepo
+        ?.appendMessage({
+          messageId: codegenMessageIdForTask(data),
+          sessionId: codegenSessionIdForTask(data),
+          clientMessageId: taskId,
+          role: "user",
+          parts: [{ type: "text", text: data.request }],
+          metadata: {
+            taskId,
+            traceId: data.traceId,
+            requestedBy: data.requestedBy,
+            retriedFromTaskId: data.retriedFromTaskId ?? null,
+            source: "agent.task.enqueue"
+          }
+        })
+        .catch((error) => logger.warn({ err: error, taskId }, "Failed to append codegen session user message"));
+      await input.codegenRepo
+        ?.recordEvent({
+          sessionId: codegenSessionIdForTask(data),
+          traceId: data.traceId,
+          kind: "status",
+          eventName: "codegen.message.appended",
+          summary: "Persisted code-update request as a durable codegen message.",
+          metadata: { taskId, messageId: codegenMessageIdForTask(data), role: "user" }
+        })
+        .catch((error) => logger.warn({ err: error, taskId }, "Failed to record codegen message event"));
+      await input.codegenRepo
         ?.createExecution({
           executionId: codegenExecutionIdForTask(data),
           sessionId: codegenSessionIdForTask(data),
           taskId,
           traceId: data.traceId,
           status: "queued",
-          harness: "kubernetes-job",
+          harness: "codex-app-server",
           model: input.config.openRouter.codegenModel,
           provider: providerForCodegenModel(input.config.openRouter.codegenModel),
           reasoningEffort: "low",
@@ -281,7 +307,7 @@ export async function startJobs(input: {
           taskId,
           traceId: data.traceId,
           status: "queued",
-          harness: "kubernetes-job",
+          harness: "codex-app-server",
           model: input.config.openRouter.codegenModel,
           provider: providerForCodegenModel(input.config.openRouter.codegenModel),
           reasoningEffort: "low",
@@ -640,6 +666,10 @@ function codegenSessionIdForTask(job: Pick<AgentTaskJob, "taskId" | "retriedFrom
 
 function codegenExecutionIdForTask(job: Pick<AgentTaskJob, "taskId">) {
   return `codegen-execution-${job.taskId}`;
+}
+
+function codegenMessageIdForTask(job: Pick<AgentTaskJob, "taskId">) {
+  return `codegen-message-${job.taskId}`;
 }
 
 function providerForCodegenModel(model: string) {

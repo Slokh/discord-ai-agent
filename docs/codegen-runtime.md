@@ -29,6 +29,8 @@ Authenticated clients can:
 
 The old task callback endpoints remain for the current sandbox runner. New codegen runtime work should attach to the session API first, then route executions to warm sandboxes, harness servers, and Discord delivery from that durable event stream.
 
+Today, `enqueueAgentTask` creates or reuses the durable codegen session, appends the code-update request as a `user` message, and creates a queued `codex-app-server` execution before handing work to the existing `agent.task` queue. This keeps the current Discord behavior intact while making the codegen session/event trail the durable source of truth for future scheduler and UI work.
+
 ## Harness Profile
 
 Code-update tasks use their own coding harness model via `OPENROUTER_CODEGEN_MODEL`, falling back to `OPENROUTER_CHAT_MODEL` when unset. This lets normal Discord chat stay on a cheap conversational model while code updates can move independently to a model better suited to repository edits.
@@ -73,11 +75,10 @@ Use `local-process` only for a worker pod you already treat as the code executio
 
 The next Centaur-like steps are:
 
-1. Route Discord code-update requests through the durable session API instead of directly creating an `agent.task`.
-2. Promote `codegen_sandbox_leases` from observability/storage into the scheduler path so workers explicitly lease and heartbeat warm sandboxes.
-3. Keep a Codex app-server process warm per worker and reuse threads/sessions across recovery turns instead of spawning app-server per task.
-4. Add queue routing/fallback so a task uses a warm worker when one is available and falls back to `kubernetes-job` when the warm pool is saturated.
-5. Move credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.
+1. Promote `codegen_sandbox_leases` from observability/storage into the scheduler path so workers explicitly lease and heartbeat warm sandboxes.
+2. Keep a Codex app-server process warm per worker and reuse threads/sessions across recovery turns instead of spawning app-server per task.
+3. Add queue routing/fallback so a task uses a warm worker when one is available and falls back to `kubernetes-job` when the warm pool is saturated.
+4. Move credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.
 
 The existing `ExecutionBackend` interface, task event stream, cache metrics, and operator scripts are intended to survive that migration.
 

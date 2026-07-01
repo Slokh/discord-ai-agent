@@ -6,13 +6,13 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   buildCodegenContextPack,
-  codeUpdatePrompt,
   codexExecArgs,
+  codexResumeExecArgs,
+  codeUpdatePrompt,
+  codeUpdateRecoveryPrompt,
   evaluateCodegenWatchdog,
-  repairWorktreeRemoteForBranchPush,
   renderCodegenContextPack,
-  runCommand,
-  type CommandWatchdog
+  repairWorktreeRemoteForBranchPush
 } from "../../src/execution/sandboxRunner.js";
 
 const execFileAsync = promisify(execFile);
@@ -30,7 +30,6 @@ describe("sandboxRunner", () => {
 
     expect(args).toEqual([
       "exec",
-      "--ephemeral",
       "-C",
       "/tmp/work/repo",
       "--dangerously-bypass-approvals-and-sandbox",
@@ -39,6 +38,87 @@ describe("sandboxRunner", () => {
       "-"
     ]);
     expect(args).not.toContain("--ask-for-approval");
+    expect(args).not.toContain("--ephemeral");
+  });
+
+  it("resumes the persisted Codex session for recovery attempts", () => {
+    expect(codexResumeExecArgs({ model: "z-ai/glm-5.2" })).toEqual([
+      "exec",
+      "resume",
+      "--last",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "-m",
+      "z-ai/glm-5.2",
+      "-"
+    ]);
+  });
+
+  it("builds a concise codegen context pack from the repository guide and project map", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-context-"));
+    try {
+      await fs.mkdir(path.join(tempDir, "src", "tools"), { recursive: true });
+      await fs.mkdir(path.join(tempDir, "src", "jobs"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "AGENTS.md"), "guide\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "tools", "coreTools.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "jobs", "queue.ts"), "export {}\n", "utf8");
+
+      const context = await buildCodegenContextPack(tempDir);
+      const rendered = renderCodegenContextPack(context);
+
+      expect(context.repoGuidePath).toBe("AGENTS.md");
+      expect(rendered).toContain("Read AGENTS.md first");
+      expect(rendered).toContain("src/tools/coreTools.ts");
+      expect(rendered).toContain("src/jobs/queue.ts");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("puts repo guidance and first-edit pressure in the initial and recovery prompts", () => {
+    const env = {
+      taskId: "task-1",
+      requestedBy: "test-user",
+      taskRequest: "fix loading indicator sticking around after codegen finishes"
+    };
+    const context = {
+      repoGuidePath: "AGENTS.md",
+      sandboxContract: ["Edit files directly in the current repository."],
+      firstMoveRules: ["Read AGENTS.md first when present.", "Make a focused regression test early."],
+      projectMap: [
+        {
+          area: "Code-update task lifecycle",
+          purpose: "Tracks code update requests through Discord progress and PRs.",
+          files: ["src/discord/taskNotifications.ts"],
+          checks: ["tests/unit/task-notifications.test.ts"]
+        }
+      ]
+    };
+
+    const initial = codeUpdatePrompt(env as any, context);
+    expect(initial).toContain("If AGENTS.md exists, read it before editing");
+    expect(initial).toContain("Make a focused regression test early");
+    expect(initial).toContain("src/discord/taskNotifications.ts");
+
+    const recovery = codeUpdateRecoveryPrompt(env as any, {
+      attempt: 2,
+      totalAttempts: 2,
+      gitStatus: "",
+      attempts: [
+        {
+          attempt: 1,
+          command: "exec",
+          exitCode: 143,
+          durationMs: 480_000,
+          producedDiff: false,
+          watchdogReason: "no_first_diff",
+          stdoutTail: "looked at task notifications",
+          stderrTail: ""
+        }
+      ]
+    });
+    expect(recovery).toContain("Do not restart broad analysis");
+    expect(recovery).toContain("make the smallest focused test or implementation edit now");
+    expect(recovery).toContain("no_first_diff");
   });
 
   it("guides Codex toward lifecycle-first implementation before broad exploration", () => {
@@ -69,16 +149,16 @@ describe("sandboxRunner", () => {
     expect(contextPack.focus).toBe("agent_task_status_lifecycle");
     expect(contextPack.likelyMechanisms).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("temporary reply"),
+        expect.stringContaining("temporary/status reply"),
         expect.stringContaining("task notifier"),
         expect.stringContaining("Terminal task rendering")
       ])
     );
-    expect(contextPack.suggestedFiles.map((file) => file.path)).toEqual(
-      expect.arrayContaining(["src/discord/client.ts", "src/discord/taskNotifications.ts", "src/tools/coreTools.ts"])
+    expect(contextPack.suggestedFiles?.map((file) => file.path)).toEqual(
+      expect.arrayContaining(["src/discord/taskNotifications.ts", "src/tools/coreTools.ts"])
     );
     expect(contextPack.firstInvariant).toContain("without leaving stale loading/progress text after completion");
-    expect(contextPack.suggestedFirstEdit).toContain("focused task notification/repository test");
+    expect(contextPack.suggestedFirstEdit).toContain("focused task notification or repository test");
   });
 
   it("includes the focused context pack in the Codex prompt", async () => {
@@ -110,12 +190,7 @@ describe("sandboxRunner", () => {
         reconnectSeen: false,
         reconnectStallMs: null
       })
-    ).toEqual(
-      expect.objectContaining({
-        action: "fail",
-        reason: "no_first_diff"
-      })
-    );
+    ).toEqual(expect.objectContaining({ action: "fail", reason: "no_first_diff" }));
   });
 
   it("continues to verification when Codex stalls after producing a diff", () => {
@@ -127,12 +202,7 @@ describe("sandboxRunner", () => {
         reconnectSeen: false,
         reconnectStallMs: null
       })
-    ).toEqual(
-      expect.objectContaining({
-        action: "continue",
-        reason: "idle_after_diff"
-      })
-    );
+    ).toEqual(expect.objectContaining({ action: "continue", reason: "idle_after_diff" }));
   });
 
   it("treats reconnect stalls as retryable before a diff and salvageable after a diff", () => {
@@ -155,52 +225,6 @@ describe("sandboxRunner", () => {
         reconnectStallMs: 3 * 60 * 1000
       })
     ).toEqual(expect.objectContaining({ action: "continue", reason: "reconnect_stall" }));
-  });
-
-  it("terminates a stalled Codex process when no diff appears", async () => {
-    const tempDir = await createGitRepo();
-    try {
-      await expect(
-        runCommand(process.execPath, ["-e", "process.stderr.write('inspecting\\n'); setInterval(() => {}, 1000);"], {
-          cwd: tempDir,
-          step: "codex",
-          watchdog: fastWatchdog({ noFirstDiffTimeoutMs: 80 })
-        })
-      ).rejects.toThrow("Codex produced no code diff");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("salvages a generated diff when Codex stalls after a reconnect", async () => {
-    const tempDir = await createGitRepo();
-    try {
-      const result = await runCommand(
-        process.execPath,
-        [
-          "-e",
-          [
-            "const fs = require('fs');",
-            "fs.appendFileSync('README.md', 'generated change\\n');",
-            "process.stderr.write('ERROR: Reconnecting... 1/5\\n');",
-            "setInterval(() => {}, 1000);"
-          ].join("")
-        ],
-        {
-          cwd: tempDir,
-          step: "codex",
-          watchdog: fastWatchdog({ reconnectStallTimeoutMs: 80, noFirstDiffTimeoutMs: 1000 })
-        }
-      );
-
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).toContain("ERROR: Reconnecting");
-      await expect(git(tempDir, ["status", "--porcelain"])).resolves.toMatchObject({
-        stdout: expect.stringContaining("README.md")
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
   });
 
   it("repairs mirror-backed worktree remotes so branch refspec pushes work", async () => {
@@ -250,34 +274,3 @@ describe("sandboxRunner", () => {
     }
   });
 });
-
-function fastWatchdog(overrides: Partial<CommandWatchdog> = {}): CommandWatchdog {
-  return {
-    kind: "codex",
-    noFirstDiffTimeoutMs: 500,
-    idleTimeoutMs: 500,
-    reconnectStallTimeoutMs: 500,
-    maxRuntimeMs: 2_000,
-    activityIntervalMs: 20,
-    ...overrides
-  };
-}
-
-async function createGitRepo() {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-runner-watchdog-"));
-  await git(tempDir, ["init", "--initial-branch=main"]);
-  await fs.writeFile(path.join(tempDir, "README.md"), "seed\n", "utf8");
-  await git(tempDir, ["add", "README.md"]);
-  await git(tempDir, [
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.com",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-m",
-    "seed"
-  ]);
-  return tempDir;
-}

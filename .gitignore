@@ -4,7 +4,6 @@ coverage/
 .env
 .env.*
 !.env.example
-.railway/
 .coo?mind/
 .DS_Store
 *.log

@@ -2842,6 +2842,7 @@ export class DiscordAiAgentRepository {
     outputTail?: string | null;
     errorTail?: string | null;
     durationMs?: number | null;
+    metadata?: Record<string, unknown>;
   }) {
     await this.pool.query(
       `
@@ -2873,7 +2874,8 @@ export class DiscordAiAgentRepository {
         command: input.command ?? null,
         exitCode: input.exitCode ?? null,
         stdoutChars: input.outputTail?.length ?? 0,
-        stderrChars: input.errorTail?.length ?? 0
+        stderrChars: input.errorTail?.length ?? 0,
+        ...(input.metadata ?? {})
       }
     }).catch(() => undefined);
   }

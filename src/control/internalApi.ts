@@ -292,7 +292,8 @@ async function handleRequest(input: {
       exitCode: body.exitCode,
       outputTail: body.outputTail,
       errorTail: body.errorTail,
-      durationMs: body.durationMs
+      durationMs: body.durationMs,
+      metadata: body.metadata
     });
     sendJson(input.response, 200, { ok: true });
     return;
@@ -454,6 +455,7 @@ function parseCommandEvent(value: unknown): {
   outputTail: string;
   errorTail: string;
   durationMs: number | null;
+  metadata: Record<string, unknown>;
 } {
   if (!value || typeof value !== "object") throw new Error("Command event body must be an object.");
   const body = value as Record<string, unknown>;
@@ -465,7 +467,8 @@ function parseCommandEvent(value: unknown): {
     exitCode: typeof body.exitCode === "number" && Number.isFinite(body.exitCode) ? Math.trunc(body.exitCode) : null,
     outputTail: typeof body.outputTail === "string" ? body.outputTail.slice(-40_000) : "",
     errorTail: typeof body.errorTail === "string" ? body.errorTail.slice(-40_000) : "",
-    durationMs: typeof body.durationMs === "number" && Number.isFinite(body.durationMs) ? Math.trunc(body.durationMs) : null
+    durationMs: typeof body.durationMs === "number" && Number.isFinite(body.durationMs) ? Math.trunc(body.durationMs) : null,
+    metadata: body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? (body.metadata as Record<string, unknown>) : {}
   };
 }
 

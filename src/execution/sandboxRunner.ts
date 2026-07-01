@@ -1,20 +1,22 @@
 import { createHash, randomUUID } from "node:crypto";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { execFile, spawn } from "node:child_process";
 import { Octokit } from "@octokit/rest";
 import { slugify } from "../util/text.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const MAX_ACTIVITY_COMMAND_OUTPUT = 12_000;
+const MAX_CONTEXT_TEXT = 16_000;
+const MAX_RECOVERY_TAIL = 10_000;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
-const COMMAND_ACTIVITY_INTERVAL_MS = 30_000;
-const CODEX_NO_FIRST_DIFF_TIMEOUT_MS = 8 * 60 * 1000;
-const CODEX_IDLE_TIMEOUT_MS = 6 * 60 * 1000;
-const CODEX_RECONNECT_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+const CODEX_MAX_ATTEMPTS = 2;
+const CODEX_FIRST_DIFF_DEADLINE_MS = 8 * 60 * 1000;
+const CODEX_IDLE_WITHOUT_DIFF_MS = 6 * 60 * 1000;
+const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
 const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
-const CODEX_TERMINATE_GRACE_MS = 5_000;
+const CODEX_WATCHDOG_POLL_MS = 15_000;
 const CODEX_RECONNECT_PATTERN = /(?:^|\n)ERROR:\s*Reconnecting\.\.\./i;
 
 type SandboxEnv = {
@@ -46,31 +48,65 @@ type CacheSummary = {
   toolShims?: string[];
 };
 
-export type CommandWatchdog = {
-  kind: "codex";
-  noFirstDiffTimeoutMs: number;
-  idleTimeoutMs: number;
-  reconnectStallTimeoutMs: number;
-  maxRuntimeMs: number;
-  activityIntervalMs?: number;
-};
-
-type GitWorkingTreeSnapshot = {
-  hasDiff: boolean;
-  status: string;
-  diffStat: string;
-  changedFiles: string[];
-  error?: string;
-};
-
 export type CodegenContextPack = {
-  focus: string;
-  rationale: string;
-  likelyMechanisms: string[];
-  suggestedFiles: Array<{ path: string; reason: string }>;
-  firstInvariant: string;
-  suggestedFirstEdit: string;
-  avoid: string[];
+  repoGuidePath?: string;
+  focus?: string;
+  rationale?: string;
+  likelyMechanisms?: string[];
+  suggestedFiles?: Array<{ path: string; reason: string }>;
+  firstInvariant?: string;
+  suggestedFirstEdit?: string;
+  avoid?: string[];
+  sandboxContract: string[];
+  firstMoveRules: string[];
+  projectMap: Array<{
+    area: string;
+    purpose: string;
+    files: string[];
+    checks: string[];
+  }>;
+};
+
+type CodexAttemptSummary = {
+  attempt: number;
+  command: "exec" | "resume";
+  exitCode: number;
+  durationMs: number;
+  producedDiff: boolean;
+  watchdogReason?: string;
+  stdoutTail: string;
+  stderrTail: string;
+};
+
+type CodexRunSummary = {
+  attempts: CodexAttemptSummary[];
+};
+
+type CodexWatchdogOptions = {
+  checkoutDir: string;
+  attempt: number;
+  totalAttempts: number;
+  firstDiffDeadlineMs?: number;
+  idleWithoutDiffMs?: number;
+  reconnectStallMs?: number;
+  maxRuntimeMs?: number;
+  pollMs?: number;
+};
+
+type CodexWatchdogResult = {
+  killed: boolean;
+  reason?: string;
+  durationMs?: number;
+  firstDiffSeenAtMs?: number;
+  lastOutputAtMs?: number;
+};
+
+type CommandResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  watchdog?: CodexWatchdogResult;
 };
 
 export type CodegenWatchdogInput = {
@@ -91,17 +127,6 @@ export type CodegenWatchdogDecision = {
   message: string;
 };
 
-class CodegenWatchdogError extends Error {
-  constructor(
-    message: string,
-    readonly decision: CodegenWatchdogDecision,
-    readonly metadata: Record<string, unknown>
-  ) {
-    super(message);
-    this.name = "CodegenWatchdogError";
-  }
-}
-
 async function main() {
   const env = loadSandboxEnv();
   const timings: TaskTimings = {};
@@ -119,14 +144,10 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     timings.total = Date.now() - totalStartedAt;
-    const watchdogMetadata =
-      error instanceof CodegenWatchdogError
-        ? { diagnosis: error.message, watchdog: { decision: error.decision, ...error.metadata } }
-        : {};
     await complete(env, {
       status: message.includes("produced no diff") ? "no_changes" : "failed",
       error: message,
-      metadata: { timingsMs: timings, ...watchdogMetadata }
+      metadata: { timingsMs: timings }
     }).catch((callbackError) => {
       console.error("Failed to post terminal task callback", callbackError);
     });
@@ -186,46 +207,36 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     await progress(env, "configure", "Writing ephemeral Codex configuration.");
     await writeCodexConfig(workRoot, checkoutDir, env);
 
-    const contextPack = await timedPhase(
-      env,
-      timings,
-      "context",
-      "Building focused codegen request context.",
-      () => buildCodegenContextPack(checkoutDir, env.taskRequest)
+    const contextPack = await timedPhase(env, timings, "context", "Building codegen request context.", async () =>
+      buildCodegenContextPack(checkoutDir, env.taskRequest)
     );
+    const renderedContextPack = renderCodegenContextPack(contextPack);
     await recordArtifact(env, {
       kind: "diagnostic",
       name: "Codegen request context",
-      content: renderCodegenContextPack(contextPack),
-      contentType: "text/markdown",
+      content: renderedContextPack,
+      contentType: "text/plain",
       metadata: {
         focus: contextPack.focus,
-        suggestedFiles: contextPack.suggestedFiles.map((file) => file.path)
+        files: uniqueStrings([
+          ...(contextPack.suggestedFiles?.map((file) => file.path) ?? []),
+          ...contextPack.projectMap.flatMap((entry) => entry.files)
+        ])
       }
     });
 
-    const codexPrompt = codeUpdatePrompt(env, contextPack);
-    await recordArtifact(env, {
-      kind: "prompt",
-      name: "Codex prompt",
-      content: codexPrompt,
-      contentType: "text/plain",
-      metadata: { model: env.openRouterChatModel }
-    });
-
     await timedPhase(env, timings, "codex", "Running Codex to implement the requested change.", async () => {
-      await runCommand(
-        process.env.CODEX_BIN || "codex",
-        codexExecArgs({ checkoutDir, model: env.openRouterChatModel }),
-        {
-          cwd: checkoutDir,
-          env: codexEnv(env, gitEnv, workRoot, toolShimDir),
-          input: codexPrompt,
-          taskEnv: env,
-          step: "codex",
-          watchdog: codegenWatchdog()
+      const codexSummary = await runCodexWithRecovery({ env, checkoutDir, gitEnv, workRoot, toolShimDir, contextPack });
+      await recordArtifact(env, {
+        kind: "diagnostic",
+        name: "Codex attempt summary",
+        content: JSON.stringify(codexSummary, null, 2),
+        contentType: "application/json",
+        metadata: {
+          attempts: codexSummary.attempts.length,
+          producedDiff: codexSummary.attempts.some((attempt) => attempt.producedDiff)
         }
-      );
+      });
     }, { model: env.openRouterChatModel });
 
     await progress(env, "diff", "Checking whether Codex produced a real code diff.");
@@ -292,7 +303,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       step: "commit"
     });
     await runCommand("git", ["add", "-A"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
-    await runCommand("git", ["commit", "-m", `Implement Discord AI Agent update: ${env.taskTitle}`], {
+    await runCommand("git", ["commit", "-m", `Implement ${env.taskTitle}`], {
       cwd: checkoutDir,
       taskEnv: env,
       step: "commit"
@@ -308,7 +319,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       octokit.pulls.create({
         owner,
         repo,
-        title: `Update Discord AI Agent: ${env.taskTitle}`,
+        title: env.taskTitle,
         head: branchName,
         base: env.githubBaseBranch,
         draft,
@@ -726,6 +737,23 @@ async function pathExists(filePath: string) {
   }
 }
 
+async function gitStatusPorcelain(checkoutDir: string) {
+  const result = await execFileText("git", ["status", "--porcelain"], { cwd: checkoutDir });
+  return result.stdout;
+}
+
+function execFileText(command: string, args: string[], options: { cwd: string; env?: NodeJS.ProcessEnv }) {
+  return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    execFile(command, args, { cwd: options.cwd, env: options.env ?? process.env, maxBuffer: 1_000_000 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ stdout: String(stdout), stderr: String(stderr) });
+    });
+  });
+}
+
 async function progress(env: SandboxEnv, step: string, message: string, metadata: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ event: "task.progress", taskId: env.taskId, step, message, metadata }));
   await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/events`, { step, message, metadata });
@@ -890,118 +918,243 @@ async function writeCodexConfig(workRoot: string, checkoutDir: string, env: Sand
   );
 }
 
-type CodegenContextRule = CodegenContextPack;
+async function runCodexWithRecovery(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+}): Promise<CodexRunSummary> {
+  const attempts: CodexAttemptSummary[] = [];
+  const codexBinary = process.env.CODEX_BIN || "codex";
+  const totalAttempts = CODEX_MAX_ATTEMPTS;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    const command: CodexAttemptSummary["command"] = attempt === 1 ? "exec" : "resume";
+    const prompt =
+      attempt === 1
+        ? codeUpdatePrompt(input.env, input.contextPack)
+        : codeUpdateRecoveryPrompt(input.env, {
+            attempt,
+            totalAttempts,
+            attempts,
+            gitStatus: await gitStatusPorcelain(input.checkoutDir).catch((error) => `Unable to read git status: ${conciseError(error)}`)
+          });
+    await recordArtifact(input.env, {
+      kind: "prompt",
+      name: attempt === 1 ? "Codex prompt" : `Codex recovery prompt ${attempt}`,
+      content: prompt,
+      contentType: "text/plain",
+      metadata: { model: input.env.openRouterChatModel, attempt, command }
+    });
+    await progress(input.env, `codex_attempt_${attempt}`, `Starting Codex ${command} attempt ${attempt}/${totalAttempts}.`, {
+      attempt,
+      totalAttempts,
+      command,
+      model: input.env.openRouterChatModel
+    });
+
+    const result = await runCommand(codexBinary, codexAttemptArgs({ command, model: input.env.openRouterChatModel }), {
+      cwd: input.checkoutDir,
+      env: codexEnv(input.env, input.gitEnv, input.workRoot, input.toolShimDir),
+      input: prompt,
+      allowFailure: true,
+      taskEnv: input.env,
+      step: `codex_attempt_${attempt}`,
+      codexWatchdog: {
+        checkoutDir: input.checkoutDir,
+        attempt,
+        totalAttempts,
+        firstDiffDeadlineMs: CODEX_FIRST_DIFF_DEADLINE_MS,
+        idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
+        reconnectStallMs: CODEX_RECONNECT_STALL_MS,
+        maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
+        pollMs: CODEX_WATCHDOG_POLL_MS
+      }
+    });
+    const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
+    const producedDiff = Boolean(gitStatus.trim());
+    const summary: CodexAttemptSummary = {
+      attempt,
+      command,
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      producedDiff,
+      watchdogReason: result.watchdog?.reason,
+      stdoutTail: tail(result.stdout, MAX_RECOVERY_TAIL),
+      stderrTail: tail(result.stderr, MAX_RECOVERY_TAIL)
+    };
+    attempts.push(summary);
+    await progress(
+      input.env,
+      producedDiff ? `codex_attempt_${attempt}_diff` : `codex_attempt_${attempt}_no_diff`,
+      producedDiff
+        ? `Codex attempt ${attempt} produced a code diff.`
+        : `Codex attempt ${attempt} finished without a code diff${attempt < totalAttempts ? "; retrying with a direct nudge." : "."}`,
+      {
+        attempt,
+        totalAttempts,
+        command,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        watchdogReason: result.watchdog?.reason,
+        gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+      }
+    );
+
+    if (producedDiff) return { attempts };
+    if (attempt < totalAttempts) continue;
+  }
+
+  throw new Error(
+    [
+      "Agent task produced no diff after Codex recovery attempts; no PR will be opened.",
+      ...attempts.map(
+        (attempt) =>
+          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+      )
+    ].join("\n")
+  );
+}
+
+type CodegenContextRule = Required<
+  Pick<CodegenContextPack, "focus" | "rationale" | "likelyMechanisms" | "suggestedFiles" | "firstInvariant" | "suggestedFirstEdit" | "avoid">
+>;
 
 const CODEGEN_CONTEXT_RULES: CodegenContextRule[] = [
   {
     focus: "agent_task_status_lifecycle",
     rationale:
-      "The request appears to involve long-running code update tasks, progress messages, PR creation, sandbox execution, or a stuck user-facing status.",
+      "The request mentions code updates, coding agents, progress, loading, completion, PRs, or sandbox behavior, so start with the durable agent task lifecycle.",
     likelyMechanisms: [
-      "Discord mentions start with a temporary reply that can be edited later.",
-      "Code update tools enqueue an agent task and pass the Discord status message id to the task record.",
-      "The task notifier renders queued/running/terminal task states back into the same Discord message.",
-      "Terminal task rendering must cover success, failure, no-change, cancellation, and notification failure paths."
+      "A Discord request first creates a temporary/status reply that is edited while work progresses.",
+      "Code-update tool calls enqueue an agent task with a Discord response channel/message target.",
+      "The task notifier renders queued/running/terminal state back into the original Discord message.",
+      "Terminal task rendering must win over stale progress, late callbacks, and notification failures."
     ],
     suggestedFiles: [
-      { path: "src/tools/coreTools.ts", reason: "Code update tool entry point, task enqueueing, and task result formatting." },
-      { path: "src/discord/client.ts", reason: "Discord mention lifecycle, Thinking reply creation, status callback, and final/error edits." },
-      { path: "src/discord/taskNotifications.ts", reason: "Background agent task progress and terminal Discord message rendering." },
-      { path: "src/db/repositories.ts", reason: "Agent task state transitions, render eligibility, and terminal render bookkeeping." },
-      { path: "src/jobs/queue.ts", reason: "Agent task queue creation and job metadata passed to the execution backend." },
-      { path: "tests/unit/task-notifications.test.ts", reason: "Focused tests for task rendering and notification behavior." },
-      { path: "tests/unit/core-tools.test.ts", reason: "Focused tests for code update tool output and enqueue behavior." },
-      { path: "tests/unit/discord-client.test.ts", reason: "Focused tests for Discord message handling and temporary reply lifecycle." }
+      { path: "src/tools/coreTools.ts", reason: "Enqueues code-update tasks and creates the initial user-visible status." },
+      { path: "src/discord/taskNotifications.ts", reason: "Renders task progress and terminal PR/failure states back to Discord." },
+      { path: "src/db/repositories.ts", reason: "Persists task status, render signatures, and terminal task state." },
+      { path: "src/jobs/queue.ts", reason: "Starts sandbox work and records task progress." },
+      { path: "tests/unit/task-notifications.test.ts", reason: "Focused coverage for task message rendering." },
+      { path: "tests/integration/repository-db.test.ts", reason: "Database coverage for terminal state and late progress behavior." }
     ],
     firstInvariant:
-      "A long-running code update request should move the same Discord status message from acknowledgement/progress to one terminal success/failure/no-changes/cancelled state, without leaving stale loading/progress text after completion.",
+      "A code-update request should transition the same Discord status message to a terminal PR/failure/no-change state without leaving stale loading/progress text after completion.",
     suggestedFirstEdit:
-      "Start by adding or updating a focused task notification/repository test that proves a terminal code-update task can still replace stale progress text after an earlier render/status problem, then make the smallest repository/notifier change that satisfies it.",
-    avoid: [
-      "Do not search only for the literal phrase from the user request; map product wording to the status reply/task notifier mechanism.",
-      "Do not replace the status message id contract unless the notifier is updated to use the new contract.",
-      "Do not change unrelated Discord history/search/tool behavior."
-    ]
+      "Add or update a focused task notification or repository test proving terminal code-update state replaces stale progress after earlier render/status problems.",
+    avoid: ["Do not search only for the user's exact wording; map product terms like loading/progress/done to task state and Discord message rendering."]
   },
   {
     focus: "discord_interaction_lifecycle",
-    rationale:
-      "The request appears to involve Discord mention handling, replies, message edits, timeouts, content filters, or conversation memory.",
+    rationale: "The request mentions Discord messages, replies, memory, timeouts, or conversation behavior.",
     likelyMechanisms: [
-      "A Discord mention is persisted, acknowledged, processed by the model-led agent, then edited into a final reply.",
-      "Worker-backed Discord requests fetch the source message and acknowledgement reply before executing the same agent path.",
-      "Failure and timeout paths edit the acknowledgement message and update process run state."
+      "Discord messages enter through the client adapter, are persisted, and are routed through the model/tool loop.",
+      "Conversation memory is per Discord channel/thread and final responses are stored back into the session."
     ],
     suggestedFiles: [
-      { path: "src/discord/client.ts", reason: "Primary Discord mention, reply, timeout, and error lifecycle." },
-      { path: "src/agent/router.ts", reason: "Model/tool loop, final response selection, and direct terminal tool handling." },
-      { path: "src/tools/coreTools.ts", reason: "Local tool implementations that may affect Discord-visible responses." },
-      { path: "tests/unit/discord-client.test.ts", reason: "Focused Discord adapter tests." },
-      { path: "tests/integration/agent.test.ts", reason: "Agent/tool behavior tests across model rounds and responses." }
+      { path: "src/discord/client.ts", reason: "Discord message handling and reply/edit behavior." },
+      { path: "src/agent/router.ts", reason: "Agent runtime, model/tool loop, and final response synthesis." },
+      { path: "src/discord/messagePersistence.ts", reason: "Message persistence and incremental sync behavior." },
+      { path: "tests/unit/discord-client.test.ts", reason: "Discord adapter coverage." },
+      { path: "tests/integration/agent.test.ts", reason: "End-to-end agent behavior coverage." }
     ],
-    firstInvariant:
-      "A Discord mention should produce exactly one coherent user-visible response path for success, direct terminal tools, content filters, errors, and timeouts.",
-    suggestedFirstEdit:
-      "Start by adding or updating the closest Discord client or agent integration test for the visible response path, then adjust the shared request lifecycle rather than only one caller.",
-    avoid: [
-      "Do not fork inline and worker-backed request behavior unless both paths remain covered.",
-      "Do not treat an earlier assistant reply or memory artifact as authoritative Discord history."
-    ]
+    firstInvariant: "Encode the requested Discord-visible behavior as one observable message/reply/session invariant.",
+    suggestedFirstEdit: "Start with the closest Discord adapter or agent integration test, then make the minimal implementation change.",
+    avoid: ["Do not bypass permission filtering or conversation memory contracts."]
   },
   {
     focus: "model_tool_routing",
-    rationale:
-      "The request appears to involve model-led tool choice, Discord search/stat tools, web tools, prompt behavior, or final-answer synthesis.",
+    rationale: "The request mentions tools, search, model behavior, prompts, schemas, stats, or routing.",
     likelyMechanisms: [
-      "The agent prompt describes when to call local Discord tools versus hosted OpenRouter tools.",
-      "The router selects usable local tool calls, executes them, stores tool evidence, then synthesizes a final answer.",
-      "Tool schema descriptions are part of the model contract and often matter as much as implementation code."
+      "The model chooses from explicit tools registered in the tool registry.",
+      "Tool quality should usually improve through descriptions, schemas, result formatting, and retrieval behavior rather than hidden request-specific branches."
     ],
     suggestedFiles: [
-      { path: "src/agent/router.ts", reason: "Model-led tool loop, system prompt, recovery behavior, and final synthesis." },
-      { path: "src/tools/registry.ts", reason: "Tool definitions, schemas, and descriptions exposed to the model." },
-      { path: "src/tools/coreTools.ts", reason: "Tool implementations and result formatting." },
-      { path: "tests/integration/agent.test.ts", reason: "Agent routing and final-answer regression tests." },
-      { path: "tests/unit/tool-registry.test.ts", reason: "Tool schema surface tests." },
-      { path: "tests/unit/core-tools.test.ts", reason: "Tool implementation tests." }
+      { path: "src/tools/registry.ts", reason: "Tool descriptions and schemas visible to the model." },
+      { path: "src/tools/coreTools.ts", reason: "Core Discord/search/status/codegen tool implementations." },
+      { path: "src/agent/router.ts", reason: "Model/tool execution loop." },
+      { path: "tests/unit/tool-registry.test.ts", reason: "Tool schema coverage." },
+      { path: "tests/unit/core-tools.test.ts", reason: "Tool behavior coverage." }
     ],
-    firstInvariant:
-      "For a model-led tool behavior change, the schema/prompt/tool result should make the intended tool choice natural without adding hidden message-specific branching.",
-    suggestedFirstEdit:
-      "Start by adding or updating an agent/tool-registry regression test that demonstrates the desired model-led tool choice or tool output contract.",
-    avoid: [
-      "Do not add semantic regex branches for one user phrasing when a tool schema or prompt contract should carry the behavior.",
-      "Do not make Discord history search the default for public/current external facts."
-    ]
+    firstInvariant: "Make the model have a better general-purpose tool affordance for the request class without adding hidden semantic branching.",
+    suggestedFirstEdit: "Improve the narrowest tool schema/result/test that would let the model choose and use the right capability.",
+    avoid: ["Do not add regex-only request routing when a tool contract can be improved instead."]
   },
   {
     focus: "general_implementation",
-    rationale:
-      "No narrower codegen context matched confidently, so start from the common agent entry points and nearest tests.",
-    likelyMechanisms: [
-      "Most user-visible behavior enters through the Discord adapter, model router, tool registry, or core tool implementations.",
-      "Tests are organized around the affected adapter/tool/runtime boundary."
-    ],
+    rationale: "No narrower lifecycle matched confidently, so start from the likely adapter/tool/runtime boundary and nearest tests.",
+    likelyMechanisms: ["Most user-visible behavior enters through the Discord adapter, model router, tool registry, or core tool implementations."],
     suggestedFiles: [
       { path: "src/discord/client.ts", reason: "Discord-facing behavior and request lifecycle." },
       { path: "src/agent/router.ts", reason: "Model-led agent behavior and final response synthesis." },
-      { path: "src/tools/registry.ts", reason: "Tool descriptions and schemas." },
       { path: "src/tools/coreTools.ts", reason: "Tool implementations." },
       { path: "tests/integration/agent.test.ts", reason: "End-to-end model/tool behavior tests." }
     ],
-    firstInvariant:
-      "Turn the requested behavior into one focused observable invariant, implement the smallest code path that satisfies it, then broaden only to touched callers and failure paths.",
-    suggestedFirstEdit:
-      "Start by adding or updating the closest existing test around the likely entry point before broad repository exploration.",
+    firstInvariant: "Turn the requested behavior into one focused observable invariant, implement the smallest code path that satisfies it, then broaden only as needed.",
+    suggestedFirstEdit: "Start by adding or updating the closest existing test around the likely entry point before broad repository exploration.",
     avoid: ["Do not start with broad repository-wide exploration when a likely entry point is available."]
   }
 ];
 
-export async function buildCodegenContextPack(checkoutDir: string, taskRequest: string): Promise<CodegenContextPack> {
-  const rule = selectCodegenContextRule(taskRequest);
+export async function buildCodegenContextPack(checkoutDir: string, taskRequest = ""): Promise<CodegenContextPack> {
+  const repoGuidePath = (await pathExists(path.join(checkoutDir, "AGENTS.md"))) ? "AGENTS.md" : undefined;
+  const focusedRule = selectCodegenContextRule(taskRequest);
+  const projectMap = await existingProjectMap(checkoutDir, [
+    {
+      area: "Code-update task lifecycle",
+      purpose: "Requests to update the bot become durable agent tasks, Kubernetes sandbox runs, Discord progress edits, and PRs.",
+      files: [
+        "src/tools/coreTools.ts",
+        "src/jobs/queue.ts",
+        "src/execution/backend.ts",
+        "src/execution/sandboxRunner.ts",
+        "src/discord/taskNotifications.ts",
+        "src/db/repositories.ts"
+      ],
+      checks: ["tests/unit/sandbox-runner.test.ts", "tests/unit/task-notifications.test.ts", "tests/integration/repository-db.test.ts"]
+    },
+    {
+      area: "Discord mention and reply lifecycle",
+      purpose: "Incoming Discord messages are persisted, routed through the model/tool loop, and answered or updated in Discord.",
+      files: ["src/discord/client.ts", "src/agent/router.ts", "src/discord/messagePersistence.ts", "src/db/repositories.ts"],
+      checks: ["tests/unit/discord-client.test.ts", "tests/integration/agent.test.ts", "tests/unit/message-persistence.test.ts"]
+    },
+    {
+      area: "Model-led tools",
+      purpose: "Tools are explicit capabilities selected by the model; prefer improving schemas/results over hidden message-specific branching.",
+      files: ["src/tools/registry.ts", "src/tools/coreTools.ts", "src/tools/types.ts", "src/agent/router.ts"],
+      checks: ["tests/unit/tool-registry.test.ts", "tests/unit/core-tools.test.ts", "tests/integration/agent.test.ts"]
+    },
+    {
+      area: "Observability console",
+      purpose: "Runs, spans, events, artifacts, and the React console explain what happened and where latency went.",
+      files: ["src/observability/runs.ts", "src/control/internalApi.ts", "src/control/console/App.tsx", "src/control/console/styles.css"],
+      checks: ["tests/unit/observability.test.ts", "tests/unit/internal-api-runs.test.ts", "tests/unit/run-console-timeline.test.ts"]
+    }
+  ]);
+
   return {
-    ...rule,
-    suggestedFiles: await filterExistingSuggestedFiles(checkoutDir, rule.suggestedFiles)
+    repoGuidePath,
+    ...focusedRule,
+    suggestedFiles: await existingSuggestedFiles(checkoutDir, focusedRule.suggestedFiles),
+    sandboxContract: [
+      "You are already inside an isolated Kubernetes sandbox with full filesystem/network access for this task.",
+      "The checkout is a writable task branch. Edit files directly in the current repository.",
+      "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after verification.",
+      "Use helper CLIs when useful: agent-task-context, agent-cache-info, agent-progress <step> <message>.",
+      "Prefer rg for search, then read only the files needed for the next concrete edit."
+    ],
+    firstMoveRules: [
+      "Read AGENTS.md first when present.",
+      "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
+      "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
+      "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",
+      "Stop when the requested behavior is implemented and the most relevant checks have run."
+    ],
+    projectMap
   };
 }
 
@@ -1022,74 +1175,115 @@ function selectCodegenContextRule(taskRequest: string): CodegenContextRule {
     "agent task"
   ]);
   const hasStatusTerm = includesAny(text, ["loading", "thinking", "status", "progress", "stuck", "hang", "finish", "done", "complete"]);
-  if (hasCodeUpdateTerm || (hasStatusTerm && includesAny(text, ["code", "agent", "bot", "request"]))) {
-    return CODEGEN_CONTEXT_RULES[0];
-  }
-
+  if (hasCodeUpdateTerm || (hasStatusTerm && includesAny(text, ["code", "agent", "bot", "request"]))) return CODEGEN_CONTEXT_RULES[0]!;
   if (includesAny(text, ["discord", "mention", "reply", "message", "timeout", "content filter", "conversation", "memory"])) {
-    return CODEGEN_CONTEXT_RULES[1];
+    return CODEGEN_CONTEXT_RULES[1]!;
   }
-
-  if (includesAny(text, ["tool", "search", "history", "web", "model", "prompt", "router", "schema", "stats"])) {
-    return CODEGEN_CONTEXT_RULES[2];
-  }
-
-  return CODEGEN_CONTEXT_RULES[3];
+  if (includesAny(text, ["tool", "search", "history", "web", "model", "prompt", "router", "schema", "stats"])) return CODEGEN_CONTEXT_RULES[2]!;
+  return CODEGEN_CONTEXT_RULES[3]!;
 }
 
 function includesAny(text: string, needles: string[]) {
   return needles.some((needle) => text.includes(needle));
 }
 
-async function filterExistingSuggestedFiles(checkoutDir: string, files: CodegenContextPack["suggestedFiles"]) {
-  const existing: CodegenContextPack["suggestedFiles"] = [];
-  for (const file of files) {
-    if (await pathExists(path.join(checkoutDir, file.path))) existing.push(file);
-  }
-  return existing.length > 0 ? existing : files;
+async function existingSuggestedFiles(checkoutDir: string, files: CodegenContextRule["suggestedFiles"]) {
+  const existing = await Promise.all(files.map(async (file) => ((await pathExists(path.join(checkoutDir, file.path))) ? file : null)));
+  const filtered = existing.filter((file): file is CodegenContextRule["suggestedFiles"][number] => Boolean(file));
+  return filtered.length ? filtered : files;
 }
 
-export function renderCodegenContextPack(contextPack: CodegenContextPack) {
-  return [
-    `Focus: ${contextPack.focus}`,
+async function existingProjectMap(checkoutDir: string, entries: CodegenContextPack["projectMap"]) {
+  return Promise.all(
+    entries.map(async (entry) => ({
+      ...entry,
+      files: await existingRelativePaths(checkoutDir, entry.files),
+      checks: await existingRelativePaths(checkoutDir, entry.checks)
+    }))
+  );
+}
+
+async function existingRelativePaths(checkoutDir: string, relativePaths: string[]) {
+  const checks = await Promise.all(relativePaths.map(async (file) => ((await pathExists(path.join(checkoutDir, file))) ? file : null)));
+  return checks.filter((file): file is string => Boolean(file));
+}
+
+export function renderCodegenContextPack(context: CodegenContextPack) {
+  const lines = [
+    ...(context.focus
+      ? [
+          `Focus: ${context.focus}`,
+          "",
+          `Why this context: ${context.rationale ?? "Matched from the requested update."}`,
+          "",
+          "Likely mechanisms:",
+          ...(context.likelyMechanisms ?? []).map((mechanism) => `- ${mechanism}`),
+          "",
+          "Suggested first files:",
+          ...(context.suggestedFiles ?? []).map((file) => `- ${file.path}: ${file.reason}`),
+          "",
+          "First implementable invariant:",
+          context.firstInvariant ?? "Make the requested behavior observable with the smallest focused change.",
+          "",
+          "Suggested first edit:",
+          context.suggestedFirstEdit ?? "Add or update the closest focused test before broad exploration.",
+          "",
+          "Avoid:",
+          ...(context.avoid ?? []).map((warning) => `- ${warning}`),
+          ""
+        ]
+      : []),
+    "Repository guide:",
+    context.repoGuidePath ? `- ${context.repoGuidePath}` : "- none found",
     "",
-    `Why this context: ${contextPack.rationale}`,
+    "Sandbox contract:",
+    ...context.sandboxContract.map((item) => `- ${item}`),
     "",
-    "Likely mechanisms:",
-    ...contextPack.likelyMechanisms.map((mechanism) => `- ${mechanism}`),
+    "First move rules:",
+    ...context.firstMoveRules.map((item) => `- ${item}`),
     "",
-    "Suggested first files:",
-    ...contextPack.suggestedFiles.map((file) => `- ${file.path}: ${file.reason}`),
-    "",
-    "First implementable invariant:",
-    contextPack.firstInvariant,
-    "",
-    "Suggested first edit:",
-    contextPack.suggestedFirstEdit,
-    "",
-    "Avoid:",
-    ...contextPack.avoid.map((warning) => `- ${warning}`)
-  ].join("\n");
+    "Project map:"
+  ];
+  for (const entry of context.projectMap) {
+    lines.push(`- ${entry.area}: ${entry.purpose}`);
+    if (entry.files.length) lines.push(`  Files: ${entry.files.join(", ")}`);
+    if (entry.checks.length) lines.push(`  Checks: ${entry.checks.join(", ")}`);
+  }
+  return tail(lines.join("\n"), MAX_CONTEXT_TEXT);
 }
 
 export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" | "taskRequest">, contextPack?: CodegenContextPack) {
+  const contextText = contextPack ? renderCodegenContextPack(contextPack) : "";
   return [
     "You are implementing a Discord-requested update to this TypeScript Discord AI Agent repository.",
     "",
     "Working style:",
     "- Move like a senior maintainer: understand just enough, make the smallest coherent change, then validate it.",
+    "- Be decisive once the relevant files are identified.",
+    "- Do not spend the whole run inspecting. Make a focused test or implementation edit early.",
     "- Do not ask follow-up questions. When the request has multiple plausible interpretations, choose the one that preserves existing workflows and makes the requested behavior true.",
+    "- Prefer the existing architecture and tests over new abstractions.",
+    "- If you are unsure between two nearby files, inspect both briefly, then edit.",
+    "",
+    "Requirements:",
+    "- If AGENTS.md exists, read it before editing and follow it.",
+    "- Read the relevant code before editing.",
+    "- Implement the requested behavior with a real code diff.",
+    "- Keep changes focused and consistent with the existing architecture.",
+    "- Add or update tests for the changed behavior.",
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the PR body records the request.",
-    ...(contextPack
-      ? [
-          "",
-          "Codegen preflight context:",
-          renderCodegenContextPack(contextPack),
-          "",
-          "Use the preflight context as a starting map, not as proof. Inspect the suggested first files before broad searching, then make the suggested first edit and first implementable invariant true."
-        ]
-      : []),
+    "- Before finishing, run the most relevant checks you can.",
+    "- Helper CLIs are available on PATH: agent-task-context, agent-cache-info, and agent-progress <step> <message>.",
+    "",
+    `Task ID: ${env.taskId}`,
+    `Requested by: ${env.requestedBy}`,
+    contextText ? "" : undefined,
+    contextText ? "Codegen preflight context:" : undefined,
+    contextText || undefined,
+    contextText
+      ? "Use the preflight context as a starting map, not as proof. Inspect the suggested first files before broad searching, then make the suggested first edit and first implementable invariant true."
+      : undefined,
     "",
     "Implementation workflow:",
     "- First inspection pass: read the likely entry point, the closest existing helper/adapter, and the closest tests. Avoid broad repository archaeology before the first edit.",
@@ -1100,33 +1294,23 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     "- For bug fixes, encode the requested behavior as a focused invariant in code or tests early. Do not conclude that existing behavior is fine merely because the first matching path appears intentional.",
     "- Make a focused first edit after the likely lifecycle owner is identified, then run `agent-progress first_edit \"Made the first focused code edit\"`.",
     "- After the first edit, broaden the search only to cover callers, failure paths, and tests touched by that lifecycle.",
-    "- Add or update tests for the changed behavior, including cleanup/fallback/error paths when the request affects temporary state or external APIs.",
-    "- Run targeted checks first, then the most relevant broader check you can before finishing.",
     "",
     "Stall avoidance:",
     "- Do not repeatedly reread the same file or expand into unrelated UI, observability, deployment, or queue code unless the lifecycle map shows it is required.",
     "- After a few targeted searches, stop searching for exact request vocabulary and act on the closest mechanism you found.",
-    "- If stuck, implement the smallest safe version that preserves existing contracts, add a focused test, and leave uncertainty only where it helps future maintainers.",
-    "- The sandbox monitors for a first diff. Produce a real code diff promptly; pure analysis without edits will be stopped and retried.",
-    "",
-    "Available helper CLIs:",
-    "- `agent-task-context` prints task metadata.",
-    "- `agent-cache-info` prints sandbox cache information.",
-    "- `agent-progress <step> <message>` records progress in the run console.",
-    "",
-    `Task ID: ${env.taskId}`,
-    `Requested by: ${env.requestedBy}`,
+    "- Produce a real code diff promptly; pure analysis without edits will be stopped and retried.",
     "",
     "Requested update:",
     env.taskRequest.trim(),
     ""
-  ].join("\n");
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
 }
 
 export function codexExecArgs(input: { checkoutDir: string; model: string }) {
   return [
     "exec",
-    "--ephemeral",
     "-C",
     input.checkoutDir,
     "--dangerously-bypass-approvals-and-sandbox",
@@ -1136,20 +1320,56 @@ export function codexExecArgs(input: { checkoutDir: string; model: string }) {
   ];
 }
 
-function codegenWatchdog(): CommandWatchdog {
-  return {
-    kind: "codex",
-    noFirstDiffTimeoutMs: CODEX_NO_FIRST_DIFF_TIMEOUT_MS,
-    idleTimeoutMs: CODEX_IDLE_TIMEOUT_MS,
-    reconnectStallTimeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
-    maxRuntimeMs: CODEX_MAX_RUNTIME_MS
-  };
+export function codexResumeExecArgs(input: { model: string }) {
+  return ["exec", "resume", "--last", "--dangerously-bypass-approvals-and-sandbox", "-m", input.model, "-"];
+}
+
+function codexAttemptArgs(input: { command: "exec" | "resume"; model: string }) {
+  return input.command === "exec" ? codexExecArgs({ checkoutDir: ".", model: input.model }) : codexResumeExecArgs({ model: input.model });
+}
+
+export function codeUpdateRecoveryPrompt(
+  env: SandboxEnv,
+  input: { attempt: number; totalAttempts: number; attempts: CodexAttemptSummary[]; gitStatus: string }
+) {
+  const previous = input.attempts.at(-1);
+  return [
+    "Continue the same code-update task in this existing sandbox checkout.",
+    "",
+    "The previous Codex attempt did not leave a code diff. Do not restart broad analysis.",
+    "You have enough context to act: make the smallest focused test or implementation edit now, then run the most relevant check.",
+    "If you need one more file, inspect it briefly and edit immediately after.",
+    "",
+    `Task ID: ${env.taskId}`,
+    `Attempt: ${input.attempt}/${input.totalAttempts}`,
+    "",
+    "Requested update:",
+    env.taskRequest.trim(),
+    "",
+    "Current git status:",
+    input.gitStatus.trim() || "(clean)",
+    "",
+    previous
+      ? [
+          "Previous attempt summary:",
+          `- exit code: ${previous.exitCode}`,
+          `- duration: ${formatDuration(previous.durationMs)}`,
+          `- watchdog: ${previous.watchdogReason ?? "none"}`,
+          previous.stdoutTail ? `- stdout tail:\n${previous.stdoutTail}` : "",
+          previous.stderrTail ? `- stderr tail:\n${previous.stderrTail}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "",
+    "",
+    "Finish with a real code diff. Do not commit, push, or open a PR yourself."
+  ].join("\n");
 }
 
 export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWatchdogDecision | null {
-  const noFirstDiffTimeoutMs = input.noFirstDiffTimeoutMs ?? CODEX_NO_FIRST_DIFF_TIMEOUT_MS;
-  const idleTimeoutMs = input.idleTimeoutMs ?? CODEX_IDLE_TIMEOUT_MS;
-  const reconnectStallTimeoutMs = input.reconnectStallTimeoutMs ?? CODEX_RECONNECT_STALL_TIMEOUT_MS;
+  const noFirstDiffTimeoutMs = input.noFirstDiffTimeoutMs ?? CODEX_FIRST_DIFF_DEADLINE_MS;
+  const idleTimeoutMs = input.idleTimeoutMs ?? CODEX_IDLE_WITHOUT_DIFF_MS;
+  const reconnectStallTimeoutMs = input.reconnectStallTimeoutMs ?? CODEX_RECONNECT_STALL_MS;
   const maxRuntimeMs = input.maxRuntimeMs ?? CODEX_MAX_RUNTIME_MS;
 
   if (!input.hasDiff && input.elapsedMs >= noFirstDiffTimeoutMs) {
@@ -1195,35 +1415,40 @@ export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWat
 
 function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean; timings: TaskTimings; cacheSummary: CacheSummary }) {
   return [
-    `Prompted by: ${input.env.requestedBy}`,
-    "",
-    "## Requested Update",
+    "## Why",
     "",
     input.env.taskRequest.trim(),
     "",
-    "## Agent Task",
+    `Prompted by: ${input.env.requestedBy}`,
+    "",
+    "## Changes",
+    "",
+    "- Implemented by the Discord AI Agent sandbox.",
+    "- See the PR diff for the exact code changes.",
+    "",
+    "## Testing",
+    "",
+    `- \`npm run verify\`: ${input.verifyPassed ? "passed" : "failed; opened as draft"}`,
+    "- `npm run scan:release`: passed",
+    "",
+    "## Context",
     "",
     `- Task ID: \`${input.env.taskId}\``,
     `- Sandbox run: \`${input.env.sandboxRunId}\``,
     "- Runtime: Kubernetes sandbox job",
     `- Model: \`${input.env.openRouterChatModel}\``,
     "",
-    "## Verification",
-    "",
-    `- \`npm run verify\`: ${input.verifyPassed ? "passed" : "failed; opened as draft"}`,
-    "- `npm run scan:release`: passed",
-    "",
-    "## Timing",
+    "Timing:",
     "",
     ...formatTimingLines(input.timings),
     "",
-    "## Cache",
+    "Cache:",
     "",
     ...formatCacheSummaryLines(input.cacheSummary)
   ].join("\n");
 }
 
-export async function runCommand(
+async function runCommand(
   command: string,
   args: string[],
   options: {
@@ -1233,12 +1458,13 @@ export async function runCommand(
     allowFailure?: boolean;
     taskEnv?: SandboxEnv;
     step?: string;
-    watchdog?: CommandWatchdog;
+    codexWatchdog?: CodexWatchdogOptions;
   }
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+): Promise<CommandResult> {
   console.log(JSON.stringify({ event: "sandbox.command.start", command, args: redactedArgs(command, args), cwd: options.cwd }));
   const startedAt = Date.now();
   const step = options.step ?? command;
+  let lastOutputAt = startedAt;
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
@@ -1248,129 +1474,45 @@ export async function runCommand(
   let stdout = "";
   let stderr = "";
   const commandLine = `${command} ${redactedArgs(command, args).join(" ")}`.trim();
-  let childClosed = false;
-  const watchdogOutcome: { current: { decision: CodegenWatchdogDecision; metadata: Record<string, unknown> } | null } = { current: null };
-  const watchdogState = {
-    lastStdoutChars: 0,
-    lastStderrChars: 0,
-    lastOutputChangedAt: startedAt,
-    reconnectSeenAt: null as number | null,
-    reconnectOutputChangedAt: null as number | null,
-    firstDiffAt: null as number | null,
-    latestDiff: null as GitWorkingTreeSnapshot | null
-  };
-
-  const emitActivity = async () => {
-    const now = Date.now();
-    const outputChanged = stdout.length !== watchdogState.lastStdoutChars || stderr.length !== watchdogState.lastStderrChars;
-    if (outputChanged) {
-      watchdogState.lastStdoutChars = stdout.length;
-      watchdogState.lastStderrChars = stderr.length;
-      watchdogState.lastOutputChangedAt = now;
-    }
-    if (CODEX_RECONNECT_PATTERN.test(stdout) || CODEX_RECONNECT_PATTERN.test(stderr)) {
-      watchdogState.reconnectSeenAt ??= now;
-      if (outputChanged) watchdogState.reconnectOutputChangedAt = now;
-    }
-
-    if (options.watchdog?.kind === "codex") {
-      watchdogState.latestDiff = await gitWorkingTreeSnapshot(options.cwd);
-      if (watchdogState.latestDiff.hasDiff && watchdogState.firstDiffAt == null) {
-        watchdogState.firstDiffAt = now;
-        await progress(options.taskEnv!, "codex_first_diff", "Codex produced the first working tree diff.", {
-          durationMs: now - startedAt,
-          changedFiles: watchdogState.latestDiff.changedFiles,
-          diffStat: tail(watchdogState.latestDiff.diffStat, 2000)
-        }).catch(() => undefined);
-      }
-
-      const reconnectStallMs =
-        watchdogState.reconnectSeenAt == null ? null : now - (watchdogState.reconnectOutputChangedAt ?? watchdogState.reconnectSeenAt);
-      const decision = evaluateCodegenWatchdog({
-        elapsedMs: now - startedAt,
-        idleMs: now - watchdogState.lastOutputChangedAt,
-        hasDiff: watchdogState.firstDiffAt != null,
-        reconnectSeen: watchdogState.reconnectSeenAt != null,
-        reconnectStallMs,
-        noFirstDiffTimeoutMs: options.watchdog.noFirstDiffTimeoutMs,
-        idleTimeoutMs: options.watchdog.idleTimeoutMs,
-        reconnectStallTimeoutMs: options.watchdog.reconnectStallTimeoutMs,
-        maxRuntimeMs: options.watchdog.maxRuntimeMs
-      });
-
-      if (decision) {
-        const metadata = {
-          command: commandLine,
-          durationMs: now - startedAt,
-          idleMs: now - watchdogState.lastOutputChangedAt,
-          stdoutChars: stdout.length,
-          stderrChars: stderr.length,
-          stdoutTail: tail(stdout, MAX_ACTIVITY_COMMAND_OUTPUT),
-          stderrTail: tail(stderr, MAX_ACTIVITY_COMMAND_OUTPUT),
-          reconnectSeen: watchdogState.reconnectSeenAt != null,
-          reconnectStallMs,
-          firstDiffAtMs: watchdogState.firstDiffAt == null ? null : watchdogState.firstDiffAt - startedAt,
-          changedFiles: watchdogState.latestDiff.changedFiles,
-          diffStat: tail(watchdogState.latestDiff.diffStat, 4000),
-          diffSnapshotError: watchdogState.latestDiff.error,
-          decision
-        };
-        watchdogOutcome.current = { decision, metadata };
-        await progress(options.taskEnv!, "codex_watchdog", decision.message, metadata).catch(() => undefined);
-        await recordArtifact(options.taskEnv, {
-          kind: "diagnostic",
-          name: "Codex watchdog diagnosis",
-          content: JSON.stringify(metadata, null, 2),
-          contentType: "application/json",
-          metadata: { reason: decision.reason, action: decision.action }
-        });
-        terminateChild(child, CODEX_TERMINATE_GRACE_MS, () => childClosed);
-        return;
-      }
-    }
-
-    await progress(options.taskEnv!, `${step}_activity`, `${step} is still running after ${formatDuration(now - startedAt)}.`, {
-      command: commandLine,
-      stdoutChars: stdout.length,
-      stderrChars: stderr.length,
-      stdoutTail: tail(stdout, MAX_ACTIVITY_COMMAND_OUTPUT),
-      stderrTail: tail(stderr, MAX_ACTIVITY_COMMAND_OUTPUT),
-      durationMs: now - startedAt,
-      idleMs: now - watchdogState.lastOutputChangedAt,
-      diff: watchdogState.latestDiff
-        ? {
-            hasDiff: watchdogState.latestDiff.hasDiff,
-            changedFiles: watchdogState.latestDiff.changedFiles,
-            diffStat: tail(watchdogState.latestDiff.diffStat, 2000),
-            error: watchdogState.latestDiff.error
-          }
-        : undefined
-    });
-  };
-
-  let activityRunning = false;
   const activityTimer =
-    (options.taskEnv || options.watchdog) && shouldEmitCommandActivity(step)
+    options.taskEnv && shouldEmitCommandActivity(step)
       ? setInterval(() => {
-          if (activityRunning || childClosed || watchdogOutcome.current) return;
-          activityRunning = true;
-          void emitActivity()
-            .catch(() => undefined)
-            .finally(() => {
-              activityRunning = false;
-            });
-        }, options.watchdog?.activityIntervalMs ?? COMMAND_ACTIVITY_INTERVAL_MS)
+          void progress(options.taskEnv!, `${step}_activity`, `${step} is still running after ${formatDuration(Date.now() - startedAt)}.`, {
+            command: commandLine,
+            stdoutChars: stdout.length,
+            stderrChars: stderr.length,
+            stdoutTail: tail(stdout, MAX_ACTIVITY_COMMAND_OUTPUT),
+            stderrTail: tail(stderr, MAX_ACTIVITY_COMMAND_OUTPUT),
+            durationMs: Date.now() - startedAt
+          }).catch(() => undefined);
+        }, 30_000)
       : undefined;
   activityTimer?.unref?.();
+  const codexWatchdog = options.codexWatchdog
+    ? startCodexWatchdog({
+        env: options.taskEnv,
+        child,
+        startedAt,
+        command: commandLine,
+        outputState: () => ({
+          stdout,
+          stderr,
+          lastOutputAt
+        }),
+        options: options.codexWatchdog
+      })
+    : undefined;
 
   child.stdout.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stdout += text;
+    lastOutputAt = Date.now();
     process.stdout.write(text);
   });
   child.stderr.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stderr += text;
+    lastOutputAt = Date.now();
     process.stderr.write(text);
   });
 
@@ -1381,46 +1523,35 @@ export async function runCommand(
   try {
     exitCode = await new Promise<number>((resolve, reject) => {
       child.on("error", reject);
-      child.on("close", (code) => {
-        childClosed = true;
-        resolve(code ?? 1);
-      });
+      child.on("close", (code) => resolve(code ?? 1));
     });
   } finally {
     if (activityTimer) clearInterval(activityTimer);
+    codexWatchdog?.stop();
   }
+  const duration = Date.now() - startedAt;
   await recordCommand(options.taskEnv, {
     step,
     command: commandLine,
     exitCode,
     outputTail: tail(stdout, MAX_CAPTURED_COMMAND_OUTPUT),
     errorTail: tail(stderr, MAX_CAPTURED_COMMAND_OUTPUT),
-    durationMs: Date.now() - startedAt
+    durationMs: duration,
+    metadata: codexWatchdog?.result()
   });
   await recordArtifact(options.taskEnv, {
     kind: "command_log",
     name: `${step} command log`,
-    content: [`$ ${commandLine}`, stdout.trimEnd(), stderr.trimEnd(), `[exit ${exitCode} in ${formatDuration(Date.now() - startedAt)}]`]
+    content: [`$ ${commandLine}`, stdout.trimEnd(), stderr.trimEnd(), `[exit ${exitCode} in ${formatDuration(duration)}]`]
       .filter(Boolean)
       .join("\n"),
     contentType: "text/plain",
-    metadata: { step, command: commandLine, exitCode, watchdog: watchdogOutcome.current?.decision ?? undefined }
+    metadata: { step, command: commandLine, exitCode, watchdog: codexWatchdog?.result() }
   });
-  const outcome = watchdogOutcome.current;
-  if (outcome?.decision.action === "fail") {
-    throw new CodegenWatchdogError(outcome.decision.message, outcome.decision, outcome.metadata);
-  }
-  if (outcome?.decision.action === "continue") {
-    await progress(options.taskEnv!, "codex_watchdog_continue", "Continuing with the generated diff after stopping stalled Codex.", {
-      ...outcome.metadata,
-      exitCode
-    }).catch(() => undefined);
-    return { exitCode: 0, stdout, stderr };
-  }
   if (exitCode !== 0 && !options.allowFailure) {
     throw new Error(`${command} ${args.join(" ")} failed with exit code ${exitCode}: ${stderr || stdout}`);
   }
-  return { exitCode, stdout, stderr };
+  return { exitCode, stdout, stderr, durationMs: duration, watchdog: codexWatchdog?.result() };
 }
 
 async function recordCommand(
@@ -1432,6 +1563,7 @@ async function recordCommand(
     outputTail: string;
     errorTail: string;
     durationMs: number;
+    metadata?: Record<string, unknown>;
   }
 ) {
   if (!env) return;
@@ -1443,55 +1575,117 @@ async function recordCommand(
   });
 }
 
-async function gitWorkingTreeSnapshot(cwd: string): Promise<GitWorkingTreeSnapshot> {
-  const status = await execFileText("git", ["status", "--porcelain"], cwd);
-  if (status.exitCode !== 0) {
-    return {
-      hasDiff: false,
-      status: "",
-      diffStat: "",
-      changedFiles: [],
-      error: status.stderr || status.stdout || `git status exited ${status.exitCode}`
-    };
-  }
-  const statusText = status.stdout.trim();
-  const changedFiles = statusText
-    ? statusText
-        .split("\n")
-        .map((line) => line.slice(3).trim())
-        .filter(Boolean)
-    : [];
-  const diffStat = statusText ? await execFileText("git", ["diff", "--stat"], cwd) : null;
-  return {
-    hasDiff: Boolean(statusText),
-    status: statusText,
-    diffStat: diffStat?.stdout.trim() ?? "",
-    changedFiles,
-    error: diffStat && diffStat.exitCode !== 0 ? diffStat.stderr || diffStat.stdout || `git diff --stat exited ${diffStat.exitCode}` : undefined
+function startCodexWatchdog(input: {
+  env?: SandboxEnv;
+  child: ReturnType<typeof spawn>;
+  startedAt: number;
+  command: string;
+  outputState: () => { stdout: string; stderr: string; lastOutputAt: number };
+  options: CodexWatchdogOptions;
+}) {
+  let stopped = false;
+  let checking = false;
+  let killTimer: NodeJS.Timeout | undefined;
+  const result: CodexWatchdogResult = { killed: false };
+  const pollMs = input.options.pollMs ?? CODEX_WATCHDOG_POLL_MS;
+  let lastStdoutChars = 0;
+  let lastStderrChars = 0;
+  let reconnectSeenAt: number | null = null;
+  let reconnectOutputChangedAt: number | null = null;
+
+  const stop = () => {
+    stopped = true;
+    clearInterval(timer);
+    if (killTimer) clearTimeout(killTimer);
   };
-}
 
-function execFileText(command: string, args: string[], cwd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile(command, args, { cwd, maxBuffer: 200_000 }, (error, stdout, stderr) => {
-      const exitCode =
-        error && typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === "number"
-          ? Number((error as NodeJS.ErrnoException & { code: number }).code)
-          : error
-            ? 1
-            : 0;
-      resolve({ exitCode, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
-    });
-  });
-}
+  const kill = async (reason: string, message: string, metadata: Record<string, unknown>) => {
+    if (result.killed || stopped) return;
+    result.killed = true;
+    result.reason = reason;
+    result.durationMs = Date.now() - input.startedAt;
+    result.lastOutputAtMs = Math.max(0, input.outputState().lastOutputAt - input.startedAt);
+    await progress(input.env!, `codex_watchdog_${reason}`, message, {
+      ...metadata,
+      attempt: input.options.attempt,
+      totalAttempts: input.options.totalAttempts,
+      command: input.command,
+      durationMs: result.durationMs,
+      lastOutputAtMs: result.lastOutputAtMs
+    }).catch(() => undefined);
+    input.child.kill("SIGTERM");
+    killTimer = setTimeout(() => {
+      if (input.child.exitCode === null && input.child.signalCode === null) input.child.kill("SIGKILL");
+    }, 5_000);
+    killTimer.unref?.();
+  };
 
-function terminateChild(child: ReturnType<typeof spawn>, graceMs: number, isClosed: () => boolean) {
-  if (child.killed) return;
-  child.kill("SIGTERM");
-  const forceKill = setTimeout(() => {
-    if (!isClosed()) child.kill("SIGKILL");
-  }, graceMs);
-  forceKill.unref?.();
+  const timer = setInterval(() => {
+    if (!input.env || checking || stopped || result.killed) return;
+    const env = input.env;
+    checking = true;
+    void (async () => {
+      try {
+        const durationMs = Date.now() - input.startedAt;
+        const outputState = input.outputState();
+        const outputChanged = outputState.stdout.length !== lastStdoutChars || outputState.stderr.length !== lastStderrChars;
+        if (outputChanged) {
+          lastStdoutChars = outputState.stdout.length;
+          lastStderrChars = outputState.stderr.length;
+        }
+        if (CODEX_RECONNECT_PATTERN.test(outputState.stdout) || CODEX_RECONNECT_PATTERN.test(outputState.stderr)) {
+          reconnectSeenAt ??= Date.now();
+          if (outputChanged) reconnectOutputChangedAt = Date.now();
+        }
+        const status = await gitStatusPorcelain(input.options.checkoutDir).catch(() => "");
+        const producedDiff = Boolean(status.trim());
+        if (producedDiff && result.firstDiffSeenAtMs == null) {
+          result.firstDiffSeenAtMs = durationMs;
+          await progress(env, "codex_first_diff", "Codex produced its first visible code diff.", {
+            attempt: input.options.attempt,
+            durationMs,
+            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
+          }).catch(() => undefined);
+        }
+
+        const idleMs = Date.now() - outputState.lastOutputAt;
+        const reconnectStallMs = reconnectSeenAt == null ? null : Date.now() - (reconnectOutputChangedAt ?? reconnectSeenAt);
+        const decision = evaluateCodegenWatchdog({
+          elapsedMs: durationMs,
+          idleMs,
+          hasDiff: producedDiff,
+          reconnectSeen: reconnectSeenAt != null,
+          reconnectStallMs,
+          noFirstDiffTimeoutMs: input.options.firstDiffDeadlineMs,
+          idleTimeoutMs: input.options.idleWithoutDiffMs,
+          reconnectStallTimeoutMs: input.options.reconnectStallMs,
+          maxRuntimeMs: input.options.maxRuntimeMs
+        });
+        if (decision) {
+          await kill(decision.reason, decision.message, {
+            idleMs,
+            action: decision.action,
+            reconnectSeen: reconnectSeenAt != null,
+            reconnectStallMs,
+            stdoutChars: outputState.stdout.length,
+            stderrChars: outputState.stderr.length,
+            stdoutTail: tail(outputState.stdout, MAX_ACTIVITY_COMMAND_OUTPUT),
+            stderrTail: tail(outputState.stderr, MAX_ACTIVITY_COMMAND_OUTPUT),
+            hasDiff: producedDiff,
+            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
+          });
+        }
+      } finally {
+        checking = false;
+      }
+    })();
+  }, pollMs);
+  timer.unref?.();
+
+  return {
+    stop,
+    result: () => result
+  };
 }
 
 async function recordArtifact(
@@ -1523,6 +1717,10 @@ async function recordArtifact(
 
 function tail(value: string, maxChars: number) {
   return value.length <= maxChars ? value : value.slice(value.length - maxChars);
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function sha256(value: string) {

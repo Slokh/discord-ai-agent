@@ -1,19 +1,16 @@
 import {
-  analyzeDiscordData,
   answerFromHistory,
   cleanResponse,
   createSkillFromRequest,
   createAgentUpdateFromRequest,
   cancelAgentTask,
   findDiscordChannels,
-  findDiscordRoles,
   findDiscordUsers,
   generateImage,
   getDiscordChannelTopics,
   getDiscordMessageContext,
   getDiscordStats,
   getRecentAgentMemory,
-  getPinnedMessages,
   getAgentTaskStatus,
   getDeploymentStatus,
   inspectAgentLogs,
@@ -390,10 +387,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       } else {
         successfulToolCallKeys.add(routeKey);
       }
-      if (
-        (route.name === "summarizeDiscordHistory" || route.name === "analyzeDiscordData" || route.name === "getDiscordMessageContext") &&
-        !isRedundantToolCall
-      ) {
+      if ((route.name === "summarizeDiscordHistory" || route.name === "getDiscordMessageContext") && !isRedundantToolCall) {
         completedTerminalToolThisRound = true;
       }
       if (result.files?.length) files.push(...result.files);
@@ -540,15 +534,6 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     };
   }
 
-  if (route.name === "findDiscordRoles") {
-    return {
-      content: cleanResponse(
-        await findDiscordRoles(ctx, stringArgument(route.arguments, "query") ?? originalText, numberArgument(route.arguments, "limit")),
-        ctx.config.maxReplyChars
-      )
-    };
-  }
-
   if (route.name === "reportStatus") {
     return { content: cleanResponse(await reportStatus(ctx), ctx.config.maxReplyChars) };
   }
@@ -645,7 +630,14 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
   }
 
   if (route.name === "summarizeDiscordThread") {
-    return { content: cleanResponse(await summarizeCurrentThread(ctx), ctx.config.maxReplyChars) };
+    return {
+      content: cleanResponse(
+        await summarizeCurrentThread(ctx, {
+          question: stringArgument(route.arguments, "question")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
   }
 
   if (route.name === "getRecentDiscordMessages") {
@@ -701,18 +693,6 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     };
   }
 
-  if (route.name === "getPinnedMessages") {
-    return {
-      content: cleanResponse(
-        await getPinnedMessages(ctx, {
-          channelIds: stringArrayArgument(route.arguments, "channelIds"),
-          limit: numberArgument(route.arguments, "limit")
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
-  }
-
   if (route.name === "getDiscordStats") {
     return {
       content: cleanResponse(
@@ -730,27 +710,6 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
           query: stringArgument(route.arguments, "query"),
           attachmentContentType: stringArgument(route.arguments, "attachmentContentType"),
           limit: numberArgument(route.arguments, "limit")
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
-  }
-
-  if (route.name === "analyzeDiscordData") {
-    return {
-      content: cleanResponse(
-        await analyzeDiscordData(ctx, {
-          task: stringArgument(route.arguments, "task") ?? originalText,
-          query: stringArgument(route.arguments, "query"),
-          authorIds: stringArrayArgument(route.arguments, "authorIds"),
-          channelIds: stringArrayArgument(route.arguments, "channelIds"),
-          authorQueries: stringArrayArgument(route.arguments, "authorQueries"),
-          channelQueries: stringArrayArgument(route.arguments, "channelQueries"),
-          dateFrom: stringArgument(route.arguments, "dateFrom"),
-          dateTo: stringArgument(route.arguments, "dateTo"),
-          includeBots: booleanArgument(route.arguments, "includeBots"),
-          sampleLimit: numberArgument(route.arguments, "sampleLimit"),
-          resultLimit: numberArgument(route.arguments, "resultLimit")
         }),
         ctx.config.maxReplyChars
       )
@@ -1149,10 +1108,7 @@ function toolEvidenceFallback(memoryEvents: NonNullable<AgentResponse["memoryEve
   if (!latest) return undefined;
   const latestSummary = [...memoryEvents].reverse().find((event) => {
     const toolName = typeof event.metadata?.toolName === "string" ? event.metadata.toolName : "";
-    return (
-      ["summarizeDiscordHistory", "getDiscordChannelTopics", "summarizeDiscordThread", "analyzeDiscordData"].includes(toolName) &&
-      isUsefulSummaryContent(event.content)
-    );
+    return ["summarizeDiscordHistory", "getDiscordChannelTopics", "summarizeDiscordThread"].includes(toolName) && isUsefulSummaryContent(event.content);
   });
   if (latestSummary) return latestSummary.content.trim();
   const results = parseDiscordEvidenceResults(latest.content).slice(0, 5);
@@ -1274,12 +1230,12 @@ function chatMessages(
         "When answering from Discord search evidence, use dates sparingly; show them only when the user asks about timing, links, sources, proof, or exact messages, or when needed to avoid making old messages sound recent. " +
         "When naming people from Discord search evidence, only use exact handles or IDs shown in the tool output; do not infer real names or display names. " +
         "For recent/current/latest Discord-history questions, choose and pass an explicit date window that fits the user request instead of searching all indexed history. " +
-        "When a user names a Discord person/channel/role without an exact mention or ID, use findDiscordUsers/findDiscordChannels/findDiscordRoles before filtered history searches. Resolver tools are intermediate; never stop after a resolver if the user asked what someone said, did, or has been up to. " +
+        "When a user names a Discord person or channel without an exact mention or ID, use findDiscordUsers/findDiscordChannels before filtered history searches. Resolver tools are intermediate; never stop after a resolver if the user asked what someone said, did, or has been up to. " +
         "For requests to link, show, or list a person's messages, use searchDiscordHistory with authorQueries/authorIds; do not search for the username as ordinary message text. " +
         "Top-level Discord mentions include recent channel memory by default. Reply messages additionally include their reply-chain context. If a user asks what you previously said, did, generated, or opened, call getRecentAgentMemory instead of guessing from absent context. " +
         "Use getRecentAgentMemory only for Discord AI Agent's own previous replies/tool results in the current channel, not for factual server-history questions. " +
-        "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext only for a specific Discord message link/ID or explicit surrounding-context request, searchDiscordAttachments for files/images, getPinnedMessages for pins, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, and activity over time. " +
-        "For ad hoc Discord data-analysis questions that require inferring a repeated text format, extracting values, deduping, or doing exact math over many messages, use analyzeDiscordData instead of searchDiscordHistory. Give it the user's task and a broad keyword query; it will sample visible messages, infer the extraction plan, and run the aggregation. " +
+        "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext only for a specific Discord message link/ID or explicit surrounding-context request, searchDiscordAttachments for files/images, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, reactions, attachments, and activity over time. " +
+        "For repeated game-score, leaderboard, or exact math questions, use getDiscordStats when the request can be answered by its metrics; otherwise gather focused Discord history evidence and explain the limitation bluntly. " +
         "For broad recaps like what a person or channel has been up to, what happened recently, or summarize activity over a period, use summarizeDiscordHistory after resolving ambiguous users/channels. Do not answer those from resolver output alone. " +
         "For recurring topics, themes, memes, bits, or what people usually talk about in channels, use getDiscordChannelTopics, not getDiscordStats groupBy=message. " +
         "For channel stats, groupBy=channel rolls thread/forum-post messages up into their parent channels; use groupBy=thread only when the user asks about threads or forum posts separately. " +

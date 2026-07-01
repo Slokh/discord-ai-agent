@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  analyzeDiscordData,
   answerFromHistory,
   createSkillFromRequest,
   extractHistorySearchSyntax,
-  findDiscordRoles,
   findDiscordUsers,
   formatAgentTaskResult,
   generateImage,
@@ -12,6 +10,7 @@ import {
   getDiscordStats,
   inspectAgentLogs,
   reportStatus,
+  summarizeDiscordHistory,
   summarizeCurrentThread,
   undoConversationTurns
 } from "../../src/tools/coreTools.js";
@@ -194,23 +193,6 @@ describe("Discord lookup tools", () => {
     });
   });
 
-  it("finds roles from the live Discord role snapshot", async () => {
-    const ctx = {
-      repo: { auditTool: vi.fn(async () => undefined) },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-      discordRoles: [
-        { id: "1", name: "admin", position: 2, managed: false, memberCount: 2 },
-        { id: "2", name: "cool people", position: 1, managed: false, memberCount: 5 }
-      ]
-    } as unknown as ToolContext;
-
-    const response = await findDiscordRoles(ctx, "cool");
-
-    expect(response).toContain("cool people id=2");
-    expect(response).not.toContain("admin");
-  });
 });
 
 describe("getDiscordStats", () => {
@@ -403,127 +385,6 @@ describe("getDiscordStats", () => {
   });
 });
 
-describe("analyzeDiscordData", () => {
-  it("infers and runs generic extracted data analytics from sampled messages", async () => {
-    const chat = vi.fn(async () => ({
-      content: JSON.stringify({
-        pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
-        query: "wordle",
-        groupBy: "user",
-        metric: "numericAverage",
-        sort: "valueAsc",
-        captureIndex: 1,
-        numericCaptureIndex: 2,
-        numericValueMap: { X: 7 },
-        distinctBy: ["author", "capture"],
-        dedupeOrder: "numericAsc",
-        minMatches: 20,
-        explanation: "Parse Wordle puzzle id and score, dedupe by user+puzzle, and rank by average score."
-      }),
-      model: "planner-model",
-      raw: {},
-      toolCalls: []
-    }));
-    const ctx = {
-      repo: {
-        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
-        keywordSearch: vi.fn(async () => [
-          {
-            messageId: "message-1",
-            guildId: "guild",
-            channelId: "channel",
-            authorId: "user-1",
-            authorUsername: "fixtureuser",
-            content: "Wordle 1 3/6",
-            normalizedContent: "Wordle 1 3/6",
-            createdAt: new Date("2026-01-01T00:00:00Z"),
-            score: 1,
-            link: "https://discord.com/channels/guild/channel/message-1"
-          }
-        ]),
-        discordPatternStats: vi.fn(async () => ({
-          pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
-          query: "wordle",
-          metric: "numericAverage",
-          groupBy: "user",
-          captureIndex: 1,
-          numericCaptureIndex: 2,
-          totalMatches: 34,
-          totalGroups: 1,
-          minMatches: 20,
-          rows: [
-            {
-              key: "user-1",
-              label: "fixtureuser",
-              value: 3.848,
-              matchCount: 34,
-              distinctAuthors: 1,
-              numericCount: 34,
-              numericAverage: 3.848,
-              numericMin: 2,
-              numericMax: 7,
-              numericSum: 130.832,
-              authorId: "user-1",
-              authorUsername: "fixtureuser",
-              channelId: null,
-              channelName: null,
-              captureValue: null,
-              periodStart: null,
-              firstMatchedAt: new Date("2025-01-01T00:00:00Z"),
-              lastMatchedAt: new Date("2026-06-01T00:00:00Z")
-            }
-          ]
-        })),
-        auditTool: vi.fn(async () => undefined)
-      },
-      openRouter: { chat },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-      visibleChannelIds: ["channel"]
-    } as unknown as ToolContext;
-
-    const response = await analyzeDiscordData(ctx, { task: "who is the top wordle player in this discord", query: "wordle" });
-
-    expect(response).toContain("Discord data analysis:");
-    expect(response).toContain("Inferred plan: Parse Wordle puzzle id");
-    expect(response).toContain("Metric: numeric average");
-    expect(response).toContain("@fixtureuser: 3.848 numeric average");
-    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        guildId: "guild",
-        visibleChannelIds: ["channel"],
-        query: "wordle",
-        limit: 80
-      })
-    );
-    expect(chat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining("Return only compact JSON") }),
-          expect.objectContaining({ content: expect.stringContaining("Wordle 1 3/6") })
-        ])
-      })
-    );
-    expect(ctx.repo.discordPatternStats).toHaveBeenCalledWith(
-      expect.objectContaining({
-        guildId: "guild",
-        visibleChannelIds: ["channel"],
-        pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
-        groupBy: "user",
-        metric: "numericAverage",
-        sort: "valueAsc",
-        captureIndex: 1,
-        numericCaptureIndex: 2,
-        numericValueMap: { X: 7 },
-        distinctBy: ["author", "capture"],
-        dedupeOrder: "numericAsc",
-        minMatches: 20
-      })
-    );
-  });
-});
-
 describe("getDiscordChannelTopics", () => {
   it("summarizes recurring channel topics from embedded sampled messages", async () => {
     const auditTool = vi.fn(async () => undefined);
@@ -576,6 +437,69 @@ describe("getDiscordChannelTopics", () => {
     );
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDiscordChannelTopics" }));
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "composeChannelTopics", model: "test-chat" }));
+  });
+});
+
+describe("summarizeDiscordHistory", () => {
+  it("builds hybrid semantic, keyword, recent, and representative evidence", async () => {
+    const semanticResult = searchResult({ messageId: "semantic", normalizedContent: "semantic job interview update", score: 0.91 });
+    const keywordResult = searchResult({ messageId: "keyword", normalizedContent: "keyword job hunt update", score: 0.8 });
+    const recentResult = searchResult({ messageId: "recent", normalizedContent: "recent career update", createdAt: new Date("2026-01-01T00:00:00.000Z") });
+    const representativeResult = searchResult({ messageId: "representative", normalizedContent: "representative workplace chatter" });
+    const chat = vi.fn(async () => ({
+      content: "People have been talking about interviews, job hunts, and career updates.",
+      model: "summary-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: { apiKey: "test-key", embeddingModel: "test-embed" },
+        embeddingDimensions: 2
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["jobs"]),
+        findDiscordUsers: vi.fn(async () => []),
+        findDiscordChannels: vi.fn(async () => []),
+        sampleMessagesFromChannels: vi.fn(async () => [representativeResult]),
+        recentMessagesFromChannels: vi.fn(async () => [recentResult]),
+        keywordSearch: vi.fn(async () => [keywordResult]),
+        vectorSearch: vi.fn(async () => [semanticResult]),
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        embed: vi.fn(async () => [[0.1, 0.2]]),
+        chat
+      },
+      github: {},
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      userDisplayName: "User",
+      visibleChannelIds: ["jobs"]
+    } as unknown as ToolContext;
+
+    const response = await summarizeDiscordHistory(ctx, {
+      question: "what have people said about job hunting?",
+      channelIds: ["jobs"],
+      sampleLimit: 20
+    });
+
+    expect(response).toContain("job hunts");
+    expect(ctx.openRouter.embed).toHaveBeenCalledWith(["what have people said about job hunting?"], "test-embed", 2);
+    expect(ctx.repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"], authorIds: [], limit: 10 }));
+    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(expect.objectContaining({ query: "what have people said about job hunting?", channelIds: ["jobs"] }));
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"] }));
+    expect(ctx.repo.sampleMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"], limit: 20 }));
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: expect.stringContaining("Retrieval mix: semantic=1, keyword=1, recent=1, representative=1") }),
+          expect.objectContaining({ content: expect.stringContaining("semantic job interview update") })
+        ])
+      })
+    );
   });
 });
 
@@ -1151,6 +1075,54 @@ describe("summarizeCurrentThread", () => {
     expect(ctx.openRouter.chat).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([expect.objectContaining({ role: "user", content: expect.stringContaining("we picked nachos") })])
+      })
+    );
+  });
+
+  it("uses hybrid focused evidence when a thread summary has a question", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        sampleMessagesFromChannels: vi.fn(async () => [
+          searchResult({ messageId: "representative-thread", channelId: "channel", normalizedContent: "older deploy context" })
+        ]),
+        recentMessagesFromChannels: vi.fn(async () => [
+          searchResult({ messageId: "recent-thread", channelId: "channel", normalizedContent: "recent deploy update" })
+        ]),
+        keywordSearch: vi.fn(async () => [
+          searchResult({ messageId: "keyword-thread", channelId: "channel", normalizedContent: "deploy keyword hit" })
+        ]),
+        vectorSearch: vi.fn(async () => [
+          searchResult({ messageId: "semantic-thread", channelId: "channel", normalizedContent: "semantic deploy decision" })
+        ]),
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        embed: vi.fn(async () => [[0.1, 0.2]]),
+        chat: vi.fn(async () => ({ content: "Deployment decision summarized.", model: "test", raw: {} }))
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      config: {
+        maxThreadSummaryMessages: 20,
+        openRouter: { apiKey: "test-key", embeddingModel: "test-embed" },
+        embeddingDimensions: 2
+      }
+    } as unknown as ToolContext;
+
+    await expect(summarizeCurrentThread(ctx, { question: "deployment decisions" })).resolves.toBe("Deployment decision summarized.");
+    expect(ctx.repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["channel"] }));
+    expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["channel"], query: "deployment decisions" }));
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["channel"] }));
+    expect(ctx.repo.sampleMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["channel"] }));
+    expect(ctx.openRouter.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "user", content: expect.stringContaining("Question: deployment decisions") }),
+          expect.objectContaining({ role: "user", content: expect.stringContaining("semantic deploy decision") })
+        ])
       })
     );
   });

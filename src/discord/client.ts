@@ -438,7 +438,6 @@ async function handleMessageCreate(
           requestId,
           statusChannelId: thinking.channelId,
           statusMessageId: thinking.id,
-          discordRoles: discordRoleSnapshots(message.guild),
           updateStatus: async (content) => {
             await thinking.edit(cleanResponse(content, input.config.maxReplyChars));
           },
@@ -983,18 +982,6 @@ function managedRoleIdsForBot(guild: Guild, botUserId: string) {
   return guild.roles.cache
     .filter((role) => (role.tags as { botId?: string } | null | undefined)?.botId === botUserId)
     .map((role) => role.id);
-}
-
-function discordRoleSnapshots(guild: Guild | null) {
-  if (!guild) return [];
-  return [...guild.roles.cache.values()].map((role) => ({
-    id: role.id,
-    name: role.name,
-    color: role.color,
-    position: role.position,
-    managed: role.managed,
-    memberCount: role.members.size
-  }));
 }
 
 function uniqueRegexCaptureIds(content: string, pattern: RegExp): string[] {

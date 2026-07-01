@@ -1127,7 +1127,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(
       repo.searchDiscordAttachments({ guildId, visibleChannelIds: [channelId], query: "file", contentType: "image/", limit: 5 })
     ).resolves.toMatchObject([{ attachmentId, filename: "file.png", contentType: "image/png" }]);
-    await expect(repo.pinnedMessages({ guildId, visibleChannelIds: [channelId], limit: 5 })).resolves.toMatchObject([{ messageId: messageA }]);
     await expect(repo.discordStats({ guildId, visibleChannelIds: [channelId], limit: 5 })).resolves.toMatchObject({
       totalMessages: 2,
       totalAttachments: 1,
@@ -1344,84 +1343,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         expect.objectContaining({ channelId: parentChannelId, channelName: "parent", value: 1 })
       ])
     );
-  });
-
-  it("aggregates repeated structured message patterns with numeric captures", async () => {
-    const guildId = `guild-${randomUUID()}`;
-    const channelId = `channel-${randomUUID()}`;
-    const userA = `user-${randomUUID()}`;
-    const userB = `user-${randomUUID()}`;
-    const userC = `user-${randomUUID()}`;
-
-    await repo.upsertGuild({ id: guildId, name: "test" });
-    await repo.upsertChannel({ id: channelId, guildId, name: "games", type: 0 });
-    await repo.upsertUser({ id: userA, username: "alice" });
-    await repo.upsertUser({ id: userB, username: "bob" });
-    await repo.upsertUser({ id: userC, username: "carol" });
-
-    const messages = [
-      { authorId: userA, authorUsername: "alice", content: "Wordle 1 3/6" },
-      { authorId: userA, authorUsername: "alice", content: "Wordle 2 4/6" },
-      { authorId: userA, authorUsername: "alice", content: "Wordle 2 6/6" },
-      { authorId: userB, authorUsername: "bob", content: "Wordle 1 5/6" },
-      { authorId: userB, authorUsername: "bob", content: "Wordle 2 X/6" },
-      { authorId: userC, authorUsername: "carol", content: "Wordle 3 2/6" }
-    ];
-    for (const [index, message] of messages.entries()) {
-      await repo.upsertMessage({
-        id: `message-${randomUUID()}`,
-        guildId,
-        channelId,
-        authorId: message.authorId,
-        authorUsername: message.authorUsername,
-        content: message.content,
-        normalizedContent: message.content,
-        createdAt: new Date(`2026-01-01T00:00:0${index}.000Z`)
-      });
-    }
-
-    const stats = await repo.discordPatternStats({
-      guildId,
-      visibleChannelIds: [channelId],
-      pattern: "^Wordle[[:space:]]+([0-9,]+)[[:space:]]+([1-6Xx])/6",
-      groupBy: "user",
-      metric: "numericAverage",
-      sort: "valueAsc",
-      captureIndex: 1,
-      numericCaptureIndex: 2,
-      numericValueMap: { x: 7 },
-      distinctBy: ["author", "capture"],
-      dedupeOrder: "numericAsc",
-      minMatches: 2,
-      limit: 10
-    });
-
-    expect(stats).toMatchObject({
-      metric: "numericAverage",
-      groupBy: "user",
-      totalMatches: 5,
-      totalGroups: 2,
-      minMatches: 2
-    });
-    expect(stats.rows).toHaveLength(2);
-    expect(stats.rows[0]).toMatchObject({
-      authorId: userA,
-      authorUsername: "alice",
-      matchCount: 2,
-      numericCount: 2,
-      numericAverage: 3.5,
-      numericMin: 3,
-      numericMax: 4
-    });
-    expect(stats.rows[1]).toMatchObject({
-      authorId: userB,
-      authorUsername: "bob",
-      matchCount: 2,
-      numericCount: 2,
-      numericAverage: 6,
-      numericMin: 5,
-      numericMax: 7
-    });
   });
 
   it("loads parent-channel topic candidates with stored embeddings", async () => {

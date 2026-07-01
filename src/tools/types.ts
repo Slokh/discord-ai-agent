@@ -21,7 +21,7 @@ export type ToolContext = {
   requestId?: string;
   statusChannelId?: string;
   statusMessageId?: string;
-  discordRoles?: DiscordRoleSnapshot[];
+  visibleIndexedChannelIds?: string[];
   deleteDiscordMessageIds?: (messageIds: string[]) => Promise<number>;
   updateStatus?: (content: string) => Promise<void>;
 };
@@ -42,15 +42,6 @@ export type DiscordReplyContextMessage = {
 export type DiscordReplyContext = DiscordReplyContextMessage & {
   rootMessageId: string;
   chain: DiscordReplyContextMessage[];
-};
-
-export type DiscordRoleSnapshot = {
-  id: string;
-  name: string;
-  color?: number | null;
-  position?: number | null;
-  managed?: boolean;
-  memberCount?: number | null;
 };
 
 export type AgentFile = {

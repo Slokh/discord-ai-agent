@@ -227,7 +227,7 @@ describe("LocalProcessExecutionBackend", () => {
           ["dist/src/execution/sandboxRunner.js"],
           expect.objectContaining({
             cwd: process.cwd(),
-            stdio: ["ignore", "inherit", "inherit"],
+            stdio: ["ignore", "pipe", "pipe"],
             env: expect.objectContaining({
               TASK_ID: "task-00005678",
               TRACE_ID: "trace-1",
@@ -252,15 +252,75 @@ describe("LocalProcessExecutionBackend", () => {
           expect.objectContaining({ step: "sandbox_prepare", message: "Preparing a warm local codegen worker process." })
         );
         await expect(backend.observeRun({ ...sandboxRun(), sandboxRunId: result.sandboxRunId })).resolves.toEqual(
-          expect.objectContaining({ status: "running", metadata: { pid: 4242 } })
+          expect.objectContaining({ status: "running", metadata: expect.objectContaining({ pid: 4242 }) })
         );
 
+        const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        child.stdout.emit("data", Buffer.from("stdout before failure\n"));
+        child.stderr.emit("data", Buffer.from("GITHUB_TOKEN=github_pat_secretsecretsecretsecretsecret\n"));
+        expect(stdoutWrite).toHaveBeenCalledWith("stdout before failure\n");
+        expect(stderrWrite).toHaveBeenCalledWith("GITHUB_TOKEN=[REDACTED]\n");
+        stdoutWrite.mockRestore();
+        stderrWrite.mockRestore();
         child.emit("exit", 1, null);
         await expect(backend.observeRun({ ...sandboxRun(), sandboxRunId: result.sandboxRunId })).resolves.toEqual(
-          expect.objectContaining({ status: "failed", metadata: expect.objectContaining({ exitCode: 1 }) })
+          expect.objectContaining({
+            status: "failed",
+            metadata: expect.objectContaining({
+              exitCode: 1,
+              stdoutTail: "stdout before failure\n",
+              stderrTail: "GITHUB_TOKEN=[REDACTED]\n"
+            })
+          })
         );
       }
     );
+  });
+
+  it("fails and terminates local codegen processes that exceed the sandbox timeout", async () => {
+    vi.useFakeTimers();
+    let now = 1782930000000;
+    try {
+      await withEnv(
+        {
+          OPENROUTER_API_KEY: "sk-test",
+          GITHUB_TOKEN: "github-token",
+          GITHUB_REPOSITORY: "example/discord-ai-agent",
+          GITHUB_BASE_BRANCH: "main",
+          TASK_SIGNING_SECRET: "task-secret",
+          CONTROL_PLANE_INTERNAL_URL: "http://agent-api:8080",
+          SANDBOX_TASK_TIMEOUT_SECONDS: "1",
+          CODEGEN_EXECUTION_BACKEND: "local-process"
+        },
+        async () => {
+          const child = fakeChildProcess();
+          const backend = new LocalProcessExecutionBackend(loadConfig(), {
+            spawnProcess: vi.fn(() => child as any) as any,
+            githubTokenResolver: vi.fn(async () => "resolved-github-token"),
+            now: () => now
+          });
+          const result = await backend.start(agentTask());
+
+          now += 1_001;
+          await vi.advanceTimersByTimeAsync(1_001);
+
+          expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+          await expect(backend.observeRun({ ...sandboxRun(), sandboxRunId: result.sandboxRunId })).resolves.toEqual(
+            expect.objectContaining({
+              status: "failed",
+              reason: "Local codegen process exceeded 1s sandbox timeout.",
+              metadata: expect.objectContaining({ timedOut: true })
+            })
+          );
+
+          await backend.cleanupRun({ ...sandboxRun(), sandboxRunId: result.sandboxRunId });
+          expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+        }
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("builds sandbox runner environment without leaking placeholder values", () => {
@@ -365,6 +425,8 @@ function sandboxRun(): SandboxRunRecord {
 function fakeChildProcess() {
   const child = new EventEmitter() as any;
   child.pid = 4242;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
   child.unref = vi.fn();
   child.kill = vi.fn();
   return child;

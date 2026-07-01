@@ -2407,7 +2407,7 @@ export class DiscordAiAgentRepository {
   }
 
   async markAgentTaskRunning(input: { taskId: string; backend?: string | null; step?: string | null; statusMessage?: string | null }) {
-    await this.pool.query(
+    const result = await this.pool.query(
       `
         UPDATE agent_tasks
         SET status = 'running',
@@ -2418,9 +2418,12 @@ export class DiscordAiAgentRepository {
             started_at = coalesce(started_at, now()),
             updated_at = now()
         WHERE task_id = $1
+          AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+        RETURNING task_id
       `,
       [input.taskId, input.backend ?? null, input.step ?? null, input.statusMessage ?? null]
     );
+    if ((result.rowCount ?? 0) === 0) return;
     await this.updateProcessRun({
       runId: input.taskId,
       status: "running",
@@ -2436,7 +2439,7 @@ export class DiscordAiAgentRepository {
     backend?: string | null;
     metadata?: Record<string, unknown>;
   }) {
-    await this.pool.query(
+    const result = await this.pool.query(
       `
         WITH updated AS (
           UPDATE agent_tasks
@@ -2446,6 +2449,7 @@ export class DiscordAiAgentRepository {
               progress_updated_at = now(),
               updated_at = now()
           WHERE task_id = $1
+            AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
           RETURNING task_id, trace_id, guild_id, channel_id, user_id
         ),
         event_insert AS (
@@ -2459,6 +2463,7 @@ export class DiscordAiAgentRepository {
       `,
       [input.taskId, input.step, input.statusMessage, input.backend ?? null, JSON.stringify(input.metadata ?? {})]
     );
+    if ((result.rowCount ?? 0) === 0) return;
     await this.updateProcessRun({
       runId: input.taskId,
       status: "running",
@@ -3213,11 +3218,34 @@ export class DiscordAiAgentRepository {
     const result = await this.pool.query(
       `
         UPDATE process_runs
-        SET status = coalesce($2, status),
-            summary = coalesce($3, summary),
-            metadata = metadata || $4::jsonb,
-            links = links || $5::jsonb,
+        SET status = CASE
+              WHEN status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+                AND $2::text IN ('queued', 'running')
+                THEN status
+              ELSE coalesce($2, status)
+            END,
+            summary = CASE
+              WHEN status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+                AND $2::text IN ('queued', 'running')
+                THEN summary
+              ELSE coalesce($3, summary)
+            END,
+            metadata = CASE
+              WHEN status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+                AND $2::text IN ('queued', 'running')
+                THEN metadata
+              ELSE metadata || $4::jsonb
+            END,
+            links = CASE
+              WHEN status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+                AND $2::text IN ('queued', 'running')
+                THEN links
+              ELSE links || $5::jsonb
+            END,
             completed_at = CASE
+              WHEN status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+                AND $2::text IN ('queued', 'running')
+                THEN completed_at
               WHEN $6::timestamptz IS NOT NULL THEN $6::timestamptz
               WHEN $2::text IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN coalesce(completed_at, now())
               ELSE completed_at

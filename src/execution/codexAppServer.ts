@@ -123,6 +123,7 @@ export class CodexAppServerClient {
     text: string;
     model?: string;
     reasoningEffort?: string;
+    onNotification?: (notification: CodexAppServerNotification) => Promise<void> | void;
   }): Promise<CodexTurnResult> {
     const params = this.turnParams(input);
     const notifications: CodexAppServerNotification[] = [];
@@ -131,7 +132,7 @@ export class CodexAppServerClient {
       const turnStart = await this.request("turn/start", params);
       const turnId = stringAt(turnStart, ["turn", "id"]);
       if (!turnId) throw new Error("Codex app-server turn/start response missing turn.id.");
-      const terminal = await this.readTurnNotifications(input.threadId, turnId);
+      const terminal = await this.readTurnNotifications(input.threadId, turnId, input.onNotification);
       if (terminal.type === "retry" && retries < this.options.maxEngineRetries) {
         retries += 1;
         await sleep(this.options.retryDelayMs(retries));
@@ -257,17 +258,23 @@ export class CodexAppServerClient {
     });
   }
 
-  private async readTurnNotifications(threadId: string, turnId: string): Promise<TerminalTurnGuardResult> {
+  private async readTurnNotifications(
+    threadId: string,
+    turnId: string,
+    onNotification?: (notification: CodexAppServerNotification) => Promise<void> | void
+  ): Promise<TerminalTurnGuardResult> {
     const guard = new TurnGuard();
     const forwarded: CodexAppServerNotification[] = [];
     while (true) {
       const notification = await this.nextNotification();
       const result = guard.observe(notification, isTerminalNotification(notification, threadId, turnId));
       if (result.type === "forward") {
+        await emitNotifications(result.values, onNotification);
         forwarded.push(...result.values);
         continue;
       }
       if (result.type === "done") {
+        await emitNotifications(result.values, onNotification);
         return { ...result, values: [...forwarded, ...result.values] };
       }
       if (result.type === "retry") {
@@ -281,6 +288,16 @@ export class CodexAppServerClient {
     this.pending.clear();
     for (const waiter of this.notificationWaiters) waiter.reject(error);
     this.notificationWaiters.splice(0, this.notificationWaiters.length);
+  }
+}
+
+async function emitNotifications(
+  notifications: CodexAppServerNotification[],
+  onNotification?: (notification: CodexAppServerNotification) => Promise<void> | void
+) {
+  if (!onNotification) return;
+  for (const notification of notifications) {
+    await onNotification(notification);
   }
 }
 

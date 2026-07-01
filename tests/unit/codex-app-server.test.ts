@@ -13,7 +13,15 @@ describe("CodexAppServerClient", () => {
     try {
       await expect(client.initialize()).resolves.toEqual({ ok: true });
       const threadId = await client.startThread({ provider: "openrouter" });
-      const result = await client.runTurn({ threadId, text: "make a patch", model: "z-ai/glm-5.2" });
+      const streamed: string[] = [];
+      const result = await client.runTurn({
+        threadId,
+        text: "make a patch",
+        model: "z-ai/glm-5.2",
+        onNotification: (notification) => {
+          streamed.push(notification.method);
+        }
+      });
 
       expect(result).toMatchObject({
         threadId: "thread-1",
@@ -26,6 +34,7 @@ describe("CodexAppServerClient", () => {
         "thread/tokenUsage/updated",
         "turn/completed"
       ]);
+      expect(streamed).toEqual(result.notifications.map((notification) => notification.method));
       expect(result.notifications[0].raw.params).toEqual(expect.objectContaining({ textElementsOk: true }));
     } finally {
       await client.close();

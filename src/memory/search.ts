@@ -35,6 +35,11 @@ export async function searchDiscordHistory(input: {
   });
   if (searchChannelIds.length === 0) return [];
   const authorIds = [...new Set([...(input.search.authorIds ?? []), input.search.authorId ?? ""].filter(Boolean))];
+  const hasNarrowingFilters =
+    authorIds.length > 0 ||
+    (input.search.channelIds?.filter(Boolean).length ?? 0) > 0 ||
+    input.search.dateFrom != null ||
+    input.search.dateTo != null;
 
   if (!normalizedQuery.trim()) {
     return input.repo.recentMessagesFromChannels({
@@ -58,7 +63,7 @@ export async function searchDiscordHistory(input: {
   });
 
   let vector: SearchResult[] = [];
-  if (input.config.openRouter.apiKey) {
+  if (input.config.openRouter.apiKey && keyword.length < limit && hasNarrowingFilters) {
     try {
       const [embedding] = await input.openRouter.embed(
         [normalizedQuery],

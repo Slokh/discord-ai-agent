@@ -71,7 +71,10 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
 
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
   const serverOverlay = await loadServerOverlay(ctx);
-  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay);
+  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay, {
+    userId: ctx.userId,
+    userDisplayName: ctx.userDisplayName
+  });
   const files: AgentFile[] = [];
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
@@ -1217,7 +1220,8 @@ function chatMessages(
   skills: string,
   sessionMessages: ConversationMessage[] = [],
   replyContext?: DiscordReplyContext,
-  serverOverlay?: ServerOverlay
+  serverOverlay?: ServerOverlay,
+  requester?: { userId: string; userDisplayName: string }
 ): ChatMessage[] {
   return [
     {
@@ -1253,11 +1257,25 @@ function chatMessages(
         "Use prior channel memory and reply-chain context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
+    ...requesterMessagesForPrompt(requester),
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
     ...serverOverlayMessagesForPrompt(serverOverlay),
     ...sessionMessagesForPrompt(sessionMessages),
     ...replyContextMessagesForPrompt(replyContext),
     { role: "user" as const, content: text }
+  ];
+}
+
+function requesterMessagesForPrompt(requester?: { userId: string; userDisplayName: string }): ChatMessage[] {
+  if (!requester) return [];
+  const displayName = requester.userDisplayName.trim() || requester.userId;
+  return [
+    {
+      role: "system",
+      content:
+        `Current Discord requester: ${displayName} (user ID ${requester.userId}). ` +
+        "First-person pronouns in the latest user request, including I/me/my/mine, refer to this requester unless the request explicitly names someone else."
+    }
   ];
 }
 

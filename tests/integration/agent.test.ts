@@ -3,6 +3,54 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("grounds first-person requests to the current Discord requester", async () => {
+    const chat = vi.fn(async () => ({
+      content: "ok",
+      model: "chat-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "requester-id",
+      userDisplayName: "kartik",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          role: "user",
+          authorId: "someone-else",
+          authorDisplayName: "Luke",
+          content: "something from earlier",
+          metadata: {},
+          createdAt: new Date()
+        }
+      ]
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "when is my birthday");
+
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("Current Discord requester: kartik (user ID requester-id)")
+          }),
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("First-person pronouns in the latest user request")
+          })
+        ])
+      })
+    );
+  });
+
   it("lets the model route status requests to reportStatus", async () => {
     const ctx = {
       config: { maxReplyChars: 1800, openRouter: { embeddingModel: "test/embed" }, discord: { clientId: "bot" } },

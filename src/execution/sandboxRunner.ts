@@ -4,15 +4,22 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Octokit } from "@octokit/rest";
+import { CodexAppServerClient, providerForModel, type CodexAppServerNotification } from "./codexAppServer.js";
 import { slugify } from "../util/text.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const MAX_ACTIVITY_COMMAND_OUTPUT = 12_000;
 const MAX_CONTEXT_TEXT = 16_000;
 const MAX_RECOVERY_TAIL = 10_000;
+const MAX_CODEGEN_ANCHORS = 12;
+const MAX_ANCHOR_MATCHES_PER_ANCHOR = 5;
+const MAX_ANCHOR_MATCHES_TOTAL = 30;
+const MAX_ANCHOR_TARGET_FILES = 8;
+const MAX_ANCHOR_SCAN_FILE_BYTES = 512_000;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
 const CODEX_MAX_ATTEMPTS = 2;
 const CODEX_FIRST_DIFF_DEADLINE_MS = 8 * 60 * 1000;
+const CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS = 4 * 60 * 1000;
 const CODEX_IDLE_WITHOUT_DIFF_MS = 6 * 60 * 1000;
 const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
 const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
@@ -33,6 +40,7 @@ type SandboxEnv = {
   githubBaseBranch: string;
   openRouterApiKey: string;
   openRouterChatModel: string;
+  openRouterCodegenModel: string;
   sandboxCacheDir: string;
   sandboxStartedAtMs: number | null;
 };
@@ -50,6 +58,9 @@ type CacheSummary = {
 
 export type CodegenContextPack = {
   repoGuidePath?: string;
+  requestAnchors?: string[];
+  anchorMatches?: CodegenAnchorMatch[];
+  anchorTargetFiles?: Array<{ path: string; reason: string }>;
   focus?: string;
   rationale?: string;
   likelyMechanisms?: string[];
@@ -67,9 +78,16 @@ export type CodegenContextPack = {
   }>;
 };
 
+type CodegenAnchorMatch = {
+  anchor: string;
+  file: string;
+  line: number;
+  preview: string;
+};
+
 type CodexAttemptSummary = {
   attempt: number;
-  command: "exec" | "resume";
+  command: "app-server" | "exec" | "resume";
   exitCode: number;
   durationMs: number;
   producedDiff: boolean;
@@ -99,6 +117,18 @@ type CodexWatchdogResult = {
   durationMs?: number;
   firstDiffSeenAtMs?: number;
   lastOutputAtMs?: number;
+};
+
+type CodexAppServerAttemptResult = {
+  exitCode: number;
+  threadId?: string;
+  terminalMethod?: string;
+  durationMs: number;
+  notifications: CodexAppServerNotification[];
+  transcript: string;
+  stderrTail: string;
+  error?: string;
+  watchdog?: CodexWatchdogResult;
 };
 
 type CommandResult = {
@@ -237,7 +267,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
           producedDiff: codexSummary.attempts.some((attempt) => attempt.producedDiff)
         }
       });
-    }, { model: env.openRouterChatModel });
+    }, { model: env.openRouterCodegenModel, harness: "codex-app-server", fallbackHarness: "codex-exec-json" });
 
     await progress(env, "diff", "Checking whether Codex produced a real code diff.");
     const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir, taskEnv: env, step: "diff" });
@@ -382,6 +412,7 @@ function loadSandboxEnv(): SandboxEnv {
     githubBaseBranch: requiredEnv("GITHUB_BASE_BRANCH"),
     openRouterApiKey: requiredEnv("OPENROUTER_API_KEY"),
     openRouterChatModel: requiredEnv("OPENROUTER_CHAT_MODEL"),
+    openRouterCodegenModel: process.env.OPENROUTER_CODEGEN_MODEL?.trim() || requiredEnv("OPENROUTER_CHAT_MODEL"),
     sandboxCacheDir: process.env.SANDBOX_CACHE_DIR || path.join(os.tmpdir(), "discord-ai-agent-cache"),
     sandboxStartedAtMs: numberEnv("SANDBOX_STARTED_AT_MS")
   };
@@ -893,32 +924,315 @@ async function writeSandboxToolShims(toolShimDir: string): Promise<string[]> {
 async function writeCodexConfig(workRoot: string, checkoutDir: string, env: SandboxEnv) {
   const codexHome = path.join(workRoot, ".codex");
   await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(
-    path.join(codexHome, "config.toml"),
-    [
-      `model = ${JSON.stringify(env.openRouterChatModel)}`,
-      'model_provider = "openrouter"',
-      'approval_policy = "never"',
-      'sandbox_mode = "danger-full-access"',
-      'preferred_auth_method = "apikey"',
-      'model_verbosity = "low"',
-      "",
-      "[model_providers.openrouter]",
-      'name = "OpenRouter"',
-      'base_url = "https://openrouter.ai/api/v1"',
-      'env_key = "OPENROUTER_API_KEY"',
-      'wire_api = "responses"',
-      "requires_openai_auth = false",
-      "",
-      `[projects.${JSON.stringify(checkoutDir)}]`,
-      'trust_level = "trusted"',
-      ""
-    ].join("\n"),
-    "utf8"
-  );
+  await fs.writeFile(path.join(codexHome, "config.toml"), codexConfigToml({ checkoutDir, model: env.openRouterCodegenModel }), "utf8");
+}
+
+export function codexConfigToml(input: { checkoutDir: string; model: string }) {
+  return [
+    `model = ${JSON.stringify(input.model)}`,
+    'model_provider = "openrouter"',
+    'approval_policy = "never"',
+    'sandbox_mode = "danger-full-access"',
+    'preferred_auth_method = "apikey"',
+    'model_reasoning_effort = "low"',
+    'model_verbosity = "low"',
+    'personality = "pragmatic"',
+    'service_tier = "fast"',
+    "",
+    "[features]",
+    "fast_mode = true",
+    "runtime_metrics = true",
+    "",
+    "[model_providers.openrouter]",
+    'name = "OpenRouter"',
+    'base_url = "https://openrouter.ai/api/v1"',
+    'env_key = "OPENROUTER_API_KEY"',
+    'wire_api = "responses"',
+    "requires_openai_auth = false",
+    "",
+    `[projects.${JSON.stringify(input.checkoutDir)}]`,
+    'trust_level = "trusted"',
+    ""
+  ].join("\n");
 }
 
 async function runCodexWithRecovery(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+}): Promise<CodexRunSummary> {
+  try {
+    return await runCodexAppServerWithRecovery(input);
+  } catch (error) {
+    const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
+    if (gitStatus.trim()) {
+      await progress(input.env, "codex_app_server_salvaged_diff", "Codex app-server failed after producing a code diff; continuing to verification.", {
+        error: conciseError(error),
+        gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+      });
+      return {
+        attempts: [
+          {
+            attempt: 1,
+            command: "app-server",
+            exitCode: 1,
+            durationMs: 0,
+            producedDiff: true,
+            stderrTail: conciseError(error),
+            stdoutTail: tail(gitStatus, MAX_RECOVERY_TAIL)
+          }
+        ]
+      };
+    }
+    await progress(input.env, "codex_app_server_fallback", "Codex app-server failed before producing a diff; falling back to codex exec.", {
+      error: conciseError(error)
+    });
+    return runCodexExecWithRecovery(input);
+  }
+}
+
+async function runCodexAppServerWithRecovery(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+}): Promise<CodexRunSummary> {
+  const attempts: CodexAttemptSummary[] = [];
+  const totalAttempts = CODEX_MAX_ATTEMPTS;
+  let threadId: string | undefined;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    const prompt =
+      attempt === 1
+        ? codeUpdatePrompt(input.env, input.contextPack)
+        : codeUpdateRecoveryPrompt(input.env, {
+            attempt,
+            totalAttempts,
+            attempts,
+            gitStatus: await gitStatusPorcelain(input.checkoutDir).catch((error) => `Unable to read git status: ${conciseError(error)}`),
+            contextPack: input.contextPack
+          });
+    await recordArtifact(input.env, {
+      kind: "prompt",
+      name: attempt === 1 ? "Codex app-server prompt" : `Codex app-server recovery prompt ${attempt}`,
+      content: prompt,
+      contentType: "text/plain",
+      metadata: { model: input.env.openRouterCodegenModel, attempt, command: "app-server", harness: "codex-app-server", threadId }
+    });
+    await progress(input.env, `codex_app_server_attempt_${attempt}`, `Starting Codex app-server attempt ${attempt}/${totalAttempts}.`, {
+      attempt,
+      totalAttempts,
+      model: input.env.openRouterCodegenModel,
+      harness: "codex-app-server",
+      threadId
+    });
+
+    const result = await runCodexAppServerAttempt({
+      ...input,
+      attempt,
+      totalAttempts,
+      prompt,
+      threadId
+    });
+    threadId = result.threadId ?? threadId;
+    const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
+    const producedDiff = Boolean(gitStatus.trim());
+    const summary: CodexAttemptSummary = {
+      attempt,
+      command: "app-server",
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      producedDiff,
+      watchdogReason: result.watchdog?.reason,
+      stdoutTail: tail(result.transcript, MAX_RECOVERY_TAIL),
+      stderrTail: tail([result.error, result.stderrTail].filter(Boolean).join("\n"), MAX_RECOVERY_TAIL)
+    };
+    attempts.push(summary);
+    await progress(
+      input.env,
+      producedDiff ? `codex_app_server_attempt_${attempt}_diff` : `codex_app_server_attempt_${attempt}_no_diff`,
+      producedDiff
+        ? `Codex app-server attempt ${attempt} produced a code diff.`
+        : `Codex app-server attempt ${attempt} finished without a code diff${attempt < totalAttempts ? "; retrying with a direct nudge." : "."}`,
+      {
+        attempt,
+        totalAttempts,
+        exitCode: result.exitCode,
+        terminalMethod: result.terminalMethod,
+        durationMs: result.durationMs,
+        watchdogReason: result.watchdog?.reason,
+        notificationCount: result.notifications.length,
+        threadId,
+        gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+      }
+    );
+
+    if (producedDiff) return { attempts };
+    if (attempt < totalAttempts) continue;
+  }
+
+  throw new Error(
+    [
+      "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
+      ...attempts.map(
+        (attempt) =>
+          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+      )
+    ].join("\n")
+  );
+}
+
+async function runCodexAppServerAttempt(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+  attempt: number;
+  totalAttempts: number;
+  prompt: string;
+  threadId?: string;
+}): Promise<CodexAppServerAttemptResult> {
+  const codexBinary = process.env.CODEX_BIN || "codex";
+  const commandLine = `${codexBinary} app-server --listen stdio://`;
+  const startedAt = Date.now();
+  const notifications: CodexAppServerNotification[] = [];
+  const transcriptLines: string[] = [];
+  let lastNotificationAt = startedAt;
+  let threadId = input.threadId;
+  let terminalMethod: string | undefined;
+  let exitCode = 0;
+  let errorText = "";
+  let reportedNotifications = 0;
+  const client = CodexAppServerClient.spawn({
+    command: codexBinary,
+    args: ["app-server", "--listen", "stdio://"],
+    cwd: input.checkoutDir,
+    env: codexEnv(input.env, input.gitEnv, input.workRoot, input.toolShimDir),
+    model: input.env.openRouterCodegenModel,
+    provider: providerForModel(input.env.openRouterCodegenModel),
+    reasoningEffort: "low"
+  });
+  const watchdog = startCodexAppServerWatchdog({
+    env: input.env,
+    startedAt,
+    command: commandLine,
+    checkoutDir: input.checkoutDir,
+    attempt: input.attempt,
+    totalAttempts: input.totalAttempts,
+    firstDiffDeadlineMs: codegenFirstDiffDeadlineMs(input.contextPack),
+    idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
+    maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
+    pollMs: CODEX_WATCHDOG_POLL_MS,
+    activityState: () => ({
+      lastNotificationAt,
+      notificationCount: notifications.length,
+      transcriptTail: tail(transcriptLines.join("\n"), MAX_ACTIVITY_COMMAND_OUTPUT)
+    }),
+    close: () => client.close()
+  });
+
+  try {
+    await client.initialize();
+    threadId = threadId
+      ? await client.resumeThread({ threadId, cwd: input.checkoutDir, provider: providerForModel(input.env.openRouterCodegenModel) })
+      : await client.startThread({ cwd: input.checkoutDir, provider: providerForModel(input.env.openRouterCodegenModel) });
+    await progress(input.env, "codex_app_server_thread", "Codex app-server thread is ready.", {
+      threadId,
+      attempt: input.attempt,
+      resumed: Boolean(input.threadId)
+    });
+    const turn = await client.runTurn({
+      threadId,
+      text: input.prompt,
+      model: input.env.openRouterCodegenModel,
+      reasoningEffort: "low",
+      onNotification: async (notification) => {
+        notifications.push(notification);
+        lastNotificationAt = Date.now();
+        const summary = codexNotificationSummary(notification);
+        transcriptLines.push(formatCodexNotificationTranscriptLine(notification, summary));
+        if (summary.report && reportedNotifications < 30) {
+          reportedNotifications += 1;
+          await progress(input.env, `codex_app_server_${sanitizeStepName(notification.method)}`, summary.message, {
+            attempt: input.attempt,
+            threadId,
+            method: notification.method,
+            ...summary.metadata
+          }).catch(() => undefined);
+        }
+      }
+    });
+    terminalMethod = turn.terminalMethod;
+    exitCode = terminalMethod === "turn/completed" ? 0 : 1;
+  } catch (error) {
+    errorText = conciseError(error);
+    exitCode = watchdog.result().killed ? 143 : 1;
+  } finally {
+    watchdog.stop();
+    await client.close().catch(() => undefined);
+  }
+
+  const durationMs = Date.now() - startedAt;
+  const transcript = transcriptLines.join("\n");
+  const stderrTail = client.stderrTail();
+  await recordCommand(input.env, {
+    step: `codex_app_server_attempt_${input.attempt}`,
+    command: commandLine,
+    exitCode,
+    outputTail: tail(transcript, MAX_CAPTURED_COMMAND_OUTPUT),
+    errorTail: tail([errorText, stderrTail].filter(Boolean).join("\n"), MAX_CAPTURED_COMMAND_OUTPUT),
+    durationMs,
+    metadata: {
+      harness: "codex-app-server",
+      threadId,
+      terminalMethod,
+      notificationCount: notifications.length,
+      watchdog: watchdog.result()
+    }
+  });
+  await recordArtifact(input.env, {
+    kind: "command_log",
+    name: `Codex app-server attempt ${input.attempt} transcript`,
+    content: [
+      `$ ${commandLine}`,
+      transcript,
+      stderrTail ? `stderr:\n${stderrTail}` : "",
+      errorText ? `error:\n${errorText}` : "",
+      `[exit ${exitCode} in ${formatDuration(durationMs)}]`
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    contentType: "application/jsonl",
+    metadata: {
+      harness: "codex-app-server",
+      threadId,
+      terminalMethod,
+      notificationCount: notifications.length,
+      watchdog: watchdog.result()
+    }
+  });
+
+  return {
+    exitCode,
+    threadId,
+    terminalMethod,
+    durationMs,
+    notifications,
+    transcript,
+    stderrTail,
+    error: errorText || undefined,
+    watchdog: watchdog.result()
+  };
+}
+
+async function runCodexExecWithRecovery(input: {
   env: SandboxEnv;
   checkoutDir: string;
   gitEnv: NodeJS.ProcessEnv;
@@ -939,23 +1253,25 @@ async function runCodexWithRecovery(input: {
             attempt,
             totalAttempts,
             attempts,
-            gitStatus: await gitStatusPorcelain(input.checkoutDir).catch((error) => `Unable to read git status: ${conciseError(error)}`)
+            gitStatus: await gitStatusPorcelain(input.checkoutDir).catch((error) => `Unable to read git status: ${conciseError(error)}`),
+            contextPack: input.contextPack
           });
     await recordArtifact(input.env, {
       kind: "prompt",
       name: attempt === 1 ? "Codex prompt" : `Codex recovery prompt ${attempt}`,
       content: prompt,
       contentType: "text/plain",
-      metadata: { model: input.env.openRouterChatModel, attempt, command }
+      metadata: { model: input.env.openRouterCodegenModel, attempt, command, harness: "codex-exec-json" }
     });
     await progress(input.env, `codex_attempt_${attempt}`, `Starting Codex ${command} attempt ${attempt}/${totalAttempts}.`, {
       attempt,
       totalAttempts,
       command,
-      model: input.env.openRouterChatModel
+      model: input.env.openRouterCodegenModel,
+      harness: "codex-exec-json"
     });
 
-    const result = await runCommand(codexBinary, codexAttemptArgs({ command, model: input.env.openRouterChatModel }), {
+    const result = await runCommand(codexBinary, codexAttemptArgs({ command, model: input.env.openRouterCodegenModel }), {
       cwd: input.checkoutDir,
       env: codexEnv(input.env, input.gitEnv, input.workRoot, input.toolShimDir),
       input: prompt,
@@ -966,7 +1282,7 @@ async function runCodexWithRecovery(input: {
         checkoutDir: input.checkoutDir,
         attempt,
         totalAttempts,
-        firstDiffDeadlineMs: CODEX_FIRST_DIFF_DEADLINE_MS,
+        firstDiffDeadlineMs: codegenFirstDiffDeadlineMs(input.contextPack),
         idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
         reconnectStallMs: CODEX_RECONNECT_STALL_MS,
         maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
@@ -1101,7 +1417,10 @@ const CODEGEN_CONTEXT_RULES: CodegenContextRule[] = [
 
 export async function buildCodegenContextPack(checkoutDir: string, taskRequest = ""): Promise<CodegenContextPack> {
   const repoGuidePath = (await pathExists(path.join(checkoutDir, "AGENTS.md"))) ? "AGENTS.md" : undefined;
-  const focusedRule = selectCodegenContextRule(taskRequest);
+  const requestAnchors = extractCodegenRequestAnchors(taskRequest);
+  const anchorMatches = await findCodegenAnchorMatches(checkoutDir, requestAnchors);
+  const anchorTargetFiles = anchorTargetFilesFromMatches(anchorMatches);
+  const focusedRule = selectCodegenContextRule(taskRequest, anchorMatches);
   const projectMap = await existingProjectMap(checkoutDir, [
     {
       area: "Code-update task lifecycle",
@@ -1135,31 +1454,314 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       checks: ["tests/unit/observability.test.ts", "tests/unit/internal-api-runs.test.ts", "tests/unit/run-console-timeline.test.ts"]
     }
   ]);
+  const focusedSuggestedFiles = await existingSuggestedFiles(checkoutDir, focusedRule.suggestedFiles);
+  const firstMoveRules = [
+    "Read AGENTS.md first when present.",
+    ...(anchorTargetFiles.length
+      ? [
+          "Exact request anchors were found; inspect the top anchor target file first and make the first edit there before reading broad project-map files.",
+          "Do not spend more than three targeted file reads before the first code diff when anchor targets exist."
+        ]
+      : []),
+    "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
+    "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
+    "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",
+    "Stop when the requested behavior is implemented and the most relevant checks have run."
+  ];
 
   return {
     repoGuidePath,
     ...focusedRule,
-    suggestedFiles: await existingSuggestedFiles(checkoutDir, focusedRule.suggestedFiles),
+    requestAnchors,
+    anchorMatches,
+    anchorTargetFiles,
+    suggestedFiles: mergeSuggestedFiles(anchorTargetFiles, focusedSuggestedFiles),
     sandboxContract: [
       "You are already inside an isolated Kubernetes sandbox with full filesystem/network access for this task.",
       "The checkout is a writable task branch. Edit files directly in the current repository.",
       "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after verification.",
       "Use helper CLIs when useful: agent-task-context, agent-cache-info, agent-progress <step> <message>.",
+      "Use apply_patch for focused file edits when available; otherwise use the smallest reliable edit command.",
       "Prefer rg for search, then read only the files needed for the next concrete edit."
     ],
-    firstMoveRules: [
-      "Read AGENTS.md first when present.",
-      "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
-      "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
-      "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",
-      "Stop when the requested behavior is implemented and the most relevant checks have run."
-    ],
+    firstMoveRules,
     projectMap
   };
 }
 
-function selectCodegenContextRule(taskRequest: string): CodegenContextRule {
+function extractCodegenRequestAnchors(taskRequest: string) {
+  const anchors: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (value: string, options: { exact?: boolean } = {}) => {
+    const cleaned = value.trim().replace(/\s+/g, " ");
+    if (!isUsefulCodegenAnchor(cleaned, options)) return;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    anchors.push(cleaned);
+  };
+
+  for (const regex of [/"([^"\n]{3,120})"/g, /`([^`\n]{3,120})`/g, /(?:^|[^A-Za-z])'([^'\n]{3,120})'(?![A-Za-z])/g, /“([^”]{3,120})”/g, /‘([^’]{3,120})’/g]) {
+    for (const match of taskRequest.matchAll(regex)) add(match[1] ?? "", { exact: true });
+  }
+
+  for (const match of taskRequest.matchAll(/\b(?:src|tests|scripts|docs|infra|k8s|migrations|skills|\.github)\/[A-Za-z0-9._/-]+\b/g)) {
+    add(match[0], { exact: true });
+  }
+
+  for (const match of taskRequest.matchAll(/(?:^|\s)(\/[a-z][a-z0-9/_:-]{2,})\b/g)) {
+    add(match[1] ?? "", { exact: true });
+  }
+
+  for (const match of taskRequest.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b/g)) {
+    add(match[0]);
+  }
+
+  for (const match of taskRequest.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*\b/g)) {
+    add(match[0]);
+  }
+
+  for (const match of taskRequest.matchAll(/\b[A-Z][A-Z0-9_]{3,}\b/g)) {
+    add(match[0]);
+  }
+
+  return anchors.slice(0, MAX_CODEGEN_ANCHORS);
+}
+
+function isUsefulCodegenAnchor(value: string, options: { exact?: boolean }) {
+  if (value.length < 3 || value.length > 120) return false;
+  if (/^https?:\/\//i.test(value)) return false;
+  if (/^\d+$/.test(value)) return false;
+  if (options.exact) return true;
+  const normalized = value.toLowerCase();
+  const genericTerms = new Set([
+    "agent",
+    "agents",
+    "bot",
+    "bots",
+    "code",
+    "discord",
+    "finish",
+    "loading",
+    "message",
+    "messages",
+    "progress",
+    "reply",
+    "request",
+    "requests",
+    "status",
+    "thinking",
+    "update",
+    "updates"
+  ]);
+  return !genericTerms.has(normalized);
+}
+
+async function findCodegenAnchorMatches(checkoutDir: string, anchors: string[]): Promise<CodegenAnchorMatch[]> {
+  const matches: CodegenAnchorMatch[] = [];
+  for (const anchor of anchors) {
+    const output = await rgFixedString(checkoutDir, anchor);
+    const parsed = output
+      .split("\n")
+      .map((line) => parseRgMatchLine(line, anchor))
+      .filter((match): match is CodegenAnchorMatch => Boolean(match))
+      .filter((match) => !isLowValueAnchorMatch(match.file))
+      .slice(0, MAX_ANCHOR_MATCHES_PER_ANCHOR);
+    matches.push(...parsed);
+    if (matches.length >= MAX_ANCHOR_MATCHES_TOTAL) break;
+  }
+  return matches.slice(0, MAX_ANCHOR_MATCHES_TOTAL);
+}
+
+async function rgFixedString(checkoutDir: string, anchor: string) {
+  return new Promise<string>((resolve) => {
+    execFile(
+      "rg",
+      [
+        "--fixed-strings",
+        "--line-number",
+        "--no-heading",
+        "--color",
+        "never",
+        "--glob",
+        "!node_modules/**",
+        "--glob",
+        "!dist/**",
+        "--glob",
+        "!coverage/**",
+        "--glob",
+        "!*.map",
+        "--glob",
+        "!package-lock.json",
+        "--",
+        anchor,
+        "."
+      ],
+      { cwd: checkoutDir, maxBuffer: 512_000 },
+      async (error, stdout) => {
+        if (error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+          resolve(await nodeFixedStringSearch(checkoutDir, anchor));
+          return;
+        }
+        resolve(stdout.toString());
+      }
+    );
+  });
+}
+
+async function nodeFixedStringSearch(checkoutDir: string, anchor: string) {
+  const lines: string[] = [];
+  await scanAnchorDirectory(checkoutDir, checkoutDir, anchor, lines);
+  return lines.join("\n");
+}
+
+async function scanAnchorDirectory(rootDir: string, currentDir: string, anchor: string, matches: string[]) {
+  let entries: Array<import("node:fs").Dirent>;
+  try {
+    entries = await fs.readdir(currentDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name);
+    const relativePath = normalizeRgRelativePath(path.relative(rootDir, fullPath));
+    if (!relativePath || isLowValueAnchorMatch(relativePath)) continue;
+
+    if (entry.isDirectory()) {
+      await scanAnchorDirectory(rootDir, fullPath, anchor, matches);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+
+    await scanAnchorFile(rootDir, fullPath, anchor, matches);
+  }
+}
+
+async function scanAnchorFile(rootDir: string, filePath: string, anchor: string, matches: string[]) {
+  let stat: import("node:fs").Stats;
+  try {
+    stat = await fs.stat(filePath);
+  } catch {
+    return;
+  }
+  if (stat.size > MAX_ANCHOR_SCAN_FILE_BYTES) return;
+
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch {
+    return;
+  }
+  if (!content.includes(anchor)) return;
+
+  const relativePath = normalizeRgRelativePath(path.relative(rootDir, filePath));
+  const contentLines = content.split(/\r?\n/);
+  for (const [index, line] of contentLines.entries()) {
+    if (line.includes(anchor)) matches.push(`${relativePath}:${index + 1}:${line}`);
+  }
+}
+
+function parseRgMatchLine(line: string, anchor: string): CodegenAnchorMatch | null {
+  const match = /^(.+?):(\d+):(.*)$/.exec(line);
+  if (!match) return null;
+  const file = normalizeRgRelativePath(match[1] ?? "");
+  const lineNumber = Number(match[2]);
+  if (!file || !Number.isFinite(lineNumber)) return null;
+  return {
+    anchor,
+    file,
+    line: lineNumber,
+    preview: (match[3] ?? "").trim().slice(0, 220)
+  };
+}
+
+function normalizeRgRelativePath(file: string) {
+  return file.replace(/^\.\//, "");
+}
+
+function isLowValueAnchorMatch(file: string) {
+  return (
+    file === ".git" ||
+    file === "node_modules" ||
+    file === "dist" ||
+    file === "coverage" ||
+    file.startsWith(".git/") ||
+    file.startsWith("node_modules/") ||
+    file.startsWith("dist/") ||
+    file.startsWith("coverage/") ||
+    file.endsWith(".map") ||
+    file === "package-lock.json"
+  );
+}
+
+function anchorTargetFilesFromMatches(matches: CodegenAnchorMatch[]) {
+  const byFile = new Map<string, { anchors: Set<string>; lines: number[]; score: number }>();
+  for (const match of matches) {
+    const current = byFile.get(match.file) ?? { anchors: new Set<string>(), lines: [], score: sourceFileScore(match.file) };
+    current.anchors.add(match.anchor);
+    current.lines.push(match.line);
+    current.score += anchorMatchScore(match);
+    byFile.set(match.file, current);
+  }
+
+  return [...byFile.entries()]
+    .sort((left, right) => right[1].score - left[1].score || left[0].localeCompare(right[0]))
+    .slice(0, MAX_ANCHOR_TARGET_FILES)
+    .map(([file, value]) => {
+      const anchors = [...value.anchors].slice(0, 3).map((anchor) => JSON.stringify(anchor)).join(", ");
+      const lines = uniqueNumbers(value.lines).slice(0, 4).join(", ");
+      return {
+        path: file,
+        reason: `Exact request anchor${value.anchors.size === 1 ? "" : "s"} ${anchors} matched at line${value.lines.length === 1 ? "" : "s"} ${lines}.`
+      };
+    });
+}
+
+function sourceFileScore(file: string) {
+  if (file.startsWith("src/")) return 6;
+  if (file.startsWith("tests/")) return 4;
+  if (file.endsWith(".ts") || file.endsWith(".tsx")) return 3;
+  if (file === "AGENTS.md" || file.endsWith(".md")) return 1;
+  return 0;
+}
+
+function anchorMatchScore(match: CodegenAnchorMatch) {
+  let score = 2;
+  if (/[{};]|=>|\b(?:await|const|let|function|return|class|import|export)\b/.test(match.preview)) score += 3;
+  if (match.preview.length <= 140) score += 1;
+  if (/\b(?:description|schema|prompt|instructions?)\b/i.test(match.preview) && match.preview.length > 140) score -= 2;
+  return score;
+}
+
+function mergeSuggestedFiles(
+  anchorTargetFiles: Array<{ path: string; reason: string }>,
+  suggestedFiles: Array<{ path: string; reason: string }>
+) {
+  const seen = new Set<string>();
+  return [...anchorTargetFiles, ...suggestedFiles].filter((file) => {
+    if (seen.has(file.path)) return false;
+    seen.add(file.path);
+    return true;
+  });
+}
+
+function uniqueNumbers(values: number[]) {
+  return [...new Set(values)].sort((left, right) => left - right);
+}
+
+function selectCodegenContextRule(taskRequest: string, anchorMatches: CodegenAnchorMatch[] = []): CodegenContextRule {
   const text = taskRequest.toLowerCase();
+  const anchorFiles = new Set(anchorMatches.map((match) => match.file));
+  const hasDiscordClientAnchor = [...anchorFiles].some((file) => file === "src/discord/client.ts" || file.startsWith("src/discord/"));
+  const hasTaskLifecycleAnchor = [...anchorFiles].some((file) =>
+    ["src/discord/taskNotifications.ts", "src/tools/coreTools.ts", "src/jobs/queue.ts", "src/db/repositories.ts"].includes(file)
+  );
+  if (hasDiscordClientAnchor && !hasTaskLifecycleAnchor && includesAny(text, ["thinking", "reply", "reaction", "message", "discord"])) {
+    return CODEGEN_CONTEXT_RULES[1]!;
+  }
   const hasCodeUpdateTerm = includesAny(text, [
     "code update",
     "coding agent",
@@ -1210,6 +1812,30 @@ async function existingRelativePaths(checkoutDir: string, relativePaths: string[
 
 export function renderCodegenContextPack(context: CodegenContextPack) {
   const lines = [
+    ...(context.requestAnchors?.length || context.anchorTargetFiles?.length
+      ? [
+          "Concrete request anchors:",
+          ...(context.requestAnchors?.length ? context.requestAnchors.map((anchor) => `- ${anchor}`) : ["- none found"]),
+          "",
+          ...(context.anchorTargetFiles?.length
+            ? [
+                "Target files from exact request evidence:",
+                ...context.anchorTargetFiles.map((file) => `- ${file.path}: ${file.reason}`),
+                "",
+                "Anchor guidance:",
+                "- Concrete request anchors outrank broad lifecycle guesses. Inspect these target files first and make the first focused edit there unless the code proves they are unrelated.",
+                ""
+              ]
+            : []),
+          ...(context.anchorMatches?.length
+            ? [
+                "Anchor match samples:",
+                ...context.anchorMatches.slice(0, 12).map((match) => `- ${match.file}:${match.line} (${match.anchor}): ${match.preview}`),
+                ""
+              ]
+            : [])
+        ]
+      : []),
     ...(context.focus
       ? [
           `Focus: ${context.focus}`,
@@ -1282,11 +1908,20 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     contextText ? "Codegen preflight context:" : undefined,
     contextText || undefined,
     contextText
-      ? "Use the preflight context as a starting map, not as proof. Inspect the suggested first files before broad searching, then make the suggested first edit and first implementable invariant true."
+      ? "Use the preflight context as a starting map, not as proof. If exact request anchor target files are present, inspect those before lifecycle files. Concrete anchors from the request outrank broad lifecycle guesses. Make the suggested first edit and first implementable invariant true."
       : undefined,
+    "",
+    "Patch-first budget:",
+    "- Read AGENTS.md if present, then inspect only the smallest snippets needed to make the first edit.",
+    "- When exact request anchor targets are present, read the top target file around the matched line and patch that owner before reading broad project-map files.",
+    "- If no anchor targets exist, read the likely entry point, one helper/adapter, and one closest test, then edit.",
+    "- Use `apply_patch` for the first focused edit when available. The first patch can be small and imperfect; refine it after tests or caller reads.",
+    "- Do not inspect status plumbing, queue code, observability UI, or extra tests before the first edit unless one of those files is the top target or required by the code you are changing.",
+    "- If you are unsure, make a small reversible implementation edit in the best target file and refine it after tests or callers reveal more.",
     "",
     "Implementation workflow:",
     "- First inspection pass: read the likely entry point, the closest existing helper/adapter, and the closest tests. Avoid broad repository archaeology before the first edit.",
+    "- If the preflight found exact quoted text, paths, symbols, env vars, routes, or tool names from the request, treat those matches as the first inspection result and patch the owning file unless it is clearly unrelated.",
     "- User wording may describe product behavior instead of exact code symbols. If literal searches miss, map the phrase to the closest existing mechanism in the lifecycle, such as a Discord reply edit, status callback, reaction, queue state, or persisted run status.",
     "- If the request changes user-visible behavior, map the lifecycle before editing: trigger -> temporary state -> progress/update paths -> success response -> error/timeout/cancellation -> cleanup.",
     "- If the behavior spans more than one path, introduce or reuse a small abstraction that owns the lifecycle instead of patching each call site independently.",
@@ -1298,6 +1933,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     "Stall avoidance:",
     "- Do not repeatedly reread the same file or expand into unrelated UI, observability, deployment, or queue code unless the lifecycle map shows it is required.",
     "- After a few targeted searches, stop searching for exact request vocabulary and act on the closest mechanism you found.",
+    "- Do not leave the checkout clean after you understand the target. Create a diff, then inspect more only to refine it.",
     "- Produce a real code diff promptly; pure analysis without edits will be stopped and retried.",
     "",
     "Requested update:",
@@ -1311,6 +1947,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
 export function codexExecArgs(input: { checkoutDir: string; model: string }) {
   return [
     "exec",
+    "--json",
     "-C",
     input.checkoutDir,
     "--dangerously-bypass-approvals-and-sandbox",
@@ -1321,24 +1958,35 @@ export function codexExecArgs(input: { checkoutDir: string; model: string }) {
 }
 
 export function codexResumeExecArgs(input: { model: string }) {
-  return ["exec", "resume", "--last", "--dangerously-bypass-approvals-and-sandbox", "-m", input.model, "-"];
+  return ["exec", "resume", "--last", "--json", "--dangerously-bypass-approvals-and-sandbox", "-m", input.model, "-"];
 }
 
 function codexAttemptArgs(input: { command: "exec" | "resume"; model: string }) {
   return input.command === "exec" ? codexExecArgs({ checkoutDir: ".", model: input.model }) : codexResumeExecArgs({ model: input.model });
 }
 
+export function codegenFirstDiffDeadlineMs(contextPack?: Pick<CodegenContextPack, "anchorTargetFiles">) {
+  return contextPack?.anchorTargetFiles?.length ? CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS : CODEX_FIRST_DIFF_DEADLINE_MS;
+}
+
 export function codeUpdateRecoveryPrompt(
   env: SandboxEnv,
-  input: { attempt: number; totalAttempts: number; attempts: CodexAttemptSummary[]; gitStatus: string }
+  input: { attempt: number; totalAttempts: number; attempts: CodexAttemptSummary[]; gitStatus: string; contextPack?: CodegenContextPack }
 ) {
   const previous = input.attempts.at(-1);
+  const anchorTargetText = recoveryAnchorTargetText(input.contextPack);
   return [
     "Continue the same code-update task in this existing sandbox checkout.",
     "",
     "The previous Codex attempt did not leave a code diff. Do not restart broad analysis.",
     "You have enough context to act: make the smallest focused test or implementation edit now, then run the most relevant check.",
-    "If you need one more file, inspect it briefly and edit immediately after.",
+    "If you need one more file, inspect it briefly and edit immediately after. Do not run more than one read/search command before the first patch on this attempt.",
+    "Use apply_patch for the recovery edit when available; otherwise use the smallest reliable edit command. A small first diff is better than more clean-checkout analysis.",
+    anchorTargetText ? "Patch-first targets from the original request anchors:" : undefined,
+    anchorTargetText || undefined,
+    anchorTargetText
+      ? "On this recovery attempt, edit one of these files before additional broad searching unless the file is clearly unrelated."
+      : undefined,
     "",
     `Task ID: ${env.taskId}`,
     `Attempt: ${input.attempt}/${input.totalAttempts}`,
@@ -1363,7 +2011,18 @@ export function codeUpdateRecoveryPrompt(
       : "",
     "",
     "Finish with a real code diff. Do not commit, push, or open a PR yourself."
-  ].join("\n");
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function recoveryAnchorTargetText(contextPack?: CodegenContextPack) {
+  const targets = contextPack?.anchorTargetFiles ?? [];
+  if (!targets.length) return "";
+  return targets
+    .slice(0, 5)
+    .map((file) => `- ${file.path}: ${file.reason}`)
+    .join("\n");
 }
 
 export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWatchdogDecision | null {
@@ -1436,7 +2095,9 @@ function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean; timing
     `- Task ID: \`${input.env.taskId}\``,
     `- Sandbox run: \`${input.env.sandboxRunId}\``,
     "- Runtime: Kubernetes sandbox job",
-    `- Model: \`${input.env.openRouterChatModel}\``,
+    `- Chat model: \`${input.env.openRouterChatModel}\``,
+    `- Codegen model: \`${input.env.openRouterCodegenModel}\``,
+    "- Harness: `codex-app-server` with `codex-exec-json` fallback",
     "",
     "Timing:",
     "",
@@ -1686,6 +2347,168 @@ function startCodexWatchdog(input: {
     stop,
     result: () => result
   };
+}
+
+function startCodexAppServerWatchdog(input: {
+  env: SandboxEnv;
+  startedAt: number;
+  command: string;
+  checkoutDir: string;
+  attempt: number;
+  totalAttempts: number;
+  firstDiffDeadlineMs?: number;
+  idleWithoutDiffMs?: number;
+  maxRuntimeMs?: number;
+  pollMs?: number;
+  activityState: () => { lastNotificationAt: number; notificationCount: number; transcriptTail: string };
+  close: () => Promise<void>;
+}) {
+  let stopped = false;
+  let checking = false;
+  const result: CodexWatchdogResult = { killed: false };
+  const pollMs = input.pollMs ?? CODEX_WATCHDOG_POLL_MS;
+
+  const stop = () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+
+  const close = async (reason: string, message: string, metadata: Record<string, unknown>) => {
+    if (result.killed || stopped) return;
+    const activity = input.activityState();
+    result.killed = true;
+    result.reason = reason;
+    result.durationMs = Date.now() - input.startedAt;
+    result.lastOutputAtMs = Math.max(0, activity.lastNotificationAt - input.startedAt);
+    await progress(input.env, `codex_app_server_watchdog_${reason}`, message, {
+      ...metadata,
+      attempt: input.attempt,
+      totalAttempts: input.totalAttempts,
+      command: input.command,
+      durationMs: result.durationMs,
+      lastOutputAtMs: result.lastOutputAtMs
+    }).catch(() => undefined);
+    await input.close().catch(() => undefined);
+  };
+
+  const timer = setInterval(() => {
+    if (checking || stopped || result.killed) return;
+    checking = true;
+    void (async () => {
+      try {
+        const durationMs = Date.now() - input.startedAt;
+        const activity = input.activityState();
+        const status = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
+        const producedDiff = Boolean(status.trim());
+        if (producedDiff && result.firstDiffSeenAtMs == null) {
+          result.firstDiffSeenAtMs = durationMs;
+          await progress(input.env, "codex_app_server_first_diff", "Codex app-server produced its first visible code diff.", {
+            attempt: input.attempt,
+            durationMs,
+            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
+          }).catch(() => undefined);
+        }
+        const idleMs = Date.now() - activity.lastNotificationAt;
+        const decision = evaluateCodegenWatchdog({
+          elapsedMs: durationMs,
+          idleMs,
+          hasDiff: producedDiff,
+          reconnectSeen: false,
+          reconnectStallMs: null,
+          noFirstDiffTimeoutMs: input.firstDiffDeadlineMs,
+          idleTimeoutMs: input.idleWithoutDiffMs,
+          maxRuntimeMs: input.maxRuntimeMs
+        });
+        if (decision) {
+          await close(decision.reason, decision.message, {
+            idleMs,
+            action: decision.action,
+            notificationCount: activity.notificationCount,
+            transcriptTail: activity.transcriptTail,
+            hasDiff: producedDiff,
+            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
+          });
+        }
+      } finally {
+        checking = false;
+      }
+    })();
+  }, pollMs);
+  timer.unref?.();
+
+  return {
+    stop,
+    result: () => result
+  };
+}
+
+function codexNotificationSummary(notification: CodexAppServerNotification): {
+  message: string;
+  report: boolean;
+  metadata: Record<string, unknown>;
+} {
+  const method = notification.method;
+  const itemType = jsonStringAt(notification.raw, ["params", "item", "type"]) ?? jsonStringAt(notification.raw, ["params", "type"]);
+  const itemId = jsonStringAt(notification.raw, ["params", "item", "id"]) ?? jsonStringAt(notification.raw, ["params", "itemId"]);
+  const command = jsonStringAt(notification.raw, ["params", "command"]) ?? jsonStringAt(notification.raw, ["params", "cmd"]);
+  const metadata: Record<string, unknown> = {
+    itemType,
+    itemId,
+    command,
+    paramsPreview: compactJson(notification.params)
+  };
+  if (method === "turn/started") return { message: "Codex turn started.", report: true, metadata };
+  if (method === "turn/completed") return { message: "Codex turn completed.", report: true, metadata };
+  if (method === "turn/failed") return { message: "Codex turn failed.", report: true, metadata };
+  if (method === "error") {
+    return {
+      message: jsonStringAt(notification.raw, ["params", "error", "message"]) ?? "Codex app-server emitted an error.",
+      report: true,
+      metadata
+    };
+  }
+  if (method === "item/started") {
+    return { message: `Codex started ${itemType ?? "an item"}.`, report: true, metadata };
+  }
+  if (method === "item/completed") {
+    return { message: `Codex completed ${itemType ?? "an item"}.`, report: true, metadata };
+  }
+  if (method === "turn/diff/updated") return { message: "Codex reported a diff update.", report: true, metadata };
+  if (method === "thread/tokenUsage/updated") return { message: "Codex token usage updated.", report: true, metadata };
+  if (method === "model/rerouted") return { message: "Codex rerouted the model.", report: true, metadata };
+  return { message: `Codex notification: ${method}.`, report: false, metadata };
+}
+
+function formatCodexNotificationTranscriptLine(
+  notification: CodexAppServerNotification,
+  summary: ReturnType<typeof codexNotificationSummary>
+) {
+  return JSON.stringify({
+    timestamp: new Date().toISOString(),
+    method: notification.method,
+    message: summary.message,
+    metadata: summary.metadata
+  });
+}
+
+function sanitizeStepName(value: string) {
+  const cleaned = value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned || "event";
+}
+
+function compactJson(value: unknown, maxChars = 1200) {
+  if (value == null) return null;
+  const text = JSON.stringify(value);
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}...`;
+}
+
+function jsonStringAt(value: unknown, keys: string[]): string | undefined {
+  let current = value;
+  for (const key of keys) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === "string" ? current : undefined;
 }
 
 async function recordArtifact(

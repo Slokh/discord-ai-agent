@@ -38,3 +38,14 @@ spec:
             {{- include "discord-ai-agent.sandboxLauncherEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
+          {{- if and .Values.sandbox.cache.enabled (eq .Values.codegen.executionBackend "local-process") }}
+          volumeMounts:
+            - name: sandbox-cache
+              mountPath: {{ .Values.sandbox.cache.mountPath | quote }}
+          {{- end }}
+      {{- if and .Values.sandbox.cache.enabled (eq .Values.codegen.executionBackend "local-process") }}
+      volumes:
+        - name: sandbox-cache
+          persistentVolumeClaim:
+            claimName: {{ include "discord-ai-agent.fullname" . }}-sandbox-cache
+      {{- end }}

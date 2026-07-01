@@ -24,6 +24,13 @@ sandbox:
       - ReadWriteOnce
     storageClassName: ""
 
+codegen:
+  # kubernetes-job keeps one isolated Kubernetes Job per code update.
+  # local-process runs codegen inside the long-lived worker process so the repo,
+  # dependency, and Codex caches stay warm between tasks. Keep worker.replicas at
+  # 1 unless the sandbox cache PVC supports ReadWriteMany.
+  executionBackend: kubernetes-job
+
 secret:
   existingSecretName: discord-ai-agent-env
 
@@ -32,6 +39,8 @@ config:
   githubRepository: owner/repo
   githubBaseBranch: main
   openRouterChatModel: z-ai/glm-5.2
+  # Optional. Defaults to openRouterChatModel when empty.
+  openRouterCodegenModel: ""
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
   embeddingDimensions: "1536"

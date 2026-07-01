@@ -7,6 +7,7 @@ const config = {
   appTitle: "Discord AI Agent Test",
   httpReferer: "http://localhost",
   chatModel: "test/chat",
+  codegenModel: "test/codegen",
   embeddingModel: "test/embed",
   imageModel: "test/image"
 };

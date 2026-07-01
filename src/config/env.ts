@@ -13,6 +13,7 @@ const booleanFromEnv = z
   });
 
 type ProcessRole = "all" | "api" | "bot" | "worker";
+type CodegenExecutionBackend = "kubernetes-job" | "local-process";
 
 function defaultProcessRole(argv = process.argv): ProcessRole {
   const role = argv.find((arg): arg is ProcessRole => arg === "all" || arg === "api" || arg === "bot" || arg === "worker");
@@ -58,6 +59,7 @@ const defaults = {
   controlUiPublicUrl: "",
   controlPlaneInternalUrl: "http://discord-ai-agent-api:8080",
   taskSigningSecret: "",
+  codegenExecutionBackend: "kubernetes-job" as CodegenExecutionBackend,
   kubernetesNamespace: process.env.POD_NAMESPACE || "discord-ai-agent",
   sandboxImage: "discord-ai-agent-sandbox:latest",
   sandboxImagePullPolicy: "IfNotPresent",
@@ -99,6 +101,7 @@ const envSchema = z.object({
   OPENROUTER_APP_TITLE: z.string().default(defaults.openRouterAppTitle),
   OPENROUTER_HTTP_REFERER: z.string().default(defaults.openRouterHttpReferer),
   OPENROUTER_CHAT_MODEL: z.string().default(defaults.openRouterChatModel),
+  OPENROUTER_CODEGEN_MODEL: z.string().optional(),
   OPENROUTER_EMBEDDING_MODEL: z.string().default(defaults.openRouterEmbeddingModel),
   OPENROUTER_IMAGE_MODEL: z.string().default(defaults.openRouterImageModel),
 
@@ -114,6 +117,7 @@ const envSchema = z.object({
   CONTROL_UI_PUBLIC_URL: z.string().default(defaults.controlUiPublicUrl),
   CONTROL_PLANE_INTERNAL_URL: z.string().url().default(defaults.controlPlaneInternalUrl),
   TASK_SIGNING_SECRET: z.string().default(defaults.taskSigningSecret),
+  CODEGEN_EXECUTION_BACKEND: z.enum(["kubernetes-job", "local-process"]).default(defaults.codegenExecutionBackend),
 
   KUBERNETES_NAMESPACE: z.string().default(defaults.kubernetesNamespace),
   SANDBOX_IMAGE: z.string().default(defaults.sandboxImage),
@@ -151,6 +155,8 @@ export function loadConfig() {
     const formatted = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n");
     throw new Error(`Invalid environment configuration:\n${formatted}`);
   }
+  const chatModel = parsed.data.OPENROUTER_CHAT_MODEL;
+  const codegenModel = parsed.data.OPENROUTER_CODEGEN_MODEL?.trim() || chatModel;
 
   return {
     nodeEnv: parsed.data.NODE_ENV,
@@ -170,7 +176,8 @@ export function loadConfig() {
       baseUrl: parsed.data.OPENROUTER_BASE_URL.replace(/\/$/, ""),
       appTitle: parsed.data.OPENROUTER_APP_TITLE,
       httpReferer: parsed.data.OPENROUTER_HTTP_REFERER,
-      chatModel: parsed.data.OPENROUTER_CHAT_MODEL,
+      chatModel,
+      codegenModel,
       embeddingModel: parsed.data.OPENROUTER_EMBEDDING_MODEL,
       imageModel: parsed.data.OPENROUTER_IMAGE_MODEL
     },
@@ -193,6 +200,7 @@ export function loadConfig() {
     execution: {
       controlPlaneInternalUrl: parsed.data.CONTROL_PLANE_INTERNAL_URL.replace(/\/$/, ""),
       taskSigningSecret: parsed.data.TASK_SIGNING_SECRET,
+      codegenBackend: parsed.data.CODEGEN_EXECUTION_BACKEND,
       kubernetes: {
         namespace: parsed.data.KUBERNETES_NAMESPACE,
         sandboxImage: parsed.data.SANDBOX_IMAGE,

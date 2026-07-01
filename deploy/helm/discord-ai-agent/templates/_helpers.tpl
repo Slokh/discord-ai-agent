@@ -30,6 +30,10 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.githubBaseBranch | quote }}
 - name: OPENROUTER_CHAT_MODEL
   value: {{ .Values.config.openRouterChatModel | quote }}
+{{- if .Values.config.openRouterCodegenModel }}
+- name: OPENROUTER_CODEGEN_MODEL
+  value: {{ .Values.config.openRouterCodegenModel | quote }}
+{{- end }}
 - name: OPENROUTER_EMBEDDING_MODEL
   value: {{ .Values.config.openRouterEmbeddingModel | quote }}
 - name: OPENROUTER_IMAGE_MODEL
@@ -38,6 +42,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.embeddingDimensions | quote }}
 - name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS
   value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
+- name: CODEGEN_EXECUTION_BACKEND
+  value: {{ .Values.codegen.executionBackend | quote }}
 {{- end -}}
 
 {{- define "discord-ai-agent.controlUiPublicEnv" -}}

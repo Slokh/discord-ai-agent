@@ -5,6 +5,7 @@ import { loadConfig } from "../../src/config/env.js";
 import { AGENT_TASK_JOB, CRAWL_GUILD_JOB, DISCORD_AGENT_REQUEST_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
+import { CodegenRepository } from "../../src/db/codegenRepository.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -162,10 +163,12 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     const config = testConfig();
     const pool = createPool(config);
     const repo = new DiscordAiAgentRepository(pool);
+    const codegenRepo = new CodegenRepository(pool);
     const processedRequests: string[] = [];
     const runtime = await startJobs({
       config,
       repo,
+      codegenRepo,
       pgBossSchema: "pgboss_test",
       crawlWorker: false,
       embeddingWorker: false,
@@ -207,9 +210,21 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           status: "running",
           backend: "test-sandbox-backend",
           currentStep: "sandbox_running",
-          statusMessage: "Kubernetes sandbox is running the task."
+          statusMessage: "Codegen sandbox is running the task."
         })
       );
+      const session = await codegenRepo.getSession({ sessionId: `codegen-session-${taskId}` });
+      expect(session).toEqual(expect.objectContaining({ status: "running", harness: "codex" }));
+      await expect(codegenRepo.listMessages({ sessionId: `codegen-session-${taskId}` })).resolves.toEqual([
+        expect.objectContaining({
+          clientMessageId: taskId,
+          role: "user",
+          parts: [{ type: "text", text: "add a calendar integration" }]
+        })
+      ]);
+      await expect(codegenRepo.listExecutions({ sessionId: `codegen-session-${taskId}` })).resolves.toEqual([
+        expect.objectContaining({ taskId, status: "running", harness: "codex-app-server", sandboxRunId: "sandbox-run-1" })
+      ]);
     } finally {
       await runtime.stop();
       await pool.end();

@@ -1,6 +1,13 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
-import { KubernetesExecutionBackend, type KubernetesExecutionClients } from "../../src/execution/backend.js";
+import {
+  buildSandboxRunnerEnv,
+  createExecutionBackend,
+  KubernetesExecutionBackend,
+  LocalProcessExecutionBackend,
+  type KubernetesExecutionClients
+} from "../../src/execution/backend.js";
 import type { AgentTaskJob } from "../../src/execution/types.js";
 import type { SandboxRunRecord } from "../../src/db/repositories.js";
 
@@ -79,6 +86,8 @@ describe("KubernetesExecutionBackend", () => {
         GITHUB_REPOSITORY: "example/discord-ai-agent",
         TASK_SIGNING_SECRET: "task-secret",
         KUBERNETES_NAMESPACE: "discord-ai-agent",
+        OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
+        OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
         SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
         SANDBOX_CACHE_PVC_NAME: "discord-ai-agent-sandbox-cache"
       },
@@ -92,6 +101,8 @@ describe("KubernetesExecutionBackend", () => {
           expect.objectContaining({
             body: expect.objectContaining({
               data: expect.objectContaining({
+                OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
+                OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
                 SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
                 SANDBOX_STARTED_AT_MS: expect.any(String)
               })
@@ -173,6 +184,116 @@ describe("KubernetesExecutionBackend", () => {
   });
 });
 
+describe("LocalProcessExecutionBackend", () => {
+  it("spawns the sandbox runner with task-scoped environment and observes the child process", async () => {
+    await withEnv(
+      {
+        OPENROUTER_API_KEY: "sk-test",
+        GITHUB_TOKEN: "github-token",
+        GITHUB_REPOSITORY: "example/discord-ai-agent",
+        GITHUB_BASE_BRANCH: "main",
+        TASK_SIGNING_SECRET: "task-secret",
+        CONTROL_PLANE_INTERNAL_URL: "http://agent-api:8080",
+        OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
+        OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
+        SANDBOX_CACHE_DIR: "/var/cache/warm-codegen",
+        CODEGEN_EXECUTION_BACKEND: "local-process"
+      },
+      async () => {
+        const child = fakeChildProcess();
+        const spawnProcess = vi.fn(() => child as any);
+        const githubTokenResolver = vi.fn(async () => "resolved-github-token");
+        const backend = new LocalProcessExecutionBackend(loadConfig(), {
+          spawnProcess: spawnProcess as any,
+          githubTokenResolver,
+          now: () => 1782930000000
+        });
+        const progress = vi.fn(async () => undefined);
+
+        const result = await backend.start(agentTask(), { progress });
+
+        expect(result).toEqual(
+          expect.objectContaining({
+            sandboxRunId: expect.stringMatching(/^run-/),
+            backendJobName: "agent-task-update-the-readme-00005678",
+            namespace: null,
+            image: "local-process"
+          })
+        );
+        expect(createExecutionBackend(loadConfig()).name).toBe("local-process-sandbox");
+        expect(githubTokenResolver).toHaveBeenCalled();
+        expect(spawnProcess).toHaveBeenCalledWith(
+          process.execPath,
+          ["dist/src/execution/sandboxRunner.js"],
+          expect.objectContaining({
+            cwd: process.cwd(),
+            stdio: ["ignore", "inherit", "inherit"],
+            env: expect.objectContaining({
+              TASK_ID: "task-00005678",
+              TRACE_ID: "trace-1",
+              SANDBOX_RUN_ID: result.sandboxRunId,
+              TASK_TITLE: "Update the README",
+              TASK_REQUEST: "Update the README.",
+              REQUESTED_BY: "user-1",
+              CONTROL_PLANE_INTERNAL_URL: "http://agent-api:8080",
+              GITHUB_TOKEN: "resolved-github-token",
+              GITHUB_REPOSITORY: "example/discord-ai-agent",
+              GITHUB_BASE_BRANCH: "main",
+              OPENROUTER_API_KEY: "sk-test",
+              OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
+              OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
+              AGENT_TASK_TOKEN: expect.any(String),
+              SANDBOX_CACHE_DIR: "/var/cache/warm-codegen",
+              SANDBOX_STARTED_AT_MS: "1782930000000"
+            })
+          })
+        );
+        expect(progress).toHaveBeenCalledWith(
+          expect.objectContaining({ step: "sandbox_prepare", message: "Preparing a warm local codegen worker process." })
+        );
+        await expect(backend.observeRun({ ...sandboxRun(), sandboxRunId: result.sandboxRunId })).resolves.toEqual(
+          expect.objectContaining({ status: "running", metadata: { pid: 4242 } })
+        );
+
+        child.emit("exit", 1, null);
+        await expect(backend.observeRun({ ...sandboxRun(), sandboxRunId: result.sandboxRunId })).resolves.toEqual(
+          expect.objectContaining({ status: "failed", metadata: expect.objectContaining({ exitCode: 1 }) })
+        );
+      }
+    );
+  });
+
+  it("builds sandbox runner environment without leaking placeholder values", () => {
+    const config = {
+      ...loadConfig(),
+      execution: { ...loadConfig().execution, taskSigningSecret: "secret", controlPlaneInternalUrl: "http://agent-api:8080" },
+      openRouter: { ...loadConfig().openRouter, apiKey: "sk-test", chatModel: "chat-model", codegenModel: "code-model" },
+      github: { ...loadConfig().github, repository: "example/repo", baseBranch: "main" }
+    };
+
+    expect(
+      buildSandboxRunnerEnv({
+        config,
+        job: agentTask(),
+        sandboxRunId: "run-123",
+        taskToken: "task-token",
+        githubToken: "github-token",
+        startedAtMs: 123,
+        baseEnv: { PATH: "/usr/bin" }
+      })
+    ).toEqual(
+      expect.objectContaining({
+        PATH: "/usr/bin",
+        TASK_ID: "task-00005678",
+        SANDBOX_RUN_ID: "run-123",
+        GITHUB_TOKEN: "github-token",
+        OPENROUTER_API_KEY: "sk-test",
+        AGENT_TASK_TOKEN: "task-token"
+      })
+    );
+  });
+});
+
 function fakeClients(
   batchOverrides: Partial<KubernetesExecutionClients["batch"]> = {},
   coreOverrides: Partial<KubernetesExecutionClients["core"]> = {}
@@ -239,4 +360,12 @@ function sandboxRun(): SandboxRunRecord {
     cleanedUpAt: null,
     updatedAt: new Date("2026-01-01T00:00:01Z")
   };
+}
+
+function fakeChildProcess() {
+  const child = new EventEmitter() as any;
+  child.pid = 4242;
+  child.unref = vi.fn();
+  child.kill = vi.fn();
+  return child;
 }

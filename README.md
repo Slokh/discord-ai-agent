@@ -174,7 +174,7 @@ npm run sandbox-cache:clear
 
 For a local Kubernetes full-loop test, see [docs/local-kubernetes.md](docs/local-kubernetes.md).
 For production setup, see [docs/eks-deploy.md](docs/eks-deploy.md).
-For the cache-first runtime and warm-sandbox direction, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
+For the cache-first runtime, durable codegen session API, and warm-sandbox direction, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
 For a reference AWS baseline, see [deploy/terraform/aws](deploy/terraform/aws).
 
 ## Configuration
@@ -196,6 +196,7 @@ Common optional settings:
 | --- | --- | --- |
 | `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
 | `OPENROUTER_CHAT_MODEL` | `z-ai/glm-5.2` | Main agent model |
+| `OPENROUTER_CODEGEN_MODEL` | same as `OPENROUTER_CHAT_MODEL` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
 | `GITHUB_REPOSITORY` | `owner/repo` | Repo for code-update PRs |
@@ -203,6 +204,7 @@ Common optional settings:
 | `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
+| `CODEGEN_EXECUTION_BACKEND` | `kubernetes-job` | `kubernetes-job` for per-task isolated Jobs, or `local-process` for a long-lived warm worker process |
 | `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
 | `SANDBOX_CACHE_DIR` | `/var/cache/discord-ai-agent` | Sandbox repo/npm/dependency cache path |
 | `SANDBOX_CACHE_PVC_NAME` | unset | Optional Kubernetes PVC mounted at `SANDBOX_CACHE_DIR` |

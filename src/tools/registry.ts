@@ -531,6 +531,11 @@ export const toolRegistry: ToolRegistryEntry[] = [
         request: {
           type: "string",
           description: "The requested agent update, integration, or repository change to implement."
+        },
+        title: {
+          type: "string",
+          description:
+            "Optional concise human PR title in plain English, 3-8 words, without prefixes like Agent Codegen. Example: Use loading reaction for pending replies."
         }
       },
       required: ["request"],

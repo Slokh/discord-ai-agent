@@ -13,6 +13,26 @@ describe("agent task Discord notifications", () => {
     expect(renderAgentTaskMessage(task, undefined, undefined, { runConsoleUrl: url }).content).toContain(`Run console: ${url}`);
   });
 
+  it("renders a concise live status message while a task is running", () => {
+    const task = agentTask({ status: "running", statusMessage: "Preparing the sandbox." });
+
+    expect(renderAgentTaskMessage(task).content).toBe(
+      ["Preparing the sandbox.", "", "Task: `Improve thing`", "Status: `running`", "Task ID: `task-1`"].join("\n")
+    );
+  });
+
+  it("renders no-diff terminal failures bluntly", () => {
+    const task = agentTask({
+      status: "no_changes",
+      currentStep: "no_changes",
+      statusMessage: "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
+      error: "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
+      completedAt: new Date("2026-06-30T12:01:00Z")
+    });
+
+    expect(renderAgentTaskMessage(task).content).toContain("No PR opened: the coding agent did not produce a code diff.");
+  });
+
   it("omits the run console line when no public control UI URL is configured", () => {
     const task = agentTask({ status: "queued" });
 

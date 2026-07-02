@@ -17,9 +17,12 @@ const MAX_ANCHOR_MATCHES_TOTAL = 30;
 const MAX_ANCHOR_TARGET_FILES = 8;
 const MAX_ANCHOR_SCAN_FILE_BYTES = 512_000;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
-const CODEX_MAX_ATTEMPTS = 2;
-const CODEX_FIRST_DIFF_DEADLINE_MS = 8 * 60 * 1000;
-const CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS = 4 * 60 * 1000;
+const CODEX_APP_SERVER_MAX_ATTEMPTS = 2;
+const CODEX_EXEC_FALLBACK_MAX_ATTEMPTS = 1;
+const CODEX_FIRST_DIFF_DEADLINE_MS = 180_000;
+const CODEX_FIRST_DIFF_RECOVERY_DEADLINE_MS = 120_000;
+const CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS = 90_000;
+const CODEX_ANCHORED_FIRST_DIFF_RECOVERY_DEADLINE_MS = 60_000;
 const CODEX_IDLE_WITHOUT_DIFF_MS = 6 * 60 * 1000;
 const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
 const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
@@ -128,8 +131,23 @@ type CodexAppServerAttemptResult = {
   transcript: string;
   stderrTail: string;
   error?: string;
+  startedTurn: boolean;
   watchdog?: CodexWatchdogResult;
 };
+
+class CodegenNoDiffError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodegenNoDiffError";
+  }
+}
+
+class CodexAppServerStartupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexAppServerStartupError";
+  }
+}
 
 type CommandResult = {
   exitCode: number;
@@ -967,6 +985,9 @@ async function runCodexWithRecovery(input: {
   try {
     return await runCodexAppServerWithRecovery(input);
   } catch (error) {
+    if (error instanceof CodegenNoDiffError) {
+      throw error;
+    }
     const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
     if (gitStatus.trim()) {
       await progress(input.env, "codex_app_server_salvaged_diff", "Codex app-server failed after producing a code diff; continuing to verification.", {
@@ -987,7 +1008,7 @@ async function runCodexWithRecovery(input: {
         ]
       };
     }
-    await progress(input.env, "codex_app_server_fallback", "Codex app-server failed before producing a diff; falling back to codex exec.", {
+    await progress(input.env, "codex_app_server_fallback", "Codex app-server could not start a usable turn; falling back to codex exec.", {
       error: conciseError(error)
     });
     return runCodexExecWithRecovery(input);
@@ -1003,7 +1024,7 @@ async function runCodexAppServerWithRecovery(input: {
   contextPack: CodegenContextPack;
 }): Promise<CodexRunSummary> {
   const attempts: CodexAttemptSummary[] = [];
-  const totalAttempts = CODEX_MAX_ATTEMPTS;
+  const totalAttempts = CODEX_APP_SERVER_MAX_ATTEMPTS;
   let threadId: string | undefined;
 
   for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
@@ -1030,6 +1051,14 @@ async function runCodexAppServerWithRecovery(input: {
       model: input.env.openRouterCodegenModel,
       harness: "codex-app-server",
       threadId
+    });
+    const firstDiffDeadlineMs = codegenFirstDiffDeadlineMs(input.contextPack, attempt);
+    await progress(input.env, "codex_first_diff_deadline", `Waiting up to ${formatDuration(firstDiffDeadlineMs)} for the first code diff.`, {
+      attempt,
+      totalAttempts,
+      harness: "codex-app-server",
+      deadlineMs: firstDiffDeadlineMs,
+      anchored: Boolean(input.contextPack.anchorTargetFiles?.length)
     });
 
     const result = await runCodexAppServerAttempt({
@@ -1073,10 +1102,21 @@ async function runCodexAppServerWithRecovery(input: {
     );
 
     if (producedDiff) return { attempts };
+    if (!result.startedTurn && result.exitCode !== 143) {
+      throw new CodexAppServerStartupError(
+        [
+          "Codex app-server failed before starting a usable model turn.",
+          ...attempts.map(
+            (attempt) =>
+              `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+          )
+        ].join("\n")
+      );
+    }
     if (attempt < totalAttempts) continue;
   }
 
-  throw new Error(
+  throw new CodegenNoDiffError(
     [
       "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
       ...attempts.map(
@@ -1110,6 +1150,7 @@ async function runCodexAppServerAttempt(input: {
   let exitCode = 0;
   let errorText = "";
   let reportedNotifications = 0;
+  let startedTurn = false;
   const client = CodexAppServerClient.spawn({
     command: codexBinary,
     args: ["app-server", "--listen", "stdio://"],
@@ -1126,7 +1167,7 @@ async function runCodexAppServerAttempt(input: {
     checkoutDir: input.checkoutDir,
     attempt: input.attempt,
     totalAttempts: input.totalAttempts,
-    firstDiffDeadlineMs: codegenFirstDiffDeadlineMs(input.contextPack),
+    firstDiffDeadlineMs: codegenFirstDiffDeadlineMs(input.contextPack, input.attempt),
     idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
     maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
     pollMs: CODEX_WATCHDOG_POLL_MS,
@@ -1156,6 +1197,7 @@ async function runCodexAppServerAttempt(input: {
       onNotification: async (notification) => {
         notifications.push(notification);
         lastNotificationAt = Date.now();
+        if (notification.method === "turn/started") startedTurn = true;
         const summary = codexNotificationSummary(notification);
         transcriptLines.push(formatCodexNotificationTranscriptLine(notification, summary));
         if (summary.report && reportedNotifications < 30) {
@@ -1228,6 +1270,7 @@ async function runCodexAppServerAttempt(input: {
     transcript,
     stderrTail,
     error: errorText || undefined,
+    startedTurn,
     watchdog: watchdog.result()
   };
 }
@@ -1242,7 +1285,7 @@ async function runCodexExecWithRecovery(input: {
 }): Promise<CodexRunSummary> {
   const attempts: CodexAttemptSummary[] = [];
   const codexBinary = process.env.CODEX_BIN || "codex";
-  const totalAttempts = CODEX_MAX_ATTEMPTS;
+  const totalAttempts = CODEX_EXEC_FALLBACK_MAX_ATTEMPTS;
 
   for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
     const command: CodexAttemptSummary["command"] = attempt === 1 ? "exec" : "resume";
@@ -1270,6 +1313,15 @@ async function runCodexExecWithRecovery(input: {
       model: input.env.openRouterCodegenModel,
       harness: "codex-exec-json"
     });
+    const firstDiffDeadlineMs = codegenFirstDiffDeadlineMs(input.contextPack, attempt);
+    await progress(input.env, "codex_first_diff_deadline", `Waiting up to ${formatDuration(firstDiffDeadlineMs)} for the first code diff.`, {
+      attempt,
+      totalAttempts,
+      command,
+      harness: "codex-exec-json",
+      deadlineMs: firstDiffDeadlineMs,
+      anchored: Boolean(input.contextPack.anchorTargetFiles?.length)
+    });
 
     const result = await runCommand(codexBinary, codexAttemptArgs({ command, model: input.env.openRouterCodegenModel }), {
       cwd: input.checkoutDir,
@@ -1282,7 +1334,7 @@ async function runCodexExecWithRecovery(input: {
         checkoutDir: input.checkoutDir,
         attempt,
         totalAttempts,
-        firstDiffDeadlineMs: codegenFirstDiffDeadlineMs(input.contextPack),
+        firstDiffDeadlineMs,
         idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
         reconnectStallMs: CODEX_RECONNECT_STALL_MS,
         maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
@@ -1965,8 +2017,10 @@ function codexAttemptArgs(input: { command: "exec" | "resume"; model: string }) 
   return input.command === "exec" ? codexExecArgs({ checkoutDir: ".", model: input.model }) : codexResumeExecArgs({ model: input.model });
 }
 
-export function codegenFirstDiffDeadlineMs(contextPack?: Pick<CodegenContextPack, "anchorTargetFiles">) {
-  return contextPack?.anchorTargetFiles?.length ? CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS : CODEX_FIRST_DIFF_DEADLINE_MS;
+export function codegenFirstDiffDeadlineMs(contextPack?: Pick<CodegenContextPack, "anchorTargetFiles">, attempt = 1) {
+  const anchored = Boolean(contextPack?.anchorTargetFiles?.length);
+  if (attempt > 1) return anchored ? CODEX_ANCHORED_FIRST_DIFF_RECOVERY_DEADLINE_MS : CODEX_FIRST_DIFF_RECOVERY_DEADLINE_MS;
+  return anchored ? CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS : CODEX_FIRST_DIFF_DEADLINE_MS;
 }
 
 export function codeUpdateRecoveryPrompt(

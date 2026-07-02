@@ -436,8 +436,9 @@ function terminalFromCommands(commands: SandboxCommandEvent[]) {
   return { content, lineCount: content ? content.split("\n").length : 0, entries };
 }
 
-function diagnosticsForRun(run: RunSummary, spans: RunSpan[], events: RunEvent[]): string[] {
+export function diagnosticsForRun(run: RunSummary, spans: RunSpan[], events: RunEvent[]): string[] {
   const diagnostics: string[] = [];
+  diagnostics.push(...codegenDiagnosticsForRun(run, events));
   const bottleneck = bottleneckSpan(spans);
   if (bottleneck) diagnostics.push(`Most time was spent in ${bottleneck.name}: ${formatDuration(bottleneck.durationMs)}.`);
   const failureEvent = [...events].reverse().find((event) => event.level === "error");
@@ -448,6 +449,38 @@ function diagnosticsForRun(run: RunSummary, spans: RunSpan[], events: RunEvent[]
     diagnostics.push(`Embedding backlog at run time: ${run.metadata.backlog}.`);
   }
   return diagnostics;
+}
+
+function codegenDiagnosticsForRun(run: RunSummary, events: RunEvent[]) {
+  if (run.kind !== "codegen") return [];
+  const diagnostics: string[] = [];
+  const latestDeadline = [...events].reverse().find((event) => eventMetadataStep(event) === "codex_first_diff_deadline");
+  const firstDiff = [...events].reverse().find((event) => {
+    const step = eventMetadataStep(event);
+    return step === "codex_first_diff" || step === "codex_app_server_first_diff";
+  });
+  const noDiffWatchdog = [...events]
+    .reverse()
+    .find((event) => eventMetadataStep(event).includes("watchdog_no_first_diff") || event.metadata.watchdogReason === "no_first_diff");
+  if (noDiffWatchdog) {
+    diagnostics.push("Model produced no code diff before the first-diff deadline.");
+  } else if (!isTerminal(run.status) && latestDeadline && !firstDiff) {
+    const deadlineMs = numberFromUnknown(latestDeadline.metadata.deadlineMs);
+    diagnostics.push(`Waiting for the first code diff${deadlineMs == null ? "" : `; deadline is ${formatDuration(deadlineMs)}`}.`);
+  } else if (firstDiff) {
+    const durationMs = numberFromUnknown(firstDiff.metadata.durationMs);
+    diagnostics.push(`First code diff appeared${durationMs == null ? "" : ` after ${formatDuration(durationMs)}`}.`);
+  }
+  return diagnostics;
+}
+
+function eventMetadataStep(event: RunEvent) {
+  const step = event.metadata.step;
+  return typeof step === "string" ? step : event.name;
+}
+
+function numberFromUnknown(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function bottleneckSpan(spans: RunSpan[]) {

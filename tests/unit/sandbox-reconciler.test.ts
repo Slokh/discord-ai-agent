@@ -12,6 +12,7 @@ describe("sandbox reconciler", () => {
       markAgentTaskFailed: vi.fn(async () => undefined)
     };
     const backend = {
+      name: "kubernetes-sandbox",
       observeRun: vi.fn(async () => ({
         status: "failed" as const,
         reason: "BackoffLimitExceeded",
@@ -45,6 +46,7 @@ describe("sandbox reconciler", () => {
       markSandboxRunCleanedUp: vi.fn(async () => undefined)
     };
     const backend = {
+      name: "kubernetes-sandbox",
       observeRun: vi.fn(),
       cleanupRun: vi.fn(async () => undefined)
     };
@@ -64,6 +66,7 @@ describe("sandbox reconciler", () => {
       markAgentTaskFailed: vi.fn(async () => undefined)
     };
     const backend = {
+      name: "kubernetes-sandbox",
       observeRun: vi.fn(),
       cleanupRun: vi.fn()
     };
@@ -89,6 +92,51 @@ describe("sandbox reconciler", () => {
       })
     });
     expect(backend.cleanupRun).not.toHaveBeenCalled();
+  });
+
+  it("ignores active sandbox runs owned by a different backend", async () => {
+    const localRun = sandboxRun({ backend: "local-process-sandbox", namespace: null });
+    const repo = {
+      listActiveSandboxRuns: vi.fn(async () => [localRun]),
+      listStaleRunningAgentTasksWithoutActiveSandbox: vi.fn(async () => []),
+      listTerminalSandboxRunsPendingCleanup: vi.fn(async () => []),
+      markAgentTaskFailed: vi.fn(async () => undefined)
+    };
+    const backend = {
+      name: "kubernetes-sandbox",
+      observeRun: vi.fn(),
+      cleanupRun: vi.fn()
+    };
+
+    await runSandboxReconciliationOnce(repo as any, backend);
+
+    expect(backend.observeRun).not.toHaveBeenCalled();
+    expect(repo.markAgentTaskFailed).not.toHaveBeenCalled();
+  });
+
+  it("does not clean terminal sandbox runs owned by a different backend", async () => {
+    const localRun = sandboxRun({
+      taskStatus: "succeeded",
+      backend: "local-process-sandbox",
+      namespace: null,
+      status: "succeeded"
+    });
+    const repo = {
+      listActiveSandboxRuns: vi.fn(async () => []),
+      listStaleRunningAgentTasksWithoutActiveSandbox: vi.fn(async () => []),
+      listTerminalSandboxRunsPendingCleanup: vi.fn(async () => [localRun]),
+      markSandboxRunCleanedUp: vi.fn(async () => undefined)
+    };
+    const backend = {
+      name: "kubernetes-sandbox",
+      observeRun: vi.fn(),
+      cleanupRun: vi.fn()
+    };
+
+    await runSandboxReconciliationOnce(repo as any, backend);
+
+    expect(backend.cleanupRun).not.toHaveBeenCalled();
+    expect(repo.markSandboxRunCleanedUp).not.toHaveBeenCalled();
   });
 });
 

@@ -1042,6 +1042,20 @@ export async function renderMetrics(repo: DiscordAiAgentRepository) {
     "# HELP discord_ai_agent_agent_tasks_total Agent tasks by status.",
     "# TYPE discord_ai_agent_agent_tasks_total gauge",
     ...taskMetrics.tasksByStatus.map((row) => `discord_ai_agent_agent_tasks_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),
+    "# HELP discord_ai_agent_agent_task_backlog_total Active queued/running agent tasks by backend and status.",
+    "# TYPE discord_ai_agent_agent_task_backlog_total gauge",
+    ...taskMetrics.agentTaskBacklog.map(
+      (row) =>
+        `discord_ai_agent_agent_task_backlog_total{backend=${quoteMetricLabel(row.backend)},status=${quoteMetricLabel(row.status)}} ${row.count}`
+    ),
+    "# HELP discord_ai_agent_agent_task_backlog_oldest_age_seconds Oldest active queued/running agent task age by backend and status.",
+    "# TYPE discord_ai_agent_agent_task_backlog_oldest_age_seconds gauge",
+    ...taskMetrics.agentTaskBacklog.map(
+      (row) =>
+        `discord_ai_agent_agent_task_backlog_oldest_age_seconds{backend=${quoteMetricLabel(row.backend)},status=${quoteMetricLabel(
+          row.status
+        )}} ${row.oldestAgeSeconds}`
+    ),
     "# HELP discord_ai_agent_sandbox_runs_total Sandbox runs by status.",
     "# TYPE discord_ai_agent_sandbox_runs_total gauge",
     ...taskMetrics.sandboxRunsByStatus.map((row) => `discord_ai_agent_sandbox_runs_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),

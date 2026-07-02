@@ -484,7 +484,7 @@ export async function startJobs(input: {
               taskId: job.data.taskId,
               backend: backendName,
               step: "sandbox_start",
-              statusMessage: "Starting codegen sandbox."
+              statusMessage: startingAgentTaskStatusMessage(backendName)
             });
             const acquiredLease = await acquireLeaseForAgentTask({
               scheduler: codegenLeaseScheduler,
@@ -565,7 +565,7 @@ export async function startJobs(input: {
                 taskId: job.data.taskId,
                 backend: backendName,
                 step: "sandbox_running",
-                statusMessage: "Codegen sandbox is running the task.",
+                statusMessage: runningAgentTaskStatusMessage(backendName),
                 metadata: result
               });
               logger.info(
@@ -754,7 +754,13 @@ async function acquireLeaseForAgentTask(input: {
         backend: input.backendName,
         step: "sandbox_wait",
         statusMessage: "Waiting for the warm codegen worker to become available.",
-        metadata: { sandboxId: input.scheduler?.sandboxId ?? null, waitedMs, attempt }
+        metadata: {
+          sandboxId: input.scheduler?.sandboxId ?? null,
+          waitedMs,
+          attempt,
+          timeoutMs: input.scheduler?.acquireTimeoutMs ?? null,
+          pollMs: input.scheduler?.acquirePollMs ?? null
+        }
       });
     }
   });
@@ -771,6 +777,18 @@ function codegenEventKindForStep(step: string): "harness" | "model" | "tool" | "
   if (/failed|error/i.test(step)) return "error";
   if (/artifact|prompt/i.test(step)) return "artifact";
   return "status";
+}
+
+function startingAgentTaskStatusMessage(backendName: string) {
+  if (backendName === "local-process-sandbox") return "Starting warm local codegen worker process.";
+  if (backendName === "kubernetes-sandbox") return "Starting Kubernetes sandbox.";
+  return "Starting codegen sandbox.";
+}
+
+function runningAgentTaskStatusMessage(backendName: string) {
+  if (backendName === "local-process-sandbox") return "Warm local codegen process is running the task.";
+  if (backendName === "kubernetes-sandbox") return "Kubernetes sandbox is running the task.";
+  return "Codegen sandbox is running the task.";
 }
 
 function formatDurationSeconds(value: number) {

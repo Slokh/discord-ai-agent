@@ -19,7 +19,11 @@ describe("codegen lease scheduler", () => {
       expect.objectContaining({
         sandboxId: "local-process:slokh-discord-ai-agent:worker-pod-1:123",
         leaseOwner: "worker:worker-pod-1:123",
-        repo: "Slokh/discord-ai-agent"
+        repo: "Slokh/discord-ai-agent",
+        heartbeatIntervalMs: 15_000,
+        staleLeaseMs: 120_000,
+        acquireTimeoutMs: 1_800_000,
+        acquirePollMs: 5_000
       })
     );
 
@@ -57,15 +61,38 @@ describe("codegen lease scheduler", () => {
         leaseOwner: scheduler.leaseOwner
       })
     );
-    expect(repo.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "codegen.sandbox.lease_acquired" }));
+    expect(repo.upsertSandboxLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          heartbeatIntervalMs: scheduler.heartbeatIntervalMs,
+          staleLeaseMs: scheduler.staleLeaseMs,
+          acquireTimeoutMs: scheduler.acquireTimeoutMs,
+          acquirePollMs: scheduler.acquirePollMs
+        })
+      })
+    );
+    expect(repo.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: "codegen.sandbox.lease_acquired",
+        metadata: expect.objectContaining({ timeoutMs: scheduler.acquireTimeoutMs, pollMs: scheduler.acquirePollMs })
+      })
+    );
   });
 
-  it("records wait events and times out when no lease is available", async () => {
+  it("uses configured lease wait timings when no lease is available", async () => {
     let now = 0;
-    const scheduler = createCodegenLeaseScheduler(testConfig({ CODEGEN_EXECUTION_BACKEND: "local-process" }), "local-process-sandbox", {
-      hostname: "worker-pod-1",
-      pid: 123
-    })!;
+    const scheduler = createCodegenLeaseScheduler(
+      testConfig({
+        CODEGEN_EXECUTION_BACKEND: "local-process",
+        CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS: "2",
+        CODEGEN_LEASE_ACQUIRE_POLL_SECONDS: "1"
+      }),
+      "local-process-sandbox",
+      {
+        hostname: "worker-pod-1",
+        pid: 123
+      }
+    )!;
     const repo = fakeLeaseRepo([]);
     const waits: number[] = [];
 
@@ -76,8 +103,6 @@ describe("codegen lease scheduler", () => {
         sessionId: "session-1",
         executionId: "execution-1",
         taskId: "task-1",
-        timeoutMs: 10,
-        pollMs: 5,
         now: () => now,
         sleep: async (ms) => {
           now += ms;
@@ -88,8 +113,13 @@ describe("codegen lease scheduler", () => {
       })
     ).rejects.toThrow(/Timed out waiting/);
 
-    expect(waits).toEqual([0, 5]);
-    expect(repo.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "codegen.sandbox.waiting_for_lease" }));
+    expect(waits).toEqual([0, 1000]);
+    expect(repo.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: "codegen.sandbox.waiting_for_lease",
+        metadata: expect.objectContaining({ timeoutMs: 2000, pollMs: 1000 })
+      })
+    );
   });
 });
 

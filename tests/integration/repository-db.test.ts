@@ -747,6 +747,30 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
   });
 
+  it("uses backend-aware copy for queued local-process agent tasks", async () => {
+    const taskId = `task-${randomUUID()}`;
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: `trace-${randomUUID()}`,
+      guildId: `guild-${randomUUID()}`,
+      channelId: `channel-${randomUUID()}`,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "local copy test",
+      request: "check backend-aware copy",
+      requestedBy: "test",
+      backend: "local-process-sandbox"
+    });
+
+    await expect(repo.getAgentTask(taskId)).resolves.toEqual(
+      expect.objectContaining({
+        status: "queued",
+        currentStep: "queued",
+        statusMessage: "Waiting for a warm codegen worker to become available."
+      })
+    );
+  });
+
   it("ignores late agent task progress after terminal failure", async () => {
     const taskId = `task-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
@@ -923,6 +947,9 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     await expect(repo.getAgentTaskMetrics()).resolves.toEqual(
       expect.objectContaining({
+        agentTaskBacklog: expect.arrayContaining([
+          expect.objectContaining({ backend: "kubernetes-sandbox", status: "queued", count: 1, oldestAgeSeconds: expect.any(Number) })
+        ]),
         codegenPhaseDurations: expect.arrayContaining([expect.objectContaining({ phase: "repo", count: 1, avgMs: 120, maxMs: 120 })]),
         sandboxCacheEvents: expect.arrayContaining([expect.objectContaining({ cacheType: "dependencies", cacheStatus: "hit", count: 1 })])
       })

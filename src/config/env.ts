@@ -72,6 +72,10 @@ const defaults = {
   sandboxTtlSecondsAfterFinished: 3600,
   sandboxCacheDir: "/var/cache/discord-ai-agent",
   sandboxCachePvcName: "",
+  codegenLeaseHeartbeatSeconds: 15,
+  codegenLeaseStaleSeconds: 120,
+  codegenLeaseAcquireTimeoutSeconds: 1800,
+  codegenLeaseAcquirePollSeconds: 5,
   workerCrawlEnabled: true,
   workerEmbeddingEnabled: true,
   workerTaskEnabled: true,
@@ -135,6 +139,10 @@ const envSchema = z.object({
   SANDBOX_TTL_SECONDS_AFTER_FINISHED: z.coerce.number().int().positive().default(defaults.sandboxTtlSecondsAfterFinished),
   SANDBOX_CACHE_DIR: z.string().default(defaults.sandboxCacheDir),
   SANDBOX_CACHE_PVC_NAME: z.string().default(defaults.sandboxCachePvcName),
+  CODEGEN_LEASE_HEARTBEAT_SECONDS: z.coerce.number().int().min(1).max(300).default(defaults.codegenLeaseHeartbeatSeconds),
+  CODEGEN_LEASE_STALE_SECONDS: z.coerce.number().int().min(10).max(3600).default(defaults.codegenLeaseStaleSeconds),
+  CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(7200).default(defaults.codegenLeaseAcquireTimeoutSeconds),
+  CODEGEN_LEASE_ACQUIRE_POLL_SECONDS: z.coerce.number().int().min(1).max(300).default(defaults.codegenLeaseAcquirePollSeconds),
 
   WORKER_CRAWL_ENABLED: booleanFromEnv.default(defaults.workerCrawlEnabled),
   WORKER_EMBEDDING_ENABLED: booleanFromEnv.default(defaults.workerEmbeddingEnabled),
@@ -223,6 +231,12 @@ export function loadConfig() {
         ttlSecondsAfterFinished: parsed.data.SANDBOX_TTL_SECONDS_AFTER_FINISHED,
         cacheDir: parsed.data.SANDBOX_CACHE_DIR,
         cachePvcName: parsed.data.SANDBOX_CACHE_PVC_NAME.trim() || null
+      },
+      codegenLease: {
+        heartbeatMs: parsed.data.CODEGEN_LEASE_HEARTBEAT_SECONDS * 1000,
+        staleMs: parsed.data.CODEGEN_LEASE_STALE_SECONDS * 1000,
+        acquireTimeoutMs: parsed.data.CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS * 1000,
+        acquirePollMs: parsed.data.CODEGEN_LEASE_ACQUIRE_POLL_SECONDS * 1000
       }
     },
     worker: {

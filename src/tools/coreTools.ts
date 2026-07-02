@@ -1277,6 +1277,7 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
     `- Embeddings: ${health.embeddings}`,
     `- Tool calls logged: ${health.toolCalls}`,
     `- Agent tasks: ${taskMetrics.tasksByStatus.map((row) => `${row.status}=${row.count}`).join(", ") || "none"}`,
+    `- Agent backlog: ${formatAgentTaskBacklogSummary(taskMetrics.agentTaskBacklog)}`,
     `- Codegen leases: ${formatLeaseMetricSummary(taskMetrics.codegenSandboxLeases)}`,
     `- Codegen timings: ${formatCodegenMetricSummary(taskMetrics.codegenPhaseDurations)}`,
     `- Sandbox cache: ${formatCacheMetricSummary(taskMetrics.sandboxCacheEvents)}`,
@@ -1530,6 +1531,13 @@ function formatCacheMetricSummary(rows: Array<{ cacheType: string; cacheStatus: 
 function formatLeaseMetricSummary(rows: Array<{ backend: string; status: string; count: number }>) {
   if (rows.length === 0) return "none yet";
   return rows.map((row) => `${row.backend}.${row.status}=${row.count}`).join(", ");
+}
+
+function formatAgentTaskBacklogSummary(rows: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>) {
+  if (rows.length === 0) return "none";
+  return rows
+    .map((row) => `${row.backend}.${row.status}=${row.count} oldest=${formatDurationSeconds(row.oldestAgeSeconds)}`)
+    .join(", ");
 }
 
 function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {

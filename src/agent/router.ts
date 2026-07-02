@@ -465,7 +465,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         content: result.content
       });
 
-      if (route.name === "openGithubPullRequest") {
+      if (route.name === "runCodingAgent") {
         const content = cleanResponse(result.content, ctx.config.maxReplyChars);
         requestLogger.info(
           {
@@ -624,7 +624,7 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     };
   }
 
-  if (route.name === "openGithubPullRequest") {
+  if (route.name === "runCodingAgent") {
     return {
       content: cleanResponse(
         await createAgentUpdateFromRequest(

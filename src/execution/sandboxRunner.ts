@@ -20,16 +20,7 @@ const MAX_ANCHOR_SCAN_FILE_BYTES = 512_000;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
 const CODEX_APP_SERVER_MAX_ATTEMPTS = 2;
 const CODEX_EXEC_FALLBACK_MAX_ATTEMPTS = 1;
-const CODEX_FIRST_DIFF_DEADLINE_MS = 10 * 60_000;
-const CODEX_FIRST_DIFF_RECOVERY_DEADLINE_MS = 10 * 60_000;
-const CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS = 10 * 60_000;
-const CODEX_ANCHORED_FIRST_DIFF_RECOVERY_DEADLINE_MS = 10 * 60_000;
-const CODEX_IDLE_WITHOUT_DIFF_MS = 6 * 60 * 1000;
-const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
-const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
-const CODEX_WATCHDOG_POLL_MS = 15_000;
 const OPENCODE_HEALTH_PROBE_TIMEOUT_MS = 1_000;
-const CODEX_RECONNECT_PATTERN = /(?:^|\n)ERROR:\s*Reconnecting\.\.\./i;
 const CODE_UPDATE_BRANCH_PREFIX = "ai";
 const CODE_UPDATE_BRANCH_SLUG_MAX_CHARS = 40;
 const CODE_UPDATE_BRANCH_SUFFIX_CHARS = 4;
@@ -122,35 +113,12 @@ type CodexAttemptSummary = {
   exitCode: number;
   durationMs: number;
   producedDiff: boolean;
-  watchdogReason?: string;
   stdoutTail: string;
   stderrTail: string;
 };
 
 type CodexRunSummary = {
   attempts: CodexAttemptSummary[];
-};
-
-type CodexWatchdogOptions = {
-  checkoutDir: string;
-  attempt: number;
-  totalAttempts: number;
-  firstDiffDeadlineMs?: number;
-  firstDiffStep?: string;
-  firstDiffMessage?: string;
-  watchdogStepPrefix?: string;
-  idleWithoutDiffMs?: number;
-  reconnectStallMs?: number;
-  maxRuntimeMs?: number;
-  pollMs?: number;
-};
-
-type CodexWatchdogResult = {
-  killed: boolean;
-  reason?: string;
-  durationMs?: number;
-  firstDiffSeenAtMs?: number;
-  lastOutputAtMs?: number;
 };
 
 type CodexAppServerAttemptResult = {
@@ -163,7 +131,6 @@ type CodexAppServerAttemptResult = {
   stderrTail: string;
   error?: string;
   startedTurn: boolean;
-  watchdog?: CodexWatchdogResult;
 };
 
 type OpenCodeServerState = {
@@ -197,25 +164,6 @@ type CommandResult = {
   stdout: string;
   stderr: string;
   durationMs: number;
-  watchdog?: CodexWatchdogResult;
-};
-
-export type CodegenWatchdogInput = {
-  elapsedMs: number;
-  idleMs: number;
-  hasDiff: boolean;
-  reconnectSeen: boolean;
-  reconnectStallMs: number | null;
-  noFirstDiffTimeoutMs?: number;
-  idleTimeoutMs?: number;
-  reconnectStallTimeoutMs?: number;
-  maxRuntimeMs?: number;
-};
-
-export type CodegenWatchdogDecision = {
-  action: "fail" | "continue";
-  reason: "no_first_diff" | "idle_before_diff" | "idle_after_diff" | "reconnect_stall" | "max_runtime";
-  message: string;
 };
 
 async function main() {
@@ -353,7 +301,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
         env,
         timings,
         "dependenciesPostCodex",
-        "Dependency files changed; refreshing dependencies before verification.",
+        "Dependency files changed; refreshing dependencies before PR creation.",
         async () => {
           const dependencyCache = await prepareDependencies({
             env,
@@ -369,9 +317,6 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     }
 
     const npmScriptEnv = codegenNpmScriptEnv(process.env);
-    const verify = await timedPhase(env, timings, "verify", "Running npm run verify on the generated changes.", async () =>
-      runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "verify", env: npmScriptEnv })
-    );
     const scan = await timedPhase(env, timings, "scan", "Running release scan before pushing generated changes.", async () =>
       runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan", env: npmScriptEnv })
     );
@@ -397,9 +342,9 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
     }, { branchName });
 
-    const draft = verify.exitCode !== 0;
+    const draft = false;
     const octokit = new Octokit({ auth: env.githubToken });
-    const initialPrBody = codeUpdatePullRequestBody({ env, verifyPassed: verify.exitCode === 0 });
+    const initialPrBody = codeUpdatePullRequestBody({ env });
     const pr = await timedPhase(env, timings, "pr", "Opening the GitHub pull request.", async () =>
       octokit.pulls.create({
         owner,
@@ -413,7 +358,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     );
 
     timings.total = Date.now() - totalStartedAt;
-    const finalPrBody = codeUpdatePullRequestBody({ env, verifyPassed: verify.exitCode === 0 });
+    const finalPrBody = codeUpdatePullRequestBody({ env });
     await octokit.pulls
       .update({
         owner,
@@ -429,7 +374,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       name: "Pull request body",
       content: finalPrBody,
       contentType: "text/markdown",
-      metadata: { prUrl: pr.data.html_url, draft, verifyPassed: verify.exitCode === 0 }
+      metadata: { prUrl: pr.data.html_url, draft, verifyPassed: null }
     });
     await progress(env, "task_complete", "Code update task finished.", {
       durationMs: timings.total,
@@ -441,7 +386,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       branchName,
       prUrl: pr.data.html_url,
       draft,
-      verifyPassed: verify.exitCode === 0,
+      verifyPassed: null,
       timings,
       cacheSummary
     };
@@ -735,8 +680,8 @@ async function restoreCachedNodeModules(input: {
   });
   await fs.rm(input.nodeModulesPath, { recursive: true, force: true }).catch(() => undefined);
   try {
-    await fs.cp(input.cachedNodeModulesPath, input.nodeModulesPath, { recursive: true, verbatimSymlinks: true });
-    await validateRestoredNodeModules(input.nodeModulesPath);
+    await fs.symlink(input.cachedNodeModulesPath, input.nodeModulesPath, "dir");
+    await validateRestoredNodeModules(input.nodeModulesPath, input.cachedNodeModulesPath);
     return true;
   } catch (error) {
     await fs.rm(input.nodeModulesPath, { recursive: true, force: true }).catch(() => undefined);
@@ -752,18 +697,24 @@ async function restoreCachedNodeModules(input: {
   }
 }
 
-async function validateRestoredNodeModules(nodeModulesPath: string) {
+async function validateRestoredNodeModules(nodeModulesPath: string, cacheRootPath?: string) {
   const requiredBins = [".bin/eslint", ".bin/tsc", ".bin/tsx", ".bin/vitest"];
+  const allowedRoots = [nodeModulesPath, cacheRootPath].filter((value): value is string => Boolean(value));
+  const realAllowedRoots = await Promise.all(allowedRoots.map((root) => fs.realpath(root)));
   await Promise.all(
     requiredBins.map(async (relativePath) => {
       const binPath = path.join(nodeModulesPath, relativePath);
       const resolved = await fs.realpath(binPath);
-      const relativeResolved = path.relative(nodeModulesPath, resolved);
-      if (relativeResolved.startsWith("..") || path.isAbsolute(relativeResolved)) {
+      if (!realAllowedRoots.some((root) => isInsidePath(root, resolved))) {
         throw new Error(`Restored dependency cache contains non-portable bin symlink: ${relativePath} -> ${resolved}`);
       }
     })
   );
+}
+
+function isInsidePath(root: string, candidate: string) {
+  const relativePath = path.relative(root, candidate);
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
 export async function dependencyCacheKey(checkoutDir: string) {
@@ -1292,17 +1243,8 @@ async function runOpenCodeWithRecovery(input: {
     model: openCodeModelId(input.env.openRouterCodegenModel),
     harness: "opencode-server"
   });
-  const firstDiffDeadlineMs = codegenFirstDiffDeadlineMs(input.contextPack, attempt);
-  await progress(input.env, "opencode_first_diff_deadline", `Waiting up to ${formatDuration(firstDiffDeadlineMs)} for the first code diff.`, {
-    attempt,
-    totalAttempts,
-    command: "opencode-run",
-    harness: "opencode-server",
-    deadlineMs: firstDiffDeadlineMs,
-    anchored: Boolean(input.contextPack.anchorTargetFiles?.length)
-  });
 
-  const result = await runOpenCodeServerAttempt({ ...input, attempt, totalAttempts, prompt, firstDiffDeadlineMs });
+  const result = await runOpenCodeServerAttempt({ ...input, attempt, totalAttempts, prompt });
   const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
   const producedDiff = Boolean(gitStatus.trim());
   const summary: CodexAttemptSummary = {
@@ -1311,7 +1253,6 @@ async function runOpenCodeWithRecovery(input: {
     exitCode: result.exitCode,
     durationMs: result.durationMs,
     producedDiff,
-    watchdogReason: result.watchdog?.reason,
     stdoutTail: tail(result.stdout, MAX_RECOVERY_TAIL),
     stderrTail: tail(result.stderr, MAX_RECOVERY_TAIL)
   };
@@ -1326,7 +1267,6 @@ async function runOpenCodeWithRecovery(input: {
       command: "opencode-run",
       exitCode: result.exitCode,
       durationMs: result.durationMs,
-      watchdogReason: result.watchdog?.reason,
       gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
     }
   );
@@ -1337,7 +1277,7 @@ async function runOpenCodeWithRecovery(input: {
       "Agent task produced no diff after OpenCode attempt; no PR will be opened.",
       ...attempts.map(
         (attempt) =>
-          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}`
       )
     ].join("\n")
   );
@@ -1352,7 +1292,6 @@ async function runOpenCodeServerAttempt(input: {
   attempt: number;
   totalAttempts: number;
   prompt: string;
-  firstDiffDeadlineMs: number;
 }): Promise<CommandResult> {
   const opencodeBinary = process.env.OPENCODE_BIN || "opencode";
   const opencodeEnv = openCodeEnv(input.env, input.gitEnv, input.opencodeHome, input.toolShimDir);
@@ -1375,19 +1314,7 @@ async function runOpenCodeServerAttempt(input: {
       taskEnv: input.env,
       step: `opencode_attempt_${input.attempt}`,
       displayCommand: `${opencodeBinary} run --attach ${server.serverUrl} --model ${openCodeModelId(input.env.openRouterCodegenModel)} --format json --title ${JSON.stringify(input.env.taskTitle)} [prompt]`,
-      codexWatchdog: {
-        checkoutDir: input.checkoutDir,
-        attempt: input.attempt,
-        totalAttempts: input.totalAttempts,
-        firstDiffDeadlineMs: input.firstDiffDeadlineMs,
-        firstDiffStep: "opencode_first_diff",
-        firstDiffMessage: "OpenCode produced its first visible code diff.",
-        watchdogStepPrefix: "opencode_watchdog",
-        idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
-        reconnectStallMs: CODEX_RECONNECT_STALL_MS,
-        maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
-        pollMs: CODEX_WATCHDOG_POLL_MS
-      }
+      onStdoutText: createOpenCodeProgressObserver({ env: input.env, attempt: input.attempt, totalAttempts: input.totalAttempts })
     });
   } finally {
     await stopOpenCodeServer(input.env, server).catch((error) => {
@@ -1560,7 +1487,7 @@ async function runCodexWithRecovery(input: {
     }
     const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
     if (gitStatus.trim()) {
-      await progress(input.env, "codex_app_server_salvaged_diff", "Codex app-server failed after producing a code diff; continuing to verification.", {
+      await progress(input.env, "codex_app_server_salvaged_diff", "Codex app-server failed after producing a code diff; continuing to PR creation.", {
         error: conciseError(error),
         gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
       });
@@ -1623,15 +1550,6 @@ async function runCodexAppServerWithRecovery(input: {
       harness: "codex-app-server",
       threadId
     });
-    const firstDiffDeadlineMs = codegenFirstDiffDeadlineMs(input.contextPack, attempt);
-    await progress(input.env, "codex_first_diff_deadline", `Waiting up to ${formatDuration(firstDiffDeadlineMs)} for the first code diff.`, {
-      attempt,
-      totalAttempts,
-      harness: "codex-app-server",
-      deadlineMs: firstDiffDeadlineMs,
-      anchored: Boolean(input.contextPack.anchorTargetFiles?.length)
-    });
-
     const result = await runCodexAppServerAttempt({
       ...input,
       attempt,
@@ -1648,7 +1566,6 @@ async function runCodexAppServerWithRecovery(input: {
       exitCode: result.exitCode,
       durationMs: result.durationMs,
       producedDiff,
-      watchdogReason: result.watchdog?.reason,
       stdoutTail: tail(result.transcript, MAX_RECOVERY_TAIL),
       stderrTail: tail([result.error, result.stderrTail].filter(Boolean).join("\n"), MAX_RECOVERY_TAIL)
     };
@@ -1665,7 +1582,6 @@ async function runCodexAppServerWithRecovery(input: {
         exitCode: result.exitCode,
         terminalMethod: result.terminalMethod,
         durationMs: result.durationMs,
-        watchdogReason: result.watchdog?.reason,
         notificationCount: result.notifications.length,
         threadId,
         gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
@@ -1679,7 +1595,7 @@ async function runCodexAppServerWithRecovery(input: {
           "Codex app-server failed before starting a usable model turn.",
           ...attempts.map(
             (attempt) =>
-              `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+              `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}`
           )
         ].join("\n")
       );
@@ -1692,7 +1608,7 @@ async function runCodexAppServerWithRecovery(input: {
       "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
       ...attempts.map(
         (attempt) =>
-          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}`
       )
     ].join("\n")
   );
@@ -1716,7 +1632,6 @@ async function runCodexAppServerAttempt(input: {
   const startedAt = Date.now();
   const notifications: CodexAppServerNotification[] = [];
   const transcriptLines: string[] = [];
-  let lastNotificationAt = startedAt;
   let threadId = input.threadId;
   let terminalMethod: string | undefined;
   let exitCode = 0;
@@ -1731,24 +1646,6 @@ async function runCodexAppServerAttempt(input: {
     model: input.env.openRouterCodegenModel,
     provider: providerForModel(input.env.openRouterCodegenModel),
     reasoningEffort: "low"
-  });
-  const watchdog = startCodexAppServerWatchdog({
-    env: input.env,
-    startedAt,
-    command: commandLine,
-    checkoutDir: input.checkoutDir,
-    attempt: input.attempt,
-    totalAttempts: input.totalAttempts,
-    firstDiffDeadlineMs: codegenFirstDiffDeadlineMs(input.contextPack, input.attempt),
-    idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
-    maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
-    pollMs: CODEX_WATCHDOG_POLL_MS,
-    activityState: () => ({
-      lastNotificationAt,
-      notificationCount: notifications.length,
-      transcriptTail: tail(transcriptLines.join("\n"), MAX_ACTIVITY_COMMAND_OUTPUT)
-    }),
-    close: () => client.close()
   });
 
   try {
@@ -1768,7 +1665,6 @@ async function runCodexAppServerAttempt(input: {
       reasoningEffort: "low",
       onNotification: async (notification) => {
         notifications.push(notification);
-        lastNotificationAt = Date.now();
         if (notification.method === "turn/started") startedTurn = true;
         const summary = codexNotificationSummary(notification);
         transcriptLines.push(formatCodexNotificationTranscriptLine(notification, summary));
@@ -1787,9 +1683,8 @@ async function runCodexAppServerAttempt(input: {
     exitCode = terminalMethod === "turn/completed" ? 0 : 1;
   } catch (error) {
     errorText = conciseError(error);
-    exitCode = watchdog.result().killed ? 143 : 1;
+    exitCode = 1;
   } finally {
-    watchdog.stop();
     await client.close().catch(() => undefined);
   }
 
@@ -1807,8 +1702,7 @@ async function runCodexAppServerAttempt(input: {
       harness: "codex-app-server",
       threadId,
       terminalMethod,
-      notificationCount: notifications.length,
-      watchdog: watchdog.result()
+      notificationCount: notifications.length
     }
   });
   await recordArtifact(input.env, {
@@ -1828,8 +1722,7 @@ async function runCodexAppServerAttempt(input: {
       harness: "codex-app-server",
       threadId,
       terminalMethod,
-      notificationCount: notifications.length,
-      watchdog: watchdog.result()
+      notificationCount: notifications.length
     }
   });
 
@@ -1842,8 +1735,7 @@ async function runCodexAppServerAttempt(input: {
     transcript,
     stderrTail,
     error: errorText || undefined,
-    startedTurn,
-    watchdog: watchdog.result()
+    startedTurn
   };
 }
 
@@ -1886,33 +1778,13 @@ async function runCodexExecWithRecovery(input: {
       model: input.env.openRouterCodegenModel,
       harness: "codex-exec-json"
     });
-    const firstDiffDeadlineMs = codegenFirstDiffDeadlineMs(input.contextPack, attempt);
-    await progress(input.env, "codex_first_diff_deadline", `Waiting up to ${formatDuration(firstDiffDeadlineMs)} for the first code diff.`, {
-      attempt,
-      totalAttempts,
-      command,
-      harness: "codex-exec-json",
-      deadlineMs: firstDiffDeadlineMs,
-      anchored: Boolean(input.contextPack.anchorTargetFiles?.length)
-    });
-
     const result = await runCommand(codexBinary, codexAttemptArgs({ command, model: input.env.openRouterCodegenModel }), {
       cwd: input.checkoutDir,
       env: codexEnv(input.env, input.gitEnv, input.codexHome, input.toolShimDir),
       input: prompt,
       allowFailure: true,
       taskEnv: input.env,
-      step: `codex_attempt_${attempt}`,
-      codexWatchdog: {
-        checkoutDir: input.checkoutDir,
-        attempt,
-        totalAttempts,
-        firstDiffDeadlineMs,
-        idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
-        reconnectStallMs: CODEX_RECONNECT_STALL_MS,
-        maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
-        pollMs: CODEX_WATCHDOG_POLL_MS
-      }
+      step: `codex_attempt_${attempt}`
     });
     const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
     const producedDiff = Boolean(gitStatus.trim());
@@ -1922,7 +1794,6 @@ async function runCodexExecWithRecovery(input: {
       exitCode: result.exitCode,
       durationMs: result.durationMs,
       producedDiff,
-      watchdogReason: result.watchdog?.reason,
       stdoutTail: tail(result.stdout, MAX_RECOVERY_TAIL),
       stderrTail: tail(result.stderr, MAX_RECOVERY_TAIL)
     };
@@ -1939,7 +1810,6 @@ async function runCodexExecWithRecovery(input: {
         command,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
-        watchdogReason: result.watchdog?.reason,
         gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
       }
     );
@@ -1953,7 +1823,7 @@ async function runCodexExecWithRecovery(input: {
       "Agent task produced no diff after Codex recovery attempts; no PR will be opened.",
       ...attempts.map(
         (attempt) =>
-          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}`
       )
     ].join("\n")
   );
@@ -2104,7 +1974,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     sandboxContract: [
       "You are already inside an isolated Kubernetes sandbox with full filesystem/network access for this task.",
       "The checkout is a writable task branch. Edit files directly in the current repository.",
-      "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after verification.",
+      "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after your focused checks pass.",
       "Use helper CLIs by absolute shim path when useful: $AGENT_TOOL_SHIM_DIR/agent-task-context, $AGENT_TOOL_SHIM_DIR/agent-cache-info, $AGENT_TOOL_SHIM_DIR/agent-progress <step> <message>.",
       "Use apply_patch for focused file edits when available; otherwise use the smallest reliable edit command.",
       "Prefer rg for search, then read only the files needed for the next concrete edit."
@@ -2537,7 +2407,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     "- Add or update tests for the changed behavior.",
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the PR body records the request.",
-    "- Before finishing, run the most relevant checks you can.",
+    "- Before finishing, run the most relevant focused checks you can. Do not run `npm run verify`; CI runs full verification after the PR opens.",
     "- Helper CLIs are available under `$AGENT_TOOL_SHIM_DIR`; use `$AGENT_TOOL_SHIM_DIR/agent-task-context`, `$AGENT_TOOL_SHIM_DIR/agent-cache-info`, and `$AGENT_TOOL_SHIM_DIR/agent-progress <step> <message>` so login shells cannot hide them.",
     "",
     `Task ID: ${env.taskId}`,
@@ -2546,14 +2416,16 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     contextText ? "Codegen preflight context:" : undefined,
     contextText || undefined,
     contextText
-      ? "Use the preflight context as a starting map, not as proof. If exact request anchor target files are present, inspect those before lifecycle files. Concrete anchors from the request outrank broad lifecycle guesses. Make the suggested first edit and first implementable invariant true."
+      ? "Use the preflight context as an execution map, not a research backlog. If exact request anchor target files are present, inspect those before lifecycle files. Concrete anchors from the request outrank broad lifecycle guesses. Make the suggested first edit and first implementable invariant true."
       : undefined,
     "",
     "Patch-first budget:",
     "- Read AGENTS.md if present, then inspect only the smallest snippets needed to make the first edit.",
     "- When exact request anchor targets are present, read the top target file around the matched line and patch that owner before reading broad project-map files.",
     "- If no anchor targets exist, read the likely entry point, one helper/adapter, and one closest test, then edit.",
+    "- Treat the first inspection pass as capped: AGENTS.md, the top target file, and at most one nearest caller/test before the first code diff.",
     "- Use `apply_patch` for the first focused edit when available. The first patch can be small and imperfect; refine it after tests or caller reads.",
+    "- Batch adjacent edits into one coherent patch. If an exact replacement fails once, switch to a line-numbered patch or smaller anchored edit instead of retrying the same replacement.",
     "- Do not inspect status plumbing, queue code, observability UI, or extra tests before the first edit unless one of those files is the top target or required by the code you are changing.",
     "- If you are unsure, make a small reversible implementation edit in the best target file and refine it after tests or callers reveal more.",
     "",
@@ -2572,7 +2444,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     "- Do not repeatedly reread the same file or expand into unrelated UI, observability, deployment, or queue code unless the lifecycle map shows it is required.",
     "- After a few targeted searches, stop searching for exact request vocabulary and act on the closest mechanism you found.",
     "- Do not leave the checkout clean after you understand the target. Create a diff, then inspect more only to refine it.",
-    "- Produce a real code diff promptly; pure analysis without edits will be stopped and retried.",
+    "- Produce a real code diff promptly; pure analysis without edits is a failed attempt.",
     "",
     "Requested update:",
     env.taskRequest.trim(),
@@ -2601,12 +2473,6 @@ export function codexResumeExecArgs(input: { model: string }) {
 
 function codexAttemptArgs(input: { command: "exec" | "resume"; model: string }) {
   return input.command === "exec" ? codexExecArgs({ checkoutDir: ".", model: input.model }) : codexResumeExecArgs({ model: input.model });
-}
-
-export function codegenFirstDiffDeadlineMs(contextPack?: Pick<CodegenContextPack, "anchorTargetFiles">, attempt = 1) {
-  const anchored = Boolean(contextPack?.anchorTargetFiles?.length);
-  if (attempt > 1) return anchored ? CODEX_ANCHORED_FIRST_DIFF_RECOVERY_DEADLINE_MS : CODEX_FIRST_DIFF_RECOVERY_DEADLINE_MS;
-  return anchored ? CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS : CODEX_FIRST_DIFF_DEADLINE_MS;
 }
 
 export function codeUpdateRecoveryPrompt(
@@ -2642,7 +2508,6 @@ export function codeUpdateRecoveryPrompt(
           "Previous attempt summary:",
           `- exit code: ${previous.exitCode}`,
           `- duration: ${formatDuration(previous.durationMs)}`,
-          `- watchdog: ${previous.watchdogReason ?? "none"}`,
           previous.stdoutTail ? `- stdout tail:\n${previous.stdoutTail}` : "",
           previous.stderrTail ? `- stderr tail:\n${previous.stderrTail}` : ""
         ]
@@ -2665,54 +2530,7 @@ function recoveryAnchorTargetText(contextPack?: CodegenContextPack) {
     .join("\n");
 }
 
-export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWatchdogDecision | null {
-  const noFirstDiffTimeoutMs = input.noFirstDiffTimeoutMs ?? CODEX_FIRST_DIFF_DEADLINE_MS;
-  const idleTimeoutMs = input.idleTimeoutMs ?? CODEX_IDLE_WITHOUT_DIFF_MS;
-  const reconnectStallTimeoutMs = input.reconnectStallTimeoutMs ?? CODEX_RECONNECT_STALL_MS;
-  const maxRuntimeMs = input.maxRuntimeMs ?? CODEX_MAX_RUNTIME_MS;
-
-  if (!input.hasDiff && input.elapsedMs >= noFirstDiffTimeoutMs) {
-    return {
-      action: "fail",
-      reason: "no_first_diff",
-      message: `Coding harness produced no code diff after ${formatDuration(input.elapsedMs)}; stopping early so this can be retried with a narrower implementation pass.`
-    };
-  }
-
-  if (input.reconnectSeen && input.reconnectStallMs != null && input.reconnectStallMs >= reconnectStallTimeoutMs) {
-    return {
-      action: input.hasDiff ? "continue" : "fail",
-      reason: "reconnect_stall",
-      message: input.hasDiff
-        ? "Coding harness stalled after a reconnect but already produced a code diff; stopping it and continuing to verification."
-        : "Coding harness stalled after a reconnect before producing a code diff; stopping early so this can be retried."
-    };
-  }
-
-  if (input.idleMs >= idleTimeoutMs) {
-    return {
-      action: input.hasDiff ? "continue" : "fail",
-      reason: input.hasDiff ? "idle_after_diff" : "idle_before_diff",
-      message: input.hasDiff
-        ? "Coding harness stopped producing output after creating a code diff; stopping it and continuing to verification."
-        : "Coding harness stopped producing output before creating a code diff; stopping early so this can be retried."
-    };
-  }
-
-  if (input.elapsedMs >= maxRuntimeMs) {
-    return {
-      action: input.hasDiff ? "continue" : "fail",
-      reason: "max_runtime",
-      message: input.hasDiff
-        ? `Coding harness reached ${formatDuration(input.elapsedMs)} with a code diff; stopping it and continuing to verification.`
-        : `Coding harness reached ${formatDuration(input.elapsedMs)} without a code diff; stopping before the Kubernetes deadline.`
-    };
-  }
-
-  return null;
-}
-
-export function codeUpdatePullRequestBody(input: { env: Pick<SandboxEnv, "taskRequest" | "requestedBy">; verifyPassed: boolean }) {
+export function codeUpdatePullRequestBody(input: { env: Pick<SandboxEnv, "taskRequest" | "requestedBy"> }) {
   return [
     "## Why",
     "",
@@ -2725,8 +2543,9 @@ export function codeUpdatePullRequestBody(input: { env: Pick<SandboxEnv, "taskRe
     "",
     "## Testing",
     "",
-    `- \`npm run verify\`: ${input.verifyPassed ? "passed" : "failed; opened as draft"}`,
+    "- Agent ran focused checks in the sandbox where applicable.",
     "- `npm run scan:release`: passed",
+    "- Full verification is handled by CI after the PR opens.",
     "",
     "---",
     "",
@@ -2745,13 +2564,12 @@ async function runCommand(
     allowFailure?: boolean;
     taskEnv?: SandboxEnv;
     step?: string;
-    codexWatchdog?: CodexWatchdogOptions;
+    onStdoutText?: (text: string) => void | Promise<void>;
   }
 ): Promise<CommandResult> {
   console.log(JSON.stringify({ event: "sandbox.command.start", command: options.displayCommand ?? command, args: options.displayCommand ? ["[displayed command redacted]"] : redactedArgs(command, args), cwd: options.cwd }));
   const startedAt = Date.now();
   const step = options.step ?? command;
-  let lastOutputAt = startedAt;
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
@@ -2775,31 +2593,20 @@ async function runCommand(
         }, 30_000)
       : undefined;
   activityTimer?.unref?.();
-  const codexWatchdog = options.codexWatchdog
-    ? startCodexWatchdog({
-        env: options.taskEnv,
-        child,
-        startedAt,
-        command: commandLine,
-        outputState: () => ({
-          stdout,
-          stderr,
-          lastOutputAt
-        }),
-        options: options.codexWatchdog
-      })
-    : undefined;
 
   child.stdout.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stdout += text;
-    lastOutputAt = Date.now();
+    if (options.onStdoutText) {
+      void Promise.resolve(options.onStdoutText(text)).catch((error) => {
+        console.error("Command stdout observer failed", error);
+      });
+    }
     process.stdout.write(text);
   });
   child.stderr.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     stderr += text;
-    lastOutputAt = Date.now();
     process.stderr.write(text);
   });
 
@@ -2814,7 +2621,11 @@ async function runCommand(
     });
   } finally {
     if (activityTimer) clearInterval(activityTimer);
-    codexWatchdog?.stop();
+  }
+  if (options.onStdoutText) {
+    await Promise.resolve(options.onStdoutText("\n")).catch((error) => {
+      console.error("Command stdout observer failed while flushing", error);
+    });
   }
   const duration = Date.now() - startedAt;
   await recordCommand(options.taskEnv, {
@@ -2823,8 +2634,7 @@ async function runCommand(
     exitCode,
     outputTail: tail(stdout, MAX_CAPTURED_COMMAND_OUTPUT),
     errorTail: tail(stderr, MAX_CAPTURED_COMMAND_OUTPUT),
-    durationMs: duration,
-    metadata: codexWatchdog?.result()
+    durationMs: duration
   });
   await recordArtifact(options.taskEnv, {
     kind: "command_log",
@@ -2833,12 +2643,12 @@ async function runCommand(
       .filter(Boolean)
       .join("\n"),
     contentType: "text/plain",
-    metadata: { step, command: commandLine, exitCode, watchdog: codexWatchdog?.result() }
+    metadata: { step, command: commandLine, exitCode }
   });
   if (exitCode !== 0 && !options.allowFailure) {
     throw new Error(`${command} ${args.join(" ")} failed with exit code ${exitCode}: ${stderr || stdout}`);
   }
-  return { exitCode, stdout, stderr, durationMs: duration, watchdog: codexWatchdog?.result() };
+  return { exitCode, stdout, stderr, durationMs: duration };
 }
 
 async function recordCommand(
@@ -2862,210 +2672,147 @@ async function recordCommand(
   });
 }
 
-function startCodexWatchdog(input: {
-  env?: SandboxEnv;
-  child: ReturnType<typeof spawn>;
-  startedAt: number;
-  command: string;
-  outputState: () => { stdout: string; stderr: string; lastOutputAt: number };
-  options: CodexWatchdogOptions;
-}) {
-  let stopped = false;
-  let checking = false;
-  let killTimer: NodeJS.Timeout | undefined;
-  const result: CodexWatchdogResult = { killed: false };
-  const pollMs = input.options.pollMs ?? CODEX_WATCHDOG_POLL_MS;
-  let lastStdoutChars = 0;
-  let lastStderrChars = 0;
-  let reconnectSeenAt: number | null = null;
-  let reconnectOutputChangedAt: number | null = null;
+type OpenCodeOutputRecord = {
+  type: string;
+  timestamp: number;
+  part: Record<string, unknown>;
+};
 
-  const stop = () => {
-    stopped = true;
-    clearInterval(timer);
-    if (killTimer) clearTimeout(killTimer);
+function createOpenCodeProgressObserver(input: { env: SandboxEnv; attempt: number; totalAttempts: number }) {
+  const state = {
+    buffer: "",
+    round: 0,
+    firstTimestamp: null as number | null,
+    firstEditReported: false,
+    currentTools: [] as string[],
+    emitted: new Set<string>()
   };
 
-  const kill = async (reason: string, message: string, metadata: Record<string, unknown>) => {
-    if (result.killed || stopped) return;
-    result.killed = true;
-    result.reason = reason;
-    result.durationMs = Date.now() - input.startedAt;
-    result.lastOutputAtMs = Math.max(0, input.outputState().lastOutputAt - input.startedAt);
-    await progress(input.env!, `${input.options.watchdogStepPrefix ?? "codex_watchdog"}_${reason}`, message, {
-      ...metadata,
-      attempt: input.options.attempt,
-      totalAttempts: input.options.totalAttempts,
-      command: input.command,
-      durationMs: result.durationMs,
-      lastOutputAtMs: result.lastOutputAtMs
+  const emit = (step: string, message: string, metadata: Record<string, unknown> = {}) => {
+    const key = `${step}:${message}:${JSON.stringify(metadata).slice(0, 400)}`;
+    if (state.emitted.has(key)) return;
+    state.emitted.add(key);
+    void progress(input.env, step, message, {
+      attempt: input.attempt,
+      totalAttempts: input.totalAttempts,
+      harness: "opencode-server",
+      ...metadata
     }).catch(() => undefined);
-    input.child.kill("SIGTERM");
-    killTimer = setTimeout(() => {
-      if (input.child.exitCode === null && input.child.signalCode === null) input.child.kill("SIGKILL");
-    }, 5_000);
-    killTimer.unref?.();
   };
 
-  const timer = setInterval(() => {
-    if (!input.env || checking || stopped || result.killed) return;
-    const env = input.env;
-    checking = true;
-    void (async () => {
-      try {
-        const durationMs = Date.now() - input.startedAt;
-        const outputState = input.outputState();
-        const outputChanged = outputState.stdout.length !== lastStdoutChars || outputState.stderr.length !== lastStderrChars;
-        if (outputChanged) {
-          lastStdoutChars = outputState.stdout.length;
-          lastStderrChars = outputState.stderr.length;
+  return (chunk: string) => {
+    state.buffer += chunk;
+    const lines = state.buffer.split(/\r?\n/);
+    state.buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      for (const record of parseOpenCodeOutputLine(line)) {
+        state.firstTimestamp ??= record.timestamp;
+        const durationMs = Math.max(0, record.timestamp - state.firstTimestamp);
+        if (record.type === "step_start") {
+          state.round += 1;
+          state.currentTools = [];
+          emit("opencode_round_started", `OpenCode started round ${state.round}.`, { round: state.round, durationMs });
+          continue;
         }
-        if (CODEX_RECONNECT_PATTERN.test(outputState.stdout) || CODEX_RECONNECT_PATTERN.test(outputState.stderr)) {
-          reconnectSeenAt ??= Date.now();
-          if (outputChanged) reconnectOutputChangedAt = Date.now();
+        if (record.type === "tool_use") {
+          const tool = openCodeToolProgressSummary(record.part);
+          state.currentTools.push(tool.name);
+          const step = `opencode_tool_${sanitizeStepName(tool.name)}`;
+          emit(step, openCodeToolProgressMessage(tool), {
+            round: state.round,
+            tool: tool.name,
+            status: tool.status,
+            title: tool.title,
+            output: tool.output,
+            durationMs: tool.durationMs ?? durationMs
+          });
+          if (!state.firstEditReported && tool.name === "edit") {
+            state.firstEditReported = true;
+            emit("opencode_first_edit", "OpenCode made its first code edit.", {
+              round: state.round,
+              tool: tool.name,
+              title: tool.title,
+              durationMs
+            });
+          }
+          continue;
         }
-        const status = await gitStatusPorcelain(input.options.checkoutDir).catch(() => "");
-        const producedDiff = Boolean(status.trim());
-        if (producedDiff && result.firstDiffSeenAtMs == null) {
-          result.firstDiffSeenAtMs = durationMs;
-          await progress(env, input.options.firstDiffStep ?? "codex_first_diff", input.options.firstDiffMessage ?? "Codex produced its first visible code diff.", {
-            attempt: input.options.attempt,
-            durationMs,
-            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
-          }).catch(() => undefined);
+        if (record.type === "text") {
+          const text = stringValue(objectValue(record.part.text)?.text) ?? stringValue(record.part.text) ?? stringValue(record.part.message);
+          if (text) {
+            emit("opencode_assistant_message", `OpenCode said: ${truncateSingleLine(text, 180)}`, {
+              round: state.round,
+              durationMs
+            });
+          }
+          continue;
         }
-
-        const idleMs = Date.now() - outputState.lastOutputAt;
-        const reconnectStallMs = reconnectSeenAt == null ? null : Date.now() - (reconnectOutputChangedAt ?? reconnectSeenAt);
-        const decision = evaluateCodegenWatchdog({
-          elapsedMs: durationMs,
-          idleMs,
-          hasDiff: producedDiff,
-          reconnectSeen: reconnectSeenAt != null,
-          reconnectStallMs,
-          noFirstDiffTimeoutMs: input.options.firstDiffDeadlineMs,
-          idleTimeoutMs: input.options.idleWithoutDiffMs,
-          reconnectStallTimeoutMs: input.options.reconnectStallMs,
-          maxRuntimeMs: input.options.maxRuntimeMs
-        });
-        if (decision) {
-          await kill(decision.reason, decision.message, {
-            idleMs,
-            action: decision.action,
-            reconnectSeen: reconnectSeenAt != null,
-            reconnectStallMs,
-            stdoutChars: outputState.stdout.length,
-            stderrChars: outputState.stderr.length,
-            stdoutTail: tail(outputState.stdout, MAX_ACTIVITY_COMMAND_OUTPUT),
-            stderrTail: tail(outputState.stderr, MAX_ACTIVITY_COMMAND_OUTPUT),
-            hasDiff: producedDiff,
-            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
+        if (record.type === "step_finish") {
+          const reason = stringValue(record.part.reason);
+          const tools = uniqueStrings(state.currentTools);
+          const message = tools.length
+            ? `OpenCode finished round ${state.round} after ${formatToolNameList(tools)}.`
+            : `OpenCode finished round ${state.round}.`;
+          emit("opencode_round_finished", message, {
+            round: state.round,
+            reason,
+            tools,
+            tokens: objectValue(record.part.tokens),
+            durationMs
           });
         }
-      } finally {
-        checking = false;
       }
-    })();
-  }, pollMs);
-  timer.unref?.();
-
-  return {
-    stop,
-    result: () => result
+    }
   };
 }
 
-function startCodexAppServerWatchdog(input: {
-  env: SandboxEnv;
-  startedAt: number;
-  command: string;
-  checkoutDir: string;
-  attempt: number;
-  totalAttempts: number;
-  firstDiffDeadlineMs?: number;
-  idleWithoutDiffMs?: number;
-  maxRuntimeMs?: number;
-  pollMs?: number;
-  activityState: () => { lastNotificationAt: number; notificationCount: number; transcriptTail: string };
-  close: () => Promise<void>;
-}) {
-  let stopped = false;
-  let checking = false;
-  const result: CodexWatchdogResult = { killed: false };
-  const pollMs = input.pollMs ?? CODEX_WATCHDOG_POLL_MS;
+function parseOpenCodeOutputLine(line: string): OpenCodeOutputRecord[] {
+  const index = line.indexOf('{"type"');
+  if (index < 0) return [];
+  try {
+    const parsed = JSON.parse(line.slice(index)) as Record<string, unknown>;
+    const type = stringValue(parsed.type);
+    const timestamp = numberValue(parsed.timestamp);
+    if (!type || timestamp == null) return [];
+    return [{ type, timestamp, part: objectValue(parsed.part) ?? {} }];
+  } catch {
+    return [];
+  }
+}
 
-  const stop = () => {
-    stopped = true;
-    clearInterval(timer);
-  };
-
-  const close = async (reason: string, message: string, metadata: Record<string, unknown>) => {
-    if (result.killed || stopped) return;
-    const activity = input.activityState();
-    result.killed = true;
-    result.reason = reason;
-    result.durationMs = Date.now() - input.startedAt;
-    result.lastOutputAtMs = Math.max(0, activity.lastNotificationAt - input.startedAt);
-    await progress(input.env, `codex_app_server_watchdog_${reason}`, message, {
-      ...metadata,
-      attempt: input.attempt,
-      totalAttempts: input.totalAttempts,
-      command: input.command,
-      durationMs: result.durationMs,
-      lastOutputAtMs: result.lastOutputAtMs
-    }).catch(() => undefined);
-    await input.close().catch(() => undefined);
-  };
-
-  const timer = setInterval(() => {
-    if (checking || stopped || result.killed) return;
-    checking = true;
-    void (async () => {
-      try {
-        const durationMs = Date.now() - input.startedAt;
-        const activity = input.activityState();
-        const status = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
-        const producedDiff = Boolean(status.trim());
-        if (producedDiff && result.firstDiffSeenAtMs == null) {
-          result.firstDiffSeenAtMs = durationMs;
-          await progress(input.env, "codex_app_server_first_diff", "Codex app-server produced its first visible code diff.", {
-            attempt: input.attempt,
-            durationMs,
-            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
-          }).catch(() => undefined);
-        }
-        const idleMs = Date.now() - activity.lastNotificationAt;
-        const decision = evaluateCodegenWatchdog({
-          elapsedMs: durationMs,
-          idleMs,
-          hasDiff: producedDiff,
-          reconnectSeen: false,
-          reconnectStallMs: null,
-          noFirstDiffTimeoutMs: input.firstDiffDeadlineMs,
-          idleTimeoutMs: input.idleWithoutDiffMs,
-          maxRuntimeMs: input.maxRuntimeMs
-        });
-        if (decision) {
-          await close(decision.reason, decision.message, {
-            idleMs,
-            action: decision.action,
-            notificationCount: activity.notificationCount,
-            transcriptTail: activity.transcriptTail,
-            hasDiff: producedDiff,
-            gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
-          });
-        }
-      } finally {
-        checking = false;
-      }
-    })();
-  }, pollMs);
-  timer.unref?.();
-
+function openCodeToolProgressSummary(part: Record<string, unknown>) {
+  const state = objectValue(part.state);
+  const input = objectValue(state?.input);
+  const time = objectValue(state?.time);
+  const name = stringValue(part.tool) ?? "tool";
+  const status = stringValue(state?.status);
+  const title = stringValue(state?.title) ?? stringValue(input?.command) ?? stringValue(input?.filePath) ?? stringValue(input?.pattern) ?? "";
+  const output = openCodeProgressOutput(name, stringValue(state?.output) ?? "");
+  const startedAt = numberValue(time?.start);
+  const endedAt = numberValue(time?.end);
   return {
-    stop,
-    result: () => result
+    name,
+    status,
+    title,
+    output,
+    durationMs: startedAt != null && endedAt != null && endedAt >= startedAt ? endedAt - startedAt : null
   };
+}
+
+function openCodeToolProgressMessage(tool: ReturnType<typeof openCodeToolProgressSummary>) {
+  const title = tool.title ? ` ${truncateSingleLine(tool.title, 140)}` : "";
+  if (tool.name === "edit") return `OpenCode is editing${title}.`;
+  if (tool.name === "read") return `OpenCode is reading${title}.`;
+  if (tool.name === "grep" || tool.name === "glob") return `OpenCode is searching${title}.`;
+  if (tool.name === "bash") return `OpenCode is running${title}.`;
+  return `OpenCode is using ${tool.name}${title}.`;
+}
+
+function openCodeProgressOutput(toolName: string, output: string) {
+  if (!output.trim()) return "";
+  if (toolName === "read") return "";
+  if (toolName === "edit" && /edit applied successfully/i.test(output)) return "Edit applied successfully.";
+  return truncateSingleLine(output, 220);
 }
 
 function codexNotificationSummary(notification: CodexAppServerNotification): {
@@ -3074,9 +2821,12 @@ function codexNotificationSummary(notification: CodexAppServerNotification): {
   metadata: Record<string, unknown>;
 } {
   const method = notification.method;
-  const itemType = jsonStringAt(notification.raw, ["params", "item", "type"]) ?? jsonStringAt(notification.raw, ["params", "type"]);
-  const itemId = jsonStringAt(notification.raw, ["params", "item", "id"]) ?? jsonStringAt(notification.raw, ["params", "itemId"]);
-  const command = jsonStringAt(notification.raw, ["params", "command"]) ?? jsonStringAt(notification.raw, ["params", "cmd"]);
+  const params = objectValue(notification.params) ?? objectValue(objectValue(notification.raw)?.params);
+  const item = objectValue(params?.item);
+  const itemType = stringValue(item?.type) ?? stringValue(params?.type);
+  const itemId = stringValue(item?.id) ?? stringValue(params?.itemId);
+  const command = stringValue(item?.command) ?? stringValue(params?.command) ?? stringValue(params?.cmd);
+  const agentText = stringValue(item?.text) ?? stringValue(params?.text);
   const metadata: Record<string, unknown> = {
     itemType,
     itemId,
@@ -3094,9 +2844,31 @@ function codexNotificationSummary(notification: CodexAppServerNotification): {
     };
   }
   if (method === "item/started") {
+    if (itemType === "commandExecution" && command) {
+      return {
+        message: `Codex is running: ${truncateSingleLine(command, 180)}`,
+        report: true,
+        metadata: { ...metadata, command }
+      };
+    }
+    if (itemType === "reasoning") return { message: "Codex is reasoning through the change.", report: true, metadata };
     return { message: `Codex started ${itemType ?? "an item"}.`, report: true, metadata };
   }
   if (method === "item/completed") {
+    if (itemType === "commandExecution" && command) {
+      return {
+        message: `Codex finished: ${truncateSingleLine(command, 180)}`,
+        report: true,
+        metadata: { ...metadata, command, status: stringValue(item?.status), exitCode: numberValue(item?.exitCode), durationMs: numberValue(item?.durationMs) }
+      };
+    }
+    if (itemType === "agentMessage" && agentText) {
+      return {
+        message: `Codex reported: ${truncateSingleLine(agentText, 180)}`,
+        report: true,
+        metadata: { ...metadata, text: truncateSingleLine(agentText, 500) }
+      };
+    }
     return { message: `Codex completed ${itemType ?? "an item"}.`, report: true, metadata };
   }
   if (method === "turn/diff/updated") return { message: "Codex reported a diff update.", report: true, metadata };
@@ -3135,6 +2907,29 @@ function jsonStringAt(value: unknown, keys: string[]): string | undefined {
     current = (current as Record<string, unknown>)[key];
   }
   return typeof current === "string" ? current : undefined;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function truncateSingleLine(value: string, maxLength: number) {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= maxLength) return singleLine;
+  return `${singleLine.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function formatToolNameList(tools: string[]) {
+  if (tools.length <= 2) return tools.join(" and ");
+  return `${tools.slice(0, 2).join(", ")} and ${tools.length - 2} more`;
 }
 
 async function recordArtifact(

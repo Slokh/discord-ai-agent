@@ -56,30 +56,23 @@ describe("run summaries", () => {
     ]);
   });
 
-  it("diagnoses codegen runs waiting for the first code diff", () => {
+  it("diagnoses active codegen runs as inspectable live progress", () => {
     const run = codegenRun({ status: "running", currentStep: "codex_app_server_attempt_1" });
-    const events = [
-      runEvent({
-        name: "task.progress",
-        summary: "Waiting up to 1m 30s for the first code diff.",
-        metadata: { step: "codex_first_diff_deadline", deadlineMs: 90_000 }
-      })
-    ];
 
-    expect(diagnosticsForRun(run, [], events)).toContain("Waiting for the first code diff; deadline is 1m 30s.");
+    expect(diagnosticsForRun(run, [], [])).toContain("Coding agent is running; inspect the latest harness, tool, and command events for live progress.");
   });
 
-  it("diagnoses codegen runs that hit the no-diff watchdog", () => {
+  it("diagnoses codegen runs that finished without a diff", () => {
     const run = codegenRun({ status: "no_changes", summary: "Agent task produced no diff." });
     const events = [
       runEvent({
         name: "task.progress",
-        summary: "Codex produced no code diff after 1m 30s.",
-        metadata: { step: "codex_app_server_watchdog_no_first_diff", watchdogReason: "no_first_diff" }
+        summary: "Codex app-server attempt 1 finished without a code diff.",
+        metadata: { step: "codex_app_server_attempt_1_no_diff" }
       })
     ];
 
-    expect(diagnosticsForRun(run, [], events)).toContain("Model produced no code diff before the first-diff deadline.");
+    expect(diagnosticsForRun(run, [], events)).toContain("Coding agent finished without leaving a code diff.");
   });
 });
 

@@ -17,7 +17,7 @@ describe("agent task Discord notifications", () => {
     const task = agentTask({ status: "running", statusMessage: "Preparing the sandbox." });
 
     expect(renderAgentTaskMessage(task).content).toBe(
-      ["Preparing the sandbox.", "", "Task: `Improve thing`", "Status: `running`", "Task ID: `task-1`"].join("\n")
+      ["Working on `Improve thing`.", "Preparing the sandbox.", "Latest step: sandbox running", "Task ID: `task-1`"].join("\n")
     );
   });
 

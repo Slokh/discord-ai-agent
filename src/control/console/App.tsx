@@ -75,6 +75,7 @@ type FlowItem = {
   artifact?: RunArtifact;
 };
 type CodexTranscriptItemKind = "message" | "command" | "warning" | "error" | "lifecycle" | "tokens" | "reasoning";
+type OpenCodeTranscriptItemKind = "round" | "tool" | "message" | "error" | "tokens";
 type CodexCommandStart = {
   timestamp: string;
   command: string | null;
@@ -96,6 +97,35 @@ export type ParsedCodexTranscript = {
     body: string;
     command: string;
     output: string;
+  }>;
+};
+type OpenCodeToolSummary = {
+  name: string;
+  status: string | null;
+  title: string;
+  output: string;
+  durationMs: number | null;
+};
+export type ParsedOpenCodeTranscript = {
+  isTranscript: boolean;
+  launchCommand: string | null;
+  rounds: number;
+  toolCalls: number;
+  textMessages: number;
+  tokenTotal: number | null;
+  firstToolAtMs: number | null;
+  firstEditAtMs: number | null;
+  slowestRound: { round: number; durationMs: number; title: string } | null;
+  items: Array<{
+    id: string;
+    kind: OpenCodeTranscriptItemKind;
+    title: string;
+    timestamp: string;
+    body: string;
+    command: string;
+    output: string;
+    durationMs: number | null;
+    tools: OpenCodeToolSummary[];
   }>;
 };
 
@@ -1052,6 +1082,7 @@ function TimelineArtifactInline({ artifact }: { artifact: RunArtifact }) {
   }, [artifact.artifactId, artifact.runId]);
 
   const visibleContent = content || artifact.preview;
+  const waitForFullOpenCodeArtifact = isOpenCodeTranscriptArtifact(artifact) && !content && loading;
   return (
     <>
       {loading && <span className="timeline-artifact-loading">Loading full artifact...</span>}
@@ -1061,34 +1092,71 @@ function TimelineArtifactInline({ artifact }: { artifact: RunArtifact }) {
           <span>{error}</span>
         </div>
       )}
-      {isCodexTranscriptArtifact(artifact) ? <CodexTranscript artifact={artifact} content={visibleContent} /> : <pre className="timeline-artifact-code">{visibleContent}</pre>}
+      {waitForFullOpenCodeArtifact ? null : isOpenCodeTranscriptArtifact(artifact) ? (
+        <OpenCodeTranscript content={visibleContent} />
+      ) : isCodexTranscriptArtifact(artifact) ? (
+        <CodexTranscript content={visibleContent} />
+      ) : (
+        <pre className="timeline-artifact-code">{visibleContent}</pre>
+      )}
     </>
   );
 }
 
-function CodexTranscript({ artifact, content }: { artifact: RunArtifact; content: string }) {
-  const transcript = useMemo(() => parseCodexTranscript(content), [content]);
+function OpenCodeTranscript({ content }: { content: string }) {
+  const transcript = useMemo(() => parseOpenCodeTranscript(content), [content]);
   if (!transcript.isTranscript) return <pre className="timeline-artifact-code">{content}</pre>;
-  const watchdog = objectValue(artifact.metadata.watchdog);
-  const watchdogKilled = watchdog?.killed === true;
-  const watchdogReason = stringValue(watchdog?.reason);
-  const watchdogDurationMs = numericMetadata(watchdog?.durationMs);
-  const lastOutputAtMs = numericMetadata(watchdog?.lastOutputAtMs);
   return (
-    <div className="codex-transcript">
-      {watchdogKilled && (
-        <div className="codex-transcript-stop">
-          <strong>Stopped by watchdog{watchdogReason ? `: ${watchdogReason}` : ""}</strong>
-          <span>
-            {[
-              watchdogDurationMs != null ? `Stopped after ${formatDuration(watchdogDurationMs)}` : "",
-              lastOutputAtMs != null ? `last output at ${formatDuration(lastOutputAtMs)}` : ""
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </span>
+    <div className="codex-transcript opencode-transcript">
+      <div className="codex-transcript-summary">
+        <Metric label="Rounds" value={transcript.rounds} />
+        <Metric label="Tool calls" value={transcript.toolCalls} />
+        <Metric label="First edit" value={transcript.firstEditAtMs == null ? "none" : formatDuration(transcript.firstEditAtMs)} />
+        <Metric label="Tokens" value={transcript.tokenTotal == null ? "unknown" : transcript.tokenTotal.toLocaleString()} />
+      </div>
+      {transcript.slowestRound && (
+        <div className="codex-transcript-stop opencode-transcript-insight">
+          <strong>Slowest model round: {transcript.slowestRound.title}</strong>
+          <span>{formatDuration(transcript.slowestRound.durationMs)}</span>
         </div>
       )}
+      <div className="codex-transcript-list">
+        {transcript.items.map((item) => (
+          <article key={item.id} className={`codex-transcript-item ${item.kind}`}>
+            <div className="codex-transcript-item-head">
+              <strong>{item.title}</strong>
+              <span>{[item.durationMs != null ? formatDuration(item.durationMs) : null, formatDate(item.timestamp)].filter(Boolean).join(" · ")}</span>
+            </div>
+            {item.body && <p>{item.body}</p>}
+            {item.tools.length > 0 && (
+              <div className="opencode-tool-list">
+                {item.tools.map((tool, index) => (
+                  <div className="opencode-tool" key={`${item.id}-${tool.name}-${index}`}>
+                    <div>
+                      <strong>{tool.name}</strong>
+                      {tool.status && <span>{tool.status}</span>}
+                      {tool.durationMs != null && <span>{formatDuration(tool.durationMs)}</span>}
+                    </div>
+                    {tool.title && <code>{tool.title}</code>}
+                    {tool.output && <p>{tool.output}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {item.command && <code>{item.command}</code>}
+            {item.output && <pre>{item.output}</pre>}
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CodexTranscript({ content }: { content: string }) {
+  const transcript = useMemo(() => parseCodexTranscript(content), [content]);
+  if (!transcript.isTranscript) return <pre className="timeline-artifact-code">{content}</pre>;
+  return (
+    <div className="codex-transcript">
       <div className="codex-transcript-summary">
         <Metric label="Messages" value={transcript.agentMessages} />
         <Metric label="Commands" value={transcript.commands} />
@@ -1559,12 +1627,18 @@ export function codegenTimelineTrace(
     addGroup(timelineStepFromCodegenEvent(mention, startedAt, { title: "User prompt received", kind: "input" }));
   }
 
-  const modelSelection = event((candidate) => candidate.name === "agent.model.round.complete" && stringArrayMetadata(candidate.metadata.selectedLocalTools).includes("openGithubPullRequest"));
+  const modelSelection = event((candidate) => candidate.name === "agent.model.round.complete" && stringArrayMetadata(candidate.metadata.selectedLocalTools).some(isCodegenToolName));
   if (modelSelection) {
-    addGroup(timelineStepFromCodegenEvent(modelSelection, startedAt, { title: "Model chose code update", kind: "model" }));
+    addGroup(
+      timelineStepFromCodegenEvent(modelSelection, startedAt, {
+        title: "Model chose code update",
+        kind: "model",
+        summary: "The model selected the coding-agent tool."
+      })
+    );
   }
 
-  const codegenTool = event((candidate) => candidate.name === "agent.tool.complete" && candidate.metadata.toolName === "openGithubPullRequest");
+  const codegenTool = event((candidate) => candidate.name === "agent.tool.complete" && isCodegenToolName(candidate.metadata.toolName));
   if (codegenTool) {
     addGroup(
       timelineStepFromCodegenEvent(codegenTool, startedAt, {
@@ -1595,12 +1669,6 @@ export function codegenTimelineTrace(
     const attemptNumber = codegenAttemptNumber(attempt.name);
     if (attemptNumber == null) continue;
     const harnessName = codegenAttemptHarnessName(attempt.name);
-    const deadline = event(
-      (candidate) =>
-        candidate.name === "task.progress" &&
-        Boolean(stringMetadata(candidate.metadata.step)?.endsWith("first_diff_deadline")) &&
-        candidate.metadata.attempt === attemptNumber
-    );
     const reasoningStarted = event(
       (candidate) =>
         candidate.name === "task.progress" &&
@@ -1614,12 +1682,6 @@ export function codegenTimelineTrace(
         return candidate.name === "task.progress" && (step === "codex_first_diff" || step === "codex_app_server_first_diff" || step === "opencode_first_diff") && candidate.metadata.attempt === attemptNumber;
       }
     );
-    const watchdog = event(
-      (candidate) =>
-        candidate.name === "task.progress" &&
-        String(candidate.metadata.step ?? "").includes("watchdog_no_first_diff") &&
-        candidate.metadata.attempt === attemptNumber
-    );
     const noDiff = event(
       (candidate) =>
         candidate.name === "task.progress" &&
@@ -1627,15 +1689,26 @@ export function codegenTimelineTrace(
           String(candidate.metadata.step ?? "") === `opencode_attempt_${attemptNumber}_no_diff`) &&
         candidate.metadata.attempt === attemptNumber
     );
+    const attemptProgress = events
+      .filter((candidate) => {
+        if (candidate.name !== "task.progress" || candidate.metadata.attempt !== attemptNumber) return false;
+        const step = String(candidate.metadata.step ?? "");
+        if (!/^(opencode_|codex_app_server_)/.test(step)) return false;
+        if (step === `codex_app_server_attempt_${attemptNumber}` || step === `opencode_attempt_${attemptNumber}`) return false;
+        if (step === "codex_app_server_item_started" && /\breasoning\b/i.test(candidate.summary ?? "")) return false;
+        if (step === `codex_app_server_attempt_${attemptNumber}_no_diff` || step === `opencode_attempt_${attemptNumber}_no_diff`) return false;
+        if (step === "codex_app_server_thread" || step === "opencode_server_ready") return false;
+        return step !== "codex_app_server_first_diff" && step !== "opencode_first_diff";
+      })
+      .map((candidate) =>
+        timelineStepFromCodegenEvent(candidate, startedAt, {
+          title: codegenProgressEventTitle(candidate),
+          kind: codegenProgressEventKind(candidate),
+          durationMs: candidate.durationMs
+        })
+      );
     const children = [
       ...artifacts((artifact) => isCodegenAttemptArtifact(artifact, attemptNumber)),
-      deadline
-        ? timelineStepFromCodegenEvent(deadline, startedAt, {
-            title: "First-diff deadline set",
-            kind: "event",
-            durationMs: null
-          })
-        : null,
       reasoningStarted
         ? timelineStepFromCodegenEvent(reasoningStarted, startedAt, {
             title: "Model started reasoning",
@@ -1643,17 +1716,11 @@ export function codegenTimelineTrace(
             durationMs: null
           })
         : null,
+      ...attemptProgress,
       firstDiff
         ? timelineStepFromCodegenEvent(firstDiff, startedAt, {
             title: "First code diff produced",
             kind: "event",
-            durationMs: null
-          })
-        : null,
-      watchdog
-        ? timelineStepFromCodegenEvent(watchdog, startedAt, {
-            title: "No-diff watchdog fired",
-            kind: "error",
             durationMs: null
           })
         : null,
@@ -1671,7 +1738,7 @@ export function codegenTimelineTrace(
       timelineStepFromCodegenSpan(attempt, startedAt, {
         title: `${harnessName} attempt ${attemptNumber}`,
         kind: attempt.status === "failed" ? "error" : "model",
-        summary: codegenAttemptSummary(attempt, noDiff ?? watchdog)
+        summary: codegenAttemptSummary(attempt, noDiff)
       }),
       children
     );
@@ -1749,8 +1816,38 @@ function codegenAttemptHarnessName(value: string) {
   return value.includes("opencode") ? "OpenCode" : "Codex";
 }
 
+function isCodegenToolName(value: unknown) {
+  return value === "runCodingAgent" || value === "openGithubPullRequest";
+}
+
+function codegenProgressEventTitle(event: RunEvent) {
+  const step = stringMetadata(event.metadata.step) ?? event.name;
+  if (step.startsWith("opencode_tool_")) {
+    const tool = stringMetadata(event.metadata.tool) ?? step.replace(/^opencode_tool_/, "").replace(/_/g, " ");
+    return `Tool: ${tool}`;
+  }
+  if (step === "opencode_round_started") return `OpenCode round ${numericMetadata(event.metadata.round) ?? ""}`.trim();
+  if (step === "opencode_round_finished") return `OpenCode round ${numericMetadata(event.metadata.round) ?? ""} finished`.trim();
+  if (step === "opencode_assistant_message") return "OpenCode assistant message";
+  if (step === "codex_app_server_item_started" || step === "codex_app_server_item_completed") {
+    const itemType = stringMetadata(event.metadata.itemType);
+    if (itemType === "commandExecution") return "Codex command";
+    if (itemType === "agentMessage") return "Codex assistant message";
+    if (itemType === "reasoning") return "Codex reasoning";
+  }
+  return timelineEventTitle(step);
+}
+
+function codegenProgressEventKind(event: RunEvent): TimelineStepKind {
+  if (event.level === "error") return "error";
+  const step = stringMetadata(event.metadata.step) ?? event.name;
+  if (step.includes("_tool_") || stringMetadata(event.metadata.tool)) return "tool";
+  if (/opencode|codex|model/i.test(step)) return "model";
+  return "event";
+}
+
 function codegenQueuedSummary(events: RunEvent[]) {
-  const queued = preferredTimelineEvent(events.filter((event) => event.name === "openGithubPullRequest" || event.metadata.toolName === "openGithubPullRequest"));
+  const queued = preferredTimelineEvent(events.filter((event) => isCodegenToolName(event.name) || isCodegenToolName(event.metadata.toolName)));
   if (!queued?.summary) return "The model handed this request to the codegen worker.";
   try {
     const parsed = JSON.parse(queued.summary);
@@ -1767,10 +1864,8 @@ function codegenQueuedSummary(events: RunEvent[]) {
 function codegenAttemptSummary(attempt: RunSpan, outcome: RunEvent | null) {
   const parts = [`Ran ${String(attempt.metadata.command ?? attempt.name)}.`];
   const exitCode = numericMetadata(attempt.metadata.exitCode ?? outcome?.metadata.exitCode);
-  const watchdogReason = stringMetadata(outcome?.metadata.watchdogReason) ?? stringMetadata((attempt.metadata.watchdog as Record<string, unknown> | undefined)?.reason);
   const gitStatus = stringMetadata(outcome?.metadata.gitStatus);
   if (exitCode != null) parts.push(`Exit ${exitCode}.`);
-  if (watchdogReason) parts.push(`Watchdog: ${watchdogReason}.`);
   if (gitStatus === "") parts.push("Git status was clean.");
   return parts.join(" ");
 }
@@ -1778,10 +1873,8 @@ function codegenAttemptSummary(attempt: RunSpan, outcome: RunEvent | null) {
 function codegenAttemptNoDiffSummary(event: RunEvent) {
   const pieces = ["No code diff was produced."];
   const exitCode = numericMetadata(event.metadata.exitCode);
-  const watchdogReason = stringMetadata(event.metadata.watchdogReason);
   const notificationCount = numericMetadata(event.metadata.notificationCount);
   if (exitCode != null) pieces.push(`Exit ${exitCode}.`);
-  if (watchdogReason) pieces.push(`Watchdog: ${watchdogReason}.`);
   if (notificationCount != null) pieces.push(`${notificationCount} ${stringMetadata(event.metadata.harness)?.includes("opencode") ? "OpenCode" : "Codex"} notifications.`);
   return pieces.join(" ");
 }
@@ -1803,8 +1896,10 @@ function isRepositorySetupArtifact(artifact: RunArtifact) {
 function isCodegenAttemptArtifact(artifact: RunArtifact, attempt: number) {
   const metadataAttempt = numericMetadata(artifact.metadata.attempt);
   if (metadataAttempt === attempt) return true;
+  const step = normalizedTimelineName(stringMetadata(artifact.metadata.step) ?? "");
+  if (step === `opencode attempt ${attempt}` || step === `codex attempt ${attempt}` || step === `codex app server attempt ${attempt}`) return true;
   const name = normalizedTimelineName(artifact.name);
-  return name.includes(`attempt ${attempt} transcript`);
+  return name.includes(`attempt ${attempt} transcript`) || name.includes(`opencode attempt ${attempt} command log`);
 }
 
 function timelineStepFromCodegenEvent(
@@ -1859,6 +1954,186 @@ function timelineArtifactTitle(artifact: RunArtifact) {
 
 function isCodexTranscriptArtifact(artifact: RunArtifact) {
   return artifact.kind === "command_log" && /\bcodex\b.+\btranscript\b/i.test(artifact.name);
+}
+
+function isOpenCodeTranscriptArtifact(artifact: RunArtifact) {
+  if (artifact.kind !== "command_log") return false;
+  const step = normalizedTimelineName(stringMetadata(artifact.metadata.step) ?? artifact.name);
+  return /\bopencode attempt \d+\b/.test(step);
+}
+
+export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscript {
+  const lines = content.split(/\r?\n/);
+  const launchCommand = lines.find((line) => line.startsWith("$ "))?.slice(2).trim() || null;
+  const records = lines.flatMap(parseOpenCodeTranscriptRecord);
+  const steps: Array<{
+    start: number;
+    end: number;
+    tools: OpenCodeToolSummary[];
+    texts: string[];
+    finish: Record<string, unknown> | null;
+  }> = [];
+  let current: (typeof steps)[number] | null = null;
+
+  for (const record of records) {
+    if (record.type === "step_start") {
+      current = { start: record.timestamp, end: record.timestamp, tools: [], texts: [], finish: null };
+      continue;
+    }
+    if (!current) continue;
+    if (record.type === "tool_use") {
+      current.tools.push(openCodeToolSummary(record.part));
+      continue;
+    }
+    if (record.type === "text") {
+      const text = stringValue(objectValue(record.part)?.text);
+      if (text) current.texts.push(text);
+      continue;
+    }
+    if (record.type === "step_finish") {
+      current.end = record.timestamp;
+      current.finish = record.part;
+      steps.push(current);
+      current = null;
+    }
+  }
+
+  const firstTimestamp = records[0]?.timestamp ?? null;
+  const items = steps.map((step, index) => openCodeRoundItem(step, index + 1));
+  const toolCalls = items.reduce((total, item) => total + item.tools.length, 0);
+  const textMessages = items.filter((item) => item.kind === "message").length;
+  const tokenTotal = lastNumber(
+    steps.map((step) => numericMetadata(objectValue(step.finish?.tokens)?.total))
+  );
+  const firstToolAtMs = firstTimestamp == null ? null : firstToolOffsetMs(steps, firstTimestamp, () => true);
+  const firstEditAtMs = firstTimestamp == null ? null : firstToolOffsetMs(steps, firstTimestamp, (tool) => tool.name === "edit");
+  const slowestRound =
+    items
+      .filter((item): item is (typeof items)[number] & { durationMs: number } => item.durationMs != null)
+      .map((item, index) => ({ round: index + 1, durationMs: item.durationMs, title: item.title }))
+      .sort((left, right) => right.durationMs - left.durationMs)[0] ?? null;
+
+  if (tokenTotal != null) {
+    const timestamp = timestampToIso(records.at(-1)?.timestamp ?? firstTimestamp ?? 0);
+    items.push({
+      id: "opencode-token-usage",
+      kind: "tokens",
+      title: "Final token usage",
+      timestamp,
+      body: `Total: ${tokenTotal.toLocaleString()}`,
+      command: "",
+      output: "",
+      durationMs: null,
+      tools: []
+    });
+  }
+
+  return {
+    isTranscript: launchCommand != null && records.some((record) => record.type === "step_start" || record.type === "tool_use"),
+    launchCommand,
+    rounds: steps.length,
+    toolCalls,
+    textMessages,
+    tokenTotal,
+    firstToolAtMs,
+    firstEditAtMs,
+    slowestRound,
+    items
+  };
+}
+
+function parseOpenCodeTranscriptRecord(line: string) {
+  const index = line.indexOf('{"type"');
+  if (index < 0) return [];
+  try {
+    const parsed = JSON.parse(line.slice(index)) as Record<string, unknown>;
+    const type = stringValue(parsed.type);
+    const timestamp = numericMetadata(parsed.timestamp);
+    if (!type || timestamp == null) return [];
+    return [
+      {
+        type,
+        timestamp,
+        part: objectValue(parsed.part) ?? {}
+      }
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function openCodeRoundItem(
+  step: { start: number; end: number; tools: OpenCodeToolSummary[]; texts: string[]; finish: Record<string, unknown> | null },
+  round: number
+): ParsedOpenCodeTranscript["items"][number] {
+  const durationMs = Math.max(0, step.end - step.start);
+  const toolNames = step.tools.map((tool) => tool.name).filter(Boolean);
+  const finishReason = stringValue(step.finish?.reason);
+  const tokens = objectValue(step.finish?.tokens);
+  const reasoningTokens = numericMetadata(tokens?.reasoning);
+  const totalTokens = numericMetadata(tokens?.total);
+  const title = toolNames.length > 0 ? `Round ${round}: ${formatToolCallList(toolNames)}` : step.texts.length > 0 ? `Round ${round}: assistant message` : `Round ${round}`;
+  const body = [
+    finishReason ? `Finished: ${finishReason}` : "",
+    totalTokens != null ? `Tokens: ${totalTokens.toLocaleString()}` : "",
+    reasoningTokens != null ? `Reasoning: ${reasoningTokens.toLocaleString()}` : "",
+    step.texts.length > 0 ? step.texts.map((text) => truncateSingleLine(text, 280)).join("\n") : ""
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const timestamp = timestampToIso(step.start);
+  return {
+    id: `opencode-round-${round}-${step.start}`,
+    kind: step.texts.length > 0 && toolNames.length === 0 ? "message" : step.tools.some((tool) => tool.status === "error") ? "error" : "round",
+    title,
+    timestamp,
+    body,
+    command: "",
+    output: "",
+    durationMs,
+    tools: step.tools
+  };
+}
+
+function openCodeToolSummary(part: Record<string, unknown>): OpenCodeToolSummary {
+  const state = objectValue(part.state);
+  const input = objectValue(state?.input);
+  const time = objectValue(state?.time);
+  const name = stringValue(part.tool) ?? "tool";
+  const status = stringValue(state?.status);
+  const title = stringValue(state?.title) ?? stringValue(input?.command) ?? stringValue(input?.filePath) ?? "";
+  const output = openCodeToolOutput(name, stringValue(state?.output) ?? "");
+  const startedAt = numericMetadata(time?.start);
+  const endedAt = numericMetadata(time?.end);
+  return {
+    name,
+    status,
+    title,
+    output,
+    durationMs: startedAt != null && endedAt != null && endedAt >= startedAt ? endedAt - startedAt : null
+  };
+}
+
+function openCodeToolOutput(toolName: string, output: string) {
+  if (!output.trim()) return "";
+  if (toolName === "read") return "";
+  if (toolName === "edit" && /edit applied successfully/i.test(output)) return "Edit applied successfully.";
+  return truncateSingleLine(output, 220);
+}
+
+function firstToolOffsetMs(steps: Array<{ start: number; tools: OpenCodeToolSummary[] }>, firstTimestamp: number, predicate: (tool: OpenCodeToolSummary) => boolean) {
+  for (const step of steps) {
+    if (step.tools.some(predicate)) return Math.max(0, step.start - firstTimestamp);
+  }
+  return null;
+}
+
+function lastNumber(values: Array<number | null>) {
+  return [...values].reverse().find((value): value is number => value != null) ?? null;
+}
+
+function timestampToIso(timestamp: number) {
+  return new Date(timestamp).toISOString();
 }
 
 export function parseCodexTranscript(content: string): ParsedCodexTranscript {
@@ -2674,6 +2949,12 @@ function metadataValue(value: unknown) {
   if (value == null) return "null";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(value);
+}
+
+function truncateSingleLine(value: string, maxLength: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
 function shortId(value: string) {

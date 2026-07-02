@@ -463,8 +463,8 @@ async function handleRequest(input: {
         taskId,
         branchName: body.branchName ?? "",
         prUrl: body.prUrl ?? "",
-        draft: Boolean(body.draft),
-        verifyPassed: Boolean(body.verifyPassed),
+        draft: body.draft ?? false,
+        verifyPassed: body.verifyPassed ?? null,
         metadata: body.metadata
       });
     } else {

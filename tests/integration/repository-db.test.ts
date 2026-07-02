@@ -925,8 +925,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.recordSandboxCommandEvent({
       taskId,
       sandboxRunId,
-      step: "verify",
-      command: "npm run verify",
+      step: "scan",
+      command: "npm run scan:release",
       exitCode: 1,
       outputTail: "stdout tail",
       errorTail: "stderr tail",
@@ -934,14 +934,14 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
 
     await expect(repo.getSandboxCommandEvents({ guildId, visibleChannelIds: [channelId], taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({ taskId, sandboxRunId, step: "verify", exitCode: 1, errorTail: "stderr tail" })
+      expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
     ]);
     await expect(repo.listRecentAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
     await expect(repo.getTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
       expect.objectContaining({ taskId, summary: "codex is still running.", metadata: expect.objectContaining({ stderrTail: "live stderr tail" }) })
     ]);
     await expect(repo.getSandboxCommandEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({ taskId, sandboxRunId, step: "verify", exitCode: 1, errorTail: "stderr tail" })
+      expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
     ]);
     await expect(repo.getSandboxRunsForTask(taskId)).resolves.toEqual([
       expect.objectContaining({ taskId, sandboxRunId, backendJobName: "agent-task-cancel-test" })

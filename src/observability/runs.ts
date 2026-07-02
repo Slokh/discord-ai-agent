@@ -477,22 +477,20 @@ export function diagnosticsForRun(run: RunSummary, spans: RunSpan[], events: Run
 function codegenDiagnosticsForRun(run: RunSummary, events: RunEvent[]) {
   if (run.kind !== "codegen") return [];
   const diagnostics: string[] = [];
-  const latestDeadline = [...events].reverse().find((event) => eventMetadataStep(event) === "codex_first_diff_deadline");
   const firstDiff = [...events].reverse().find((event) => {
     const step = eventMetadataStep(event);
-    return step === "codex_first_diff" || step === "codex_app_server_first_diff";
+    return step === "codex_first_diff" || step === "codex_app_server_first_diff" || step === "opencode_first_diff" || step === "opencode_first_edit";
   });
-  const noDiffWatchdog = [...events]
+  const noDiff = [...events]
     .reverse()
-    .find((event) => eventMetadataStep(event).includes("watchdog_no_first_diff") || event.metadata.watchdogReason === "no_first_diff");
-  if (noDiffWatchdog) {
-    diagnostics.push("Model produced no code diff before the first-diff deadline.");
-  } else if (!isTerminal(run.status) && latestDeadline && !firstDiff) {
-    const deadlineMs = numberFromUnknown(latestDeadline.metadata.deadlineMs);
-    diagnostics.push(`Waiting for the first code diff${deadlineMs == null ? "" : `; deadline is ${formatDuration(deadlineMs)}`}.`);
+    .find((event) => eventMetadataStep(event).endsWith("_no_diff") || run.status === "no_changes");
+  if (noDiff) {
+    diagnostics.push("Coding agent finished without leaving a code diff.");
+  } else if (!isTerminal(run.status) && !firstDiff) {
+    diagnostics.push("Coding agent is running; inspect the latest harness, tool, and command events for live progress.");
   } else if (firstDiff) {
     const durationMs = numberFromUnknown(firstDiff.metadata.durationMs);
-    diagnostics.push(`First code diff appeared${durationMs == null ? "" : ` after ${formatDuration(durationMs)}`}.`);
+    diagnostics.push(`First visible edit appeared${durationMs == null ? "" : ` after ${formatDuration(durationMs)}`}.`);
   }
   return diagnostics;
 }

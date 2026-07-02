@@ -1244,6 +1244,11 @@ kbd {
   font-size: 12px;
 }
 
+.opencode-transcript-insight {
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
+}
+
 .codex-transcript-list {
   display: grid;
   gap: 8px;
@@ -1316,6 +1321,48 @@ kbd {
   overflow: auto;
   padding: 9px;
   white-space: pre-wrap;
+}
+
+.opencode-tool-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.opencode-tool {
+  background: color-mix(in oklab, var(--pane-3) 50%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  border-radius: 7px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.opencode-tool > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.opencode-tool > div strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.opencode-tool > div span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.opencode-tool code {
+  display: block;
+}
+
+.opencode-tool p {
+  margin: 0;
 }
 
 .terminal-panel,

@@ -7,7 +7,6 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   buildCodegenContextPack,
-  codegenFirstDiffDeadlineMs,
   codegenNpmInstallEnv,
   codegenNpmScriptEnv,
   codexConfigToml,
@@ -20,7 +19,6 @@ import {
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
   dependencyCacheKey,
-  evaluateCodegenWatchdog,
   fetchOpenCodeHealth,
   openCodeConfigJson,
   openCodeModelId,
@@ -172,8 +170,7 @@ describe("sandboxRunner", () => {
       env: {
         taskRequest: "Use a loading reaction while the bot is working.",
         requestedBy: "demo-user (100000000000000001)"
-      },
-      verifyPassed: true
+      }
     });
 
     expect(body).toBe(
@@ -189,8 +186,9 @@ describe("sandboxRunner", () => {
         "",
         "## Testing",
         "",
-        "- `npm run verify`: passed",
+        "- Agent ran focused checks in the sandbox where applicable.",
         "- `npm run scan:release`: passed",
+        "- Full verification is handled by CI after the PR opens.",
         "",
         "---",
         "",
@@ -259,7 +257,6 @@ describe("sandboxRunner", () => {
           exitCode: 143,
           durationMs: 480_000,
           producedDiff: false,
-          watchdogReason: "no_first_diff",
           stdoutTail: "looked at task notifications",
           stderrTail: ""
         }
@@ -267,7 +264,7 @@ describe("sandboxRunner", () => {
     });
     expect(recovery).toContain("Do not restart broad analysis");
     expect(recovery).toContain("make the smallest focused test or implementation edit now");
-    expect(recovery).toContain("no_first_diff");
+    expect(recovery).toContain("looked at task notifications");
   });
 
   it("guides Codex toward lifecycle-first implementation before broad exploration", () => {
@@ -484,61 +481,6 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("Concrete anchors from the request outrank broad lifecycle guesses");
     expect(prompt).toContain("First implementable invariant:");
     expect(prompt).toContain("Suggested first edit:");
-  });
-
-  it("fails early when Codex has not produced a diff", () => {
-    expect(
-      evaluateCodegenWatchdog({
-        elapsedMs: 11 * 60 * 1000,
-        idleMs: 30_000,
-        hasDiff: false,
-        reconnectSeen: false,
-        reconnectStallMs: null
-      })
-    ).toEqual(expect.objectContaining({ action: "fail", reason: "no_first_diff", message: expect.stringContaining("Coding harness") }));
-  });
-
-  it("continues to verification when Codex stalls after producing a diff", () => {
-    expect(
-      evaluateCodegenWatchdog({
-        elapsedMs: 12 * 60 * 1000,
-        idleMs: 6 * 60 * 1000,
-        hasDiff: true,
-        reconnectSeen: false,
-        reconnectStallMs: null
-      })
-    ).toEqual(expect.objectContaining({ action: "continue", reason: "idle_after_diff" }));
-  });
-
-  it("uses a 10 minute no-first-diff deadline for normal, recovery, and anchored attempts", () => {
-    expect(codegenFirstDiffDeadlineMs()).toBe(600_000);
-    expect(codegenFirstDiffDeadlineMs(undefined, 2)).toBe(600_000);
-    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] })).toBe(600_000);
-    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] }, 2)).toBe(600_000);
-  });
-
-  it("treats reconnect stalls as retryable before a diff and salvageable after a diff", () => {
-    expect(
-      evaluateCodegenWatchdog({
-        elapsedMs: 6 * 60 * 1000,
-        idleMs: 60_000,
-        hasDiff: false,
-        reconnectSeen: true,
-        reconnectStallMs: 3 * 60 * 1000,
-        noFirstDiffTimeoutMs: 10 * 60 * 1000
-      })
-    ).toEqual(expect.objectContaining({ action: "fail", reason: "reconnect_stall" }));
-
-    expect(
-      evaluateCodegenWatchdog({
-        elapsedMs: 6 * 60 * 1000,
-        idleMs: 60_000,
-        hasDiff: true,
-        reconnectSeen: true,
-        reconnectStallMs: 3 * 60 * 1000,
-        noFirstDiffTimeoutMs: 10 * 60 * 1000
-      })
-    ).toEqual(expect.objectContaining({ action: "continue", reason: "reconnect_stall" }));
   });
 
   it("repairs mirror-backed worktree remotes so branch refspec pushes work", async () => {

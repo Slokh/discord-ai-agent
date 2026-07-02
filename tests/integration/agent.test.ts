@@ -1421,7 +1421,7 @@ describe("agent router", () => {
             toolCalls: [
               {
                 id: "call-1",
-                name: "openGithubPullRequest",
+                name: "runCodingAgent",
                 argumentsText: JSON.stringify({ request: "add a calendar integration", title: "Add calendar support" })
               }
             ]
@@ -1465,7 +1465,7 @@ describe("agent router", () => {
       })
     );
     expect(ctx.updateStatus).toHaveBeenCalledWith("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
-    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "openGithubPullRequest" }));
+    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "runCodingAgent" }));
   });
 
   it("audits failed agent requests before surfacing the error to Discord", async () => {

@@ -15,7 +15,7 @@ export type ToolName =
   | "summarizeDiscordThread"
   | "generateImage"
   | "createSkillDraft"
-  | "openGithubPullRequest"
+  | "runCodingAgent"
   | "getAgentTaskStatus"
   | "listAgentTasks"
   | "retryAgentTask"
@@ -520,7 +520,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
-    name: "openGithubPullRequest",
+    name: "runCodingAgent",
     description:
       "Start an isolated Kubernetes sandbox task for a requested Discord AI Agent update. The bot will update the same Discord reply with progress and the PR link when the task finishes. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
     userVisible: true,
@@ -783,7 +783,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   if (name === "generateImage") return "generation";
   if (name === "createSkillDraft") return "memory";
   if (
-    name === "openGithubPullRequest" ||
+    name === "runCodingAgent" ||
     name === "getAgentTaskStatus" ||
     name === "listAgentTasks" ||
     name === "retryAgentTask" ||
@@ -811,7 +811,7 @@ function defaultToolExamples(name: ToolName): string[] {
     summarizeDiscordThread: "@ai summarize this thread",
     generateImage: "@ai make an image of a wizard eating nachos",
     createSkillDraft: "@ai learn this for next time: movie night is on Fridays",
-    openGithubPullRequest: "@ai update yourself to handle Bluesky links better",
+    runCodingAgent: "@ai update yourself to handle Bluesky links better",
     getAgentTaskStatus: "@ai what happened to the last update?",
     listAgentTasks: "@ai show recent update tasks",
     retryAgentTask: "@ai retry that update",

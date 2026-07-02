@@ -48,9 +48,9 @@ export const fixtureSnapshots: RunSnapshot[] = [
       terminalEntry("terminal-1-command", "command", "codex", "$ codex exec ..."),
       terminalEntry("terminal-1-stdout", "stdout", "codex", "Reading files...\nEditing src/discord/client.ts\nRunning tests..."),
       terminalEntry("terminal-1-exit", "exit", "codex", "[exit 0 in 14m]"),
-      terminalEntry("terminal-2-command", "command", "verify", "$ npm run verify"),
-      terminalEntry("terminal-2-stdout", "stdout", "verify", "passed"),
-      terminalEntry("terminal-2-exit", "exit", "verify", "[exit 0 in 1m 48s]")
+      terminalEntry("terminal-2-command", "command", "scan", "$ npm run scan:release"),
+      terminalEntry("terminal-2-stdout", "stdout", "scan", "passed"),
+      terminalEntry("terminal-2-exit", "exit", "scan", "[exit 0 in 1m 48s]")
     ]),
     diagnostics: ["Most time was spent in codex: 14m 0s.", "All checks passed before the PR opened."],
     raw: {},

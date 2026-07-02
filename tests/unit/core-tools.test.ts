@@ -1107,8 +1107,8 @@ describe("inspectAgentLogs", () => {
             id: 1,
             taskId: "task-1",
             sandboxRunId: "run-1",
-            step: "verify",
-            command: "npm run verify",
+            step: "scan",
+            command: "npm run scan:release",
             exitCode: 1,
             outputTail: "",
             errorTail: "test failure",
@@ -1130,7 +1130,7 @@ describe("inspectAgentLogs", () => {
     expect(response).toContain("agent.request.complete 1234ms");
     expect(response).toContain("task.progress task=task-1");
     expect(response).toContain("Sandbox commands:");
-    expect(response).toContain("npm run verify");
+    expect(response).toContain("npm run scan:release");
     expect(response).toContain("searchDiscordHistory");
     expect(ctx.repo.getTraceEvents).toHaveBeenCalledWith({
       guildId: "guild",

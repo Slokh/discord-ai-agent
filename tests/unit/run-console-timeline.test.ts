@@ -5,6 +5,7 @@ import {
   enrichModelRoundToolRequests,
   groupTimelineSteps,
   parseCodexTranscript,
+  parseOpenCodeTranscript,
   relatedRunTimelineSteps,
   summedStepDuration,
   timelineStepSummaryText,
@@ -345,38 +346,28 @@ describe("run console timeline", () => {
       runEvent({
         id: "model",
         name: "agent.model.round.complete",
-        summary: "Round 1: openGithubPullRequest",
+        summary: "Round 1: runCodingAgent",
         createdAt: atMs(24_380),
         durationMs: 24_380,
-        metadata: { selectedLocalTools: ["openGithubPullRequest"] }
+        metadata: { selectedLocalTools: ["runCodingAgent"] }
       }),
       runEvent({
         id: "tool",
         name: "agent.tool.complete",
-        summary: "openGithubPullRequest: 203 chars",
+        summary: "runCodingAgent: 203 chars",
         createdAt: atMs(24_929),
         durationMs: 549,
-        metadata: { toolName: "openGithubPullRequest" }
+        metadata: { toolName: "runCodingAgent" }
       }),
       runEvent({
         id: "tool-result",
         source: "tool",
-        name: "openGithubPullRequest",
+        name: "runCodingAgent",
         summary: "{\"taskId\":\"task-1\",\"jobId\":\"job-1\"}",
         createdAt: atMs(24_927)
       }),
       runEvent({ id: "sandbox", source: "task", name: "task.progress", summary: "Sandbox process started.", createdAt: atMs(28_460), durationMs: 1063, metadata: { step: "sandbox_acquired" } }),
-      runEvent({ id: "deadline-1", source: "task", name: "task.progress", summary: "Waiting up to 90s for the first code diff.", createdAt: atMs(62_000), metadata: { step: "codex_first_diff_deadline", attempt: 1 } }),
       runEvent({ id: "reasoning-1", source: "task", name: "task.progress", summary: "Codex started reasoning.", createdAt: atMs(72_000), metadata: { step: "codex_app_server_item_started", attempt: 1 } }),
-      runEvent({
-        id: "watchdog-1",
-        source: "task",
-        name: "task.progress",
-        summary: "Codex produced no code diff after 90s.",
-        createdAt: atMs(152_000),
-        durationMs: 90_000,
-        metadata: { step: "codex_app_server_watchdog_no_first_diff", attempt: 1 }
-      }),
       runEvent({
         id: "no-diff-1",
         source: "task",
@@ -384,9 +375,8 @@ describe("run console timeline", () => {
         summary: "Codex app-server attempt 1 finished without a code diff.",
         createdAt: atMs(152_101),
         durationMs: 90_101,
-        metadata: { step: "codex_app_server_attempt_1_no_diff", attempt: 1, exitCode: 143, watchdogReason: "no_first_diff", gitStatus: "", notificationCount: 135 }
+        metadata: { step: "codex_app_server_attempt_1_no_diff", attempt: 1, exitCode: 143, gitStatus: "", notificationCount: 135 }
       }),
-      runEvent({ id: "deadline-2", source: "task", name: "task.progress", summary: "Waiting up to 60s for the first code diff.", createdAt: atMs(152_200), metadata: { step: "codex_first_diff_deadline", attempt: 2 } }),
       runEvent({
         id: "no-diff-2",
         source: "task",
@@ -394,7 +384,7 @@ describe("run console timeline", () => {
         summary: "Codex app-server attempt 2 finished without a code diff.",
         createdAt: atMs(212_280),
         durationMs: 60_080,
-        metadata: { step: "codex_app_server_attempt_2_no_diff", attempt: 2, exitCode: 143, watchdogReason: "no_first_diff", gitStatus: "", notificationCount: 530 }
+        metadata: { step: "codex_app_server_attempt_2_no_diff", attempt: 2, exitCode: 143, gitStatus: "", notificationCount: 530 }
       }),
       runEvent({ id: "cleanup", source: "task", name: "task.progress", summary: "Cleaning up the ephemeral sandbox checkout.", createdAt: atMs(212_300), metadata: { step: "cleanup" } }),
       runEvent({
@@ -451,9 +441,7 @@ describe("run console timeline", () => {
     ]);
     expect(trace?.groups.find((group) => timelineTitleText(group.parent) === "Codex attempt 1")?.children.map((child) => timelineTitleText(child))).toEqual([
       "Codex app-server prompt",
-      "First-diff deadline set",
       "Model started reasoning",
-      "No-diff watchdog fired",
       "Attempt ended with no diff",
       "Codex app-server attempt 1 transcript"
     ]);
@@ -463,14 +451,16 @@ describe("run console timeline", () => {
 
   it("labels OpenCode attempt spans distinctly from Codex attempts", () => {
     const events: RunEvent[] = [
-      runEvent({ id: "deadline", source: "task", name: "task.progress", summary: "Waiting up to 10m for the first code diff.", createdAt: atMs(1_000), metadata: { step: "opencode_first_diff_deadline", attempt: 1 } }),
+      runEvent({ id: "round", source: "task", name: "task.progress", summary: "OpenCode started round 1.", createdAt: atMs(2_000), metadata: { step: "opencode_round_started", attempt: 1, round: 1 } }),
+      runEvent({ id: "tool", source: "task", name: "task.progress", summary: "OpenCode is reading src/discord/client.ts.", createdAt: atMs(3_000), metadata: { step: "opencode_tool_read", attempt: 1, tool: "read", title: "src/discord/client.ts" } }),
+      runEvent({ id: "round-finished", source: "task", name: "task.progress", summary: "OpenCode finished round 1 after read.", createdAt: atMs(5_000), metadata: { step: "opencode_round_finished", attempt: 1, round: 1, tools: ["read"] } }),
       runEvent({
         id: "no-diff",
         source: "task",
         name: "task.progress",
         summary: "OpenCode attempt 1 finished without a code diff.",
         createdAt: atMs(11_000),
-        metadata: { step: "opencode_attempt_1_no_diff", attempt: 1, exitCode: 0, watchdogReason: "no_first_diff", gitStatus: "" }
+        metadata: { step: "opencode_attempt_1_no_diff", attempt: 1, exitCode: 0, gitStatus: "" }
       })
     ];
     const spans: RunSpan[] = [
@@ -486,11 +476,88 @@ describe("run console timeline", () => {
       })
     ];
 
-    const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts: [] }), { events, spans, startedAt: atMs(0) });
+    const artifacts: RunArtifact[] = [
+      runArtifact({
+        artifactId: "opencode-log",
+        kind: "command_log",
+        name: "opencode_attempt_1 command log",
+        createdAt: atMs(12_000),
+        metadata: { step: "opencode_attempt_1" }
+      })
+    ];
+
+    const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts }), { events, spans, startedAt: atMs(0) });
 
     expect(trace?.groups.map((group) => timelineTitleText(group.parent))).toEqual(["OpenCode attempt 1"]);
-    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["First-diff deadline set", "Attempt ended with no diff"]);
+    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual([
+      "OpenCode round 1",
+      "Tool: read",
+      "OpenCode round 1 finished",
+      "Attempt ended with no diff",
+      "Command: opencode_attempt_1"
+    ]);
     expect(trace?.slowest).toEqual({ name: "OpenCode attempt 1", durationMs: 10_000 });
+  });
+
+  it("formats OpenCode command logs into model-round breakdowns", () => {
+    const transcript = parseOpenCodeTranscript(
+      [
+        "$ opencode run --attach http://127.0.0.1:4123 --model openrouter/z-ai/glm-5.2 [prompt]",
+        JSON.stringify({ type: "step_start", timestamp: Date.parse(atMs(0)), part: {} }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse(atMs(5_000)),
+          part: {
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "/repo/src/discord/client.ts" },
+              output: "file content",
+              time: { start: Date.parse(atMs(5_000)), end: Date.parse(atMs(5_025)) }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: "step_finish",
+          timestamp: Date.parse(atMs(10_000)),
+          part: { reason: "tool-calls", tokens: { total: 100, input: 80, reasoning: 10, cache: { read: 0 } } }
+        }),
+        JSON.stringify({ type: "step_start", timestamp: Date.parse(atMs(12_000)), part: {} }),
+        JSON.stringify({
+          type: "text",
+          timestamp: Date.parse(atMs(13_000)),
+          part: { text: "I have enough context. Making the edit." }
+        }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse(atMs(14_000)),
+          part: {
+            tool: "edit",
+            state: {
+              status: "completed",
+              input: { filePath: "/repo/src/discord/client.ts" },
+              output: "Edit applied successfully.",
+              time: { start: Date.parse(atMs(14_000)), end: Date.parse(atMs(14_011)) }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: "step_finish",
+          timestamp: Date.parse(atMs(20_000)),
+          part: { reason: "tool-calls", tokens: { total: 220, input: 90, reasoning: 20, cache: { read: 50 } } }
+        })
+      ].join("\n")
+    );
+
+    expect(transcript.isTranscript).toBe(true);
+    expect(transcript.rounds).toBe(2);
+    expect(transcript.toolCalls).toBe(2);
+    expect(transcript.firstToolAtMs).toBe(0);
+    expect(transcript.firstEditAtMs).toBe(12_000);
+    expect(transcript.tokenTotal).toBe(220);
+    expect(transcript.slowestRound).toEqual({ round: 1, durationMs: 10_000, title: "Round 1: read" });
+    expect(transcript.items.map((item) => item.title)).toEqual(["Round 1: read", "Round 2: edit", "Final token usage"]);
+    expect(transcript.items[1]?.body).toContain("Making the edit");
   });
 
   it("formats Codex app-server transcripts into high-signal items", () => {

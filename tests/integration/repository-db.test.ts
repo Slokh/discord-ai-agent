@@ -947,6 +947,9 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     await expect(repo.getAgentTaskMetrics()).resolves.toEqual(
       expect.objectContaining({
+        agentTaskBacklog: expect.arrayContaining([
+          expect.objectContaining({ backend: "kubernetes-sandbox", status: "queued", count: 1, oldestAgeSeconds: expect.any(Number) })
+        ]),
         codegenPhaseDurations: expect.arrayContaining([expect.objectContaining({ phase: "repo", count: 1, avgMs: 120, maxMs: 120 })]),
         sandboxCacheEvents: expect.arrayContaining([expect.objectContaining({ cacheType: "dependencies", cacheStatus: "hit", count: 1 })])
       })

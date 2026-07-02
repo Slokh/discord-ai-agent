@@ -96,6 +96,11 @@ codegenWorker:
   replicas: 1
   terminationGracePeriodSeconds: 120
   executionBackend: local-process
+  lease:
+    heartbeatSeconds: 15
+    staleSeconds: 120
+    acquireTimeoutSeconds: 1800
+    acquirePollSeconds: 5
   resources: {}
 
 migrations:

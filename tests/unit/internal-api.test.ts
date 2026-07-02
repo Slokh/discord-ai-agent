@@ -45,6 +45,7 @@ describe("internal API metrics", () => {
       health: async () => ({ messages: 2, embeddings: 1, toolCalls: 3 }),
       getAgentTaskMetrics: async () => ({
         tasksByStatus: [],
+        agentTaskBacklog: [{ backend: "local-process-sandbox", status: "queued", count: 2, oldestAgeSeconds: 42 }],
         sandboxRunsByStatus: [],
         codegenSandboxLeases: [{ backend: "local-process-sandbox", status: "idle", count: 1 }],
         codegenPhaseDurations: [],
@@ -56,5 +57,8 @@ describe("internal API metrics", () => {
 
     expect(metrics).toContain("# HELP discord_ai_agent_codegen_sandbox_leases_total Codegen sandbox leases by backend and status.");
     expect(metrics).toContain('discord_ai_agent_codegen_sandbox_leases_total{backend="local-process-sandbox",status="idle"} 1');
+    expect(metrics).toContain("# HELP discord_ai_agent_agent_task_backlog_oldest_age_seconds Oldest active queued/running agent task age by backend and status.");
+    expect(metrics).toContain('discord_ai_agent_agent_task_backlog_total{backend="local-process-sandbox",status="queued"} 2');
+    expect(metrics).toContain('discord_ai_agent_agent_task_backlog_oldest_age_seconds{backend="local-process-sandbox",status="queued"} 42');
   });
 });

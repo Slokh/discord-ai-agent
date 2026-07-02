@@ -23,6 +23,10 @@ describe("config", () => {
         "SANDBOX_IMAGE",
         "SANDBOX_CACHE_DIR",
         "SANDBOX_CACHE_PVC_NAME",
+        "CODEGEN_LEASE_HEARTBEAT_SECONDS",
+        "CODEGEN_LEASE_STALE_SECONDS",
+        "CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS",
+        "CODEGEN_LEASE_ACQUIRE_POLL_SECONDS",
         "WORKER_CRAWL_ENABLED",
         "WORKER_EMBEDDING_ENABLED",
         "WORKER_TASK_ENABLED",
@@ -50,6 +54,12 @@ describe("config", () => {
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
         expect(config.execution.kubernetes.cacheDir).toBe("/var/cache/discord-ai-agent");
         expect(config.execution.kubernetes.cachePvcName).toBeNull();
+        expect(config.execution.codegenLease).toEqual({
+          heartbeatMs: 15_000,
+          staleMs: 120_000,
+          acquireTimeoutMs: 1_800_000,
+          acquirePollMs: 5_000
+        });
         expect(config.worker).toEqual({
           crawlEnabled: true,
           embeddingEnabled: true,
@@ -94,6 +104,25 @@ describe("config", () => {
     withEnv({ CODEGEN_EXECUTION_BACKEND: "local-process" }, () => {
       expect(loadConfig().execution.codegenBackend).toBe("local-process");
     });
+  });
+
+  it("allows tuning warm codegen lease timings", () => {
+    withEnv(
+      {
+        CODEGEN_LEASE_HEARTBEAT_SECONDS: "10",
+        CODEGEN_LEASE_STALE_SECONDS: "45",
+        CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS: "90",
+        CODEGEN_LEASE_ACQUIRE_POLL_SECONDS: "3"
+      },
+      () => {
+        expect(loadConfig().execution.codegenLease).toEqual({
+          heartbeatMs: 10_000,
+          staleMs: 45_000,
+          acquireTimeoutMs: 90_000,
+          acquirePollMs: 3_000
+        });
+      }
+    );
   });
 
   it("allows splitting worker queues across deployments", () => {

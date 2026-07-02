@@ -754,7 +754,13 @@ async function acquireLeaseForAgentTask(input: {
         backend: input.backendName,
         step: "sandbox_wait",
         statusMessage: "Waiting for the warm codegen worker to become available.",
-        metadata: { sandboxId: input.scheduler?.sandboxId ?? null, waitedMs, attempt }
+        metadata: {
+          sandboxId: input.scheduler?.sandboxId ?? null,
+          waitedMs,
+          attempt,
+          timeoutMs: input.scheduler?.acquireTimeoutMs ?? null,
+          pollMs: input.scheduler?.acquirePollMs ?? null
+        }
       });
     }
   });

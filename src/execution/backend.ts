@@ -5,9 +5,13 @@ import type { AppConfig } from "../config/env.js";
 import { assertExecutionConfig } from "../config/env.js";
 import type { SandboxRunRecord } from "../db/repositories.js";
 import { resolveGitHubTaskToken } from "../github/appToken.js";
+import { redactSensitiveText } from "../observability/redaction.js";
 import { slugify } from "../util/text.js";
 import { taskBearerToken } from "./token.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "./types.js";
+
+const LOCAL_PROCESS_OUTPUT_TAIL_CHARS = 12_000;
+const LOCAL_PROCESS_GRACEFUL_SHUTDOWN_MS = 10_000;
 
 export type ExecutionContext = {
   sandboxId?: string | null;
@@ -46,6 +50,13 @@ type LocalProcessState = {
   signal: NodeJS.Signals | null;
   error?: string;
   child: ReturnType<typeof spawn>;
+  startedAtMs: number;
+  lastOutputAtMs: number;
+  stdoutTail: string;
+  stderrTail: string;
+  timedOutAtMs?: number;
+  timeout?: NodeJS.Timeout;
+  killTimeout?: NodeJS.Timeout;
 };
 
 type SpawnProcess = typeof spawn;
@@ -340,16 +351,29 @@ export class LocalProcessExecutionBackend implements ExecutionBackend {
         startedAtMs,
         baseEnv: process.env
       }),
-      stdio: ["ignore", "inherit", "inherit"]
+      stdio: ["ignore", "pipe", "pipe"]
     });
-    const state: LocalProcessState = { child, exited: false, exitCode: null, signal: null };
+    const state: LocalProcessState = {
+      child,
+      exited: false,
+      exitCode: null,
+      signal: null,
+      startedAtMs,
+      lastOutputAtMs: startedAtMs,
+      stdoutTail: "",
+      stderrTail: ""
+    };
     this.runs.set(sandboxRunId, state);
+    this.attachOutputTails(state);
+    this.armTaskTimeout(state);
     child.once("error", (error) => {
+      this.clearProcessTimers(state);
       state.exited = true;
       state.exitCode = 1;
       state.error = error instanceof Error ? error.message : String(error);
     });
     child.once("exit", (code, signal) => {
+      this.clearProcessTimers(state);
       state.exited = true;
       state.exitCode = code;
       state.signal = signal;
@@ -375,31 +399,94 @@ export class LocalProcessExecutionBackend implements ExecutionBackend {
     if (!state) {
       return { status: "gone", reason: "Local codegen process is not tracked by this worker." };
     }
+    const metadata = this.processMetadata(state);
+    if (state.timedOutAtMs != null) {
+      return {
+        status: "failed",
+        reason: state.error ?? `Local codegen process exceeded ${this.config.execution.kubernetes.taskTimeoutSeconds}s sandbox timeout.`,
+        metadata: { ...metadata, timedOut: true }
+      };
+    }
     if (!state.exited) {
       return {
         status: "running",
-        metadata: { pid: state.child.pid ?? null }
+        metadata: {
+          pid: state.child.pid ?? null,
+          durationMs: Math.max(0, this.now() - state.startedAtMs),
+          lastOutputAtMs: state.lastOutputAtMs
+        }
       };
     }
     if (state.exitCode === 0) {
       return {
         status: "succeeded",
         reason: "Local codegen process exited without sending a terminal callback.",
-        metadata: { exitCode: state.exitCode, signal: state.signal }
+        metadata
       };
     }
     return {
       status: "failed",
       reason: state.error ?? `Local codegen process exited with code ${state.exitCode ?? "null"}${state.signal ? ` and signal ${state.signal}` : ""}.`,
-      metadata: { exitCode: state.exitCode, signal: state.signal, error: state.error ?? null }
+      metadata
     };
   }
 
   async cleanupRun(run: SandboxRunRecord): Promise<void> {
     const state = this.runs.get(run.sandboxRunId);
     this.runs.delete(run.sandboxRunId);
-    if (!state || state.exited) return;
+    if (!state) return;
+    this.clearProcessTimers(state);
+    if (state.exited) return;
     state.child.kill("SIGTERM");
+  }
+
+  private attachOutputTails(state: LocalProcessState) {
+    state.child.stdout?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      state.stdoutTail = boundedAppend(state.stdoutTail, text, LOCAL_PROCESS_OUTPUT_TAIL_CHARS);
+      state.lastOutputAtMs = this.now();
+      process.stdout.write(redactSensitiveText(text).text);
+    });
+    state.child.stderr?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      state.stderrTail = boundedAppend(state.stderrTail, text, LOCAL_PROCESS_OUTPUT_TAIL_CHARS);
+      state.lastOutputAtMs = this.now();
+      process.stderr.write(redactSensitiveText(text).text);
+    });
+  }
+
+  private armTaskTimeout(state: LocalProcessState) {
+    const timeoutMs = this.config.execution.kubernetes.taskTimeoutSeconds * 1000;
+    state.timeout = setTimeout(() => {
+      state.timedOutAtMs = this.now();
+      state.error = `Local codegen process exceeded ${this.config.execution.kubernetes.taskTimeoutSeconds}s sandbox timeout.`;
+      state.child.kill("SIGTERM");
+      state.killTimeout = setTimeout(() => {
+        if (!state.exited) state.child.kill("SIGKILL");
+      }, LOCAL_PROCESS_GRACEFUL_SHUTDOWN_MS);
+      state.killTimeout.unref?.();
+    }, timeoutMs);
+    state.timeout.unref?.();
+  }
+
+  private clearProcessTimers(state: LocalProcessState) {
+    if (state.timeout) clearTimeout(state.timeout);
+    if (state.killTimeout) clearTimeout(state.killTimeout);
+    state.timeout = undefined;
+    state.killTimeout = undefined;
+  }
+
+  private processMetadata(state: LocalProcessState): Record<string, unknown> {
+    return {
+      pid: state.child.pid ?? null,
+      exitCode: state.exitCode,
+      signal: state.signal,
+      error: state.error ?? null,
+      durationMs: Math.max(0, this.now() - state.startedAtMs),
+      lastOutputAtMs: state.lastOutputAtMs,
+      stdoutTail: redactSensitiveText(state.stdoutTail).text,
+      stderrTail: redactSensitiveText(state.stderrTail).text
+    };
   }
 }
 
@@ -442,6 +529,11 @@ function isKubernetesConflict(error: unknown) {
 
 function isKubernetesNotFound(error: unknown) {
   return kubernetesErrorStatus(error) === 404;
+}
+
+function boundedAppend(previous: string, next: string, maxChars: number) {
+  const combined = `${previous}${next}`;
+  return combined.length <= maxChars ? combined : combined.slice(combined.length - maxChars);
 }
 
 function kubernetesErrorStatus(error: unknown) {

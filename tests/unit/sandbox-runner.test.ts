@@ -293,9 +293,11 @@ describe("sandboxRunner", () => {
   });
 
   it("uses a shorter no-first-diff deadline when exact request anchors found target files", () => {
-    expect(codegenFirstDiffDeadlineMs()).toBe(8 * 60 * 1000);
-    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] })).toBe(
-      4 * 60 * 1000
+    expect(codegenFirstDiffDeadlineMs()).toBe(180_000);
+    expect(codegenFirstDiffDeadlineMs(undefined, 2)).toBe(120_000);
+    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] })).toBe(90_000);
+    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] }, 2)).toBe(
+      60_000
     );
   });
 
@@ -306,7 +308,8 @@ describe("sandboxRunner", () => {
         idleMs: 60_000,
         hasDiff: false,
         reconnectSeen: true,
-        reconnectStallMs: 3 * 60 * 1000
+        reconnectStallMs: 3 * 60 * 1000,
+        noFirstDiffTimeoutMs: 10 * 60 * 1000
       })
     ).toEqual(expect.objectContaining({ action: "fail", reason: "reconnect_stall" }));
 
@@ -316,7 +319,8 @@ describe("sandboxRunner", () => {
         idleMs: 60_000,
         hasDiff: true,
         reconnectSeen: true,
-        reconnectStallMs: 3 * 60 * 1000
+        reconnectStallMs: 3 * 60 * 1000,
+        noFirstDiffTimeoutMs: 10 * 60 * 1000
       })
     ).toEqual(expect.objectContaining({ action: "continue", reason: "reconnect_stall" }));
   });

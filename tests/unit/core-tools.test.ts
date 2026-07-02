@@ -155,6 +155,17 @@ describe("formatAgentTaskResult", () => {
     expect(response).toContain("Cache: repo=hit | deps=miss node-22-abcdef123");
     expect(response).toContain("refreshed deps after Codex");
   });
+
+  it("includes a run-console link when one is provided", () => {
+    const response = formatAgentTaskResult({
+      taskId: "task-1",
+      jobId: "job-1",
+      runConsoleUrl: "https://tasks.example/runs/task-1"
+    });
+
+    expect(response).toContain("Working on it...");
+    expect(response).toContain("Run console: https://tasks.example/runs/task-1");
+  });
 });
 
 describe("Discord lookup tools", () => {

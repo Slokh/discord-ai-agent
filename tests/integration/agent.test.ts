@@ -1451,7 +1451,7 @@ describe("agent router", () => {
     const response = await handleAgentRequest(ctx, "how should we track events?");
 
     expect(response.content).toBe(
-      "I’m working on that code change now. I’ll update this message with progress and the PR link when it’s ready. Task ID: `task-calendar-integration`."
+      "Working on it...\n\nI’ll update this message with progress and the PR link when it’s ready.\nTask ID: `task-calendar-integration`."
     );
     expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1464,7 +1464,7 @@ describe("agent router", () => {
         discordResponseMessageId: "reply-1"
       })
     );
-    expect(ctx.updateStatus).toHaveBeenCalledWith("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
+    expect(ctx.updateStatus).toHaveBeenCalledWith("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "openGithubPullRequest" }));
   });
 

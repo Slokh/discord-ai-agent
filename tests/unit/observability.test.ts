@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../../src/observability/redaction.js";
-import { extractDiscordMessageId, summaryFromTask } from "../../src/observability/runs.js";
+import { diagnosticsForRun, extractDiscordMessageId, summaryFromTask } from "../../src/observability/runs.js";
 import type { AgentTaskRecord } from "../../src/db/repositories.js";
+import type { RunEvent, RunSummary } from "../../src/observability/runs.js";
 
 describe("observability redaction", () => {
   it("redacts common secret shapes before artifact persistence", () => {
@@ -75,4 +76,71 @@ describe("run summaries", () => {
       })
     );
   });
+
+  it("diagnoses codegen runs waiting for the first code diff", () => {
+    const run = codegenRun({ status: "running", currentStep: "codex_app_server_attempt_1" });
+    const events = [
+      runEvent({
+        name: "task.progress",
+        summary: "Waiting up to 1m 30s for the first code diff.",
+        metadata: { step: "codex_first_diff_deadline", deadlineMs: 90_000 }
+      })
+    ];
+
+    expect(diagnosticsForRun(run, [], events)).toContain("Waiting for the first code diff; deadline is 1m 30s.");
+  });
+
+  it("diagnoses codegen runs that hit the no-diff watchdog", () => {
+    const run = codegenRun({ status: "no_changes", summary: "Agent task produced no diff." });
+    const events = [
+      runEvent({
+        name: "task.progress",
+        summary: "Codex produced no code diff after 1m 30s.",
+        metadata: { step: "codex_app_server_watchdog_no_first_diff", watchdogReason: "no_first_diff" }
+      })
+    ];
+
+    expect(diagnosticsForRun(run, [], events)).toContain("Model produced no code diff before the first-diff deadline.");
+  });
 });
+
+function codegenRun(overrides: Partial<RunSummary> = {}): RunSummary {
+  const now = new Date("2026-06-30T12:00:00Z");
+  return {
+    runId: "task-1",
+    traceId: "trace-1",
+    kind: "codegen",
+    status: "running",
+    title: "Test task",
+    summary: null,
+    requester: "kartik",
+    guildId: "guild-1",
+    channelId: "channel-1",
+    userId: "user-1",
+    messageId: null,
+    source: "agent_task",
+    startedAt: now,
+    completedAt: null,
+    updatedAt: now,
+    durationMs: null,
+    currentStep: "running",
+    bottleneck: null,
+    links: {},
+    metadata: {},
+    ...overrides
+  };
+}
+
+function runEvent(overrides: Partial<RunEvent> = {}): RunEvent {
+  return {
+    id: "event-1",
+    source: "task",
+    level: "info",
+    name: "task.progress",
+    summary: null,
+    createdAt: new Date("2026-06-30T12:00:30Z"),
+    durationMs: null,
+    metadata: {},
+    ...overrides
+  };
+}

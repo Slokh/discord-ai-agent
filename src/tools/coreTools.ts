@@ -937,6 +937,9 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
   const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy });
+  const runConsoleUrl = agentTaskRunConsoleUrl(ctx.config, result.taskId);
+  const response = formatAgentTaskResult({ ...result, runConsoleUrl });
+  await ctx.updateStatus?.(response);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -947,7 +950,7 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
-  return formatAgentTaskResult(result);
+  return response;
 }
 
 async function enqueueAgentCodeUpdateTask(
@@ -957,7 +960,7 @@ async function enqueueAgentCodeUpdateTask(
   if (!ctx.jobs) {
     throw new Error("Agent task queue is unavailable in this process.");
   }
-  await ctx.updateStatus?.("Working on the code change now. I’ll edit this message with the PR link when it’s ready.");
+  await ctx.updateStatus?.("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
   return ctx.jobs.enqueueAgentTask({
     request: input.request.trim(),
     title: input.updateName,
@@ -977,51 +980,64 @@ export function formatAgentTaskResult(input: {
   timedOut?: boolean;
   taskEvents?: TaskEvent[];
   commandEvents?: SandboxCommandEvent[];
+  runConsoleUrl?: string | null;
 }) {
+  const withRunConsole = (content: string) => appendAgentTaskRunConsoleLink(content, input.runConsoleUrl);
   if (input.timedOut) {
     const status = input.job?.status ? ` Current status: \`${input.job.status}\`.` : "";
-    return `I’m still working on that code change and do not have the final result yet.${status} Task ID: \`${input.taskId}\`.`;
+    return withRunConsole(`I’m still working on that code change and do not have the final result yet.${status} Task ID: \`${input.taskId}\`.`);
   }
 
   const job = input.job;
   if (!job) {
-    return `I’m working on that code change now. I’ll update this message with progress and the PR link when it’s ready. Task ID: \`${input.taskId}\`.`;
+    return withRunConsole(`Working on it...\n\nI’ll update this message with progress and the PR link when it’s ready.\nTask ID: \`${input.taskId}\`.`);
   }
 
   if (job.status === "succeeded" && job.prUrl) {
     const draftNote = job.draft ? " It opened as a draft because verification did not fully pass." : "";
-    return [`Done: ${job.prUrl}${draftNote}`, formatAgentTaskTimingSummary(input.taskEvents)].filter(Boolean).join("\n");
+    return withRunConsole([`Done: ${job.prUrl}${draftNote}`, formatAgentTaskTimingSummary(input.taskEvents)].filter(Boolean).join("\n"));
   }
 
   if (job.status === "no_changes") {
-    return [
-      `I tried to make that change, but the sandbox did not produce a code diff, so no PR was opened. Task ID: \`${input.taskId}\`.`,
+    return withRunConsole([
+      `No PR opened: the coding agent did not produce a code diff. Task ID: \`${input.taskId}\`.`,
       formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
-      .join("\n");
+      .join("\n"));
   }
 
   if (job.status === "cancelled") {
-    return [
+    return withRunConsole([
       `That code change task was cancelled. Task ID: \`${input.taskId}\`.`,
       job.error ? truncateForDiscord(job.error, 500) : "",
       formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
-      .join("\n");
+      .join("\n"));
   }
 
   if (job.status === "failed") {
-    return [
-      `I tried to make that change, but the sandbox failed: ${truncateForDiscord(job.error ?? "unknown error", 900)}`,
+    return withRunConsole([
+      `No PR opened: the sandbox failed. ${truncateForDiscord(job.error ?? "unknown error", 900)}`,
       formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
-      .join("\n");
+      .join("\n"));
   }
 
-  return `I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`;
+  return withRunConsole(`I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`);
+}
+
+function agentTaskRunConsoleUrl(config: ToolContext["config"], taskId: string) {
+  const publicUrl = config.controlUi?.publicUrl;
+  if (!publicUrl) return null;
+  return `${publicUrl}/runs/${encodeURIComponent(taskId)}`;
+}
+
+function appendAgentTaskRunConsoleLink(content: string, runConsoleUrl: string | null | undefined) {
+  if (!runConsoleUrl) return content;
+  return [content, "", `Run console: ${runConsoleUrl}`].join("\n");
 }
 
 function formatLastCommandFailure(events: SandboxCommandEvent[] | undefined) {

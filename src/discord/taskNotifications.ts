@@ -169,10 +169,10 @@ function progressAgentTaskMessage(task: AgentTaskRecord) {
   const detail =
     task.status === "queued" || !rawDetail
       ? task.status === "running"
-        ? "Working on the code change now."
-        : "Preparing the code change."
+        ? "Working on it..."
+        : "Working on it..."
       : rawDetail;
-  return [detail, "", `Update: \`${task.title}\``, `Task ID: \`${task.taskId}\``].join("\n");
+  return [detail, "", `Task: \`${task.title}\``, `Status: \`${task.status}\``, `Task ID: \`${task.taskId}\``].join("\n");
 }
 
 export function agentTaskRunConsoleUrl(config: AppConfig, taskId: string) {

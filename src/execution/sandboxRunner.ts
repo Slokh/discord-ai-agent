@@ -28,6 +28,7 @@ const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
 const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
 const CODEX_WATCHDOG_POLL_MS = 15_000;
 const CODEX_RECONNECT_PATTERN = /(?:^|\n)ERROR:\s*Reconnecting\.\.\./i;
+const DEPENDENCY_CACHE_MODE = "devdeps-v1";
 
 type SandboxEnv = {
   taskId: string;
@@ -656,8 +657,9 @@ async function prepareDependencies(input: {
       cacheStatus: "miss",
       reason: input.reason
     });
-    await runCommand("npm", ["ci", "--cache", input.cache.npmCacheDir, "--prefer-offline", "--no-audit", "--fund=false"], {
+    await runCommand("npm", ["ci", "--include=dev", "--cache", input.cache.npmCacheDir, "--prefer-offline", "--no-audit", "--fund=false"], {
       cwd: input.checkoutDir,
+      env: codegenNpmInstallEnv(process.env),
       taskEnv: input.env,
       step: "dependencies"
     });
@@ -703,12 +705,27 @@ async function restoreCachedNodeModules(input: {
   }
 }
 
-async function dependencyCacheKey(checkoutDir: string) {
+export async function dependencyCacheKey(checkoutDir: string) {
   const [lockfile, packageJson] = await Promise.all([
     fs.readFile(path.join(checkoutDir, "package-lock.json")),
     fs.readFile(path.join(checkoutDir, "package.json"))
   ]);
-  return `${process.version.replace(/^v/, "node-")}-${sha256Buffer(Buffer.concat([lockfile, packageJson])).slice(0, 24)}`;
+  return `${process.version.replace(/^v/, "node-")}-${DEPENDENCY_CACHE_MODE}-${sha256Buffer(Buffer.concat([lockfile, packageJson])).slice(0, 24)}`;
+}
+
+export function codegenNpmInstallEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...baseEnv };
+  delete env.NODE_ENV;
+  delete env.npm_config_production;
+  delete env.NPM_CONFIG_PRODUCTION;
+  delete env.npm_config_omit;
+  delete env.NPM_CONFIG_OMIT;
+  return {
+    ...env,
+    NODE_ENV: "development",
+    npm_config_production: "false",
+    NPM_CONFIG_PRODUCTION: "false"
+  };
 }
 
 async function readDependencyManifestState(checkoutDir: string): Promise<Record<string, string | null>> {
@@ -1542,7 +1559,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       "You are already inside an isolated Kubernetes sandbox with full filesystem/network access for this task.",
       "The checkout is a writable task branch. Edit files directly in the current repository.",
       "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after verification.",
-      "Use helper CLIs when useful: agent-task-context, agent-cache-info, agent-progress <step> <message>.",
+      "Use helper CLIs by absolute shim path when useful: $AGENT_TOOL_SHIM_DIR/agent-task-context, $AGENT_TOOL_SHIM_DIR/agent-cache-info, $AGENT_TOOL_SHIM_DIR/agent-progress <step> <message>.",
       "Use apply_patch for focused file edits when available; otherwise use the smallest reliable edit command.",
       "Prefer rg for search, then read only the files needed for the next concrete edit."
     ],
@@ -1770,7 +1787,12 @@ function anchorTargetFilesFromMatches(matches: CodegenAnchorMatch[]) {
   }
 
   return [...byFile.entries()]
-    .sort((left, right) => right[1].score - left[1].score || left[0].localeCompare(right[0]))
+    .sort(
+      (left, right) =>
+        anchorTargetFileRank(right[0]) - anchorTargetFileRank(left[0]) ||
+        right[1].score - left[1].score ||
+        left[0].localeCompare(right[0])
+    )
     .slice(0, MAX_ANCHOR_TARGET_FILES)
     .map(([file, value]) => {
       const anchors = [...value.anchors].slice(0, 3).map((anchor) => JSON.stringify(anchor)).join(", ");
@@ -1785,6 +1807,14 @@ function anchorTargetFilesFromMatches(matches: CodegenAnchorMatch[]) {
 function sourceFileScore(file: string) {
   if (file.startsWith("src/")) return 6;
   if (file.startsWith("tests/")) return 4;
+  if (file.endsWith(".ts") || file.endsWith(".tsx")) return 3;
+  if (file === "AGENTS.md" || file.endsWith(".md")) return 1;
+  return 0;
+}
+
+function anchorTargetFileRank(file: string) {
+  if (file.startsWith("src/")) return 4;
+  if (file.startsWith("tests/")) return 2;
   if (file.endsWith(".ts") || file.endsWith(".tsx")) return 3;
   if (file === "AGENTS.md" || file.endsWith(".md")) return 1;
   return 0;
@@ -1962,7 +1992,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the PR body records the request.",
     "- Before finishing, run the most relevant checks you can.",
-    "- Helper CLIs are available on PATH: agent-task-context, agent-cache-info, and agent-progress <step> <message>.",
+    "- Helper CLIs are available under `$AGENT_TOOL_SHIM_DIR`; use `$AGENT_TOOL_SHIM_DIR/agent-task-context`, `$AGENT_TOOL_SHIM_DIR/agent-cache-info`, and `$AGENT_TOOL_SHIM_DIR/agent-progress <step> <message>` so login shells cannot hide them.",
     "",
     `Task ID: ${env.taskId}`,
     `Requested by: ${env.requestedBy}`,
@@ -1989,7 +2019,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     "- If the behavior spans more than one path, introduce or reuse a small abstraction that owns the lifecycle instead of patching each call site independently.",
     "- Preserve existing invariants that other code may depend on. If replacing a visible mechanism, keep any underlying state or callback contract intact unless the request explicitly says to remove it.",
     "- For bug fixes, encode the requested behavior as a focused invariant in code or tests early. Do not conclude that existing behavior is fine merely because the first matching path appears intentional.",
-    "- Make a focused first edit after the likely lifecycle owner is identified, then run `agent-progress first_edit \"Made the first focused code edit\"`.",
+    "- Make a focused first edit after the likely lifecycle owner is identified, then run `$AGENT_TOOL_SHIM_DIR/agent-progress first_edit \"Made the first focused code edit\"`.",
     "- After the first edit, broaden the search only to cover callers, failure paths, and tests touched by that lifecycle.",
     "",
     "Stall avoidance:",

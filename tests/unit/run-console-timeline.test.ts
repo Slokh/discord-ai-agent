@@ -346,23 +346,23 @@ describe("run console timeline", () => {
       runEvent({
         id: "model",
         name: "agent.model.round.complete",
-        summary: "Round 1: openGithubPullRequest",
+        summary: "Round 1: runCodingAgent",
         createdAt: atMs(24_380),
         durationMs: 24_380,
-        metadata: { selectedLocalTools: ["openGithubPullRequest"] }
+        metadata: { selectedLocalTools: ["runCodingAgent"] }
       }),
       runEvent({
         id: "tool",
         name: "agent.tool.complete",
-        summary: "openGithubPullRequest: 203 chars",
+        summary: "runCodingAgent: 203 chars",
         createdAt: atMs(24_929),
         durationMs: 549,
-        metadata: { toolName: "openGithubPullRequest" }
+        metadata: { toolName: "runCodingAgent" }
       }),
       runEvent({
         id: "tool-result",
         source: "tool",
-        name: "openGithubPullRequest",
+        name: "runCodingAgent",
         summary: "{\"taskId\":\"task-1\",\"jobId\":\"job-1\"}",
         createdAt: atMs(24_927)
       }),

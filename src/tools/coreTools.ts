@@ -1008,7 +1008,7 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
-    toolName: "openGithubPullRequest",
+    toolName: "runCodingAgent",
     argumentsSummary: summarizeForAudit({ request, updateName }),
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });

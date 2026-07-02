@@ -112,10 +112,10 @@ function snapshotFixture(): RunSnapshot {
         source: "trace",
         level: "info",
         name: "LLM call 1",
-        summary: "Requested tool openGithubPullRequest",
+        summary: "Requested tool runCodingAgent",
         createdAt: new Date("2026-07-01T17:40:45.000Z"),
         durationMs: 23_373,
-        metadata: { tools: ["openGithubPullRequest"] }
+        metadata: { tools: ["runCodingAgent"] }
       }
     ],
     artifacts: [

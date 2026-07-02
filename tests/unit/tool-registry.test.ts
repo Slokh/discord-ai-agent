@@ -18,7 +18,7 @@ describe("toolRegistry", () => {
       "summarizeDiscordThread",
       "generateImage",
       "createSkillDraft",
-      "openGithubPullRequest",
+      "runCodingAgent",
       "getAgentTaskStatus",
       "listAgentTasks",
       "retryAgentTask",
@@ -42,7 +42,7 @@ describe("toolRegistry", () => {
     expect(contracts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "openGithubPullRequest",
+          name: "runCodingAgent",
           category: "coding",
           mutates: true,
           permissionRequirements: expect.arrayContaining(["explicit_user_request"]),

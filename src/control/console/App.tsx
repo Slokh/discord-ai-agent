@@ -1627,12 +1627,18 @@ export function codegenTimelineTrace(
     addGroup(timelineStepFromCodegenEvent(mention, startedAt, { title: "User prompt received", kind: "input" }));
   }
 
-  const modelSelection = event((candidate) => candidate.name === "agent.model.round.complete" && stringArrayMetadata(candidate.metadata.selectedLocalTools).includes("openGithubPullRequest"));
+  const modelSelection = event((candidate) => candidate.name === "agent.model.round.complete" && stringArrayMetadata(candidate.metadata.selectedLocalTools).some(isCodegenToolName));
   if (modelSelection) {
-    addGroup(timelineStepFromCodegenEvent(modelSelection, startedAt, { title: "Model chose code update", kind: "model" }));
+    addGroup(
+      timelineStepFromCodegenEvent(modelSelection, startedAt, {
+        title: "Model chose code update",
+        kind: "model",
+        summary: "The model selected the coding-agent tool."
+      })
+    );
   }
 
-  const codegenTool = event((candidate) => candidate.name === "agent.tool.complete" && candidate.metadata.toolName === "openGithubPullRequest");
+  const codegenTool = event((candidate) => candidate.name === "agent.tool.complete" && isCodegenToolName(candidate.metadata.toolName));
   if (codegenTool) {
     addGroup(
       timelineStepFromCodegenEvent(codegenTool, startedAt, {
@@ -1810,6 +1816,10 @@ function codegenAttemptHarnessName(value: string) {
   return value.includes("opencode") ? "OpenCode" : "Codex";
 }
 
+function isCodegenToolName(value: unknown) {
+  return value === "runCodingAgent" || value === "openGithubPullRequest";
+}
+
 function codegenProgressEventTitle(event: RunEvent) {
   const step = stringMetadata(event.metadata.step) ?? event.name;
   if (step.startsWith("opencode_tool_")) {
@@ -1837,7 +1847,7 @@ function codegenProgressEventKind(event: RunEvent): TimelineStepKind {
 }
 
 function codegenQueuedSummary(events: RunEvent[]) {
-  const queued = preferredTimelineEvent(events.filter((event) => event.name === "openGithubPullRequest" || event.metadata.toolName === "openGithubPullRequest"));
+  const queued = preferredTimelineEvent(events.filter((event) => isCodegenToolName(event.name) || isCodegenToolName(event.metadata.toolName)));
   if (!queued?.summary) return "The model handed this request to the codegen worker.";
   try {
     const parsed = JSON.parse(queued.summary);

@@ -1,6 +1,6 @@
 # Discord AI Agent
 
-A self-hosted AI agent for private Discord servers.
+A self-hosted AI agent for private Discord servers (local OpenCode smoke test).
 
 Mention `@ai` and the bot can answer questions, search server history with Discord permissions, summarize channels, generate images, look things up on the web, remember private server skills, and open code-update PRs for itself.
 

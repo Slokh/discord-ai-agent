@@ -869,6 +869,7 @@ export function timelineSummaryText(summary: string) {
   if (!trimmed) return "";
   if (/^no summary(?: recorded)?\.?$/i.test(trimmed)) return "";
   if (/^sent thinking reply\.?$/i.test(trimmed)) return "";
+  if (/^added loading reaction\.?$/i.test(trimmed)) return "";
   if (/^thinking\.\.\.$/i.test(trimmed)) return "";
   if (/^[\w -]+ work took \d+(?:\.\d+)?s\.?$/i.test(trimmed)) return "";
   if (/^[\w -]+ work took \d+m \d+s\.?$/i.test(trimmed)) return "";
@@ -970,7 +971,7 @@ export function timelineTitleText(step: Pick<TimelineStep, "title" | "summary" |
   const title = normalizedTimelineName(step.title);
   const toolName = toolNameFromSummary(step.summary);
   if (/\b(discord mention received|discord user prompt|user prompt)\b/.test(title)) return "User prompt";
-  if (/\b(discord thinking sent|thinking reply sent)\b/.test(title)) return "Acknowledgement sent";
+  if (/\b(discord thinking sent|thinking reply sent|discord loading reaction added|loading reaction added)\b/.test(title)) return "Acknowledgement sent";
   if (/\b(load channel memory|load memory)\b/.test(title)) return "Load conversation memory";
   if (/\b(resolve discord permissions|permissions visibility resolved)\b/.test(title)) return "Check user access";
   if (/\b(discord reply context resolved|reply context resolved)\b/.test(title)) return "Load reply context";
@@ -2235,6 +2236,7 @@ function timelineEventTitle(name: string) {
   const text = normalizedTimelineName(name);
   if (/\bdiscord mention received\b/.test(text)) return "User prompt";
   if (/\bdiscord thinking sent\b/.test(text)) return "Thinking reply sent";
+  if (/\bdiscord loading reaction added\b/.test(text)) return "Loading reaction added";
   return humanizeEventName(name);
 }
 
@@ -2465,7 +2467,7 @@ function shouldNestTimelineChild(child: TimelineStep, parent: TimelineStep) {
 
 function isTopLevelTimelineMarker(step: TimelineStep) {
   const text = normalizedTimelineName(step.title);
-  return /\b(discord mention received|discord user prompt|discord thinking sent|agent request started|agent response ready|discord final response|final response|response ready)\b/.test(text);
+  return /\b(discord mention received|discord user prompt|discord thinking sent|discord loading reaction added|agent request started|agent response ready|discord final response|final response|response ready)\b/.test(text);
 }
 
 function timelineStepStartMs(step: TimelineStep) {

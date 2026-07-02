@@ -40,6 +40,7 @@ describe("run console timeline", () => {
     expect(timelineSummaryText("Tool work took 11m 30s.")).toBe("");
     expect(timelineSummaryText("No summary recorded.")).toBe("");
     expect(timelineSummaryText("Sent Thinking reply")).toBe("");
+    expect(timelineSummaryText("Added loading reaction")).toBe("");
     expect(timelineSummaryText("Thinking...")).toBe("");
     expect(timelineSummaryText("Round 1: getDiscordStats")).toBe("Round 1: getDiscordStats");
   });
@@ -47,6 +48,7 @@ describe("run console timeline", () => {
   it("uses friendly display names for implementation-shaped timeline rows", () => {
     expect(timelineTitleText(timelineStep({ id: "prompt", kind: "input", title: "Discord mention received", summary: "hello", createdAt: atMs(0), durationMs: null }))).toBe("User prompt");
     expect(timelineTitleText(timelineStep({ id: "ack", kind: "response", title: "Thinking reply sent", summary: "", createdAt: atMs(0), durationMs: null }))).toBe("Acknowledgement sent");
+    expect(timelineTitleText(timelineStep({ id: "ack-reaction", kind: "response", title: "Loading reaction added", summary: "", createdAt: atMs(0), durationMs: null }))).toBe("Acknowledgement sent");
     expect(timelineTitleText(timelineStep({ id: "memory", kind: "span", title: "Load channel memory", summary: "", createdAt: atMs(0), durationMs: 8 }))).toBe("Load conversation memory");
     expect(timelineTitleText(timelineStep({ id: "permissions", kind: "span", title: "Resolve Discord permissions", summary: "", createdAt: atMs(0), durationMs: 411 }))).toBe("Check user access");
     expect(timelineTitleText(timelineStep({ id: "model", kind: "model", title: "Agent model round complete", summary: "Round 2: no local tools", createdAt: atMs(0), durationMs: 100 }))).toBe("LLM call 2");

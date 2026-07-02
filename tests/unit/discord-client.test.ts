@@ -1,17 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../../src/agent/router.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/agent/router.js")>("../../src/agent/router.js");
+  return {
+    ...actual,
+    handleAgentRequest: vi.fn()
+  };
+});
 import {
+  DISCORD_LOADING_REACTION,
   deletedMessageIdsForConfiguredGuild,
   discordChannelThreadKey,
   explicitChannelMentionIds,
   explicitRoleMentionIds,
   explicitUserMentionIds,
+  handleMessageCreate,
   hasExplicitBotAddress,
   hasExplicitBotMention,
   isSelfMessage,
   persistReactionMessage,
+  runQueuedDiscordAgentRequest,
   shouldProcessGuildEvent,
   stripBotAddress
 } from "../../src/discord/client.js";
+import { handleAgentRequest } from "../../src/agent/router.js";
 
 describe("isSelfMessage", () => {
   it("detects messages authored by the current bot user", () => {
@@ -125,6 +136,75 @@ describe("persistReactionMessage", () => {
   });
 });
 
+describe("Discord loading reaction lifecycle", () => {
+  beforeEach(() => {
+    vi.mocked(handleAgentRequest).mockReset();
+  });
+
+  it("reacts with the loading emoji and queues work without sending a thinking reply", async () => {
+    const repo = fullRepo();
+    const jobs = {
+      enqueueDiscordAgentRequest: vi.fn(async () => "job-1")
+    };
+    const client = { user: { id: "bot", username: "ai" } } as any;
+    const message = fakeMentionMessage();
+
+    await handleMessageCreate(
+      {
+        config: { discord: { guildId: "guild-a" }, maxReplyChars: 2_000 } as any,
+        repo: repo as any,
+        openRouter: {} as any,
+        jobs: jobs as any
+      },
+      client,
+      message as any
+    );
+
+    expect(message.react).toHaveBeenCalledWith(DISCORD_LOADING_REACTION);
+    expect(message.reply).not.toHaveBeenCalled();
+    expect(jobs.enqueueDiscordAgentRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "message-1",
+        messageId: "message-1",
+        text: "hello"
+      })
+    );
+  });
+
+  it("removes the loading reaction from the prompt message and replies with the final answer", async () => {
+    const repo = fullRepo();
+    vi.mocked(handleAgentRequest).mockResolvedValue({ content: "final answer" });
+    const message = fakeMentionMessage();
+    const client = fakeClientForQueuedMessage(message);
+
+    await runQueuedDiscordAgentRequest(
+      {
+        config: { discordAgentResponseTimeoutMs: 5_000, maxReplyChars: 2_000 } as any,
+        repo: repo as any,
+        openRouter: {} as any,
+        client
+      },
+      {
+        runId: "run-1",
+        traceId: "run-1",
+        guildId: "guild-a",
+        channelId: "channel-1",
+        messageId: "message-1",
+        userId: "author-1",
+        text: "hello",
+        rawContent: "<@bot> hello",
+        mentionKind: "user",
+        botRoleIds: [],
+        requesterDisplayName: "Alice",
+        enqueuedAt: new Date("2024-01-01T00:00:00.000Z").toISOString()
+      }
+    );
+
+    expect(message.reply).toHaveBeenCalledWith({ content: "final answer", files: undefined });
+    expect(message.loadingReaction.users.remove).toHaveBeenCalledWith("bot");
+  });
+});
+
 function fakeRepo() {
   return {
     upsertGuild: vi.fn(async () => undefined),
@@ -132,6 +212,24 @@ function fakeRepo() {
     upsertUser: vi.fn(async () => undefined),
     upsertMessage: vi.fn(async () => undefined),
     isUserPrivacyDeleted: vi.fn(async () => false)
+  };
+}
+
+function fullRepo() {
+  return {
+    ...fakeRepo(),
+    isUserInteractionBlocked: vi.fn(async () => false),
+    upsertProcessRun: vi.fn(async () => undefined),
+    storeProcessRunArtifact: vi.fn(async () => undefined),
+    updateProcessRun: vi.fn(async () => undefined),
+    ensureConversationSession: vi.fn(async () => undefined),
+    recentConversationMessages: vi.fn(async () => []),
+    appendConversationMessage: vi.fn(async () => undefined),
+    recordProcessRunSpan: vi.fn(async () => undefined),
+    recordTraceEvent: vi.fn(async () => undefined),
+    getProcessRun: vi.fn(async () => null),
+    deleteConversationMessagesByDiscordMessageIds: vi.fn(async () => 0),
+    auditTool: vi.fn(async () => undefined)
   };
 }
 
@@ -176,4 +274,83 @@ function fakeGuildMessage(guildId: string) {
     },
     attachments: new Map()
   };
+}
+
+function fakeMentionMessage() {
+  const finalReply = { id: "reply-1", url: "https://discord.com/channels/guild-a/channel-1/reply-1", channelId: "channel-1", edit: vi.fn() };
+  const loadingReaction = {
+    emoji: { id: "1521299407214084337", name: "loading", animated: true },
+    users: { remove: vi.fn(async () => undefined) }
+  };
+  const reactionCache = {
+    find: (predicate: (reaction: typeof loadingReaction) => boolean) => [loadingReaction].find(predicate),
+    values: () => [loadingReaction][Symbol.iterator]()
+  };
+  const channel = {
+    id: "channel-1",
+    name: "general",
+    type: 0,
+    parentId: null,
+    isThread: () => false,
+    permissionsFor: () => ({ has: () => true }),
+    messages: {
+      fetch: vi.fn(async () => message)
+    }
+  };
+  const member = {
+    id: "author-1",
+    guild: { id: "guild-a" },
+    displayName: "Alice",
+    nickname: null,
+    joinedAt: null,
+    roles: { cache: new Map([["guild-a", {}], ["role-1", {}]]) }
+  };
+  const guild = {
+    id: "guild-a",
+    name: "Test Guild",
+    members: { fetch: vi.fn(async () => member) },
+    channels: { fetch: vi.fn(async () => channel), cache: new Map([["channel-1", channel]]) }
+  };
+  const message: any = {
+    id: "message-1",
+    partial: false,
+    inGuild: () => true,
+    guildId: "guild-a",
+    guild,
+    channel,
+    channelId: "channel-1",
+    author: { id: "author-1", username: "alice", globalName: "Alice", bot: false },
+    member,
+    content: "<@bot> hello",
+    cleanContent: "@ai hello",
+    createdAt: new Date("2024-01-01T00:00:00.000Z"),
+    createdTimestamp: new Date("2024-01-01T00:00:00.000Z").getTime(),
+    editedAt: null,
+    editedTimestamp: null,
+    type: 0,
+    system: false,
+    pinned: false,
+    reference: null,
+    url: "https://discord.com/channels/guild-a/channel-1/message-1",
+    mentions: { everyone: false, users: new Map(), roles: new Map(), channels: new Map() },
+    reactions: { cache: reactionCache },
+    attachments: new Map(),
+    react: vi.fn(async () => loadingReaction),
+    reply: vi.fn(async (payload: any) => (typeof payload === "string" ? { ...finalReply, content: payload } : { ...finalReply, ...payload })),
+    fetchReference: vi.fn(),
+    client: { user: { id: "bot" } },
+    loadingReaction
+  };
+  channel.messages.fetch.mockResolvedValue(message);
+  return message;
+}
+
+function fakeClientForQueuedMessage(message: any) {
+  return {
+    user: { id: "bot", username: "ai" },
+    isReady: () => true,
+    channels: {
+      fetch: vi.fn(async () => message.channel)
+    }
+  } as any;
 }

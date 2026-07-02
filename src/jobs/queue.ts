@@ -52,8 +52,6 @@ export type DiscordAgentRequestJob = {
   channelId: string;
   messageId: string;
   userId: string;
-  responseChannelId: string;
-  responseMessageId: string;
   text: string;
   rawContent: string;
   mentionKind: string;
@@ -193,8 +191,7 @@ export async function startJobs(input: {
         {
           queue: DISCORD_AGENT_REQUEST_JOB,
           runId: job.runId,
-          messageId: job.messageId,
-          responseMessageId: job.responseMessageId
+          messageId: job.messageId
         },
         "Enqueueing Discord agent request"
       );
@@ -641,8 +638,7 @@ export async function startJobs(input: {
                 queue: DISCORD_AGENT_REQUEST_JOB,
                 jobId: job.id,
                 runId: job.data.runId,
-                messageId: job.data.messageId,
-                responseMessageId: job.data.responseMessageId
+                messageId: job.data.messageId
               },
               "Starting queued Discord agent request"
             );

@@ -20,13 +20,14 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { handleAgentRequest } from "../agent/router.js";
 import { cleanResponse } from "../tools/coreTools.js";
-import type { DiscordReplyContext, DiscordReplyContextMessage } from "../tools/types.js";
+import type { AgentResponse, DiscordReplyContext, DiscordReplyContextMessage } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
 
 const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
 const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 8;
+export const DISCORD_LOADING_REACTION = "loading:1521299407214084337";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -184,7 +185,7 @@ export function createDiscordAiAgentBot(input: {
   };
 }
 
-async function handleMessageCreate(
+export async function handleMessageCreate(
   input: {
     config: AppConfig;
     repo: DiscordAiAgentRepository;
@@ -323,12 +324,11 @@ async function handleMessageCreate(
       metadata: { discordUrl: message.url, rawContent: message.content }
     })
     .catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord prompt artifact"));
-  const thinking = await message.reply("Thinking...");
-  requestLogger.debug({ replyMessageId: thinking.id }, "Sent thinking reply");
+  await addLoadingReaction(message, requestLogger);
   await recordTraceEvent(input.repo, {
-    eventName: "discord.thinking.sent",
-    summary: "Sent Thinking reply",
-    metadata: { replyMessageId: thinking.id }
+    eventName: "discord.loading.reaction.added",
+    summary: "Added loading reaction",
+    metadata: { messageId: message.id, emoji: DISCORD_LOADING_REACTION }
   });
   if (input.jobs) {
     const enqueuedAt = new Date();
@@ -340,8 +340,6 @@ async function handleMessageCreate(
         channelId: message.channelId,
         messageId: message.id,
         userId: message.author.id,
-        responseChannelId: thinking.channelId,
-        responseMessageId: thinking.id,
         text,
         rawContent: message.content,
         mentionKind: mentionContext.kind ?? "unknown",
@@ -354,11 +352,8 @@ async function handleMessageCreate(
           runId: message.id,
           status: "queued",
           summary: "Queued Discord mention for worker processing.",
-          links: { discordReply: thinking.url },
           metadata: {
             pgbossJobId: jobId,
-            responseChannelId: thinking.channelId,
-            responseMessageId: thinking.id,
             queuedAt: enqueuedAt.toISOString()
           }
         })
@@ -366,13 +361,13 @@ async function handleMessageCreate(
       await recordTraceEvent(input.repo, {
         eventName: "discord.agent_request.enqueued",
         summary: "Queued Discord mention for worker processing",
-        metadata: { jobId, responseMessageId: thinking.id }
+        metadata: { jobId, messageId: message.id }
       });
       return;
     } catch (error) {
       requestLogger.error({ err: error }, "Failed to enqueue Discord agent request");
       const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
-      const finalReply = await thinking.edit(errorContent);
+      const finalReply = await sendErrorDiscordReply(message, null, errorContent, requestLogger);
       await input.repo
         .updateProcessRun({
           runId: message.id,
@@ -385,6 +380,7 @@ async function handleMessageCreate(
       return;
     }
   }
+  let statusMessage: Message | null = null;
   const threadKey = discordChannelThreadKey(message.guildId, message.channelId);
   const userDisplayName = message.member?.displayName ?? message.author.username;
   const sessionStartedAt = Date.now();
@@ -513,10 +509,14 @@ async function handleMessageCreate(
           sessionMessages: priorSessionMessages,
           replyContext,
           requestId,
-          statusChannelId: thinking.channelId,
-          statusMessageId: thinking.id,
+          get statusChannelId() {
+            return statusMessage?.channelId;
+          },
+          get statusMessageId() {
+            return statusMessage?.id;
+          },
           updateStatus: async (content) => {
-            await thinking.edit(cleanResponse(content, input.config.maxReplyChars));
+            statusMessage = await upsertStatusReply(statusMessage, message, cleanResponse(content, input.config.maxReplyChars));
           },
           deleteDiscordMessageIds: async (messageIds) => {
             let deleted = 0;
@@ -565,11 +565,8 @@ async function handleMessageCreate(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
-    const finalReply = await thinking.edit({
-      content: response.content,
-      files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
-    });
-    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with final response");
+    const finalReply = await sendFinalDiscordReply(message, statusMessage, response, requestLogger);
+    requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord reply with final response");
 
     for (const memoryEvent of response.memoryEvents ?? []) {
       await input.repo.appendConversationMessage({
@@ -646,7 +643,7 @@ async function handleMessageCreate(
         "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
         input.config.maxReplyChars
       );
-      const finalReply = await thinking.edit(filteredContent);
+      const finalReply = await sendErrorDiscordReply(message, statusMessage, filteredContent, requestLogger);
       const deletedMemoryRows = await input.repo
         .deleteConversationMessagesByDiscordMessageIds({
           threadKey,
@@ -696,8 +693,8 @@ async function handleMessageCreate(
         .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
     }
     const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
-    const finalReply = await thinking.edit(errorContent);
-    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with error response");
+    const finalReply = await sendErrorDiscordReply(message, statusMessage, errorContent, requestLogger);
+    requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord reply with error response");
     await recordTraceEvent(input.repo, {
       eventName: "discord.mention.failed",
       level: "error",
@@ -769,12 +766,9 @@ export async function runQueuedDiscordAgentRequest(
     return;
   }
 
-  const [message, thinking] = await Promise.all([
-    fetchDiscordMessage(input.client, job.channelId, job.messageId),
-    fetchDiscordMessage(input.client, job.responseChannelId, job.responseMessageId)
-  ]);
+  const message = await fetchDiscordMessage(input.client, job.channelId, job.messageId);
   if (!message.inGuild()) throw new Error("Queued Discord request source message is no longer a guild message.");
-  await executeDiscordAgentRequest(input, input.client, message, thinking, {
+  await executeDiscordAgentRequest(input, input.client, message, {
     requestId: job.runId,
     text: job.text,
     rawContent: job.rawContent,
@@ -792,7 +786,6 @@ async function executeDiscordAgentRequest(
   },
   client: Client,
   message: Message,
-  thinking: Message,
   request: {
     requestId: string;
     text: string;
@@ -813,6 +806,7 @@ async function executeDiscordAgentRequest(
     messageId: message.id,
     userId: message.author.id
   });
+  let statusMessage: Message | null = null;
   const threadKey = discordChannelThreadKey(guildId, message.channelId);
   const userDisplayName = message.member?.displayName ?? message.author.username;
   const sessionStartedAt = Date.now();
@@ -941,10 +935,14 @@ async function executeDiscordAgentRequest(
           sessionMessages: priorSessionMessages,
           replyContext,
           requestId: request.requestId,
-          statusChannelId: thinking.channelId,
-          statusMessageId: thinking.id,
+          get statusChannelId() {
+            return statusMessage?.channelId;
+          },
+          get statusMessageId() {
+            return statusMessage?.id;
+          },
           updateStatus: async (content) => {
-            await thinking.edit(cleanResponse(content, input.config.maxReplyChars));
+            statusMessage = await upsertStatusReply(statusMessage, message, cleanResponse(content, input.config.maxReplyChars));
           },
           deleteDiscordMessageIds: async (messageIds) => {
             let deleted = 0;
@@ -993,11 +991,8 @@ async function executeDiscordAgentRequest(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
-    const finalReply = await thinking.edit({
-      content: response.content,
-      files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
-    });
-    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with final response");
+    const finalReply = await sendFinalDiscordReply(message, statusMessage, response, requestLogger);
+    requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord reply with final response");
 
     for (const memoryEvent of response.memoryEvents ?? []) {
       await input.repo.appendConversationMessage({
@@ -1074,7 +1069,7 @@ async function executeDiscordAgentRequest(
         "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
         input.config.maxReplyChars
       );
-      const finalReply = await thinking.edit(filteredContent);
+      const finalReply = await sendErrorDiscordReply(message, statusMessage, filteredContent, requestLogger);
       const deletedMemoryRows = await input.repo
         .deleteConversationMessagesByDiscordMessageIds({
           threadKey,
@@ -1124,8 +1119,8 @@ async function executeDiscordAgentRequest(
         .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
     }
     const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
-    const finalReply = await thinking.edit(errorContent);
-    requestLogger.info({ replyMessageId: finalReply.id }, "Edited Discord reply with error response");
+    const finalReply = await sendErrorDiscordReply(message, statusMessage, errorContent, requestLogger);
+    requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord reply with error response");
     await recordTraceEvent(input.repo, {
       eventName: "discord.mention.failed",
       level: "error",
@@ -1387,6 +1382,41 @@ async function fetchDiscordMessage(client: Client, channelId: string, messageId:
   const messages = (channel as any)?.messages;
   if (!messages?.fetch) throw new Error(`Discord channel ${channelId} cannot fetch messages.`);
   return (await messages.fetch(messageId)) as Message;
+}
+
+async function addLoadingReaction(message: Message, requestLogger: Logger) {
+  await message.react(DISCORD_LOADING_REACTION);
+  requestLogger.debug({ messageId: message.id, emoji: DISCORD_LOADING_REACTION }, "Added loading reaction");
+}
+
+async function removeLoadingReaction(message: Message, requestLogger: Logger) {
+  const reaction = message.reactions.cache.find((entry) => entry.emoji.id === "1521299407214084337");
+  if (!reaction) return;
+  await reaction.users.remove(message.client.user?.id);
+  requestLogger.debug({ messageId: message.id, emoji: DISCORD_LOADING_REACTION }, "Removed loading reaction");
+}
+
+async function upsertStatusReply(statusMessage: Message | null, sourceMessage: Message, content: string) {
+  if (statusMessage) {
+    return await statusMessage.edit(content);
+  }
+  return await sourceMessage.reply(content);
+}
+
+async function sendFinalDiscordReply(message: Message, statusMessage: Message | null, response: AgentResponse, requestLogger: Logger) {
+  const payload = {
+    content: response.content,
+    files: response.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }))
+  };
+  const finalReply = statusMessage ? await statusMessage.edit(payload) : await message.reply(payload);
+  await removeLoadingReaction(message, requestLogger);
+  return finalReply;
+}
+
+async function sendErrorDiscordReply(message: Message, statusMessage: Message | null, content: string, requestLogger: Logger) {
+  const finalReply = statusMessage ? await statusMessage.edit(content) : await message.reply(content);
+  await removeLoadingReaction(message, requestLogger);
+  return finalReply;
 }
 
 function isTerminalProcessRunStatus(status: string) {

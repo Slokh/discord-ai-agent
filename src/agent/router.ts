@@ -1309,7 +1309,7 @@ function chatMessages(
         "For Discord image requests, call generateImage so the result can be attached. " +
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +
         "For undo/delete/forget/remove requests about your previous replies, call undoConversationTurns. " +
-        "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. If the user is replying to your 'Thinking...' message or asking why you are still thinking, do not search Discord history. " +
+        "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. If the user is replying to your loading reaction/status message or asking why you are still loading, do not search Discord history. " +
         "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
         "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, run a coding PR update, or undo/delete/forget prior agent turns. " +
         "Use prior channel memory and reply-chain context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +

@@ -60,7 +60,7 @@ const defaults = {
   controlUiPublicUrl: "",
   controlPlaneInternalUrl: "http://discord-ai-agent-api:8080",
   taskSigningSecret: "",
-  codegenHarness: "codex" as CodegenHarness,
+  codegenHarness: "opencode" as CodegenHarness,
   codegenExecutionBackend: "kubernetes-job" as CodegenExecutionBackend,
   kubernetesNamespace: process.env.POD_NAMESPACE || "discord-ai-agent",
   sandboxImage: "discord-ai-agent-sandbox:latest",

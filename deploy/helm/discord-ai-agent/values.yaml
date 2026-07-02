@@ -31,7 +31,7 @@ codegen:
   executionBackend: kubernetes-job
   # codex uses the Codex app-server harness. opencode uses OpenCode serve + run
   # while keeping the rest of the sandbox, verification, and PR flow unchanged.
-  harness: codex
+  harness: opencode
 
 secret:
   existingSecretName: discord-ai-agent-env
@@ -42,7 +42,7 @@ config:
   githubBaseBranch: main
   openRouterChatModel: z-ai/glm-5.2
   # Optional. Defaults to openRouterChatModel when empty.
-  openRouterCodegenModel: ""
+  openRouterCodegenModel: z-ai/glm-5.2
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
   embeddingDimensions: "1536"

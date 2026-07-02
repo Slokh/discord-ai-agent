@@ -352,7 +352,7 @@ describe("LocalProcessExecutionBackend", () => {
         SANDBOX_RUN_ID: "run-123",
         GITHUB_TOKEN: "github-token",
         OPENROUTER_API_KEY: "sk-test",
-        CODEGEN_HARNESS: "codex",
+        CODEGEN_HARNESS: "opencode",
         AGENT_TASK_TOKEN: "task-token"
       })
     );

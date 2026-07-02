@@ -461,6 +461,38 @@ describe("run console timeline", () => {
     expect(trace?.slowest).toEqual({ name: "Codex attempt 1", durationMs: 90_101 });
   });
 
+  it("labels OpenCode attempt spans distinctly from Codex attempts", () => {
+    const events: RunEvent[] = [
+      runEvent({ id: "deadline", source: "task", name: "task.progress", summary: "Waiting up to 10m for the first code diff.", createdAt: atMs(1_000), metadata: { step: "opencode_first_diff_deadline", attempt: 1 } }),
+      runEvent({
+        id: "no-diff",
+        source: "task",
+        name: "task.progress",
+        summary: "OpenCode attempt 1 finished without a code diff.",
+        createdAt: atMs(11_000),
+        metadata: { step: "opencode_attempt_1_no_diff", attempt: 1, exitCode: 0, watchdogReason: "no_first_diff", gitStatus: "" }
+      })
+    ];
+    const spans: RunSpan[] = [
+      runSpan({
+        id: "attempt",
+        source: "command",
+        name: "opencode_attempt_1",
+        status: "failed",
+        startedAt: atMs(1_000),
+        completedAt: atMs(11_000),
+        durationMs: 10_000,
+        metadata: { command: "opencode run --attach http://127.0.0.1:4123 [prompt]", exitCode: 0 }
+      })
+    ];
+
+    const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts: [] }), { events, spans, startedAt: atMs(0) });
+
+    expect(trace?.groups.map((group) => timelineTitleText(group.parent))).toEqual(["OpenCode attempt 1"]);
+    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["First-diff deadline set", "Attempt ended with no diff"]);
+    expect(trace?.slowest).toEqual({ name: "OpenCode attempt 1", durationMs: 10_000 });
+  });
+
   it("formats Codex app-server transcripts into high-signal items", () => {
     const transcript = parseCodexTranscript(
       [

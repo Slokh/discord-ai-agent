@@ -1594,8 +1594,12 @@ export function codegenTimelineTrace(
   for (const attempt of codegenAttemptSpans(spans)) {
     const attemptNumber = codegenAttemptNumber(attempt.name);
     if (attemptNumber == null) continue;
+    const harnessName = codegenAttemptHarnessName(attempt.name);
     const deadline = event(
-      (candidate) => candidate.name === "task.progress" && candidate.metadata.step === "codex_first_diff_deadline" && candidate.metadata.attempt === attemptNumber
+      (candidate) =>
+        candidate.name === "task.progress" &&
+        Boolean(stringMetadata(candidate.metadata.step)?.endsWith("first_diff_deadline")) &&
+        candidate.metadata.attempt === attemptNumber
     );
     const reasoningStarted = event(
       (candidate) =>
@@ -1607,7 +1611,7 @@ export function codegenTimelineTrace(
     const firstDiff = event(
       (candidate) => {
         const step = String(candidate.metadata.step ?? "");
-        return candidate.name === "task.progress" && (step === "codex_first_diff" || step === "codex_app_server_first_diff") && candidate.metadata.attempt === attemptNumber;
+        return candidate.name === "task.progress" && (step === "codex_first_diff" || step === "codex_app_server_first_diff" || step === "opencode_first_diff") && candidate.metadata.attempt === attemptNumber;
       }
     );
     const watchdog = event(
@@ -1619,7 +1623,8 @@ export function codegenTimelineTrace(
     const noDiff = event(
       (candidate) =>
         candidate.name === "task.progress" &&
-        String(candidate.metadata.step ?? "") === `codex_app_server_attempt_${attemptNumber}_no_diff` &&
+        (String(candidate.metadata.step ?? "") === `codex_app_server_attempt_${attemptNumber}_no_diff` ||
+          String(candidate.metadata.step ?? "") === `opencode_attempt_${attemptNumber}_no_diff`) &&
         candidate.metadata.attempt === attemptNumber
     );
     const children = [
@@ -1664,7 +1669,7 @@ export function codegenTimelineTrace(
 
     addGroup(
       timelineStepFromCodegenSpan(attempt, startedAt, {
-        title: `Codex attempt ${attemptNumber}`,
+        title: `${harnessName} attempt ${attemptNumber}`,
         kind: attempt.status === "failed" ? "error" : "model",
         summary: codegenAttemptSummary(attempt, noDiff ?? watchdog)
       }),
@@ -1734,10 +1739,14 @@ function codegenAttemptSpans(spans: RunSpan[]) {
 }
 
 function codegenAttemptNumber(value: string) {
-  const match = value.match(/codex_(?:app_server_)?attempt_(\d+)/);
+  const match = value.match(/(?:codex_(?:app_server_)?|opencode_)attempt_(\d+)/);
   if (!match?.[1]) return null;
   const attempt = Number(match[1]);
   return Number.isFinite(attempt) ? attempt : null;
+}
+
+function codegenAttemptHarnessName(value: string) {
+  return value.includes("opencode") ? "OpenCode" : "Codex";
 }
 
 function codegenQueuedSummary(events: RunEvent[]) {
@@ -1773,7 +1782,7 @@ function codegenAttemptNoDiffSummary(event: RunEvent) {
   const notificationCount = numericMetadata(event.metadata.notificationCount);
   if (exitCode != null) pieces.push(`Exit ${exitCode}.`);
   if (watchdogReason) pieces.push(`Watchdog: ${watchdogReason}.`);
-  if (notificationCount != null) pieces.push(`${notificationCount} Codex notifications.`);
+  if (notificationCount != null) pieces.push(`${notificationCount} ${stringMetadata(event.metadata.harness)?.includes("opencode") ? "OpenCode" : "Codex"} notifications.`);
   return pieces.join(" ");
 }
 

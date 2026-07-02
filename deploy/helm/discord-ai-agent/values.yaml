@@ -29,6 +29,9 @@ codegen:
   # Prefer codegenWorker.enabled=true for warm local-process codegen so normal
   # worker queues stay separate from code execution.
   executionBackend: kubernetes-job
+  # codex uses the Codex app-server harness. opencode uses OpenCode serve + run
+  # while keeping the rest of the sandbox, verification, and PR flow unchanged.
+  harness: codex
 
 secret:
   existingSecretName: discord-ai-agent-env

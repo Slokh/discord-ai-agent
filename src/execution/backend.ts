@@ -127,6 +127,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         GITHUB_BASE_BRANCH: this.config.github.baseBranch,
         OPENROUTER_CHAT_MODEL: this.config.openRouter.chatModel,
         OPENROUTER_CODEGEN_MODEL: this.config.openRouter.codegenModel,
+        CODEGEN_HARNESS: this.config.execution.codegenHarness,
         SANDBOX_CACHE_DIR: this.config.execution.kubernetes.cacheDir,
         SANDBOX_STARTED_AT_MS: String(Date.now())
       });
@@ -517,6 +518,7 @@ export function buildSandboxRunnerEnv(input: {
     OPENROUTER_API_KEY: input.config.openRouter.apiKey,
     OPENROUTER_CHAT_MODEL: input.config.openRouter.chatModel,
     OPENROUTER_CODEGEN_MODEL: input.config.openRouter.codegenModel,
+    CODEGEN_HARNESS: input.config.execution.codegenHarness,
     AGENT_TASK_TOKEN: input.taskToken,
     SANDBOX_CACHE_DIR: input.config.execution.kubernetes.cacheDir,
     SANDBOX_STARTED_AT_MS: String(input.startedAtMs)

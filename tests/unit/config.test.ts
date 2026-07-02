@@ -18,6 +18,7 @@ describe("config", () => {
         "CONTROL_UI_PUBLIC_URL",
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
+        "CODEGEN_HARNESS",
         "CODEGEN_EXECUTION_BACKEND",
         "KUBERNETES_NAMESPACE",
         "SANDBOX_IMAGE",
@@ -49,6 +50,7 @@ describe("config", () => {
         expect(config.controlUi.publicUrl).toBeNull();
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
+        expect(config.execution.codegenHarness).toBe("codex");
         expect(config.execution.codegenBackend).toBe("kubernetes-job");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
@@ -103,6 +105,12 @@ describe("config", () => {
   it("allows selecting the local-process codegen backend", () => {
     withEnv({ CODEGEN_EXECUTION_BACKEND: "local-process" }, () => {
       expect(loadConfig().execution.codegenBackend).toBe("local-process");
+    });
+  });
+
+  it("allows selecting the OpenCode codegen harness", () => {
+    withEnv({ CODEGEN_HARNESS: "opencode" }, () => {
+      expect(loadConfig().execution.codegenHarness).toBe("opencode");
     });
   });
 

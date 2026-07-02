@@ -8,6 +8,7 @@ import {
   buildCodegenContextPack,
   codegenFirstDiffDeadlineMs,
   codegenNpmInstallEnv,
+  codegenNpmScriptEnv,
   codexConfigToml,
   codexExecArgs,
   codexHomePathForTask,
@@ -19,6 +20,10 @@ import {
   codeUpdateRecoveryPrompt,
   dependencyCacheKey,
   evaluateCodegenWatchdog,
+  openCodeConfigJson,
+  openCodeModelId,
+  openCodeRunArgs,
+  openCodeServeArgs,
   renderCodegenContextPack,
   repairWorktreeRemoteForBranchPush
 } from "../../src/execution/sandboxRunner.js";
@@ -80,6 +85,39 @@ describe("sandboxRunner", () => {
     expect(config).toContain('wire_api = "responses"');
     expect(config).toContain('[projects."/tmp/work/repo"]');
     expect(config).toContain('trust_level = "trusted"');
+  });
+
+  it("builds OpenCode server and run commands from the shared codegen model", () => {
+    expect(openCodeModelId("z-ai/glm-5.2")).toBe("openrouter/z-ai/glm-5.2");
+    expect(openCodeModelId("openrouter/z-ai/glm-5.2")).toBe("openrouter/z-ai/glm-5.2");
+    expect(openCodeServeArgs(4123)).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "4123"]);
+    expect(
+      openCodeRunArgs({
+        serverUrl: "http://127.0.0.1:4123",
+        checkoutDir: "/tmp/work/repo",
+        model: "z-ai/glm-5.2",
+        title: "Update the README",
+        prompt: "Please edit the README."
+      })
+    ).toEqual([
+      "run",
+      "--attach",
+      "http://127.0.0.1:4123",
+      "--dir",
+      "/tmp/work/repo",
+      "--model",
+      "openrouter/z-ai/glm-5.2",
+      "--format",
+      "json",
+      "--auto",
+      "--title",
+      "Update the README",
+      "Please edit the README."
+    ]);
+    expect(JSON.parse(openCodeConfigJson({ model: "z-ai/glm-5.2" }))).toEqual({
+      $schema: "https://opencode.ai/config.json",
+      model: "openrouter/z-ai/glm-5.2"
+    });
   });
 
   it("keeps Codex home outside the temporary workspace when a persistent sandbox cache exists", () => {
@@ -242,6 +280,36 @@ describe("sandboxRunner", () => {
     expect(env.npm_config_omit).toBeUndefined();
   });
 
+  it("strips runtime app configuration from generated npm verification commands", () => {
+    const env = codegenNpmScriptEnv({
+      PATH: "/usr/bin",
+      HOME: "/tmp/home",
+      NODE_ENV: "production",
+      NPM_CONFIG_PRODUCTION: "true",
+      npm_config_omit: "dev",
+      CODEGEN_HARNESS: "opencode",
+      OPENROUTER_API_KEY: "sk-test",
+      GITHUB_TOKEN: "ghp-test",
+      DATABASE_URL: "postgres://example",
+      TASK_REQUEST: "update the bot",
+      SANDBOX_RUN_ID: "run-123",
+      DISCORD_AI_AGENT_PROCESS_ROLE: "worker"
+    });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/tmp/home");
+    expect(env.NODE_ENV).toBe("development");
+    expect(env.NPM_CONFIG_PRODUCTION).toBeUndefined();
+    expect(env.npm_config_omit).toBeUndefined();
+    expect(env.CODEGEN_HARNESS).toBeUndefined();
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.TASK_REQUEST).toBeUndefined();
+    expect(env.SANDBOX_RUN_ID).toBeUndefined();
+    expect(env.DISCORD_AI_AGENT_PROCESS_ROLE).toBeUndefined();
+  });
+
   it("includes dev dependency mode in the dependency cache key", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-dependency-cache-"));
     try {
@@ -401,7 +469,7 @@ describe("sandboxRunner", () => {
         reconnectSeen: false,
         reconnectStallMs: null
       })
-    ).toEqual(expect.objectContaining({ action: "fail", reason: "no_first_diff" }));
+    ).toEqual(expect.objectContaining({ action: "fail", reason: "no_first_diff", message: expect.stringContaining("Coding harness") }));
   });
 
   it("continues to verification when Codex stalls after producing a diff", () => {

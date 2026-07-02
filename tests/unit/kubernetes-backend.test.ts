@@ -88,6 +88,7 @@ describe("KubernetesExecutionBackend", () => {
         KUBERNETES_NAMESPACE: "discord-ai-agent",
         OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
         OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
+        CODEGEN_HARNESS: "opencode",
         SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
         SANDBOX_CACHE_PVC_NAME: "discord-ai-agent-sandbox-cache"
       },
@@ -103,6 +104,7 @@ describe("KubernetesExecutionBackend", () => {
               data: expect.objectContaining({
                 OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
                 OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
+                CODEGEN_HARNESS: "opencode",
                 SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
                 SANDBOX_STARTED_AT_MS: expect.any(String)
               })
@@ -196,6 +198,7 @@ describe("LocalProcessExecutionBackend", () => {
         CONTROL_PLANE_INTERNAL_URL: "http://agent-api:8080",
         OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
         OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
+        CODEGEN_HARNESS: "opencode",
         SANDBOX_CACHE_DIR: "/var/cache/warm-codegen",
         CODEGEN_EXECUTION_BACKEND: "local-process"
       },
@@ -242,6 +245,7 @@ describe("LocalProcessExecutionBackend", () => {
               OPENROUTER_API_KEY: "sk-test",
               OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2",
               OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
+              CODEGEN_HARNESS: "opencode",
               AGENT_TASK_TOKEN: expect.any(String),
               SANDBOX_CACHE_DIR: "/var/cache/warm-codegen",
               SANDBOX_STARTED_AT_MS: "1782930000000"
@@ -348,6 +352,7 @@ describe("LocalProcessExecutionBackend", () => {
         SANDBOX_RUN_ID: "run-123",
         GITHUB_TOKEN: "github-token",
         OPENROUTER_API_KEY: "sk-test",
+        CODEGEN_HARNESS: "codex",
         AGENT_TASK_TOKEN: "task-token"
       })
     );

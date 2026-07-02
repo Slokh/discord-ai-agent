@@ -42,6 +42,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.embeddingDimensions | quote }}
 - name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS
   value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
+- name: CODEGEN_HARNESS
+  value: {{ .Values.codegen.harness | quote }}
 {{- end -}}
 
 {{- define "discord-ai-agent.controlUiPublicEnv" -}}

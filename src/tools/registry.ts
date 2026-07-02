@@ -628,7 +628,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getDeploymentStatus",
     description:
-      "Report the running deployment revision, uptime, database health, agent task metrics, and recent tasks. Use after deploys or when users ask whether the deployed bot is healthy.",
+      "Report the running deployment revision, uptime, database health, active or stale code-update tasks, agent task metrics, and recent tasks. Use after deploys or when users ask whether the deployed bot is healthy or whether codegen is stuck.",
     userVisible: true,
     mutates: false,
     category: "ops",

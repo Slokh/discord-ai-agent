@@ -36,6 +36,8 @@ export type HistoryAnswerOptions = {
 
 const MAX_UNDO_TURNS = 10;
 const MS_PER_DAY = 86_400_000;
+const ACTIVE_AGENT_TASK_STATUSES: AgentTaskStatus[] = ["queued", "running"];
+const ACTIVE_AGENT_TASK_STALE_MS = 15 * 60 * 1000;
 
 type ChannelTopicCluster = {
   size: number;
@@ -1240,9 +1242,15 @@ export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string
 }
 
 export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
-  const [health, taskMetrics, recentTasks] = await Promise.all([
+  const [health, taskMetrics, activeTasks, recentTasks] = await Promise.all([
     ctx.repo.health(),
     ctx.repo.getAgentTaskMetrics(),
+    ctx.repo.listAgentTasks({
+      guildId: ctx.guildId,
+      visibleChannelIds: ctx.visibleChannelIds,
+      statuses: ACTIVE_AGENT_TASK_STATUSES,
+      limit: 5
+    }),
     ctx.repo.listAgentTasks({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
@@ -1263,9 +1271,10 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
     userId: ctx.userId,
     toolName: "getDeploymentStatus",
     argumentsSummary: "deployment status",
-    resultSummary: summarizeForAudit({ revision, recentTasks: recentTasks.length })
+    resultSummary: summarizeForAudit({ revision, activeTasks: activeTasks.length, recentTasks: recentTasks.length })
   });
 
+  const nowMs = Date.now();
   return [
     "Deployment status:",
     `- Revision: ${revision}`,
@@ -1281,6 +1290,8 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
     `- Codegen leases: ${formatLeaseMetricSummary(taskMetrics.codegenSandboxLeases)}`,
     `- Codegen timings: ${formatCodegenMetricSummary(taskMetrics.codegenPhaseDurations)}`,
     `- Sandbox cache: ${formatCacheMetricSummary(taskMetrics.sandboxCacheEvents)}`,
+    activeTasks.length ? "Active code updates:" : "Active code updates: none",
+    ...activeTasks.map((task) => `- ${formatActiveAgentTaskLine(task, nowMs)}`),
     recentTasks.length ? "Recent tasks:" : "Recent tasks: none",
     ...recentTasks.map((task) => `- ${formatAgentTaskLine(task)}`)
   ].join("\n");
@@ -1510,6 +1521,15 @@ function formatAgentTaskLine(task: AgentTaskRecord) {
     `updated=${task.updatedAt.toISOString()}`
   ].filter(Boolean);
   return `${parts.join(" | ")}\n  ${truncateForDiscord(task.title, 180)}`;
+}
+
+function formatActiveAgentTaskLine(task: AgentTaskRecord, nowMs: number) {
+  const startedAt = task.startedAt ?? task.createdAt;
+  const progressAt = task.progressUpdatedAt ?? task.updatedAt ?? startedAt;
+  const elapsedMs = Math.max(0, nowMs - startedAt.getTime());
+  const idleMs = Math.max(0, nowMs - progressAt.getTime());
+  const stale = idleMs >= ACTIVE_AGENT_TASK_STALE_MS ? " | stale" : "";
+  return `${formatAgentTaskLine(task)}\n  elapsed=${formatDurationMs(elapsedMs)} | idle=${formatDurationMs(idleMs)}${stale}`;
 }
 
 function formatCodegenMetricSummary(rows: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>) {

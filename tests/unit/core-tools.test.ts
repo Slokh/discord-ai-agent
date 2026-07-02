@@ -961,6 +961,58 @@ describe("getDeploymentStatus", () => {
     expect(response).toContain("Agent backlog: local-process-sandbox.running=1 oldest=2m 5s");
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDeploymentStatus" }));
   });
+
+  it("calls out active stale code-update tasks", async () => {
+    vi.setSystemTime(new Date("2026-07-01T12:30:00.000Z"));
+    const auditTool = vi.fn(async () => undefined);
+    const activeTask = {
+      taskId: "task-stale",
+      traceId: "trace-stale",
+      guildId: "guild",
+      channelId: "channel",
+      status: "running",
+      currentStep: "codex",
+      title: "make codegen faster",
+      requestedBy: "kartik",
+      createdAt: new Date("2026-07-01T12:00:00.000Z"),
+      startedAt: new Date("2026-07-01T12:00:00.000Z"),
+      progressUpdatedAt: new Date("2026-07-01T12:10:00.000Z"),
+      updatedAt: new Date("2026-07-01T12:10:00.000Z")
+    };
+    const listAgentTasks = vi.fn(async (input: { statuses?: string[] }) => (input.statuses?.includes("running") ? [activeTask] : []));
+    const ctx = {
+      repo: {
+        health: vi.fn(async () => ({ messages: 2, embeddings: 1, toolCalls: 3 })),
+        getAgentTaskMetrics: vi.fn(async () => ({
+          tasksByStatus: [{ status: "running", count: 1 }],
+          agentTaskBacklog: [],
+          sandboxRunsByStatus: [],
+          codegenSandboxLeases: [],
+          codegenPhaseDurations: [],
+          sandboxCacheEvents: []
+        })),
+        listAgentTasks,
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      config: { github: { repository: "Slokh/discord-ai-agent", baseBranch: "main" } }
+    } as unknown as ToolContext;
+
+    const response = await getDeploymentStatus(ctx);
+
+    expect(response).toContain("Active code updates:");
+    expect(response).toContain("`task-stale` | running | step=codex");
+    expect(response).toContain("elapsed=30m 0s | idle=20m 0s | stale");
+    expect(listAgentTasks).toHaveBeenCalledWith(expect.objectContaining({ statuses: ["queued", "running"], limit: 5 }));
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resultSummary: expect.stringContaining("\"activeTasks\":1")
+      })
+    );
+  });
 });
 
 describe("inspectAgentLogs", () => {

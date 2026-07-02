@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   answerFromHistory,
+  agentUpdateTitleFromRequest,
   createSkillFromRequest,
   extractHistorySearchSyntax,
   findDiscordUsers,
@@ -49,6 +50,16 @@ describe("extractHistorySearchSyntax", () => {
 });
 
 describe("model-led mutating tools", () => {
+  it("builds concise human titles for code-update requests", () => {
+    expect(
+      agentUpdateTitleFromRequest(
+        'instead of replying "Thinking..." when prompted, can you just react with the <a:loading:1521299407214084337> emoji to the prompt. Then reply as normal. open a PR'
+      )
+    ).toBe("Replace Thinking reply with loading emoji");
+    expect(agentUpdateTitleFromRequest("add a calendar integration")).toBe("Add a calendar integration");
+    expect(agentUpdateTitleFromRequest("add a calendar integration", "Add calendar support")).toBe("Add calendar support");
+  });
+
   it("saves a skill from structured model arguments", async () => {
     const ctx = {
       config: { openRouter: {}, maxReplyChars: 1800 },

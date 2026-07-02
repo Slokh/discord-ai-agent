@@ -11,6 +11,9 @@ import {
   codexExecArgs,
   codexHomePathForTask,
   codexResumeExecArgs,
+  codeUpdateBranchName,
+  codeUpdatePullRequestBody,
+  codeUpdatePullRequestTitle,
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
   evaluateCodegenWatchdog,
@@ -84,6 +87,53 @@ describe("sandboxRunner", () => {
         workRoot: "/tmp/discord-ai-agent-workspaces/slokh-discord-ai-agent-156e554d18/task-PN8sBv"
       })
     ).toBe("/var/cache/discord-ai-agent/codex-home/task-PN8sBv");
+  });
+
+  it("uses concise ai-prefixed branch names for code updates", () => {
+    expect(codeUpdateBranchName("Use loading reaction instead of Thinking reply", "task-1782969722216-b841abb5")).toBe(
+      "ai/use-loading-reaction-thinking-reply-abb5"
+    );
+  });
+
+  it("humanizes legacy kebab task titles before opening PRs", () => {
+    expect(codeUpdatePullRequestTitle("instead-of-replying-with-a-thinking-placeholder--retry")).toBe(
+      "Instead of replying with a thinking placeholder"
+    );
+  });
+
+  it("keeps generated PR bodies focused with prompted-by in the footer", () => {
+    const body = codeUpdatePullRequestBody({
+      env: {
+        taskRequest: "Use a loading reaction while the bot is working.",
+        requestedBy: "kartik (87002447687467008)"
+      },
+      verifyPassed: true
+    });
+
+    expect(body).toBe(
+      [
+        "## Why",
+        "",
+        "Use a loading reaction while the bot is working.",
+        "",
+        "## Changes",
+        "",
+        "- Implemented by the Discord AI Agent sandbox.",
+        "- See the PR diff for the exact code changes.",
+        "",
+        "## Testing",
+        "",
+        "- `npm run verify`: passed",
+        "- `npm run scan:release`: passed",
+        "",
+        "---",
+        "",
+        "Prompted by: kartik (87002447687467008)"
+      ].join("\n")
+    );
+    expect(body).not.toContain("## Context");
+    expect(body).not.toContain("Task ID");
+    expect(body).not.toContain("Codegen model");
   });
 
   it("builds a concise codegen context pack from the repository guide and project map", async () => {

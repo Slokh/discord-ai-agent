@@ -143,7 +143,7 @@ npm run sandbox-cache:prune
 npm run sandbox-cache:clear
 ```
 
-The API `/metrics` endpoint includes aggregate codegen phase timings and sandbox cache hit/miss counters.
+The API `/metrics` endpoint includes active agent task backlog age, aggregate codegen phase timings, and sandbox cache hit/miss counters.
 
 ## Networking
 
@@ -205,6 +205,7 @@ The API service also exposes Prometheus text metrics at `/metrics`. The Helm cha
 - stored embeddings
 - logged tool calls
 - agent task counts by status
+- active agent task backlog counts and oldest age by backend/status
 - sandbox run counts by status
 
 ## First Run

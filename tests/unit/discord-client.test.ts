@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  addLoadingReaction,
+  createStatusReplyLifecycle,
   deletedMessageIdsForConfiguredGuild,
   discordChannelThreadKey,
   explicitChannelMentionIds,
@@ -8,7 +10,10 @@ import {
   hasExplicitBotAddress,
   hasExplicitBotMention,
   isSelfMessage,
+  LOADING_REACTION_EMOJI_ID,
+  LOADING_REACTION_IDENTIFIER,
   persistReactionMessage,
+  removeLoadingReaction,
   shouldProcessGuildEvent,
   stripBotAddress
 } from "../../src/discord/client.js";
@@ -124,6 +129,79 @@ describe("persistReactionMessage", () => {
     expect(repo.upsertMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("loading reaction lifecycle", () => {
+  it("reactions the original prompt with the animated loading emoji instead of replying", async () => {
+    const message = fakeReactableMessage();
+    await addLoadingReaction(message as any);
+    expect(message.react).toHaveBeenCalledWith(LOADING_REACTION_IDENTIFIER);
+    expect(message.reply).not.toHaveBeenCalled();
+  });
+
+  it("removes the loading reaction by emoji id", async () => {
+    const message = fakeReactableMessage({ withLoadingReaction: true });
+    await removeLoadingReaction(message as any, "bot");
+    expect(message.loadingReaction.users.remove).toHaveBeenCalledWith("bot");
+  });
+
+  it("creates a reply and removes the loading reaction on first status update, then edits", async () => {
+    const message = fakeReactableMessage({ withLoadingReaction: true });
+    const lifecycle = createStatusReplyLifecycle(message as any, "bot", 2000);
+
+    const first = await lifecycle.ensureStatusMessage("Working on it...");
+    expect(message.reply).toHaveBeenCalledWith("Working on it...");
+    expect(message.loadingReaction.users.remove).toHaveBeenCalledWith("bot");
+    expect(first.id).toBe("reply-1");
+    expect(lifecycle.statusChannelId).toBe("reply-channel");
+    expect(lifecycle.statusMessageId).toBe("reply-1");
+
+    const edited = await lifecycle.ensureStatusMessage("final response");
+    expect(first.edit).toHaveBeenCalledWith("final response");
+    expect(message.reply).toHaveBeenCalledTimes(1);
+    expect(edited.id).toBe("reply-1");
+  });
+
+  it("sends object payloads (content + files) as a fresh reply when no status message exists", async () => {
+    const message = fakeReactableMessage();
+    const lifecycle = createStatusReplyLifecycle(message as any, "bot", 2000);
+    const payload = { content: "done", files: [] };
+    const first = await lifecycle.ensureStatusMessage(payload as any);
+    expect(message.reply).toHaveBeenCalledWith(payload);
+    expect(first.id).toBe("reply-1");
+  });
+});
+
+function fakeReactableMessage(options: { withLoadingReaction?: boolean } = {}) {
+  let replyCounter = 0;
+  const edited = { id: "reply-1", channelId: "reply-channel", url: "https://discord.com/channels/g/c/reply-1", edit: vi.fn(async (payload: any) => ({ ...edited, ...payload })) } as any;
+  const loadingReaction = {
+    emoji: { id: LOADING_REACTION_EMOJI_ID, name: "loading", animated: true },
+    users: { remove: vi.fn(async () => undefined) },
+    count: 1,
+    me: true
+  };
+  const cacheMap = new Map<string, any>();
+  if (options.withLoadingReaction) cacheMap.set(LOADING_REACTION_EMOJI_ID, loadingReaction);
+  const cache = {
+    find: (predicate: (reaction: any) => boolean) => {
+      for (const value of cacheMap.values()) if (predicate(value)) return value;
+      return undefined;
+    }
+  };
+  return {
+    id: "prompt-1",
+    channelId: "prompt-channel",
+    url: "https://discord.com/channels/g/c/prompt-1",
+    react: vi.fn(async () => undefined),
+    reply: vi.fn(async () => {
+      replyCounter += 1;
+      edited.id = `reply-${replyCounter}`;
+      return edited;
+    }),
+    reactions: { cache },
+    loadingReaction
+  };
+}
 
 function fakeRepo() {
   return {

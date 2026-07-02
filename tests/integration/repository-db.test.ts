@@ -747,6 +747,73 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
   });
 
+  it("finds stale running agent tasks that have no active sandbox", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const staleTaskId = `task-${randomUUID()}`;
+    const freshTaskId = `task-${randomUUID()}`;
+    const activeSandboxTaskId = `task-${randomUUID()}`;
+    const staleAt = new Date("2026-01-01T00:00:00.000Z");
+    const freshAt = new Date("2026-01-01T00:30:00.000Z");
+    const staleBefore = new Date("2026-01-01T00:15:00.000Z");
+
+    await repo.upsertGuild({ id: guildId, name: "Task Guild" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "tasks", type: 0 });
+    for (const taskId of [staleTaskId, freshTaskId, activeSandboxTaskId]) {
+      await repo.upsertAgentTaskQueued({
+        taskId,
+        traceId: `trace-${randomUUID()}`,
+        guildId,
+        channelId,
+        userId: `user-${randomUUID()}`,
+        taskType: "code_update",
+        title: "stale task query test",
+        request: "check stale task query behavior",
+        requestedBy: "test",
+        backend: "kubernetes-sandbox"
+      });
+      await repo.markAgentTaskRunning({
+        taskId,
+        backend: "kubernetes-sandbox",
+        step: "sandbox_running",
+        statusMessage: "Running sandbox."
+      });
+    }
+
+    await repo.recordSandboxRun({
+      taskId: activeSandboxTaskId,
+      sandboxRunId: `run-${randomUUID()}`,
+      backend: "kubernetes-sandbox",
+      namespace: "discord-ai-agent",
+      backendJobName: "agent-task-active",
+      image: "sandbox:test"
+    });
+    await pool.query(
+      `
+        UPDATE agent_tasks
+        SET started_at = $2,
+            progress_updated_at = $2,
+            updated_at = $2
+        WHERE task_id = ANY($1::text[])
+      `,
+      [[staleTaskId, activeSandboxTaskId], staleAt]
+    );
+    await pool.query(
+      `
+        UPDATE agent_tasks
+        SET started_at = $2,
+            progress_updated_at = $2,
+            updated_at = $2
+        WHERE task_id = $1
+      `,
+      [freshTaskId, freshAt]
+    );
+
+    await expect(repo.listStaleRunningAgentTasksWithoutActiveSandbox({ staleBefore, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({ taskId: staleTaskId, status: "running" })
+    ]);
+  });
+
   it("uses backend-aware copy for queued local-process agent tasks", async () => {
     const taskId = `task-${randomUUID()}`;
     await repo.upsertAgentTaskQueued({

@@ -2851,6 +2851,35 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToAgentTask);
   }
 
+  async listStaleRunningAgentTasksWithoutActiveSandbox(input: { staleBefore: Date; limit?: number }): Promise<AgentTaskRecord[]> {
+    const limit = Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          task_type, title, request, requested_by, status, backend, current_step,
+          status_message, branch_name, pr_url, draft, verify_passed, error,
+          created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
+          progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
+        FROM agent_tasks at
+        WHERE at.status = 'running'
+          AND coalesce(at.progress_updated_at, at.updated_at, at.started_at, at.created_at) < $1
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sandbox_runs sr
+            WHERE sr.task_id = at.task_id
+              AND sr.completed_at IS NULL
+              AND sr.status = 'running'
+          )
+        ORDER BY coalesce(at.progress_updated_at, at.updated_at, at.started_at, at.created_at) ASC, at.created_at ASC
+        LIMIT $2
+      `,
+      [input.staleBefore, limit]
+    );
+    return result.rows.map(rowToAgentTask);
+  }
+
   async listTerminalAgentTasksNeedingNotification(limit = 20): Promise<AgentTaskRecord[]> {
     const result = await this.pool.query(
       `

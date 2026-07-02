@@ -3,6 +3,7 @@ import type { KubernetesExecutionBackend, ObservedSandboxRun } from "./backend.j
 import { logger } from "../util/logger.js";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 30_000;
+const DEFAULT_STALE_RUNNING_TASK_MS = 15 * 60_000;
 
 type SandboxRunBackend = Pick<KubernetesExecutionBackend, "observeRun" | "cleanupRun">;
 
@@ -15,6 +16,7 @@ export function startSandboxReconciler(input: {
   repo: DiscordAiAgentRepository;
   backend: SandboxRunBackend;
   intervalMs?: number;
+  staleRunningTaskMs?: number;
 }): SandboxReconcilerRuntime {
   let stopped = false;
   let running = false;
@@ -24,7 +26,7 @@ export function startSandboxReconciler(input: {
     if (running || stopped) return;
     running = true;
     try {
-      await runSandboxReconciliationOnce(input.repo, input.backend);
+      await runSandboxReconciliationOnce(input.repo, input.backend, { staleRunningTaskMs: input.staleRunningTaskMs });
     } finally {
       running = false;
     }
@@ -45,8 +47,13 @@ export function startSandboxReconciler(input: {
   };
 }
 
-export async function runSandboxReconciliationOnce(repo: DiscordAiAgentRepository, backend: SandboxRunBackend) {
+export async function runSandboxReconciliationOnce(
+  repo: DiscordAiAgentRepository,
+  backend: SandboxRunBackend,
+  options: { staleRunningTaskMs?: number; now?: () => number } = {}
+) {
   await reconcileActiveRuns(repo, backend);
+  await reconcileRunningTasksWithoutActiveSandbox(repo, options);
   await cleanupTerminalRuns(repo, backend);
 }
 
@@ -77,6 +84,43 @@ async function reconcileActiveRuns(repo: DiscordAiAgentRepository, backend: Sand
       error: observed.reason ?? (observed.status === "gone" ? "Sandbox job disappeared before completion." : "Sandbox job failed."),
       metadata: { sandboxRunId: run.sandboxRunId, observed }
     });
+  }
+}
+
+async function reconcileRunningTasksWithoutActiveSandbox(
+  repo: DiscordAiAgentRepository,
+  options: { staleRunningTaskMs?: number; now?: () => number }
+) {
+  const staleRunningTaskMs = options.staleRunningTaskMs ?? DEFAULT_STALE_RUNNING_TASK_MS;
+  const now = options.now ?? Date.now;
+  const staleBefore = new Date(now() - staleRunningTaskMs);
+  const tasks = await repo.listStaleRunningAgentTasksWithoutActiveSandbox({ staleBefore });
+  for (const task of tasks) {
+    const progressAt = task.progressUpdatedAt ?? task.updatedAt ?? task.startedAt ?? task.createdAt;
+    const message = "Agent task was running without an active sandbox after the stale threshold.";
+    await repo.markAgentTaskFailed({
+      taskId: task.taskId,
+      error: message,
+      metadata: {
+        reason: "stale_running_task_without_active_sandbox",
+        staleBefore: staleBefore.toISOString(),
+        staleRunningTaskMs,
+        lastProgressAt: progressAt.toISOString(),
+        currentStep: task.currentStep,
+        backend: task.backend
+      }
+    });
+    logger.warn(
+      {
+        taskId: task.taskId,
+        staleBefore,
+        staleRunningTaskMs,
+        lastProgressAt: progressAt,
+        currentStep: task.currentStep,
+        backend: task.backend
+      },
+      "Marked stale running agent task failed because no active sandbox run exists"
+    );
   }
 }
 

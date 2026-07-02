@@ -7,6 +7,7 @@ describe("sandbox reconciler", () => {
     const run = sandboxRun();
     const repo = {
       listActiveSandboxRuns: vi.fn(async () => [run]),
+      listStaleRunningAgentTasksWithoutActiveSandbox: vi.fn(async () => []),
       listTerminalSandboxRunsPendingCleanup: vi.fn(async () => []),
       markAgentTaskFailed: vi.fn(async () => undefined)
     };
@@ -39,6 +40,7 @@ describe("sandbox reconciler", () => {
     const run = sandboxRun({ taskStatus: "succeeded", status: "succeeded" });
     const repo = {
       listActiveSandboxRuns: vi.fn(async () => []),
+      listStaleRunningAgentTasksWithoutActiveSandbox: vi.fn(async () => []),
       listTerminalSandboxRunsPendingCleanup: vi.fn(async () => [run]),
       markSandboxRunCleanedUp: vi.fn(async () => undefined)
     };
@@ -51,6 +53,42 @@ describe("sandbox reconciler", () => {
 
     expect(backend.cleanupRun).toHaveBeenCalledWith(run);
     expect(repo.markSandboxRunCleanedUp).toHaveBeenCalledWith("run-1");
+  });
+
+  it("marks stale running tasks failed when no active sandbox run exists", async () => {
+    const task = agentTask();
+    const repo = {
+      listActiveSandboxRuns: vi.fn(async () => []),
+      listStaleRunningAgentTasksWithoutActiveSandbox: vi.fn(async () => [task]),
+      listTerminalSandboxRunsPendingCleanup: vi.fn(async () => []),
+      markAgentTaskFailed: vi.fn(async () => undefined)
+    };
+    const backend = {
+      observeRun: vi.fn(),
+      cleanupRun: vi.fn()
+    };
+
+    await runSandboxReconciliationOnce(repo as any, backend, {
+      staleRunningTaskMs: 15 * 60_000,
+      now: () => new Date("2026-01-01T00:30:00Z").getTime()
+    });
+
+    expect(repo.listStaleRunningAgentTasksWithoutActiveSandbox).toHaveBeenCalledWith({
+      staleBefore: new Date("2026-01-01T00:15:00Z")
+    });
+    expect(repo.markAgentTaskFailed).toHaveBeenCalledWith({
+      taskId: "task-1",
+      error: "Agent task was running without an active sandbox after the stale threshold.",
+      metadata: expect.objectContaining({
+        reason: "stale_running_task_without_active_sandbox",
+        staleBefore: "2026-01-01T00:15:00.000Z",
+        staleRunningTaskMs: 900_000,
+        lastProgressAt: "2026-01-01T00:10:00.000Z",
+        currentStep: "sandbox_running",
+        backend: "local-process-sandbox"
+      })
+    });
+    expect(backend.cleanupRun).not.toHaveBeenCalled();
   });
 });
 
@@ -70,5 +108,44 @@ function sandboxRun(overrides: Partial<SandboxRunRecord> = {}): SandboxRunRecord
     cleanedUpAt: null,
     updatedAt: new Date("2026-01-01T00:00:01Z"),
     ...overrides
+  };
+}
+
+function agentTask() {
+  return {
+    taskId: "task-1",
+    pgBossJobId: "job-1",
+    traceId: "trace-1",
+    guildId: "guild-1",
+    channelId: "channel-1",
+    userId: "user-1",
+    threadKey: null,
+    discordResponseChannelId: null,
+    discordResponseMessageId: null,
+    retriedFromTaskId: null,
+    taskType: "code_update",
+    title: "stale task",
+    request: "make a change",
+    requestedBy: "test",
+    status: "running",
+    backend: "local-process-sandbox",
+    currentStep: "sandbox_running",
+    statusMessage: "Running codegen.",
+    branchName: null,
+    prUrl: null,
+    draft: null,
+    verifyPassed: null,
+    error: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    startedAt: new Date("2026-01-01T00:00:01Z"),
+    cancelledAt: null,
+    completedAt: null,
+    notifiedAt: null,
+    notificationError: null,
+    progressUpdatedAt: new Date("2026-01-01T00:10:00Z"),
+    lastRenderedSignature: null,
+    lastRenderedAt: null,
+    terminalRenderedAt: null,
+    updatedAt: new Date("2026-01-01T00:10:00Z")
   };
 }

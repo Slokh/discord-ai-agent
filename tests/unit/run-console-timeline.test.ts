@@ -5,6 +5,7 @@ import {
   enrichModelRoundToolRequests,
   groupTimelineSteps,
   parseCodexTranscript,
+  parseOpenCodeTranscript,
   relatedRunTimelineSteps,
   summedStepDuration,
   timelineStepSummaryText,
@@ -486,11 +487,82 @@ describe("run console timeline", () => {
       })
     ];
 
-    const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts: [] }), { events, spans, startedAt: atMs(0) });
+    const artifacts: RunArtifact[] = [
+      runArtifact({
+        artifactId: "opencode-log",
+        kind: "command_log",
+        name: "opencode_attempt_1 command log",
+        createdAt: atMs(12_000),
+        metadata: { step: "opencode_attempt_1" }
+      })
+    ];
+
+    const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts }), { events, spans, startedAt: atMs(0) });
 
     expect(trace?.groups.map((group) => timelineTitleText(group.parent))).toEqual(["OpenCode attempt 1"]);
-    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["First-diff deadline set", "Attempt ended with no diff"]);
+    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["First-diff deadline set", "Attempt ended with no diff", "Command: opencode_attempt_1"]);
     expect(trace?.slowest).toEqual({ name: "OpenCode attempt 1", durationMs: 10_000 });
+  });
+
+  it("formats OpenCode command logs into model-round breakdowns", () => {
+    const transcript = parseOpenCodeTranscript(
+      [
+        "$ opencode run --attach http://127.0.0.1:4123 --model openrouter/z-ai/glm-5.2 [prompt]",
+        JSON.stringify({ type: "step_start", timestamp: Date.parse(atMs(0)), part: {} }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse(atMs(5_000)),
+          part: {
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "/repo/src/discord/client.ts" },
+              output: "file content",
+              time: { start: Date.parse(atMs(5_000)), end: Date.parse(atMs(5_025)) }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: "step_finish",
+          timestamp: Date.parse(atMs(10_000)),
+          part: { reason: "tool-calls", tokens: { total: 100, input: 80, reasoning: 10, cache: { read: 0 } } }
+        }),
+        JSON.stringify({ type: "step_start", timestamp: Date.parse(atMs(12_000)), part: {} }),
+        JSON.stringify({
+          type: "text",
+          timestamp: Date.parse(atMs(13_000)),
+          part: { text: "I have enough context. Making the edit." }
+        }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse(atMs(14_000)),
+          part: {
+            tool: "edit",
+            state: {
+              status: "completed",
+              input: { filePath: "/repo/src/discord/client.ts" },
+              output: "Edit applied successfully.",
+              time: { start: Date.parse(atMs(14_000)), end: Date.parse(atMs(14_011)) }
+            }
+          }
+        }),
+        JSON.stringify({
+          type: "step_finish",
+          timestamp: Date.parse(atMs(20_000)),
+          part: { reason: "tool-calls", tokens: { total: 220, input: 90, reasoning: 20, cache: { read: 50 } } }
+        })
+      ].join("\n")
+    );
+
+    expect(transcript.isTranscript).toBe(true);
+    expect(transcript.rounds).toBe(2);
+    expect(transcript.toolCalls).toBe(2);
+    expect(transcript.firstToolAtMs).toBe(0);
+    expect(transcript.firstEditAtMs).toBe(12_000);
+    expect(transcript.tokenTotal).toBe(220);
+    expect(transcript.slowestRound).toEqual({ round: 1, durationMs: 10_000, title: "Round 1: read" });
+    expect(transcript.items.map((item) => item.title)).toEqual(["Round 1: read", "Round 2: edit", "Final token usage"]);
+    expect(transcript.items[1]?.body).toContain("Making the edit");
   });
 
   it("formats Codex app-server transcripts into high-signal items", () => {

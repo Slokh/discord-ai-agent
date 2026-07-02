@@ -2336,6 +2336,7 @@ export class DiscordAiAgentRepository {
     requestedBy: string;
     backend?: string | null;
   }) {
+    const statusMessage = queuedAgentTaskStatusMessage(input.backend);
     await this.pool.query(
       `
         INSERT INTO agent_tasks(
@@ -2343,7 +2344,7 @@ export class DiscordAiAgentRepository {
           thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
           task_type, title, request, requested_by, backend, status, current_step, status_message, progress_updated_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'queued', 'queued', 'Waiting for a Kubernetes sandbox to start.', now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'queued', 'queued', $16, now(), now())
         ON CONFLICT(task_id) DO UPDATE SET
           pgboss_job_id = coalesce(EXCLUDED.pgboss_job_id, agent_tasks.pgboss_job_id),
           trace_id = coalesce(EXCLUDED.trace_id, agent_tasks.trace_id),
@@ -2380,7 +2381,8 @@ export class DiscordAiAgentRepository {
         input.title,
         input.request,
         input.requestedBy,
-        input.backend ?? null
+        input.backend ?? null,
+        statusMessage
       ]
     );
     await this.upsertProcessRun({
@@ -2389,7 +2391,7 @@ export class DiscordAiAgentRepository {
       kind: "codegen",
       status: "queued",
       title: input.title,
-      summary: "Waiting for a Kubernetes sandbox to start.",
+      summary: statusMessage,
       guildId: input.guildId,
       channelId: input.channelId,
       userId: input.userId,
@@ -5201,6 +5203,12 @@ function rowToAgentTask(row: any): AgentTaskRecord {
     terminalRenderedAt: row.terminal_rendered_at == null ? null : new Date(row.terminal_rendered_at),
     updatedAt: new Date(row.updated_at)
   };
+}
+
+function queuedAgentTaskStatusMessage(backend?: string | null) {
+  if (backend === "local-process-sandbox") return "Waiting for a warm codegen worker to become available.";
+  if (backend === "kubernetes-sandbox") return "Waiting for a Kubernetes sandbox to start.";
+  return "Waiting for a codegen sandbox to start.";
 }
 
 function rowToSandboxCommandEvent(row: any): SandboxCommandEvent {

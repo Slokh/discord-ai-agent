@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  codegenTimelineTrace,
   compactTimelineSteps,
   enrichModelRoundToolRequests,
   groupTimelineSteps,
+  parseCodexTranscript,
   summedStepDuration,
   timelineStepSummaryText,
   timelineSummaryText,
@@ -10,6 +12,7 @@ import {
   timelineToolRequests,
   type TimelineStep
 } from "../../src/control/console/App.js";
+import type { RunArtifact, RunEvent, RunSnapshot, RunSpan } from "../../src/control/console/types.js";
 
 describe("run console timeline", () => {
   it("sums counted step durations instead of first-to-last wall-clock range", () => {
@@ -292,6 +295,221 @@ describe("run console timeline", () => {
 
     expect(steps.map((step) => step.id)).toEqual(["model", "tool-done"]);
   });
+
+  it("turns codegen no-diff runs into a concise human timeline", () => {
+    const events: RunEvent[] = [
+      runEvent({ id: "mention", name: "discord.mention.received", summary: "please open a PR", createdAt: atMs(0) }),
+      runEvent({
+        id: "model",
+        name: "agent.model.round.complete",
+        summary: "Round 1: openGithubPullRequest",
+        createdAt: atMs(24_380),
+        durationMs: 24_380,
+        metadata: { selectedLocalTools: ["openGithubPullRequest"] }
+      }),
+      runEvent({
+        id: "tool",
+        name: "agent.tool.complete",
+        summary: "openGithubPullRequest: 203 chars",
+        createdAt: atMs(24_929),
+        durationMs: 549,
+        metadata: { toolName: "openGithubPullRequest" }
+      }),
+      runEvent({
+        id: "tool-result",
+        source: "tool",
+        name: "openGithubPullRequest",
+        summary: "{\"taskId\":\"task-1\",\"jobId\":\"job-1\"}",
+        createdAt: atMs(24_927)
+      }),
+      runEvent({ id: "sandbox", source: "task", name: "task.progress", summary: "Sandbox process started.", createdAt: atMs(28_460), durationMs: 1063, metadata: { step: "sandbox_acquired" } }),
+      runEvent({ id: "deadline-1", source: "task", name: "task.progress", summary: "Waiting up to 90s for the first code diff.", createdAt: atMs(62_000), metadata: { step: "codex_first_diff_deadline", attempt: 1 } }),
+      runEvent({ id: "reasoning-1", source: "task", name: "task.progress", summary: "Codex started reasoning.", createdAt: atMs(72_000), metadata: { step: "codex_app_server_item_started", attempt: 1 } }),
+      runEvent({
+        id: "watchdog-1",
+        source: "task",
+        name: "task.progress",
+        summary: "Codex produced no code diff after 90s.",
+        createdAt: atMs(152_000),
+        durationMs: 90_000,
+        metadata: { step: "codex_app_server_watchdog_no_first_diff", attempt: 1 }
+      }),
+      runEvent({
+        id: "no-diff-1",
+        source: "task",
+        name: "task.progress",
+        summary: "Codex app-server attempt 1 finished without a code diff.",
+        createdAt: atMs(152_101),
+        durationMs: 90_101,
+        metadata: { step: "codex_app_server_attempt_1_no_diff", attempt: 1, exitCode: 143, watchdogReason: "no_first_diff", gitStatus: "", notificationCount: 135 }
+      }),
+      runEvent({ id: "deadline-2", source: "task", name: "task.progress", summary: "Waiting up to 60s for the first code diff.", createdAt: atMs(152_200), metadata: { step: "codex_first_diff_deadline", attempt: 2 } }),
+      runEvent({
+        id: "no-diff-2",
+        source: "task",
+        name: "task.progress",
+        summary: "Codex app-server attempt 2 finished without a code diff.",
+        createdAt: atMs(212_280),
+        durationMs: 60_080,
+        metadata: { step: "codex_app_server_attempt_2_no_diff", attempt: 2, exitCode: 143, watchdogReason: "no_first_diff", gitStatus: "", notificationCount: 530 }
+      }),
+      runEvent({ id: "cleanup", source: "task", name: "task.progress", summary: "Cleaning up the ephemeral sandbox checkout.", createdAt: atMs(212_300), metadata: { step: "cleanup" } }),
+      runEvent({
+        id: "completed",
+        source: "task",
+        level: "error",
+        name: "task.completed",
+        summary: "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
+        createdAt: atMs(213_600)
+      })
+    ];
+    const spans: RunSpan[] = [
+      runSpan({ id: "repo", name: "repo", startedAt: atMs(29_000), completedAt: atMs(29_474), durationMs: 474 }),
+      runSpan({ id: "dependencies", name: "dependencies", startedAt: atMs(29_500), completedAt: atMs(61_340), durationMs: 31_840 }),
+      runSpan({ id: "toolShims", name: "toolShims", startedAt: atMs(61_350), completedAt: atMs(61_362), durationMs: 12 }),
+      runSpan({ id: "context", name: "context", startedAt: atMs(61_400), completedAt: atMs(61_519), durationMs: 119 }),
+      runSpan({ id: "attempt-1", source: "command", name: "codex_app_server_attempt_1", status: "failed", startedAt: atMs(62_000), completedAt: atMs(152_101), durationMs: 90_101, metadata: { command: "codex app-server --listen stdio://", exitCode: 143 } }),
+      runSpan({ id: "attempt-2", source: "command", name: "codex_app_server_attempt_2", status: "failed", startedAt: atMs(152_200), completedAt: atMs(212_280), durationMs: 60_080, metadata: { command: "codex app-server --listen stdio://", exitCode: 143 } })
+    ];
+    const artifacts: RunArtifact[] = [
+      runArtifact({ artifactId: "repo-log", kind: "command_log", name: "repo_seed command log", createdAt: atMs(29_474), metadata: { step: "repo_seed" } }),
+      runArtifact({ artifactId: "dependency-log", kind: "command_log", name: "dependencies command log", createdAt: atMs(61_340), metadata: { step: "dependencies" } }),
+      runArtifact({ artifactId: "context", kind: "diagnostic", name: "Codegen request context", createdAt: atMs(61_520), preview: "Concrete request anchors..." }),
+      runArtifact({ artifactId: "prompt-1", kind: "prompt", name: "Codex app-server prompt", createdAt: atMs(61_990), metadata: { attempt: 1 } }),
+      runArtifact({ artifactId: "transcript-1", kind: "command_log", name: "Codex app-server attempt 1 transcript", createdAt: atMs(152_120) }),
+      runArtifact({ artifactId: "prompt-2", kind: "prompt", name: "Codex app-server recovery prompt 2", createdAt: atMs(152_190), metadata: { attempt: 2 } }),
+      runArtifact({ artifactId: "transcript-2", kind: "command_log", name: "Codex app-server attempt 2 transcript", createdAt: atMs(212_300) })
+    ];
+
+    const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts }), { events, spans, startedAt: atMs(0) });
+
+    expect(trace?.groups.map((group) => timelineTitleText(group.parent))).toEqual([
+      "User prompt",
+      "Model chose code update",
+      "Codegen task queued",
+      "Sandbox process started",
+      "Repository prepared",
+      "Dependencies installed",
+      "Helper tools installed",
+      "Codegen context built",
+      "Codex attempt 1",
+      "Codex attempt 2",
+      "Cleanup started",
+      "No PR opened"
+    ]);
+    expect(trace?.groups.find((group) => timelineTitleText(group.parent) === "Repository prepared")?.children.map((child) => timelineTitleText(child))).toEqual([
+      "Command: repo_seed"
+    ]);
+    expect(trace?.groups.find((group) => timelineTitleText(group.parent) === "Dependencies installed")?.children.map((child) => timelineTitleText(child))).toEqual([
+      "Command: dependencies"
+    ]);
+    expect(trace?.groups.find((group) => timelineTitleText(group.parent) === "Codegen context built")?.children.map((child) => timelineTitleText(child))).toEqual([
+      "Codegen request context"
+    ]);
+    expect(trace?.groups.find((group) => timelineTitleText(group.parent) === "Codex attempt 1")?.children.map((child) => timelineTitleText(child))).toEqual([
+      "Codex app-server prompt",
+      "First-diff deadline set",
+      "Model started reasoning",
+      "No-diff watchdog fired",
+      "Attempt ended with no diff",
+      "Codex app-server attempt 1 transcript"
+    ]);
+    expect(trace?.durationMs).toBe(208_618);
+    expect(trace?.slowest).toEqual({ name: "Codex attempt 1", durationMs: 90_101 });
+  });
+
+  it("formats Codex app-server transcripts into high-signal items", () => {
+    const transcript = parseCodexTranscript(
+      [
+        "$ codex app-server --listen stdio://",
+        JSON.stringify({
+          timestamp: atMs(0),
+          method: "thread/started",
+          message: "Codex notification: thread/started.",
+          metadata: { paramsPreview: JSON.stringify({ thread: { modelProvider: "openrouter", cwd: "/repo" } }) }
+        }),
+        JSON.stringify({
+          timestamp: atMs(10),
+          method: "warning",
+          message: "Codex notification: warning.",
+          metadata: { paramsPreview: JSON.stringify({ message: "Model metadata missing." }) }
+        }),
+        JSON.stringify({
+          timestamp: atMs(20),
+          method: "item/reasoning/textDelta",
+          message: "Codex notification: item/reasoning/textDelta.",
+          metadata: { paramsPreview: JSON.stringify({ delta: "thinking" }) }
+        }),
+        JSON.stringify({
+          timestamp: atMs(30),
+          method: "item/completed",
+          message: "Codex completed agentMessage.",
+          metadata: { itemType: "agentMessage", paramsPreview: JSON.stringify({ item: { type: "agentMessage", text: "I'll inspect the files." } }) }
+        }),
+        JSON.stringify({
+          timestamp: atMs(35),
+          method: "item/started",
+          message: "Codex started commandExecution.",
+          metadata: {
+            itemType: "commandExecution",
+            itemId: "call_1",
+            paramsPreview: JSON.stringify({
+              item: {
+                type: "commandExecution",
+                id: "call_1",
+                command: "/bin/bash -lc \"rg Thinking src\"",
+                status: "inProgress",
+                commandActions: [{ type: "search", command: "rg Thinking src", name: "src" }]
+              }
+            })
+          }
+        }),
+        JSON.stringify({
+          timestamp: atMs(40),
+          method: "item/completed",
+          message: "Codex completed commandExecution.",
+          metadata: {
+            itemType: "commandExecution",
+            itemId: "call_1",
+            paramsPreview:
+              '{"item":{"type":"commandExecution","id":"call_1","command":"/bin/bash -lc \\"rg Thinking src\\"","status":"completed","aggregatedOutput":"src/discord/client.ts:42: Thinking...'
+          }
+        }),
+        JSON.stringify({
+          timestamp: atMs(50),
+          method: "thread/tokenUsage/updated",
+          message: "Codex token usage updated.",
+          metadata: { paramsPreview: JSON.stringify({ tokenUsage: { total: { totalTokens: 1000, cachedInputTokens: 100, outputTokens: 20 } } }) }
+        }),
+        "stderr:",
+        "warning line",
+        "error:",
+        "Codex app-server exited before completing pending requests.",
+        "[exit 143 in 90s]"
+      ].join("\n")
+    );
+
+    expect(transcript.isTranscript).toBe(true);
+    expect(transcript.agentMessages).toBe(1);
+    expect(transcript.commands).toBe(1);
+    expect(transcript.reasoningDeltaCount).toBe(1);
+    expect(transcript.tokenTotal).toBe(1000);
+    expect(transcript.items.map((item) => item.title)).toEqual([
+      "App-server launched",
+      "Thread started",
+      "Warning",
+      "Reasoning stream",
+      "Assistant message 1",
+      "Command 1",
+      "Codex stderr",
+      "App-server closed",
+      "Final token usage"
+    ]);
+    const command = transcript.items.find((item) => item.title === "Command 1");
+    expect(command?.body).toContain("Duration: 0.005s");
+    expect(command?.body).toContain("search src");
+    expect(command?.output).toContain("client.ts");
+  });
 });
 
 function atMs(offsetMs: number) {
@@ -308,6 +526,72 @@ function timelineStep(input: Pick<TimelineStep, "id" | "title" | "createdAt" | "
     source: "trace",
     status: null,
     level: null,
+    metadata: {},
+    ...input
+  };
+}
+
+function codegenSnapshot({ events, spans, artifacts = [] }: { events: RunEvent[]; spans: RunSpan[]; artifacts?: RunArtifact[] }): RunSnapshot {
+  return {
+    run: {
+      runId: "task-1",
+      traceId: "trace-1",
+      kind: "codegen",
+      status: "no_changes",
+      title: "test task",
+      summary: "Agent task produced no diff.",
+      requester: "kartik",
+      guildId: null,
+      channelId: null,
+      userId: null,
+      messageId: null,
+      source: "agent_task",
+      startedAt: atMs(24_500),
+      completedAt: atMs(183_600),
+      updatedAt: atMs(183_600),
+      durationMs: 159_100,
+      currentStep: "cleanup",
+      bottleneck: null,
+      links: {},
+      metadata: {}
+    },
+    spans,
+    events,
+    artifacts,
+    terminal: { lineCount: 0, content: "", entries: [] },
+    diagnostics: [],
+    raw: {},
+    generatedAt: atMs(183_700)
+  };
+}
+
+function runArtifact(input: Partial<RunArtifact> & Pick<RunArtifact, "artifactId" | "kind" | "name" | "createdAt">): RunArtifact {
+  return {
+    runId: "task-1",
+    contentType: "text/plain",
+    sizeBytes: 100,
+    preview: "artifact preview",
+    redacted: false,
+    expiresAt: null,
+    metadata: {},
+    ...input
+  };
+}
+
+function runEvent(input: Partial<RunEvent> & Pick<RunEvent, "id" | "name" | "summary" | "createdAt">): RunEvent {
+  return {
+    source: "trace",
+    level: "info",
+    durationMs: null,
+    metadata: {},
+    ...input
+  };
+}
+
+function runSpan(input: Partial<RunSpan> & Pick<RunSpan, "id" | "name" | "startedAt" | "completedAt" | "durationMs">): RunSpan {
+  return {
+    source: "task",
+    status: "succeeded",
     metadata: {},
     ...input
   };

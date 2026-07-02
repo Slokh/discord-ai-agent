@@ -9,6 +9,7 @@ import {
   codegenFirstDiffDeadlineMs,
   codexConfigToml,
   codexExecArgs,
+  codexHomePathForTask,
   codexResumeExecArgs,
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
@@ -74,6 +75,15 @@ describe("sandboxRunner", () => {
     expect(config).toContain('wire_api = "responses"');
     expect(config).toContain('[projects."/tmp/work/repo"]');
     expect(config).toContain('trust_level = "trusted"');
+  });
+
+  it("keeps Codex home outside the temporary workspace when a persistent sandbox cache exists", () => {
+    expect(
+      codexHomePathForTask({
+        sandboxCacheDir: "/var/cache/discord-ai-agent",
+        workRoot: "/tmp/discord-ai-agent-workspaces/slokh-discord-ai-agent-156e554d18/task-PN8sBv"
+      })
+    ).toBe("/var/cache/discord-ai-agent/codex-home/task-PN8sBv");
   });
 
   it("builds a concise codegen context pack from the repository guide and project map", async () => {
@@ -271,7 +281,7 @@ describe("sandboxRunner", () => {
   it("fails early when Codex has not produced a diff", () => {
     expect(
       evaluateCodegenWatchdog({
-        elapsedMs: 8 * 60 * 1000,
+        elapsedMs: 11 * 60 * 1000,
         idleMs: 30_000,
         hasDiff: false,
         reconnectSeen: false,
@@ -292,13 +302,11 @@ describe("sandboxRunner", () => {
     ).toEqual(expect.objectContaining({ action: "continue", reason: "idle_after_diff" }));
   });
 
-  it("uses a shorter no-first-diff deadline when exact request anchors found target files", () => {
-    expect(codegenFirstDiffDeadlineMs()).toBe(180_000);
-    expect(codegenFirstDiffDeadlineMs(undefined, 2)).toBe(120_000);
-    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] })).toBe(90_000);
-    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] }, 2)).toBe(
-      60_000
-    );
+  it("uses a 10 minute no-first-diff deadline for normal, recovery, and anchored attempts", () => {
+    expect(codegenFirstDiffDeadlineMs()).toBe(600_000);
+    expect(codegenFirstDiffDeadlineMs(undefined, 2)).toBe(600_000);
+    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] })).toBe(600_000);
+    expect(codegenFirstDiffDeadlineMs({ anchorTargetFiles: [{ path: "src/discord/client.ts", reason: "exact anchor" }] }, 2)).toBe(600_000);
   });
 
   it("treats reconnect stalls as retryable before a diff and salvageable after a diff", () => {

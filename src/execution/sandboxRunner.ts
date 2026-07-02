@@ -19,10 +19,10 @@ const MAX_ANCHOR_SCAN_FILE_BYTES = 512_000;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
 const CODEX_APP_SERVER_MAX_ATTEMPTS = 2;
 const CODEX_EXEC_FALLBACK_MAX_ATTEMPTS = 1;
-const CODEX_FIRST_DIFF_DEADLINE_MS = 180_000;
-const CODEX_FIRST_DIFF_RECOVERY_DEADLINE_MS = 120_000;
-const CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS = 90_000;
-const CODEX_ANCHORED_FIRST_DIFF_RECOVERY_DEADLINE_MS = 60_000;
+const CODEX_FIRST_DIFF_DEADLINE_MS = 10 * 60_000;
+const CODEX_FIRST_DIFF_RECOVERY_DEADLINE_MS = 10 * 60_000;
+const CODEX_ANCHORED_FIRST_DIFF_DEADLINE_MS = 10 * 60_000;
+const CODEX_ANCHORED_FIRST_DIFF_RECOVERY_DEADLINE_MS = 10 * 60_000;
 const CODEX_IDLE_WITHOUT_DIFF_MS = 6 * 60 * 1000;
 const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
 const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
@@ -213,6 +213,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     console.error("Failed to prune old sandbox workspaces", error);
   });
   const workRoot = await fs.mkdtemp(path.join(cache.workspacesDir, "task-"));
+  const codexHome = codexHomePathForTask({ sandboxCacheDir: cache.rootDir, workRoot });
   const checkoutDir = path.join(workRoot, "repo");
   const gitEnv = await gitAuthEnv(env.githubToken, workRoot);
 
@@ -253,7 +254,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     });
 
     await progress(env, "configure", "Writing ephemeral Codex configuration.");
-    await writeCodexConfig(workRoot, checkoutDir, env);
+    await writeCodexConfig(codexHome, checkoutDir, env);
 
     const contextPack = await timedPhase(env, timings, "context", "Building codegen request context.", async () =>
       buildCodegenContextPack(checkoutDir, env.taskRequest)
@@ -274,7 +275,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     });
 
     await timedPhase(env, timings, "codex", "Running Codex to implement the requested change.", async () => {
-      const codexSummary = await runCodexWithRecovery({ env, checkoutDir, gitEnv, workRoot, toolShimDir, contextPack });
+      const codexSummary = await runCodexWithRecovery({ env, checkoutDir, gitEnv, workRoot, codexHome, toolShimDir, contextPack });
       await recordArtifact(env, {
         kind: "diagnostic",
         name: "Codex attempt summary",
@@ -412,6 +413,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     await progress(env, "cleanup", "Cleaning up the ephemeral sandbox checkout.").catch(() => undefined);
     await removeCachedWorktree(cache.mirrorDir, checkoutDir).catch(() => undefined);
     await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(codexHome, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -503,6 +505,11 @@ function sandboxCachePaths(env: SandboxEnv, owner: string, repo: string): Sandbo
     mirrorDir: path.join(reposDir, `${repoKey}.git`),
     repoLockDir: path.join(locksDir, `${repoKey}.repo.lock`)
   };
+}
+
+export function codexHomePathForTask(input: { sandboxCacheDir: string; workRoot: string }) {
+  const taskDir = path.basename(input.workRoot) || `task-${sha256(input.workRoot).slice(0, 10)}`;
+  return path.join(input.sandboxCacheDir, "codex-home", taskDir);
 }
 
 async function prepareCachedWorktree(input: {
@@ -865,10 +872,10 @@ async function gitAuthEnv(token: string, workRoot: string): Promise<NodeJS.Proce
   };
 }
 
-function codexEnv(env: SandboxEnv, baseEnv: NodeJS.ProcessEnv, workRoot: string, toolShimDir: string): NodeJS.ProcessEnv {
+function codexEnv(env: SandboxEnv, baseEnv: NodeJS.ProcessEnv, codexHome: string, toolShimDir: string): NodeJS.ProcessEnv {
   return {
     ...baseEnv,
-    CODEX_HOME: path.join(workRoot, ".codex"),
+    CODEX_HOME: codexHome,
     OPENROUTER_API_KEY: env.openRouterApiKey,
     PATH: `${toolShimDir}${path.delimiter}${baseEnv.PATH ?? process.env.PATH ?? ""}`,
     AGENT_TOOL_SHIM_DIR: toolShimDir
@@ -939,8 +946,7 @@ async function writeSandboxToolShims(toolShimDir: string): Promise<string[]> {
   return Object.keys(shims);
 }
 
-async function writeCodexConfig(workRoot: string, checkoutDir: string, env: SandboxEnv) {
-  const codexHome = path.join(workRoot, ".codex");
+async function writeCodexConfig(codexHome: string, checkoutDir: string, env: SandboxEnv) {
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(path.join(codexHome, "config.toml"), codexConfigToml({ checkoutDir, model: env.openRouterCodegenModel }), "utf8");
 }
@@ -979,6 +985,7 @@ async function runCodexWithRecovery(input: {
   checkoutDir: string;
   gitEnv: NodeJS.ProcessEnv;
   workRoot: string;
+  codexHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
 }): Promise<CodexRunSummary> {
@@ -1020,6 +1027,7 @@ async function runCodexAppServerWithRecovery(input: {
   checkoutDir: string;
   gitEnv: NodeJS.ProcessEnv;
   workRoot: string;
+  codexHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
 }): Promise<CodexRunSummary> {
@@ -1132,6 +1140,7 @@ async function runCodexAppServerAttempt(input: {
   checkoutDir: string;
   gitEnv: NodeJS.ProcessEnv;
   workRoot: string;
+  codexHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
   attempt: number;
@@ -1155,7 +1164,7 @@ async function runCodexAppServerAttempt(input: {
     command: codexBinary,
     args: ["app-server", "--listen", "stdio://"],
     cwd: input.checkoutDir,
-    env: codexEnv(input.env, input.gitEnv, input.workRoot, input.toolShimDir),
+    env: codexEnv(input.env, input.gitEnv, input.codexHome, input.toolShimDir),
     model: input.env.openRouterCodegenModel,
     provider: providerForModel(input.env.openRouterCodegenModel),
     reasoningEffort: "low"
@@ -1280,6 +1289,7 @@ async function runCodexExecWithRecovery(input: {
   checkoutDir: string;
   gitEnv: NodeJS.ProcessEnv;
   workRoot: string;
+  codexHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
 }): Promise<CodexRunSummary> {
@@ -1325,7 +1335,7 @@ async function runCodexExecWithRecovery(input: {
 
     const result = await runCommand(codexBinary, codexAttemptArgs({ command, model: input.env.openRouterCodegenModel }), {
       cwd: input.checkoutDir,
-      env: codexEnv(input.env, input.gitEnv, input.workRoot, input.toolShimDir),
+      env: codexEnv(input.env, input.gitEnv, input.codexHome, input.toolShimDir),
       input: prompt,
       allowFailure: true,
       taskEnv: input.env,

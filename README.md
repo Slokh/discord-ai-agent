@@ -120,6 +120,8 @@ Try:
 @ai status
 ```
 
+To verify basic functionality, run `npm test` as a smoke test before starting development.
+
 ## Indexing Discord History
 
 The bot can answer normal questions immediately. To search old Discord messages, run:

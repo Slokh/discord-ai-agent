@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCodegenContextPack,
   codegenFirstDiffDeadlineMs,
+  codegenNpmInstallEnv,
   codexConfigToml,
   codexExecArgs,
   codexHomePathForTask,
@@ -16,6 +17,7 @@ import {
   codeUpdatePullRequestTitle,
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
+  dependencyCacheKey,
   evaluateCodegenWatchdog,
   renderCodegenContextPack,
   repairWorktreeRemoteForBranchPush
@@ -219,8 +221,37 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("Preserve existing invariants that other code may depend on");
     expect(prompt).toContain("encode the requested behavior as a focused invariant");
     expect(prompt).toContain("stop searching for exact request vocabulary");
-    expect(prompt).toContain("agent-progress first_edit");
+    expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-progress first_edit");
     expect(prompt).toContain("Produce a real code diff promptly");
+  });
+
+  it("forces codegen dependency installs to include dev dependencies even under production service env", () => {
+    const env = codegenNpmInstallEnv({
+      ...process.env,
+      NODE_ENV: "production",
+      NPM_CONFIG_PRODUCTION: "true",
+      npm_config_production: "true",
+      NPM_CONFIG_OMIT: "dev",
+      npm_config_omit: "dev"
+    });
+
+    expect(env.NODE_ENV).toBe("development");
+    expect(env.NPM_CONFIG_PRODUCTION).toBe("false");
+    expect(env.npm_config_production).toBe("false");
+    expect(env.NPM_CONFIG_OMIT).toBeUndefined();
+    expect(env.npm_config_omit).toBeUndefined();
+  });
+
+  it("includes dev dependency mode in the dependency cache key", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-dependency-cache-"));
+    try {
+      await fs.writeFile(path.join(tempDir, "package.json"), '{"scripts":{},"devDependencies":{"vitest":"1.0.0"}}\n', "utf8");
+      await fs.writeFile(path.join(tempDir, "package-lock.json"), '{"lockfileVersion":3,"packages":{}}\n', "utf8");
+
+      await expect(dependencyCacheKey(tempDir)).resolves.toMatch(/^node-\d+\.\d+\.\d+-devdeps-v1-[a-f0-9]{24}$/);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("builds a code update status lifecycle context pack from product-language requests", async () => {
@@ -303,6 +334,39 @@ describe("sandboxRunner", () => {
       expect(recovery).toContain("Do not run more than one read/search command before the first patch");
       expect(recovery).toContain("Use apply_patch for the recovery edit when available");
       expect(recovery).toContain("src/discord/client.ts");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers source owners over tests when both match the same exact request anchor", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-anchor-owner-"));
+    try {
+      await fs.mkdir(path.join(tempDir, "src", "discord"), { recursive: true });
+      await fs.mkdir(path.join(tempDir, "tests", "unit"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "src", "discord", "client.ts"),
+        'export async function reply() { return message.reply("Thinking..."); }\n',
+        "utf8"
+      );
+      await fs.writeFile(
+        path.join(tempDir, "tests", "unit", "run-console-timeline.test.ts"),
+        [
+          'expect(timelineSummaryText("Sent Thinking reply")).toBe("");',
+          'expect(timelineTitleText({ title: "Thinking reply sent" } as any)).toBe("Acknowledgement sent");',
+          'expect(rendered).toContain("Thinking...");',
+          ""
+        ].join("\n"),
+        "utf8"
+      );
+
+      const contextPack = await buildCodegenContextPack(tempDir, 'Replace the "Thinking..." placeholder reply behavior.');
+
+      expect(contextPack.anchorTargetFiles?.map((file) => file.path).slice(0, 2)).toEqual([
+        "src/discord/client.ts",
+        "tests/unit/run-console-timeline.test.ts"
+      ]);
+      expect(contextPack.suggestedFiles?.[0]?.path).toBe("src/discord/client.ts");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

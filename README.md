@@ -215,6 +215,9 @@ Common optional settings:
 | `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all` |
 | `RUN_MIGRATIONS` | `true` | Run migrations on process startup; Helm runtime pods set this to `false` because migrations run as a hook |
 
+> `CODEGEN_HARNESS` selects the sandbox coding harness: `codex` is the default, while `CODEGEN_HARNESS=opencode` runs code-update tasks through OpenCode.
+
+
 ## Private Skills
 
 Private server-specific skills live in Postgres, not Git.

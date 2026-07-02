@@ -50,7 +50,7 @@ describe("config", () => {
         expect(config.controlUi.publicUrl).toBeNull();
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
-        expect(config.execution.codegenHarness).toBe("codex");
+        expect(config.execution.codegenHarness).toBe("opencode");
         expect(config.execution.codegenBackend).toBe("kubernetes-job");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");

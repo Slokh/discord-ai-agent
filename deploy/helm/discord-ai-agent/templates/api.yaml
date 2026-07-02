@@ -48,7 +48,7 @@ spec:
           env:
             - name: DISCORD_AI_AGENT_PROCESS_ROLE
               value: api
-            {{- include "discord-ai-agent.runtimeMigrationEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.internalApiEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.controlUiPublicEnv" . | nindent 12 }}

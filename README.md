@@ -196,7 +196,7 @@ Common optional settings:
 | --- | --- | --- |
 | `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
 | `OPENROUTER_CHAT_MODEL` | `z-ai/glm-5.2` | Main agent model |
-| `OPENROUTER_CODEGEN_MODEL` | same as `OPENROUTER_CHAT_MODEL` | Coding harness model for sandboxed PR generation |
+| `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
 | `GITHUB_REPOSITORY` | `owner/repo` | Repo for code-update PRs |
@@ -205,7 +205,7 @@ Common optional settings:
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
 | `CODEGEN_EXECUTION_BACKEND` | `kubernetes-job` | `kubernetes-job` for per-task isolated Jobs, or `local-process` for a long-lived warm worker process |
-| `CODEGEN_HARNESS` | `codex` | Coding harness for code-update tasks: `codex` by default, or `opencode` to run tasks through OpenCode |
+| `CODEGEN_HARNESS` | `opencode` | Coding harness for code-update tasks: `opencode` by default, or `codex` to run tasks through Codex |
 | `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_DISCORD_AGENT_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated codegen worker |
 | `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
 | `SANDBOX_CACHE_DIR` | `/var/cache/discord-ai-agent` | Sandbox repo/npm/dependency cache path |

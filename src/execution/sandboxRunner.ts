@@ -28,6 +28,7 @@ const CODEX_IDLE_WITHOUT_DIFF_MS = 6 * 60 * 1000;
 const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
 const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
 const CODEX_WATCHDOG_POLL_MS = 15_000;
+const OPENCODE_HEALTH_PROBE_TIMEOUT_MS = 1_000;
 const CODEX_RECONNECT_PATTERN = /(?:^|\n)ERROR:\s*Reconnecting\.\.\./i;
 const CODE_UPDATE_BRANCH_PREFIX = "ai";
 const CODE_UPDATE_BRANCH_SLUG_MAX_CHARS = 40;
@@ -1255,13 +1256,10 @@ export function openCodeRunArgs(input: { serverUrl: string; checkoutDir: string;
     "run",
     "--attach",
     input.serverUrl,
-    "--dir",
-    input.checkoutDir,
     "--model",
     openCodeModelId(input.model),
     "--format",
     "json",
-    "--auto",
     "--title",
     input.title,
     input.prompt
@@ -1376,7 +1374,7 @@ async function runOpenCodeServerAttempt(input: {
       allowFailure: true,
       taskEnv: input.env,
       step: `opencode_attempt_${input.attempt}`,
-      displayCommand: `${opencodeBinary} run --attach ${server.serverUrl} --dir ${input.checkoutDir} --model ${openCodeModelId(input.env.openRouterCodegenModel)} --format json --auto --title ${JSON.stringify(input.env.taskTitle)} [prompt]`,
+      displayCommand: `${opencodeBinary} run --attach ${server.serverUrl} --model ${openCodeModelId(input.env.openRouterCodegenModel)} --format json --title ${JSON.stringify(input.env.taskTitle)} [prompt]`,
       codexWatchdog: {
         checkoutDir: input.checkoutDir,
         attempt: input.attempt,
@@ -1465,15 +1463,38 @@ async function waitForOpenCodeServer(state: OpenCodeServerState, timeoutMs = 15_
       throw new Error(`OpenCode server exited before it was ready: code=${state.exitCode ?? "null"} signal=${state.signal ?? "null"}`);
     }
     try {
-      const response = await fetch(`${state.serverUrl}/global/health`);
+      const response = await fetchOpenCodeHealth({ serverUrl: state.serverUrl });
       if (response.ok) return;
-      lastError = `${response.status}: ${await response.text()}`;
+      lastError = `${response.status}: ${response.body}`;
     } catch (error) {
       lastError = conciseError(error);
     }
     await sleep(250);
   }
   throw new Error(`OpenCode server did not become healthy within ${formatDuration(timeoutMs)}${lastError ? `: ${lastError}` : ""}`);
+}
+
+export async function fetchOpenCodeHealth(input: { serverUrl: string; timeoutMs?: number }) {
+  const timeoutMs = input.timeoutMs ?? OPENCODE_HEALTH_PROBE_TIMEOUT_MS;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const response = await fetch(`${input.serverUrl}/global/health`, { signal: controller.signal });
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: response.ok ? "" : await response.text()
+    };
+  } catch (error) {
+    if (timedOut) throw new Error(`OpenCode health probe timed out after ${formatDuration(timeoutMs)}.`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function stopOpenCodeServer(env: SandboxEnv, state: OpenCodeServerState) {

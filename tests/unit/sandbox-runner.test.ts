@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -20,6 +21,7 @@ import {
   codeUpdateRecoveryPrompt,
   dependencyCacheKey,
   evaluateCodegenWatchdog,
+  fetchOpenCodeHealth,
   openCodeConfigJson,
   openCodeModelId,
   openCodeRunArgs,
@@ -103,13 +105,10 @@ describe("sandboxRunner", () => {
       "run",
       "--attach",
       "http://127.0.0.1:4123",
-      "--dir",
-      "/tmp/work/repo",
       "--model",
       "openrouter/z-ai/glm-5.2",
       "--format",
       "json",
-      "--auto",
       "--title",
       "Update the README",
       "Please edit the README."
@@ -118,6 +117,33 @@ describe("sandboxRunner", () => {
       $schema: "https://opencode.ai/config.json",
       model: "openrouter/z-ai/glm-5.2"
     });
+  });
+
+  it("times out a hung OpenCode health probe", async () => {
+    const server = createServer(() => {
+      // Deliberately leave the request open to match a half-ready server.
+    });
+    const serverUrl = await new Promise<string>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("Unable to bind test server."));
+          return;
+        }
+        resolve(`http://127.0.0.1:${address.port}`);
+      });
+    });
+
+    try {
+      const startedAt = Date.now();
+      await expect(fetchOpenCodeHealth({ serverUrl, timeoutMs: 25 })).rejects.toThrow("OpenCode health probe timed out");
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("keeps Codex home outside the temporary workspace when a persistent sandbox cache exists", () => {

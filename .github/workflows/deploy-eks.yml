@@ -28,6 +28,10 @@ jobs:
       CONTROL_UI_PUBLIC_URL: ${{ vars.CONTROL_UI_PUBLIC_URL }}
       CODEGEN_WORKER_ENABLED: ${{ vars.CODEGEN_WORKER_ENABLED }}
       CODEGEN_WORKER_REPLICAS: ${{ vars.CODEGEN_WORKER_REPLICAS }}
+      CODEGEN_LEASE_HEARTBEAT_SECONDS: ${{ vars.CODEGEN_LEASE_HEARTBEAT_SECONDS }}
+      CODEGEN_LEASE_STALE_SECONDS: ${{ vars.CODEGEN_LEASE_STALE_SECONDS }}
+      CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS: ${{ vars.CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS }}
+      CODEGEN_LEASE_ACQUIRE_POLL_SECONDS: ${{ vars.CODEGEN_LEASE_ACQUIRE_POLL_SECONDS }}
       SANDBOX_CACHE_ENABLED: ${{ vars.SANDBOX_CACHE_ENABLED }}
       SANDBOX_CACHE_SIZE: ${{ vars.SANDBOX_CACHE_SIZE }}
       SANDBOX_CACHE_STORAGE_CLASS: ${{ vars.SANDBOX_CACHE_STORAGE_CLASS }}
@@ -89,6 +93,18 @@ jobs:
           fi
           if [ -n "${CODEGEN_WORKER_REPLICAS:-}" ]; then
             helm_args+=(--set "codegenWorker.replicas=$CODEGEN_WORKER_REPLICAS")
+          fi
+          if [ -n "${CODEGEN_LEASE_HEARTBEAT_SECONDS:-}" ]; then
+            helm_args+=(--set "codegenWorker.lease.heartbeatSeconds=$CODEGEN_LEASE_HEARTBEAT_SECONDS")
+          fi
+          if [ -n "${CODEGEN_LEASE_STALE_SECONDS:-}" ]; then
+            helm_args+=(--set "codegenWorker.lease.staleSeconds=$CODEGEN_LEASE_STALE_SECONDS")
+          fi
+          if [ -n "${CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS:-}" ]; then
+            helm_args+=(--set "codegenWorker.lease.acquireTimeoutSeconds=$CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS")
+          fi
+          if [ -n "${CODEGEN_LEASE_ACQUIRE_POLL_SECONDS:-}" ]; then
+            helm_args+=(--set "codegenWorker.lease.acquirePollSeconds=$CODEGEN_LEASE_ACQUIRE_POLL_SECONDS")
           fi
           if is_true "$SANDBOX_CACHE_ENABLED"; then
             helm_args+=(--set "sandbox.cache.enabled=true")

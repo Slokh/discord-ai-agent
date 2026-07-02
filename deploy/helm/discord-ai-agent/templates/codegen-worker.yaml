@@ -40,6 +40,14 @@ spec:
               value: "false"
             - name: CODEGEN_EXECUTION_BACKEND
               value: {{ .Values.codegenWorker.executionBackend | quote }}
+            - name: CODEGEN_LEASE_HEARTBEAT_SECONDS
+              value: {{ .Values.codegenWorker.lease.heartbeatSeconds | quote }}
+            - name: CODEGEN_LEASE_STALE_SECONDS
+              value: {{ .Values.codegenWorker.lease.staleSeconds | quote }}
+            - name: CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS
+              value: {{ .Values.codegenWorker.lease.acquireTimeoutSeconds | quote }}
+            - name: CODEGEN_LEASE_ACQUIRE_POLL_SECONDS
+              value: {{ .Values.codegenWorker.lease.acquirePollSeconds | quote }}
             {{- include "discord-ai-agent.controlUiPublicEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}

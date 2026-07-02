@@ -73,6 +73,15 @@ Set `CODEGEN_EXECUTION_BACKEND` to choose the backend:
 
 Use `local-process` only for a pod you already treat as the code execution boundary. When `codegenWorker.enabled=true`, the regular worker stops consuming code-update task jobs so crawl, embedding, and Discord request work stay separate from warm codegen execution.
 
+Warm workers coordinate through `codegen_sandbox_leases`. The default lease behavior is:
+
+- heartbeat every 15 seconds
+- consider a lease stale after 120 seconds without a heartbeat
+- wait up to 30 minutes for the warm worker slot before failing the task
+- poll for the lease every 5 seconds while waiting
+
+Override these with `CODEGEN_LEASE_HEARTBEAT_SECONDS`, `CODEGEN_LEASE_STALE_SECONDS`, `CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS`, and `CODEGEN_LEASE_ACQUIRE_POLL_SECONDS`. In Helm, use `codegenWorker.lease.*`. Wait/acquire events include the active timeout and poll interval so the run console can explain whether a task is actually executing or queued behind the warm slot.
+
 ## Warm Runtime Direction
 
 The next Centaur-like steps are:

@@ -15,6 +15,8 @@ export type CodegenLeaseScheduler = {
   backendName: string;
   heartbeatIntervalMs: number;
   staleLeaseMs: number;
+  acquireTimeoutMs: number;
+  acquirePollMs: number;
 };
 
 type LeaseRepo = Pick<
@@ -32,14 +34,17 @@ export function createCodegenLeaseScheduler(
   const pid = processInfo.pid ?? process.pid;
   const repo = config.github.repository || "unknown-repo";
   const repoKey = sanitizeLeasePart(repo);
+  const timings = config.execution.codegenLease;
   return {
     enabled: true,
     sandboxId: `local-process:${repoKey}:${host}:${pid}`,
     leaseOwner: `worker:${host}:${pid}`,
     repo,
     backendName,
-    heartbeatIntervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS,
-    staleLeaseMs: DEFAULT_STALE_LEASE_MS
+    heartbeatIntervalMs: timings?.heartbeatMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+    staleLeaseMs: timings?.staleMs ?? DEFAULT_STALE_LEASE_MS,
+    acquireTimeoutMs: timings?.acquireTimeoutMs ?? DEFAULT_ACQUIRE_TIMEOUT_MS,
+    acquirePollMs: timings?.acquirePollMs ?? DEFAULT_ACQUIRE_POLL_MS
   };
 }
 
@@ -52,7 +57,11 @@ export async function registerCodegenWorkerLease(repo: LeaseRepo, scheduler: Cod
     metadata: {
       backend: scheduler.backendName,
       worker: scheduler.leaseOwner,
-      registeredAt: new Date().toISOString()
+      registeredAt: new Date().toISOString(),
+      heartbeatIntervalMs: scheduler.heartbeatIntervalMs,
+      staleLeaseMs: scheduler.staleLeaseMs,
+      acquireTimeoutMs: scheduler.acquireTimeoutMs,
+      acquirePollMs: scheduler.acquirePollMs
     }
   });
 }
@@ -101,8 +110,8 @@ export async function waitForCodegenSandboxLease(input: {
 }): Promise<CodegenSandboxLeaseRecord> {
   const now = input.now ?? Date.now;
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const timeoutMs = input.timeoutMs ?? DEFAULT_ACQUIRE_TIMEOUT_MS;
-  const pollMs = input.pollMs ?? DEFAULT_ACQUIRE_POLL_MS;
+  const timeoutMs = input.timeoutMs ?? input.scheduler.acquireTimeoutMs;
+  const pollMs = input.pollMs ?? input.scheduler.acquirePollMs;
   const startedAt = now();
   let attempt = 0;
 
@@ -123,7 +132,15 @@ export async function waitForCodegenSandboxLease(input: {
         kind: "status",
         eventName: "codegen.sandbox.lease_acquired",
         summary: "Acquired warm codegen worker lease.",
-        metadata: { taskId: input.taskId, sandboxId: lease.sandboxId, leaseOwner: lease.leaseOwner, attempt }
+        metadata: {
+          taskId: input.taskId,
+          sandboxId: lease.sandboxId,
+          leaseOwner: lease.leaseOwner,
+          waitedMs: Math.max(0, now() - startedAt),
+          attempt,
+          timeoutMs,
+          pollMs
+        }
       });
       return lease;
     }
@@ -141,7 +158,7 @@ export async function waitForCodegenSandboxLease(input: {
       kind: "status",
       eventName: "codegen.sandbox.waiting_for_lease",
       summary: "Waiting for warm codegen worker lease.",
-      metadata: { taskId: input.taskId, sandboxId: input.scheduler.sandboxId, waitedMs, attempt }
+      metadata: { taskId: input.taskId, sandboxId: input.scheduler.sandboxId, waitedMs, attempt, timeoutMs, pollMs }
     });
     await sleep(Math.min(pollMs, Math.max(0, timeoutMs - waitedMs)));
   }

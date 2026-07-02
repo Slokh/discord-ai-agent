@@ -10,6 +10,7 @@ import {
   getDeploymentStatus,
   getDiscordChannelTopics,
   getDiscordStats,
+  inspectDiscordImages,
   inspectAgentLogs,
   reportStatus,
   summarizeDiscordHistory,
@@ -892,6 +893,85 @@ describe("generateImage", () => {
       name: expect.stringMatching(/\.webp$/),
       contentType: "image/webp"
     });
+  });
+
+  it("passes current Discord image attachments as generation references", async () => {
+    const generateImageMock = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: []
+    }));
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { generateImage: generateImageMock },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      requestAttachments: [
+        {
+          id: "attachment-1",
+          url: "https://cdn.discordapp.com/image.png",
+          filename: "image.png",
+          contentType: "image/png",
+          width: 640,
+          height: 480
+        }
+      ]
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, { prompt: "turn this into pixel art" });
+
+    expect(result.content).toBe("Generated image for: turn this into pixel art\nUsed 1 reference image.");
+    expect(generateImageMock).toHaveBeenCalledWith("turn this into pixel art", {
+      inputReferences: [{ type: "image_url", image_url: { url: "https://cdn.discordapp.com/image.png" } }]
+    });
+  });
+
+  it("inspects current Discord image attachments with a vision model", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const chat = vi.fn(async () => ({
+      content: "It looks like a dashboard screenshot.",
+      model: "vision-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      repo: { auditTool },
+      openRouter: { chat },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      requestAttachments: [
+        {
+          id: "attachment-1",
+          url: "https://cdn.discordapp.com/screenshot.png",
+          filename: "screenshot.png",
+          contentType: "image/png",
+          width: 1200,
+          height: 800
+        }
+      ]
+    } as unknown as ToolContext;
+
+    const result = await inspectDiscordImages(ctx, { question: "what is this?" });
+
+    expect(result).toContain("It looks like a dashboard screenshot.");
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "google/gemini-3.1-flash-lite",
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: expect.stringContaining("what is this?") }),
+              { type: "image_url", image_url: { url: "https://cdn.discordapp.com/screenshot.png" } }
+            ])
+          })
+        ])
+      })
+    );
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectDiscordImages" }));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectDiscordImagesResult", model: "vision-model" }));
   });
 
   it("falls back to image URLs when attachment fetching fails", async () => {

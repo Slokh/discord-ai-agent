@@ -9,6 +9,7 @@ export type ToolName =
   | "getRecentDiscordMessages"
   | "getDiscordMessageContext"
   | "searchDiscordAttachments"
+  | "inspectDiscordImages"
   | "getDiscordStats"
   | "getDiscordChannelTopics"
   | "summarizeDiscordHistory"
@@ -242,7 +243,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
   },
   {
     name: "searchDiscordAttachments",
-    description: "Search indexed Discord attachments by filename, content type, surrounding message text, author, or channel.",
+    description:
+      "Search indexed Discord attachments by filename, content type, surrounding message text, author, or channel. Returns attachment URLs and message links. For understanding what is in an image, call inspectDiscordImages after finding the relevant image URL.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -269,6 +271,36 @@ export const toolRegistry: ToolRegistryEntry[] = [
         limit: {
           type: "number",
           description: "Maximum attachments. Defaults to 10."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "inspectDiscordImages",
+    description:
+      "Use a vision model to inspect images from the current Discord request, the replied-to message chain, explicit image URLs, or a Discord message link/ID. Use this when the user asks what is shown in an attached/replied image, screenshot, meme, chart, photo, or visual Discord attachment. Do not use it for text-only history questions.",
+    userVisible: true,
+    mutates: false,
+    parameters: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "The visual question to answer. Defaults to a concise description request."
+        },
+        imageUrls: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional direct image URLs, usually from searchDiscordAttachments."
+        },
+        messageIdOrUrl: {
+          type: "string",
+          description: "Optional Discord message ID or message URL whose visible image attachments should be inspected."
+        },
+        useContextImages: {
+          type: "boolean",
+          description: "Whether to include images attached to the current request or replied-to chain. Defaults to true."
         }
       },
       additionalProperties: false
@@ -482,7 +514,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
   },
   {
     name: "generateImage",
-    description: "Generate an image with the configured OpenRouter image model.",
+    description:
+      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for make/draw/generate image requests and for edits like 'make this into...', 'modify this', or 'use the attached image as a reference'.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -490,7 +523,16 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         prompt: {
           type: "string",
-          description: "The image prompt to generate."
+          description: "The image generation or edit prompt."
+        },
+        referenceImageUrls: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional image URLs to use as references, usually from searchDiscordAttachments or inspectDiscordImages context."
+        },
+        useContextImages: {
+          type: "boolean",
+          description: "Whether to include images attached to the current request or replied-to chain as references. Defaults to true when context images exist."
         }
       },
       required: ["prompt"],
@@ -772,7 +814,7 @@ export function renderToolList() {
 
 function defaultPermissionRequirements(tool: ToolRegistryEntry): string[] {
   if (tool.mutates) return ["explicit_user_request", "tool_audit_log"];
-  if (tool.name.startsWith("inspect")) return ["owner_or_authorized_debugger", "tool_audit_log"];
+  if (tool.name === "inspectAgentLogs") return ["owner_or_authorized_debugger", "tool_audit_log"];
   if (tool.name.toLowerCase().includes("discord") || tool.name.startsWith("find")) {
     return ["requester_visible_discord_channels", "tool_audit_log"];
   }
@@ -805,6 +847,7 @@ function defaultToolExamples(name: ToolName): string[] {
     getRecentDiscordMessages: "@ai what just happened in here?",
     getDiscordMessageContext: "@ai show the context around this message link",
     searchDiscordAttachments: "@ai find the image of nachos",
+    inspectDiscordImages: "@ai what is in this screenshot?",
     getDiscordStats: "@ai rank channels by messages per day",
     getDiscordChannelTopics: "@ai what are the main recurring topics in each channel?",
     summarizeDiscordHistory: "@ai what has tyler been up to recently?",

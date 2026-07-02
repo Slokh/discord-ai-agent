@@ -1496,6 +1496,9 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(
       repo.searchDiscordAttachments({ guildId, visibleChannelIds: [channelId], query: "file", contentType: "image/", limit: 5 })
     ).resolves.toMatchObject([{ attachmentId, filename: "file.png", contentType: "image/png" }]);
+    await expect(
+      repo.messageAttachments({ guildId, visibleChannelIds: [channelId], messageId: messageB, limit: 5 })
+    ).resolves.toMatchObject([{ attachmentId, filename: "file.png", contentType: "image/png" }]);
     await expect(repo.discordStats({ guildId, visibleChannelIds: [channelId], limit: 5 })).resolves.toMatchObject({
       totalMessages: 2,
       totalAttachments: 1,

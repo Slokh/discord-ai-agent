@@ -10,6 +10,7 @@ import {
   getDiscordChannelTopics,
   getDiscordMessageContext,
   getDiscordStats,
+  inspectDiscordImages,
   getRecentAgentMemory,
   getAgentTaskStatus,
   getDeploymentStatus,
@@ -26,7 +27,7 @@ import {
 } from "../tools/coreTools.js";
 import type { ChatMessage } from "../models/openrouter.js";
 import type { ConversationMessage, ServerOverlay } from "../db/repositories.js";
-import type { AgentFile, AgentResponse, DiscordReplyContext, ToolContext } from "../tools/types.js";
+import type { AgentFile, AgentResponse, DiscordAttachmentContext, DiscordReplyContext, ToolContext } from "../tools/types.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { openRouterServerToolDefinitionsForModel, toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
@@ -71,10 +72,18 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
 
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
   const serverOverlay = await loadServerOverlay(ctx);
-  const messages: ChatMessage[] = chatMessages(text, skills, ctx.sessionMessages ?? [], ctx.replyContext, serverOverlay, {
-    userId: ctx.userId,
-    userDisplayName: ctx.userDisplayName
-  });
+  const messages: ChatMessage[] = chatMessages(
+    text,
+    skills,
+    ctx.sessionMessages ?? [],
+    ctx.replyContext,
+    ctx.requestAttachments,
+    serverOverlay,
+    {
+      userId: ctx.userId,
+      userDisplayName: ctx.userDisplayName
+    }
+  );
   const files: AgentFile[] = [];
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
@@ -93,6 +102,8 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       sessionMessageCount: ctx.sessionMessages?.length ?? 0,
       hasReplyContext: Boolean(ctx.replyContext),
       replyContextMessageId: ctx.replyContext?.messageId,
+      requestAttachmentCount: ctx.requestAttachments?.length ?? 0,
+      replyContextAttachmentCount: replyContextAttachmentCount(ctx.replyContext),
       hasServerOverlay: Boolean(serverOverlay?.enabled && serverOverlay.systemPrompt.trim()),
       visibleChannelCount: ctx.visibleChannelIds.length,
       mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
@@ -107,6 +118,8 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       sessionMessageCount: ctx.sessionMessages?.length ?? 0,
       hasReplyContext: Boolean(ctx.replyContext),
       replyContextMessageId: ctx.replyContext?.messageId,
+      requestAttachmentCount: ctx.requestAttachments?.length ?? 0,
+      replyContextAttachmentCount: replyContextAttachmentCount(ctx.replyContext),
       hasServerOverlay: Boolean(serverOverlay?.enabled && serverOverlay.systemPrompt.trim()),
       visibleChannelCount: ctx.visibleChannelIds.length,
       mentionedUserCount: ctx.mentionedUserIds?.length ?? 0,
@@ -685,10 +698,28 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
 
   if (route.name === "generateImage") {
     const prompt = stringArgument(route.arguments, "prompt") ?? originalText;
-    const image = await generateImage(ctx, prompt);
+    const image = await generateImage(ctx, {
+      prompt,
+      referenceImageUrls: stringArrayArgument(route.arguments, "referenceImageUrls"),
+      useContextImages: booleanArgument(route.arguments, "useContextImages")
+    });
     return {
       content: cleanResponse(image.content, ctx.config.maxReplyChars),
       files: image.files
+    };
+  }
+
+  if (route.name === "inspectDiscordImages") {
+    return {
+      content: cleanResponse(
+        await inspectDiscordImages(ctx, {
+          question: stringArgument(route.arguments, "question") ?? originalText,
+          imageUrls: stringArrayArgument(route.arguments, "imageUrls"),
+          messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
+          useContextImages: booleanArgument(route.arguments, "useContextImages")
+        }),
+        ctx.config.maxReplyChars
+      )
     };
   }
 
@@ -1284,6 +1315,7 @@ function chatMessages(
   skills: string,
   sessionMessages: ConversationMessage[] = [],
   replyContext?: DiscordReplyContext,
+  requestAttachments: DiscordAttachmentContext[] = [],
   serverOverlay?: ServerOverlay,
   requester?: { userId: string; userDisplayName: string }
 ): ChatMessage[] {
@@ -1313,7 +1345,8 @@ function chatMessages(
         "For favorite/best/most popular message questions, use getDiscordStats with metric=reactions and groupBy=message as evidence, then make a clear pick when the evidence supports one. " +
         "For current public information, news, schedules, prices, releases, or external facts, use web_search and datetime when useful. " +
         "For URLs, use web_fetch when reading the page would improve the answer. " +
-        "For Discord image requests, call generateImage so the result can be attached. " +
+        "When the current message or reply context includes images and the user asks what is shown, asks about a screenshot/meme/photo/chart, or asks for visual details, call inspectDiscordImages. " +
+        "For Discord image generation requests, call generateImage so the result can be attached. If the user asks to edit, modify, transform, copy the style of, or use an attached/replied image as a reference, call generateImage with useContextImages=true or explicit referenceImageUrls. " +
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +
         "For undo/delete/forget/remove requests about your previous replies, call undoConversationTurns. " +
         "For questions about why Discord AI Agent was slow, hung, failed, chose a tool, or behaved oddly, call inspectAgentLogs; a Discord message ID is usually the traceId. If the user is replying to your 'Thinking...' message or asking why you are still thinking, do not search Discord history. " +
@@ -1327,6 +1360,7 @@ function chatMessages(
     ...serverOverlayMessagesForPrompt(serverOverlay),
     ...sessionMessagesForPrompt(sessionMessages),
     ...replyContextMessagesForPrompt(replyContext),
+    ...imageContextMessagesForPrompt(requestAttachments, replyContext),
     { role: "user" as const, content: text }
   ];
 }
@@ -1342,6 +1376,58 @@ function requesterMessagesForPrompt(requester?: { userId: string; userDisplayNam
         "First-person pronouns in the latest user request, including I/me/my/mine, refer to this requester unless the request explicitly names someone else."
     }
   ];
+}
+
+function imageContextMessagesForPrompt(
+  requestAttachments: DiscordAttachmentContext[] = [],
+  replyContext: DiscordReplyContext | undefined
+): ChatMessage[] {
+  const lines: string[] = [];
+  const requestImages = requestAttachments.filter(isDiscordImageAttachmentContext);
+  if (requestImages.length > 0) {
+    lines.push("Current user message images:");
+    lines.push(...requestImages.map((attachment, index) => `- current ${index + 1}: ${discordAttachmentPromptLabel(attachment)}`));
+  }
+
+  const replyImages = (replyContext?.chain ?? []).flatMap((message) =>
+    (message.attachments ?? []).filter(isDiscordImageAttachmentContext).map((attachment) => ({ message, attachment }))
+  );
+  if (replyImages.length > 0) {
+    lines.push("Reply-chain images:");
+    lines.push(
+      ...replyImages.map(({ message, attachment }, index) => {
+        const source = message.url ? `message ${message.url}` : `message ${message.messageId}`;
+        return `- reply ${index + 1}: ${source}; ${discordAttachmentPromptLabel(attachment)}`;
+      })
+    );
+  }
+
+  if (lines.length === 0) return [];
+  return [
+    {
+      role: "system",
+      content:
+        "Discord image attachments are available to local tools for this request. " +
+        "Use inspectDiscordImages to understand them, or generateImage with useContextImages=true to use them as references.\n" +
+        lines.join("\n")
+    }
+  ];
+}
+
+function replyContextAttachmentCount(replyContext: DiscordReplyContext | undefined) {
+  return (replyContext?.chain ?? []).reduce((total, message) => total + (message.attachments?.length ?? 0), 0);
+}
+
+function isDiscordImageAttachmentContext(attachment: DiscordAttachmentContext) {
+  return (
+    attachment.contentType?.toLowerCase().startsWith("image/") ||
+    /\.(?:png|jpe?g|webp|gif|bmp|tiff?|heic|avif)(?:[?#].*)?$/i.test(attachment.filename ?? attachment.url)
+  );
+}
+
+function discordAttachmentPromptLabel(attachment: DiscordAttachmentContext) {
+  const dimensions = attachment.width && attachment.height ? `${attachment.width}x${attachment.height}` : "";
+  return [attachment.filename ?? attachment.id, attachment.contentType, dimensions, attachment.url].filter(Boolean).join(" | ");
 }
 
 async function loadServerOverlay(ctx: ToolContext): Promise<ServerOverlay | undefined> {

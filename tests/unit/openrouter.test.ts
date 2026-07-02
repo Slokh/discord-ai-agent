@@ -64,6 +64,7 @@ describe("OpenRouterClient", () => {
 
     const client = new OpenRouterClient(config);
     await client.generateImage("transparent logo", {
+      inputReferences: [{ type: "image_url", image_url: { url: "https://cdn.discordapp.com/ref.png" } }],
       resolution: "1K",
       aspectRatio: "1:1",
       quality: "high",
@@ -79,6 +80,7 @@ describe("OpenRouterClient", () => {
           model: "test/image",
           prompt: "transparent logo",
           resolution: "1K",
+          input_references: [{ type: "image_url", image_url: { url: "https://cdn.discordapp.com/ref.png" } }],
           aspect_ratio: "1:1",
           quality: "high",
           output_format: "png",

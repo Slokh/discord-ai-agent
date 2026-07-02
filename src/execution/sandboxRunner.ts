@@ -344,11 +344,12 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       );
     }
 
+    const npmScriptEnv = codegenNpmScriptEnv(process.env);
     const verify = await timedPhase(env, timings, "verify", "Running npm run verify on the generated changes.", async () =>
-      runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "verify" })
+      runCommand("npm", ["run", "verify"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "verify", env: npmScriptEnv })
     );
     const scan = await timedPhase(env, timings, "scan", "Running release scan before pushing generated changes.", async () =>
-      runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan" })
+      runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan", env: npmScriptEnv })
     );
     if (scan.exitCode !== 0) {
       throw new Error("Release scan failed after agent task; refusing to push generated changes.");
@@ -361,6 +362,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       taskEnv: env,
       step: "commit"
     });
+    await runCommand("git", ["config", "commit.gpgsign", "false"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
     await runCommand("git", ["add", "-A"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
     await runCommand("git", ["commit", "-m", `Implement ${env.taskTitle}`], {
       cwd: checkoutDir,
@@ -685,7 +687,7 @@ async function prepareDependencies(input: {
     });
     const tempCachePath = path.join(input.cache.nodeModulesDir, `.tmp-${lockHash}-${randomUUID()}`);
     await fs.rm(tempCachePath, { recursive: true, force: true }).catch(() => undefined);
-    await fs.cp(nodeModulesPath, tempCachePath, { recursive: true });
+    await fs.cp(nodeModulesPath, tempCachePath, { recursive: true, verbatimSymlinks: true });
     await fs.rename(tempCachePath, cachedNodeModulesPath).catch(async (error: NodeJS.ErrnoException) => {
       await fs.rm(tempCachePath, { recursive: true, force: true }).catch(() => undefined);
       if (error.code !== "EEXIST") throw error;
@@ -709,7 +711,8 @@ async function restoreCachedNodeModules(input: {
   });
   await fs.rm(input.nodeModulesPath, { recursive: true, force: true }).catch(() => undefined);
   try {
-    await fs.cp(input.cachedNodeModulesPath, input.nodeModulesPath, { recursive: true });
+    await fs.cp(input.cachedNodeModulesPath, input.nodeModulesPath, { recursive: true, verbatimSymlinks: true });
+    await validateRestoredNodeModules(input.nodeModulesPath);
     return true;
   } catch (error) {
     await fs.rm(input.nodeModulesPath, { recursive: true, force: true }).catch(() => undefined);
@@ -723,6 +726,20 @@ async function restoreCachedNodeModules(input: {
     }).catch(() => undefined);
     return false;
   }
+}
+
+async function validateRestoredNodeModules(nodeModulesPath: string) {
+  const requiredBins = [".bin/eslint", ".bin/tsc", ".bin/tsx", ".bin/vitest"];
+  await Promise.all(
+    requiredBins.map(async (relativePath) => {
+      const binPath = path.join(nodeModulesPath, relativePath);
+      const resolved = await fs.realpath(binPath);
+      const relativeResolved = path.relative(nodeModulesPath, resolved);
+      if (relativeResolved.startsWith("..") || path.isAbsolute(relativeResolved)) {
+        throw new Error(`Restored dependency cache contains non-portable bin symlink: ${relativePath} -> ${resolved}`);
+      }
+    })
+  );
 }
 
 export async function dependencyCacheKey(checkoutDir: string) {
@@ -745,6 +762,52 @@ export function codegenNpmInstallEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.Process
     NODE_ENV: "development",
     npm_config_production: "false",
     NPM_CONFIG_PRODUCTION: "false"
+  };
+}
+
+const CODEGEN_NPM_SCRIPT_ENV_PREFIXES = [
+  "CODEGEN_",
+  "CONTROL_",
+  "CRAWL_",
+  "DISCORD_",
+  "GITHUB_",
+  "KUBERNETES_",
+  "OPENROUTER_",
+  "RAILWAY_",
+  "SANDBOX_",
+  "WORKER_"
+];
+
+const CODEGEN_NPM_SCRIPT_ENV_KEYS = new Set([
+  "BOT_NAME",
+  "DATABASE_URL",
+  "EMBEDDING_DIMENSIONS",
+  "MAX_HISTORY_RESULTS",
+  "MAX_REPLY_CHARS",
+  "MAX_THREAD_SUMMARY_MESSAGES",
+  "RUN_MIGRATIONS",
+  "TASK_ID",
+  "TASK_REQUEST",
+  "TASK_SIGNING_SECRET",
+  "TASK_TITLE",
+  "TRACE_ID"
+]);
+
+export function codegenNpmScriptEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...baseEnv };
+  delete env.NODE_ENV;
+  delete env.npm_config_production;
+  delete env.NPM_CONFIG_PRODUCTION;
+  delete env.npm_config_omit;
+  delete env.NPM_CONFIG_OMIT;
+  for (const key of Object.keys(env)) {
+    if (CODEGEN_NPM_SCRIPT_ENV_KEYS.has(key) || CODEGEN_NPM_SCRIPT_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      delete env[key];
+    }
+  }
+  return {
+    ...env,
+    NODE_ENV: "development"
   };
 }
 

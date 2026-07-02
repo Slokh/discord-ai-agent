@@ -8,6 +8,7 @@ import {
   buildCodegenContextPack,
   codegenFirstDiffDeadlineMs,
   codegenNpmInstallEnv,
+  codegenNpmScriptEnv,
   codexConfigToml,
   codexExecArgs,
   codexHomePathForTask,
@@ -227,6 +228,36 @@ describe("sandboxRunner", () => {
     expect(env.npm_config_production).toBe("false");
     expect(env.NPM_CONFIG_OMIT).toBeUndefined();
     expect(env.npm_config_omit).toBeUndefined();
+  });
+
+  it("strips runtime app configuration from generated npm verification commands", () => {
+    const env = codegenNpmScriptEnv({
+      PATH: "/usr/bin",
+      HOME: "/tmp/home",
+      NODE_ENV: "production",
+      NPM_CONFIG_PRODUCTION: "true",
+      npm_config_omit: "dev",
+      CODEGEN_HARNESS: "opencode",
+      OPENROUTER_API_KEY: "sk-test",
+      GITHUB_TOKEN: "ghp-test",
+      DATABASE_URL: "postgres://example",
+      TASK_REQUEST: "update the bot",
+      SANDBOX_RUN_ID: "run-123",
+      DISCORD_AI_AGENT_PROCESS_ROLE: "worker"
+    });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/tmp/home");
+    expect(env.NODE_ENV).toBe("development");
+    expect(env.NPM_CONFIG_PRODUCTION).toBeUndefined();
+    expect(env.npm_config_omit).toBeUndefined();
+    expect(env.CODEGEN_HARNESS).toBeUndefined();
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.TASK_REQUEST).toBeUndefined();
+    expect(env.SANDBOX_RUN_ID).toBeUndefined();
+    expect(env.DISCORD_AI_AGENT_PROCESS_ROLE).toBeUndefined();
   });
 
   it("includes dev dependency mode in the dependency cache key", async () => {

@@ -1,11 +1,11 @@
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
-import type { KubernetesExecutionBackend, ObservedSandboxRun } from "./backend.js";
+import type { ExecutionBackend, ObservedSandboxRun } from "./backend.js";
 import { logger } from "../util/logger.js";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 30_000;
 const DEFAULT_STALE_RUNNING_TASK_MS = 15 * 60_000;
 
-type SandboxRunBackend = Pick<KubernetesExecutionBackend, "observeRun" | "cleanupRun">;
+type SandboxRunBackend = Pick<ExecutionBackend, "name" | "observeRun" | "cleanupRun">;
 
 export type SandboxReconcilerRuntime = {
   stop: () => void;
@@ -58,8 +58,10 @@ export async function runSandboxReconciliationOnce(
 }
 
 async function reconcileActiveRuns(repo: DiscordAiAgentRepository, backend: SandboxRunBackend) {
-  const runs = await repo.listActiveSandboxRuns();
+  const runs = await repo.listActiveSandboxRuns({ backend: backend.name });
   for (const run of runs) {
+    if (run.backend !== backend.name) continue;
+
     let observed: ObservedSandboxRun;
     try {
       observed = await backend.observeRun(run);
@@ -125,8 +127,10 @@ async function reconcileRunningTasksWithoutActiveSandbox(
 }
 
 async function cleanupTerminalRuns(repo: DiscordAiAgentRepository, backend: SandboxRunBackend) {
-  const runs = await repo.listTerminalSandboxRunsPendingCleanup();
+  const runs = await repo.listTerminalSandboxRunsPendingCleanup({ backend: backend.name });
   for (const run of runs) {
+    if (run.backend !== backend.name) continue;
+
     try {
       await backend.cleanupRun(run);
       await repo.markSandboxRunCleanedUp(run.sandboxRunId);

@@ -3197,7 +3197,8 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToSandboxCommandEvent);
   }
 
-  async listActiveSandboxRuns(limit = 50): Promise<SandboxRunRecord[]> {
+  async listActiveSandboxRuns(input: { backend?: string; limit?: number } = {}): Promise<SandboxRunRecord[]> {
+    const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 50)));
     const result = await this.pool.query(
       `
         SELECT
@@ -3208,10 +3209,11 @@ export class DiscordAiAgentRepository {
         JOIN agent_tasks at ON at.task_id = sr.task_id
         WHERE at.status IN ('queued', 'running')
           AND sr.status = 'running'
+          AND ($1::text IS NULL OR sr.backend = $1)
         ORDER BY sr.updated_at ASC
-        LIMIT $1
+        LIMIT $2
       `,
-      [Math.max(1, Math.min(200, Math.trunc(limit)))]
+      [input.backend ?? null, limit]
     );
     return result.rows.map(rowToSandboxRun);
   }
@@ -3233,7 +3235,8 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToSandboxRun);
   }
 
-  async listTerminalSandboxRunsPendingCleanup(limit = 50): Promise<SandboxRunRecord[]> {
+  async listTerminalSandboxRunsPendingCleanup(input: { backend?: string; limit?: number } = {}): Promise<SandboxRunRecord[]> {
+    const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 50)));
     const result = await this.pool.query(
       `
         SELECT
@@ -3244,10 +3247,11 @@ export class DiscordAiAgentRepository {
         JOIN agent_tasks at ON at.task_id = sr.task_id
         WHERE at.status IN ('succeeded', 'failed', 'no_changes', 'cancelled')
           AND sr.cleaned_up_at IS NULL
+          AND ($1::text IS NULL OR sr.backend = $1)
         ORDER BY coalesce(sr.completed_at, sr.updated_at) ASC
-        LIMIT $1
+        LIMIT $2
       `,
-      [Math.max(1, Math.min(200, Math.trunc(limit)))]
+      [input.backend ?? null, limit]
     );
     return result.rows.map(rowToSandboxRun);
   }

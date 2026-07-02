@@ -626,7 +626,14 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
 
   if (route.name === "openGithubPullRequest") {
     return {
-      content: cleanResponse(await createAgentUpdateFromRequest(ctx, stringArgument(route.arguments, "request") ?? originalText), ctx.config.maxReplyChars)
+      content: cleanResponse(
+        await createAgentUpdateFromRequest(
+          ctx,
+          stringArgument(route.arguments, "request") ?? originalText,
+          stringArgument(route.arguments, "title")
+        ),
+        ctx.config.maxReplyChars
+      )
     };
   }
 

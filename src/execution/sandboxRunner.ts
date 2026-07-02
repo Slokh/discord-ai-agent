@@ -29,6 +29,28 @@ const CODEX_RECONNECT_STALL_MS = 3 * 60 * 1000;
 const CODEX_MAX_RUNTIME_MS = 25 * 60 * 1000;
 const CODEX_WATCHDOG_POLL_MS = 15_000;
 const CODEX_RECONNECT_PATTERN = /(?:^|\n)ERROR:\s*Reconnecting\.\.\./i;
+const CODE_UPDATE_BRANCH_PREFIX = "ai";
+const CODE_UPDATE_BRANCH_SLUG_MAX_CHARS = 40;
+const CODE_UPDATE_BRANCH_SUFFIX_CHARS = 4;
+const CODE_UPDATE_BRANCH_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "can",
+  "for",
+  "from",
+  "in",
+  "instead",
+  "of",
+  "on",
+  "or",
+  "please",
+  "the",
+  "to",
+  "with",
+  "you"
+]);
 const DEPENDENCY_CACHE_MODE = "devdeps-v1";
 
 type CodegenHarness = "codex" | "opencode";
@@ -225,7 +247,8 @@ async function main() {
 
 async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStartedAt: number) {
   const { owner, repo } = parseGitHubRepository(env.githubRepository);
-  const branchName = codeUpdateBranchName(env.taskTitle);
+  const prTitle = codeUpdatePullRequestTitle(env.taskTitle);
+  const branchName = codeUpdateBranchName(prTitle, env.taskId);
   const cache = sandboxCachePaths(env, owner, repo);
   const cacheSummary: CacheSummary = {};
   await fs.mkdir(cache.workspacesDir, { recursive: true });
@@ -364,7 +387,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     });
     await runCommand("git", ["config", "commit.gpgsign", "false"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
     await runCommand("git", ["add", "-A"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
-    await runCommand("git", ["commit", "-m", `Implement ${env.taskTitle}`], {
+    await runCommand("git", ["commit", "-m", prTitle], {
       cwd: checkoutDir,
       taskEnv: env,
       step: "commit"
@@ -375,12 +398,12 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
 
     const draft = verify.exitCode !== 0;
     const octokit = new Octokit({ auth: env.githubToken });
-    const initialPrBody = pullRequestBody({ env, verifyPassed: verify.exitCode === 0, timings, cacheSummary });
+    const initialPrBody = codeUpdatePullRequestBody({ env, verifyPassed: verify.exitCode === 0 });
     const pr = await timedPhase(env, timings, "pr", "Opening the GitHub pull request.", async () =>
       octokit.pulls.create({
         owner,
         repo,
-        title: env.taskTitle,
+        title: prTitle,
         head: branchName,
         base: env.githubBaseBranch,
         draft,
@@ -389,7 +412,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     );
 
     timings.total = Date.now() - totalStartedAt;
-    const finalPrBody = pullRequestBody({ env, verifyPassed: verify.exitCode === 0, timings, cacheSummary });
+    const finalPrBody = codeUpdatePullRequestBody({ env, verifyPassed: verify.exitCode === 0 });
     await octokit.pulls
       .update({
         owner,
@@ -943,9 +966,47 @@ function parseGitHubRepository(repository: string) {
   return { owner, repo };
 }
 
-function codeUpdateBranchName(title: string) {
-  const slug = slugify(title).slice(0, 48) || "agent-update";
-  return `discord-ai-agent/update-${slug}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+export function codeUpdateBranchName(title: string, taskId?: string) {
+  const suffix = codeUpdateBranchSuffix(taskId);
+  const maxSlugChars = suffix
+    ? Math.max(12, CODE_UPDATE_BRANCH_SLUG_MAX_CHARS - suffix.length - 1)
+    : CODE_UPDATE_BRANCH_SLUG_MAX_CHARS;
+  const slug = conciseBranchSlug(title, maxSlugChars) || "update";
+  return `${CODE_UPDATE_BRANCH_PREFIX}/${suffix ? `${slug}-${suffix}` : slug}`;
+}
+
+export function codeUpdatePullRequestTitle(title: string) {
+  const trimmed = title.trim().replace(/(?:--?retry)$/i, "").trim();
+  const humanized = looksLikeKebabTitle(trimmed) ? trimmed.split("-").filter(Boolean).join(" ") : trimmed;
+  const cleaned = humanized
+    .replace(/\b(?:open|create|make)\s+(?:a\s+)?(?:github\s+)?(?:pull request|pr)\b[.!?]?/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/[.!?]+$/g, "")
+    .trim();
+  if (!cleaned) return "Agent update";
+  return `${cleaned[0]?.toUpperCase() ?? ""}${cleaned.slice(1)}`;
+}
+
+function conciseBranchSlug(title: string, maxChars: number) {
+  const words = slugify(codeUpdatePullRequestTitle(title))
+    .split("-")
+    .filter((word) => word && !CODE_UPDATE_BRANCH_STOP_WORDS.has(word));
+  const slug = words.join("-") || slugify(title);
+  return trimSlug(slug, maxChars);
+}
+
+function trimSlug(slug: string, maxChars: number) {
+  if (slug.length <= maxChars) return slug;
+  return slug.slice(0, maxChars).replace(/-[^-]*$/, "").replace(/^-+|-+$/g, "") || slug.slice(0, maxChars).replace(/^-+|-+$/g, "");
+}
+
+function codeUpdateBranchSuffix(taskId: string | undefined) {
+  if (!taskId) return "";
+  return taskId.replace(/[^a-z0-9]/gi, "").slice(-CODE_UPDATE_BRANCH_SUFFIX_CHARS).toLowerCase();
+}
+
+function looksLikeKebabTitle(value: string) {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(value);
 }
 
 async function gitAuthEnv(token: string, workRoot: string): Promise<NodeJS.ProcessEnv> {
@@ -2630,13 +2691,11 @@ export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWat
   return null;
 }
 
-function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean; timings: TaskTimings; cacheSummary: CacheSummary }) {
+export function codeUpdatePullRequestBody(input: { env: Pick<SandboxEnv, "taskRequest" | "requestedBy">; verifyPassed: boolean }) {
   return [
     "## Why",
     "",
     input.env.taskRequest.trim(),
-    "",
-    `Prompted by: ${input.env.requestedBy}`,
     "",
     "## Changes",
     "",
@@ -2648,22 +2707,9 @@ function pullRequestBody(input: { env: SandboxEnv; verifyPassed: boolean; timing
     `- \`npm run verify\`: ${input.verifyPassed ? "passed" : "failed; opened as draft"}`,
     "- `npm run scan:release`: passed",
     "",
-    "## Context",
+    "---",
     "",
-    `- Task ID: \`${input.env.taskId}\``,
-    `- Sandbox run: \`${input.env.sandboxRunId}\``,
-    "- Runtime: Kubernetes sandbox job",
-    `- Chat model: \`${input.env.openRouterChatModel}\``,
-    `- Codegen model: \`${input.env.openRouterCodegenModel}\``,
-    "- Harness: `codex-app-server` with `codex-exec-json` fallback",
-    "",
-    "Timing:",
-    "",
-    ...formatTimingLines(input.timings),
-    "",
-    "Cache:",
-    "",
-    ...formatCacheSummaryLines(input.cacheSummary)
+    `Prompted by: ${input.env.requestedBy}`
   ].join("\n");
 }
 
@@ -3121,43 +3167,6 @@ function formatDuration(ms: number) {
 function conciseError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return message.split("\n")[0]?.slice(0, 500) ?? "unknown error";
-}
-
-function formatTimingLines(timings: TaskTimings) {
-  const ordered = [
-    ["sandbox acquisition/startup", timings.sandboxStartup],
-    ["repo refresh / checkout", timings.repo],
-    ["dependency prep", timings.dependencies],
-    ["tool shim setup", timings.toolShims],
-    ["Codex execution", timings.codex],
-    ["OpenCode execution", timings.opencode],
-    ["post-harness dependency prep", timings.dependenciesPostCodex],
-    ["verification", timings.verify],
-    ["scan", timings.scan],
-    ["git push", timings.push],
-    ["PR creation", timings.pr],
-    ["total", timings.total]
-  ] as const;
-  return ordered
-    .filter(([, value]) => typeof value === "number")
-    .map(([label, value]) => `- ${label}: ${formatDuration(value ?? 0)}`);
-}
-
-function formatCacheSummaryLines(cache: CacheSummary) {
-  const lines = [
-    `- repository mirror: ${cache.repo ?? "unknown"}`,
-    `- dependencies: ${cache.dependencies ?? "unknown"}${cache.dependencyCacheKey ? ` (${cache.dependencyCacheKey})` : ""}`
-  ];
-  if (cache.dependencyFilesChanged?.length) {
-    lines.push(`- dependency files changed after codegen harness: ${cache.dependencyFilesChanged.join(", ")}`);
-  }
-  if (cache.dependencyRefreshAfterCodex) {
-    lines.push("- dependencies refreshed after codegen harness before verification");
-  }
-  if (cache.toolShims?.length) {
-    lines.push(`- sandbox helper tools: ${cache.toolShims.join(", ")}`);
-  }
-  return lines;
 }
 
 function sleep(ms: number) {

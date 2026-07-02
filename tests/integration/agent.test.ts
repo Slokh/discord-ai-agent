@@ -1422,7 +1422,7 @@ describe("agent router", () => {
               {
                 id: "call-1",
                 name: "openGithubPullRequest",
-                argumentsText: JSON.stringify({ request: "add a calendar integration" })
+                argumentsText: JSON.stringify({ request: "add a calendar integration", title: "Add calendar support" })
               }
             ]
           })
@@ -1455,7 +1455,7 @@ describe("agent router", () => {
     );
     expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "calendar-integration",
+        title: "Add calendar support",
         request: "add a calendar integration",
         requestedBy: "User (u)",
         taskType: "code_update",

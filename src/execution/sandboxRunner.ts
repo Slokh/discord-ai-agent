@@ -1256,13 +1256,10 @@ export function openCodeRunArgs(input: { serverUrl: string; checkoutDir: string;
     "run",
     "--attach",
     input.serverUrl,
-    "--dir",
-    input.checkoutDir,
     "--model",
     openCodeModelId(input.model),
     "--format",
     "json",
-    "--auto",
     "--title",
     input.title,
     input.prompt
@@ -1377,7 +1374,7 @@ async function runOpenCodeServerAttempt(input: {
       allowFailure: true,
       taskEnv: input.env,
       step: `opencode_attempt_${input.attempt}`,
-      displayCommand: `${opencodeBinary} run --attach ${server.serverUrl} --dir ${input.checkoutDir} --model ${openCodeModelId(input.env.openRouterCodegenModel)} --format json --auto --title ${JSON.stringify(input.env.taskTitle)} [prompt]`,
+      displayCommand: `${opencodeBinary} run --attach ${server.serverUrl} --model ${openCodeModelId(input.env.openRouterCodegenModel)} --format json --title ${JSON.stringify(input.env.taskTitle)} [prompt]`,
       codexWatchdog: {
         checkoutDir: input.checkoutDir,
         attempt: input.attempt,

@@ -46,6 +46,7 @@
     "sandbox-cache:clear": "tsx scripts/sandboxCache.ts clear --yes",
     "smoke:discord": "tsx scripts/smokeDiscord.ts",
     "smoke:github": "tsx scripts/smokeGithub.ts",
+    "smoke:codegen": "tsx scripts/smokeCodegen.ts",
     "smoke:openrouter": "tsx scripts/smokeOpenRouter.ts",
     "smoke:startup": "tsx scripts/smokeStartup.ts",
     "scan:release": "tsx scripts/scanRelease.ts",

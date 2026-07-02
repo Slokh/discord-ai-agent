@@ -105,13 +105,10 @@ describe("sandboxRunner", () => {
       "run",
       "--attach",
       "http://127.0.0.1:4123",
-      "--dir",
-      "/tmp/work/repo",
       "--model",
       "openrouter/z-ai/glm-5.2",
       "--format",
       "json",
-      "--auto",
       "--title",
       "Update the README",
       "Please edit the README."

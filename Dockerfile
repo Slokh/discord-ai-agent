@@ -18,7 +18,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev && npm install -g @openai/codex@0.142.4
+RUN npm ci --omit=dev && npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
 COPY skills ./skills

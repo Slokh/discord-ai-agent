@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Octokit } from "@octokit/rest";
@@ -30,6 +31,8 @@ const CODEX_WATCHDOG_POLL_MS = 15_000;
 const CODEX_RECONNECT_PATTERN = /(?:^|\n)ERROR:\s*Reconnecting\.\.\./i;
 const DEPENDENCY_CACHE_MODE = "devdeps-v1";
 
+type CodegenHarness = "codex" | "opencode";
+
 type SandboxEnv = {
   taskId: string;
   traceId: string;
@@ -45,6 +48,7 @@ type SandboxEnv = {
   openRouterApiKey: string;
   openRouterChatModel: string;
   openRouterCodegenModel: string;
+  codegenHarness: CodegenHarness;
   sandboxCacheDir: string;
   sandboxStartedAtMs: number | null;
 };
@@ -91,7 +95,7 @@ type CodegenAnchorMatch = {
 
 type CodexAttemptSummary = {
   attempt: number;
-  command: "app-server" | "exec" | "resume";
+  command: "app-server" | "exec" | "resume" | "opencode-run";
   exitCode: number;
   durationMs: number;
   producedDiff: boolean;
@@ -109,6 +113,9 @@ type CodexWatchdogOptions = {
   attempt: number;
   totalAttempts: number;
   firstDiffDeadlineMs?: number;
+  firstDiffStep?: string;
+  firstDiffMessage?: string;
+  watchdogStepPrefix?: string;
   idleWithoutDiffMs?: number;
   reconnectStallMs?: number;
   maxRuntimeMs?: number;
@@ -134,6 +141,18 @@ type CodexAppServerAttemptResult = {
   error?: string;
   startedTurn: boolean;
   watchdog?: CodexWatchdogResult;
+};
+
+type OpenCodeServerState = {
+  child: ReturnType<typeof spawn>;
+  serverUrl: string;
+  commandLine: string;
+  startedAt: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  error?: string;
 };
 
 class CodegenNoDiffError extends Error {
@@ -215,6 +234,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
   });
   const workRoot = await fs.mkdtemp(path.join(cache.workspacesDir, "task-"));
   const codexHome = codexHomePathForTask({ sandboxCacheDir: cache.rootDir, workRoot });
+  const opencodeHome = path.join(workRoot, "opencode-home");
   const checkoutDir = path.join(workRoot, "repo");
   const gitEnv = await gitAuthEnv(env.githubToken, workRoot);
 
@@ -248,14 +268,15 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     });
 
     const toolShimDir = path.join(workRoot, "tool-shims");
-    await timedPhase(env, timings, "toolShims", "Installing sandbox helper tool shims for Codex.", async () => {
+    await timedPhase(env, timings, "toolShims", "Installing sandbox helper tool shims for the codegen harness.", async () => {
       const shims = await writeSandboxToolShims(toolShimDir);
       cacheSummary.toolShims = shims;
-      await progress(env, "tool_shims_ready", "Sandbox helper tools are available on PATH.", { toolShims: shims });
+      await progress(env, "tool_shims_ready", "Sandbox helper tools are available for the codegen harness.", { toolShims: shims, harness: env.codegenHarness });
     });
 
-    await progress(env, "configure", "Writing ephemeral Codex configuration.");
-    await writeCodexConfig(codexHome, checkoutDir, env);
+    await progress(env, "configure", `Writing ephemeral ${codegenHarnessDisplayName(env.codegenHarness)} configuration.`, { harness: env.codegenHarness });
+    if (env.codegenHarness === "opencode") await writeOpenCodeConfig(opencodeHome, env);
+    else await writeCodexConfig(codexHome, checkoutDir, env);
 
     const contextPack = await timedPhase(env, timings, "context", "Building codegen request context.", async () =>
       buildCodegenContextPack(checkoutDir, env.taskRequest)
@@ -275,21 +296,9 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       }
     });
 
-    await timedPhase(env, timings, "codex", "Running Codex to implement the requested change.", async () => {
-      const codexSummary = await runCodexWithRecovery({ env, checkoutDir, gitEnv, workRoot, codexHome, toolShimDir, contextPack });
-      await recordArtifact(env, {
-        kind: "diagnostic",
-        name: "Codex attempt summary",
-        content: JSON.stringify(codexSummary, null, 2),
-        contentType: "application/json",
-        metadata: {
-          attempts: codexSummary.attempts.length,
-          producedDiff: codexSummary.attempts.some((attempt) => attempt.producedDiff)
-        }
-      });
-    }, { model: env.openRouterCodegenModel, harness: "codex-app-server", fallbackHarness: "codex-exec-json" });
+    await runSelectedCodegenHarness({ env, timings, checkoutDir, gitEnv, workRoot, codexHome, opencodeHome, toolShimDir, contextPack });
 
-    await progress(env, "diff", "Checking whether Codex produced a real code diff.");
+    await progress(env, "diff", `Checking whether ${codegenHarnessDisplayName(env.codegenHarness)} produced a real code diff.`, { harness: env.codegenHarness });
     const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir, taskEnv: env, step: "diff" });
     if (!status.stdout.trim()) {
       throw new Error("Agent task produced no diff; no PR will be opened.");
@@ -434,6 +443,7 @@ function loadSandboxEnv(): SandboxEnv {
     openRouterApiKey: requiredEnv("OPENROUTER_API_KEY"),
     openRouterChatModel: requiredEnv("OPENROUTER_CHAT_MODEL"),
     openRouterCodegenModel: process.env.OPENROUTER_CODEGEN_MODEL?.trim() || requiredEnv("OPENROUTER_CHAT_MODEL"),
+    codegenHarness: codegenHarnessFromEnv(process.env.CODEGEN_HARNESS),
     sandboxCacheDir: process.env.SANDBOX_CACHE_DIR || path.join(os.tmpdir(), "discord-ai-agent-cache"),
     sandboxStartedAtMs: numberEnv("SANDBOX_STARTED_AT_MS")
   };
@@ -450,6 +460,16 @@ function numberEnv(name: string) {
   if (!value) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function codegenHarnessFromEnv(value: string | undefined): CodegenHarness {
+  if (!value || value === "codex") return "codex";
+  if (value === "opencode") return "opencode";
+  throw new Error(`Invalid CODEGEN_HARNESS "${value}". Expected "codex" or "opencode".`);
+}
+
+function codegenHarnessDisplayName(harness: CodegenHarness) {
+  return harness === "opencode" ? "OpenCode" : "Codex";
 }
 
 async function timedPhase<T>(
@@ -968,6 +988,59 @@ async function writeCodexConfig(codexHome: string, checkoutDir: string, env: San
   await fs.writeFile(path.join(codexHome, "config.toml"), codexConfigToml({ checkoutDir, model: env.openRouterCodegenModel }), "utf8");
 }
 
+async function runSelectedCodegenHarness(input: {
+  env: SandboxEnv;
+  timings: TaskTimings;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  workRoot: string;
+  codexHome: string;
+  opencodeHome: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+}) {
+  if (input.env.codegenHarness === "opencode") {
+    await timedPhase(
+      input.env,
+      input.timings,
+      "opencode",
+      "Running OpenCode to implement the requested change.",
+      async () => {
+        const summary = await runOpenCodeWithRecovery(input);
+        await recordAgentAttemptSummary(input.env, "OpenCode attempt summary", summary, "opencode-server");
+      },
+      { model: openCodeModelId(input.env.openRouterCodegenModel), harness: "opencode-server" }
+    );
+    return;
+  }
+
+  await timedPhase(
+    input.env,
+    input.timings,
+    "codex",
+    "Running Codex to implement the requested change.",
+    async () => {
+      const summary = await runCodexWithRecovery(input);
+      await recordAgentAttemptSummary(input.env, "Codex attempt summary", summary, "codex-app-server");
+    },
+    { model: input.env.openRouterCodegenModel, harness: "codex-app-server", fallbackHarness: "codex-exec-json" }
+  );
+}
+
+async function recordAgentAttemptSummary(env: SandboxEnv, name: string, summary: CodexRunSummary, harness: string) {
+  await recordArtifact(env, {
+    kind: "diagnostic",
+    name,
+    content: JSON.stringify(summary, null, 2),
+    contentType: "application/json",
+    metadata: {
+      harness,
+      attempts: summary.attempts.length,
+      producedDiff: summary.attempts.some((attempt) => attempt.producedDiff)
+    }
+  });
+}
+
 export function codexConfigToml(input: { checkoutDir: string; model: string }) {
   return [
     `model = ${JSON.stringify(input.model)}`,
@@ -995,6 +1068,334 @@ export function codexConfigToml(input: { checkoutDir: string; model: string }) {
     'trust_level = "trusted"',
     ""
   ].join("\n");
+}
+
+async function writeOpenCodeConfig(opencodeHome: string, env: Pick<SandboxEnv, "openRouterApiKey" | "openRouterCodegenModel">) {
+  const dataHome = path.join(opencodeHome, ".local", "share");
+  const authDir = path.join(dataHome, "opencode");
+  await fs.mkdir(authDir, { recursive: true });
+  await fs.writeFile(
+    path.join(authDir, "auth.json"),
+    JSON.stringify(
+      {
+        openrouter: {
+          type: "api",
+          key: env.openRouterApiKey
+        }
+      },
+      null,
+      2
+    ),
+    { encoding: "utf8", mode: 0o600 }
+  );
+  await fs.writeFile(path.join(opencodeHome, "opencode.json"), openCodeConfigJson({ model: env.openRouterCodegenModel }), {
+    encoding: "utf8",
+    mode: 0o600
+  });
+}
+
+export function openCodeConfigJson(input: { model: string }) {
+  return JSON.stringify(
+    {
+      $schema: "https://opencode.ai/config.json",
+      model: openCodeModelId(input.model)
+    },
+    null,
+    2
+  );
+}
+
+function openCodeEnv(env: SandboxEnv, baseEnv: NodeJS.ProcessEnv, opencodeHome: string, toolShimDir: string): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    HOME: opencodeHome,
+    XDG_CONFIG_HOME: path.join(opencodeHome, ".config"),
+    XDG_DATA_HOME: path.join(opencodeHome, ".local", "share"),
+    OPENCODE_CONFIG: path.join(opencodeHome, "opencode.json"),
+    OPENROUTER_API_KEY: env.openRouterApiKey,
+    PATH: `${toolShimDir}${path.delimiter}${baseEnv.PATH ?? process.env.PATH ?? ""}`,
+    AGENT_TOOL_SHIM_DIR: toolShimDir
+  };
+}
+
+export function openCodeModelId(model: string) {
+  return model.startsWith("openrouter/") ? model : `openrouter/${model}`;
+}
+
+export function openCodeServeArgs(port: number) {
+  return ["serve", "--hostname", "127.0.0.1", "--port", String(port)];
+}
+
+export function openCodeRunArgs(input: { serverUrl: string; checkoutDir: string; model: string; title: string; prompt: string }) {
+  return [
+    "run",
+    "--attach",
+    input.serverUrl,
+    "--dir",
+    input.checkoutDir,
+    "--model",
+    openCodeModelId(input.model),
+    "--format",
+    "json",
+    "--auto",
+    "--title",
+    input.title,
+    input.prompt
+  ];
+}
+
+async function runOpenCodeWithRecovery(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  opencodeHome: string;
+  toolShimDir: string;
+  contextPack: CodegenContextPack;
+}): Promise<CodexRunSummary> {
+  const attempts: CodexAttemptSummary[] = [];
+  const totalAttempts = 1;
+  const attempt = 1;
+  const prompt = codeUpdatePrompt(input.env, input.contextPack);
+  await recordArtifact(input.env, {
+    kind: "prompt",
+    name: "OpenCode prompt",
+    content: prompt,
+    contentType: "text/plain",
+    metadata: { model: openCodeModelId(input.env.openRouterCodegenModel), attempt, command: "opencode-run", harness: "opencode-server" }
+  });
+  await progress(input.env, "opencode_attempt_1", "Starting OpenCode server attempt 1/1.", {
+    attempt,
+    totalAttempts,
+    command: "opencode-run",
+    model: openCodeModelId(input.env.openRouterCodegenModel),
+    harness: "opencode-server"
+  });
+  const firstDiffDeadlineMs = codegenFirstDiffDeadlineMs(input.contextPack, attempt);
+  await progress(input.env, "opencode_first_diff_deadline", `Waiting up to ${formatDuration(firstDiffDeadlineMs)} for the first code diff.`, {
+    attempt,
+    totalAttempts,
+    command: "opencode-run",
+    harness: "opencode-server",
+    deadlineMs: firstDiffDeadlineMs,
+    anchored: Boolean(input.contextPack.anchorTargetFiles?.length)
+  });
+
+  const result = await runOpenCodeServerAttempt({ ...input, attempt, totalAttempts, prompt, firstDiffDeadlineMs });
+  const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
+  const producedDiff = Boolean(gitStatus.trim());
+  const summary: CodexAttemptSummary = {
+    attempt,
+    command: "opencode-run",
+    exitCode: result.exitCode,
+    durationMs: result.durationMs,
+    producedDiff,
+    watchdogReason: result.watchdog?.reason,
+    stdoutTail: tail(result.stdout, MAX_RECOVERY_TAIL),
+    stderrTail: tail(result.stderr, MAX_RECOVERY_TAIL)
+  };
+  attempts.push(summary);
+  await progress(
+    input.env,
+    producedDiff ? "opencode_attempt_1_diff" : "opencode_attempt_1_no_diff",
+    producedDiff ? "OpenCode attempt 1 produced a code diff." : "OpenCode attempt 1 finished without a code diff.",
+    {
+      attempt,
+      totalAttempts,
+      command: "opencode-run",
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      watchdogReason: result.watchdog?.reason,
+      gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+    }
+  );
+
+  if (producedDiff) return { attempts };
+  throw new CodegenNoDiffError(
+    [
+      "Agent task produced no diff after OpenCode attempt; no PR will be opened.",
+      ...attempts.map(
+        (attempt) =>
+          `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, watchdog=${attempt.watchdogReason ?? "none"}`
+      )
+    ].join("\n")
+  );
+}
+
+async function runOpenCodeServerAttempt(input: {
+  env: SandboxEnv;
+  checkoutDir: string;
+  gitEnv: NodeJS.ProcessEnv;
+  opencodeHome: string;
+  toolShimDir: string;
+  attempt: number;
+  totalAttempts: number;
+  prompt: string;
+  firstDiffDeadlineMs: number;
+}): Promise<CommandResult> {
+  const opencodeBinary = process.env.OPENCODE_BIN || "opencode";
+  const opencodeEnv = openCodeEnv(input.env, input.gitEnv, input.opencodeHome, input.toolShimDir);
+  const server = await startOpenCodeServer({ env: input.env, binary: opencodeBinary, cwd: input.checkoutDir, opencodeEnv });
+  try {
+    await progress(input.env, "opencode_server_ready", "OpenCode server is ready.", {
+      attempt: input.attempt,
+      serverUrl: server.serverUrl
+    });
+    return await runCommand(opencodeBinary, openCodeRunArgs({
+      serverUrl: server.serverUrl,
+      checkoutDir: input.checkoutDir,
+      model: input.env.openRouterCodegenModel,
+      title: input.env.taskTitle,
+      prompt: input.prompt
+    }), {
+      cwd: input.checkoutDir,
+      env: opencodeEnv,
+      allowFailure: true,
+      taskEnv: input.env,
+      step: `opencode_attempt_${input.attempt}`,
+      displayCommand: `${opencodeBinary} run --attach ${server.serverUrl} --dir ${input.checkoutDir} --model ${openCodeModelId(input.env.openRouterCodegenModel)} --format json --auto --title ${JSON.stringify(input.env.taskTitle)} [prompt]`,
+      codexWatchdog: {
+        checkoutDir: input.checkoutDir,
+        attempt: input.attempt,
+        totalAttempts: input.totalAttempts,
+        firstDiffDeadlineMs: input.firstDiffDeadlineMs,
+        firstDiffStep: "opencode_first_diff",
+        firstDiffMessage: "OpenCode produced its first visible code diff.",
+        watchdogStepPrefix: "opencode_watchdog",
+        idleWithoutDiffMs: CODEX_IDLE_WITHOUT_DIFF_MS,
+        reconnectStallMs: CODEX_RECONNECT_STALL_MS,
+        maxRuntimeMs: CODEX_MAX_RUNTIME_MS,
+        pollMs: CODEX_WATCHDOG_POLL_MS
+      }
+    });
+  } finally {
+    await stopOpenCodeServer(input.env, server).catch((error) => {
+      console.error("Failed to stop OpenCode server cleanly", error);
+    });
+  }
+}
+
+async function startOpenCodeServer(input: {
+  env: SandboxEnv;
+  binary: string;
+  cwd: string;
+  opencodeEnv: NodeJS.ProcessEnv;
+}): Promise<OpenCodeServerState> {
+  const port = await reserveLocalPort();
+  const args = openCodeServeArgs(port);
+  const serverUrl = `http://127.0.0.1:${port}`;
+  const commandLine = `${input.binary} ${args.join(" ")}`;
+  const startedAt = Date.now();
+  const child = spawn(input.binary, args, {
+    cwd: input.cwd,
+    env: input.opencodeEnv,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const state: OpenCodeServerState = {
+    child,
+    serverUrl,
+    commandLine,
+    startedAt,
+    stdout: "",
+    stderr: "",
+    exitCode: null,
+    signal: null
+  };
+  child.stdout?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf8");
+    state.stdout += text;
+    process.stdout.write(text);
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf8");
+    state.stderr += text;
+    process.stderr.write(text);
+  });
+  child.once("error", (error) => {
+    state.error = conciseError(error);
+  });
+  child.once("exit", (code, signal) => {
+    state.exitCode = code;
+    state.signal = signal;
+  });
+
+  await progress(input.env, "opencode_server_start", "Starting OpenCode server.", {
+    command: commandLine,
+    serverUrl
+  });
+  try {
+    await waitForOpenCodeServer(state);
+    return state;
+  } catch (error) {
+    state.error = conciseError(error);
+    await stopOpenCodeServer(input.env, state).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function waitForOpenCodeServer(state: OpenCodeServerState, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    if (state.error) throw new Error(`OpenCode server failed to start: ${state.error}`);
+    if (state.exitCode != null || state.signal != null) {
+      throw new Error(`OpenCode server exited before it was ready: code=${state.exitCode ?? "null"} signal=${state.signal ?? "null"}`);
+    }
+    try {
+      const response = await fetch(`${state.serverUrl}/global/health`);
+      if (response.ok) return;
+      lastError = `${response.status}: ${await response.text()}`;
+    } catch (error) {
+      lastError = conciseError(error);
+    }
+    await sleep(250);
+  }
+  throw new Error(`OpenCode server did not become healthy within ${formatDuration(timeoutMs)}${lastError ? `: ${lastError}` : ""}`);
+}
+
+async function stopOpenCodeServer(env: SandboxEnv, state: OpenCodeServerState) {
+  if (state.exitCode == null && state.signal == null) {
+    state.child.kill("SIGTERM");
+    await waitForChildExit(state.child, 5_000).catch(() => {
+      if (state.exitCode == null && state.signal == null) state.child.kill("SIGKILL");
+    });
+  }
+  const durationMs = Date.now() - state.startedAt;
+  const exitCode = state.error ? 1 : 0;
+  await recordCommand(env, {
+    step: "opencode_server",
+    command: state.commandLine,
+    exitCode,
+    outputTail: tail(state.stdout, MAX_CAPTURED_COMMAND_OUTPUT),
+    errorTail: tail([state.error, state.stderr].filter(Boolean).join("\n"), MAX_CAPTURED_COMMAND_OUTPUT),
+    durationMs,
+    metadata: {
+      harness: "opencode-server",
+      serverUrl: state.serverUrl,
+      processExitCode: state.exitCode,
+      signal: state.signal
+    }
+  });
+  await recordArtifact(env, {
+    kind: "command_log",
+    name: "OpenCode server log",
+    content: [
+      `$ ${state.commandLine}`,
+      state.stdout.trimEnd(),
+      state.stderr.trimEnd(),
+      state.error ? `error:\n${state.error}` : "",
+      `[stopped after ${formatDuration(durationMs)}]`
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    contentType: "text/plain",
+    metadata: {
+      step: "opencode_server",
+      harness: "opencode-server",
+      serverUrl: state.serverUrl,
+      processExitCode: state.exitCode,
+      signal: state.signal
+    }
+  });
 }
 
 async function runCodexWithRecovery(input: {
@@ -2129,7 +2530,7 @@ export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWat
     return {
       action: "fail",
       reason: "no_first_diff",
-      message: `Codex produced no code diff after ${formatDuration(input.elapsedMs)}; stopping early so this can be retried with a narrower implementation pass.`
+      message: `Coding harness produced no code diff after ${formatDuration(input.elapsedMs)}; stopping early so this can be retried with a narrower implementation pass.`
     };
   }
 
@@ -2138,8 +2539,8 @@ export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWat
       action: input.hasDiff ? "continue" : "fail",
       reason: "reconnect_stall",
       message: input.hasDiff
-        ? "Codex stalled after a reconnect but already produced a code diff; stopping Codex and continuing to verification."
-        : "Codex stalled after a reconnect before producing a code diff; stopping early so this can be retried."
+        ? "Coding harness stalled after a reconnect but already produced a code diff; stopping it and continuing to verification."
+        : "Coding harness stalled after a reconnect before producing a code diff; stopping early so this can be retried."
     };
   }
 
@@ -2148,8 +2549,8 @@ export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWat
       action: input.hasDiff ? "continue" : "fail",
       reason: input.hasDiff ? "idle_after_diff" : "idle_before_diff",
       message: input.hasDiff
-        ? "Codex stopped producing output after creating a code diff; stopping Codex and continuing to verification."
-        : "Codex stopped producing output before creating a code diff; stopping early so this can be retried."
+        ? "Coding harness stopped producing output after creating a code diff; stopping it and continuing to verification."
+        : "Coding harness stopped producing output before creating a code diff; stopping early so this can be retried."
     };
   }
 
@@ -2158,8 +2559,8 @@ export function evaluateCodegenWatchdog(input: CodegenWatchdogInput): CodegenWat
       action: input.hasDiff ? "continue" : "fail",
       reason: "max_runtime",
       message: input.hasDiff
-        ? `Codex reached ${formatDuration(input.elapsedMs)} with a code diff; stopping Codex and continuing to verification.`
-        : `Codex reached ${formatDuration(input.elapsedMs)} without a code diff; stopping before the Kubernetes deadline.`
+        ? `Coding harness reached ${formatDuration(input.elapsedMs)} with a code diff; stopping it and continuing to verification.`
+        : `Coding harness reached ${formatDuration(input.elapsedMs)} without a code diff; stopping before the Kubernetes deadline.`
     };
   }
 
@@ -2210,13 +2611,14 @@ async function runCommand(
     cwd: string;
     env?: NodeJS.ProcessEnv;
     input?: string;
+    displayCommand?: string;
     allowFailure?: boolean;
     taskEnv?: SandboxEnv;
     step?: string;
     codexWatchdog?: CodexWatchdogOptions;
   }
 ): Promise<CommandResult> {
-  console.log(JSON.stringify({ event: "sandbox.command.start", command, args: redactedArgs(command, args), cwd: options.cwd }));
+  console.log(JSON.stringify({ event: "sandbox.command.start", command: options.displayCommand ?? command, args: options.displayCommand ? ["[displayed command redacted]"] : redactedArgs(command, args), cwd: options.cwd }));
   const startedAt = Date.now();
   const step = options.step ?? command;
   let lastOutputAt = startedAt;
@@ -2228,7 +2630,7 @@ async function runCommand(
 
   let stdout = "";
   let stderr = "";
-  const commandLine = `${command} ${redactedArgs(command, args).join(" ")}`.trim();
+  const commandLine = options.displayCommand ?? `${command} ${redactedArgs(command, args).join(" ")}`.trim();
   const activityTimer =
     options.taskEnv && shouldEmitCommandActivity(step)
       ? setInterval(() => {
@@ -2360,7 +2762,7 @@ function startCodexWatchdog(input: {
     result.reason = reason;
     result.durationMs = Date.now() - input.startedAt;
     result.lastOutputAtMs = Math.max(0, input.outputState().lastOutputAt - input.startedAt);
-    await progress(input.env!, `codex_watchdog_${reason}`, message, {
+    await progress(input.env!, `${input.options.watchdogStepPrefix ?? "codex_watchdog"}_${reason}`, message, {
       ...metadata,
       attempt: input.options.attempt,
       totalAttempts: input.options.totalAttempts,
@@ -2396,7 +2798,7 @@ function startCodexWatchdog(input: {
         const producedDiff = Boolean(status.trim());
         if (producedDiff && result.firstDiffSeenAtMs == null) {
           result.firstDiffSeenAtMs = durationMs;
-          await progress(env, "codex_first_diff", "Codex produced its first visible code diff.", {
+          await progress(env, input.options.firstDiffStep ?? "codex_first_diff", input.options.firstDiffMessage ?? "Codex produced its first visible code diff.", {
             attempt: input.options.attempt,
             durationMs,
             gitStatus: tail(status, MAX_ACTIVITY_COMMAND_OUTPUT)
@@ -2665,7 +3067,8 @@ function formatTimingLines(timings: TaskTimings) {
     ["dependency prep", timings.dependencies],
     ["tool shim setup", timings.toolShims],
     ["Codex execution", timings.codex],
-    ["post-Codex dependency prep", timings.dependenciesPostCodex],
+    ["OpenCode execution", timings.opencode],
+    ["post-harness dependency prep", timings.dependenciesPostCodex],
     ["verification", timings.verify],
     ["scan", timings.scan],
     ["git push", timings.push],
@@ -2683,10 +3086,10 @@ function formatCacheSummaryLines(cache: CacheSummary) {
     `- dependencies: ${cache.dependencies ?? "unknown"}${cache.dependencyCacheKey ? ` (${cache.dependencyCacheKey})` : ""}`
   ];
   if (cache.dependencyFilesChanged?.length) {
-    lines.push(`- dependency files changed after Codex: ${cache.dependencyFilesChanged.join(", ")}`);
+    lines.push(`- dependency files changed after codegen harness: ${cache.dependencyFilesChanged.join(", ")}`);
   }
   if (cache.dependencyRefreshAfterCodex) {
-    lines.push("- dependencies refreshed after Codex before verification");
+    lines.push("- dependencies refreshed after codegen harness before verification");
   }
   if (cache.toolShims?.length) {
     lines.push(`- sandbox helper tools: ${cache.toolShims.join(", ")}`);
@@ -2698,8 +3101,60 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+function reserveLocalPort() {
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!address || typeof address === "string") {
+          reject(new Error("Unable to reserve a local port."));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+  });
+}
+
+function waitForChildExit(child: ReturnType<typeof spawn>, timeoutMs: number) {
+  return new Promise<void>((resolve, reject) => {
+    if (child.exitCode != null || child.signalCode != null) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Process did not exit within ${formatDuration(timeoutMs)}.`));
+    }, timeoutMs);
+    timeout.unref?.();
+    const onExit = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.off("exit", onExit);
+    };
+    child.once("exit", onExit);
+  });
+}
+
 function shouldEmitCommandActivity(step: string) {
-  return step === "codex" || step === "verify" || step === "scan" || step === "dependencies";
+  return (
+    step === "codex" ||
+    step.startsWith("codex_attempt_") ||
+    step === "opencode" ||
+    step.startsWith("opencode_attempt_") ||
+    step === "verify" ||
+    step === "scan" ||
+    step === "dependencies"
+  );
 }
 
 function redactedArgs(command: string, args: string[]) {

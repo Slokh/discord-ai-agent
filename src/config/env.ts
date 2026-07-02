@@ -14,6 +14,7 @@ const booleanFromEnv = z
 
 type ProcessRole = "all" | "api" | "bot" | "worker";
 type CodegenExecutionBackend = "kubernetes-job" | "local-process";
+type CodegenHarness = "codex" | "opencode";
 
 function defaultProcessRole(argv = process.argv): ProcessRole {
   const role = argv.find((arg): arg is ProcessRole => arg === "all" || arg === "api" || arg === "bot" || arg === "worker");
@@ -59,6 +60,7 @@ const defaults = {
   controlUiPublicUrl: "",
   controlPlaneInternalUrl: "http://discord-ai-agent-api:8080",
   taskSigningSecret: "",
+  codegenHarness: "codex" as CodegenHarness,
   codegenExecutionBackend: "kubernetes-job" as CodegenExecutionBackend,
   kubernetesNamespace: process.env.POD_NAMESPACE || "discord-ai-agent",
   sandboxImage: "discord-ai-agent-sandbox:latest",
@@ -125,6 +127,7 @@ const envSchema = z.object({
   CONTROL_UI_PUBLIC_URL: z.string().default(defaults.controlUiPublicUrl),
   CONTROL_PLANE_INTERNAL_URL: z.string().url().default(defaults.controlPlaneInternalUrl),
   TASK_SIGNING_SECRET: z.string().default(defaults.taskSigningSecret),
+  CODEGEN_HARNESS: z.enum(["codex", "opencode"]).default(defaults.codegenHarness),
   CODEGEN_EXECUTION_BACKEND: z.enum(["kubernetes-job", "local-process"]).default(defaults.codegenExecutionBackend),
 
   KUBERNETES_NAMESPACE: z.string().default(defaults.kubernetesNamespace),
@@ -217,6 +220,7 @@ export function loadConfig() {
     execution: {
       controlPlaneInternalUrl: parsed.data.CONTROL_PLANE_INTERNAL_URL.replace(/\/$/, ""),
       taskSigningSecret: parsed.data.TASK_SIGNING_SECRET,
+      codegenHarness: parsed.data.CODEGEN_HARNESS,
       codegenBackend: parsed.data.CODEGEN_EXECUTION_BACKEND,
       kubernetes: {
         namespace: parsed.data.KUBERNETES_NAMESPACE,

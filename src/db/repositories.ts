@@ -2821,6 +2821,27 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToAgentTask);
   }
 
+  async listAgentTasksForTrace(input: { traceId: string; limit?: number }): Promise<AgentTaskRecord[]> {
+    const limit = Math.max(1, Math.min(50, Math.trunc(input.limit ?? 20)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          task_id, pgboss_job_id, trace_id, guild_id, channel_id, user_id,
+          thread_key, discord_response_channel_id, discord_response_message_id, retried_from_task_id,
+          task_type, title, request, requested_by, status, backend, current_step,
+          status_message, branch_name, pr_url, draft, verify_passed, error,
+          created_at, started_at, cancelled_at, completed_at, notified_at, notification_error,
+          progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
+        FROM agent_tasks
+        WHERE trace_id = $1
+        ORDER BY coalesce(started_at, created_at) ASC, created_at ASC
+        LIMIT $2
+      `,
+      [input.traceId, limit]
+    );
+    return result.rows.map(rowToAgentTask);
+  }
+
   async listAgentTasks(input: {
     guildId: string;
     visibleChannelIds?: string[];
@@ -3758,6 +3779,24 @@ export class DiscordAiAgentRepository {
         LIMIT $1
       `,
       [limit, input.kind ?? null, input.status ?? null, input.includeEmbeddings ?? true]
+    );
+    return result.rows.map(rowToProcessRun);
+  }
+
+  async listProcessRunsForTrace(input: { traceId: string; limit?: number }): Promise<ProcessRunRecord[]> {
+    const limit = Math.max(1, Math.min(50, Math.trunc(input.limit ?? 20)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+        FROM process_runs
+        WHERE trace_id = $1
+        ORDER BY started_at ASC, updated_at ASC
+        LIMIT $2
+      `,
+      [input.traceId, limit]
     );
     return result.rows.map(rowToProcessRun);
   }

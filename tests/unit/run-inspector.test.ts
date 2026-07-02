@@ -150,6 +150,7 @@ function snapshotFixture(): RunSnapshot {
     },
     diagnostics: ["codex was the bottleneck"],
     raw: { sandboxRuns: [] },
+    relatedRuns: [],
     generatedAt: new Date("2026-07-01T17:57:29.000Z")
   };
 }

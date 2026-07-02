@@ -231,6 +231,8 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     findProcessRunByDiscordMessageId: async (messageId: string) => (messageId === "1521541635580756031" ? run : undefined),
     findAgentTaskByDiscordMessageId: async () => undefined,
     listRecentAgentTasks: async () => [],
+    listProcessRunsForTrace: async () => [run],
+    listAgentTasksForTrace: async () => [],
     getProcessRun: async (runId: string) => (runId === "run-1" ? run : undefined),
     getAgentTask: async () => undefined,
     getProcessRunSpans: async () => [],

@@ -587,6 +587,52 @@ kbd {
   padding: 10px;
 }
 
+.related-run-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.related-run-card {
+  background: var(--pane-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  text-decoration: none;
+}
+
+.related-run-card:hover {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+}
+
+.related-run-card-top {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.related-run-card-top > span:last-child {
+  color: var(--faint);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.related-run-card strong,
+.related-run-card p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.related-run-card p {
+  color: var(--muted);
+  margin: 0;
+}
+
 .notice.bad {
   background:
     linear-gradient(180deg, rgb(255 140 152 / 0.11), transparent 100%),
@@ -929,7 +975,8 @@ kbd {
 }
 
 .timeline-icon.model,
-.timeline-icon.tool {
+.timeline-icon.tool,
+.timeline-icon.run {
   color: var(--muted);
 }
 
@@ -971,6 +1018,29 @@ kbd {
 .timeline-card p {
   color: var(--text);
   overflow-wrap: anywhere;
+}
+
+.related-run-inline {
+  display: grid;
+  gap: 8px;
+}
+
+.related-run-inline p {
+  margin: 0;
+}
+
+.related-run-inline a {
+  align-items: center;
+  color: var(--accent);
+  display: inline-flex;
+  font-weight: 700;
+  gap: 6px;
+  text-decoration: none;
+  width: fit-content;
+}
+
+.related-run-inline a:hover {
+  text-decoration: underline;
 }
 
 .requested-tools {

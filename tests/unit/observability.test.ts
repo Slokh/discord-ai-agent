@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../../src/observability/redaction.js";
-import { diagnosticsForRun, extractDiscordMessageId, summaryFromTask } from "../../src/observability/runs.js";
+import { diagnosticsForRun, extractDiscordMessageId, relatedRunSummaries, summaryFromTask } from "../../src/observability/runs.js";
 import type { AgentTaskRecord } from "../../src/db/repositories.js";
 import type { RunEvent, RunSummary } from "../../src/observability/runs.js";
 
@@ -29,42 +29,7 @@ describe("run summaries", () => {
   it("derives codegen run summaries from legacy task rows", () => {
     const createdAt = new Date("2026-06-30T12:00:00Z");
     const completedAt = new Date("2026-06-30T12:02:00Z");
-    const task: AgentTaskRecord = {
-      taskId: "task-1",
-      pgBossJobId: "job-1",
-      traceId: "trace-1",
-      guildId: "guild-1",
-      channelId: "channel-1",
-      userId: "user-1",
-      threadKey: null,
-      discordResponseChannelId: null,
-      discordResponseMessageId: null,
-      retriedFromTaskId: null,
-      taskType: "code_update",
-      title: "Fix title",
-      request: "please fix title",
-      requestedBy: "kartik",
-      status: "succeeded",
-      backend: "kubernetes-sandbox",
-      currentStep: "done",
-      statusMessage: "Opened pull request.",
-      branchName: "branch",
-      prUrl: "https://github.com/example/repo/pull/1",
-      draft: false,
-      verifyPassed: true,
-      error: null,
-      createdAt,
-      startedAt: createdAt,
-      cancelledAt: null,
-      completedAt,
-      notifiedAt: null,
-      notificationError: null,
-      progressUpdatedAt: completedAt,
-      lastRenderedSignature: null,
-      lastRenderedAt: null,
-      terminalRenderedAt: null,
-      updatedAt: completedAt
-    };
+    const task = agentTaskRecord({ createdAt, startedAt: createdAt, completedAt, updatedAt: completedAt });
 
     expect(summaryFromTask(task)).toEqual(
       expect.objectContaining({
@@ -75,6 +40,20 @@ describe("run summaries", () => {
         links: expect.objectContaining({ pullRequest: "https://github.com/example/repo/pull/1" })
       })
     );
+  });
+
+  it("derives related child runs from the shared trace while excluding the selected task", () => {
+    const selected = agentTaskRecord({ taskId: "task-selected", traceId: "trace-1" });
+    const child = agentTaskRecord({ taskId: "task-child", traceId: "trace-1", title: "Child task", status: "running" });
+
+    expect(relatedRunSummaries({ task: selected, relatedProcessRuns: [], relatedTasks: [selected, child] })).toEqual([
+      expect.objectContaining({
+        runId: "task-child",
+        kind: "codegen",
+        status: "running",
+        title: "Child task"
+      })
+    ]);
   });
 
   it("diagnoses codegen runs waiting for the first code diff", () => {
@@ -141,6 +120,48 @@ function runEvent(overrides: Partial<RunEvent> = {}): RunEvent {
     createdAt: new Date("2026-06-30T12:00:30Z"),
     durationMs: null,
     metadata: {},
+    ...overrides
+  };
+}
+
+function agentTaskRecord(overrides: Partial<AgentTaskRecord> = {}): AgentTaskRecord {
+  const createdAt = new Date("2026-06-30T12:00:00Z");
+  const completedAt = new Date("2026-06-30T12:02:00Z");
+  return {
+    taskId: "task-1",
+    pgBossJobId: "job-1",
+    traceId: "trace-1",
+    guildId: "guild-1",
+    channelId: "channel-1",
+    userId: "user-1",
+    threadKey: null,
+    discordResponseChannelId: null,
+    discordResponseMessageId: null,
+    retriedFromTaskId: null,
+    taskType: "code_update",
+    title: "Fix title",
+    request: "please fix title",
+    requestedBy: "kartik",
+    status: "succeeded",
+    backend: "kubernetes-sandbox",
+    currentStep: "done",
+    statusMessage: "Opened pull request.",
+    branchName: "branch",
+    prUrl: "https://github.com/example/repo/pull/1",
+    draft: false,
+    verifyPassed: true,
+    error: null,
+    createdAt,
+    startedAt: createdAt,
+    cancelledAt: null,
+    completedAt,
+    notifiedAt: null,
+    notificationError: null,
+    progressUpdatedAt: completedAt,
+    lastRenderedSignature: null,
+    lastRenderedAt: null,
+    terminalRenderedAt: null,
+    updatedAt: completedAt,
     ...overrides
   };
 }

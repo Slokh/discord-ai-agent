@@ -79,5 +79,6 @@ export type RunSnapshot = {
   terminal: { lineCount: number; content: string; entries: TerminalEntry[] };
   diagnostics: string[];
   raw: Record<string, unknown>;
+  relatedRuns: RunSummary[];
   generatedAt: string;
 };

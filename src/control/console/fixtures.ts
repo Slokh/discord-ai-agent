@@ -54,6 +54,7 @@ export const fixtureSnapshots: RunSnapshot[] = [
     ]),
     diagnostics: ["Most time was spent in codex: 14m 0s.", "All checks passed before the PR opened."],
     raw: {},
+    relatedRuns: [],
     generatedAt: now.toISOString()
   },
   {
@@ -93,6 +94,30 @@ export const fixtureSnapshots: RunSnapshot[] = [
     terminal: terminal([]),
     diagnostics: ["Most time was spent in Run model-led agent: 15m 0s.", "Latest failure signal: Discord AI Agent agent request timed out."],
     raw: {},
+    relatedRuns: [
+      {
+        runId: "task-fixture-child-running",
+        traceId: "1521541635580756031",
+        kind: "codegen",
+        status: "running",
+        title: "Investigate Discord timeout",
+        summary: "Waiting for the first code diff.",
+        requester: "Luke",
+        guildId: "guild",
+        channelId: "general",
+        userId: "luke",
+        messageId: null,
+        source: "agent_task",
+        startedAt: minutesAgo(15),
+        completedAt: null,
+        updatedAt: minutesAgo(1),
+        durationMs: null,
+        currentStep: "codex_app_server_attempt_1",
+        bottleneck: null,
+        links: {},
+        metadata: {}
+      }
+    ],
     generatedAt: now.toISOString()
   },
   {
@@ -128,6 +153,7 @@ export const fixtureSnapshots: RunSnapshot[] = [
     terminal: terminal([]),
     diagnostics: ["Most time was spent in OpenRouter embed batch 2: 8.900s.", "Currently active at openrouter.embed.", "Embedding backlog at run time: 18200."],
     raw: {},
+    relatedRuns: [],
     generatedAt: now.toISOString()
   }
 ];

@@ -99,3 +99,17 @@ Then visit `http://localhost:8080/runs`.
 If you expose the API service on a public hostname, set `CONTROL_UI_AUTH_PASSWORD` in the runtime Secret first. Browser access uses Basic auth with username `admin`; scripts may also use `Authorization: Bearer $CONTROL_UI_AUTH_PASSWORD`. Set `CONTROL_UI_PUBLIC_URL` to the externally reachable console origin, such as `https://tasks.example.com`, so Discord code-update progress messages include a direct `/runs/<taskId>` console link. Do not include `/runs` in the value; the bot appends the run path itself.
 
 To share a pre-authenticated link, append `?auth=$CONTROL_UI_AUTH_PASSWORD` to any run-console URL. The server validates the token, stores an HttpOnly cookie for 30 days, then redirects to the same URL without the auth query parameter.
+
+For a terminal-first health check, run:
+
+```sh
+npm run codegen:status
+```
+
+The status command summarizes active code-update tasks, pg-boss `agent.task` state counts, sandbox run cleanup backlog, warm-worker lease heartbeats, recent terminal failures, and stale-work diagnostics. Use `--stale-minutes` to tune the threshold while debugging a suspected hang, and `--json` when another tool needs the raw snapshot.
+
+When you do not have direct database access, point the same command at the authenticated control API:
+
+```sh
+npm run codegen:status -- --source api --api-url https://tasks.example.com
+```

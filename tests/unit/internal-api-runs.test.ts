@@ -79,6 +79,25 @@ describe("internal API run endpoints", () => {
     expect(listInputs.at(-1)).toEqual({ includeEmbeddings: true });
   });
 
+  it("serves codegen status snapshots for operator tooling", async () => {
+    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), db: fakeCodegenStatusPool() as never });
+    const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
+
+    const status = await fetch(`${runtime.url}/api/codegen/status?limit=2&staleMinutes=5`, { headers: auth });
+
+    expect(status.status).toBe(200);
+    await expect(status.json()).resolves.toEqual(
+      expect.objectContaining({
+        staleAfterMs: 300_000,
+        taskCounts: [{ name: "running", count: 1 }],
+        queueCounts: [{ name: "active", count: 1 }],
+        activeTasks: [expect.objectContaining({ taskId: "task-active", status: "running" })],
+        activeSandboxRuns: [expect.objectContaining({ sandboxRunId: "run-active", taskId: "task-active" })],
+        leases: [expect.objectContaining({ sandboxId: "sandbox-1", status: "leased" })]
+      })
+    );
+  });
+
   it("serves a Centaur-style codegen session control-plane API", async () => {
     const codegenRepo = fakeCodegenRepo();
     runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), codegenRepo: codegenRepo as never });
@@ -221,6 +240,86 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     getTraceEventsForTrace: async () => [],
     getToolAuditLogsForTrace: async () => []
   } as unknown as DiscordAiAgentRepository;
+}
+
+function fakeCodegenStatusPool() {
+  return {
+    query: async (sql: string) => {
+      if (/SELECT status AS name, count\(\*\)::int AS count FROM agent_tasks/.test(sql)) {
+        return { rows: [{ name: "running", count: 1 }] };
+      }
+      if (/FROM pgboss\.job/.test(sql)) {
+        return { rows: [{ name: "active", count: 1 }] };
+      }
+      if (/FROM agent_tasks\s+WHERE status IN \('queued', 'running'\)/.test(sql)) {
+        return {
+          rows: [
+            {
+              task_id: "task-active",
+              trace_id: "trace-active",
+              title: "Active task",
+              requested_by: "kartik",
+              status: "running",
+              backend: "local-process-sandbox",
+              current_step: "codex",
+              status_message: "Running codegen.",
+              branch_name: null,
+              pr_url: null,
+              error: null,
+              created_at: new Date("2026-07-01T12:00:00Z"),
+              started_at: new Date("2026-07-01T12:00:01Z"),
+              completed_at: null,
+              progress_updated_at: new Date("2026-07-01T12:00:02Z"),
+              updated_at: new Date("2026-07-01T12:00:02Z")
+            }
+          ]
+        };
+      }
+      if (/FROM agent_tasks\s+WHERE status IN \('succeeded', 'failed', 'no_changes', 'cancelled'\)/.test(sql)) {
+        return { rows: [] };
+      }
+      if (/FROM sandbox_runs sr\s+JOIN agent_tasks at ON at\.task_id = sr\.task_id\s+WHERE at\.status IN \('queued', 'running'\)/.test(sql)) {
+        return {
+          rows: [
+            {
+              sandbox_run_id: "run-active",
+              task_id: "task-active",
+              task_status: "running",
+              backend: "local-process-sandbox",
+              namespace: null,
+              backend_job_name: "local-agent-task",
+              status: "running",
+              started_at: new Date("2026-07-01T12:00:01Z"),
+              completed_at: null,
+              cleaned_up_at: null,
+              updated_at: new Date("2026-07-01T12:00:02Z")
+            }
+          ]
+        };
+      }
+      if (/FROM sandbox_runs sr\s+JOIN agent_tasks at ON at\.task_id = sr\.task_id\s+WHERE at\.status IN \('succeeded', 'failed', 'no_changes', 'cancelled'\)/.test(sql)) {
+        return { rows: [] };
+      }
+      if (/FROM codegen_sandbox_leases/.test(sql)) {
+        return {
+          rows: [
+            {
+              sandbox_id: "sandbox-1",
+              repo: "Slokh/discord-ai-agent",
+              status: "leased",
+              lease_owner: "worker-1",
+              execution_id: "execution-1",
+              heartbeat_at: new Date("2026-07-01T12:00:03Z"),
+              last_used_at: new Date("2026-07-01T12:00:03Z"),
+              metadata: { backend: "local-process-sandbox" },
+              updated_at: new Date("2026-07-01T12:00:03Z")
+            }
+          ]
+        };
+      }
+      return { rows: [] };
+    }
+  };
 }
 
 function fakeCodegenRepo() {

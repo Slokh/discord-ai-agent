@@ -3,10 +3,12 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import { assertTaskCallbackConfig } from "../config/env.js";
 import type { CodegenMessageRole, CodegenRepository } from "../db/codegenRepository.js";
+import type { DbPool } from "../db/pool.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
 import { verifyTaskBearerToken } from "../execution/token.js";
 import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execution/types.js";
+import { collectCodegenStatusSnapshot } from "../observability/codegenStatus.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../observability/runs.js";
 import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
@@ -24,6 +26,7 @@ export async function startInternalApi(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   codegenRepo?: CodegenRepository;
+  db?: DbPool;
 }): Promise<InternalApiRuntime> {
   assertTaskCallbackConfig(input.config);
   const server = http.createServer(async (request, response) => {
@@ -55,6 +58,7 @@ async function handleRequest(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   codegenRepo?: CodegenRepository;
+  db?: DbPool;
   request: http.IncomingMessage;
   response: http.ServerResponse;
 }) {
@@ -123,6 +127,19 @@ async function handleRequest(input: {
       runs: await listRunSummaries(input.repo, { limit, includeEmbeddings }),
       generatedAt: new Date().toISOString()
     });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/codegen/status") {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!input.db) {
+      sendJson(input.response, 503, { error: "database_unavailable" });
+      return;
+    }
+    sendJson(input.response, 200, (await collectCodegenStatusSnapshot(input.db, {
+      limit: parseLimit(url.searchParams.get("limit"), 10, 100),
+      staleAfterMs: parseStaleAfterMs(url.searchParams.get("staleMinutes"))
+    })) as unknown as Record<string, unknown>);
     return;
   }
 
@@ -819,6 +836,13 @@ function parseLimit(value: string | null, fallback: number, max: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(max, Math.trunc(parsed)));
+}
+
+function parseStaleAfterMs(value: string | null) {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  return Math.max(0.1, Math.min(1440, parsed)) * 60 * 1000;
 }
 
 function deterministicCodegenId(prefix: string, key: string) {

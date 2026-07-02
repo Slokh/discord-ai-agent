@@ -37,6 +37,7 @@
     "doctor": "tsx scripts/doctor.ts",
     "prompt": "tsx scripts/prompt.ts",
     "runs:inspect": "tsx scripts/inspectRun.ts",
+    "codegen:status": "tsx scripts/codegenStatus.ts",
     "invite-url": "tsx scripts/discordInviteUrl.ts",
     "preflight": "tsx scripts/preflight.ts",
     "preflight:deploy": "tsx scripts/deployPreflight.ts",

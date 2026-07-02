@@ -7,7 +7,7 @@ import { runWithTrace } from "../util/trace.js";
 
 const DEFAULT_POLL_MS = 2_000;
 const RENDER_LIMIT = 20;
-const NONTERMINAL_RENDER_THROTTLE_MS = 5_000;
+const NONTERMINAL_RENDER_THROTTLE_MS = 2_000;
 
 export type AgentTaskNotifierRuntime = {
   stop: () => void;
@@ -166,13 +166,41 @@ function shouldRenderAgentTask(task: AgentTaskRecord, rendered: { signature: str
 
 function progressAgentTaskMessage(task: AgentTaskRecord) {
   const rawDetail = task.statusMessage?.trim();
-  const detail =
-    task.status === "queued" || !rawDetail
-      ? task.status === "running"
-        ? "Working on it..."
-        : "Working on it..."
-      : rawDetail;
-  return [detail, "", `Task: \`${task.title}\``, `Status: \`${task.status}\``, `Task ID: \`${task.taskId}\``].join("\n");
+  const title = task.title.trim() || "code update";
+  const heading = task.status === "queued" ? `Queued \`${title}\`.` : `Working on \`${title}\`.`;
+  const latest = rawDetail || (task.status === "queued" ? "Waiting for a sandbox to start." : "Starting the coding agent.");
+  const step = task.currentStep ? humanizeTaskStep(task.currentStep) : null;
+  return [heading, latest, step ? `Latest step: ${step}` : "", `Task ID: \`${task.taskId}\``].filter(Boolean).join("\n");
+}
+
+function humanizeTaskStep(step: string) {
+  const labels: Record<string, string> = {
+    sandbox_acquired: "sandbox started",
+    repo: "preparing repository",
+    repo_complete: "repository ready",
+    dependencies: "preparing dependencies",
+    dependencies_complete: "dependencies ready",
+    toolShims: "installing helper tools",
+    toolShims_complete: "helper tools ready",
+    context: "building code context",
+    context_complete: "code context ready",
+    opencode_server_start: "starting OpenCode",
+    opencode_server_ready: "OpenCode ready",
+    opencode_round_started: "model round started",
+    opencode_round_finished: "model round finished",
+    opencode_first_edit: "first edit made",
+    diff: "checking for code changes",
+    scan: "running release scan",
+    scan_complete: "release scan passed",
+    commit: "committing changes",
+    push: "pushing branch",
+    push_complete: "branch pushed",
+    pr: "opening pull request",
+    pr_complete: "pull request opened",
+    task_complete: "task complete",
+    cleanup: "cleaning up"
+  };
+  return labels[step] ?? step.replace(/_/g, " ");
 }
 
 export function agentTaskRunConsoleUrl(config: AppConfig, taskId: string) {

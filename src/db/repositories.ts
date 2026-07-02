@@ -2582,8 +2582,8 @@ export class DiscordAiAgentRepository {
     taskId: string;
     branchName: string;
     prUrl: string;
-    draft: boolean;
-    verifyPassed: boolean;
+    draft: boolean | null;
+    verifyPassed: boolean | null;
     metadata?: Record<string, unknown>;
   }) {
     await this.pool.query(

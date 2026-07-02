@@ -1057,7 +1057,7 @@ export function formatAgentTaskResult(input: {
   }
 
   if (job.status === "succeeded" && job.prUrl) {
-    const draftNote = job.draft ? " It opened as a draft because verification did not fully pass." : "";
+    const draftNote = job.draft ? " It opened as a draft." : "";
     return withRunConsole([`Done: ${job.prUrl}${draftNote}`, formatAgentTaskTimingSummary(input.taskEvents)].filter(Boolean).join("\n"));
   }
 
@@ -1160,7 +1160,6 @@ function formatCompactTimingLine(timings: Record<string, unknown> | undefined) {
     ["deps", timings.dependencies],
     ["deps2", timings.dependenciesPostCodex],
     ["codex", timings.codex],
-    ["verify", timings.verify],
     ["scan", timings.scan],
     ["push", timings.push],
     ["PR", timings.pr]

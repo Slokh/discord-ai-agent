@@ -367,17 +367,7 @@ describe("run console timeline", () => {
         createdAt: atMs(24_927)
       }),
       runEvent({ id: "sandbox", source: "task", name: "task.progress", summary: "Sandbox process started.", createdAt: atMs(28_460), durationMs: 1063, metadata: { step: "sandbox_acquired" } }),
-      runEvent({ id: "deadline-1", source: "task", name: "task.progress", summary: "Waiting up to 90s for the first code diff.", createdAt: atMs(62_000), metadata: { step: "codex_first_diff_deadline", attempt: 1 } }),
       runEvent({ id: "reasoning-1", source: "task", name: "task.progress", summary: "Codex started reasoning.", createdAt: atMs(72_000), metadata: { step: "codex_app_server_item_started", attempt: 1 } }),
-      runEvent({
-        id: "watchdog-1",
-        source: "task",
-        name: "task.progress",
-        summary: "Codex produced no code diff after 90s.",
-        createdAt: atMs(152_000),
-        durationMs: 90_000,
-        metadata: { step: "codex_app_server_watchdog_no_first_diff", attempt: 1 }
-      }),
       runEvent({
         id: "no-diff-1",
         source: "task",
@@ -385,9 +375,8 @@ describe("run console timeline", () => {
         summary: "Codex app-server attempt 1 finished without a code diff.",
         createdAt: atMs(152_101),
         durationMs: 90_101,
-        metadata: { step: "codex_app_server_attempt_1_no_diff", attempt: 1, exitCode: 143, watchdogReason: "no_first_diff", gitStatus: "", notificationCount: 135 }
+        metadata: { step: "codex_app_server_attempt_1_no_diff", attempt: 1, exitCode: 143, gitStatus: "", notificationCount: 135 }
       }),
-      runEvent({ id: "deadline-2", source: "task", name: "task.progress", summary: "Waiting up to 60s for the first code diff.", createdAt: atMs(152_200), metadata: { step: "codex_first_diff_deadline", attempt: 2 } }),
       runEvent({
         id: "no-diff-2",
         source: "task",
@@ -395,7 +384,7 @@ describe("run console timeline", () => {
         summary: "Codex app-server attempt 2 finished without a code diff.",
         createdAt: atMs(212_280),
         durationMs: 60_080,
-        metadata: { step: "codex_app_server_attempt_2_no_diff", attempt: 2, exitCode: 143, watchdogReason: "no_first_diff", gitStatus: "", notificationCount: 530 }
+        metadata: { step: "codex_app_server_attempt_2_no_diff", attempt: 2, exitCode: 143, gitStatus: "", notificationCount: 530 }
       }),
       runEvent({ id: "cleanup", source: "task", name: "task.progress", summary: "Cleaning up the ephemeral sandbox checkout.", createdAt: atMs(212_300), metadata: { step: "cleanup" } }),
       runEvent({
@@ -452,9 +441,7 @@ describe("run console timeline", () => {
     ]);
     expect(trace?.groups.find((group) => timelineTitleText(group.parent) === "Codex attempt 1")?.children.map((child) => timelineTitleText(child))).toEqual([
       "Codex app-server prompt",
-      "First-diff deadline set",
       "Model started reasoning",
-      "No-diff watchdog fired",
       "Attempt ended with no diff",
       "Codex app-server attempt 1 transcript"
     ]);
@@ -464,14 +451,16 @@ describe("run console timeline", () => {
 
   it("labels OpenCode attempt spans distinctly from Codex attempts", () => {
     const events: RunEvent[] = [
-      runEvent({ id: "deadline", source: "task", name: "task.progress", summary: "Waiting up to 10m for the first code diff.", createdAt: atMs(1_000), metadata: { step: "opencode_first_diff_deadline", attempt: 1 } }),
+      runEvent({ id: "round", source: "task", name: "task.progress", summary: "OpenCode started round 1.", createdAt: atMs(2_000), metadata: { step: "opencode_round_started", attempt: 1, round: 1 } }),
+      runEvent({ id: "tool", source: "task", name: "task.progress", summary: "OpenCode is reading src/discord/client.ts.", createdAt: atMs(3_000), metadata: { step: "opencode_tool_read", attempt: 1, tool: "read", title: "src/discord/client.ts" } }),
+      runEvent({ id: "round-finished", source: "task", name: "task.progress", summary: "OpenCode finished round 1 after read.", createdAt: atMs(5_000), metadata: { step: "opencode_round_finished", attempt: 1, round: 1, tools: ["read"] } }),
       runEvent({
         id: "no-diff",
         source: "task",
         name: "task.progress",
         summary: "OpenCode attempt 1 finished without a code diff.",
         createdAt: atMs(11_000),
-        metadata: { step: "opencode_attempt_1_no_diff", attempt: 1, exitCode: 0, watchdogReason: "no_first_diff", gitStatus: "" }
+        metadata: { step: "opencode_attempt_1_no_diff", attempt: 1, exitCode: 0, gitStatus: "" }
       })
     ];
     const spans: RunSpan[] = [
@@ -500,7 +489,13 @@ describe("run console timeline", () => {
     const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts }), { events, spans, startedAt: atMs(0) });
 
     expect(trace?.groups.map((group) => timelineTitleText(group.parent))).toEqual(["OpenCode attempt 1"]);
-    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["First-diff deadline set", "Attempt ended with no diff", "Command: opencode_attempt_1"]);
+    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual([
+      "OpenCode round 1",
+      "Tool: read",
+      "OpenCode round 1 finished",
+      "Attempt ended with no diff",
+      "Command: opencode_attempt_1"
+    ]);
     expect(trace?.slowest).toEqual({ name: "OpenCode attempt 1", durationMs: 10_000 });
   });
 

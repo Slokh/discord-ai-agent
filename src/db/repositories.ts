@@ -2012,6 +2012,52 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToDiscordAttachmentSearchResult);
   }
 
+  async messageAttachments(input: {
+    guildId: string;
+    visibleChannelIds: string[];
+    messageId: string;
+    contentType?: string;
+    limit: number;
+  }): Promise<DiscordAttachmentSearchResult[]> {
+    if (input.visibleChannelIds.length === 0 || !input.messageId.trim()) return [];
+    const contentType = input.contentType?.trim().toLowerCase() ?? "";
+    const result = await this.pool.query(
+      `
+        SELECT
+          a.id AS attachment_id,
+          a.message_id,
+          m.guild_id,
+          m.channel_id,
+          m.author_id,
+          u.username AS author_username,
+          m.normalized_content,
+          m.created_at,
+          a.url,
+          a.proxy_url,
+          a.filename,
+          a.content_type,
+          a.size_bytes
+        FROM attachments a
+        JOIN messages m ON m.id = a.message_id
+        JOIN discord_users u ON u.id = m.author_id
+        JOIN channels c ON c.id = m.channel_id
+        LEFT JOIN channels parent ON parent.id = c.parent_id
+        WHERE m.guild_id = $1
+          AND m.id = $2
+          AND m.channel_id = ANY($3::text[])
+          AND m.deleted_at IS NULL
+          AND c.is_excluded = false
+          AND coalesce(parent.is_excluded, false) = false
+          AND ($4 = '' OR lower(coalesce(a.content_type, '')) LIKE $4 || '%')
+          AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
+        ORDER BY a.id ASC
+        LIMIT $5
+      `,
+      [input.guildId, input.messageId.trim(), input.visibleChannelIds, contentType, input.limit]
+    );
+    return result.rows.map(rowToDiscordAttachmentSearchResult);
+  }
+
   async discordStats(input: {
     guildId: string;
     visibleChannelIds: string[];

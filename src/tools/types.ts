@@ -18,12 +18,25 @@ export type ToolContext = {
   threadKey?: string;
   sessionMessages?: ConversationMessage[];
   replyContext?: DiscordReplyContext;
+  requestAttachments?: DiscordAttachmentContext[];
   requestId?: string;
   statusChannelId?: string;
   statusMessageId?: string;
   visibleIndexedChannelIds?: string[];
   deleteDiscordMessageIds?: (messageIds: string[]) => Promise<number>;
   updateStatus?: (content: string) => Promise<void>;
+};
+
+export type DiscordAttachmentContext = {
+  id: string;
+  url: string;
+  proxyUrl?: string | null;
+  filename?: string | null;
+  contentType?: string | null;
+  sizeBytes?: number | null;
+  width?: number | null;
+  height?: number | null;
+  description?: string | null;
 };
 
 export type DiscordReplyContextMessage = {
@@ -35,6 +48,7 @@ export type DiscordReplyContextMessage = {
   authorIsBot: boolean;
   content: string;
   attachmentSummaries: string[];
+  attachments: DiscordAttachmentContext[];
   createdAt: string | null;
   url: string | null;
 };

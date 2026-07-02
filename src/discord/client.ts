@@ -20,7 +20,7 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { handleAgentRequest } from "../agent/router.js";
 import { cleanResponse } from "../tools/coreTools.js";
-import type { DiscordReplyContext, DiscordReplyContextMessage } from "../tools/types.js";
+import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
@@ -265,6 +265,7 @@ async function handleMessageCreate(
 
   const requestId = message.id;
   const text = stripBotAddress(message.content, client.user.id, mentionContext.botRoleIds).trim();
+  const requestAttachments = discordAttachmentContextsFromMessage(message);
   const requestLogger = logger.child({
     traceId: message.id,
     requestId,
@@ -278,7 +279,9 @@ async function handleMessageCreate(
       contentPreview: previewText(text),
       rawContentPreview: previewText(message.content),
       mentionKind: mentionContext.kind,
-      botRoleIds: mentionContext.botRoleIds
+      botRoleIds: mentionContext.botRoleIds,
+      attachmentCount: requestAttachments.length,
+      imageAttachmentCount: requestAttachments.filter(isDiscordImageAttachment).length
     },
     "Discord AI Agent mention received"
   );
@@ -287,7 +290,9 @@ async function handleMessageCreate(
     summary: previewText(text),
     metadata: {
       rawContentPreview: previewText(message.content),
-      mentionKind: mentionContext.kind
+      mentionKind: mentionContext.kind,
+      attachmentCount: requestAttachments.length,
+      imageAttachmentCount: requestAttachments.filter(isDiscordImageAttachment).length
     }
   });
   await input.repo
@@ -308,6 +313,8 @@ async function handleMessageCreate(
         prompt: text,
         rawContentPreview: previewText(message.content),
         mentionKind: mentionContext.kind ?? "unknown",
+        attachmentCount: requestAttachments.length,
+        imageAttachmentCount: requestAttachments.filter(isDiscordImageAttachment).length,
         discordUrl: message.url
       },
       links: { discordMessage: message.url }
@@ -320,7 +327,7 @@ async function handleMessageCreate(
       name: "Discord user prompt",
       content: text,
       contentType: "text/plain",
-      metadata: { discordUrl: message.url, rawContent: message.content }
+      metadata: { discordUrl: message.url, rawContent: message.content, attachments: requestAttachments }
     })
     .catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord prompt artifact"));
   const thinking = await message.reply("Thinking...");
@@ -439,7 +446,8 @@ async function handleMessageCreate(
     createdAt: message.createdAt,
     metadata: {
       discordUrl: message.url,
-      rawContent: message.content
+      rawContent: message.content,
+      attachments: requestAttachments
     }
   });
   requestLogger.debug({ threadKey }, "Stored user turn in channel memory");
@@ -512,6 +520,7 @@ async function handleMessageCreate(
           threadKey,
           sessionMessages: priorSessionMessages,
           replyContext,
+          requestAttachments,
           requestId,
           statusChannelId: thinking.channelId,
           statusMessageId: thinking.id,
@@ -815,6 +824,7 @@ async function executeDiscordAgentRequest(
   });
   const threadKey = discordChannelThreadKey(guildId, message.channelId);
   const userDisplayName = message.member?.displayName ?? message.author.username;
+  const requestAttachments = discordAttachmentContextsFromMessage(message);
   const sessionStartedAt = Date.now();
   await input.repo.ensureConversationSession({
     threadKey,
@@ -867,7 +877,8 @@ async function executeDiscordAgentRequest(
     createdAt: message.createdAt,
     metadata: {
       discordUrl: message.url,
-      rawContent: request.rawContent
+      rawContent: request.rawContent,
+      attachments: requestAttachments
     }
   });
   requestLogger.debug({ threadKey }, "Stored user turn in channel memory");
@@ -940,6 +951,7 @@ async function executeDiscordAgentRequest(
           threadKey,
           sessionMessages: priorSessionMessages,
           replyContext,
+          requestAttachments,
           requestId: request.requestId,
           statusChannelId: thinking.channelId,
           statusMessageId: thinking.id,
@@ -1318,6 +1330,7 @@ async function resolveDiscordReplyContext(input: {
 }
 
 function discordReplyContextMessageFromMessage(message: Message): DiscordReplyContextMessage {
+  const attachments = discordAttachmentContextsFromMessage(message);
   return {
     messageId: message.id,
     channelId: message.channelId,
@@ -1326,12 +1339,40 @@ function discordReplyContextMessageFromMessage(message: Message): DiscordReplyCo
     authorDisplayName: message.member?.displayName ?? message.author?.globalName ?? message.author?.username ?? null,
     authorIsBot: Boolean(message.author?.bot),
     content: message.content ?? "",
-    attachmentSummaries: [...message.attachments.values()].map((attachment) =>
-      [attachment.name ?? attachment.id, attachment.contentType, attachment.size ? `${attachment.size} bytes` : ""].filter(Boolean).join(" ")
-    ),
+    attachmentSummaries: attachments.map(discordAttachmentSummary),
+    attachments,
     createdAt: message.createdAt?.toISOString?.() ?? null,
     url: message.url ?? null
   };
+}
+
+function discordAttachmentContextsFromMessage(message: Message): DiscordAttachmentContext[] {
+  return [...message.attachments.values()].map((attachment) => ({
+    id: attachment.id,
+    url: attachment.url,
+    proxyUrl: attachment.proxyURL ?? null,
+    filename: attachment.name ?? null,
+    contentType: attachment.contentType ?? null,
+    sizeBytes: attachment.size ?? null,
+    width: attachment.width ?? null,
+    height: attachment.height ?? null,
+    description: attachment.description ?? null
+  }));
+}
+
+function discordAttachmentSummary(attachment: DiscordAttachmentContext) {
+  const dimensions = attachment.width && attachment.height ? `${attachment.width}x${attachment.height}` : "";
+  return [attachment.filename ?? attachment.id, attachment.contentType, dimensions, attachment.sizeBytes ? `${attachment.sizeBytes} bytes` : ""]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function isDiscordImageAttachment(attachment: DiscordAttachmentContext) {
+  return isImageContentType(attachment.contentType) || /\.(?:png|jpe?g|webp|gif|bmp|tiff?|heic|avif)$/i.test(attachment.filename ?? "");
+}
+
+function isImageContentType(contentType: string | null | undefined) {
+  return typeof contentType === "string" && contentType.toLowerCase().startsWith("image/");
 }
 
 function discordMessageTraceContext(

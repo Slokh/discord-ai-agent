@@ -1,9 +1,13 @@
 import type { AppConfig } from "../config/env.js";
 import { durationMs, logger } from "../util/logger.js";
 
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: string | ChatContentPart[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: Array<{
@@ -60,12 +64,18 @@ export type ImageResult = {
 
 export type ImageOptions = {
   model?: string;
+  inputReferences?: ImageReference[];
   resolution?: string;
   aspectRatio?: string;
   quality?: "auto" | "low" | "medium" | "high";
   outputFormat?: "png" | "jpeg" | "webp";
   background?: "auto" | "transparent" | "opaque";
   n?: number;
+};
+
+export type ImageReference = {
+  type: "image_url";
+  image_url: { url: string };
 };
 
 const OPENROUTER_CHAT_TIMEOUT_MS = 45_000;
@@ -92,6 +102,7 @@ export class OpenRouterClient {
         operation: "chat",
         model,
         messageCount: input.messages.length,
+        imageInputCount: countChatImageInputs(input.messages),
         localToolCount,
         hostedToolCount,
         maxTokens: input.maxTokens ?? 1200,
@@ -213,6 +224,7 @@ export class OpenRouterClient {
         operation: "image",
         model,
         promptChars: prompt.length,
+        inputReferenceCount: options?.inputReferences?.length ?? 0,
         resolution: options?.resolution,
         aspectRatio: options?.aspectRatio,
         quality: options?.quality,
@@ -226,6 +238,7 @@ export class OpenRouterClient {
     };
 
     if (options?.resolution) body.resolution = options.resolution;
+    if (options?.inputReferences?.length) body.input_references = options.inputReferences;
     if (options?.aspectRatio) body.aspect_ratio = options.aspectRatio;
     if (options?.quality) body.quality = options.quality;
     if (options?.outputFormat) body.output_format = options.outputFormat;
@@ -247,6 +260,7 @@ export class OpenRouterClient {
         model: result.model,
         durationMs: durationMs(startedAt),
         imageCount: result.data.length,
+        inputReferenceCount: options?.inputReferences?.length ?? 0,
         estimatedCostUsd: result.estimatedCostUsd
       },
       "OpenRouter image response"
@@ -372,6 +386,13 @@ function finishReasonFromChoice(choice: any): string | undefined {
 
 function isContentFilterSignal(value: unknown) {
   return /\bcontent[_ -]?filter(?:ed)?\b/i.test(String(value ?? ""));
+}
+
+function countChatImageInputs(messages: ChatMessage[]) {
+  return messages.reduce((total, message) => {
+    if (!Array.isArray(message.content)) return total;
+    return total + message.content.filter((part) => part.type === "image_url").length;
+  }, 0);
 }
 
 function parseDsmlToolCalls(content: string): ChatResult["toolCalls"] {

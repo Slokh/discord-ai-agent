@@ -12,6 +12,7 @@ describe("toolRegistry", () => {
       "getRecentDiscordMessages",
       "getDiscordMessageContext",
       "searchDiscordAttachments",
+      "inspectDiscordImages",
       "getDiscordStats",
       "getDiscordChannelTopics",
       "summarizeDiscordHistory",
@@ -32,6 +33,7 @@ describe("toolRegistry", () => {
 
   it("renders a user-visible tool list", () => {
     expect(renderToolList()).toContain("searchDiscordHistory");
+    expect(renderToolList()).toContain("inspectDiscordImages");
     expect(renderToolList()).toContain("Generate an image");
     expect(renderToolList()).toContain("web_search");
   });

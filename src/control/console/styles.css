@@ -881,12 +881,11 @@ kbd {
 
 .timeline-child p {
   color: var(--muted);
-  display: -webkit-box;
+  display: block;
   font-size: 12px;
   line-height: 1.45;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .timeline-child details {
@@ -947,9 +946,8 @@ kbd {
 .timeline-step-main strong,
 .timeline-step-main span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .timeline-step-main span {
@@ -1119,6 +1117,135 @@ kbd {
 .timeline-list summary,
 .call-item summary {
   cursor: pointer;
+}
+
+.timeline-artifact-loading {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.timeline-artifact-code {
+  background: color-mix(in oklab, black 18%, var(--pane-3));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #d9dee4;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  margin: 0;
+  max-height: min(58vh, 720px);
+  min-width: 0;
+  overflow: auto;
+  overflow-wrap: normal;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.codex-transcript {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.codex-transcript-summary {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.codex-transcript-stop {
+  align-items: center;
+  background: color-mix(in oklab, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in oklab, var(--warn) 42%, var(--border));
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.codex-transcript-stop strong,
+.codex-transcript-stop span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.codex-transcript-stop span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.codex-transcript-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.codex-transcript-item {
+  background: color-mix(in oklab, var(--pane) 28%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  border-radius: 8px;
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.codex-transcript-item.warning {
+  border-color: color-mix(in oklab, var(--warn) 45%, var(--border));
+}
+
+.codex-transcript-item.error {
+  border-color: color-mix(in oklab, var(--bad) 48%, var(--border));
+}
+
+.codex-transcript-item-head {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.codex-transcript-item-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.codex-transcript-item-head span,
+.codex-transcript-item p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.codex-transcript-item p {
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.codex-transcript-item code,
+.codex-transcript-item pre {
+  background: color-mix(in oklab, black 18%, var(--pane-3));
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: #d9dee4;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  min-width: 0;
+}
+
+.codex-transcript-item code {
+  overflow-wrap: anywhere;
+  padding: 7px 8px;
+  white-space: pre-wrap;
+}
+
+.codex-transcript-item pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 9px;
+  white-space: pre-wrap;
 }
 
 .terminal-panel,
@@ -1806,9 +1933,8 @@ h2 {
 
 .timeline-step-main strong {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .timeline-step-main span,
@@ -1902,6 +2028,10 @@ h2 {
 @media (max-width: 640px) {
   .latency-row {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .codex-transcript-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .latency-head {

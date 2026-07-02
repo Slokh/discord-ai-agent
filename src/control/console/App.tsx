@@ -74,6 +74,30 @@ type FlowItem = {
   metadata: Record<string, unknown>;
   artifact?: RunArtifact;
 };
+type CodexTranscriptItemKind = "message" | "command" | "warning" | "error" | "lifecycle" | "tokens" | "reasoning";
+type CodexCommandStart = {
+  timestamp: string;
+  command: string | null;
+  summary: string;
+};
+export type ParsedCodexTranscript = {
+  isTranscript: boolean;
+  launchCommand: string | null;
+  agentMessages: number;
+  commands: number;
+  reasoningDeltaCount: number;
+  reasoningChars: number;
+  tokenTotal: number | null;
+  items: Array<{
+    id: string;
+    kind: CodexTranscriptItemKind;
+    title: string;
+    timestamp: string;
+    body: string;
+    command: string;
+    output: string;
+  }>;
+};
 
 type ConsoleUrlState = {
   runId: string;
@@ -620,7 +644,7 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
   });
   const timelineStartedAt = timelineStart(snapshot.run.startedAt, events, spans, flows);
   const timedEvents = eventsWithTiming(events, timelineStartedAt);
-  const trace = timelineTrace({ events: timedEvents, spans, flows, startedAt: timelineStartedAt });
+  const trace = codegenTimelineTrace(snapshot, { events, spans, startedAt: timelineStartedAt }) ?? timelineTrace({ events: timedEvents, spans, flows, startedAt: timelineStartedAt });
 
   return (
     <section className="panel detail-panel">
@@ -688,7 +712,7 @@ function TimelineGroupItem({ group }: { group: TimelineStepGroup }) {
         <TimelineStepHeader step={group.parent} />
         <TimelineStepDetails step={group.parent} />
         <TimelineStepMeta step={group.parent} />
-        {group.parent.artifact && <ArtifactMeta artifact={group.parent.artifact} />}
+        {group.parent.artifact && <TimelineArtifactInline artifact={group.parent.artifact} />}
         {group.children.length > 0 && (
           <div className="timeline-children">
             {group.children.map((child) => (
@@ -696,7 +720,7 @@ function TimelineGroupItem({ group }: { group: TimelineStepGroup }) {
                 <TimelineStepHeader step={child} child />
                 <TimelineStepDetails step={child} />
                 <TimelineStepMeta step={child} />
-                {child.artifact && <ArtifactMeta artifact={child.artifact} />}
+                {child.artifact && <TimelineArtifactInline artifact={child.artifact} />}
                 {Object.keys(child.metadata).length > 0 && (
                   <details>
                     <summary>Metadata</summary>
@@ -719,6 +743,7 @@ function TimelineGroupItem({ group }: { group: TimelineStepGroup }) {
 }
 
 function TimelineStepDetails({ step }: { step: TimelineStep }) {
+  if (step.artifact) return null;
   const toolRequests = timelineToolRequests(step);
   if (isModelRoundTimelineStep(step) && toolRequests.length > 0) return <RequestedTools requests={toolRequests} />;
   const summary = timelineStepSummaryText(step);
@@ -864,10 +889,9 @@ function parseToolArgumentsText(argumentsText?: string | null): Record<string, u
 
 function formatToolArgumentValue(value: unknown) {
   if (value == null) return "null";
-  if (typeof value === "string") return value.length > 90 ? `${value.slice(0, 87)}...` : value;
+  if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const text = JSON.stringify(value);
-  return text.length > 90 ? `${text.slice(0, 87)}...` : text;
+  return JSON.stringify(value);
 }
 
 function isModelRoundTimelineStep(step: Pick<TimelineStep, "title">) {
@@ -935,12 +959,87 @@ function TimelineStepMeta({ step }: { step: TimelineStep }) {
   );
 }
 
-function ArtifactMeta({ artifact }: { artifact: RunArtifact }) {
+function TimelineArtifactInline({ artifact }: { artifact: RunArtifact }) {
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    setLoading(true);
+    setError(null);
+    fetchArtifact(artifact.runId, artifact.artifactId)
+      .then((nextContent) => {
+        if (!disposed) setContent(nextContent);
+      })
+      .catch((loadError) => {
+        if (!disposed) setError(loadError instanceof Error ? loadError.message : String(loadError));
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [artifact.artifactId, artifact.runId]);
+
+  const visibleContent = content || artifact.preview;
   return (
-    <div className="flow-artifact-meta">
-      <span>{artifact.kind}</span>
-      <span>{artifact.contentType}</span>
-      {artifact.redacted && <span>redacted</span>}
+    <>
+      {loading && <span className="timeline-artifact-loading">Loading full artifact...</span>}
+      {error && (
+        <div className="jump-error">
+          <AlertCircle />
+          <span>{error}</span>
+        </div>
+      )}
+      {isCodexTranscriptArtifact(artifact) ? <CodexTranscript artifact={artifact} content={visibleContent} /> : <pre className="timeline-artifact-code">{visibleContent}</pre>}
+    </>
+  );
+}
+
+function CodexTranscript({ artifact, content }: { artifact: RunArtifact; content: string }) {
+  const transcript = useMemo(() => parseCodexTranscript(content), [content]);
+  if (!transcript.isTranscript) return <pre className="timeline-artifact-code">{content}</pre>;
+  const watchdog = objectValue(artifact.metadata.watchdog);
+  const watchdogKilled = watchdog?.killed === true;
+  const watchdogReason = stringValue(watchdog?.reason);
+  const watchdogDurationMs = numericMetadata(watchdog?.durationMs);
+  const lastOutputAtMs = numericMetadata(watchdog?.lastOutputAtMs);
+  return (
+    <div className="codex-transcript">
+      {watchdogKilled && (
+        <div className="codex-transcript-stop">
+          <strong>Stopped by watchdog{watchdogReason ? `: ${watchdogReason}` : ""}</strong>
+          <span>
+            {[
+              watchdogDurationMs != null ? `Stopped after ${formatDuration(watchdogDurationMs)}` : "",
+              lastOutputAtMs != null ? `last output at ${formatDuration(lastOutputAtMs)}` : ""
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        </div>
+      )}
+      <div className="codex-transcript-summary">
+        <Metric label="Messages" value={transcript.agentMessages} />
+        <Metric label="Commands" value={transcript.commands} />
+        <Metric label="Reasoning" value={`${transcript.reasoningDeltaCount} chunks`} />
+        <Metric label="Tokens" value={transcript.tokenTotal == null ? "unknown" : transcript.tokenTotal.toLocaleString()} />
+      </div>
+      <div className="codex-transcript-list">
+        {transcript.items.map((item) => (
+          <article key={item.id} className={`codex-transcript-item ${item.kind}`}>
+            <div className="codex-transcript-item-head">
+              <strong>{item.title}</strong>
+              <span>{formatDate(item.timestamp)}</span>
+            </div>
+            {item.body && <p>{item.body}</p>}
+            {item.command && <code>{item.command}</code>}
+            {item.output && <pre>{item.output}</pre>}
+          </article>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1310,6 +1409,614 @@ function timelineTrace({ events, spans, flows, startedAt }: { events: TimedRunEv
     steps.push(timelineStepFromEvent(event));
   }
   return buildTimelineTrace(steps);
+}
+
+export function codegenTimelineTrace(
+  snapshot: RunSnapshot,
+  { events, spans, startedAt }: { events: RunEvent[]; spans: RunSpan[]; startedAt: string }
+): TimelineTrace | null {
+  if (snapshot.run.kind !== "codegen") return null;
+  const groups: TimelineStepGroup[] = [];
+  const addGroup = (parent: TimelineStep, children: TimelineStep[] = []) => {
+    groups.push({ id: parent.id, parent, children: sortTimelineSteps(children) });
+  };
+  const event = (predicate: (event: RunEvent) => boolean) => preferredTimelineEvent(events.filter(predicate));
+  const progress = (step: string) => event((candidate) => candidate.name === "task.progress" && candidate.metadata.step === step);
+  const span = (name: string) => preferredTimelineSpan(spans.filter((candidate) => normalizedTimelineName(candidate.name) === normalizedTimelineName(name)));
+  const artifacts = (predicate: (artifact: RunArtifact) => boolean) =>
+    snapshot.artifacts.filter(predicate).map((artifact) => timelineStepFromCodegenArtifact(artifact, startedAt));
+
+  const mention = event((candidate) => candidate.name === "discord.mention.received");
+  if (mention) {
+    addGroup(timelineStepFromCodegenEvent(mention, startedAt, { title: "User prompt received", kind: "input" }));
+  }
+
+  const modelSelection = event((candidate) => candidate.name === "agent.model.round.complete" && stringArrayMetadata(candidate.metadata.selectedLocalTools).includes("openGithubPullRequest"));
+  if (modelSelection) {
+    addGroup(timelineStepFromCodegenEvent(modelSelection, startedAt, { title: "Model chose code update", kind: "model" }));
+  }
+
+  const codegenTool = event((candidate) => candidate.name === "agent.tool.complete" && candidate.metadata.toolName === "openGithubPullRequest");
+  if (codegenTool) {
+    addGroup(
+      timelineStepFromCodegenEvent(codegenTool, startedAt, {
+        title: "Codegen task queued",
+        kind: "tool",
+        summary: codegenQueuedSummary(events)
+      })
+    );
+  }
+
+  const sandboxStarted = progress("sandbox_acquired");
+  if (sandboxStarted) {
+    addGroup(timelineStepFromCodegenEvent(sandboxStarted, startedAt, { title: "Sandbox process started", durationMs: sandboxStarted.durationMs }));
+  }
+
+  const phaseRows = [
+    { name: "repo", title: "Repository prepared", artifacts: artifacts(isRepositorySetupArtifact) },
+    { name: "dependencies", title: "Dependencies installed", artifacts: artifacts((artifact) => artifact.metadata.step === "dependencies") },
+    { name: "toolShims", title: "Helper tools installed", artifacts: [] },
+    { name: "context", title: "Codegen context built", artifacts: artifacts((artifact) => artifact.kind === "diagnostic" && /codegen request context/i.test(artifact.name)) }
+  ];
+  for (const phase of phaseRows) {
+    const phaseSpan = span(phase.name);
+    if (phaseSpan) addGroup(timelineStepFromCodegenSpan(phaseSpan, startedAt, { title: phase.title }), phase.artifacts);
+  }
+
+  for (const attempt of codegenAttemptSpans(spans)) {
+    const attemptNumber = codegenAttemptNumber(attempt.name);
+    if (attemptNumber == null) continue;
+    const deadline = event(
+      (candidate) => candidate.name === "task.progress" && candidate.metadata.step === "codex_first_diff_deadline" && candidate.metadata.attempt === attemptNumber
+    );
+    const reasoningStarted = event(
+      (candidate) =>
+        candidate.name === "task.progress" &&
+        candidate.metadata.step === "codex_app_server_item_started" &&
+        candidate.metadata.attempt === attemptNumber &&
+        /\breasoning\b/i.test(candidate.summary ?? "")
+    );
+    const firstDiff = event(
+      (candidate) => {
+        const step = String(candidate.metadata.step ?? "");
+        return candidate.name === "task.progress" && (step === "codex_first_diff" || step === "codex_app_server_first_diff") && candidate.metadata.attempt === attemptNumber;
+      }
+    );
+    const watchdog = event(
+      (candidate) =>
+        candidate.name === "task.progress" &&
+        String(candidate.metadata.step ?? "").includes("watchdog_no_first_diff") &&
+        candidate.metadata.attempt === attemptNumber
+    );
+    const noDiff = event(
+      (candidate) =>
+        candidate.name === "task.progress" &&
+        String(candidate.metadata.step ?? "") === `codex_app_server_attempt_${attemptNumber}_no_diff` &&
+        candidate.metadata.attempt === attemptNumber
+    );
+    const children = [
+      ...artifacts((artifact) => isCodegenAttemptArtifact(artifact, attemptNumber)),
+      deadline
+        ? timelineStepFromCodegenEvent(deadline, startedAt, {
+            title: "First-diff deadline set",
+            kind: "event",
+            durationMs: null
+          })
+        : null,
+      reasoningStarted
+        ? timelineStepFromCodegenEvent(reasoningStarted, startedAt, {
+            title: "Model started reasoning",
+            kind: "model",
+            durationMs: null
+          })
+        : null,
+      firstDiff
+        ? timelineStepFromCodegenEvent(firstDiff, startedAt, {
+            title: "First code diff produced",
+            kind: "event",
+            durationMs: null
+          })
+        : null,
+      watchdog
+        ? timelineStepFromCodegenEvent(watchdog, startedAt, {
+            title: "No-diff watchdog fired",
+            kind: "error",
+            durationMs: null
+          })
+        : null,
+      noDiff
+        ? timelineStepFromCodegenEvent(noDiff, startedAt, {
+            title: "Attempt ended with no diff",
+            kind: "error",
+            durationMs: null,
+            summary: codegenAttemptNoDiffSummary(noDiff)
+          })
+        : null
+    ].filter((step): step is TimelineStep => step != null);
+
+    addGroup(
+      timelineStepFromCodegenSpan(attempt, startedAt, {
+        title: `Codex attempt ${attemptNumber}`,
+        kind: attempt.status === "failed" ? "error" : "model",
+        summary: codegenAttemptSummary(attempt, noDiff ?? watchdog)
+      }),
+      children
+    );
+  }
+
+  const cleanup = progress("cleanup");
+  if (cleanup) addGroup(timelineStepFromCodegenEvent(cleanup, startedAt, { title: "Cleanup started" }));
+
+  const completed = event((candidate) => candidate.name === "task.completed");
+  if (completed) {
+    addGroup(
+      timelineStepFromCodegenEvent(completed, startedAt, {
+        title: snapshot.run.status === "no_changes" ? "No PR opened" : "Run completed",
+        kind: completed.level === "error" ? "error" : "response",
+        summary: completed.summary ?? snapshot.run.summary ?? ""
+      })
+    );
+  }
+
+  if (groups.length === 0) return null;
+  const sortedGroups = groups.sort((left, right) => timelineStepStartMs(left.parent) - timelineStepStartMs(right.parent));
+  const steps = sortTimelineSteps(sortedGroups.flatMap((group) => [group.parent, ...group.children]));
+  const durations = sortedGroups
+    .map((group) => ({ name: timelineTitleText(group.parent), durationMs: group.parent.durationMs ?? 0 }))
+    .filter((item) => item.durationMs > 0);
+  return {
+    steps,
+    groups: sortedGroups,
+    durationMs: summedStepDuration(sortedGroups.map((group) => group.parent)),
+    status: snapshot.run.status,
+    slowest: durations.length > 0 ? durations.reduce((current, item) => (item.durationMs > current.durationMs ? item : current), durations[0]!) : null
+  };
+}
+
+function timelineStepFromCodegenSpan(
+  span: RunSpan,
+  startedAt: string,
+  overrides: Partial<Pick<TimelineStep, "title" | "summary" | "kind" | "durationMs">> = {}
+): TimelineStep {
+  return {
+    ...timelineStepFromSpan(span, startedAt),
+    ...overrides,
+    id: `codegen-${span.id}`
+  };
+}
+
+function preferredTimelineEvent(events: RunEvent[]) {
+  const preference = ["task", "trace", "process", "command", "tool"];
+  return [...events].sort((left, right) => preference.indexOf(left.source) - preference.indexOf(right.source))[0] ?? null;
+}
+
+function preferredTimelineSpan(spans: RunSpan[]) {
+  const preference = ["task", "command", "process", "sandbox"];
+  return [...spans].sort((left, right) => preference.indexOf(left.source) - preference.indexOf(right.source))[0] ?? null;
+}
+
+function codegenAttemptSpans(spans: RunSpan[]) {
+  return spans
+    .filter((span) => codegenAttemptNumber(span.name) != null)
+    .sort((left, right) => {
+      const leftAttempt = codegenAttemptNumber(left.name) ?? 0;
+      const rightAttempt = codegenAttemptNumber(right.name) ?? 0;
+      return leftAttempt - rightAttempt;
+    });
+}
+
+function codegenAttemptNumber(value: string) {
+  const match = value.match(/codex_(?:app_server_)?attempt_(\d+)/);
+  if (!match?.[1]) return null;
+  const attempt = Number(match[1]);
+  return Number.isFinite(attempt) ? attempt : null;
+}
+
+function codegenQueuedSummary(events: RunEvent[]) {
+  const queued = preferredTimelineEvent(events.filter((event) => event.name === "openGithubPullRequest" || event.metadata.toolName === "openGithubPullRequest"));
+  if (!queued?.summary) return "The model handed this request to the codegen worker.";
+  try {
+    const parsed = JSON.parse(queued.summary);
+    if (parsed && typeof parsed === "object") {
+      const taskId = typeof (parsed as Record<string, unknown>).taskId === "string" ? (parsed as Record<string, unknown>).taskId : null;
+      if (taskId) return `Queued codegen task ${taskId}.`;
+    }
+  } catch {
+    // Fall through to the plain summary.
+  }
+  return queued.summary;
+}
+
+function codegenAttemptSummary(attempt: RunSpan, outcome: RunEvent | null) {
+  const parts = [`Ran ${String(attempt.metadata.command ?? attempt.name)}.`];
+  const exitCode = numericMetadata(attempt.metadata.exitCode ?? outcome?.metadata.exitCode);
+  const watchdogReason = stringMetadata(outcome?.metadata.watchdogReason) ?? stringMetadata((attempt.metadata.watchdog as Record<string, unknown> | undefined)?.reason);
+  const gitStatus = stringMetadata(outcome?.metadata.gitStatus);
+  if (exitCode != null) parts.push(`Exit ${exitCode}.`);
+  if (watchdogReason) parts.push(`Watchdog: ${watchdogReason}.`);
+  if (gitStatus === "") parts.push("Git status was clean.");
+  return parts.join(" ");
+}
+
+function codegenAttemptNoDiffSummary(event: RunEvent) {
+  const pieces = ["No code diff was produced."];
+  const exitCode = numericMetadata(event.metadata.exitCode);
+  const watchdogReason = stringMetadata(event.metadata.watchdogReason);
+  const notificationCount = numericMetadata(event.metadata.notificationCount);
+  if (exitCode != null) pieces.push(`Exit ${exitCode}.`);
+  if (watchdogReason) pieces.push(`Watchdog: ${watchdogReason}.`);
+  if (notificationCount != null) pieces.push(`${notificationCount} Codex notifications.`);
+  return pieces.join(" ");
+}
+
+function numericMetadata(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringMetadata(value: unknown) {
+  return typeof value === "string" ? value : null;
+}
+
+function isRepositorySetupArtifact(artifact: RunArtifact) {
+  if (artifact.kind !== "command_log") return false;
+  const step = stringMetadata(artifact.metadata.step);
+  return step === "repo_seed" || step === "repo_checkout" || step === "branch";
+}
+
+function isCodegenAttemptArtifact(artifact: RunArtifact, attempt: number) {
+  const metadataAttempt = numericMetadata(artifact.metadata.attempt);
+  if (metadataAttempt === attempt) return true;
+  const name = normalizedTimelineName(artifact.name);
+  return name.includes(`attempt ${attempt} transcript`);
+}
+
+function timelineStepFromCodegenEvent(
+  event: RunEvent,
+  startedAt: string,
+  overrides: Partial<Pick<TimelineStep, "title" | "summary" | "kind" | "durationMs">> = {}
+): TimelineStep {
+  return {
+    id: `codegen-event-${event.id}`,
+    kind: event.level === "error" ? "error" : "event",
+    title: timelineEventTitle(event.name),
+    summary: event.summary ?? "",
+    createdAt: event.createdAt,
+    durationMs: event.durationMs,
+    durationStartedAt: durationStartedAtForCompletedStep(event.createdAt, event.durationMs),
+    gapMs: null,
+    offset: formatOffset(startedAt, event.createdAt),
+    source: event.source,
+    status: null,
+    level: event.level,
+    metadata: event.metadata,
+    ...overrides
+  };
+}
+
+function timelineStepFromCodegenArtifact(artifact: RunArtifact, startedAt: string): TimelineStep {
+  return {
+    id: `codegen-artifact-${artifact.artifactId}`,
+    kind: "artifact",
+    title: timelineArtifactTitle(artifact),
+    summary: artifact.preview,
+    createdAt: artifact.createdAt,
+    durationMs: null,
+    durationStartedAt: null,
+    gapMs: null,
+    offset: formatOffset(startedAt, artifact.createdAt),
+    source: "artifact",
+    status: null,
+    level: null,
+    metadata: artifact.metadata,
+    artifact
+  };
+}
+
+function timelineArtifactTitle(artifact: RunArtifact) {
+  if (artifact.kind === "command_log") {
+    const match = artifact.name.match(/^(.+?) command log$/i);
+    if (match?.[1]) return `Command: ${match[1]}`;
+  }
+  return artifact.name;
+}
+
+function isCodexTranscriptArtifact(artifact: RunArtifact) {
+  return artifact.kind === "command_log" && /\bcodex\b.+\btranscript\b/i.test(artifact.name);
+}
+
+export function parseCodexTranscript(content: string): ParsedCodexTranscript {
+  const lines = content.split(/\r?\n/);
+  const launchCommand = lines.find((line) => line.startsWith("$ "))?.slice(2).trim() || null;
+  const records = lines.flatMap(parseCodexTranscriptRecord);
+  const items: ParsedCodexTranscript["items"] = [];
+  const commandStarts = new Map<string, CodexCommandStart>();
+  let agentMessages = 0;
+  let commands = 0;
+  let reasoningDeltaCount = 0;
+  let reasoningChars = 0;
+  let tokenTotal: number | null = null;
+  let tokenCached: number | null = null;
+  let tokenOutput: number | null = null;
+
+  if (launchCommand) {
+    items.push({
+      id: "launch-command",
+      kind: "lifecycle",
+      title: "App-server launched",
+      timestamp: records[0]?.timestamp ?? new Date(0).toISOString(),
+      body: "",
+      command: launchCommand,
+      output: ""
+    });
+  }
+
+  for (const record of records) {
+    const params = parseParamsPreview(record.metadata.paramsPreview);
+    const item = objectValue(params?.item);
+    const itemType = stringValue(record.metadata.itemType) ?? stringValue(item?.type);
+
+    if (record.method === "warning") {
+      items.push(transcriptItem(record, "warning", "Warning", stringValue(params?.message) ?? record.message));
+      continue;
+    }
+    if (record.method === "thread/started") {
+      const thread = objectValue(params?.thread);
+      const modelProvider = stringValue(thread?.modelProvider);
+      const cwd = stringValue(thread?.cwd);
+      items.push(transcriptItem(record, "lifecycle", "Thread started", [modelProvider ? `Provider: ${modelProvider}` : "", cwd ? `cwd: ${cwd}` : ""].filter(Boolean).join("\n")));
+      continue;
+    }
+    if (record.method === "turn/started") {
+      items.push(transcriptItem(record, "lifecycle", "Turn started", ""));
+      continue;
+    }
+    if (record.method === "thread/tokenUsage/updated") {
+      const total = objectValue(objectValue(params?.tokenUsage)?.total);
+      tokenTotal = numericMetadata(total?.totalTokens) ?? tokenTotal;
+      tokenCached = numericMetadata(total?.cachedInputTokens) ?? tokenCached;
+      tokenOutput = numericMetadata(total?.outputTokens) ?? tokenOutput;
+      continue;
+    }
+    if (record.method === "item/reasoning/textDelta") {
+      reasoningDeltaCount += 1;
+      reasoningChars += stringValue(params?.delta)?.length ?? 0;
+      continue;
+    }
+    if (record.method !== "item/completed" && record.method !== "item/started") continue;
+    if (record.method === "item/started" && itemType !== "commandExecution") continue;
+
+    if (itemType === "commandExecution" && record.method === "item/started") {
+      const itemId = commandItemId(record, item);
+      if (!itemId) continue;
+      commandStarts.set(itemId, {
+        timestamp: record.timestamp,
+        command: stringValue(item?.command) ?? paramsPreviewStringField(record.metadata.paramsPreview, "command"),
+        summary: commandActionSummary(item?.commandActions)
+      });
+      continue;
+    }
+
+    if (itemType === "agentMessage" && record.method === "item/completed") {
+      const text = stringValue(item?.text);
+      if (!text) continue;
+      agentMessages += 1;
+      items.push(transcriptItem(record, "message", `Assistant message ${agentMessages}`, text));
+      continue;
+    }
+    if (itemType === "commandExecution" && record.method === "item/completed") {
+      const commandStart = commandStarts.get(commandItemId(record, item) ?? "");
+      const command = stringValue(item?.command) ?? paramsPreviewStringField(record.metadata.paramsPreview, "command") ?? commandStart?.command;
+      if (!command) continue;
+      commands += 1;
+      const status = stringValue(item?.status) ?? paramsPreviewStringField(record.metadata.paramsPreview, "status");
+      const durationMs = numericMetadata(item?.durationMs) ?? paramsPreviewNumberField(record.metadata.paramsPreview, "durationMs") ?? commandDurationFromTimestamps(commandStart?.timestamp, record.timestamp);
+      const exitCode = numericMetadata(item?.exitCode) ?? paramsPreviewNumberField(record.metadata.paramsPreview, "exitCode");
+      const actionSummary = commandActionSummary(item?.commandActions) || commandStart?.summary || "";
+      const body = [
+        status ? `Status: ${status}` : "",
+        exitCode != null ? `Exit: ${exitCode}` : "",
+        durationMs != null ? `Duration: ${formatDuration(durationMs)}` : "",
+        actionSummary
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      items.push({
+        ...transcriptItem(record, "command", `Command ${commands}`, body),
+        command,
+        output: stringValue(item?.aggregatedOutput) ?? paramsPreviewStringField(record.metadata.paramsPreview, "aggregatedOutput", { allowTruncated: true }) ?? ""
+      });
+    }
+  }
+
+  if (reasoningDeltaCount > 0) {
+    const firstRecord = records.find((record) => record.method === "item/reasoning/textDelta") ?? records[0];
+    if (firstRecord) {
+      items.push(
+        transcriptItem(
+          firstRecord,
+          "reasoning",
+          "Reasoning stream",
+          `${reasoningDeltaCount.toLocaleString()} streamed chunks, ${reasoningChars.toLocaleString()} chars. Content is summarized here because the raw stream is noisy and token-level.`
+        )
+      );
+    }
+  }
+
+  const stderr = transcriptSection(content, "stderr:");
+  if (stderr) {
+    const timestamp = records.at(-1)?.timestamp ?? new Date(0).toISOString();
+    items.push({ id: "stderr", kind: "error", title: "Codex stderr", timestamp, body: "Process stderr captured before exit; this is not necessarily the stop reason.", command: "", output: stderr });
+  }
+  const terminalError = transcriptSection(content, "error:");
+  if (terminalError) {
+    const timestamp = records.at(-1)?.timestamp ?? new Date(0).toISOString();
+    items.push({ id: "terminal-error", kind: "error", title: "App-server closed", timestamp, body: terminalError, command: "", output: "" });
+  }
+  if (tokenTotal != null) {
+    const timestamp = records.at(-1)?.timestamp ?? new Date(0).toISOString();
+    items.push({
+      id: "token-usage",
+      kind: "tokens",
+      title: "Final token usage",
+      timestamp,
+      body: [
+        `Total: ${tokenTotal.toLocaleString()}`,
+        tokenCached != null ? `Cached input: ${tokenCached.toLocaleString()}` : "",
+        tokenOutput != null ? `Output: ${tokenOutput.toLocaleString()}` : ""
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      command: "",
+      output: ""
+    });
+  }
+
+  return {
+    isTranscript: launchCommand != null && records.length > 0,
+    launchCommand,
+    agentMessages,
+    commands,
+    reasoningDeltaCount,
+    reasoningChars,
+    tokenTotal,
+    items: items.sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime())
+  };
+}
+
+function parseCodexTranscriptRecord(line: string) {
+  if (!line.startsWith("{")) return [];
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    const timestamp = stringValue(parsed.timestamp);
+    const method = stringValue(parsed.method);
+    if (!timestamp || !method) return [];
+    return [
+      {
+        timestamp,
+        method,
+        message: stringValue(parsed.message) ?? method,
+        metadata: objectValue(parsed.metadata) ?? {}
+      }
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function parseParamsPreview(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function commandItemId(record: ReturnType<typeof parseCodexTranscriptRecord>[number], item: Record<string, unknown> | null) {
+  return stringValue(record.metadata.itemId) ?? stringValue(item?.id) ?? paramsPreviewStringField(record.metadata.paramsPreview, "id");
+}
+
+function commandDurationFromTimestamps(startedAt: string | null | undefined, completedAt: string) {
+  if (!startedAt) return null;
+  const started = new Date(startedAt).getTime();
+  const completed = new Date(completedAt).getTime();
+  if (!Number.isFinite(started) || !Number.isFinite(completed) || completed < started) return null;
+  return completed - started;
+}
+
+function commandActionSummary(value: unknown) {
+  if (!Array.isArray(value)) return "";
+  const actions = value.flatMap((action) => {
+    const record = objectValue(action);
+    if (!record) return [];
+    const type = stringValue(record.type);
+    const name = stringValue(record.name);
+    const command = stringValue(record.command);
+    if (type && name) return `${type} ${name}`;
+    if (type && command) return `${type} ${command}`;
+    if (type) return type;
+    return [];
+  });
+  return actions.slice(0, 3).join(", ");
+}
+
+function paramsPreviewStringField(value: unknown, key: string, options: { allowTruncated?: boolean } = {}) {
+  if (typeof value !== "string") return null;
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = value.match(new RegExp(`"${escapedKey}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`));
+  if (match?.[1]) return decodeJsonStringFragment(match[1]);
+  if (!options.allowTruncated) return null;
+  const start = value.search(new RegExp(`"${escapedKey}"\\s*:\\s*"`));
+  if (start < 0) return null;
+  const prefix = value.slice(start).match(new RegExp(`^"${escapedKey}"\\s*:\\s*"`))?.[0];
+  if (!prefix) return null;
+  const rest = value.slice(start + prefix.length);
+  const closing = rest.match(/"[,}]/);
+  const raw = (closing ? rest.slice(0, closing.index) : rest).replace(/\.\.\.$/, "");
+  return decodeJsonStringFragment(raw);
+}
+
+function paramsPreviewNumberField(value: unknown, key: string) {
+  if (typeof value !== "string") return null;
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = value.match(new RegExp(`"${escapedKey}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`));
+  if (!match?.[1]) return null;
+  const number = Number(match[1]);
+  return Number.isFinite(number) ? number : null;
+}
+
+function decodeJsonStringFragment(value: string) {
+  try {
+    return JSON.parse(`"${value}"`) as string;
+  } catch {
+    return value;
+  }
+}
+
+function transcriptItem(record: ReturnType<typeof parseCodexTranscriptRecord>[number], kind: CodexTranscriptItemKind, title: string, body: string) {
+  return {
+    id: `${kind}-${record.timestamp}-${title}`,
+    kind,
+    title,
+    timestamp: record.timestamp,
+    body,
+    command: "",
+    output: ""
+  };
+}
+
+function transcriptSection(content: string, marker: string) {
+  const index = content.indexOf(`\n${marker}`);
+  if (index < 0) return "";
+  const afterMarker = content.slice(index + marker.length + 1);
+  const nextKnownSection = afterMarker.search(/\n(?:stderr:|error:|\[exit )/);
+  const section = nextKnownSection > 0 ? afterMarker.slice(0, nextKnownSection) : afterMarker;
+  return section.trim();
+}
+
+function objectValue(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : null;
+}
+
+function sortTimelineSteps(steps: TimelineStep[]) {
+  return [...steps]
+    .sort((left, right) => {
+      const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      if (Number.isFinite(timeDelta) && timeDelta !== 0) return timeDelta;
+      return timelineStepOrder(left.kind) - timelineStepOrder(right.kind);
+    })
+    .map((step, index, sortedSteps) => {
+      const previous = index > 0 ? sortedSteps[index - 1] : null;
+      const gapMs = previous ? new Date(step.createdAt).getTime() - new Date(previous.createdAt).getTime() : null;
+      return {
+        ...step,
+        gapMs: gapMs != null && Number.isFinite(gapMs) && gapMs >= 0 ? gapMs : null
+      };
+    });
 }
 
 function timelineStart(defaultStartedAt: string, events: RunEvent[], spans: RunSpan[], flows: FlowItem[]) {

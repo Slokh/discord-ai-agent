@@ -5,6 +5,7 @@ import {
   enrichModelRoundToolRequests,
   groupTimelineSteps,
   parseCodexTranscript,
+  relatedRunTimelineSteps,
   summedStepDuration,
   timelineStepSummaryText,
   timelineSummaryText,
@@ -128,6 +129,48 @@ describe("run console timeline", () => {
         name: "getDiscordStats",
         argumentsText: "{\"groupBy\":\"user\",\"limit\":15,\"metric\":\"messages\"}"
       }
+    ]);
+  });
+
+  it("promotes related child runs as visible timeline rows", () => {
+    const steps = relatedRunTimelineSteps(
+      [
+        {
+          runId: "task-1",
+          traceId: "trace-1",
+          kind: "codegen",
+          status: "running",
+          title: "Fix notification wording",
+          summary: null,
+          requester: "kartik",
+          guildId: "guild-1",
+          channelId: "channel-1",
+          userId: "user-1",
+          messageId: null,
+          source: "agent_task",
+          startedAt: atMs(2_000),
+          completedAt: null,
+          updatedAt: atMs(4_000),
+          durationMs: null,
+          currentStep: "codex_app_server_attempt_1",
+          bottleneck: null,
+          links: {},
+          metadata: {}
+        }
+      ],
+      { startedAt: atMs(0), generatedAt: atMs(7_000) }
+    );
+
+    expect(steps).toEqual([
+      expect.objectContaining({
+        id: "related-run-task-1",
+        kind: "run",
+        title: "Codegen task running",
+        source: "related run",
+        status: "running",
+        durationMs: 5_000,
+        summary: expect.stringContaining("Current step: codex_app_server_attempt_1.")
+      })
     ]);
   });
 
@@ -561,6 +604,7 @@ function codegenSnapshot({ events, spans, artifacts = [] }: { events: RunEvent[]
     terminal: { lineCount: 0, content: "", entries: [] },
     diagnostics: [],
     raw: {},
+    relatedRuns: [],
     generatedAt: atMs(183_700)
   };
 }

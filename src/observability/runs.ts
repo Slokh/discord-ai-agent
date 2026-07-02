@@ -87,6 +87,7 @@ export type RunSnapshot = {
     task?: AgentTaskRecord;
     sandboxRuns: SandboxRunRecord[];
   };
+  relatedRuns: RunSummary[];
   generatedAt: Date;
 };
 
@@ -145,7 +146,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
   if (!processRun && !task) return undefined;
 
   const traceId = processRun?.traceId ?? task?.traceId ?? runId;
-  const [processSpans, processEvents, artifacts, taskEvents, commands, sandboxRuns, traceEvents, toolLogs] = await Promise.all([
+  const [processSpans, processEvents, artifacts, taskEvents, commands, sandboxRuns, traceEvents, toolLogs, relatedProcessRuns, relatedTasks] = await Promise.all([
     processRun ? repo.getProcessRunSpans(processRun.runId) : Promise.resolve([]),
     processRun ? repo.getProcessRunEvents({ runId: processRun.runId, limit: 500 }) : Promise.resolve([]),
     processRun ? repo.getProcessRunArtifacts(processRun.runId) : Promise.resolve([]),
@@ -153,7 +154,9 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     task ? repo.getSandboxCommandEventsForTask({ taskId: task.taskId, limit: 100 }) : Promise.resolve([]),
     task ? repo.getSandboxRunsForTask(task.taskId) : Promise.resolve([]),
     traceId ? repo.getTraceEventsForTrace({ traceId, limit: 500 }) : Promise.resolve([]),
-    traceId ? repo.getToolAuditLogsForTrace({ traceId, limit: 200 }) : Promise.resolve([])
+    traceId ? repo.getToolAuditLogsForTrace({ traceId, limit: 200 }) : Promise.resolve([]),
+    traceId ? repo.listProcessRunsForTrace({ traceId, limit: 20 }) : Promise.resolve([]),
+    traceId ? repo.listAgentTasksForTrace({ traceId, limit: 20 }) : Promise.resolve([])
   ]);
 
   const spans = sortSpans([
@@ -179,8 +182,28 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     terminal,
     diagnostics: diagnosticsForRun(run, spans, events),
     raw: { processRun, task, sandboxRuns },
+    relatedRuns: relatedRunSummaries({ processRun, task, relatedProcessRuns, relatedTasks }),
     generatedAt: new Date()
   };
+}
+
+export function relatedRunSummaries(input: {
+  processRun?: ProcessRunRecord;
+  task?: AgentTaskRecord;
+  relatedProcessRuns: ProcessRunRecord[];
+  relatedTasks: AgentTaskRecord[];
+}): RunSummary[] {
+  const currentIds = new Set([input.processRun?.runId, input.task?.taskId].filter((value): value is string => Boolean(value)));
+  const byId = new Map<string, RunSummary>();
+  for (const run of input.relatedProcessRuns) {
+    if (currentIds.has(run.runId)) continue;
+    byId.set(run.runId, summaryFromProcessRun(run));
+  }
+  for (const task of input.relatedTasks) {
+    if (currentIds.has(task.taskId) || byId.has(task.taskId)) continue;
+    byId.set(task.taskId, summaryFromTask(task));
+  }
+  return [...byId.values()].sort((left, right) => left.startedAt.getTime() - right.startedAt.getTime());
 }
 
 export function summaryFromProcessRun(run: ProcessRunRecord, spans: RunSpan[] = []): RunSummary {

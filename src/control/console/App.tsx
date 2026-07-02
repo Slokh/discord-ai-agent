@@ -27,7 +27,7 @@ type TerminalStream = TerminalEntry["stream"];
 type HistoryMode = "push" | "replace";
 type LatencyRow = RunSnapshot["spans"][number] & { durationMs: number };
 type TimedRunEvent = { event: RunEvent; gapMs: number | null; offset: string };
-type TimelineStepKind = FlowItemKind | "span" | "event";
+type TimelineStepKind = FlowItemKind | "span" | "event" | "run";
 export type TimelineStep = {
   id: string;
   kind: TimelineStepKind;
@@ -524,6 +524,8 @@ function Overview({ snapshot }: { snapshot: RunSnapshot }) {
   const totalDuration = latencyTotal(snapshot);
   const slowest = latencyRows[0] ?? null;
   const signalEvents = snapshot.events.filter((event) => event.level === "error" || event.level === "warn").slice(-4).reverse();
+  const relatedRuns = snapshot.relatedRuns ?? [];
+  const activeRelatedRuns = relatedRuns.filter((run) => !isTerminal(run.status));
   return (
     <div className="overview-grid">
       <section className="panel insight-panel">
@@ -540,7 +542,17 @@ function Overview({ snapshot }: { snapshot: RunSnapshot }) {
         <Metric label="Duration" value={formatDuration(snapshot.run.durationMs)} />
         <Metric label="Slowest" value={slowest ? `${slowest.name} (${formatDuration(slowest.durationMs)})` : "none"} tone={slowest ? "info" : "normal"} />
         <Metric label="Events" value={snapshot.events.length} />
+        {relatedRuns.length > 0 && <Metric label="Related" value={relatedRuns.length} tone={activeRelatedRuns.length > 0 ? "info" : "normal"} />}
       </section>
+      {relatedRuns.length > 0 && (
+        <section className="panel wide">
+          <div className="panel-title">
+            <Link2 />
+            <h3>Related Runs</h3>
+          </div>
+          <RelatedRunList runs={relatedRuns} generatedAt={snapshot.generatedAt} />
+        </section>
+      )}
       <section className="panel wide">
         <div className="panel-title">
           <Clock3 />
@@ -617,13 +629,41 @@ function LatencyBreakdown({ rows, totalDuration }: { rows: LatencyRow[]; totalDu
   );
 }
 
+function RelatedRunList({ runs, generatedAt }: { runs: RunSummary[]; generatedAt: string }) {
+  return (
+    <div className="related-run-list">
+      {runs.map((run) => {
+        const durationMs = relatedRunDurationMs(run, generatedAt);
+        return (
+          <a className={`related-run-card ${run.status}`} href={runHref(run.runId, "timeline")} key={run.runId}>
+            <div className="related-run-card-top">
+              <StatusTag status={run.status} />
+              <Tag intent="neutral">{run.kind}</Tag>
+              <span>{formatDuration(durationMs)}</span>
+            </div>
+            <strong>{run.title}</strong>
+            <p>{relatedRunSummary(run, { includeTitle: false }) || run.runId}</p>
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
   const [level, setLevel] = useState<EventLevel | "all">("all");
   const [source, setSource] = useState<string>("all");
   const flowItems = useMemo(() => conversationFlow(snapshot), [snapshot]);
+  const relatedRuns = useMemo(() => snapshot.relatedRuns ?? [], [snapshot.relatedRuns]);
   const sources = useMemo(
-    () => uniqueStrings([...snapshot.events.map((event) => event.source), ...snapshot.spans.map((span) => span.source), ...flowItems.map((item) => item.source)]).sort(),
-    [snapshot.events, snapshot.spans, flowItems]
+    () =>
+      uniqueStrings([
+        ...snapshot.events.map((event) => event.source),
+        ...snapshot.spans.map((span) => span.source),
+        ...flowItems.map((item) => item.source),
+        ...relatedRuns.map(() => "related run")
+      ]).sort(),
+    [snapshot.events, snapshot.spans, flowItems, relatedRuns]
   );
   const events = snapshot.events.filter((event) => {
     if (level !== "all" && event.level !== level) return false;
@@ -642,9 +682,21 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
     if (source !== "all" && item.source !== source) return false;
     return true;
   });
+  const visibleRelatedRuns = relatedRuns.filter((run) => {
+    if (source !== "all" && source !== "related run") return false;
+    if (level === "debug") return false;
+    if (level === "error") return run.status === "failed" || run.status === "cancelled";
+    if (level === "warn") return run.status === "no_changes";
+    return true;
+  });
   const timelineStartedAt = timelineStart(snapshot.run.startedAt, events, spans, flows);
   const timedEvents = eventsWithTiming(events, timelineStartedAt);
-  const trace = codegenTimelineTrace(snapshot, { events, spans, startedAt: timelineStartedAt }) ?? timelineTrace({ events: timedEvents, spans, flows, startedAt: timelineStartedAt });
+  const baseTrace = codegenTimelineTrace(snapshot, { events, spans, startedAt: timelineStartedAt }) ?? timelineTrace({ events: timedEvents, spans, flows, startedAt: timelineStartedAt });
+  const relatedSteps = relatedRunTimelineSteps(visibleRelatedRuns, {
+    startedAt: timelineStartedAt,
+    generatedAt: snapshot.generatedAt
+  });
+  const trace = relatedSteps.length > 0 ? buildTimelineTrace([...baseTrace.steps, ...relatedSteps]) : baseTrace;
 
   return (
     <section className="panel detail-panel">
@@ -744,10 +796,26 @@ function TimelineGroupItem({ group }: { group: TimelineStepGroup }) {
 
 function TimelineStepDetails({ step }: { step: TimelineStep }) {
   if (step.artifact) return null;
+  if (step.kind === "run") return <RelatedRunInline step={step} />;
   const toolRequests = timelineToolRequests(step);
   if (isModelRoundTimelineStep(step) && toolRequests.length > 0) return <RequestedTools requests={toolRequests} />;
   const summary = timelineStepSummaryText(step);
   return summary ? <p>{summary}</p> : null;
+}
+
+function RelatedRunInline({ step }: { step: TimelineStep }) {
+  const runId = typeof step.metadata.runId === "string" ? step.metadata.runId : "";
+  return (
+    <div className="related-run-inline">
+      {step.summary && <p>{step.summary}</p>}
+      {runId && (
+        <a href={runHref(runId, "timeline")}>
+          Open {step.metadata.kind === "codegen" ? "codegen" : "related"} timeline
+          <Link2 />
+        </a>
+      )}
+    </div>
+  );
 }
 
 function RequestedTools({ requests }: { requests: TimelineToolRequest[] }) {
@@ -1366,6 +1434,13 @@ function writeConsoleUrlState(state: ConsoleUrlState, mode: HistoryMode) {
   else window.history.pushState(null, "", nextUrl);
 }
 
+function runHref(runId: string, tab: DetailTab = "overview") {
+  const params = new URLSearchParams(window.location.search);
+  for (const key of managedSearchParams) params.delete(key);
+  if (tab !== "overview") params.set("tab", tab);
+  return `${runsRoutePrefix()}/${encodeURIComponent(runId)}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
+}
+
 function runIdFromLocation() {
   const match = window.location.pathname.match(/^\/(?:console\/)?runs\/([^/]+)$/);
   return match ? decodeURIComponent(match[1]!) : "";
@@ -1409,6 +1484,59 @@ function timelineTrace({ events, spans, flows, startedAt }: { events: TimedRunEv
     steps.push(timelineStepFromEvent(event));
   }
   return buildTimelineTrace(steps);
+}
+
+export function relatedRunTimelineSteps(runs: RunSummary[], input: { startedAt: string; generatedAt: string }): TimelineStep[] {
+  return runs.map((run) => {
+    const durationMs = relatedRunDurationMs(run, input.generatedAt);
+    return {
+      id: `related-run-${run.runId}`,
+      kind: "run",
+      title: relatedRunTitle(run),
+      summary: relatedRunSummary(run),
+      createdAt: run.startedAt,
+      durationMs,
+      durationStartedAt: run.startedAt,
+      gapMs: null,
+      offset: formatOffset(input.startedAt, run.startedAt),
+      source: "related run",
+      status: run.status,
+      level: run.status === "failed" || run.status === "cancelled" ? "error" : null,
+      metadata: {
+        runId: run.runId,
+        traceId: run.traceId,
+        kind: run.kind,
+        currentStep: run.currentStep,
+        links: run.links
+      }
+    };
+  });
+}
+
+function relatedRunTitle(run: RunSummary) {
+  const kind = run.kind === "codegen" ? "Codegen task" : `${titleCase(run.kind)} run`;
+  if (run.status === "running") return `${kind} running`;
+  if (run.status === "queued") return `${kind} queued`;
+  if (run.status === "succeeded") return `${kind} completed`;
+  if (run.status === "no_changes") return `${kind} finished with no changes`;
+  if (run.status === "cancelled") return `${kind} cancelled`;
+  return `${kind} failed`;
+}
+
+function relatedRunSummary(run: RunSummary, options: { includeTitle?: boolean } = {}) {
+  const includeTitle = options.includeTitle ?? true;
+  return [includeTitle ? run.title : null, run.currentStep ? `Current step: ${run.currentStep}.` : null, run.summary, typeof run.links.pullRequest === "string" ? `PR: ${run.links.pullRequest}` : null]
+    .filter((item): item is string => Boolean(item))
+    .join(" ");
+}
+
+function relatedRunDurationMs(run: RunSummary, generatedAt: string) {
+  if (typeof run.durationMs === "number" && Number.isFinite(run.durationMs)) return run.durationMs;
+  if (isTerminal(run.status)) return null;
+  const startedAt = new Date(run.startedAt).getTime();
+  const endedAt = new Date(generatedAt).getTime();
+  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return null;
+  return endedAt - startedAt;
 }
 
 export function codegenTimelineTrace(
@@ -2322,7 +2450,7 @@ function bestTimelineParent(child: TimelineStep, parents: TimelineStep[]) {
 
 function shouldNestTimelineChild(child: TimelineStep, parent: TimelineStep) {
   if (isTopLevelTimelineMarker(child)) return false;
-  if (child.kind === "input" || child.kind === "response" || child.kind === "artifact") return false;
+  if (child.kind === "input" || child.kind === "response" || child.kind === "artifact" || child.kind === "run") return false;
   const childText = normalizedTimelineName(`${child.title} ${child.source}`);
   const parentText = normalizedTimelineName(`${parent.title} ${parent.source}`);
   const parentIsTool = /\btool\b/.test(parentText);
@@ -2376,9 +2504,10 @@ function timelineStepOrder(kind: TimelineStepKind) {
     model: 2,
     tool: 3,
     span: 4,
-    artifact: 5,
-    response: 6,
-    error: 7
+    run: 5,
+    artifact: 6,
+    response: 7,
+    error: 8
   };
   return order[kind];
 }
@@ -2499,6 +2628,7 @@ function artifactKind(artifact: RunArtifact): FlowItemKind {
 }
 
 function timelineStepIcon(kind: TimelineStepKind) {
+  if (kind === "run") return <Bot />;
   if (kind === "span" || kind === "event") return <Activity />;
   if (kind === "model" || kind === "input" || kind === "response") return <MessageSquare />;
   if (kind === "tool") return <Wrench />;

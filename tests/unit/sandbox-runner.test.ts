@@ -92,8 +92,8 @@ describe("sandboxRunner", () => {
   });
 
   it("uses concise ai-prefixed branch names for code updates", () => {
-    expect(codeUpdateBranchName("Use loading reaction instead of Thinking reply", "task-1782969722216-b841abb5")).toBe(
-      "ai/use-loading-reaction-thinking-reply-abb5"
+    expect(codeUpdateBranchName("Use loading reaction instead of Thinking reply", "task-demo-1234-abcd5678")).toBe(
+      "ai/use-loading-reaction-thinking-reply-5678"
     );
   });
 
@@ -107,7 +107,7 @@ describe("sandboxRunner", () => {
     const body = codeUpdatePullRequestBody({
       env: {
         taskRequest: "Use a loading reaction while the bot is working.",
-        requestedBy: "kartik (87002447687467008)"
+        requestedBy: "demo-user (100000000000000001)"
       },
       verifyPassed: true
     });
@@ -130,7 +130,7 @@ describe("sandboxRunner", () => {
         "",
         "---",
         "",
-        "Prompted by: kartik (87002447687467008)"
+        "Prompted by: demo-user (100000000000000001)"
       ].join("\n")
     );
     expect(body).not.toContain("## Context");

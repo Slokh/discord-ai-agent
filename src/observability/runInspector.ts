@@ -47,6 +47,12 @@ export function formatRunSummaryList(runs: RunSummary[], options: RunSummaryList
       .filter(Boolean)
       .join(" | ");
     if (detail) lines.push(`  ${detail}`);
+    const failureDiagnosis = codegenFailureDiagnosisFromMetadata(run.metadata.failureDiagnosis);
+    if (failureDiagnosis) {
+      lines.push(
+        `  diagnosis=${failureDiagnosis.category ?? "unknown"} | ${truncateSingleLine(failureDiagnosis.summary, 180)} | next=${truncateSingleLine(failureDiagnosis.nextAction, 180)}`
+      );
+    }
     if (run.summary) lines.push(`  ${truncateSingleLine(run.summary, 220)}`);
   }
   return `${lines.join("\n")}\n`;
@@ -205,6 +211,19 @@ function usageFromMetadata(metadata: Record<string, unknown>) {
     cachedInputTokens: numberFromUnknown(record.cachedInputTokens)
   };
   return Object.values(normalized).some((value) => value != null) ? normalized : null;
+}
+
+function codegenFailureDiagnosisFromMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const summary = stringFromUnknown(record.summary);
+  const nextAction = stringFromUnknown(record.nextAction);
+  if (!summary || !nextAction) return null;
+  return {
+    category: stringFromUnknown(record.category),
+    summary,
+    nextAction
+  };
 }
 
 export function formatRunArtifacts(artifacts: ProcessRunArtifactContent[]): string {

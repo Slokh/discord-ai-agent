@@ -141,7 +141,14 @@ describe("run inspector formatting", () => {
         title: "replace thinking",
         summary: "Agent task produced no diff.",
         bottleneck: { name: "opencode_attempt_1", durationMs: 870_000 },
-        links: { pullRequest: "https://github.com/example/repo/pull/1" }
+        links: { pullRequest: "https://github.com/example/repo/pull/1" },
+        metadata: {
+          failureDiagnosis: {
+            category: "no_diff",
+            summary: "The coding agent completed but did not leave a repository diff.",
+            nextAction: "Inspect the transcript and clarify the requested file or expected behavior."
+          }
+        }
       }),
       runSummary({ runId: "run-failed", kind: "codegen", status: "failed", durationMs: 300_000, title: "fix codegen" })
     ];
@@ -153,6 +160,8 @@ describe("run inspector formatting", () => {
     expect(report.indexOf("run-slow")).toBeLessThan(report.indexOf("run-failed"));
     expect(report).toContain("bottleneck=opencode_attempt_1 14m 30s");
     expect(report).toContain("pr=https://github.com/example/repo/pull/1");
+    expect(report).toContain("diagnosis=no_diff | The coding agent completed but did not leave a repository diff.");
+    expect(report).toContain("next=Inspect the transcript and clarify the requested file or expected behavior.");
     expect(report).not.toContain("run-fast");
   });
 });

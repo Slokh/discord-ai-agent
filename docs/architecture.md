@@ -48,6 +48,7 @@ Postgres is the durable source of truth for Discord messages, embeddings, skills
 3. `src/control/console/` renders the React run console.
 4. `scripts/inspectRun.ts`, `scripts/codegenStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths.
 5. `inspectAgentLogs` accepts Discord message links, message IDs, run IDs, or trace IDs and includes the same normalized run diagnostics as the console when the referenced run is visible to the requester.
+6. Worker processes run `src/observability/artifactRetention.ts` periodically to delete expired large run/codegen artifacts and their chunks.
 
 Useful terminal entrypoints:
 

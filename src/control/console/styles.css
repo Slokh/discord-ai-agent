@@ -243,6 +243,74 @@ kbd {
   gap: 8px;
 }
 
+.run-breakdown {
+  background: var(--pane-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.run-breakdown-header,
+.count-chip-group > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.run-breakdown-header {
+  justify-content: space-between;
+}
+
+.run-breakdown-header span,
+.count-chip-group > span {
+  color: var(--faint);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.count-chip-group {
+  display: grid;
+  gap: 6px;
+}
+
+.count-chip {
+  align-items: center;
+  background: color-mix(in oklab, var(--pane-3) 72%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 5px;
+  min-height: 26px;
+  max-width: 100%;
+  padding: 0 8px;
+  text-transform: capitalize;
+}
+
+.count-chip strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+button.count-chip:hover {
+  border-color: color-mix(in oklab, var(--accent) 50%, var(--border));
+  color: var(--text);
+}
+
+.count-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--page);
+}
+
+.count-chip.active strong {
+  color: var(--page);
+}
+
 .select-control {
   align-items: center;
   background:

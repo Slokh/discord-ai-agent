@@ -1,18 +1,29 @@
 import { fixtureArtifact, fixtureRuns, fixtureSnapshots } from "./fixtures.js";
-import type { RunSnapshot, RunSummary } from "./types.js";
+import type { RunListAggregate, RunListResponse, RunSnapshot, RunSummary } from "./types.js";
 
 const useFixtures = import.meta.env.MODE === "fixture";
 
-export async function fetchRuns(input: { includeEmbeddings?: boolean } = {}): Promise<RunSummary[]> {
-  if (useFixtures) return input.includeEmbeddings ? fixtureRuns : fixtureRuns.filter((run) => run.kind !== "embedding");
+export async function fetchRunList(input: { includeEmbeddings?: boolean } = {}): Promise<RunListResponse> {
+  if (useFixtures) {
+    const runs = input.includeEmbeddings ? fixtureRuns : fixtureRuns.filter((run) => run.kind !== "embedding");
+    return { runs, aggregate: aggregateRuns(runs), generatedAt: new Date().toISOString() };
+  }
   const params = new URLSearchParams({
     limit: "200",
     includeEmbeddings: input.includeEmbeddings ? "1" : "0"
   });
   const response = await fetch(`/api/runs?${params}`, { credentials: "include" });
   if (!response.ok) throw new Error(`Failed to load runs (${response.status})`);
-  const body = (await response.json()) as { runs: RunSummary[] };
-  return body.runs;
+  const body = (await response.json()) as Partial<RunListResponse> & { runs: RunSummary[] };
+  return {
+    runs: body.runs,
+    aggregate: body.aggregate ?? aggregateRuns(body.runs),
+    generatedAt: body.generatedAt ?? new Date().toISOString()
+  };
+}
+
+export async function fetchRuns(input: { includeEmbeddings?: boolean } = {}): Promise<RunSummary[]> {
+  return (await fetchRunList(input)).runs;
 }
 
 export async function fetchRunSnapshot(runId: string): Promise<RunSnapshot> {
@@ -73,4 +84,42 @@ function extractDiscordMessageId(input: string): string | null {
     // Fall through to pasted-text scan.
   }
   return value.match(/\d{15,25}/g)?.at(-1) ?? null;
+}
+
+function aggregateRuns(runs: RunSummary[]): RunListAggregate {
+  return {
+    total: runs.length,
+    active: runs.filter((run) => !isTerminal(run.status)).length,
+    attention: runs.filter((run) => run.status === "failed" || run.status === "cancelled" || run.status === "no_changes").length,
+    terminal: runs.filter((run) => isTerminal(run.status)).length,
+    byStatus: countBy(runs, (run) => run.status),
+    byKind: countBy(runs, (run) => run.kind),
+    codegenDiagnoses: countBy(
+      runs
+        .map((run) => codegenDiagnosisCategory(run.metadata.failureDiagnosis))
+        .filter((category): category is string => Boolean(category)),
+      (category) => category
+    )
+  };
+}
+
+function countBy<T>(items: T[], keyForItem: (item: T) => string) {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = keyForItem(item);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([name, count]) => ({ name, count }));
+}
+
+function codegenDiagnosisCategory(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const category = (value as Record<string, unknown>).category;
+  return typeof category === "string" && category.trim() ? category.trim() : null;
+}
+
+function isTerminal(status: RunSummary["status"]) {
+  return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
 }

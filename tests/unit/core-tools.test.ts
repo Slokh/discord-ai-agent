@@ -178,6 +178,68 @@ describe("formatAgentTaskResult", () => {
     expect(response).toContain("Working on it...");
     expect(response).toContain("Run console: https://tasks.example/runs/task-1");
   });
+
+  it("uses failure diagnosis details for no-change code-update results", () => {
+    const response = formatAgentTaskResult({
+      taskId: "task-1",
+      jobId: "job-1",
+      job: {
+        taskId: "task-1",
+        pgBossJobId: "job-1",
+        status: "no_changes",
+        title: "update status",
+        error: "Agent task produced no diff.",
+        updatedAt: new Date("2026-01-01T00:00:00Z")
+      } as any,
+      taskEvents: [
+        {
+          eventName: "task.completed",
+          metadata: {
+            failureDiagnosis: {
+              category: "no_first_edit",
+              summary: "OpenCode finished without making a code edit, so no PR was opened.",
+              nextAction: "Improve context packaging so the agent makes an early focused edit."
+            }
+          }
+        }
+      ] as any
+    });
+
+    expect(response).toContain("No PR opened: OpenCode finished without making a code edit, so no PR was opened. Task ID: `task-1`.");
+    expect(response).toContain("Next: Improve context packaging so the agent makes an early focused edit.");
+    expect(response).not.toContain("the coding agent did not produce a code diff");
+  });
+
+  it("uses failure diagnosis details for failed code-update results", () => {
+    const response = formatAgentTaskResult({
+      taskId: "task-1",
+      jobId: "job-1",
+      job: {
+        taskId: "task-1",
+        pgBossJobId: "job-1",
+        status: "failed",
+        title: "update status",
+        error: "sandbox failed",
+        updatedAt: new Date("2026-01-01T00:00:00Z")
+      } as any,
+      taskEvents: [
+        {
+          eventName: "task.completed",
+          metadata: {
+            failureDiagnosis: {
+              category: "release_scan",
+              summary: "The agent produced changes, but the release scan failed before the branch was pushed.",
+              nextAction: "Inspect the release scan command log."
+            }
+          }
+        }
+      ] as any
+    });
+
+    expect(response).toContain("No PR opened: The agent produced changes, but the release scan failed before the branch was pushed.");
+    expect(response).toContain("Next: Inspect the release scan command log.");
+    expect(response).not.toContain("the sandbox failed");
+  });
 });
 
 describe("Discord lookup tools", () => {

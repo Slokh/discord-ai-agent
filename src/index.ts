@@ -75,6 +75,18 @@ async function main() {
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
 
+  // Permanently-excluded Discord channels (e.g. #trivia-sucks) must never be indexed,
+  // embedded, or returned by any retrieval tool. Purge any already-indexed data and pin
+  // the exclusion flag on every boot so a full crawl/backfill can never re-include them.
+  try {
+    const purged = await repo.purgeExcludedChannels();
+    if (purged.some((row) => row.deletedMessages > 0 || row.deletedEmbeddings > 0 || row.deletedAttachments > 0 || row.deletedCrawlCursors > 0)) {
+      logger.info({ purged }, "Purged permanently-excluded Discord channels");
+    }
+  } catch (error) {
+    logger.warn({ err: error }, "Failed to purge permanently-excluded Discord channels; continuing startup");
+  }
+
   const client =
     startsDiscordClient
       ? new Client({

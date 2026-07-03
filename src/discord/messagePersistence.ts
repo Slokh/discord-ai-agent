@@ -1,6 +1,7 @@
 import type { GuildBasedChannel, GuildMember, Message, TextBasedChannel } from "discord.js";
 import { normalizeMessageContent } from "../memory/normalize.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import { isExcludedChannelId } from "./excludedChannels.js";
 
 export async function persistDiscordMessage(repo: DiscordAiAgentRepository, message: Message) {
   if (!message.inGuild()) return;
@@ -9,6 +10,7 @@ export async function persistDiscordMessage(repo: DiscordAiAgentRepository, mess
   }
   const guild = message.guild;
   if (!guild) return;
+  if (isExcludedChannelId(message.channel.id)) return;
 
   await repo.upsertGuild({
     id: guild.id,

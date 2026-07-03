@@ -181,7 +181,67 @@ describe("discoverCrawlableChannels", () => {
     expect(repo.upsertChannel).toHaveBeenCalledWith(expect.objectContaining({ id: "thread-1", parentId: "forum-1", isThread: true }));
     expect(repo.upsertChannel).toHaveBeenCalledWith(expect.objectContaining({ id: "hidden-1", isThread: false }));
   });
+
+  it("skips permanently-excluded channels and their threads", async () => {
+    const repo = fakeCrawlerRepo();
+    const crawler = new DiscordCrawler({
+      client: { user: { id: "bot" } } as any,
+      repo: repo as any,
+      config: retryConfig() as any
+    });
+    const excludedThread = fakeChannel({
+      id: "1172353113471074314-thread",
+      parentId: "1172353113471074314",
+      type: ChannelType.PublicThread,
+      readable: true,
+      hasMessages: true
+    });
+    const excluded = fakeChannel({
+      id: "1172353113471074314",
+      type: ChannelType.GuildText,
+      readable: true,
+      hasMessages: true,
+      activeThreads: [excludedThread],
+      archivedThreads: [[excludedThread]]
+    });
+    const normal = fakeChannel({ id: "text-ok", type: ChannelType.GuildText, readable: true, hasMessages: true });
+
+    const guild = fakeGuild([excluded, normal]);
+    const channels = await crawler.discoverCrawlableChannels(guild as any);
+
+    expect(channels.map((channel) => channel.id)).toEqual(["text-ok"]);
+    expect(repo.upsertChannel).not.toHaveBeenCalledWith(expect.objectContaining({ id: "1172353113471074314" }));
+    expect(repo.upsertChannel).not.toHaveBeenCalledWith(expect.objectContaining({ id: "1172353113471074314-thread" }));
+  });
 });
+
+describe("crawlChannel excluded guard", () => {
+  it("refuses to crawl a permanently-excluded channel", async () => {
+    const repo = {
+      getCrawlCursor: vi.fn(async () => undefined),
+      updateCrawlCursor: vi.fn(async () => undefined),
+      upsertMessage: vi.fn(async () => undefined),
+      isUserPrivacyDeleted: vi.fn(async () => false)
+    };
+    const channel = fakeMessageChannel({
+      id: "1172353113471074314",
+      guildId: "guild-1",
+      pages: [[fakeMessage({ id: "message-1", content: "nope", createdTimestamp: 1 })]]
+    });
+
+    const crawler = new DiscordCrawler({
+      client: { user: { id: "bot" } } as any,
+      repo: repo as any,
+      config: retryConfig() as any
+    });
+
+    await crawler.crawlChannel(channel as any);
+
+    expect(repo.upsertMessage).not.toHaveBeenCalled();
+    expect(repo.updateCrawlCursor).not.toHaveBeenCalled();
+  });
+});
+
 
 describe("crawlChannel", () => {
   it("persists fetched messages and enqueues embeddings instead of embedding inline", async () => {

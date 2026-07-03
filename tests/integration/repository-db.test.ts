@@ -1281,6 +1281,52 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.getCrawlStatus(guildId)).resolves.toEqual([]);
   });
 
+  it("permanently excludes the hardcoded blocklist channel from retrieval and purges its data", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = "1172353113471074314";
+    const userId = `user-${randomUUID()}`;
+    const messageId = `message-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    // Insert the blocklist channel with is_excluded=false to prove the hardcoded
+    // filter excludes it regardless of the flag.
+    await repo.upsertChannel({ id: channelId, guildId, name: "trivia-sucks", type: 0 });
+    await pool.query("UPDATE channels SET is_excluded = false WHERE id = $1", [channelId]);
+    await repo.upsertMessage({
+      id: messageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "trivia noise",
+      normalizedContent: "trivia noise",
+      createdAt: new Date()
+    });
+    await repo.storeMessageEmbedding({
+      messageId,
+      embedding: Array.from({ length: 1536 }, () => 0.001),
+      model: "test"
+    });
+    await repo.updateCrawlCursor({ guildId, channelId, status: "complete", crawledCountIncrement: 5 });
+
+    // Even with is_excluded=false, the hardcoded blocklist keeps it out of retrieval.
+    await expect(repo.getVisibleIndexedChannelIds(guildId, [channelId])).resolves.toEqual([]);
+    await expect(repo.keywordSearch({ guildId, visibleChannelIds: [channelId], query: "trivia", limit: 10 })).resolves.toEqual([]);
+
+    const purged = await repo.purgeExcludedChannels();
+    const row = purged.find((entry) => entry.channelId === channelId);
+    expect(row).toBeDefined();
+    expect(row?.deletedMessages).toBeGreaterThanOrEqual(1);
+    expect(row?.deletedEmbeddings).toBeGreaterThanOrEqual(1);
+    expect(row?.deletedCrawlCursors).toBeGreaterThanOrEqual(1);
+
+    // Data is gone and the channel is pinned excluded.
+    const remaining = await pool.query("SELECT count(*)::int AS count FROM messages WHERE channel_id = $1", [channelId]);
+    expect(remaining.rows[0]?.count).toBe(0);
+    const channel = await pool.query("SELECT is_excluded FROM channels WHERE id = $1", [channelId]);
+    expect(channel.rows[0]?.is_excluded).toBe(true);
+  });
+
+
   it("initializes pending crawl cursors without downgrading existing channel progress", async () => {
     const guildId = `guild-${randomUUID()}`;
     const completeChannelId = `channel-${randomUUID()}`;

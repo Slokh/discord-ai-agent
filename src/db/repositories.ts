@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DbPool } from "./pool.js";
 import { currentTraceContext } from "../util/trace.js";
 import { redactSensitiveText } from "../observability/redaction.js";
+import { EXCLUDED_CHANNEL_IDS } from "../discord/excludedChannels.js";
 
 const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
 const LARGE_ARTIFACT_RETENTION_DAYS = 14;
@@ -1183,10 +1184,52 @@ export class DiscordAiAgentRepository {
           )
           AND c.is_excluded = false
           AND coalesce(parent.is_excluded, false) = false
+          AND c.id <> ALL($3::text[])
       `,
-      [guildId, visibleChannelIds]
+      [guildId, visibleChannelIds, [...EXCLUDED_CHANNEL_IDS]]
     );
     return result.rows.map((row) => String(row.id));
+  }
+
+  async purgeExcludedChannels(): Promise<{ channelId: string; deletedMessages: number; deletedEmbeddings: number; deletedAttachments: number; deletedCrawlCursors: number }[]> {
+    const excluded = [...EXCLUDED_CHANNEL_IDS];
+    if (excluded.length === 0) return [];
+    const results: { channelId: string; deletedMessages: number; deletedEmbeddings: number; deletedAttachments: number; deletedCrawlCursors: number }[] = [];
+
+    for (const channelId of excluded) {
+      const messages = await this.pool.query("SELECT count(*)::int AS count FROM messages WHERE channel_id = $1", [channelId]);
+      const embeddings = await this.pool.query(
+        "SELECT count(*)::int AS count FROM message_embeddings e JOIN messages m ON m.id = e.message_id WHERE m.channel_id = $1",
+        [channelId]
+      );
+      const attachments = await this.pool.query(
+        "SELECT count(*)::int AS count FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.channel_id = $1",
+        [channelId]
+      );
+      const crawlCursors = await this.pool.query("SELECT count(*)::int AS count FROM crawl_cursors WHERE channel_id = $1", [channelId]);
+
+      // Pin the channel's exclusion flag if a row exists. If no row exists yet, the
+      // hardcoded blocklist filter in getVisibleIndexedChannelIds keeps it out of
+      // retrieval, and the crawler/persister skip it so it never gets indexed. If a row
+      // exists from a prior crawl, is_excluded=true keeps the SQL is_excluded filters
+      // excluding it permanently even if a future full crawl re-discovers it.
+      await this.pool.query("UPDATE channels SET is_excluded = true, updated_at = now() WHERE id = $1", [channelId]);
+
+      // Delete messages (cascades to attachments + message_embeddings via FK ON DELETE CASCADE),
+      // and remove any crawl cursor so a backfill never resumes indexing this channel.
+      await this.pool.query("DELETE FROM crawl_cursors WHERE channel_id = $1", [channelId]);
+      await this.pool.query("DELETE FROM messages WHERE channel_id = $1", [channelId]);
+
+      results.push({
+        channelId,
+        deletedMessages: Number(messages.rows[0]?.count ?? 0),
+        deletedEmbeddings: Number(embeddings.rows[0]?.count ?? 0),
+        deletedAttachments: Number(attachments.rows[0]?.count ?? 0),
+        deletedCrawlCursors: Number(crawlCursors.rows[0]?.count ?? 0)
+      });
+    }
+
+    return results;
   }
 
   async keywordSearch(input: {

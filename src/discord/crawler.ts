@@ -12,6 +12,7 @@ import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { embeddingPriorityForMessageTimestamp, type MessageEmbeddingEnqueueOptions } from "../jobs/queue.js";
 import { channelRecordFromChannel, persistDiscordMessage } from "./messagePersistence.js";
+import { isExcludedChannelId } from "./excludedChannels.js";
 import { logger } from "../util/logger.js";
 
 type CrawlableChannel = GuildBasedChannel & {
@@ -154,12 +155,14 @@ export class DiscordCrawler {
 
     for (const channel of guild.channels.cache.values()) {
       if (!channel) continue;
+      if (isExcludedChannelId(channel.id)) continue;
       await this.persistChannel(guild.id, channel);
 
       if (!this.canBotCrawl(botMember, channel)) continue;
       if (hasMessageFetch(channel)) pushUniqueCrawlChannel(channels, seenChannelIds, channel);
 
       for (const thread of await this.fetchThreads(channel as CrawlableChannel)) {
+        if (isExcludedChannelId(thread.id)) continue;
         await this.persistThread(guild.id, thread);
         if (this.canBotCrawl(botMember, thread) && hasMessageFetch(thread)) {
           pushUniqueCrawlChannel(channels, seenChannelIds, thread);
@@ -172,6 +175,7 @@ export class DiscordCrawler {
 
   async crawlChannel(channel: CrawlableChannel) {
     if (!channel.guildId || !hasMessageFetch(channel)) return;
+    if (isExcludedChannelId(channel.id)) return;
     const existing = await this.input.repo.getCrawlCursor(channel.id);
     if (existing?.status === "complete" && existing.last_message_id) {
       await this.backfillChannel(channel, existing.last_message_id);

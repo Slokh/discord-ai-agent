@@ -84,7 +84,7 @@ describe("DiscordResponseSink", () => {
   });
 
   it("falls back to cached loading reaction cleanup when the acknowledgement reaction was not captured", async () => {
-    const reaction = fakeReaction({ id: null, name: DEFAULT_DISCORD_LOADING_REACTION });
+    const reaction = fakeReaction({ id: "1521299407214084337", name: "loading" });
     const sourceMessage = fakeMessage({
       reactions: {
         cache: {

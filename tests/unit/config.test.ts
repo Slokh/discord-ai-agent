@@ -40,7 +40,7 @@ describe("config", () => {
         expect(config.discord.clientId).toBe("");
         expect(config.discord.guildId).toBe("");
         expect(config.discord.botName).toBe("ai");
-        expect(config.discord.loadingReaction).toBe("⏳");
+        expect(config.discord.loadingReaction).toBe("<a:loading:1521299407214084337>");
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
         expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");

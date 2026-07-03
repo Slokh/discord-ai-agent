@@ -63,6 +63,9 @@ const defaults = {
   controlPlaneInternalUrl: "http://discord-ai-agent-api:8080",
   taskSigningSecret: "",
   agentRuntimeExecutionBackend: "in-process" as AgentRuntimeExecutionBackend,
+  agentRuntimeWarmSandboxUrl: "",
+  agentRuntimeWarmSandboxHost: "0.0.0.0",
+  agentRuntimeWarmSandboxPort: 8090,
   codegenHarness: "opencode" as CodegenHarness,
   codegenExecutionBackend: "kubernetes-job" as CodegenExecutionBackend,
   kubernetesNamespace: process.env.POD_NAMESPACE || "discord-ai-agent",
@@ -132,6 +135,9 @@ const envSchema = z.object({
   CONTROL_PLANE_INTERNAL_URL: z.string().url().default(defaults.controlPlaneInternalUrl),
   TASK_SIGNING_SECRET: z.string().default(defaults.taskSigningSecret),
   AGENT_RUNTIME_EXECUTION_BACKEND: z.enum(["in-process", "warm-sandbox"]).default(defaults.agentRuntimeExecutionBackend),
+  AGENT_RUNTIME_WARM_SANDBOX_URL: z.string().default(defaults.agentRuntimeWarmSandboxUrl),
+  AGENT_RUNTIME_WARM_SANDBOX_HOST: z.string().default(defaults.agentRuntimeWarmSandboxHost),
+  AGENT_RUNTIME_WARM_SANDBOX_PORT: z.coerce.number().int().positive().default(defaults.agentRuntimeWarmSandboxPort),
   CODEGEN_HARNESS: z.enum(["codex", "opencode"]).default(defaults.codegenHarness),
   CODEGEN_EXECUTION_BACKEND: z.enum(["kubernetes-job", "local-process"]).default(defaults.codegenExecutionBackend),
 
@@ -224,7 +230,10 @@ export function loadConfig() {
       publicUrl: parsed.data.CONTROL_UI_PUBLIC_URL.trim().replace(/\/$/, "") || null
     },
     agentRuntime: {
-      executionBackend: parsed.data.AGENT_RUNTIME_EXECUTION_BACKEND
+      executionBackend: parsed.data.AGENT_RUNTIME_EXECUTION_BACKEND,
+      warmSandboxUrl: parsed.data.AGENT_RUNTIME_WARM_SANDBOX_URL.trim().replace(/\/$/, "") || null,
+      warmSandboxHost: parsed.data.AGENT_RUNTIME_WARM_SANDBOX_HOST,
+      warmSandboxPort: parsed.data.AGENT_RUNTIME_WARM_SANDBOX_PORT
     },
     execution: {
       controlPlaneInternalUrl: parsed.data.CONTROL_PLANE_INTERNAL_URL.replace(/\/$/, ""),

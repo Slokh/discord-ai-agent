@@ -39,7 +39,7 @@ function testInput(executionBackend: AppConfig["agentRuntime"]["executionBackend
   return {
     config: {
       ...loadConfig(),
-      agentRuntime: { executionBackend }
+      agentRuntime: { ...loadConfig().agentRuntime, executionBackend }
     },
     repo: {} as never,
     agentRuntimeRepo: {} as never,

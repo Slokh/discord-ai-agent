@@ -16,7 +16,7 @@ export function createAgentRuntimeRunner(input: {
 }): AgentRuntimeExecutionRunner {
   const agentExecutor =
     input.config.agentRuntime.executionBackend === "warm-sandbox"
-      ? new WarmSandboxAgentRuntimePromptExecutor()
+      ? new WarmSandboxAgentRuntimePromptExecutor({ warmSandboxUrl: input.config.agentRuntime.warmSandboxUrl })
       : new InProcessAgentRuntimePromptExecutor();
   return {
     run: async (job, context) => {

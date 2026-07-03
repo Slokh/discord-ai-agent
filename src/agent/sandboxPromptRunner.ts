@@ -3,40 +3,23 @@ import { loadConfig } from "../config/env.js";
 import { createPool } from "../db/pool.js";
 import { DiscordAiAgentRepository } from "../db/repositories.js";
 import { OpenRouterClient } from "../models/openrouter.js";
-import type { ToolContext } from "../tools/types.js";
-import { handleAgentRequest } from "./router.js";
-import { conversationMessagesFromEnvelope, serializeAgentResponse, type SandboxPromptRequest } from "./sandboxPromptProtocol.js";
+import { executeSandboxPromptRequest } from "./sandboxPromptCore.js";
+import type { SandboxPromptRequest } from "./sandboxPromptProtocol.js";
 
 async function main() {
   const input = JSON.parse(await readStdin()) as SandboxPromptRequest;
-  const envelope = input.envelope;
   const config = loadConfig();
   const pool = createPool(config);
   try {
     const repo = new DiscordAiAgentRepository(pool);
     const openRouter = new OpenRouterClient(config.openRouter);
-    const toolContext: ToolContext = {
+    const response = await executeSandboxPromptRequest({
       config,
       repo,
       openRouter,
-      guildId: envelope.guildId,
-      channelId: envelope.channelId,
-      userId: envelope.userId,
-      userDisplayName: envelope.userDisplayName,
-      visibleChannelIds: envelope.visibleChannelIds,
-      mentionedUserIds: envelope.mentionedUserIds,
-      mentionedChannelIds: envelope.mentionedChannelIds,
-      threadKey: envelope.threadKey,
-      sessionMessages: conversationMessagesFromEnvelope(envelope),
-      replyContext: envelope.replyContext ?? undefined,
-      requestAttachments: envelope.requestAttachments,
-      requestId: envelope.requestId,
-      statusChannelId: envelope.delivery.statusChannelId ?? undefined,
-      statusMessageId: envelope.delivery.statusMessageId ?? undefined
-    };
-
-    const response = await handleAgentRequest(toolContext, envelope.text);
-    process.stdout.write(`${JSON.stringify(serializeAgentResponse(response))}\n`);
+      request: input
+    });
+    process.stdout.write(`${JSON.stringify(response)}\n`);
   } finally {
     await pool.end().catch(() => undefined);
   }

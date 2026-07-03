@@ -20,6 +20,9 @@ describe("config", () => {
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
         "AGENT_RUNTIME_EXECUTION_BACKEND",
+        "AGENT_RUNTIME_WARM_SANDBOX_URL",
+        "AGENT_RUNTIME_WARM_SANDBOX_HOST",
+        "AGENT_RUNTIME_WARM_SANDBOX_PORT",
         "CODEGEN_HARNESS",
         "CODEGEN_EXECUTION_BACKEND",
         "KUBERNETES_NAMESPACE",
@@ -54,6 +57,9 @@ describe("config", () => {
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
         expect(config.agentRuntime.executionBackend).toBe("in-process");
+        expect(config.agentRuntime.warmSandboxUrl).toBeNull();
+        expect(config.agentRuntime.warmSandboxHost).toBe("0.0.0.0");
+        expect(config.agentRuntime.warmSandboxPort).toBe(8090);
         expect(config.execution.codegenHarness).toBe("opencode");
         expect(config.execution.codegenBackend).toBe("kubernetes-job");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
@@ -105,9 +111,22 @@ describe("config", () => {
   });
 
   it("allows selecting the warm-sandbox agent runtime backend", () => {
-    withEnv({ AGENT_RUNTIME_EXECUTION_BACKEND: "warm-sandbox" }, () => {
-      expect(loadConfig().agentRuntime.executionBackend).toBe("warm-sandbox");
-    });
+    withEnv(
+      {
+        AGENT_RUNTIME_EXECUTION_BACKEND: "warm-sandbox",
+        AGENT_RUNTIME_WARM_SANDBOX_URL: "http://warm-sandbox:8090/",
+        AGENT_RUNTIME_WARM_SANDBOX_HOST: "127.0.0.1",
+        AGENT_RUNTIME_WARM_SANDBOX_PORT: "8091"
+      },
+      () => {
+        expect(loadConfig().agentRuntime).toEqual({
+          executionBackend: "warm-sandbox",
+          warmSandboxUrl: "http://warm-sandbox:8090",
+          warmSandboxHost: "127.0.0.1",
+          warmSandboxPort: 8091
+        });
+      }
+    );
   });
 
   it("allows codegen to use a different model than normal chat", () => {

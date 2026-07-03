@@ -39,22 +39,27 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
     private readonly options: {
       spawnProcess?: SpawnAgentProcess;
       runnerCommand?: RunnerCommand;
+      warmSandboxUrl?: string | null;
+      fetchImpl?: typeof fetch;
       env?: NodeJS.ProcessEnv;
     } = {}
   ) {}
 
   async execute(input: AgentRuntimePromptExecutionInput): Promise<AgentResponse> {
-    const command = this.options.runnerCommand ?? resolveSandboxPromptRunnerCommand();
     const request: SandboxPromptRequest = { envelope: input.turnEnvelope };
     const startedAt = Date.now();
+    const transport = this.options.warmSandboxUrl ? "http" : "child_process";
+    const command = transport === "child_process" ? this.options.runnerCommand ?? resolveSandboxPromptRunnerCommand() : null;
     await storeWarmSandboxArtifact(input, {
       protocolKind: "sandbox_prompt_request",
       name: "Warm sandbox prompt request",
       content: JSON.stringify(request, null, 2),
       metadata: {
         executor: this.name,
-        command: command.command,
-        args: command.args,
+        transport,
+        command: command?.command ?? null,
+        args: command?.args ?? null,
+        url: transport === "http" ? this.options.warmSandboxUrl : null,
         requestId: input.turnEnvelope.requestId
       }
     });
@@ -63,10 +68,64 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
       startedAt,
       metadata: {
         executor: this.name,
-        command: command.command,
-        args: command.args
+        transport,
+        command: command?.command ?? null,
+        args: command?.args ?? null,
+        url: transport === "http" ? this.options.warmSandboxUrl : null
       }
     });
+    if (this.options.warmSandboxUrl) {
+      return await this.executeRemote(input, request, startedAt);
+    }
+    if (!command) throw new Error("Warm sandbox child process command was not resolved.");
+    return await this.executeChild(input, request, command, startedAt);
+  }
+
+  private async executeRemote(input: AgentRuntimePromptExecutionInput, request: SandboxPromptRequest, startedAt: number): Promise<AgentResponse> {
+    const url = `${this.options.warmSandboxUrl}/execute`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+    try {
+      const response = await (this.options.fetchImpl ?? fetch)(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+        signal: controller.signal
+      });
+      const responseText = await response.text();
+      if (!response.ok) {
+        throw new Error(`Warm sandbox HTTP request failed (${response.status}): ${responseText}`);
+      }
+      const serializedResponse = JSON.parse(responseText) as SandboxPromptResponse;
+      return await this.completeWarmSandboxResponse(input, serializedResponse, startedAt, {
+        transport: "http",
+        url: this.options.warmSandboxUrl,
+        httpStatus: response.status,
+        responseBytes: Buffer.byteLength(responseText, "utf8")
+      });
+    } catch (error) {
+      await recordWarmSandboxSpan(input, {
+        status: "failed",
+        startedAt,
+        metadata: {
+          executor: this.name,
+          transport: "http",
+          url: this.options.warmSandboxUrl,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      }).catch(() => undefined);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async executeChild(
+    input: AgentRuntimePromptExecutionInput,
+    request: SandboxPromptRequest,
+    command: RunnerCommand,
+    startedAt: number
+  ): Promise<AgentResponse> {
     const child = (this.options.spawnProcess ?? spawnAgentProcess)(command.command, command.args, {
       env: {
         ...process.env,
@@ -85,7 +144,7 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         recordWarmSandboxSpan(input, {
           status: "failed",
           startedAt,
-          metadata: { executor: this.name, error: `Timed out after ${input.timeoutMs}ms.`, stderrTail: stderr || null }
+          metadata: { executor: this.name, transport: "child_process", error: `Timed out after ${input.timeoutMs}ms.`, stderrTail: stderr || null }
         }).catch(() => undefined);
         reject(new Error(`Warm sandbox agent runtime execution timed out after ${input.timeoutMs}ms.`));
       }, input.timeoutMs);
@@ -103,7 +162,7 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         recordWarmSandboxSpan(input, {
           status: "failed",
           startedAt,
-          metadata: { executor: this.name, error: error.message, stderrTail: stderr || null }
+          metadata: { executor: this.name, transport: "child_process", error: error.message, stderrTail: stderr || null }
         }).catch(() => undefined);
         reject(error);
       });
@@ -117,6 +176,7 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
             startedAt,
             metadata: {
               executor: this.name,
+              transport: "child_process",
               exitCode: code,
               signal,
               stdoutTail: stdout || null,
@@ -132,33 +192,12 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         }
         try {
           const serializedResponse = parseSandboxPromptResponse(stdout);
-          const response = deserializeAgentResponse(serializedResponse);
-          Promise.all([
-            storeWarmSandboxArtifact(input, {
-              protocolKind: "sandbox_prompt_response",
-              name: "Warm sandbox prompt response",
-              content: JSON.stringify(serializedResponse, null, 2),
-              metadata: {
-                executor: this.name,
-                responseChars: response.content.length,
-                fileCount: response.files?.length ?? 0,
-                memoryEventCount: response.memoryEvents?.length ?? 0
-              }
-            }),
-            recordWarmSandboxSpan(input, {
-              status: "succeeded",
-              startedAt,
-              metadata: {
-                executor: this.name,
-                responseChars: response.content.length,
-                fileCount: response.files?.length ?? 0,
-                memoryEventCount: response.memoryEvents?.length ?? 0,
-                stdoutBytes: Buffer.byteLength(stdout, "utf8"),
-                stderrBytes: Buffer.byteLength(stderr, "utf8")
-              }
-            })
-          ])
-            .then(() => resolve(response))
+          this.completeWarmSandboxResponse(input, serializedResponse, startedAt, {
+            transport: "child_process",
+            stdoutBytes: Buffer.byteLength(stdout, "utf8"),
+            stderrBytes: Buffer.byteLength(stderr, "utf8")
+          })
+            .then(resolve)
             .catch(reject);
         } catch (error) {
           recordWarmSandboxSpan(input, {
@@ -166,6 +205,7 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
             startedAt,
             metadata: {
               executor: this.name,
+              transport: "child_process",
               error: error instanceof Error ? error.message : String(error),
               stdoutTail: stdout || null,
               stderrTail: stderr || null
@@ -182,6 +222,41 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
       });
       child.stdin.end(JSON.stringify(request));
     });
+  }
+
+  private async completeWarmSandboxResponse(
+    input: AgentRuntimePromptExecutionInput,
+    serializedResponse: SandboxPromptResponse,
+    startedAt: number,
+    metadata: Record<string, unknown>
+  ): Promise<AgentResponse> {
+    const response = deserializeAgentResponse(serializedResponse);
+    await Promise.all([
+      storeWarmSandboxArtifact(input, {
+        protocolKind: "sandbox_prompt_response",
+        name: "Warm sandbox prompt response",
+        content: JSON.stringify(serializedResponse, null, 2),
+        metadata: {
+          executor: this.name,
+          ...metadata,
+          responseChars: response.content.length,
+          fileCount: response.files?.length ?? 0,
+          memoryEventCount: response.memoryEvents?.length ?? 0
+        }
+      }),
+      recordWarmSandboxSpan(input, {
+        status: "succeeded",
+        startedAt,
+        metadata: {
+          executor: this.name,
+          ...metadata,
+          responseChars: response.content.length,
+          fileCount: response.files?.length ?? 0,
+          memoryEventCount: response.memoryEvents?.length ?? 0
+        }
+      })
+    ]);
+    return response;
   }
 }
 

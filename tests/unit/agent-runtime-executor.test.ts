@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InProcessAgentRuntimePromptExecutor, WarmSandboxAgentRuntimePromptExecutor } from "../../src/agent/runtimeExecutor.js";
 import { handleAgentRequest } from "../../src/agent/router.js";
 
@@ -9,6 +9,10 @@ vi.mock("../../src/agent/router.js", () => ({
 }));
 
 describe("agent runtime prompt executors", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("runs the compatibility model loop in-process", async () => {
     vi.mocked(handleAgentRequest).mockResolvedValue({ content: "hello" });
     const executor = new InProcessAgentRuntimePromptExecutor();
@@ -92,6 +96,69 @@ describe("agent runtime prompt executors", () => {
         spanId: "agent.executor.warm_sandbox",
         status: "succeeded",
         metadata: expect.objectContaining({ responseChars: "hello from sandbox".length, fileCount: 1 })
+      })
+    );
+  });
+
+  it("runs warm-sandbox executions through the HTTP protocol when a warm server URL is configured", async () => {
+    const responseBody = {
+      content: "hello from warm server",
+      files: [{ name: "out.txt", contentType: "text/plain", dataBase64: Buffer.from("ok").toString("base64") }],
+      memoryEvents: [{ role: "assistant", content: "remembered" }]
+    };
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(responseBody), { status: 200 }));
+    const executor = new WarmSandboxAgentRuntimePromptExecutor({
+      warmSandboxUrl: "http://warm-sandbox:8090",
+      fetchImpl
+    });
+    const repo = {
+      storeProcessRunArtifact: vi.fn(async () => undefined),
+      recordProcessRunSpan: vi.fn(async () => undefined)
+    };
+
+    await expect(
+      executor.execute({
+        toolContext: { requestId: "request-http", repo } as never,
+        text: "hello",
+        timeoutMs: 1000,
+        turnEnvelope: { requestId: "request-http", text: "hello" } as never
+      })
+    ).resolves.toEqual({
+      content: "hello from warm server",
+      files: [{ name: "out.txt", contentType: "text/plain", data: Buffer.from("ok") }],
+      memoryEvents: [{ role: "assistant", content: "remembered" }]
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://warm-sandbox:8090/execute",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ envelope: { requestId: "request-http", text: "hello" } })
+      })
+    );
+    expect(repo.storeProcessRunArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "request-http",
+        name: "Warm sandbox prompt request",
+        metadata: expect.objectContaining({
+          protocolKind: "sandbox_prompt_request",
+          transport: "http",
+          url: "http://warm-sandbox:8090",
+          command: null
+        })
+      })
+    );
+    expect(repo.recordProcessRunSpan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "request-http",
+        status: "succeeded",
+        metadata: expect.objectContaining({
+          transport: "http",
+          url: "http://warm-sandbox:8090",
+          httpStatus: 200,
+          responseChars: "hello from warm server".length
+        })
       })
     );
   });

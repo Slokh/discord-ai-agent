@@ -30,9 +30,24 @@ The internal API now exposes generic agent control-plane objects. Authenticated 
 
 The first migration slice records Discord prompts and their in-process compatibility execution in this generic session ledger. Each Discord turn also stores a `turn_envelope` artifact with the serializable request context: prompt text, Discord IDs, visible channels, reply context, attachments, delivery message IDs, and recent channel memory. That artifact is the replay payload a warm sandbox executor should consume instead of reconstructing Discord state inside the worker process.
 
-`AGENT_RUNTIME_EXECUTION_BACKEND` selects the prompt execution backend. It defaults to `in-process`, which calls the existing model/tool router through `src/agent/inProcessRuntimeExecutor.ts`. The selection now flows through `src/agent/runtimeRunner.ts` and `src/agent/runtimeExecutor.ts` so the worker can prepare the Discord turn once, store the replay envelope, then hand response generation to the selected executor. `warm-sandbox` currently runs the prompt in an out-of-process `sandboxPromptRunner` child using the stored envelope protocol; this is the process boundary that the Kubernetes warm-pod launcher should replace next.
+`AGENT_RUNTIME_EXECUTION_BACKEND` selects the prompt execution backend. It defaults to `in-process`, which calls the existing model/tool router through `src/agent/inProcessRuntimeExecutor.ts`. The selection now flows through `src/agent/runtimeRunner.ts` and `src/agent/runtimeExecutor.ts` so the worker can prepare the Discord turn once, store the replay envelope, then hand response generation to the selected executor. `warm-sandbox` sends that envelope to `AGENT_RUNTIME_WARM_SANDBOX_URL` when configured; otherwise it falls back to the out-of-process `sandboxPromptRunner` child for local compatibility.
 
-Warm prompt executions write a `Warm sandbox prompt runner` span and `raw_json` artifacts for the serialized prompt request and response. Those artifacts are intentionally the same envelope/response contract the future remote warm-pod transport should use, so latency and protocol bugs are visible in the run console before the Kubernetes handoff is added.
+Warm prompt executions write a `Warm sandbox prompt runner` span and `raw_json` artifacts for the serialized prompt request and response. Span/artifact metadata includes the selected transport (`http` or `child_process`) plus HTTP status or process byte counts, so latency and protocol bugs are visible in the run console.
+
+Run a local warm prompt server with:
+
+```sh
+npm run agent:warm-server
+```
+
+In Kubernetes, set:
+
+```sh
+--set agentRuntime.executionBackend=warm-sandbox
+--set agentRuntime.warmSandbox.enabled=true
+```
+
+The Helm chart deploys a ClusterIP `agent-runtime` service and points the worker at it through `AGENT_RUNTIME_WARM_SANDBOX_URL`. The warm prompt server starts an enqueue-only job runtime so model-selected code-update tools can still enqueue normal `agent.task` work while prompt execution runs behind the remote runtime boundary.
 
 ## Legacy Codegen Session API
 

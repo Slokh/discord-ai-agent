@@ -139,4 +139,28 @@ For long or exact Discord prompts, put the prompt in a local file and pass:
 npm run smoke:codegen -- --request-file .discord-ai-agent/codegen-smoke/request.txt --close-pr
 ```
 
+To run a repeatable local codegen regression suite, put cases in a gitignored JSON file:
+
+```json
+{
+  "version": 1,
+  "name": "private-codegen-regressions",
+  "cases": [
+    {
+      "id": "tool-schema-context",
+      "title": "Improve tool schema context",
+      "request": "Make the coding agent handle tool schema changes with a focused test first."
+    }
+  ]
+}
+```
+
+Then run:
+
+```sh
+npm run smoke:codegen -- --suite .discord-ai-agent/codegen-smoke/suite.json --harness opencode --model z-ai/glm-5.2 --close-pr
+```
+
+Suite reports are written under `.discord-ai-agent/codegen-smoke/suites/` with aggregate `summary.md` and `results.json` files. Cases can override `harness`, `model`, `timeoutMs`, `closePr`, `title`, `request`, or `requestFile`; use `skip` and `skipReason` to keep costly cases documented but disabled.
+
 Use `--close-pr` for iteration runs that should automatically close the generated smoke PR and delete its branch. Omit it only when you intentionally want to inspect the opened PR on GitHub.

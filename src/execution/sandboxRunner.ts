@@ -149,9 +149,12 @@ type OpenCodeServerState = {
 };
 
 class CodegenNoDiffError extends Error {
-  constructor(message: string) {
+  readonly attempts: CodexAttemptSummary[];
+
+  constructor(message: string, attempts: CodexAttemptSummary[] = []) {
     super(message);
     this.name = "CodegenNoDiffError";
+    this.attempts = attempts;
   }
 }
 
@@ -170,6 +173,7 @@ type CommandResult = {
 };
 
 type CodegenFailureCategory =
+  | "no_first_edit"
   | "no_diff"
   | "harness_startup"
   | "release_scan"
@@ -188,6 +192,7 @@ export type CodegenFailureDiagnosis = {
   failedPhase: string | null;
   slowestPhase: { name: string; durationMs: number } | null;
   timingsMs: TaskTimings;
+  attempts?: Array<Pick<CodexAttemptSummary, "attempt" | "command" | "exitCode" | "durationMs" | "producedDiff">>;
 };
 
 async function main() {
@@ -225,10 +230,11 @@ async function main() {
 export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTimings; harness?: CodegenHarness }): CodegenFailureDiagnosis {
   const error = input.error instanceof Error ? input.error : new Error(String(input.error));
   const message = error.message;
+  const attempts = codegenAttemptsFromError(error);
   const failedPhase = inferFailedCodegenPhase(message, input.timings, input.harness);
   const slowestPhase = slowestCodegenPhase(input.timings);
-  const category = classifyCodegenFailure(message, error.name, failedPhase, input.harness);
-  const status = category === "no_diff" ? "no_changes" : "failed";
+  const category = classifyCodegenFailure(message, error.name, failedPhase, input.harness, attempts);
+  const status = category === "no_diff" || category === "no_first_edit" ? "no_changes" : "failed";
   const summary = codegenFailureSummary(category, input.harness);
   return {
     category,
@@ -238,8 +244,38 @@ export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTim
     error: message,
     failedPhase,
     slowestPhase,
-    timingsMs: { ...input.timings }
+    timingsMs: { ...input.timings },
+    attempts: attempts.length
+      ? attempts.map((attempt) => ({
+          attempt: attempt.attempt,
+          command: attempt.command,
+          exitCode: attempt.exitCode,
+          durationMs: attempt.durationMs,
+          producedDiff: attempt.producedDiff
+        }))
+      : undefined
   };
+}
+
+function codegenAttemptsFromError(error: Error): CodexAttemptSummary[] {
+  if (error instanceof CodegenNoDiffError) return error.attempts;
+  const value = (error as { attempts?: unknown }).attempts;
+  if (!Array.isArray(value)) return [];
+  return value.filter(isCodexAttemptSummary);
+}
+
+function isCodexAttemptSummary(value: unknown): value is CodexAttemptSummary {
+  if (!value || typeof value !== "object") return false;
+  const attempt = value as Partial<CodexAttemptSummary>;
+  return (
+    typeof attempt.attempt === "number" &&
+    ["app-server", "exec", "resume", "opencode-run"].includes(String(attempt.command)) &&
+    typeof attempt.exitCode === "number" &&
+    typeof attempt.durationMs === "number" &&
+    typeof attempt.producedDiff === "boolean" &&
+    typeof attempt.stdoutTail === "string" &&
+    typeof attempt.stderrTail === "string"
+  );
 }
 
 export function renderCodegenFailureDiagnosis(diagnosis: CodegenFailureDiagnosis) {
@@ -257,6 +293,17 @@ export function renderCodegenFailureDiagnosis(diagnosis: CodegenFailureDiagnosis
     "",
     diagnosis.error,
     "",
+    ...(diagnosis.attempts?.length
+      ? [
+          "## Attempts",
+          "",
+          ...diagnosis.attempts.map(
+            (attempt) =>
+              `- attempt ${attempt.attempt}: command=${attempt.command}, exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, producedDiff=${attempt.producedDiff}`
+          ),
+          ""
+        ]
+      : []),
     "## Timings",
     ""
   ];
@@ -291,9 +338,17 @@ async function recordCodegenFailureDiagnosis(env: SandboxEnv, diagnosis: Codegen
   });
 }
 
-function classifyCodegenFailure(message: string, errorName: string, failedPhase: string | null, harness: CodegenHarness | undefined): CodegenFailureCategory {
+function classifyCodegenFailure(
+  message: string,
+  errorName: string,
+  failedPhase: string | null,
+  harness: CodegenHarness | undefined,
+  attempts: CodexAttemptSummary[] = []
+): CodegenFailureCategory {
   const text = message.toLowerCase();
-  if (errorName === "CodegenNoDiffError" || text.includes("produced no diff")) return "no_diff";
+  if (errorName === "CodegenNoDiffError" || text.includes("produced no diff")) {
+    return attempts.length > 0 && !attempts.some((attempt) => attemptProducedEditSignal(attempt)) ? "no_first_edit" : "no_diff";
+  }
   if (errorName === "CodexAppServerStartupError" || text.includes("failed before starting a usable model turn") || text.includes("health probe timed out")) {
     return "harness_startup";
   }
@@ -303,6 +358,12 @@ function classifyCodegenFailure(message: string, errorName: string, failedPhase:
   if (text.includes("npm ci") || text.includes("npm install") || failedPhase === "dependencies") return "dependency_install";
   if (text.includes("codex") || text.includes("opencode") || harness) return "command_failed";
   return "unknown";
+}
+
+function attemptProducedEditSignal(attempt: CodexAttemptSummary) {
+  if (attempt.producedDiff) return true;
+  const text = `${attempt.stdoutTail}\n${attempt.stderrTail}`.toLowerCase();
+  return /(?:\bfirst[_ -]?edit\b|\bfirst[_ -]?diff\b|\bapply_patch\b|\bedit_file\b|\bfile_edit\b|\btool_use\b.*\bedit\b|"name"\s*:\s*"edit"|"tool"\s*:\s*"edit")/.test(text);
 }
 
 function inferFailedCodegenPhase(message: string, timings: TaskTimings, harness: CodegenHarness | undefined) {
@@ -328,6 +389,8 @@ function slowestCodegenPhase(timings: TaskTimings) {
 function codegenFailureSummary(category: CodegenFailureCategory, harness: CodegenHarness | undefined) {
   const harnessName = harness ? codegenHarnessDisplayName(harness) : "The coding harness";
   switch (category) {
+    case "no_first_edit":
+      return `${harnessName} finished without making a code edit, so no PR was opened.`;
     case "no_diff":
       return `${harnessName} finished but left the repository with no code diff, so no PR was opened.`;
     case "harness_startup":
@@ -349,6 +412,8 @@ function codegenFailureSummary(category: CodegenFailureCategory, harness: Codege
 
 function codegenFailureNextAction(category: CodegenFailureCategory, failedPhase: string | null) {
   switch (category) {
+    case "no_first_edit":
+      return "Inspect the harness transcript, prompt, and preflight context; improve context packaging or task instructions so the agent makes an early focused edit.";
     case "no_diff":
       return "Inspect the harness transcript and request context; improve context packaging or the coding prompt if the task should have produced a change.";
     case "harness_startup":
@@ -1453,7 +1518,8 @@ async function runOpenCodeWithRecovery(input: {
         (attempt) =>
           `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}`
       )
-    ].join("\n")
+    ].join("\n"),
+    attempts
   );
 }
 
@@ -1784,7 +1850,8 @@ async function runCodexAppServerWithRecovery(input: {
         (attempt) =>
           `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}`
       )
-    ].join("\n")
+    ].join("\n"),
+    attempts
   );
 }
 
@@ -1992,14 +2059,15 @@ async function runCodexExecWithRecovery(input: {
     if (attempt < totalAttempts) continue;
   }
 
-  throw new Error(
+  throw new CodegenNoDiffError(
     [
       "Agent task produced no diff after Codex recovery attempts; no PR will be opened.",
       ...attempts.map(
         (attempt) =>
           `attempt ${attempt.attempt}: exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}`
       )
-    ].join("\n")
+    ].join("\n"),
+    attempts
   );
 }
 

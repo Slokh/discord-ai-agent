@@ -3,7 +3,7 @@ import type { Logger } from "pino";
 import { cleanResponse } from "../tools/coreTools.js";
 import type { AgentFile } from "../tools/types.js";
 
-export const DEFAULT_DISCORD_LOADING_REACTION = "⏳";
+export const DEFAULT_DISCORD_LOADING_REACTION = "<a:loading:1521299407214084337>";
 const ACKNOWLEDGEMENT_FALLBACK_CONTENT = "Working on it...";
 
 export type DiscordResponseResult = {

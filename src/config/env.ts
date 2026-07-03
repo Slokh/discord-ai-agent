@@ -41,7 +41,7 @@ const defaults = {
   discordClientId: "",
   discordGuildId: "",
   discordBotName: "ai",
-  discordLoadingReaction: "⏳",
+  discordLoadingReaction: "<a:loading:1521299407214084337>",
   databaseUrl: defaultDatabaseUrl(),
   embeddingDimensions: 1536,
   openRouterBaseUrl: "https://openrouter.ai/api/v1",

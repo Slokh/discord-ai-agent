@@ -178,7 +178,18 @@ describe("internal API run endpoints", () => {
 
   it("serves a generic agent session control-plane API", async () => {
     const codegenRepo = fakeCodegenRepo();
-    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), codegenRepo: codegenRepo as never });
+    const enqueuedJobs: unknown[] = [];
+    runtime = await startInternalApi({
+      config: testConfig(),
+      repo: fakeRepo(),
+      codegenRepo: codegenRepo as never,
+      jobs: {
+        enqueueAgentRuntimeExecution: async (job) => {
+          enqueuedJobs.push(job);
+          return "agent-runtime-job-1";
+        }
+      }
+    });
     const auth = {
       authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}`,
       "content-type": "application/json"
@@ -192,6 +203,9 @@ describe("internal API run endpoints", () => {
       body: JSON.stringify({
         request: "answer the Discord prompt through a warm sandbox session",
         requestedBy: "kartik",
+        guildId: "guild-1",
+        channelId: "channel-1",
+        userId: "user-1",
         model: "z-ai/glm-5.2",
         harness: "opencode"
       })
@@ -221,12 +235,26 @@ describe("internal API run endpoints", () => {
     const execute = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/execute`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ reasoningEffort: "low", metadata: { source: "test" } })
+      body: JSON.stringify({
+        reasoningEffort: "low",
+        metadata: { source: "test" },
+        enqueue: true,
+        runId: "discord-run-2",
+        messageId: "discord-message-2",
+        responseChannelId: "channel-1",
+        responseMessageId: "thinking-message-1",
+        text: "hello from Discord",
+        rawContent: "<@ai> hello from Discord",
+        mentionKind: "user",
+        botRoleIds: ["bot-role-1"],
+        requesterDisplayName: "kartik"
+      })
     });
     expect(execute.status).toBe(202);
     const executeBody = await execute.json();
     expect(executeBody).toEqual(
       expect.objectContaining({
+        jobId: "agent-runtime-job-1",
         execution: expect.objectContaining({
           status: "queued",
           reasoningEffort: "low",
@@ -234,6 +262,26 @@ describe("internal API run endpoints", () => {
         })
       })
     );
+    expect(enqueuedJobs).toEqual([
+      expect.objectContaining({
+        runId: "discord-run-2",
+        traceId: "discord-run-2",
+        agentSessionId: createBody.session.sessionId,
+        agentExecutionId: executeBody.execution.executionId,
+        agentThreadKey: threadKey,
+        guildId: "guild-1",
+        channelId: "channel-1",
+        messageId: "discord-message-2",
+        userId: "user-1",
+        responseChannelId: "channel-1",
+        responseMessageId: "thinking-message-1",
+        text: "hello from Discord",
+        rawContent: "<@ai> hello from Discord",
+        mentionKind: "user",
+        botRoleIds: ["bot-role-1"],
+        requesterDisplayName: "kartik"
+      })
+    ]);
     const envelopeArtifact = await codegenRepo.storeArtifact({
       sessionId: createBody.session.sessionId,
       executionId: executeBody.execution.executionId,
@@ -250,7 +298,10 @@ describe("internal API run endpoints", () => {
       expect.objectContaining({
         messages: [expect.objectContaining({ clientMessageId: "discord-message-2" })],
         executions: [expect.objectContaining({ status: "queued" })],
-        events: expect.arrayContaining([expect.objectContaining({ eventName: "agent.execution.queued" })])
+        events: expect.arrayContaining([
+          expect.objectContaining({ eventName: "agent.execution.queued" }),
+          expect.objectContaining({ eventName: "agent.execution.job_enqueued" })
+        ])
       })
     );
 
@@ -551,6 +602,43 @@ function fakeCodegenRepo() {
       };
       executions.set(input.sessionId, [execution, ...(executions.get(input.sessionId) ?? [])]);
       return execution;
+    },
+    updateExecution: async (input: {
+      executionId: string;
+      status?: CodegenExecutionRecord["status"];
+      branchName?: string | null;
+      prUrl?: string | null;
+      draft?: boolean | null;
+      verifyPassed?: boolean | null;
+      error?: string | null;
+      sandboxId?: string | null;
+      sandboxRunId?: string | null;
+      codexThreadId?: string | null;
+      metadata?: Record<string, unknown>;
+    }) => {
+      for (const [sessionId, sessionExecutions] of executions.entries()) {
+        const index = sessionExecutions.findIndex((execution) => execution.executionId === input.executionId);
+        if (index < 0) continue;
+        const existing = sessionExecutions[index]!;
+        const updated: CodegenExecutionRecord = {
+          ...existing,
+          status: input.status ?? existing.status,
+          branchName: input.branchName ?? existing.branchName,
+          prUrl: input.prUrl ?? existing.prUrl,
+          draft: input.draft ?? existing.draft,
+          verifyPassed: input.verifyPassed ?? existing.verifyPassed,
+          error: input.error ?? existing.error,
+          sandboxId: input.sandboxId ?? existing.sandboxId,
+          sandboxRunId: input.sandboxRunId ?? existing.sandboxRunId,
+          metadata: { ...existing.metadata, ...(input.metadata ?? {}) },
+          updatedAt: new Date("2026-06-30T12:00:02Z")
+        };
+        const nextExecutions = [...sessionExecutions];
+        nextExecutions[index] = updated;
+        executions.set(sessionId, nextExecutions);
+        return updated;
+      }
+      return undefined;
     },
     listExecutions: async (input: { sessionId: string }) => executions.get(input.sessionId) ?? [],
     recordEvent: async (input: {

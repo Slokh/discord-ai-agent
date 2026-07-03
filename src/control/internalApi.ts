@@ -12,6 +12,7 @@ import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execut
 import { collectCodegenStatusSnapshot } from "../observability/codegenStatus.js";
 import { buildRunListAggregate } from "../observability/runAggregates.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../observability/runs.js";
+import type { AgentRuntimeExecutionJob, JobRuntime } from "../jobs/queue.js";
 import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
@@ -29,6 +30,7 @@ export async function startInternalApi(input: {
   repo: DiscordAiAgentRepository;
   codegenRepo?: CodegenRepository;
   db?: DbPool;
+  jobs?: Pick<JobRuntime, "enqueueAgentRuntimeExecution">;
 }): Promise<InternalApiRuntime> {
   assertTaskCallbackConfig(input.config);
   const server = http.createServer(async (request, response) => {
@@ -61,6 +63,7 @@ async function handleRequest(input: {
   repo: DiscordAiAgentRepository;
   codegenRepo?: CodegenRepository;
   db?: DbPool;
+  jobs?: Pick<JobRuntime, "enqueueAgentRuntimeExecution">;
   request: http.IncomingMessage;
   response: http.ServerResponse;
 }) {
@@ -203,7 +206,16 @@ async function handleRequest(input: {
       sendJson(input.response, 404, { error: "agent_session_not_found" });
       return;
     }
-    const body = parseCodegenExecuteBody(await readJsonBody(input.request));
+    const body = parseAgentExecuteBody(await readJsonBody(input.request));
+    if (body.enqueue && !input.jobs) {
+      sendJson(input.response, 503, { error: "agent_runtime_queue_unavailable" });
+      return;
+    }
+    const missingEnqueueContext = body.enqueue ? missingAgentRuntimeExecutionJobContext({ session, body }) : null;
+    if (missingEnqueueContext) {
+      sendJson(input.response, 400, { error: "agent_runtime_enqueue_context_missing", detail: missingEnqueueContext });
+      return;
+    }
     const execution = await agentRepo.createExecution({
       executionId: body.executionId ?? deterministicCodegenId("agent-execution", `${session.sessionId}:${Date.now()}:${randomUUID()}`),
       sessionId: session.sessionId,
@@ -228,7 +240,65 @@ async function handleRequest(input: {
       summary: "Queued agent execution.",
       metadata: { executionId: execution.executionId, harness: execution.harness, model: execution.model }
     });
-    sendJson(input.response, 202, { ok: true, session, execution });
+    let jobId: string | null = null;
+    if (body.enqueue) {
+      const job = agentRuntimeExecutionJobFromSession({
+        session,
+        execution,
+        threadKey,
+        body
+      });
+      try {
+        jobId = await input.jobs!.enqueueAgentRuntimeExecution(job);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await agentRepo.updateExecution({
+          executionId: execution.executionId,
+          status: "failed",
+          error: message,
+          metadata: {
+            queue: "agent.runtime.execution",
+            enqueueFailed: true
+          }
+        });
+        await agentRepo.recordEvent({
+          sessionId: session.sessionId,
+          executionId: execution.executionId,
+          traceId: execution.traceId,
+          kind: "error",
+          level: "error",
+          eventName: "agent.execution.enqueue_failed",
+          summary: message,
+          metadata: { runId: job.runId, messageId: job.messageId }
+        });
+        sendJson(input.response, 502, { error: "agent_runtime_enqueue_failed", detail: message, session, execution });
+        return;
+      }
+      await agentRepo.updateExecution({
+        executionId: execution.executionId,
+        metadata: {
+          pgbossJobId: jobId,
+          queuedAt: job.enqueuedAt,
+          queue: "agent.runtime.execution"
+        }
+      });
+      await agentRepo.recordEvent({
+        sessionId: session.sessionId,
+        executionId: execution.executionId,
+        traceId: execution.traceId,
+        kind: "status",
+        eventName: "agent.execution.job_enqueued",
+        summary: "Enqueued agent runtime execution job.",
+        metadata: {
+          jobId,
+          runId: job.runId,
+          messageId: job.messageId,
+          responseMessageId: job.responseMessageId ?? null,
+          turnEnvelopeArtifactId: job.turnEnvelopeArtifactId ?? null
+        }
+      });
+    }
+    sendJson(input.response, 202, { ok: true, session, execution, jobId });
     return;
   }
 
@@ -1097,6 +1167,116 @@ function parseCodegenExecuteBody(value: unknown): {
   };
 }
 
+type AgentExecuteBody = {
+  executionId: string | null;
+  taskId: string | null;
+  traceId: string | null;
+  attempt: number | undefined;
+  harness: string | null;
+  model: string | null;
+  provider: string | null;
+  reasoningEffort: string | null;
+  sandboxId: string | null;
+  sandboxRunId: string | null;
+  metadata: Record<string, unknown>;
+  enqueue: boolean;
+  runId: string | null;
+  guildId: string | null;
+  channelId: string | null;
+  messageId: string | null;
+  userId: string | null;
+  responseChannelId: string | null;
+  responseMessageId: string | null;
+  turnEnvelopeArtifactId: string | null;
+  text: string | null;
+  rawContent: string | null;
+  mentionKind: string | null;
+  botRoleIds: string[];
+  requesterDisplayName: string | null;
+  enqueuedAt: string | null;
+};
+
+function parseAgentExecuteBody(value: unknown): AgentExecuteBody {
+  const base = parseCodegenExecuteBody(value);
+  const body = value as Record<string, unknown>;
+  return {
+    ...base,
+    enqueue: parseBooleanLike(body.enqueue) || parseBooleanLike(body.enqueueJob),
+    runId: stringOrNull(body.runId),
+    guildId: stringOrNull(body.guildId),
+    channelId: stringOrNull(body.channelId),
+    messageId: stringOrNull(body.messageId),
+    userId: stringOrNull(body.userId),
+    responseChannelId: stringOrNull(body.responseChannelId),
+    responseMessageId: stringOrNull(body.responseMessageId),
+    turnEnvelopeArtifactId: stringOrNull(body.turnEnvelopeArtifactId),
+    text: stringOrNull(body.text),
+    rawContent: stringOrNull(body.rawContent),
+    mentionKind: stringOrNull(body.mentionKind),
+    botRoleIds: stringArray(body.botRoleIds),
+    requesterDisplayName: stringOrNull(body.requesterDisplayName),
+    enqueuedAt: stringOrNull(body.enqueuedAt)
+  };
+}
+
+function agentRuntimeExecutionJobFromSession(input: {
+  session: Awaited<ReturnType<AgentRuntimeRepository["upsertSession"]>>;
+  execution: Awaited<ReturnType<AgentRuntimeRepository["createExecution"]>>;
+  threadKey: string;
+  body: AgentExecuteBody;
+}): AgentRuntimeExecutionJob {
+  const metadata = input.session.metadata;
+  const messageId = input.body.messageId ?? metadataString(metadata, "currentMessageId");
+  const guildId = input.body.guildId ?? input.session.guildId;
+  const channelId = input.body.channelId ?? input.session.channelId;
+  const userId = input.body.userId ?? input.session.userId;
+  const text = input.body.text ?? input.session.request;
+  const missingContext = missingAgentRuntimeExecutionJobContext({ session: input.session, body: input.body });
+  if (missingContext) throw new Error(missingContext);
+  if (!messageId || !guildId || !channelId || !userId || !text.trim()) throw new Error("Agent execution enqueue context is incomplete.");
+  const runId = input.body.runId ?? messageId;
+  return {
+    runId,
+    traceId: input.body.traceId ?? input.execution.traceId ?? runId,
+    agentSessionId: input.session.sessionId,
+    agentExecutionId: input.execution.executionId,
+    agentThreadKey: input.session.threadKey ?? input.threadKey,
+    guildId,
+    channelId,
+    messageId,
+    userId,
+    responseChannelId: input.body.responseChannelId ?? metadataString(metadata, "responseChannelId") ?? undefined,
+    responseMessageId: input.body.responseMessageId ?? metadataString(metadata, "responseMessageId") ?? undefined,
+    turnEnvelopeArtifactId: input.body.turnEnvelopeArtifactId ?? metadataString(metadata, "turnEnvelopeArtifactId"),
+    text,
+    rawContent: input.body.rawContent ?? text,
+    mentionKind: input.body.mentionKind ?? metadataString(metadata, "mentionKind") ?? "user",
+    botRoleIds: input.body.botRoleIds,
+    requesterDisplayName: input.body.requesterDisplayName ?? input.session.requestedBy,
+    enqueuedAt: input.body.enqueuedAt ?? new Date().toISOString()
+  };
+}
+
+function missingAgentRuntimeExecutionJobContext(input: { session: Awaited<ReturnType<AgentRuntimeRepository["upsertSession"]>>; body: AgentExecuteBody }) {
+  const metadata = input.session.metadata;
+  const missing: string[] = [];
+  if (!(input.body.guildId ?? input.session.guildId)) missing.push("guildId");
+  if (!(input.body.channelId ?? input.session.channelId)) missing.push("channelId");
+  if (!(input.body.messageId ?? metadataString(metadata, "currentMessageId"))) missing.push("messageId");
+  if (!(input.body.userId ?? input.session.userId)) missing.push("userId");
+  if (!(input.body.text ?? input.session.request).trim()) missing.push("text");
+  return missing.length ? `Missing ${missing.join(", ")} on the execute body or session.` : null;
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 function objectOrEmpty(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -1141,6 +1321,13 @@ function agentRuntimeRepo(codegenRepo?: CodegenRepository) {
 
 function parseBoolean(value: string | null) {
   return /^(1|true|yes)$/i.test(value ?? "");
+}
+
+function parseBooleanLike(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1;
+  if (typeof value === "string") return /^(1|true|yes)$/i.test(value);
+  return false;
 }
 
 function sendJson(response: http.ServerResponse, status: number, body: Record<string, unknown>) {

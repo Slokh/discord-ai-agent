@@ -146,7 +146,7 @@ async function main() {
     { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsDiscordAgentWorker },
     "Job runtime ready"
   );
-  const internalApi = startsApi ? await startInternalApi({ config, repo, codegenRepo, db: pool }) : null;
+  const internalApi = startsApi ? await startInternalApi({ config, repo, codegenRepo, db: pool, jobs }) : null;
   const staleRunReconciler = startsApi
     ? startStaleRunReconciler({
         repo,

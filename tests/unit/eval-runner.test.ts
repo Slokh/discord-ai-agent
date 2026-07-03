@@ -7,6 +7,7 @@ const basePrompt: EvalPrompt = {
   prompt: "what did people say about jobs?",
   notes: undefined,
   expectedTools: [],
+  expectedRequestedTools: [],
   mustContain: [],
   mustNotContain: [],
   promptArgs: [],
@@ -61,6 +62,7 @@ describe("eval runner", () => {
           {
             metadata: {
               requestedToolCalls: ["findDiscordUsers", "summarizeDiscordHistory"],
+              requestedToolRequests: [{ name: "openrouter:web_search" }],
               selectedLocalTools: ["findDiscordUsers"],
               selectedLocalToolRequests: [{ name: "summarizeDiscordHistory" }]
             }
@@ -69,7 +71,7 @@ describe("eval runner", () => {
         [{ toolName: "findDiscordUsers" }, { toolName: "summarizeDiscordHistory" }]
       )
     ).toEqual({
-      requestedTools: ["findDiscordUsers", "summarizeDiscordHistory"],
+      requestedTools: ["findDiscordUsers", "summarizeDiscordHistory", "openrouter:web_search"],
       selectedTools: ["findDiscordUsers", "summarizeDiscordHistory"],
       auditedTools: ["findDiscordUsers", "summarizeDiscordHistory"],
       traceEventCount: 1,
@@ -83,6 +85,7 @@ describe("eval runner", () => {
         {
           ...basePrompt,
           expectedTools: ["searchDiscordHistory"],
+          expectedRequestedTools: ["openrouter:web_search"],
           mustContain: ["job"],
           mustNotContain: ["Sources:"],
           maxLatencyMs: 100
@@ -91,7 +94,7 @@ describe("eval runner", () => {
           answer: "People talked about job interviews.",
           durationMs: 50,
           evidence: {
-            requestedTools: ["searchDiscordHistory"],
+            requestedTools: ["searchDiscordHistory", "openrouter:web_search"],
             selectedTools: ["searchDiscordHistory"],
             auditedTools: [],
             traceEventCount: 1,
@@ -103,7 +106,14 @@ describe("eval runner", () => {
 
     expect(
       evaluatePromptAssertions(
-        { ...basePrompt, expectedTools: ["getDiscordStats"], mustContain: ["ranked"], mustNotContain: ["Sources:"], maxLatencyMs: 10 },
+        {
+          ...basePrompt,
+          expectedTools: ["getDiscordStats"],
+          expectedRequestedTools: ["openrouter:web_search"],
+          mustContain: ["ranked"],
+          mustNotContain: ["Sources:"],
+          maxLatencyMs: 10
+        },
         {
           answer: "Sources: none",
           durationMs: 20,
@@ -118,6 +128,7 @@ describe("eval runner", () => {
       )
     ).toEqual([
       "expected tool getDiscordStats was not observed",
+      "expected requested tool openrouter:web_search was not observed",
       "answer did not contain required text: ranked",
       "answer contained forbidden text: Sources:",
       "latency 20ms exceeded 10ms"

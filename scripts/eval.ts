@@ -15,6 +15,7 @@ const evalPromptSchema = z.object({
   prompt: z.string().min(1),
   notes: z.string().optional(),
   expectedTools: z.array(z.string().min(1)).default([]),
+  expectedRequestedTools: z.array(z.string().min(1)).default([]),
   mustContain: z.array(z.string().min(1)).default([]),
   mustNotContain: z.array(z.string().min(1)).default([]),
   maxLatencyMs: z.number().int().positive().optional(),
@@ -357,9 +358,13 @@ export function evaluatePromptAssertions(
   const failures: string[] = [];
   const normalizedAnswer = output.answer.toLowerCase();
   const observedTools = new Set([...output.evidence.selectedTools, ...output.evidence.auditedTools]);
+  const requestedTools = new Set(output.evidence.requestedTools);
 
   for (const tool of prompt.expectedTools) {
     if (!observedTools.has(tool)) failures.push(`expected tool ${tool} was not observed`);
+  }
+  for (const tool of prompt.expectedRequestedTools) {
+    if (!requestedTools.has(tool)) failures.push(`expected requested tool ${tool} was not observed`);
   }
   for (const text of prompt.mustContain) {
     if (!normalizedAnswer.includes(text.toLowerCase())) failures.push(`answer did not contain required text: ${text}`);

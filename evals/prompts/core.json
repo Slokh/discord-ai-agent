@@ -102,6 +102,7 @@
       "id": "web-current-external-fact",
       "category": "web",
       "prompt": "what is the next world cup match?",
+      "expectedRequestedTools": ["openrouter:web_search"],
       "mustNotContain": ["Discord evidence"],
       "notes": "Current public facts should not over-index on Discord history."
     },
@@ -109,6 +110,7 @@
       "id": "web-specific-game-help",
       "category": "web",
       "prompt": "how can i see my batomon rank?",
+      "expectedRequestedTools": ["openrouter:web_search"],
       "mustNotContain": ["Discord evidence"],
       "notes": "Niche external product questions should use web tools when Discord evidence is insufficient."
     },

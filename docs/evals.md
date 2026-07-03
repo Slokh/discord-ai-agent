@@ -38,6 +38,7 @@ npm run eval -- --include-private
       "category": "history",
       "prompt": "what have people said about job hunting or interviewing?",
       "expectedTools": ["searchDiscordHistory"],
+      "expectedRequestedTools": [],
       "mustContain": ["interview"],
       "mustNotContain": ["Sources:"],
       "notes": "Should answer conversationally without dumping citation blocks."
@@ -52,6 +53,7 @@ Supported prompt fields:
 - `category`: grouping, such as `history`, `stats`, `web`, `image`, `codegen`, or `ops`.
 - `prompt`: text passed to `npm run prompt`.
 - `expectedTools`: local tools that must be observed in trace/tool audit evidence.
+- `expectedRequestedTools`: local or hosted tools that must be observed in model-requested tool calls, such as `openrouter:web_search`.
 - `mustContain`: case-insensitive answer substrings.
 - `mustNotContain`: case-insensitive forbidden answer substrings.
 - `maxLatencyMs`: optional latency ceiling for the prompt.

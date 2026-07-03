@@ -993,6 +993,35 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
   });
 
+  it("attaches queued agent tasks to the final Discord prompt reply", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const traceId = `trace-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const replyMessageId = `reply-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Warm Runtime Task Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId,
+      guildId,
+      channelId,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "warm runtime task",
+      request: "make warm runtime task updates reliable",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+
+    await expect(repo.listRenderableAgentTasks(5)).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
+    await expect(repo.attachAgentTasksToDiscordResponse({ traceId, channelId, messageId: replyMessageId })).resolves.toBe(1);
+    await expect(repo.getAgentTask(taskId)).resolves.toMatchObject({
+      discordResponseChannelId: channelId,
+      discordResponseMessageId: replyMessageId
+    });
+    await expect(repo.listRenderableAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
+  });
+
   it("aggregates agent task phase durations and sandbox cache events", async () => {
     const taskId = `task-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;

@@ -44,6 +44,10 @@ async function enqueueAgentCodeUpdateTask(
   }
   await ctx.updateStatus?.("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
   return ctx.jobs.enqueueAgentTask({
+    traceId: ctx.requestId,
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
     request: input.request.trim(),
     title: input.updateName,
     requestedBy: input.requestedBy,

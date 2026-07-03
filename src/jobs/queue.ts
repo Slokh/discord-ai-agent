@@ -83,7 +83,7 @@ export type JobRuntime = {
   enqueueAgentRuntimeExecution: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
   enqueueDiscordAgentRequest: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
   enqueueAgentTask: (
-    job: Omit<AgentTaskJob, "taskId" | "traceId" | "taskType"> & { taskId?: string; taskType?: AgentTaskJob["taskType"] }
+    job: Omit<AgentTaskJob, "taskId" | "taskType"> & { taskId?: string; taskType?: AgentTaskJob["taskType"] }
   ) => Promise<{ jobId: string | null; taskId: string }>;
   stop: () => Promise<void>;
 };
@@ -234,10 +234,10 @@ export async function startJobs(input: {
         ...job,
         taskId,
         taskType: job.taskType ?? "code_update",
-        traceId: trace?.traceId ?? taskId,
-        guildId: trace?.guildId,
-        channelId: trace?.channelId,
-        userId: trace?.userId
+        traceId: trace?.traceId ?? job.traceId ?? taskId,
+        guildId: trace?.guildId ?? job.guildId,
+        channelId: trace?.channelId ?? job.channelId,
+        userId: trace?.userId ?? job.userId
       };
       logger.info({ queue: AGENT_TASK_JOB, taskId, title: job.title }, "Enqueueing agent task");
       const backendName = input.agentTask?.name ?? "kubernetes-sandbox";

@@ -47,7 +47,7 @@ In Kubernetes, set:
 --set agentRuntime.warmSandbox.enabled=true
 ```
 
-The Helm chart deploys a ClusterIP `agent-runtime` service and points the worker at it through `AGENT_RUNTIME_WARM_SANDBOX_URL`. The warm prompt server starts an enqueue-only job runtime so model-selected code-update tools can still enqueue normal `agent.task` work while prompt execution runs behind the remote runtime boundary.
+The Helm chart deploys a ClusterIP `agent-runtime` service and points the worker at it through `AGENT_RUNTIME_WARM_SANDBOX_URL`. The warm prompt server starts an enqueue-only job runtime so model-selected code-update tools can still enqueue normal `agent.task` work while prompt execution runs behind the remote runtime boundary. When a warm-runtime tool enqueues a code-update task before a Discord status message exists, the Discord worker attaches tasks from the same prompt trace to the final reply message so the normal task notifier can edit that reply with progress and the PR link.
 
 ## Legacy Codegen Session API
 

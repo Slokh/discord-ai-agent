@@ -1623,6 +1623,60 @@ describe("agent router", () => {
     );
   });
 
+  it("preserves prompt trace and Discord scope when warm runtimes enqueue codegen without a status updater", async () => {
+    const enqueueAgentTask = vi.fn(async () => ({
+      jobId: "job-1",
+      taskId: "task-warm-runtime"
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, github: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        chat: vi.fn().mockResolvedValueOnce({
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "runCodingAgent",
+              argumentsText: JSON.stringify({ request: "make warm runtime task updates reliable", title: "Fix warm task updates" })
+            }
+          ]
+        })
+      },
+      github: {},
+      jobs: {
+        enqueueAgentTask
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      requestId: "prompt-message-1"
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "update yourself so warm runtime task updates work");
+
+    expect(response.content).toContain("Task ID: `task-warm-runtime`");
+    expect(enqueueAgentTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        traceId: "prompt-message-1",
+        guildId: "g",
+        channelId: "c",
+        userId: "u",
+        title: "Fix warm task updates",
+        request: "make warm runtime task updates reliable",
+        discordResponseChannelId: "c",
+        discordResponseMessageId: undefined
+      })
+    );
+  });
+
   it("audits failed agent requests before surfacing the error to Discord", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {

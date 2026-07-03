@@ -690,6 +690,7 @@ async function executeDiscordAgentRequest(
       }
     });
     const finalReply = (await responseSink.sendFinal({ content: response.content, files: response.files })).message;
+    await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord final response");
     await finishAgentRuntimePromptExecution({
       agentRuntime: input.agentRuntime,
@@ -778,6 +779,7 @@ async function executeDiscordAgentRequest(
         input.config.maxReplyChars
       );
       const finalReply = (await responseSink.sendError(filteredContent)).message;
+      await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
       const deletedMemoryRows = await input.repo
         .deleteConversationMessagesByDiscordMessageIds({
           threadKey,
@@ -839,6 +841,7 @@ async function executeDiscordAgentRequest(
     }
     const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
     const finalReply = (await responseSink.sendError(errorContent)).message;
+    await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord error response");
     await recordTraceEvent(input.repo, {
       eventName: "discord.mention.failed",
@@ -1119,6 +1122,35 @@ async function replayPreparedDiscordAgentTurn(input: {
     turnEnvelopeArtifactId: null,
     priorSessionMessages
   };
+}
+
+async function attachPromptTasksToDiscordReply(
+  input: DiscordAgentRequestInput,
+  traceId: string,
+  finalReply: Message,
+  requestLogger: Logger
+) {
+  const attachedTasks = await input.repo
+    .attachAgentTasksToDiscordResponse({
+      traceId,
+      channelId: finalReply.channelId,
+      messageId: finalReply.id
+    })
+    .catch((error) => {
+      requestLogger.warn({ err: error, traceId, replyMessageId: finalReply.id }, "Failed to attach prompt agent tasks to Discord reply");
+      return 0;
+    });
+  if (attachedTasks <= 0) return;
+  requestLogger.info({ traceId, replyMessageId: finalReply.id, attachedTasks }, "Attached prompt agent tasks to Discord reply");
+  await recordTraceEvent(input.repo, {
+    eventName: "agent.tasks.attached_to_reply",
+    summary: `Attached ${attachedTasks} agent task${attachedTasks === 1 ? "" : "s"} to the Discord reply`,
+    metadata: {
+      replyMessageId: finalReply.id,
+      replyUrl: finalReply.url,
+      attachedTasks
+    }
+  });
 }
 
 function queueIncomingMessageEmbedding(

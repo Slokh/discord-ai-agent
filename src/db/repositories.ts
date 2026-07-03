@@ -2454,6 +2454,21 @@ export class DiscordAiAgentRepository {
     }).catch(() => undefined);
   }
 
+  async attachAgentTasksToDiscordResponse(input: { traceId: string; channelId: string; messageId: string }): Promise<number> {
+    const result = await this.pool.query(
+      `
+        UPDATE agent_tasks
+        SET discord_response_channel_id = coalesce(discord_response_channel_id, $2),
+            discord_response_message_id = coalesce(discord_response_message_id, $3),
+            updated_at = now()
+        WHERE trace_id = $1
+          AND discord_response_message_id IS NULL
+      `,
+      [input.traceId, input.channelId, input.messageId]
+    );
+    return result.rowCount ?? 0;
+  }
+
   async markAgentTaskRunning(input: { taskId: string; backend?: string | null; step?: string | null; statusMessage?: string | null }) {
     const result = await this.pool.query(
       `

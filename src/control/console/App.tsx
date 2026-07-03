@@ -18,7 +18,7 @@ import {
   XCircle
 } from "lucide-react";
 import { Button, Copy, Status, Tabs, Tag } from "regen-ui";
-import { parseOpenCodeTranscript } from "../../observability/openCodeTranscript.js";
+import { parseOpenCodeTranscript, type ParsedOpenCodeTranscript } from "../../observability/openCodeTranscript.js";
 import { fetchArtifact, fetchRunList, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
 import type { EventLevel, RunArtifact, RunCount, RunKind, RunListAggregate, RunEvent, RunSnapshot, RunSpan, RunStatus, RunSummary, TerminalEntry } from "./types.js";
 
@@ -76,6 +76,7 @@ type FlowItem = {
   artifact?: RunArtifact;
 };
 type CodexTranscriptItemKind = "message" | "command" | "warning" | "error" | "lifecycle" | "tokens" | "reasoning";
+type OpenCodeTranscriptItem = ParsedOpenCodeTranscript["items"][number];
 type CodexCommandStart = {
   timestamp: string;
   command: string | null;
@@ -758,12 +759,45 @@ function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
           </div>
           <ol className="timeline-list flat-timeline">
             {trace.groups.map((group) => (
-              <TimelineGroupItem key={group.id} group={group} />
+              <TimelineGroupItems key={group.id} group={group} />
             ))}
           </ol>
         </div>
       )}
     </section>
+  );
+}
+
+function TimelineGroupItems({ group }: { group: TimelineStepGroup }) {
+  const parentOpenCodeArtifact = group.parent.artifact && isOpenCodeTranscriptArtifact(group.parent.artifact) ? group.parent.artifact : undefined;
+  const openCodeArtifactStep = group.children.find((child) => child.artifact && isOpenCodeTranscriptArtifact(child.artifact));
+  const promotedOpenCode = usePromotedOpenCodeActivity(parentOpenCodeArtifact ?? openCodeArtifactStep?.artifact);
+  const hasPromotableArtifact = Boolean(parentOpenCodeArtifact ?? openCodeArtifactStep?.artifact);
+  const isWaitingForOpenCodeArtifact = hasPromotableArtifact && !promotedOpenCode.content && promotedOpenCode.error == null;
+  const shouldPromoteOpenCode = isWaitingForOpenCodeArtifact || promotedOpenCode.loading || promotedOpenCode.transcript?.isTranscript;
+  const visibleChildren = shouldPromoteOpenCode && openCodeArtifactStep?.artifact
+    ? group.children.filter((child) => child.artifact?.artifactId !== openCodeArtifactStep.artifact?.artifactId)
+    : group.children;
+
+  if (parentOpenCodeArtifact) {
+    if (isWaitingForOpenCodeArtifact) return <OpenCodeRoundLoadingItem group={group} />;
+    if (promotedOpenCode.transcript?.isTranscript) {
+      return (
+        <>
+          {promotedOpenCode.transcript.items.map((item) => <OpenCodeRoundTimelineItem key={`${group.id}-${item.id}`} item={item} />)}
+        </>
+      );
+    }
+    return <TimelineGroupItem group={group} />;
+  }
+
+  return (
+    <>
+      <TimelineGroupItem group={{ ...group, children: visibleChildren }} />
+      {isWaitingForOpenCodeArtifact && <OpenCodeRoundLoadingItem group={group} />}
+      {promotedOpenCode.transcript?.isTranscript &&
+        promotedOpenCode.transcript.items.map((item) => <OpenCodeRoundTimelineItem key={`${group.id}-${item.id}`} item={item} />)}
+    </>
   );
 }
 
@@ -805,6 +839,115 @@ function TimelineGroupItem({ group }: { group: TimelineStepGroup }) {
       </article>
     </li>
   );
+}
+
+function usePromotedOpenCodeActivity(artifact?: RunArtifact) {
+  const [state, setState] = useState<{ artifactId: string | null; content: string; loading: boolean; error: string | null }>({
+    artifactId: null,
+    content: "",
+    loading: false,
+    error: null
+  });
+
+  useEffect(() => {
+    if (!artifact) {
+      setState((current) => (current.artifactId == null && !current.content && !current.loading && current.error == null ? current : { artifactId: null, content: "", loading: false, error: null }));
+      return;
+    }
+    let disposed = false;
+    setState({ artifactId: artifact.artifactId, content: "", loading: true, error: null });
+    fetchArtifact(artifact.runId, artifact.artifactId)
+      .then((content) => {
+        if (!disposed) setState({ artifactId: artifact.artifactId, content, loading: false, error: null });
+      })
+      .catch((loadError) => {
+        if (!disposed) {
+          setState({
+            artifactId: artifact.artifactId,
+            content: "",
+            loading: false,
+            error: loadError instanceof Error ? loadError.message : String(loadError)
+          });
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [artifact?.artifactId, artifact?.runId]);
+
+  const transcript = useMemo(() => (state.content ? parseOpenCodeTranscript(state.content) : null), [state.content]);
+  return { ...state, transcript };
+}
+
+function OpenCodeRoundLoadingItem({ group }: { group: TimelineStepGroup }) {
+  const step: TimelineStep = {
+    id: `${group.id}-opencode-loading`,
+    kind: "model",
+    title: "Loading OpenCode activity",
+    summary: "",
+    createdAt: group.parent.createdAt,
+    durationMs: null,
+    durationStartedAt: null,
+    gapMs: null,
+    offset: group.parent.offset,
+    source: "opencode",
+    status: "running",
+    level: null,
+    metadata: {}
+  };
+  return (
+    <li className="timeline-step model running opencode-promoted-round">
+      <div className="timeline-rail">
+        <div className="timeline-dot" />
+      </div>
+      <article className="timeline-card">
+        <TimelineStepHeader step={step} />
+        <span className="timeline-artifact-loading">Loading full OpenCode transcript...</span>
+        <TimelineStepMeta step={step} />
+      </article>
+    </li>
+  );
+}
+
+function OpenCodeRoundTimelineItem({ item }: { item: OpenCodeTranscriptItem }) {
+  const step = openCodeRoundTimelineStep(item);
+  return (
+    <li className={`timeline-step ${step.kind} ${step.level ?? step.status ?? ""} opencode-promoted-round`}>
+      <div className="timeline-rail">
+        <div className="timeline-dot" />
+      </div>
+      <article className="timeline-card">
+        <TimelineStepHeader step={step} />
+        <OpenCodeRoundContent item={item} />
+        <TimelineStepMeta step={step} />
+      </article>
+    </li>
+  );
+}
+
+function openCodeRoundTimelineStep(item: OpenCodeTranscriptItem): TimelineStep {
+  return {
+    id: item.id,
+    kind: openCodeRoundTimelineKind(item),
+    title: item.title,
+    summary: item.body,
+    createdAt: item.timestamp,
+    durationMs: item.durationMs,
+    durationStartedAt: item.durationMs != null ? item.timestamp : null,
+    gapMs: null,
+    offset: "",
+    source: "opencode",
+    status: item.active ? "running" : null,
+    level: item.kind === "error" ? "error" : null,
+    metadata: {}
+  };
+}
+
+function openCodeRoundTimelineKind(item: OpenCodeTranscriptItem): TimelineStepKind {
+  if (item.kind === "error") return "error";
+  if (item.kind === "tool") return "tool";
+  if (item.kind === "tokens") return "event";
+  return "model";
 }
 
 function TimelineStepDetails({ step }: { step: TimelineStep }) {
@@ -1134,36 +1277,49 @@ function OpenCodeTranscript({ content }: { content: string }) {
           </div>
         )}
       </div>
-      <div className="codex-transcript-list">
+      <div className="opencode-round-timeline">
         {transcript.items.map((item) => (
-          <article key={item.id} className={`codex-transcript-item ${item.kind}${item.active ? " active" : ""}`}>
-            <div className="codex-transcript-item-head">
-              <strong>{item.title}</strong>
-              <span>{[item.active ? "running" : null, item.durationMs != null ? formatDuration(item.durationMs) : null, formatDate(item.timestamp)].filter(Boolean).join(" · ")}</span>
+          <article key={item.id} className={`opencode-round-step ${item.kind}${item.active ? " active" : ""}`}>
+            <div className="opencode-round-rail">
+              <span className="opencode-round-dot" />
             </div>
-            {item.active && <span className="codex-transcript-active-pill">Active round</span>}
-            {item.body && <p>{item.body}</p>}
-            {item.tools.length > 0 && (
-              <div className="opencode-tool-list">
-                {item.tools.map((tool, index) => (
-                  <div className="opencode-tool" key={`${item.id}-${tool.name}-${index}`}>
-                    <div>
-                      <strong>{tool.name}</strong>
-                      {tool.status && <span>{tool.status}</span>}
-                      {tool.durationMs != null && <span>{formatDuration(tool.durationMs)}</span>}
-                    </div>
-                    {tool.title && <code>{tool.title}</code>}
-                    {tool.output && <p>{tool.output}</p>}
-                  </div>
-                ))}
+            <div className={`codex-transcript-item opencode-round-card ${item.kind}${item.active ? " active" : ""}`}>
+              <div className="codex-transcript-item-head">
+                <strong>{item.title}</strong>
+                <span>{[item.active ? "running" : null, item.durationMs != null ? formatDuration(item.durationMs) : null, formatDate(item.timestamp)].filter(Boolean).join(" · ")}</span>
               </div>
-            )}
-            {item.command && <code>{item.command}</code>}
-            {item.output && <pre>{item.output}</pre>}
+              <OpenCodeRoundContent item={item} />
+            </div>
           </article>
         ))}
       </div>
     </div>
+  );
+}
+
+function OpenCodeRoundContent({ item }: { item: OpenCodeTranscriptItem }) {
+  return (
+    <>
+      {item.active && <span className="codex-transcript-active-pill">Active round</span>}
+      {item.body && <p>{item.body}</p>}
+      {item.tools.length > 0 && (
+        <div className="opencode-tool-list">
+          {item.tools.map((tool, index) => (
+            <div className="opencode-tool" key={`${item.id}-${tool.name}-${index}`}>
+              <div>
+                <strong>{tool.name}</strong>
+                {tool.status && <span>{tool.status}</span>}
+                {tool.durationMs != null && <span>{formatDuration(tool.durationMs)}</span>}
+              </div>
+              {tool.title && <code>{tool.title}</code>}
+              {tool.output && <p>{tool.output}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      {item.command && <code>{item.command}</code>}
+      {item.output && <pre>{item.output}</pre>}
+    </>
   );
 }
 
@@ -1830,13 +1986,17 @@ export function codegenTimelineTrace(
           String(candidate.metadata.step ?? "") === `opencode_attempt_${attemptNumber}_no_diff`) &&
         candidate.metadata.attempt === attemptNumber
     );
+    const attemptArtifacts = artifacts((artifact) => isCodegenAttemptArtifact(artifact, attemptNumber));
+    const hasOpenCodeActivityArtifact = attemptArtifacts.some((step) => step.artifact && isOpenCodeTranscriptArtifact(step.artifact));
     const attemptProgress = events
       .filter((candidate) => {
         if (candidate.name !== "task.progress" || candidate.metadata.attempt !== attemptNumber) return false;
         const step = String(candidate.metadata.step ?? "");
         if (!/^(opencode_|codex_app_server_)/.test(step)) return false;
         if (step === `codex_app_server_attempt_${attemptNumber}` || step === `opencode_attempt_${attemptNumber}`) return false;
+        if (hasOpenCodeActivityArtifact && step.startsWith("opencode_")) return false;
         if (step === "codex_app_server_item_started" && /\breasoning\b/i.test(candidate.summary ?? "")) return false;
+        if (step === "opencode_round_started" || step === "opencode_round_finished") return false;
         if (step === `codex_app_server_attempt_${attemptNumber}_no_diff` || step === `opencode_attempt_${attemptNumber}_no_diff`) return false;
         if (step === "codex_app_server_thread" || step === "opencode_server_ready") return false;
         return step !== "codex_app_server_first_diff" && step !== "opencode_first_diff";
@@ -1849,7 +2009,7 @@ export function codegenTimelineTrace(
         })
       );
     const children = [
-      ...artifacts((artifact) => isCodegenAttemptArtifact(artifact, attemptNumber)),
+      ...attemptArtifacts,
       reasoningStarted
         ? timelineStepFromCodegenEvent(reasoningStarted, startedAt, {
             title: "Model started reasoning",
@@ -1968,8 +2128,6 @@ function codegenProgressEventTitle(event: RunEvent) {
     const tool = stringMetadata(event.metadata.tool) ?? step.replace(/^opencode_tool_/, "").replace(/_/g, " ");
     return `Tool: ${tool}`;
   }
-  if (step === "opencode_round_started") return `OpenCode round ${numericMetadata(event.metadata.round) ?? ""}`.trim();
-  if (step === "opencode_round_finished") return `OpenCode round ${numericMetadata(event.metadata.round) ?? ""} finished`.trim();
   if (step === "opencode_assistant_message") return "OpenCode assistant message";
   if (step === "codex_app_server_item_started" || step === "codex_app_server_item_completed") {
     const itemType = stringMetadata(event.metadata.itemType);
@@ -2091,6 +2249,8 @@ function timelineStepFromCodegenArtifact(artifact: RunArtifact, startedAt: strin
 }
 
 function timelineArtifactTitle(artifact: RunArtifact) {
+  if (isOpenCodeTranscriptArtifact(artifact)) return "OpenCode activity";
+  if (isCodexTranscriptArtifact(artifact)) return artifact.name;
   if (artifact.kind === "command_log") {
     const match = artifact.name.match(/^(.+?) command log$/i);
     if (match?.[1]) return `Command: ${match[1]}`;

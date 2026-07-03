@@ -453,7 +453,7 @@ describe("run console timeline", () => {
     expect(trace?.slowest).toEqual({ name: "Codex attempt 1", durationMs: 90_101 });
   });
 
-  it("labels OpenCode attempt spans distinctly from Codex attempts", () => {
+  it("keeps OpenCode attempt timelines focused on activity instead of lifecycle noise", () => {
     const events: RunEvent[] = [
       runEvent({ id: "round", source: "task", name: "task.progress", summary: "OpenCode started round 1.", createdAt: atMs(2_000), metadata: { step: "opencode_round_started", attempt: 1, round: 1 } }),
       runEvent({ id: "tool", source: "task", name: "task.progress", summary: "OpenCode is reading src/discord/client.ts.", createdAt: atMs(3_000), metadata: { step: "opencode_tool_read", attempt: 1, tool: "read", title: "src/discord/client.ts" } }),
@@ -494,13 +494,34 @@ describe("run console timeline", () => {
 
     expect(trace?.groups.map((group) => timelineTitleText(group.parent))).toEqual(["OpenCode attempt 1"]);
     expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual([
-      "OpenCode round 1",
-      "Tool: read",
-      "OpenCode round 1 finished",
       "Attempt ended with no diff",
-      "Command: opencode_attempt_1"
+      "OpenCode activity"
     ]);
     expect(trace?.slowest).toEqual({ name: "OpenCode attempt 1", durationMs: 10_000 });
+  });
+
+  it("keeps live OpenCode tool progress visible until the activity artifact exists", () => {
+    const events: RunEvent[] = [
+      runEvent({ id: "round", source: "task", name: "task.progress", summary: "OpenCode started round 1.", createdAt: atMs(2_000), metadata: { step: "opencode_round_started", attempt: 1, round: 1 } }),
+      runEvent({ id: "tool", source: "task", name: "task.progress", summary: "OpenCode is reading src/discord/client.ts.", createdAt: atMs(3_000), metadata: { step: "opencode_tool_read", attempt: 1, tool: "read", title: "src/discord/client.ts" } }),
+      runEvent({ id: "round-finished", source: "task", name: "task.progress", summary: "OpenCode finished round 1 after read.", createdAt: atMs(5_000), metadata: { step: "opencode_round_finished", attempt: 1, round: 1, tools: ["read"] } })
+    ];
+    const spans: RunSpan[] = [
+      runSpan({
+        id: "attempt",
+        source: "command",
+        name: "opencode_attempt_1",
+        status: "running",
+        startedAt: atMs(1_000),
+        completedAt: null,
+        durationMs: 10_000,
+        metadata: { command: "opencode run --attach http://127.0.0.1:4123 [prompt]" }
+      })
+    ];
+
+    const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts: [] }), { events, spans, startedAt: atMs(0) });
+
+    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["Tool: read"]);
   });
 
   it("formats OpenCode command logs into model-round breakdowns", () => {

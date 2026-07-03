@@ -1278,6 +1278,47 @@ kbd {
   border-color: color-mix(in oklab, var(--bad) 48%, var(--border));
 }
 
+.codex-transcript-item.active {
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 60%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 35%, transparent);
+  position: relative;
+}
+
+.codex-transcript-item.active::before {
+  background: var(--accent);
+  border-radius: 8px 0 0 8px;
+  bottom: 0;
+  content: "";
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 3px;
+}
+
+.codex-transcript-active-pill {
+  align-self: start;
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 55%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  justify-self: start;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  text-transform: uppercase;
+}
+
+@keyframes opencode-active-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.codex-transcript-item.active .codex-transcript-active-pill {
+  animation: opencode-active-pulse 1.6s ease-in-out infinite;
+}
+
 .codex-transcript-item-head {
   align-items: baseline;
   display: flex;

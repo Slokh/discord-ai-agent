@@ -37,6 +37,7 @@ export type ParsedOpenCodeTranscript = {
     output: string;
     durationMs: number | null;
     tools: OpenCodeToolSummary[];
+    active?: boolean;
   }>;
 };
 
@@ -100,6 +101,9 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
       : null;
   const analysisSteps = current ? [...steps, current] : steps;
   const items = steps.map((step, index) => openCodeRoundItem(step, index + 1));
+  if (current && activeRound) {
+    items.push(openCodeActiveRoundItem(current, activeRound.round, lastTimestamp ?? current.start));
+  }
   const toolCalls = analysisSteps.reduce((total, step) => total + step.tools.length, 0);
   const textMessages = items.filter((item) => item.kind === "message").length;
   const totalDurationMs = firstTimestamp == null || lastTimestamp == null ? null : Math.max(0, lastTimestamp - firstTimestamp);
@@ -227,6 +231,37 @@ function openCodeRoundItem(step: OpenCodeStep, round: number): ParsedOpenCodeTra
     output: "",
     durationMs,
     tools: step.tools
+  };
+}
+
+function openCodeActiveRoundItem(step: OpenCodeStep, round: number, lastTimestamp: number): ParsedOpenCodeTranscript["items"][number] {
+  const durationMs = Math.max(0, lastTimestamp - step.start);
+  const toolNames = step.tools.map((tool) => tool.name).filter(Boolean);
+  const toolDurationMs = step.tools.reduce((total, tool) => total + (tool.durationMs ?? 0), 0);
+  const modelWaitMs = Math.max(0, durationMs - toolDurationMs);
+  const title = toolNames.length > 0 ? `Round ${round}: ${formatToolCallList(toolNames)}` : step.texts.length > 0 ? `Round ${round}: assistant message` : `Round ${round}`;
+  const body = [
+    "In progress",
+    durationMs > 0 ? `Running for ${formatOpenCodeDuration(durationMs)}` : "",
+    modelWaitMs > 0 ? `Model wait so far: ${formatOpenCodeDuration(modelWaitMs)}` : "",
+    toolDurationMs > 0 ? `Tool time so far: ${formatOpenCodeDuration(toolDurationMs)}` : "",
+    step.tools.some((tool) => tool.status === "error" || tool.status === "failed") ? "Some tools failed" : "",
+    step.texts.length > 0 ? step.texts.map((text) => truncateSingleLine(text, 280)).join("\n") : ""
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const timestamp = timestampToIso(step.start);
+  return {
+    id: `opencode-round-${round}-${step.start}-active`,
+    kind: "round",
+    title,
+    timestamp,
+    body,
+    command: "",
+    output: "",
+    durationMs,
+    tools: step.tools,
+    active: true
   };
 }
 

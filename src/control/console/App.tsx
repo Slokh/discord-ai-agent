@@ -1124,11 +1124,12 @@ function OpenCodeTranscript({ content }: { content: string }) {
       </div>
       <div className="codex-transcript-list">
         {transcript.items.map((item) => (
-          <article key={item.id} className={`codex-transcript-item ${item.kind}`}>
+          <article key={item.id} className={`codex-transcript-item ${item.kind}${item.active ? " active" : ""}`}>
             <div className="codex-transcript-item-head">
               <strong>{item.title}</strong>
-              <span>{[item.durationMs != null ? formatDuration(item.durationMs) : null, formatDate(item.timestamp)].filter(Boolean).join(" · ")}</span>
+              <span>{[item.active ? "running" : null, item.durationMs != null ? formatDuration(item.durationMs) : null, formatDate(item.timestamp)].filter(Boolean).join(" · ")}</span>
             </div>
+            {item.active && <span className="codex-transcript-active-pill">Active round</span>}
             {item.body && <p>{item.body}</p>}
             {item.tools.length > 0 && (
               <div className="opencode-tool-list">

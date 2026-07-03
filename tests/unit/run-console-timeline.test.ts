@@ -601,6 +601,36 @@ describe("run console timeline", () => {
       tools: ["read"],
       lastEventAt: atMs(5_000)
     });
+    expect(transcript.items.some((item) => item.active)).toBe(true);
+    const activeItem = transcript.items.find((item) => item.active);
+    expect(activeItem?.title).toBe("Round 1: read");
+    expect(activeItem?.durationMs).toBe(5_000);
+    expect(activeItem?.tools.map((tool) => tool.name)).toEqual(["read"]);
+  });
+
+  it("does not mark any opencode round active once the last round finished", () => {
+    const transcript = parseOpenCodeTranscript(
+      [
+        "$ opencode run --model openrouter/z-ai/glm-5.2 [prompt]",
+        JSON.stringify({ type: "step_start", timestamp: Date.parse(atMs(0)), part: {} }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse(atMs(5_000)),
+          part: {
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "/repo/src/execution/sandboxRunner.ts" },
+              time: { start: Date.parse(atMs(5_000)), end: Date.parse(atMs(5_020)) }
+            }
+          }
+        }),
+        JSON.stringify({ type: "step_finish", timestamp: Date.parse(atMs(9_000)), part: { reason: "tool-calls" } })
+      ].join("\n")
+    );
+
+    expect(transcript.activeRound).toBeNull();
+    expect(transcript.items.some((item) => item.active)).toBe(false);
   });
 
   it("formats Codex app-server transcripts into high-signal items", () => {

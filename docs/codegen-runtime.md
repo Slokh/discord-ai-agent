@@ -1,6 +1,8 @@
-# Codegen Runtime
+# Agent Runtime And Codegen
 
-Discord AI Agent supports two code-update execution backends:
+Discord AI Agent is migrating toward a Centaur-style runtime where every Discord prompt is represented as a durable agent session, and code updates are one capability inside that session. The generic control-plane facade is `src/db/agentRuntimeRepository.ts` plus `/api/agent/sessions/:threadKey`.
+
+The current code-update compatibility path still supports two execution backends:
 
 - `kubernetes-job` (default): each task gets an isolated Kubernetes Job and branch
 - `local-process`: a long-lived worker pod starts sandbox runner child processes locally, avoiding per-task Kubernetes Job creation and keeping repo, dependency, and harness caches warm in the worker
@@ -13,7 +15,21 @@ Both modes are cache-first:
 
 This keeps the user-facing flow synchronous while removing the most expensive repeated setup from the request path.
 
-## Durable Session API
+## Durable Agent Session API
+
+The internal API now exposes generic agent control-plane objects. Authenticated clients can:
+
+- `POST /api/agent/sessions/:threadKey` to create or reuse a durable agent session for a Discord channel/thread context.
+- `GET /api/agent/sessions/:threadKey` to replay the session, messages, executions, and events.
+- `POST /api/agent/sessions/:threadKey/messages` to persist one user/system/assistant/tool turn as structured parts.
+- `GET /api/agent/sessions/:threadKey/messages` to replay stored turns.
+- `POST /api/agent/sessions/:threadKey/execute` to create a durable queued execution row.
+- `GET /api/agent/sessions/:threadKey/events` to replay normalized execution events.
+- `GET /api/agent/sessions/:threadKey/stream` to follow the replayable event trail over SSE.
+
+The first migration slice records Discord prompts and their in-process compatibility execution in this generic session ledger. The next runtime migration should route those queued executions to warm Kubernetes sandbox pods that keep a harness server alive.
+
+## Legacy Codegen Session API
 
 The internal API now exposes the codegen control-plane objects directly. This is the migration point from the original `agent.task` callback flow toward a Centaur-style runtime where Discord is only ingress/delivery and the API owns durable execution state.
 
@@ -27,7 +43,7 @@ Authenticated clients can:
 - `GET /api/codegen/sessions/:threadKey/events` to replay normalized execution events.
 - `GET /api/codegen/sessions/:threadKey/stream` to follow the replayable event trail over SSE.
 
-The old task callback endpoints remain for the current sandbox runner. New codegen runtime work should attach to the session API first, then route executions to warm sandboxes, harness servers, and Discord delivery from that durable event stream.
+The old task callback endpoints remain for the current sandbox runner. New runtime work should attach to the generic agent session API first, then route executions to warm sandboxes, harness servers, and Discord delivery from that durable event stream.
 
 Today, `enqueueAgentTask` creates or reuses the durable codegen session, appends the code-update request as a `user` message, and creates a queued harness execution before handing work to the existing `agent.task` queue. This keeps the current Discord behavior intact while making the codegen session/event trail the durable source of truth for future scheduler and UI work.
 

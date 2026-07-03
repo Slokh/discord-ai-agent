@@ -11,6 +11,7 @@ import {
   type PartialMessageReaction
 } from "discord.js";
 import type { AppConfig } from "../config/env.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { isOpenRouterContentFilterError, type OpenRouterClient } from "../models/openrouter.js";
 import { embeddingPriorityForMessageTimestamp, type DiscordAgentRequestJob, type JobRuntime } from "../jobs/queue.js";
@@ -19,6 +20,7 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { handleAgentRequest } from "../agent/router.js";
+import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, ToolContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
@@ -38,6 +40,7 @@ export type DiscordAiAgentBotRuntime = {
 export function createDiscordAiAgentBot(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
+  agentRuntime?: AgentRuntimeRepository;
   openRouter: OpenRouterClient;
   crawler: DiscordCrawler;
   jobs?: JobRuntime;
@@ -188,6 +191,7 @@ async function handleMessageCreate(
   input: {
     config: AppConfig;
     repo: DiscordAiAgentRepository;
+    agentRuntime?: AgentRuntimeRepository;
     openRouter: OpenRouterClient;
     jobs?: JobRuntime;
   },
@@ -330,6 +334,23 @@ async function handleMessageCreate(
       metadata: { discordUrl: message.url, rawContent: message.content, attachments: requestAttachments }
     })
     .catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord prompt artifact"));
+  const agentRuntimeExecution = await ensureAgentRuntimePromptExecution({
+    agentRuntime: input.agentRuntime,
+    guildId: message.guildId,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userDisplayName: message.member?.displayName ?? message.author.username,
+    threadKey: discordChannelThreadKey(message.guildId, message.channelId),
+    requestId,
+    text,
+    rawContent: message.content,
+    discordUrl: message.url,
+    status: "queued",
+    source: "discord.ingress"
+  }).catch((error) => {
+    requestLogger.warn({ err: error }, "Failed to record agent runtime prompt session");
+    return null;
+  });
   const responseSink = new DiscordResponseSink({
     client,
     sourceMessage: message,
@@ -349,6 +370,9 @@ async function handleMessageCreate(
       const jobId = await input.jobs.enqueueDiscordAgentRequest({
         runId: message.id,
         traceId: message.id,
+        agentSessionId: agentRuntimeExecution?.session.sessionId,
+        agentExecutionId: agentRuntimeExecution?.executionId,
+        agentThreadKey: agentRuntimeExecution?.session.threadKey ?? discordChannelThreadKey(message.guildId, message.channelId),
         guildId: message.guildId,
         channelId: message.channelId,
         messageId: message.id,
@@ -369,7 +393,9 @@ async function handleMessageCreate(
           metadata: {
             pgbossJobId: jobId,
             queuedAt: enqueuedAt.toISOString(),
-            acknowledgement: "loading_reaction"
+            acknowledgement: "loading_reaction",
+            agentSessionId: agentRuntimeExecution?.session.sessionId ?? null,
+            agentExecutionId: agentRuntimeExecution?.executionId ?? null
           }
         })
         .catch((error) => requestLogger.warn({ err: error }, "Failed to mark Discord run queued"));
@@ -408,6 +434,7 @@ export async function runQueuedDiscordAgentRequest(
   input: {
     config: AppConfig;
     repo: DiscordAiAgentRepository;
+    agentRuntime?: AgentRuntimeRepository;
     openRouter: OpenRouterClient;
     jobs?: JobRuntime;
     client: Client;
@@ -449,6 +476,8 @@ export async function runQueuedDiscordAgentRequest(
   await responseSink.acknowledge();
   await executeDiscordAgentRequest(input, input.client, message, responseSink, {
     requestId: job.runId,
+    agentSessionId: job.agentSessionId,
+    agentExecutionId: job.agentExecutionId,
     text: job.text,
     rawContent: job.rawContent,
     botRoleIds: job.botRoleIds,
@@ -460,6 +489,7 @@ async function executeDiscordAgentRequest(
   input: {
     config: AppConfig;
     repo: DiscordAiAgentRepository;
+    agentRuntime?: AgentRuntimeRepository;
     openRouter: OpenRouterClient;
     jobs?: JobRuntime;
   },
@@ -468,6 +498,8 @@ async function executeDiscordAgentRequest(
   responseSink: DiscordResponseSink,
   request: {
     requestId: string;
+    agentSessionId?: string;
+    agentExecutionId?: string;
     text: string;
     rawContent: string;
     botRoleIds: string[];
@@ -489,6 +521,25 @@ async function executeDiscordAgentRequest(
   const threadKey = discordChannelThreadKey(guildId, message.channelId);
   const userDisplayName = message.member?.displayName ?? message.author.username;
   const requestAttachments = discordAttachmentContextsFromMessage(message);
+  const agentRuntimeExecution = await ensureAgentRuntimePromptExecution({
+    agentRuntime: input.agentRuntime,
+    guildId,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userDisplayName,
+    threadKey,
+    agentSessionId: request.agentSessionId,
+    agentExecutionId: request.agentExecutionId,
+    requestId: request.requestId,
+    text: request.text,
+    rawContent: request.rawContent,
+    discordUrl: message.url,
+    status: "running",
+    source: "discord.worker"
+  }).catch((error) => {
+    requestLogger.warn({ err: error }, "Failed to mark agent runtime execution running");
+    return null;
+  });
   const sessionStartedAt = Date.now();
   await input.repo.ensureConversationSession({
     threadKey,
@@ -671,6 +722,16 @@ async function executeDiscordAgentRequest(
     });
     const finalReply = (await responseSink.sendFinal({ content: response.content, files: response.files })).message;
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord final response");
+    await finishAgentRuntimePromptExecution({
+      agentRuntime: input.agentRuntime,
+      session: agentRuntimeExecution?.session,
+      executionId: agentRuntimeExecution?.executionId,
+      status: "succeeded",
+      replyMessageId: finalReply.id,
+      replyUrl: finalReply.url,
+      responseContent: response.content,
+      durationMs: durationMs(request.messageStartedAt)
+    }).catch((error) => requestLogger.warn({ err: error }, "Failed to mark agent runtime execution succeeded"));
 
     for (const memoryEvent of response.memoryEvents ?? []) {
       await input.repo.appendConversationMessage({
@@ -780,6 +841,17 @@ async function executeDiscordAgentRequest(
           metadata: { error: error.message, deletedMemoryRows }
         })
         .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark content-filtered run"));
+      await finishAgentRuntimePromptExecution({
+        agentRuntime: input.agentRuntime,
+        session: agentRuntimeExecution?.session,
+        executionId: agentRuntimeExecution?.executionId,
+        status: "failed",
+        replyMessageId: finalReply.id,
+        replyUrl: finalReply.url,
+        responseContent: filteredContent,
+        error: error.message,
+        durationMs: durationMs(request.messageStartedAt)
+      }).catch((runtimeError) => requestLogger.warn({ err: runtimeError }, "Failed to mark content-filtered agent runtime execution"));
       return;
     }
 
@@ -837,6 +909,17 @@ async function executeDiscordAgentRequest(
         metadata: { error: error instanceof Error ? error.message : String(error), durationMs: durationMs(request.messageStartedAt) }
       })
       .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark Discord run failed"));
+    await finishAgentRuntimePromptExecution({
+      agentRuntime: input.agentRuntime,
+      session: agentRuntimeExecution?.session,
+      executionId: agentRuntimeExecution?.executionId,
+      status: "failed",
+      replyMessageId: finalReply.id,
+      replyUrl: finalReply.url,
+      responseContent: errorContent,
+      error: error instanceof Error ? error.message : String(error),
+      durationMs: durationMs(request.messageStartedAt)
+    }).catch((runtimeError) => requestLogger.warn({ err: runtimeError }, "Failed to mark failed agent runtime execution"));
     await input.repo.appendConversationMessage({
       threadKey,
       role: "assistant",

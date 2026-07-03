@@ -2,6 +2,7 @@ import http from "node:http";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import { assertTaskCallbackConfig } from "../config/env.js";
+import { AgentRuntimeRepository, type AgentRuntimeMessageRole } from "../db/agentRuntimeRepository.js";
 import type { CodegenMessageRole, CodegenRepository } from "../db/codegenRepository.js";
 import type { DbPool } from "../db/pool.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
@@ -143,6 +144,190 @@ async function handleRequest(input: {
       limit: parseLimit(url.searchParams.get("limit"), 10, 100),
       staleAfterMs: parseStaleAfterMs(url.searchParams.get("staleMinutes"))
     })) as unknown as Record<string, unknown>);
+    return;
+  }
+
+  const agentMessagesMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/messages$/);
+  if ((method === "GET" || method === "POST") && agentMessagesMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentMessagesMatch[1] ?? "");
+    const session = await agentRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "agent_session_not_found" });
+      return;
+    }
+    if (method === "GET") {
+      sendJson(input.response, 200, {
+        messages: await agentRepo.listMessages({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("limit"), 100, 500) }),
+        generatedAt: new Date().toISOString()
+      });
+      return;
+    }
+
+    const body = parseAgentMessageBody(await readJsonBody(input.request));
+    const message = await agentRepo.appendMessage({
+      sessionId: session.sessionId,
+      messageId: body.messageId ?? deterministicCodegenId("agent-message", `${session.sessionId}:${body.clientMessageId ?? randomUUID()}`),
+      clientMessageId: body.clientMessageId,
+      role: body.role,
+      parts: body.parts,
+      metadata: body.metadata
+    });
+    await agentRepo.recordEvent({
+      sessionId: session.sessionId,
+      kind: "status",
+      eventName: "agent.message.appended",
+      summary: `Appended ${body.role} message.`,
+      metadata: { messageId: message.messageId, clientMessageId: message.clientMessageId, role: message.role }
+    });
+    sendJson(input.response, 200, { ok: true, message });
+    return;
+  }
+
+  const agentExecuteMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/execute$/);
+  if (method === "POST" && agentExecuteMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentExecuteMatch[1] ?? "");
+    const session = await agentRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "agent_session_not_found" });
+      return;
+    }
+    const body = parseCodegenExecuteBody(await readJsonBody(input.request));
+    const execution = await agentRepo.createExecution({
+      executionId: body.executionId ?? deterministicCodegenId("agent-execution", `${session.sessionId}:${Date.now()}:${randomUUID()}`),
+      sessionId: session.sessionId,
+      taskId: body.taskId,
+      traceId: body.traceId ?? session.traceId,
+      attempt: body.attempt,
+      status: "queued",
+      harness: body.harness,
+      model: body.model ?? session.model,
+      provider: body.provider ?? session.provider,
+      reasoningEffort: body.reasoningEffort,
+      sandboxId: body.sandboxId,
+      sandboxRunId: body.sandboxRunId,
+      metadata: body.metadata
+    });
+    await agentRepo.recordEvent({
+      sessionId: session.sessionId,
+      executionId: execution.executionId,
+      traceId: execution.traceId,
+      kind: "status",
+      eventName: "agent.execution.queued",
+      summary: "Queued agent execution.",
+      metadata: { executionId: execution.executionId, harness: execution.harness, model: execution.model }
+    });
+    sendJson(input.response, 202, { ok: true, session, execution });
+    return;
+  }
+
+  const agentEventsMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/events$/);
+  if (method === "GET" && agentEventsMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentEventsMatch[1] ?? "");
+    const session = await agentRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "agent_session_not_found" });
+      return;
+    }
+    sendJson(input.response, 200, {
+      events: await agentRepo.listEvents({
+        sessionId: session.sessionId,
+        executionId: url.searchParams.get("executionId"),
+        afterEventId: parseNullableInteger(url.searchParams.get("afterEventId")),
+        limit: parseLimit(url.searchParams.get("limit"), 200, 1000)
+      }),
+      generatedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  const agentStreamMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/stream$/);
+  if (method === "GET" && agentStreamMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    await streamAgentEvents({
+      agentRepo,
+      request: input.request,
+      response: input.response,
+      threadKey: decodeURIComponent(agentStreamMatch[1] ?? ""),
+      executionId: url.searchParams.get("executionId"),
+      afterEventId: parseNullableInteger(url.searchParams.get("afterEventId"))
+    });
+    return;
+  }
+
+  const agentSessionMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)$/);
+  if ((method === "GET" || method === "POST") && agentSessionMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentSessionMatch[1] ?? "");
+    if (method === "GET") {
+      const session = await agentRepo.getSession({ threadKey });
+      if (!session) {
+        sendJson(input.response, 404, { error: "agent_session_not_found" });
+        return;
+      }
+      const [messages, executions, events] = await Promise.all([
+        agentRepo.listMessages({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("messages"), 100, 500) }),
+        agentRepo.listExecutions({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("executions"), 20, 100) }),
+        agentRepo.listEvents({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("events"), 200, 1000) })
+      ]);
+      sendJson(input.response, 200, { session, messages, executions, events, generatedAt: new Date().toISOString() });
+      return;
+    }
+
+    const body = parseAgentSessionBody(await readJsonBody(input.request));
+    const session = await agentRepo.upsertSession({
+      sessionId: body.sessionId,
+      traceId: body.traceId,
+      threadKey,
+      guildId: body.guildId,
+      channelId: body.channelId,
+      userId: body.userId,
+      title: body.title,
+      request: body.request,
+      requestedBy: body.requestedBy,
+      status: body.status,
+      harness: body.harness,
+      model: body.model,
+      provider: body.provider,
+      harnessThreadId: body.harnessThreadId,
+      metadata: body.metadata
+    });
+    await agentRepo.recordEvent({
+      sessionId: session.sessionId,
+      traceId: session.traceId,
+      kind: "status",
+      eventName: "agent.session.upserted",
+      summary: "Agent session is ready.",
+      metadata: { threadKey: session.threadKey, harness: session.harness, model: session.model }
+    });
+    sendJson(input.response, 200, { ok: true, session });
     return;
   }
 
@@ -762,6 +947,46 @@ function parseCodegenSessionBody(value: unknown): {
   };
 }
 
+function parseAgentSessionBody(value: unknown): {
+  sessionId: string | null;
+  traceId: string | null;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+  title: string | null;
+  request: string | null;
+  requestedBy: string | null;
+  status: CodegenApiStatus | undefined;
+  harness: string | null;
+  model: string | null;
+  provider: string | null;
+  harnessThreadId: string | null;
+  metadata: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object") throw new Error("Agent session body must be an object.");
+  const body = value as Record<string, unknown>;
+  const status = body.status;
+  if (status != null && !["queued", "running", "succeeded", "failed", "no_changes", "cancelled"].includes(String(status))) {
+    throw new Error("Invalid agent session status.");
+  }
+  return {
+    sessionId: stringOrNull(body.sessionId),
+    traceId: stringOrNull(body.traceId),
+    guildId: stringOrNull(body.guildId),
+    channelId: stringOrNull(body.channelId),
+    userId: stringOrNull(body.userId),
+    title: stringOrNull(body.title),
+    request: stringOrNull(body.request),
+    requestedBy: stringOrNull(body.requestedBy),
+    status: status == null ? undefined : (String(status) as CodegenApiStatus),
+    harness: stringOrNull(body.harness),
+    model: stringOrNull(body.model),
+    provider: stringOrNull(body.provider),
+    harnessThreadId: stringOrNull(body.harnessThreadId) ?? stringOrNull(body.codexThreadId),
+    metadata: objectOrEmpty(body.metadata)
+  };
+}
+
 function parseCodegenMessageBody(value: unknown): {
   messageId: string | null;
   clientMessageId: string | null;
@@ -781,6 +1006,34 @@ function parseCodegenMessageBody(value: unknown): {
       ? [{ type: "text", text: body.text }]
       : [];
   if (parts.length === 0) throw new Error("Codegen message body requires parts or text.");
+  return {
+    messageId: stringOrNull(body.messageId),
+    clientMessageId: stringOrNull(body.clientMessageId),
+    role,
+    parts,
+    metadata: objectOrEmpty(body.metadata)
+  };
+}
+
+function parseAgentMessageBody(value: unknown): {
+  messageId: string | null;
+  clientMessageId: string | null;
+  role: AgentRuntimeMessageRole;
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object") throw new Error("Agent message body must be an object.");
+  const body = value as Record<string, unknown>;
+  const role = String(body.role ?? "user");
+  if (role !== "system" && role !== "user" && role !== "assistant" && role !== "tool") {
+    throw new Error("Agent message role must be system, user, assistant, or tool.");
+  }
+  const parts = Array.isArray(body.parts)
+    ? body.parts
+    : typeof body.text === "string"
+      ? [{ type: "text", text: body.text }]
+      : [];
+  if (parts.length === 0) throw new Error("Agent message body requires parts or text.");
   return {
     messageId: stringOrNull(body.messageId),
     clientMessageId: stringOrNull(body.clientMessageId),
@@ -856,6 +1109,10 @@ function titleFromRequest(request: string) {
   const clean = request.trim().replace(/\s+/g, " ");
   if (!clean) return "Codegen session";
   return clean.length <= 80 ? clean : `${clean.slice(0, 77)}...`;
+}
+
+function agentRuntimeRepo(codegenRepo?: CodegenRepository) {
+  return codegenRepo ? new AgentRuntimeRepository(codegenRepo) : null;
 }
 
 function parseBoolean(value: string | null) {
@@ -1028,6 +1285,63 @@ function sendUiUnauthorized(response: http.ServerResponse) {
     "www-authenticate": 'Basic realm="Discord AI Agent task viewer"'
   });
   response.end("Authentication required.");
+}
+
+async function streamAgentEvents(input: {
+  agentRepo: AgentRuntimeRepository;
+  request: http.IncomingMessage;
+  response: http.ServerResponse;
+  threadKey: string;
+  executionId: string | null;
+  afterEventId: number | null;
+}) {
+  input.response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive"
+  });
+
+  const session = await input.agentRepo.getSession({ threadKey: input.threadKey });
+  if (!session) {
+    input.response.write(`event: error\ndata: ${JSON.stringify({ error: "agent_session_not_found" })}\n\n`);
+    input.response.end();
+    return;
+  }
+
+  let closed = false;
+  let afterEventId = input.afterEventId ?? 0;
+  input.request.on("close", () => {
+    closed = true;
+  });
+
+  const sendEvents = async () => {
+    if (closed || input.response.destroyed) return;
+    const events = await input.agentRepo.listEvents({
+      sessionId: session.sessionId,
+      executionId: input.executionId,
+      afterEventId,
+      limit: 200
+    });
+    for (const event of events) {
+      afterEventId = Math.max(afterEventId, event.id);
+      input.response.write(`event: agent.event\ndata: ${JSON.stringify(event)}\n\n`);
+    }
+    input.response.write(`event: heartbeat\ndata: ${JSON.stringify({ afterEventId, generatedAt: new Date().toISOString() })}\n\n`);
+  };
+
+  await sendEvents();
+  const interval = setInterval(() => {
+    void sendEvents().catch((error) => {
+      logger.warn({ err: error, threadKey: input.threadKey, executionId: input.executionId }, "Failed to stream agent runtime events");
+    });
+  }, 2000);
+  interval.unref?.();
+
+  await new Promise<void>((resolve) => {
+    input.request.on("close", resolve);
+    input.response.on("close", resolve);
+  });
+  clearInterval(interval);
 }
 
 export async function renderMetrics(repo: DiscordAiAgentRepository) {

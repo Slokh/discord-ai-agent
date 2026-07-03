@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
 import { startInternalApi } from "./control/internalApi.js";
+import { AgentRuntimeRepository } from "./db/agentRuntimeRepository.js";
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
 import { CodegenRepository } from "./db/codegenRepository.js";
@@ -72,6 +73,7 @@ async function main() {
   logger.debug("Postgres pool created");
   const repo = new DiscordAiAgentRepository(pool);
   const codegenRepo = new CodegenRepository(pool);
+  const agentRuntimeRepo = new AgentRuntimeRepository(codegenRepo);
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
 
@@ -133,7 +135,7 @@ async function main() {
       client && startsWorker
         ? {
             run: async (job, context) => {
-              await runQueuedDiscordAgentRequest({ config, repo, openRouter, jobs: context.jobs, client }, job);
+              await runQueuedDiscordAgentRequest({ config, repo, agentRuntime: agentRuntimeRepo, openRouter, jobs: context.jobs, client }, job);
             }
           }
         : undefined,
@@ -155,7 +157,10 @@ async function main() {
       })
     : null;
   const sandboxReconciler = startsTaskWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
-  const runtime = startsBot && client && crawler instanceof DiscordCrawler ? createDiscordAiAgentBot({ config, repo, openRouter, crawler, jobs, client }) : null;
+  const runtime =
+    startsBot && client && crawler instanceof DiscordCrawler
+      ? createDiscordAiAgentBot({ config, repo, agentRuntime: agentRuntimeRepo, openRouter, crawler, jobs, client })
+      : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
 
   let shuttingDown = false;

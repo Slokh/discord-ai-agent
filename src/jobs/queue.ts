@@ -19,7 +19,8 @@ import {
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
 export const AGENT_TASK_JOB = "agent.task";
-export const DISCORD_AGENT_REQUEST_JOB = "discord.agent.request";
+export const AGENT_RUNTIME_EXECUTION_JOB = "agent.runtime.execution";
+export const DISCORD_AGENT_REQUEST_JOB = AGENT_RUNTIME_EXECUTION_JOB;
 const EMBEDDING_JOB_BATCH_SIZE = 400;
 const DISCORD_AGENT_JOB_EXPIRE_SECONDS = 10 * 60;
 
@@ -49,6 +50,9 @@ export type AgentTaskRunner = {
 export type DiscordAgentRequestJob = {
   runId: string;
   traceId?: string;
+  agentSessionId?: string;
+  agentExecutionId?: string;
+  agentThreadKey?: string;
   guildId: string;
   channelId: string;
   messageId: string;
@@ -201,7 +205,7 @@ export async function startJobs(input: {
           messageId: job.messageId,
           responseMessageId: job.responseMessageId
         },
-        "Enqueueing Discord agent request"
+        "Enqueueing agent runtime execution"
       );
       const id = await boss.send(DISCORD_AGENT_REQUEST_JOB, job, {
         singletonKey: job.runId,
@@ -210,7 +214,7 @@ export async function startJobs(input: {
         retryBackoff: true,
         expireInSeconds: DISCORD_AGENT_JOB_EXPIRE_SECONDS
       });
-      logger.info({ queue: DISCORD_AGENT_REQUEST_JOB, runId: job.runId, jobId: id ?? null }, "Discord agent request enqueue complete");
+      logger.info({ queue: DISCORD_AGENT_REQUEST_JOB, runId: job.runId, jobId: id ?? null }, "Agent runtime execution enqueue complete");
       return id ?? null;
     },
     enqueueAgentTask: async (job) => {
@@ -650,13 +654,13 @@ export async function startJobs(input: {
                 messageId: job.data.messageId,
                 responseMessageId: job.data.responseMessageId
               },
-              "Starting queued Discord agent request"
+              "Starting queued agent runtime execution"
             );
             const existingRun = await input.repo?.getProcessRun(job.data.runId).catch(() => undefined);
             if (existingRun && isTerminalProcessRunStatus(existingRun.status)) {
               logger.info(
                 { queue: DISCORD_AGENT_REQUEST_JOB, jobId: job.id, runId: job.data.runId, status: existingRun.status },
-                "Skipping queued Discord agent request because run is already terminal"
+                "Skipping queued agent runtime execution because run is already terminal"
               );
               return;
             }
@@ -664,7 +668,7 @@ export async function startJobs(input: {
               ?.updateProcessRun({
                 runId: job.data.runId,
                 status: "running",
-                summary: "Processing queued Discord mention.",
+                summary: "Processing queued agent runtime execution.",
                 metadata: {
                   queue: DISCORD_AGENT_REQUEST_JOB,
                   pgbossJobId: job.id,
@@ -693,7 +697,7 @@ export async function startJobs(input: {
               await input.discordAgent!.run(job.data, { jobs: runtime });
               logger.info(
                 { queue: DISCORD_AGENT_REQUEST_JOB, jobId: job.id, runId: job.data.runId, durationMs: durationMs(startedAt) },
-                "Queued Discord agent request complete"
+                "Queued agent runtime execution complete"
               );
             } catch (error) {
               await input.repo
@@ -709,7 +713,7 @@ export async function startJobs(input: {
                 .catch((runError) => logger.warn({ err: runError, runId: job.data.runId }, "Failed to record Discord job failure event"));
               logger.error(
                 { err: error, queue: DISCORD_AGENT_REQUEST_JOB, jobId: job.id, runId: job.data.runId, durationMs: durationMs(startedAt) },
-                "Queued Discord agent request failed"
+                "Queued agent runtime execution failed"
               );
               throw error;
             }
@@ -718,7 +722,7 @@ export async function startJobs(input: {
       }
     });
   } else if (discordAgentWorkerEnabled) {
-    logger.warn({ queue: DISCORD_AGENT_REQUEST_JOB }, "Discord agent request worker requested without a runner");
+    logger.warn({ queue: DISCORD_AGENT_REQUEST_JOB }, "Agent runtime execution worker requested without a runner");
   }
 
   return runtime;

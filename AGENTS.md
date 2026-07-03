@@ -16,11 +16,12 @@ This repo is a TypeScript Discord AI agent with durable code-update tasks. Keep 
 - Discord mentions enter through `src/discord/client.ts`, then route through `src/agent/router.ts`.
 - Discord-visible acknowledgements, lazy status replies, final replies, files, and loading-reaction cleanup should go through `src/discord/responseSink.ts`.
 - Model-selected tool contracts live in `src/tools/registry.ts`; `src/tools/coreTools.ts` is the compatibility facade for focused tool-family modules.
-- Durable code-update tasks are enqueued from `src/tools/agentTaskTools.ts` through the `coreTools.ts` facade, processed in `src/jobs/queue.ts`, launched by `src/execution/backend.ts`, executed by `src/execution/sandboxRunner.ts`, and rendered back to Discord by `src/discord/taskNotifications.ts`.
-- Agent task state, trace events, command events, artifacts, and run-console data are persisted in `src/db/repositories.ts`.
+- Durable agent sessions are exposed through `src/db/agentRuntimeRepository.ts` and `/api/agent/sessions/:threadKey`; code-update tasks are currently a compatibility path through `src/tools/agentTaskTools.ts`, `src/jobs/queue.ts`, `src/execution/backend.ts`, and `src/execution/sandboxRunner.ts`.
+- Agent runtime sessions, task state, trace events, command events, artifacts, and run-console data are persisted through `src/db/agentRuntimeRepository.ts` and `src/db/repositories.ts`.
 - The run console API is in `src/control/internalApi.ts`; the React console lives under `src/control/console/`.
 - Read `docs/architecture.md`, `docs/improvement-plan.md`, `docs/tool-design.md`, and the closest `src/**/README.md` before broad codegen, retrieval, observability, or Discord-flow changes.
 - Use `npm run eval -- --dry-run` for eval schema checks, and `npm run eval` when live OpenRouter/DB-backed regression runs are intended.
+- For Centaur-style runtime work, prefer generic agent-session changes over new codegen-only paths.
 
 ## Ownership Map
 

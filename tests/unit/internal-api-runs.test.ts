@@ -173,6 +173,87 @@ describe("internal API run endpoints", () => {
     await reader.cancel();
     expect(Buffer.from(chunk.value ?? new Uint8Array()).toString("utf8")).toContain("event: codegen.event");
   });
+
+  it("serves a generic agent session control-plane API", async () => {
+    const codegenRepo = fakeCodegenRepo();
+    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), codegenRepo: codegenRepo as never });
+    const auth = {
+      authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}`,
+      "content-type": "application/json"
+    };
+    const threadKey = "discord:111:222";
+    const encodedThreadKey = encodeURIComponent(threadKey);
+
+    const create = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        request: "answer the Discord prompt through a warm sandbox session",
+        requestedBy: "kartik",
+        model: "z-ai/glm-5.2",
+        harness: "opencode"
+      })
+    });
+    expect(create.status).toBe(200);
+    await expect(create.json()).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        session: expect.objectContaining({
+          threadKey,
+          request: "answer the Discord prompt through a warm sandbox session",
+          model: "z-ai/glm-5.2",
+          metadata: expect.objectContaining({ runtime: "agent" })
+        })
+      })
+    );
+
+    const append = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/messages`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ role: "user", text: "hello from Discord", clientMessageId: "discord-message-2" })
+    });
+    expect(append.status).toBe(200);
+    await expect(append.json()).resolves.toEqual(expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }));
+
+    const execute = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/execute`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ reasoningEffort: "low", metadata: { source: "test" } })
+    });
+    expect(execute.status).toBe(202);
+    await expect(execute.json()).resolves.toEqual(
+      expect.objectContaining({
+        execution: expect.objectContaining({
+          status: "queued",
+          reasoningEffort: "low",
+          metadata: expect.objectContaining({ runtime: "agent", source: "test" })
+        })
+      })
+    );
+
+    const detail = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}`, { headers: auth });
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toEqual(
+      expect.objectContaining({
+        messages: [expect.objectContaining({ clientMessageId: "discord-message-2" })],
+        executions: [expect.objectContaining({ status: "queued" })],
+        events: expect.arrayContaining([expect.objectContaining({ eventName: "agent.execution.queued" })])
+      })
+    );
+
+    const events = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/events`, { headers: auth });
+    expect(events.status).toBe(200);
+    await expect(events.json()).resolves.toEqual(
+      expect.objectContaining({ events: expect.arrayContaining([expect.objectContaining({ eventName: "agent.message.appended" })]) })
+    );
+
+    const stream = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/stream`, { headers: auth });
+    expect(stream.status).toBe(200);
+    const reader = stream.body!.getReader();
+    const chunk = await reader.read();
+    await reader.cancel();
+    expect(Buffer.from(chunk.value ?? new Uint8Array()).toString("utf8")).toContain("event: agent.event");
+  });
 });
 
 function testConfig(): AppConfig {

@@ -48,6 +48,14 @@ Postgres is the durable source of truth for Discord messages, embeddings, skills
 3. `src/control/console/` renders the React run console.
 4. `scripts/inspectRun.ts`, `scripts/codegenStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths.
 
+Useful terminal entrypoints:
+
+```sh
+npm run runs:inspect -- --list --kind codegen --sort slowest --limit 10
+npm run runs:inspect -- <run-id-or-discord-message-link> --terminal
+npm run codegen:status
+```
+
 ## Change Guidance
 
 - Keep the Discord UX commandless: users should keep writing normal `@ai ...` prompts.

@@ -1,6 +1,6 @@
 import type { ProcessRunArtifactContent } from "../db/repositories.js";
 import { formatOpenCodeTranscriptDiagnostics, parseOpenCodeTranscript } from "./openCodeTranscript.js";
-import type { RunArtifactSummary, RunSnapshot, RunSpan, RunTerminalEntry } from "./runs.js";
+import type { RunArtifactSummary, RunSnapshot, RunSpan, RunSummary, RunTerminalEntry } from "./runs.js";
 
 export type RunInspectionOptions = {
   eventLimit?: number;
@@ -9,6 +9,48 @@ export type RunInspectionOptions = {
   includeTerminal?: boolean;
   terminalLimit?: number;
 };
+
+export type RunSummaryListOptions = {
+  kind?: string;
+  status?: string;
+  sort?: "updated" | "started" | "slowest";
+  limit?: number;
+};
+
+export function formatRunSummaryList(runs: RunSummary[], options: RunSummaryListOptions = {}): string {
+  const limit = clampInteger(options.limit ?? 20, 1, 500);
+  const filtered = runs
+    .filter((run) => !options.kind || run.kind === options.kind)
+    .filter((run) => !options.status || run.status === options.status)
+    .sort((left, right) => compareRunSummaries(left, right, options.sort ?? "updated"))
+    .slice(0, limit);
+
+  const lines = [
+    `Runs (${filtered.length}${runs.length > filtered.length ? ` of ${runs.length}` : ""})`,
+    `Sort: ${options.sort ?? "updated"}${options.kind ? ` | Kind: ${options.kind}` : ""}${options.status ? ` | Status: ${options.status}` : ""}`,
+    ""
+  ];
+  if (filtered.length === 0) {
+    lines.push("No matching runs.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  for (const run of filtered) {
+    lines.push(`- ${run.runId} | ${run.kind} | ${run.status} | ${formatSeconds(run.durationMs)} | ${truncateSingleLine(run.title, 100)}`);
+    const detail = [
+      run.requester ? `requester=${run.requester}` : null,
+      run.currentStep ? `step=${run.currentStep}` : null,
+      run.bottleneck ? `bottleneck=${run.bottleneck.name} ${formatSeconds(run.bottleneck.durationMs)}` : null,
+      run.links.pullRequest ? `pr=${String(run.links.pullRequest)}` : null,
+      run.messageId ? `message=${run.messageId}` : null
+    ]
+      .filter(Boolean)
+      .join(" | ");
+    if (detail) lines.push(`  ${detail}`);
+    if (run.summary) lines.push(`  ${truncateSingleLine(run.summary, 220)}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
 
 export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectionOptions = {}): string {
   const eventLimit = clampInteger(options.eventLimit ?? 80, 1, 500);
@@ -84,6 +126,12 @@ export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectio
   lines.push("");
   lines.push(`Generated: ${formatDateTime(snapshot.generatedAt)}`);
   return `${lines.join("\n")}\n`;
+}
+
+function compareRunSummaries(left: RunSummary, right: RunSummary, sort: NonNullable<RunSummaryListOptions["sort"]>) {
+  if (sort === "slowest") return (right.durationMs ?? -1) - (left.durationMs ?? -1);
+  if (sort === "started") return right.startedAt.getTime() - left.startedAt.getTime();
+  return right.updatedAt.getTime() - left.updatedAt.getTime();
 }
 
 export function formatRunArtifacts(artifacts: ProcessRunArtifactContent[]): string {

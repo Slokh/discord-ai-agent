@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatRunArtifacts, formatRunInspection, formatSeconds, selectArtifacts } from "../../src/observability/runInspector.js";
-import type { RunSnapshot } from "../../src/observability/runs.js";
+import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, formatSeconds, selectArtifacts } from "../../src/observability/runInspector.js";
+import type { RunSnapshot, RunSummary } from "../../src/observability/runs.js";
 
 describe("run inspector formatting", () => {
   it("formats a compact debugger report for a run snapshot", () => {
@@ -126,7 +126,60 @@ describe("run inspector formatting", () => {
     expect(formatSeconds(1234)).toBe("1.234s");
     expect(formatSeconds(63_000)).toBe("1m 3s");
   });
+
+  it("formats filtered run summary lists for aggregate debugging", () => {
+    const runs: RunSummary[] = [
+      runSummary({ runId: "run-fast", kind: "discord", status: "succeeded", durationMs: 1200, title: "hello" }),
+      runSummary({
+        runId: "run-slow",
+        kind: "codegen",
+        status: "no_changes",
+        durationMs: 900_000,
+        title: "replace thinking",
+        summary: "Agent task produced no diff.",
+        bottleneck: { name: "opencode_attempt_1", durationMs: 870_000 },
+        links: { pullRequest: "https://github.com/example/repo/pull/1" }
+      }),
+      runSummary({ runId: "run-failed", kind: "codegen", status: "failed", durationMs: 300_000, title: "fix codegen" })
+    ];
+
+    const report = formatRunSummaryList(runs, { kind: "codegen", sort: "slowest", limit: 2 });
+
+    expect(report).toContain("Runs (2 of 3)");
+    expect(report).toContain("Sort: slowest | Kind: codegen");
+    expect(report.indexOf("run-slow")).toBeLessThan(report.indexOf("run-failed"));
+    expect(report).toContain("bottleneck=opencode_attempt_1 14m 30s");
+    expect(report).toContain("pr=https://github.com/example/repo/pull/1");
+    expect(report).not.toContain("run-fast");
+  });
 });
+
+function runSummary(overrides: Partial<RunSummary>): RunSummary {
+  const now = new Date("2026-07-01T17:40:21.000Z");
+  return {
+    runId: "run-1",
+    traceId: "trace-1",
+    kind: "discord",
+    status: "succeeded",
+    title: "test run",
+    summary: null,
+    requester: "kartik",
+    guildId: "guild",
+    channelId: "channel",
+    userId: "user",
+    messageId: "message",
+    source: "process_run",
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+    durationMs: 1000,
+    currentStep: null,
+    bottleneck: null,
+    links: {},
+    metadata: {},
+    ...overrides
+  };
+}
 
 function snapshotFixture(): RunSnapshot {
   const startedAt = new Date("2026-07-01T17:40:21.000Z");

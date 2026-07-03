@@ -2,7 +2,16 @@ import type { GuildBasedChannel, GuildMember, Message, TextBasedChannel } from "
 import { normalizeMessageContent } from "../memory/normalize.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 
-export async function persistDiscordMessage(repo: DiscordAiAgentRepository, message: Message) {
+export function isExcludedChannelId(channelId: string | null | undefined, excludedChannelIds: Set<string>): boolean {
+  if (!channelId) return false;
+  return excludedChannelIds.has(channelId);
+}
+
+export async function persistDiscordMessage(
+  repo: DiscordAiAgentRepository,
+  message: Message,
+  options?: { excludedChannelIds?: Set<string> }
+) {
   if (!message.inGuild()) return;
   if (message.partial) {
     message = await message.fetch();
@@ -10,13 +19,34 @@ export async function persistDiscordMessage(repo: DiscordAiAgentRepository, mess
   const guild = message.guild;
   if (!guild) return;
 
+  const channelId = message.channel.id;
+  const parentId = "parentId" in message.channel ? (message.channel.parentId ?? null) : null;
+  const excludedChannelIds = options?.excludedChannelIds;
+  const isExcluded = excludedChannelIds
+    ? isExcludedChannelId(channelId, excludedChannelIds) || isExcludedChannelId(parentId, excludedChannelIds)
+    : false;
+
   await repo.upsertGuild({
     id: guild.id,
     name: guild.name,
     raw: { id: guild.id, name: guild.name }
   });
 
-  await repo.upsertChannel(channelRecordFromMessage(message));
+  const channelRecord = channelRecordFromMessage(message);
+  await repo.upsertChannel(channelRecord);
+
+  if (isExcluded) {
+    await repo.setChannelExcluded({
+      channelId,
+      excluded: true,
+      guildId: guild.id,
+      parentId: channelRecord.parentId,
+      name: channelRecord.name,
+      type: channelRecord.type,
+      isThread: channelRecord.isThread
+    });
+    return;
+  }
 
   await repo.upsertMessage({
     id: message.id,

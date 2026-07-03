@@ -38,6 +38,9 @@ secret:
 
 config:
   botName: ai
+  # Comma-separated Discord channel IDs excluded from crawling, indexing,
+  # embedding, searching, and summarizing.
+  discordExcludedChannelIds: ""
   githubRepository: owner/repo
   githubBaseBranch: main
   openRouterChatModel: z-ai/glm-5.2

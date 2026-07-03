@@ -181,6 +181,80 @@ describe("discoverCrawlableChannels", () => {
     expect(repo.upsertChannel).toHaveBeenCalledWith(expect.objectContaining({ id: "thread-1", parentId: "forum-1", isThread: true }));
     expect(repo.upsertChannel).toHaveBeenCalledWith(expect.objectContaining({ id: "hidden-1", isThread: false }));
   });
+
+  it("excludes channels whose IDs are in the configured excluded list and marks them excluded", async () => {
+    const repo = {
+      ...fakeCrawlerRepo(),
+      setChannelExcluded: vi.fn(async () => undefined)
+    };
+    const crawler = new DiscordCrawler({
+      client: { user: { id: "bot" } } as any,
+      repo: repo as any,
+      config: { ...retryConfig(), discord: { excludedChannelIds: ["excluded-channel"] } } as any
+    });
+    const excluded = fakeChannel({
+      id: "excluded-channel",
+      type: ChannelType.GuildText,
+      readable: true,
+      hasMessages: true
+    });
+    const childThread = fakeChannel({
+      id: "thread-2",
+      parentId: "excluded-channel",
+      type: ChannelType.PublicThread,
+      readable: true,
+      hasMessages: true
+    });
+    const allowed = fakeChannel({ id: "text-2", type: ChannelType.GuildText, readable: true, hasMessages: true });
+    const forumParentExcluded = fakeChannel({
+      id: "forum-2",
+      type: ChannelType.GuildForum,
+      readable: true,
+      hasMessages: false,
+      activeThreads: [childThread]
+    });
+
+    const guild = fakeGuild([excluded, allowed, forumParentExcluded]);
+    const channels = await crawler.discoverCrawlableChannels(guild as any);
+
+    expect(channels.map((channel) => channel.id)).toEqual(["text-2"]);
+    expect(repo.setChannelExcluded).toHaveBeenCalledWith(expect.objectContaining({ channelId: "excluded-channel", excluded: true }));
+    expect(repo.setChannelExcluded).toHaveBeenCalledWith(expect.objectContaining({ channelId: "thread-2", excluded: true }));
+  });
+});
+
+describe("crawlChannel exclusion guard", () => {
+  it("skips crawling and embedding messages from excluded channels", async () => {
+    const repo = {
+      getCrawlCursor: vi.fn(async () => undefined),
+      updateCrawlCursor: vi.fn(async () => undefined),
+      upsertGuild: vi.fn(async () => undefined),
+      upsertChannel: vi.fn(async () => undefined),
+      upsertMessage: vi.fn(async () => undefined),
+      setChannelExcluded: vi.fn(async () => undefined),
+      isUserPrivacyDeleted: vi.fn(async () => false)
+    };
+    const enqueueMessageEmbedding = vi.fn(async () => "job-1");
+    const message = fakeMessage({ id: "message-1", content: "trivia", createdTimestamp: 2_000 });
+    const channel = fakeMessageChannel({
+      id: "excluded-channel",
+      guildId: "guild-1",
+      pages: [[message]]
+    });
+    message.channel = channel;
+
+    const crawler = new DiscordCrawler({
+      client: { user: { id: "bot" } } as any,
+      repo: repo as any,
+      config: { ...retryConfig(), discord: { excludedChannelIds: ["excluded-channel"] } } as any,
+      embeddingQueue: { enqueueMessageEmbedding }
+    });
+
+    await crawler.crawlChannel(channel as any);
+
+    expect(repo.upsertMessage).not.toHaveBeenCalled();
+    expect(enqueueMessageEmbedding).not.toHaveBeenCalled();
+  });
 });
 
 describe("crawlChannel", () => {
@@ -329,6 +403,7 @@ function retryConfig() {
     crawlBatchSize: 100,
     crawlFetchRetries: 0,
     crawlRetryBaseMs: 0,
-    crawlRetryMaxMs: 0
+    crawlRetryMaxMs: 0,
+    discord: { excludedChannelIds: [] as string[] }
   };
 }

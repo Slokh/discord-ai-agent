@@ -9,6 +9,7 @@ describe("config", () => {
         "DISCORD_GUILD_ID",
         "BOT_NAME",
         "DISCORD_LOADING_REACTION",
+        "DISCORD_EXCLUDED_CHANNEL_IDS",
         "RUN_MIGRATIONS",
         "OPENROUTER_CHAT_MODEL",
         "OPENROUTER_CODEGEN_MODEL",
@@ -41,6 +42,7 @@ describe("config", () => {
         expect(config.discord.guildId).toBe("");
         expect(config.discord.botName).toBe("ai");
         expect(config.discord.loadingReaction).toBe("<a:loading:1521299407214084337>");
+        expect(config.discord.excludedChannelIds).toEqual([]);
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
         expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
@@ -99,6 +101,12 @@ describe("config", () => {
   it("allows configuring the Discord loading reaction", () => {
     withEnv({ DISCORD_LOADING_REACTION: "<a:loading:1521299407214084337>" }, () => {
       expect(loadConfig().discord.loadingReaction).toBe("<a:loading:1521299407214084337>");
+    });
+  });
+
+  it("parses configured Discord channel exclusions", () => {
+    withEnv({ DISCORD_EXCLUDED_CHANNEL_IDS: "channel-a, channel-b,,channel-c" }, () => {
+      expect(loadConfig().discord.excludedChannelIds).toEqual(["channel-a", "channel-b", "channel-c"]);
     });
   });
 

@@ -505,7 +505,7 @@ describe("sandboxRunner", () => {
 
   it("routes Discord knowledge/indexing changes to storage owners instead of generated tool-name anchors", async () => {
     const taskRequest = [
-      "Fully exclude channel ID 1172353113471074314 (#trivia-sucks) from all current and future knowledge.",
+      "Fully exclude channel ID 111111111111111111 (#excluded-channel) from all current and future knowledge.",
       "Remove indexed messages, embeddings, message index, search index, stats, everything.",
       "Ensure searchDiscordHistory, getRecentDiscordMessages, getDiscordStats, summarizeDiscordHistory, getDiscordChannelTopics, searchDiscordAttachments, and any other retrieval tool filters out this channel."
     ].join(" ");

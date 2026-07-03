@@ -131,6 +131,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
     secretKeyRef:
       name: {{ .Values.secret.existingSecretName }}
       key: {{ .Values.config.discordGuildIdSecretKey }}
+- name: DISCORD_EXCLUDED_CHANNEL_IDS
+  value: {{ .Values.config.discordExcludedChannelIds | quote }}
 {{- end -}}
 
 {{- define "discord-ai-agent.openRouterEnv" -}}

@@ -1083,6 +1083,99 @@ export class DiscordAiAgentRepository {
     ]);
   }
 
+  async applyChannelExclusions(input: { guildId: string; channelIds: string[] }): Promise<{
+    channelsMarked: number;
+    messagesDeleted: number;
+    attachmentsDeleted: number;
+    embeddingsDeleted: number;
+  }> {
+    const channelIds = [...new Set(input.channelIds.map((id) => id.trim()).filter(Boolean))];
+    if (channelIds.length === 0) {
+      return { channelsMarked: 0, messagesDeleted: 0, attachmentsDeleted: 0, embeddingsDeleted: 0 };
+    }
+
+    const result = await this.pool.query(
+      `
+        WITH input_channels AS (
+          SELECT unnest($2::text[]) AS id
+        ),
+        target_channels AS (
+          SELECT c.id, c.guild_id, c.parent_id, c.name, c.type, c.is_thread, c.raw
+          FROM channels c
+          WHERE c.guild_id = $1
+            AND (
+              c.id IN (SELECT id FROM input_channels)
+              OR c.parent_id IN (SELECT id FROM input_channels)
+            )
+          UNION
+          SELECT input_channels.id, $1, NULL, NULL, 0, false, '{}'::jsonb
+          FROM input_channels
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM channels c
+            WHERE c.guild_id = $1
+              AND c.id = input_channels.id
+          )
+        ),
+        marked_channels AS (
+          INSERT INTO channels(id, guild_id, parent_id, name, type, is_thread, is_excluded, raw, updated_at)
+          SELECT id, guild_id, parent_id, name, type, is_thread, true, raw, now()
+          FROM target_channels
+          ON CONFLICT(id) DO UPDATE SET
+            guild_id = EXCLUDED.guild_id,
+            parent_id = COALESCE(EXCLUDED.parent_id, channels.parent_id),
+            name = COALESCE(EXCLUDED.name, channels.name),
+            type = EXCLUDED.type,
+            is_thread = EXCLUDED.is_thread,
+            is_excluded = true,
+            updated_at = now()
+          RETURNING id
+        ),
+        target_messages AS (
+          SELECT m.id
+          FROM messages m
+          LEFT JOIN channels c ON c.id = m.channel_id
+          WHERE m.guild_id = $1
+            AND (
+              m.channel_id IN (SELECT id FROM input_channels)
+              OR c.parent_id IN (SELECT id FROM input_channels)
+            )
+        ),
+        deleted_attachments AS (
+          DELETE FROM attachments a
+          USING target_messages tm
+          WHERE a.message_id = tm.id
+          RETURNING a.id
+        ),
+        deleted_embeddings AS (
+          DELETE FROM message_embeddings e
+          USING target_messages tm
+          WHERE e.message_id = tm.id
+          RETURNING e.message_id
+        ),
+        deleted_messages AS (
+          DELETE FROM messages m
+          USING target_messages tm
+          WHERE m.id = tm.id
+          RETURNING m.id
+        )
+        SELECT
+          (SELECT count(*)::int FROM marked_channels) AS channels_marked,
+          (SELECT count(*)::int FROM deleted_messages) AS messages_deleted,
+          (SELECT count(*)::int FROM deleted_attachments) AS attachments_deleted,
+          (SELECT count(*)::int FROM deleted_embeddings) AS embeddings_deleted
+      `,
+      [input.guildId, channelIds]
+    );
+    const row = result.rows[0] ?? {};
+    return {
+      channelsMarked: Number(row.channels_marked ?? 0),
+      messagesDeleted: Number(row.messages_deleted ?? 0),
+      attachmentsDeleted: Number(row.attachments_deleted ?? 0),
+      embeddingsDeleted: Number(row.embeddings_deleted ?? 0)
+    };
+  }
+
   async updateCrawlCursor(input: {
     guildId: string;
     channelId: string;

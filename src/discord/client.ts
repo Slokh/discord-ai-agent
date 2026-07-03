@@ -15,7 +15,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { isOpenRouterContentFilterError, type OpenRouterClient } from "../models/openrouter.js";
 import { embeddingPriorityForMessageTimestamp, type DiscordAgentRequestJob, type JobRuntime } from "../jobs/queue.js";
 import type { DiscordCrawler } from "./crawler.js";
-import { persistDiscordMessage } from "./messagePersistence.js";
+import { isExcludedChannelId, persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { handleAgentRequest } from "../agent/router.js";
@@ -98,7 +98,11 @@ export function createDiscordAiAgentBot(input: {
         if (fetched.inGuild()) {
           if (!shouldProcessGuildEvent(input.config.discord.guildId, fetched.guildId)) return;
           if (isSelfMessage(fetched as Message, client.user?.id)) return;
-          await persistDiscordMessage(input.repo, fetched as Message);
+          const excludedChannelIds = new Set(input.config.discord.excludedChannelIds);
+          await persistDiscordMessage(input.repo, fetched as Message, { excludedChannelIds });
+          if (isExcludedChannelId(fetched.channelId, excludedChannelIds) || isExcludedChannelId(fetched.channel?.parentId, excludedChannelIds)) {
+            return;
+          }
           queueIncomingMessageEmbedding(input, fetched as Message, client.user?.id, "message_update");
           await recordTraceEvent(input.repo, { eventName: "discord.message.updated", summary: "Persisted edited Discord message" });
         }
@@ -208,7 +212,11 @@ async function handleMessageCreate(
     return;
   }
 
-  await persistDiscordMessage(input.repo, message);
+  const excludedChannelIds = new Set(input.config.discord.excludedChannelIds);
+  const channelIsExcluded =
+    isExcludedChannelId(message.channelId, excludedChannelIds) ||
+    isExcludedChannelId(message.channel?.parentId, excludedChannelIds);
+  await persistDiscordMessage(input.repo, message, { excludedChannelIds });
   logger.debug(
     {
       messageId: message.id,
@@ -216,11 +224,16 @@ async function handleMessageCreate(
       channelId: message.channelId,
       authorId: message.author.id,
       authorIsBot: message.author.bot,
-      contentChars: message.content?.length ?? 0
+      contentChars: message.content?.length ?? 0,
+      excluded: channelIsExcluded
     },
     "Persisted incoming Discord message"
   );
 
+  if (channelIsExcluded) {
+    logger.debug({ messageId: message.id, channelId: message.channelId }, "Skipping embedding/reply for excluded channel");
+    return;
+  }
   if (message.author.bot) {
     logger.debug({ messageId: message.id, channelId: message.channelId, authorId: message.author.id }, "Ignoring bot-authored Discord message");
     return;
@@ -1153,7 +1166,9 @@ export async function persistReactionMessage(
   const fetchedMessage = message.partial ? await message.fetch() : message;
   if (!fetchedMessage.inGuild()) return;
   if (!shouldProcessGuildEvent(input.config.discord.guildId, fetchedMessage.guildId)) return;
-  await persistDiscordMessage(input.repo, fetchedMessage);
+  await persistDiscordMessage(input.repo, fetchedMessage, {
+    excludedChannelIds: new Set(input.config.discord.excludedChannelIds)
+  });
 }
 
 export function hasExplicitBotMention(content: string, botUserId: string): boolean {

@@ -71,6 +71,7 @@ async function main() {
   const pool = createPool(config);
   logger.debug("Postgres pool created");
   const repo = new DiscordAiAgentRepository(pool);
+  await applyConfiguredChannelExclusions({ repo, guildId: config.discord.guildId, channelIds: config.discord.excludedChannelIds });
   const codegenRepo = new CodegenRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
@@ -209,4 +210,26 @@ function describeDatabaseUrl(databaseUrl: string) {
   } catch {
     return "unparseable";
   }
+}
+
+async function applyConfiguredChannelExclusions(input: {
+  repo: DiscordAiAgentRepository;
+  guildId: string;
+  channelIds: string[];
+}) {
+  if (!input.guildId || input.channelIds.length === 0) return;
+  const result = await input.repo.applyChannelExclusions({
+    guildId: input.guildId,
+    channelIds: input.channelIds
+  });
+  logger.info(
+    {
+      configuredExcludedChannelCount: input.channelIds.length,
+      channelsMarked: result.channelsMarked,
+      messagesDeleted: result.messagesDeleted,
+      attachmentsDeleted: result.attachmentsDeleted,
+      embeddingsDeleted: result.embeddingsDeleted
+    },
+    "Applied configured Discord channel exclusions"
+  );
 }

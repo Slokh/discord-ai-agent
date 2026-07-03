@@ -26,6 +26,7 @@ jobs:
       API_SERVICE_TYPE: ${{ vars.API_SERVICE_TYPE }}
       API_TLS_CERTIFICATE_ARN: ${{ vars.API_TLS_CERTIFICATE_ARN }}
       CONTROL_UI_PUBLIC_URL: ${{ vars.CONTROL_UI_PUBLIC_URL }}
+      DISCORD_EXCLUDED_CHANNEL_IDS: ${{ vars.DISCORD_EXCLUDED_CHANNEL_IDS }}
       CODEGEN_WORKER_ENABLED: ${{ vars.CODEGEN_WORKER_ENABLED }}
       CODEGEN_WORKER_REPLICAS: ${{ vars.CODEGEN_WORKER_REPLICAS }}
       CODEGEN_LEASE_HEARTBEAT_SECONDS: ${{ vars.CODEGEN_LEASE_HEARTBEAT_SECONDS }}
@@ -81,6 +82,9 @@ jobs:
           fi
           if [ -n "${CONTROL_UI_PUBLIC_URL:-}" ]; then
             helm_args+=(--set-string "config.controlUiPublicUrl=$CONTROL_UI_PUBLIC_URL")
+          fi
+          if [ -n "${DISCORD_EXCLUDED_CHANNEL_IDS:-}" ]; then
+            helm_args+=(--set-string "config.discordExcludedChannelIds=$DISCORD_EXCLUDED_CHANNEL_IDS")
           fi
           is_true() {
             case "${1:-}" in

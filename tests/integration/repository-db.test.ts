@@ -1155,6 +1155,57 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.getVisibleIndexedChannelIds(guildId, [channelId])).resolves.toEqual([channelId]);
   });
 
+  it("applies configured channel exclusions to existing indexed messages", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const threadId = `channel-${randomUUID()}-thread-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const channelMessageId = `message-${randomUUID()}`;
+    const threadMessageId = `message-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "excluded", type: 0 });
+    await repo.upsertChannel({ id: threadId, guildId, parentId: channelId, name: "excluded-thread", type: 11, isThread: true });
+    await repo.upsertMessage({
+      id: channelMessageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "excluded channel content",
+      normalizedContent: "excluded channel content",
+      createdAt: new Date(),
+      attachments: [{ id: `attachment-${randomUUID()}`, url: "https://cdn.discordapp.com/excluded.png" }]
+    });
+    await repo.upsertMessage({
+      id: threadMessageId,
+      guildId,
+      channelId: threadId,
+      authorId: userId,
+      content: "excluded thread content",
+      normalizedContent: "excluded thread content",
+      createdAt: new Date()
+    });
+    await repo.storeMessageEmbedding({ messageId: channelMessageId, embedding: Array.from({ length: 1536 }, () => 0.001), model: "test" });
+    await repo.storeMessageEmbedding({ messageId: threadMessageId, embedding: Array.from({ length: 1536 }, () => 0.001), model: "test" });
+
+    const result = await repo.applyChannelExclusions({ guildId, channelIds: [channelId] });
+
+    expect(result).toEqual({ channelsMarked: 2, messagesDeleted: 2, attachmentsDeleted: 1, embeddingsDeleted: 2 });
+    await expect(repo.getVisibleIndexedChannelIds(guildId, [channelId, threadId])).resolves.toEqual([]);
+    const messages = await pool.query("SELECT count(*)::int AS count FROM messages WHERE id = ANY($1::text[])", [
+      [channelMessageId, threadMessageId]
+    ]);
+    const attachments = await pool.query("SELECT count(*)::int AS count FROM attachments WHERE message_id = ANY($1::text[])", [
+      [channelMessageId, threadMessageId]
+    ]);
+    const embeddings = await pool.query("SELECT count(*)::int AS count FROM message_embeddings WHERE message_id = ANY($1::text[])", [
+      [channelMessageId, threadMessageId]
+    ]);
+    expect(messages.rows[0]?.count).toBe(0);
+    expect(attachments.rows[0]?.count).toBe(0);
+    expect(embeddings.rows[0]?.count).toBe(0);
+  });
+
   it("does not return recent messages for excluded channels", async () => {
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;

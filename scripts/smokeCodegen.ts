@@ -20,14 +20,14 @@ type SmokeArgs = {
   model: string;
   title: string;
   request: string;
+  requestFile?: string;
   closePr: boolean;
   timeoutMs: number;
   useBuiltRunner: boolean;
 };
 
-const args = parseArgs(process.argv.slice(2));
-
 async function main() {
+  const args = await parseArgs(process.argv.slice(2));
   const config = loadConfig();
   if (!config.openRouter.apiKey) throw new Error("OPENROUTER_API_KEY is required.");
   const githubToken = await resolveGitHubTaskToken(config);
@@ -40,6 +40,7 @@ async function main() {
   await fs.mkdir(artifactDir, { recursive: true });
   await fs.mkdir(cacheDir, { recursive: true });
 
+  const startedAt = Date.now();
   const callbacks: CallbackRecord[] = [];
   let completion: Record<string, unknown> | undefined;
   let completeResolve: (() => void) | undefined;
@@ -75,6 +76,7 @@ async function main() {
   process.stdout.write(`task id: ${taskId}\n`);
   process.stdout.write(`harness/model: ${args.harness} / ${args.model}\n`);
   process.stdout.write(`artifacts: ${artifactDir}\n`);
+  if (args.requestFile) process.stdout.write(`request file: ${args.requestFile}\n`);
 
   const child = spawnRunner({
     env: {
@@ -117,12 +119,31 @@ async function main() {
   await fs.writeFile(path.join(workDir, "callbacks.json"), JSON.stringify(callbacks, null, 2), "utf8");
   if (completion) await fs.writeFile(path.join(workDir, "completion.json"), JSON.stringify(completion, null, 2), "utf8");
 
+  const summary = formatSmokeSummary({
+    taskId,
+    harness: args.harness,
+    model: args.model,
+    title: args.title,
+    request: args.request,
+    workDir,
+    artifactDir,
+    durationMs: Date.now() - startedAt,
+    exit,
+    callbacks,
+    completion
+  });
+  const summaryPath = path.join(workDir, "summary.md");
+  await fs.writeFile(summaryPath, summary, "utf8");
+  process.stdout.write(`summary: ${summaryPath}\n`);
+  const failureDiagnosis = failureDiagnosisLines(completion).join("\n");
+  if (failureDiagnosis) process.stdout.write(`${failureDiagnosis}\n`);
+
   if (args.closePr && completion?.prUrl) {
     await closePullRequest({ configRepository: config.github.repository, token: githubToken, prUrl: String(completion.prUrl), branchName: nullableString(completion.branchName) });
   }
 
   if (exit.code !== 0 || !completion || completion.status !== "succeeded") {
-    throw new Error(`Codegen smoke failed: exit=${exit.code} status=${String(completion?.status ?? "missing")}`);
+    throw new Error(`Codegen smoke failed: exit=${exit.code} status=${String(completion?.status ?? "missing")}. See ${summaryPath}`);
   }
 
   process.stdout.write(`smoke ok: ${completion.prUrl}\n`);
@@ -143,6 +164,92 @@ function spawnRunner(input: { env: NodeJS.ProcessEnv; useBuiltRunner: boolean })
   child.stdout.on("data", (chunk) => process.stdout.write(chunk));
   child.stderr.on("data", (chunk) => process.stderr.write(chunk));
   return child;
+}
+
+export function formatSmokeSummary(input: {
+  taskId: string;
+  harness: string;
+  model: string;
+  title: string;
+  request: string;
+  workDir: string;
+  artifactDir: string;
+  durationMs: number;
+  exit: { code: number | null; signal: NodeJS.Signals | null };
+  callbacks: CallbackRecord[];
+  completion?: Record<string, unknown>;
+}) {
+  const terminal = input.completion;
+  const status = terminalStatus(input.completion, input.exit);
+  const lines = [
+    "# Codegen Smoke Summary",
+    "",
+    `Task: ${input.taskId}`,
+    `Status: ${status}`,
+    `Harness: ${input.harness}`,
+    `Model: ${input.model}`,
+    `Duration: ${formatDuration(input.durationMs)}`,
+    `Exit: ${input.exit.code ?? "signal"}${input.exit.signal ? ` (${input.exit.signal})` : ""}`,
+    `Work dir: ${input.workDir}`,
+    `Artifacts: ${input.artifactDir}`,
+    "",
+    "## Request",
+    "",
+    `Title: ${input.title}`,
+    "",
+    input.request,
+    "",
+    "## Completion",
+    ""
+  ];
+  if (!terminal) {
+    lines.push("No completion callback was received.");
+  } else {
+    for (const key of ["status", "branchName", "prUrl", "error"]) {
+      const value = terminal[key];
+      if (value != null && value !== "") lines.push(`- ${key}: ${String(value)}`);
+    }
+    const diagnosis = failureDiagnosisLines(terminal);
+    if (diagnosis.length > 0) {
+      lines.push("", "## Failure Diagnosis", "", ...diagnosis.map((line) => `- ${line}`));
+    }
+  }
+  lines.push("", "## Callback Timeline", "");
+  if (input.callbacks.length === 0) {
+    lines.push("No callbacks were received.");
+  } else {
+    for (const callback of input.callbacks) {
+      lines.push(`- ${callback.at} ${callback.path}: ${summaryForCallback(callback.body)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function terminalStatus(completion: Record<string, unknown> | undefined, exit: { code: number | null; signal: NodeJS.Signals | null }) {
+  if (completion?.status) return String(completion.status);
+  if (exit.signal) return `terminated:${exit.signal}`;
+  if (exit.code != null) return `exit:${exit.code}`;
+  return "unknown";
+}
+
+function failureDiagnosisLines(completion: Record<string, unknown> | undefined) {
+  const metadata = objectRecord(completion?.metadata);
+  const diagnosis = objectRecord(metadata?.failureDiagnosis);
+  if (!diagnosis) return [];
+  const lines: string[] = [];
+  for (const key of ["category", "summary", "nextAction", "failedPhase"]) {
+    const value = diagnosis[key];
+    if (typeof value === "string" && value.trim()) lines.push(`${key}: ${value.trim()}`);
+  }
+  const slowestPhase = objectRecord(diagnosis.slowestPhase);
+  if (typeof slowestPhase?.name === "string" && typeof slowestPhase.durationMs === "number") {
+    lines.push(`slowestPhase: ${slowestPhase.name} (${formatDuration(slowestPhase.durationMs)})`);
+  }
+  return lines;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function waitForExit(child: ReturnType<typeof spawn>) {
@@ -202,16 +309,20 @@ async function closePullRequest(input: { configRepository: string; token: string
   }
 }
 
-function parseArgs(values: string[]): SmokeArgs {
+export async function parseArgs(values: string[]): Promise<SmokeArgs> {
   const harness = valueFor(values, "--harness") ?? "opencode";
   if (harness !== "codex" && harness !== "opencode") throw new Error("--harness must be codex or opencode");
+  const requestFile = valueFor(values, "--request-file");
+  const request = requestFile
+    ? await fs.readFile(path.resolve(requestFile), "utf8")
+    : valueFor(values, "--request") ??
+      "Make a tiny README.md wording change for a temporary local codegen smoke test. Keep it to one sentence and do not modify behavior.";
   return {
     harness,
     model: valueFor(values, "--model") ?? process.env.OPENROUTER_CODEGEN_MODEL ?? process.env.OPENROUTER_CHAT_MODEL ?? "z-ai/glm-5.2",
     title: valueFor(values, "--title") ?? "Local codegen smoke test",
-    request:
-      valueFor(values, "--request") ??
-      "Make a tiny README.md wording change for a temporary local codegen smoke test. Keep it to one sentence and do not modify behavior.",
+    request,
+    requestFile: requestFile ? path.resolve(requestFile) : undefined,
     closePr: values.includes("--close-pr"),
     timeoutMs: Number(valueFor(values, "--timeout-ms") ?? 20 * 60_000),
     useBuiltRunner: values.includes("--built")
@@ -232,7 +343,14 @@ function nullableString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+function formatDuration(ms: number) {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

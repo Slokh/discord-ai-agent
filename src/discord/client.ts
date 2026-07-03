@@ -334,6 +334,7 @@ async function handleMessageCreate(
     client,
     sourceMessage: message,
     maxReplyChars: input.config.maxReplyChars,
+    loadingReactionEmoji: input.config.discord.loadingReaction,
     logger: requestLogger
   });
   await responseSink.acknowledge();
@@ -442,6 +443,7 @@ export async function runQueuedDiscordAgentRequest(
     sourceMessage: message,
     maxReplyChars: input.config.maxReplyChars,
     logger: requestLogger,
+    loadingReactionEmoji: input.config.discord.loadingReaction,
     statusMessage
   });
   await responseSink.acknowledge();

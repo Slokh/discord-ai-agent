@@ -8,6 +8,7 @@ describe("config", () => {
         "DISCORD_CLIENT_ID",
         "DISCORD_GUILD_ID",
         "BOT_NAME",
+        "DISCORD_LOADING_REACTION",
         "RUN_MIGRATIONS",
         "OPENROUTER_CHAT_MODEL",
         "OPENROUTER_CODEGEN_MODEL",
@@ -39,6 +40,7 @@ describe("config", () => {
         expect(config.discord.clientId).toBe("");
         expect(config.discord.guildId).toBe("");
         expect(config.discord.botName).toBe("ai");
+        expect(config.discord.loadingReaction).toBe("⏳");
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
         expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
@@ -91,6 +93,12 @@ describe("config", () => {
   it("allows configuring the Discord response timeout", () => {
     withEnv({ DISCORD_AGENT_RESPONSE_TIMEOUT_MS: "900000" }, () => {
       expect(loadConfig().discordAgentResponseTimeoutMs).toBe(900_000);
+    });
+  });
+
+  it("allows configuring the Discord loading reaction", () => {
+    withEnv({ DISCORD_LOADING_REACTION: "<a:loading:1521299407214084337>" }, () => {
+      expect(loadConfig().discord.loadingReaction).toBe("<a:loading:1521299407214084337>");
     });
   });
 

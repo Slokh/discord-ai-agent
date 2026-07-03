@@ -5,7 +5,6 @@ import {
   enrichModelRoundToolRequests,
   groupTimelineSteps,
   parseCodexTranscript,
-  parseOpenCodeTranscript,
   relatedRunTimelineSteps,
   summedStepDuration,
   timelineStepSummaryText,
@@ -15,6 +14,7 @@ import {
   type TimelineStep
 } from "../../src/control/console/App.js";
 import type { RunArtifact, RunEvent, RunSnapshot, RunSpan } from "../../src/control/console/types.js";
+import { parseOpenCodeTranscript } from "../../src/observability/openCodeTranscript.js";
 
 describe("run console timeline", () => {
   it("sums counted step durations instead of first-to-last wall-clock range", () => {
@@ -566,6 +566,41 @@ describe("run console timeline", () => {
     expect(transcript.items[1]?.body).toContain("Making the edit");
     expect(transcript.items[1]?.body).toContain("Model wait: 7.989s");
     expect(transcript.items[1]?.body).toContain("Tool time: 0.011s");
+  });
+
+  it("keeps unfinished OpenCode rounds visible while the harness is still running", () => {
+    const transcript = parseOpenCodeTranscript(
+      [
+        "$ opencode run --model openrouter/z-ai/glm-5.2 [prompt]",
+        JSON.stringify({ type: "step_start", timestamp: Date.parse(atMs(0)), part: {} }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse(atMs(5_000)),
+          part: {
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "/repo/src/execution/sandboxRunner.ts" },
+              time: { start: Date.parse(atMs(5_000)), end: Date.parse(atMs(5_020)) }
+            }
+          }
+        })
+      ].join("\n")
+    );
+
+    expect(transcript.isTranscript).toBe(true);
+    expect(transcript.rounds).toBe(1);
+    expect(transcript.toolCalls).toBe(1);
+    expect(transcript.totalDurationMs).toBe(5_000);
+    expect(transcript.toolDurationMs).toBe(20);
+    expect(transcript.modelWaitMs).toBe(4_980);
+    expect(transcript.firstToolAtMs).toBe(5_000);
+    expect(transcript.activeRound).toEqual({
+      round: 1,
+      durationMs: 5_000,
+      tools: ["read"],
+      lastEventAt: atMs(5_000)
+    });
   });
 
   it("formats Codex app-server transcripts into high-signal items", () => {

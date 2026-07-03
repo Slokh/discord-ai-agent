@@ -3,8 +3,8 @@ import type { Logger } from "pino";
 import { cleanResponse } from "../tools/coreTools.js";
 import type { AgentFile } from "../tools/types.js";
 
-export const DISCORD_LOADING_EMOJI_ID = "1521299407214084337";
-export const DISCORD_LOADING_EMOJI = `<a:loading:${DISCORD_LOADING_EMOJI_ID}>`;
+export const DEFAULT_DISCORD_LOADING_REACTION = "⏳";
+const ACKNOWLEDGEMENT_FALLBACK_CONTENT = "Working on it...";
 
 export type DiscordResponseResult = {
   message: Message;
@@ -16,6 +16,8 @@ export class DiscordResponseSink {
   private readonly sourceMessage: Message;
   private readonly maxReplyChars: number;
   private readonly logger: Logger;
+  private readonly loadingReactionEmoji: string;
+  private readonly loadingReactionMatch: DiscordReactionMatch;
   private statusMessage: Message | null;
   private loadingReaction: Awaited<ReturnType<Message["react"]>> | null = null;
   private acknowledgementAttempted = false;
@@ -25,12 +27,15 @@ export class DiscordResponseSink {
     sourceMessage: Message;
     maxReplyChars: number;
     logger: Logger;
+    loadingReactionEmoji?: string;
     statusMessage?: Message | null;
   }) {
     this.client = input.client;
     this.sourceMessage = input.sourceMessage;
     this.maxReplyChars = input.maxReplyChars;
     this.logger = input.logger;
+    this.loadingReactionEmoji = input.loadingReactionEmoji?.trim() || DEFAULT_DISCORD_LOADING_REACTION;
+    this.loadingReactionMatch = parseDiscordReactionMatch(this.loadingReactionEmoji);
     this.statusMessage = input.statusMessage ?? null;
   }
 
@@ -50,10 +55,15 @@ export class DiscordResponseSink {
     if (this.acknowledgementAttempted) return;
     this.acknowledgementAttempted = true;
     try {
-      this.loadingReaction = await this.sourceMessage.react(DISCORD_LOADING_EMOJI);
-      this.logger.debug({ emojiId: DISCORD_LOADING_EMOJI_ID }, "Added Discord loading reaction");
+      this.loadingReaction = await this.sourceMessage.react(this.loadingReactionEmoji);
+      this.logger.debug({ emoji: this.loadingReactionEmoji }, "Added Discord loading reaction");
     } catch (error) {
-      this.logger.warn({ err: error, emojiId: DISCORD_LOADING_EMOJI_ID }, "Failed to add Discord loading reaction");
+      this.logger.warn({ err: error, emoji: this.loadingReactionEmoji }, "Failed to add Discord loading reaction");
+      try {
+        await this.updateStatus(ACKNOWLEDGEMENT_FALLBACK_CONTENT);
+      } catch (fallbackError) {
+        this.logger.warn({ err: fallbackError }, "Failed to create fallback Discord acknowledgement status");
+      }
     }
   }
 
@@ -87,14 +97,41 @@ export class DiscordResponseSink {
     if (!botUserId) return;
     const reaction =
       this.loadingReaction ??
-      this.sourceMessage.reactions.cache.get(DISCORD_LOADING_EMOJI_ID) ??
-      this.sourceMessage.reactions.cache.find((candidate) => candidate.emoji.id === DISCORD_LOADING_EMOJI_ID);
+      this.sourceMessage.reactions.cache.get(this.loadingReactionMatch.cacheKey) ??
+      this.sourceMessage.reactions.cache.find((candidate) => reactionMatches(candidate, this.loadingReactionMatch));
     if (!reaction) return;
     try {
       await reaction.users.remove(botUserId);
-      this.logger.debug({ emojiId: DISCORD_LOADING_EMOJI_ID }, "Removed Discord loading reaction");
+      this.logger.debug({ emoji: this.loadingReactionEmoji }, "Removed Discord loading reaction");
     } catch (error) {
-      this.logger.warn({ err: error, emojiId: DISCORD_LOADING_EMOJI_ID }, "Failed to remove Discord loading reaction");
+      this.logger.warn({ err: error, emoji: this.loadingReactionEmoji }, "Failed to remove Discord loading reaction");
     }
   }
+}
+
+type DiscordReactionMatch = {
+  cacheKey: string;
+  id: string | null;
+  name: string;
+};
+
+function parseDiscordReactionMatch(value: string): DiscordReactionMatch {
+  const custom = /^<a?:([^:>]+):(\d+)>$/.exec(value.trim());
+  if (custom) {
+    return {
+      cacheKey: custom[2] ?? value,
+      id: custom[2] ?? null,
+      name: custom[1] ?? value
+    };
+  }
+  return {
+    cacheKey: value,
+    id: null,
+    name: value
+  };
+}
+
+function reactionMatches(reaction: Awaited<ReturnType<Message["react"]>>, expected: DiscordReactionMatch) {
+  if (expected.id && reaction.emoji.id === expected.id) return true;
+  return reaction.emoji.name === expected.name;
 }

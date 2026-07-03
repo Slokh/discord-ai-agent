@@ -18,6 +18,7 @@ import {
   XCircle
 } from "lucide-react";
 import { Button, Copy, Status, Tabs, Tag } from "regen-ui";
+import { parseOpenCodeTranscript } from "../../observability/openCodeTranscript.js";
 import { fetchArtifact, fetchRuns, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
 import type { EventLevel, RunArtifact, RunEvent, RunKind, RunSnapshot, RunSpan, RunStatus, RunSummary, TerminalEntry } from "./types.js";
 
@@ -75,7 +76,6 @@ type FlowItem = {
   artifact?: RunArtifact;
 };
 type CodexTranscriptItemKind = "message" | "command" | "warning" | "error" | "lifecycle" | "tokens" | "reasoning";
-type OpenCodeTranscriptItemKind = "round" | "tool" | "message" | "error" | "tokens";
 type CodexCommandStart = {
   timestamp: string;
   command: string | null;
@@ -97,43 +97,6 @@ export type ParsedCodexTranscript = {
     body: string;
     command: string;
     output: string;
-  }>;
-};
-type OpenCodeToolSummary = {
-  name: string;
-  status: string | null;
-  title: string;
-  output: string;
-  durationMs: number | null;
-  startedAtMs: number | null;
-  endedAtMs: number | null;
-};
-export type ParsedOpenCodeTranscript = {
-  isTranscript: boolean;
-  launchCommand: string | null;
-  rounds: number;
-  toolCalls: number;
-  textMessages: number;
-  tokenTotal: number | null;
-  totalDurationMs: number | null;
-  modelWaitMs: number | null;
-  toolDurationMs: number;
-  interRoundGapMs: number;
-  failedTools: number;
-  repeatedReads: Array<{ title: string; count: number }>;
-  firstToolAtMs: number | null;
-  firstEditAtMs: number | null;
-  slowestRound: { round: number; durationMs: number; title: string } | null;
-  items: Array<{
-    id: string;
-    kind: OpenCodeTranscriptItemKind;
-    title: string;
-    timestamp: string;
-    body: string;
-    command: string;
-    output: string;
-    durationMs: number | null;
-    tools: OpenCodeToolSummary[];
   }>;
 };
 
@@ -1137,6 +1100,15 @@ function OpenCodeTranscript({ content }: { content: string }) {
             <span>{formatDuration(transcript.interRoundGapMs)}</span>
           </div>
         )}
+        {transcript.activeRound && (
+          <div className="codex-transcript-stop opencode-transcript-insight">
+            <strong>Active round: round {transcript.activeRound.round}</strong>
+            <span>
+              {formatDuration(transcript.activeRound.durationMs)} so far
+              {transcript.activeRound.tools.length > 0 ? ` · ${transcript.activeRound.tools.join(", ")}` : ""}
+            </span>
+          </div>
+        )}
         {transcript.failedTools > 0 && (
           <div className="codex-transcript-stop opencode-transcript-insight">
             <strong>Failed tools</strong>
@@ -1992,221 +1964,6 @@ function isOpenCodeTranscriptArtifact(artifact: RunArtifact) {
   return /\bopencode attempt \d+\b/.test(step);
 }
 
-export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscript {
-  const lines = content.split(/\r?\n/);
-  const launchCommand = lines.find((line) => line.startsWith("$ "))?.slice(2).trim() || null;
-  const records = lines.flatMap(parseOpenCodeTranscriptRecord);
-  const steps: Array<{
-    start: number;
-    end: number;
-    tools: OpenCodeToolSummary[];
-    texts: string[];
-    finish: Record<string, unknown> | null;
-  }> = [];
-  let current: (typeof steps)[number] | null = null;
-
-  for (const record of records) {
-    if (record.type === "step_start") {
-      current = { start: record.timestamp, end: record.timestamp, tools: [], texts: [], finish: null };
-      continue;
-    }
-    if (!current) continue;
-    if (record.type === "tool_use") {
-      current.tools.push(openCodeToolSummary(record.part));
-      continue;
-    }
-    if (record.type === "text") {
-      const text = stringValue(objectValue(record.part)?.text);
-      if (text) current.texts.push(text);
-      continue;
-    }
-    if (record.type === "step_finish") {
-      current.end = record.timestamp;
-      current.finish = record.part;
-      steps.push(current);
-      current = null;
-    }
-  }
-
-  const firstTimestamp = records[0]?.timestamp ?? null;
-  const lastTimestamp = records.at(-1)?.timestamp ?? null;
-  const items = steps.map((step, index) => openCodeRoundItem(step, index + 1));
-  const toolCalls = items.reduce((total, item) => total + item.tools.length, 0);
-  const textMessages = items.filter((item) => item.kind === "message").length;
-  const totalDurationMs = firstTimestamp == null || lastTimestamp == null ? null : Math.max(0, lastTimestamp - firstTimestamp);
-  const toolDurationMs = steps.reduce((total, step) => total + step.tools.reduce((stepTotal, tool) => stepTotal + (tool.durationMs ?? 0), 0), 0);
-  const roundDurationMs = steps.reduce((total, step) => total + Math.max(0, step.end - step.start), 0);
-  const modelWaitMs = steps.length === 0 ? null : Math.max(0, roundDurationMs - toolDurationMs);
-  const interRoundGapMs = steps.reduce((total, step, index) => {
-    const next = steps[index + 1];
-    return next ? total + Math.max(0, next.start - step.end) : total;
-  }, 0);
-  const failedTools = steps.reduce((total, step) => total + step.tools.filter((tool) => tool.status === "error" || tool.status === "failed").length, 0);
-  const repeatedReads = repeatedOpenCodeReads(steps);
-  const tokenTotal = lastNumber(
-    steps.map((step) => numericMetadata(objectValue(step.finish?.tokens)?.total))
-  );
-  const firstToolAtMs = firstTimestamp == null ? null : firstToolOffsetMs(steps, firstTimestamp, () => true);
-  const firstEditAtMs = firstTimestamp == null ? null : firstToolOffsetMs(steps, firstTimestamp, (tool) => tool.name === "edit");
-  const slowestRound =
-    items
-      .filter((item): item is (typeof items)[number] & { durationMs: number } => item.durationMs != null)
-      .map((item, index) => ({ round: index + 1, durationMs: item.durationMs, title: item.title }))
-      .sort((left, right) => right.durationMs - left.durationMs)[0] ?? null;
-
-  if (tokenTotal != null) {
-    const timestamp = timestampToIso(records.at(-1)?.timestamp ?? firstTimestamp ?? 0);
-    items.push({
-      id: "opencode-token-usage",
-      kind: "tokens",
-      title: "Final token usage",
-      timestamp,
-      body: `Total: ${tokenTotal.toLocaleString()}`,
-      command: "",
-      output: "",
-      durationMs: null,
-      tools: []
-    });
-  }
-
-  return {
-    isTranscript: launchCommand != null && records.some((record) => record.type === "step_start" || record.type === "tool_use"),
-    launchCommand,
-    rounds: steps.length,
-    toolCalls,
-    textMessages,
-    tokenTotal,
-    totalDurationMs,
-    modelWaitMs,
-    toolDurationMs,
-    interRoundGapMs,
-    failedTools,
-    repeatedReads,
-    firstToolAtMs,
-    firstEditAtMs,
-    slowestRound,
-    items
-  };
-}
-
-function parseOpenCodeTranscriptRecord(line: string) {
-  const index = line.indexOf('{"type"');
-  if (index < 0) return [];
-  try {
-    const parsed = JSON.parse(line.slice(index)) as Record<string, unknown>;
-    const type = stringValue(parsed.type);
-    const timestamp = numericMetadata(parsed.timestamp);
-    if (!type || timestamp == null) return [];
-    return [
-      {
-        type,
-        timestamp,
-        part: objectValue(parsed.part) ?? {}
-      }
-    ];
-  } catch {
-    return [];
-  }
-}
-
-function openCodeRoundItem(
-  step: { start: number; end: number; tools: OpenCodeToolSummary[]; texts: string[]; finish: Record<string, unknown> | null },
-  round: number
-): ParsedOpenCodeTranscript["items"][number] {
-  const durationMs = Math.max(0, step.end - step.start);
-  const toolNames = step.tools.map((tool) => tool.name).filter(Boolean);
-  const toolDurationMs = step.tools.reduce((total, tool) => total + (tool.durationMs ?? 0), 0);
-  const modelWaitMs = Math.max(0, durationMs - toolDurationMs);
-  const finishReason = stringValue(step.finish?.reason);
-  const tokens = objectValue(step.finish?.tokens);
-  const reasoningTokens = numericMetadata(tokens?.reasoning);
-  const totalTokens = numericMetadata(tokens?.total);
-  const title = toolNames.length > 0 ? `Round ${round}: ${formatToolCallList(toolNames)}` : step.texts.length > 0 ? `Round ${round}: assistant message` : `Round ${round}`;
-  const body = [
-    finishReason ? `Finished: ${finishReason}` : "",
-    durationMs > 0 ? `Model wait: ${formatDuration(modelWaitMs)}` : "",
-    toolDurationMs > 0 ? `Tool time: ${formatDuration(toolDurationMs)}` : "",
-    totalTokens != null ? `Tokens: ${totalTokens.toLocaleString()}` : "",
-    reasoningTokens != null ? `Reasoning: ${reasoningTokens.toLocaleString()}` : "",
-    step.texts.length > 0 ? step.texts.map((text) => truncateSingleLine(text, 280)).join("\n") : ""
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const timestamp = timestampToIso(step.start);
-  return {
-    id: `opencode-round-${round}-${step.start}`,
-    kind: step.texts.length > 0 && toolNames.length === 0 ? "message" : step.tools.some((tool) => tool.status === "error") ? "error" : "round",
-    title,
-    timestamp,
-    body,
-    command: "",
-    output: "",
-    durationMs,
-    tools: step.tools
-  };
-}
-
-function openCodeToolSummary(part: Record<string, unknown>): OpenCodeToolSummary {
-  const state = objectValue(part.state);
-  const input = objectValue(state?.input);
-  const time = objectValue(state?.time);
-  const name = stringValue(part.tool) ?? "tool";
-  const status = stringValue(state?.status);
-  const title = stringValue(state?.title) ?? stringValue(input?.command) ?? stringValue(input?.filePath) ?? "";
-  const output = openCodeToolOutput(name, stringValue(state?.output) ?? "");
-  const startedAt = numericMetadata(time?.start);
-  const endedAt = numericMetadata(time?.end);
-  return {
-    name,
-    status,
-    title,
-    output,
-    durationMs: startedAt != null && endedAt != null && endedAt >= startedAt ? endedAt - startedAt : null,
-    startedAtMs: startedAt,
-    endedAtMs: endedAt
-  };
-}
-
-function openCodeToolOutput(toolName: string, output: string) {
-  if (!output.trim()) return "";
-  if (toolName === "read") return "";
-  if (toolName === "edit" && /edit applied successfully/i.test(output)) return "Edit applied successfully.";
-  return truncateSingleLine(output, 220);
-}
-
-function firstToolOffsetMs(steps: Array<{ start: number; tools: OpenCodeToolSummary[] }>, firstTimestamp: number, predicate: (tool: OpenCodeToolSummary) => boolean) {
-  for (const step of steps) {
-    const tool = step.tools.find(predicate);
-    if (tool) return Math.max(0, (tool.startedAtMs ?? step.start) - firstTimestamp);
-  }
-  return null;
-}
-
-function repeatedOpenCodeReads(steps: Array<{ tools: OpenCodeToolSummary[] }>) {
-  const counts = new Map<string, number>();
-  for (const step of steps) {
-    for (const tool of step.tools) {
-      if (tool.name !== "read") continue;
-      const title = tool.title.trim();
-      if (!title) continue;
-      counts.set(title, (counts.get(title) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()]
-    .filter(([, count]) => count > 1)
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .slice(0, 5)
-    .map(([title, count]) => ({ title, count }));
-}
-
-function lastNumber(values: Array<number | null>) {
-  return [...values].reverse().find((value): value is number => value != null) ?? null;
-}
-
-function timestampToIso(timestamp: number) {
-  return new Date(timestamp).toISOString();
-}
-
 export function parseCodexTranscript(content: string): ParsedCodexTranscript {
   const lines = content.split(/\r?\n/);
   const launchCommand = lines.find((line) => line.startsWith("$ "))?.slice(2).trim() || null;
@@ -3020,12 +2777,6 @@ function metadataValue(value: unknown) {
   if (value == null) return "null";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(value);
-}
-
-function truncateSingleLine(value: string, maxLength: number) {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
 function shortId(value: string) {

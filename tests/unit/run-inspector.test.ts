@@ -89,6 +89,38 @@ describe("run inspector formatting", () => {
     expect(report).toContain("Slowest round: round 1 10.000s (read)");
   });
 
+  it("includes active OpenCode round diagnostics before a step finishes", () => {
+    const artifact = {
+      ...snapshotFixture().artifacts[0]!,
+      kind: "command_log" as const,
+      name: "OpenCode attempt 1 transcript",
+      content: [
+        "$ opencode run --model openrouter/z-ai/glm-5.2 [prompt]",
+        JSON.stringify({ type: "step_start", timestamp: Date.parse("2026-07-01T00:00:00.000Z"), part: {} }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse("2026-07-01T00:00:05.000Z"),
+          part: {
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "src/execution/sandboxRunner.ts" },
+              time: { start: Date.parse("2026-07-01T00:00:05.000Z"), end: Date.parse("2026-07-01T00:00:05.020Z") }
+            }
+          }
+        })
+      ].join("\n")
+    };
+
+    const report = formatRunArtifacts([artifact]);
+
+    expect(report).toContain("OpenCode latency: total=5.000s");
+    expect(report).toContain("model_wait=4.980s");
+    expect(report).toContain("rounds=1");
+    expect(report).toContain("tool_calls=1");
+    expect(report).toContain("Active round: round 1 running for 5.000s (read)");
+  });
+
   it("formats durations as seconds instead of milliseconds", () => {
     expect(formatSeconds(42)).toBe("0.042s");
     expect(formatSeconds(1234)).toBe("1.234s");

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DISCORD_LOADING_EMOJI, DISCORD_LOADING_EMOJI_ID, DiscordResponseSink } from "../../src/discord/responseSink.js";
+import { DEFAULT_DISCORD_LOADING_REACTION, DiscordResponseSink } from "../../src/discord/responseSink.js";
 
 describe("DiscordResponseSink", () => {
   it("acknowledges with a loading reaction and replies final content when no status message exists", async () => {
@@ -15,7 +15,7 @@ describe("DiscordResponseSink", () => {
     await sink.acknowledge();
     const result = await sink.sendFinal({ content: "done" });
 
-    expect(sourceMessage.react).toHaveBeenCalledWith(DISCORD_LOADING_EMOJI);
+    expect(sourceMessage.react).toHaveBeenCalledWith(DEFAULT_DISCORD_LOADING_REACTION);
     expect(sourceMessage.reply).toHaveBeenCalledWith({ content: "done" });
     expect(reaction.users.remove).toHaveBeenCalledWith("bot-user");
     expect(result.usedStatusMessage).toBe(false);
@@ -84,7 +84,7 @@ describe("DiscordResponseSink", () => {
   });
 
   it("falls back to cached loading reaction cleanup when the acknowledgement reaction was not captured", async () => {
-    const reaction = fakeReaction();
+    const reaction = fakeReaction({ id: null, name: DEFAULT_DISCORD_LOADING_REACTION });
     const sourceMessage = fakeMessage({
       reactions: {
         cache: {
@@ -105,15 +105,62 @@ describe("DiscordResponseSink", () => {
     expect(reaction.users.remove).toHaveBeenCalledWith("bot-user");
   });
 
-  it("does not throw if acknowledgement or cleanup fails", async () => {
+  it("supports configured custom loading reactions", async () => {
+    const reaction = fakeReaction({ id: "1521299407214084337", name: "loading" });
+    const sourceMessage = fakeMessage({
+      react: vi.fn(async () => reaction),
+      reactions: {
+        cache: {
+          get: vi.fn(() => null),
+          find: vi.fn((predicate: (reaction: any) => boolean) => (predicate(reaction) ? reaction : null))
+        }
+      }
+    });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any,
+      loadingReactionEmoji: "<a:loading:1521299407214084337>"
+    });
+
+    await sink.acknowledge();
+    await sink.clearAcknowledgement();
+
+    expect(sourceMessage.react).toHaveBeenCalledWith("<a:loading:1521299407214084337>");
+    expect(reaction.users.remove).toHaveBeenCalledWith("bot-user");
+  });
+
+  it("creates a fallback status message when acknowledgement reaction fails", async () => {
+    const sourceMessage = fakeMessage({
+      react: vi.fn(async () => {
+        throw new Error("missing reaction permission");
+      })
+    });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    await sink.acknowledge();
+
+    expect(sourceMessage.reply).toHaveBeenCalledWith("Working on it...");
+  });
+
+  it("does not throw if acknowledgement fallback or cleanup fails", async () => {
     const sourceMessage = fakeMessage({
       react: vi.fn(async () => {
         throw new Error("missing reaction permission");
       }),
+      reply: vi.fn(async () => {
+        throw new Error("missing send permission");
+      }),
       reactions: {
         cache: {
           get: vi.fn(() => ({
-            emoji: { id: DISCORD_LOADING_EMOJI_ID },
+            emoji: { id: null, name: DEFAULT_DISCORD_LOADING_REACTION },
             users: {
               remove: vi.fn(async () => {
                 throw new Error("missing cleanup permission");
@@ -149,9 +196,9 @@ function fakeLogger() {
   };
 }
 
-function fakeReaction() {
+function fakeReaction(input: { id: string | null; name: string } = { id: null, name: DEFAULT_DISCORD_LOADING_REACTION }) {
   return {
-    emoji: { id: DISCORD_LOADING_EMOJI_ID },
+    emoji: input,
     users: {
       remove: vi.fn(async () => undefined)
     }

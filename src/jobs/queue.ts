@@ -47,7 +47,7 @@ export type AgentTaskRunner = {
   start: (job: AgentTaskJob, context?: ExecutionContext) => Promise<AgentTaskStartResult>;
 };
 
-export type DiscordAgentRequestJob = {
+export type AgentRuntimeExecutionJob = {
   runId: string;
   traceId?: string;
   agentSessionId?: string;
@@ -67,15 +67,20 @@ export type DiscordAgentRequestJob = {
   enqueuedAt: string;
 };
 
-export type DiscordAgentRequestRunner = {
-  run: (job: DiscordAgentRequestJob, context: { jobs: JobRuntime }) => Promise<void>;
+export type DiscordAgentRequestJob = AgentRuntimeExecutionJob;
+
+export type AgentRuntimeExecutionRunner = {
+  run: (job: AgentRuntimeExecutionJob, context: { jobs: JobRuntime }) => Promise<void>;
 };
+
+export type DiscordAgentRequestRunner = AgentRuntimeExecutionRunner;
 
 export type JobRuntime = {
   boss: PgBoss;
   enqueueGuildCrawl: () => Promise<string | null>;
   enqueueMessageEmbedding: (messageId: string, options?: MessageEmbeddingEnqueueOptions) => Promise<string | null>;
-  enqueueDiscordAgentRequest: (job: DiscordAgentRequestJob) => Promise<string | null>;
+  enqueueAgentRuntimeExecution: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
+  enqueueDiscordAgentRequest: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
   enqueueAgentTask: (
     job: Omit<AgentTaskJob, "taskId" | "traceId" | "taskType"> & { taskId?: string; taskType?: AgentTaskJob["taskType"] }
   ) => Promise<{ jobId: string | null; taskId: string }>;
@@ -87,6 +92,7 @@ export async function startJobs(input: {
   crawler: CrawlJobRunner;
   embedding?: EmbeddingJobRunner;
   agentTask?: AgentTaskRunner | ExecutionBackend;
+  agentRuntime?: AgentRuntimeExecutionRunner;
   discordAgent?: DiscordAgentRequestRunner;
   worker?: boolean;
   crawlWorker?: boolean;
@@ -197,7 +203,7 @@ export async function startJobs(input: {
       logger.debug({ queue: EMBED_MESSAGE_JOB, messageId, jobId: id ?? null }, "Message embedding enqueue complete");
       return id ?? null;
     },
-    enqueueDiscordAgentRequest: async (job: DiscordAgentRequestJob) => {
+    enqueueAgentRuntimeExecution: async (job: AgentRuntimeExecutionJob) => {
       logger.info(
         {
           queue: DISCORD_AGENT_REQUEST_JOB,
@@ -216,6 +222,9 @@ export async function startJobs(input: {
       });
       logger.info({ queue: DISCORD_AGENT_REQUEST_JOB, runId: job.runId, jobId: id ?? null }, "Agent runtime execution enqueue complete");
       return id ?? null;
+    },
+    enqueueDiscordAgentRequest: async (job: AgentRuntimeExecutionJob) => {
+      return runtime.enqueueAgentRuntimeExecution(job);
     },
     enqueueAgentTask: async (job) => {
       const trace = currentTraceContext();
@@ -632,8 +641,9 @@ export async function startJobs(input: {
     logger.warn({ queue: AGENT_TASK_JOB }, "Agent task worker requested without a runner");
   }
 
-  if (discordAgentWorkerEnabled && input.discordAgent) {
-    await boss.work<DiscordAgentRequestJob>(DISCORD_AGENT_REQUEST_JOB, { batchSize: 1, pollingIntervalSeconds: 1 }, async (jobs) => {
+  const agentRuntimeRunner = input.agentRuntime ?? input.discordAgent;
+  if (discordAgentWorkerEnabled && agentRuntimeRunner) {
+    await boss.work<AgentRuntimeExecutionJob>(DISCORD_AGENT_REQUEST_JOB, { batchSize: 1, pollingIntervalSeconds: 1 }, async (jobs) => {
       for (const job of jobs) {
         const startedAt = Date.now();
         await runWithTrace(
@@ -683,7 +693,7 @@ export async function startJobs(input: {
                   ?.recordProcessRunSpan({
                     runId: job.data.runId,
                     spanId: "queue.wait",
-                    name: "Wait in Discord request queue",
+                    name: "Wait in agent runtime queue",
                     status: "succeeded",
                     startedAt: enqueuedAt,
                     completedAt: new Date(startedAt),
@@ -694,7 +704,7 @@ export async function startJobs(input: {
               }
             }
             try {
-              await input.discordAgent!.run(job.data, { jobs: runtime });
+              await agentRuntimeRunner.run(job.data, { jobs: runtime });
               logger.info(
                 { queue: DISCORD_AGENT_REQUEST_JOB, jobId: job.id, runId: job.data.runId, durationMs: durationMs(startedAt) },
                 "Queued agent runtime execution complete"

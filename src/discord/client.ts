@@ -367,7 +367,7 @@ async function handleMessageCreate(
   if (input.jobs) {
     const enqueuedAt = new Date();
     try {
-      const jobId = await input.jobs.enqueueDiscordAgentRequest({
+      const jobId = await input.jobs.enqueueAgentRuntimeExecution({
         runId: message.id,
         traceId: message.id,
         agentSessionId: agentRuntimeExecution?.session.sessionId,
@@ -430,7 +430,7 @@ async function handleMessageCreate(
   });
 }
 
-export async function runQueuedDiscordAgentRequest(
+export async function runQueuedAgentRuntimeExecution(
   input: {
     config: AppConfig;
     repo: DiscordAiAgentRepository;
@@ -444,12 +444,12 @@ export async function runQueuedDiscordAgentRequest(
   await waitForDiscordClientReady(input.client);
   const existingRun = await input.repo.getProcessRun(job.runId).catch(() => undefined);
   if (existingRun && isTerminalProcessRunStatus(existingRun.status)) {
-    logger.info({ runId: job.runId, status: existingRun.status }, "Skipping queued Discord request because run is already terminal");
+    logger.info({ runId: job.runId, status: existingRun.status }, "Skipping queued agent runtime execution because run is already terminal");
     return;
   }
 
   const message = await fetchDiscordMessage(input.client, job.channelId, job.messageId);
-  if (!message.inGuild()) throw new Error("Queued Discord request source message is no longer a guild message.");
+  if (!message.inGuild()) throw new Error("Queued agent runtime execution source message is no longer a guild message.");
   const requestLogger = logger.child({
     traceId: job.traceId ?? job.runId,
     requestId: job.runId,
@@ -484,6 +484,8 @@ export async function runQueuedDiscordAgentRequest(
     messageStartedAt: parseDateMs(job.enqueuedAt) ?? Date.now()
   });
 }
+
+export const runQueuedDiscordAgentRequest = runQueuedAgentRuntimeExecution;
 
 async function executeDiscordAgentRequest(
   input: {

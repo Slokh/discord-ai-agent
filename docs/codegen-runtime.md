@@ -97,7 +97,7 @@ Set `CODEGEN_EXECUTION_BACKEND` to choose the backend:
 - `kubernetes-job`: safest isolation boundary and current default.
 - `local-process`: lower latency mode for a dedicated codegen worker pod. In Helm, enable `codegenWorker.enabled=true`; that deployment consumes only `agent.task`, sets `CODEGEN_EXECUTION_BACKEND=local-process`, and mounts the sandbox cache PVC when `sandbox.cache.enabled=true`.
 
-Use `local-process` only for a pod you already treat as the code execution boundary. When `codegenWorker.enabled=true`, the regular worker stops consuming code-update task jobs so crawl, embedding, and Discord request work stay separate from warm codegen execution.
+Use `local-process` only for a pod you already treat as the code execution boundary. When `codegenWorker.enabled=true`, the regular worker stops consuming code-update task jobs so crawl, embedding, and agent runtime execution work stay separate from warm codegen execution.
 
 Warm workers coordinate through `codegen_sandbox_leases`. The default lease behavior is:
 

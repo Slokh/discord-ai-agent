@@ -7,7 +7,7 @@ This file is the short map for coding agents. Prefer this and the nearest `src/*
 Discord AI Agent is a TypeScript Node app with three production roles:
 
 - `bot`: Discord gateway, mention detection, response rendering, per-channel conversation memory.
-- `worker`: queue consumers for crawl, embeddings, Discord agent requests, codegen tasks, reconciliation, and cleanup.
+- `worker`: queue consumers for crawl, embeddings, agent runtime executions, codegen tasks, reconciliation, and cleanup.
 - `api`: internal control plane for sandbox callbacks, run console APIs, metrics, and authenticated debugging UI.
 
 Postgres is the durable source of truth for Discord messages, embeddings, skills, conversation memory, traces, process runs, task events, sandbox runs, codegen sessions, and the generic agent-runtime session facade that is replacing codegen-only execution.

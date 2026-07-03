@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import PgBoss from "pg-boss";
 import { loadConfig } from "../../src/config/env.js";
-import { AGENT_TASK_JOB, CRAWL_GUILD_JOB, DISCORD_AGENT_REQUEST_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
+import {
+  AGENT_RUNTIME_EXECUTION_JOB,
+  AGENT_TASK_JOB,
+  CRAWL_GUILD_JOB,
+  EMBED_MESSAGE_JOB,
+  startJobs,
+  type JobRuntime
+} from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { CodegenRepository } from "../../src/db/codegenRepository.js";
@@ -258,7 +265,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
-  it("processes queued Discord agent requests when the Discord worker is enabled", async () => {
+  it("processes queued agent runtime executions when the runtime worker is enabled", async () => {
     const config = testConfig();
     const processedRunIds: string[] = [];
     const runtime = await startJobs({
@@ -271,7 +278,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       crawler: {
         crawlConfiguredGuild: async () => undefined
       },
-      discordAgent: {
+      agentRuntime: {
         run: async (job) => {
           processedRunIds.push(job.runId);
         }
@@ -279,7 +286,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     });
     runtimes.push(runtime);
 
-    const jobId = await runtime.enqueueDiscordAgentRequest({
+    const jobId = await runtime.enqueueAgentRuntimeExecution({
       runId: "discord-run-worker",
       traceId: "discord-run-worker",
       guildId: "guild",
@@ -301,7 +308,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
-  it("can enqueue Discord agent requests without running the Discord worker", async () => {
+  it("can enqueue agent runtime executions without running the runtime worker", async () => {
     const config = testConfig();
     const processedRunIds: string[] = [];
     const runtime = await startJobs({
@@ -314,7 +321,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       crawler: {
         crawlConfiguredGuild: async () => undefined
       },
-      discordAgent: {
+      agentRuntime: {
         run: async (job) => {
           processedRunIds.push(job.runId);
         }
@@ -322,7 +329,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     });
     runtimes.push(runtime);
 
-    const jobId = await runtime.enqueueDiscordAgentRequest({
+    const jobId = await runtime.enqueueAgentRuntimeExecution({
       runId: "discord-run-pending",
       traceId: "discord-run-pending",
       guildId: "guild",
@@ -342,7 +349,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(processedRunIds).toEqual([]);
-    await runtime.boss.deleteJob(DISCORD_AGENT_REQUEST_JOB, jobId!);
+    await runtime.boss.deleteJob(AGENT_RUNTIME_EXECUTION_JOB, jobId!);
     await runtime.stop();
   });
 

@@ -7,6 +7,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Bot login, guild scoping, message/reaction/edit/delete events, and mention detection.
 - Reply context, request attachments, image metadata, permissions, and channel visibility.
 - Response sink for acknowledgements, lazy status messages, final replies, attachments, and cleanup.
+- Queue handoff into durable agent runtime executions.
 - Full-server crawl and incremental message persistence.
 - Codegen task progress rendering back to Discord.
 
@@ -26,4 +27,4 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 
 ## Migration Direction
 
-Keep `client.ts` as the bot entrypoint. New implementation should separate mention parsing, event handlers, request context, queue handoff, response rendering, and trace recording.
+Keep `client.ts` as the bot entrypoint. New implementation should separate mention parsing, event handlers, request context, agent-runtime queue handoff, response rendering, and trace recording.

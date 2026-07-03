@@ -11,7 +11,7 @@ import { startSandboxReconciler } from "./execution/reconciler.js";
 import { OpenRouterClient } from "./models/openrouter.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
-import { createDiscordAiAgentBot, runQueuedDiscordAgentRequest } from "./discord/client.js";
+import { createDiscordAiAgentBot, runQueuedAgentRuntimeExecution } from "./discord/client.js";
 import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
 import { startJobs } from "./jobs/queue.js";
 import { startStaleRunReconciler } from "./observability/staleRuns.js";
@@ -131,11 +131,11 @@ async function main() {
         await embedStoredMessage({ repo, openRouter, config, messageId });
       }
     },
-    discordAgent:
+    agentRuntime:
       client && startsWorker
         ? {
             run: async (job, context) => {
-              await runQueuedDiscordAgentRequest({ config, repo, agentRuntime: agentRuntimeRepo, openRouter, jobs: context.jobs, client }, job);
+              await runQueuedAgentRuntimeExecution({ config, repo, agentRuntime: agentRuntimeRepo, openRouter, jobs: context.jobs, client }, job);
             }
           }
         : undefined,

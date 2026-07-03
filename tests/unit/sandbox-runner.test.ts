@@ -258,6 +258,50 @@ describe("sandboxRunner", () => {
     }
   });
 
+  it("includes repo guide excerpts and exact focused check commands in the context pack", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-context-checks-"));
+    try {
+      await fs.mkdir(path.join(tempDir, "src", "tools"), { recursive: true });
+      await fs.mkdir(path.join(tempDir, "tests", "unit"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "AGENTS.md"), "Use rg first.\nAdd focused regression tests.\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "tsconfig.json"), '{"compilerOptions":{}}\n', "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "tools", "registry.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "tools", "coreTools.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "tests", "unit", "tool-registry.test.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "tests", "unit", "core-tools.test.ts"), "export {}\n", "utf8");
+
+      const context = await buildCodegenContextPack(tempDir, "Improve the tool schema for Discord history search.");
+      const rendered = renderCodegenContextPack(context);
+      const prompt = codeUpdatePrompt(
+        {
+          taskId: "task-1",
+          requestedBy: "kartik",
+          taskRequest: "Improve the tool schema for Discord history search."
+        },
+        context
+      );
+
+      expect(context.repoGuideExcerpt).toContain("Use rg first.");
+      expect(context.suggestedCheckCommands).toEqual([
+        {
+          command: "npm test -- tests/unit/tool-registry.test.ts tests/unit/core-tools.test.ts",
+          reason: "Run the closest focused tests for the suggested source/test area before broader checks."
+        },
+        {
+          command: "npm run typecheck",
+          reason: "Catch repository-wide TypeScript contract breakage after focused edits."
+        }
+      ]);
+      expect(rendered).toContain("Repository guide excerpt:");
+      expect(rendered).toContain("> Add focused regression tests.");
+      expect(rendered).toContain("Suggested focused checks:");
+      expect(rendered).toContain("npm test -- tests/unit/tool-registry.test.ts tests/unit/core-tools.test.ts");
+      expect(prompt).toContain("Run the suggested focused checks from the preflight context");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("puts repo guidance and first-edit pressure in the initial and recovery prompts", () => {
     const env = {
       taskId: "task-1",

@@ -11,6 +11,7 @@ import { slugify } from "../util/text.js";
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const MAX_ACTIVITY_COMMAND_OUTPUT = 12_000;
 const MAX_CONTEXT_TEXT = 16_000;
+const MAX_REPO_GUIDE_EXCERPT = 3_000;
 const MAX_RECOVERY_TAIL = 10_000;
 const MAX_CODEGEN_ANCHORS = 12;
 const MAX_ANCHOR_MATCHES_PER_ANCHOR = 5;
@@ -80,6 +81,7 @@ type CacheSummary = {
 
 export type CodegenContextPack = {
   repoGuidePath?: string;
+  repoGuideExcerpt?: string;
   requestAnchors?: string[];
   anchorMatches?: CodegenAnchorMatch[];
   anchorTargetFiles?: Array<{ path: string; reason: string }>;
@@ -87,6 +89,7 @@ export type CodegenContextPack = {
   rationale?: string;
   likelyMechanisms?: string[];
   suggestedFiles?: Array<{ path: string; reason: string }>;
+  suggestedCheckCommands?: Array<{ command: string; reason: string }>;
   firstInvariant?: string;
   suggestedFirstEdit?: string;
   avoid?: string[];
@@ -2113,6 +2116,7 @@ const CODEGEN_CONTEXT_RULES: CodegenContextRule[] = [
 
 export async function buildCodegenContextPack(checkoutDir: string, taskRequest = ""): Promise<CodegenContextPack> {
   const repoGuidePath = (await pathExists(path.join(checkoutDir, "AGENTS.md"))) ? "AGENTS.md" : undefined;
+  const repoGuideExcerpt = repoGuidePath ? await readRepoGuideExcerpt(path.join(checkoutDir, repoGuidePath)) : undefined;
   const requestAnchors = extractCodegenRequestAnchors(taskRequest);
   const anchorMatches = await findCodegenAnchorMatches(checkoutDir, requestAnchors);
   const anchorTargetFiles = anchorTargetFilesFromMatches(anchorMatches);
@@ -2151,6 +2155,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     }
   ]);
   const focusedSuggestedFiles = await existingSuggestedFiles(checkoutDir, focusedRule.suggestedFiles);
+  const suggestedCheckCommands = await buildSuggestedCheckCommands(checkoutDir, focusedSuggestedFiles);
   const firstMoveRules = [
     "Read AGENTS.md first when present.",
     ...(anchorTargetFiles.length
@@ -2167,11 +2172,13 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
 
   return {
     repoGuidePath,
+    repoGuideExcerpt,
     ...focusedRule,
     requestAnchors,
     anchorMatches,
     anchorTargetFiles,
     suggestedFiles: mergeSuggestedFiles(anchorTargetFiles, focusedSuggestedFiles),
+    suggestedCheckCommands,
     sandboxContract: [
       "You are already inside an isolated Kubernetes sandbox with full filesystem/network access for this task.",
       "The checkout is a writable task branch. Edit files directly in the current repository.",
@@ -2489,10 +2496,10 @@ function selectCodegenContextRule(taskRequest: string, anchorMatches: CodegenAnc
   const hasResponseLifecycleTerm = includesAny(text, ["reply", "replies", "reaction", "react", "loading", "thinking", "status message", "progress message", "acknowledge", "acknowledgement", "attachment", "files"]);
   if (hasCodeUpdateTerm || (hasStatusTerm && includesAny(text, ["code", "agent", "bot", "request"]))) return codegenContextRule("agent_task_status_lifecycle");
   if (hasDiscordClientAnchor && hasResponseLifecycleTerm) return codegenContextRule("discord_response_lifecycle");
+  if (includesAny(text, ["tool", "search", "history", "web", "model", "prompt", "router", "schema", "stats"])) return codegenContextRule("model_tool_routing");
   if (includesAny(text, ["discord", "mention", "reply", "message", "timeout", "content filter", "conversation", "memory"])) {
     return hasResponseLifecycleTerm ? codegenContextRule("discord_response_lifecycle") : codegenContextRule("discord_interaction_lifecycle");
   }
-  if (includesAny(text, ["tool", "search", "history", "web", "model", "prompt", "router", "schema", "stats"])) return codegenContextRule("model_tool_routing");
   return codegenContextRule("general_implementation");
 }
 
@@ -2525,6 +2532,45 @@ async function existingProjectMap(checkoutDir: string, entries: CodegenContextPa
 async function existingRelativePaths(checkoutDir: string, relativePaths: string[]) {
   const checks = await Promise.all(relativePaths.map(async (file) => ((await pathExists(path.join(checkoutDir, file))) ? file : null)));
   return checks.filter((file): file is string => Boolean(file));
+}
+
+async function readRepoGuideExcerpt(filePath: string) {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    return tail(content.trim(), MAX_REPO_GUIDE_EXCERPT);
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildSuggestedCheckCommands(checkoutDir: string, files: Array<{ path: string; reason: string }>) {
+  const existingTests = uniqueStrings(files.map((file) => file.path).filter(isTestFilePath)).slice(0, 4);
+  const commands: Array<{ command: string; reason: string }> = [];
+  if (existingTests.length > 0) {
+    commands.push({
+      command: `npm test -- ${existingTests.map(shellQuoteArg).join(" ")}`,
+      reason: "Run the closest focused tests for the suggested source/test area before broader checks."
+    });
+  }
+  if (files.some((file) => isTypeScriptPath(file.path)) && (await pathExists(path.join(checkoutDir, "tsconfig.json")))) {
+    commands.push({
+      command: "npm run typecheck",
+      reason: "Catch repository-wide TypeScript contract breakage after focused edits."
+    });
+  }
+  return commands;
+}
+
+function isTestFilePath(filePath: string) {
+  return /^tests\/.+\.(?:test|spec)\.[cm]?[tj]sx?$/.test(filePath) || /(?:^|\/)__tests__\/.+\.[cm]?[tj]sx?$/.test(filePath);
+}
+
+function isTypeScriptPath(filePath: string) {
+  return /\.[cm]?tsx?$/.test(filePath);
+}
+
+function shellQuoteArg(value: string) {
+  return /^[A-Za-z0-9._/@:-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 export function renderCodegenContextPack(context: CodegenContextPack) {
@@ -2565,6 +2611,13 @@ export function renderCodegenContextPack(context: CodegenContextPack) {
           "Suggested first files:",
           ...(context.suggestedFiles ?? []).map((file) => `- ${file.path}: ${file.reason}`),
           "",
+          ...(context.suggestedCheckCommands?.length
+            ? [
+                "Suggested focused checks:",
+                ...context.suggestedCheckCommands.map((check) => `- ${check.command}: ${check.reason}`),
+                ""
+              ]
+            : []),
           "First implementable invariant:",
           context.firstInvariant ?? "Make the requested behavior observable with the smallest focused change.",
           "",
@@ -2578,6 +2631,13 @@ export function renderCodegenContextPack(context: CodegenContextPack) {
       : []),
     "Repository guide:",
     context.repoGuidePath ? `- ${context.repoGuidePath}` : "- none found",
+    ...(context.repoGuideExcerpt
+      ? [
+          "",
+          "Repository guide excerpt:",
+          ...context.repoGuideExcerpt.split("\n").map((line) => `> ${line}`)
+        ]
+      : []),
     "",
     "Sandbox contract:",
     ...context.sandboxContract.map((item) => `- ${item}`),
@@ -2608,7 +2668,7 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
     "- When user wording is product behavior, map it to the lifecycle: trigger -> acknowledgement/status -> work -> success response -> error path -> cleanup.",
     "- Prefer a small shared lifecycle owner over patching duplicated inline and queued paths independently.",
     "- Add or update focused tests for the changed behavior.",
-    "- Run the most relevant focused checks you can. Do not run `npm run verify`; CI runs full verification after the PR opens.",
+    "- Run the suggested focused checks from the preflight context when they match your edit. Do not run `npm run verify`; CI runs full verification after the PR opens.",
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the PR body records the request.",
     "- Helper CLIs are available under `$AGENT_TOOL_SHIM_DIR`: `agent-task-context`, `agent-cache-info`, and `agent-progress <step> <message>`.",

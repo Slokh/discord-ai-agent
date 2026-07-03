@@ -450,6 +450,11 @@ describe("getDiscordChannelTopics", () => {
     });
 
     expect(response).toContain("job hunting");
+    expect(response).toContain("Discord channel topics summary:");
+    expect(response).toContain("Scope: requester-visible indexed Discord messages");
+    expect(response).toContain("Sampling: 6 candidate messages across 1 channels (6 embedded)");
+    expect(response).toContain("Coverage: directional semantic sample, not an exhaustive exact phrase count");
+    expect(response).toContain("Summary:");
     expect(ctx.repo.discordChannelTopicCandidates).toHaveBeenCalledWith(
       expect.objectContaining({
         channelLimit: 1,
@@ -516,6 +521,14 @@ describe("summarizeDiscordHistory", () => {
     });
 
     expect(response).toContain("job hunts");
+    expect(response).toContain("Discord history summary:");
+    expect(response).toContain("Scope: requester-visible indexed Discord messages");
+    expect(response).toContain("Question: what have people said about job hunting?");
+    expect(response).toContain("Applied filters: channelIds=jobs");
+    expect(response).toContain("Retrieval mix: semantic=1, keyword=1, recent=1, representative=1");
+    expect(response).toContain("Sample count: 4/20");
+    expect(response).toContain("Coverage: representative sample, not exhaustive");
+    expect(response).toContain("Summary:");
     expect(ctx.openRouter.embed).toHaveBeenCalledWith(["what have people said about job hunting?"], "test-embed", 2);
     expect(ctx.repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"], authorIds: [], limit: 10 }));
     expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(expect.objectContaining({ query: "what have people said about job hunting?", channelIds: ["jobs"] }));

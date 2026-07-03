@@ -368,12 +368,14 @@ export async function getDiscordChannelTopics(
     ...normalizeIds(input.channelIds),
     ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
   ]);
+  const dateFrom = coerceDateStart(input.dateFrom);
+  const dateTo = coerceDateEnd(input.dateTo);
   const candidates = await ctx.repo.discordChannelTopicCandidates({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
     channelIds,
-    dateFrom: coerceDateStart(input.dateFrom),
-    dateTo: coerceDateEnd(input.dateTo),
+    dateFrom,
+    dateTo,
     channelLimit,
     samplesPerChannel,
     minChannelMessages,
@@ -427,7 +429,18 @@ export async function getDiscordChannelTopics(
     estimatedCostUsd: response.estimatedCostUsd
   });
 
-  return response.content;
+  return formatChannelTopicsResult(response.content, {
+    channelIds,
+    dateFrom,
+    dateTo,
+    channelLimit,
+    topicsPerChannel,
+    samplesPerChannel,
+    minChannelMessages,
+    minMessageChars,
+    includeBots: Boolean(input.includeBots),
+    candidates
+  });
 }
 
 export async function summarizeDiscordHistory(
@@ -527,7 +540,20 @@ export async function summarizeDiscordHistory(
     estimatedCostUsd: response.estimatedCostUsd
   });
 
-  return summary;
+  return formatDiscordHistorySummaryResult(summary, {
+    question,
+    authorIds,
+    aboutUserIds,
+    channelIds,
+    dateFrom,
+    dateTo: explicitDateTo,
+    retrievalQuery: evidence.retrievalQuery,
+    counts: evidence.counts,
+    sampleCount: samples.length,
+    sampleLimit,
+    evidenceDates: historyEvidenceDateSummary(samples),
+    evidenceAuthors: historyEvidenceAuthors(samples)
+  });
 }
 
 async function collectDiscordSummaryEvidence(
@@ -1976,6 +2002,51 @@ function formatChannelTopicEvidence(candidates: DiscordChannelTopicCandidate[], 
   ].join("\n\n");
 }
 
+function formatChannelTopicsResult(
+  summary: string,
+  input: {
+    channelIds: string[];
+    dateFrom?: Date;
+    dateTo?: Date;
+    channelLimit: number;
+    topicsPerChannel: number;
+    samplesPerChannel: number;
+    minChannelMessages: number;
+    minMessageChars: number;
+    includeBots: boolean;
+    candidates: DiscordChannelTopicCandidate[];
+  }
+) {
+  const channelCount = groupTopicCandidates(input.candidates).size;
+  const embeddedCount = input.candidates.filter((candidate) => candidate.embedding).length;
+  return [
+    "Discord channel topics summary:",
+    "- Scope: requester-visible indexed Discord messages",
+    `- Applied filters: ${formatChannelTopicFilters(input)}`,
+    `- Sampling: ${input.candidates.length} candidate messages across ${channelCount} channels (${embeddedCount} embedded)`,
+    `- Limits: channelLimit=${input.channelLimit}; topicsPerChannel=${input.topicsPerChannel}; samplesPerChannel=${input.samplesPerChannel}; minChannelMessages=${input.minChannelMessages}; minMessageChars=${input.minMessageChars}`,
+    "- Coverage: directional semantic sample, not an exhaustive exact phrase count",
+    "",
+    "Summary:",
+    summary.trim()
+  ].join("\n");
+}
+
+function formatChannelTopicFilters(input: {
+  channelIds: string[];
+  dateFrom?: Date;
+  dateTo?: Date;
+  includeBots: boolean;
+}) {
+  const filters = [
+    input.channelIds.length ? `channelIds=${input.channelIds.join(",")}` : null,
+    input.dateFrom ? `from=${input.dateFrom.toISOString().slice(0, 10)}` : null,
+    input.dateTo ? `through=${input.dateTo.toISOString().slice(0, 10)}` : null,
+    input.includeBots ? "includeBots=true" : null
+  ].filter((filter): filter is string => Boolean(filter));
+  return filters.length ? filters.join("; ") : "none";
+}
+
 function groupTopicCandidates(candidates: DiscordChannelTopicCandidate[]) {
   const groups = new Map<string, DiscordChannelTopicCandidate[]>();
   for (const candidate of candidates) {
@@ -2134,6 +2205,57 @@ function formatDiscordStatsFilters(options: DiscordStatsFormatOptions) {
     options.attachmentContentType?.trim() ? `attachmentContentType=${options.attachmentContentType.trim()}` : null,
     options.includeBots ? "includeBots=true" : null,
     options.sort ? `sort=${options.sort}` : null
+  ].filter((filter): filter is string => Boolean(filter));
+  return filters.length ? filters.join("; ") : "none";
+}
+
+function formatDiscordHistorySummaryResult(
+  summary: string,
+  input: {
+    question: string;
+    authorIds: string[];
+    aboutUserIds: string[];
+    channelIds: string[];
+    dateFrom?: Date;
+    dateTo?: Date;
+    retrievalQuery: string;
+    counts: DiscordSummaryEvidence["counts"];
+    sampleCount: number;
+    sampleLimit: number;
+    evidenceDates: string;
+    evidenceAuthors: string;
+  }
+) {
+  return [
+    "Discord history summary:",
+    "- Scope: requester-visible indexed Discord messages",
+    `- Question: ${input.question}`,
+    `- Applied filters: ${formatDiscordHistorySummaryFilters(input)}`,
+    `- Retrieval query: ${input.retrievalQuery || "(broad summary)"}`,
+    `- Retrieval mix: semantic=${input.counts.semantic}, keyword=${input.counts.keyword}, recent=${input.counts.recent}, representative=${input.counts.representative}`,
+    `- Sample count: ${input.sampleCount}/${input.sampleLimit}`,
+    `- Evidence dates: ${input.evidenceDates}`,
+    `- Evidence authors: ${input.evidenceAuthors}`,
+    "- Coverage: representative sample, not exhaustive",
+    "",
+    "Summary:",
+    summary.trim()
+  ].join("\n");
+}
+
+function formatDiscordHistorySummaryFilters(input: {
+  authorIds: string[];
+  aboutUserIds: string[];
+  channelIds: string[];
+  dateFrom?: Date;
+  dateTo?: Date;
+}) {
+  const filters = [
+    input.authorIds.length ? `authorIds=${input.authorIds.join(",")}` : null,
+    input.aboutUserIds.length ? `aboutUserIds=${input.aboutUserIds.join(",")}` : null,
+    input.channelIds.length ? `channelIds=${input.channelIds.join(",")}` : null,
+    input.dateFrom ? `from=${input.dateFrom.toISOString().slice(0, 10)}` : null,
+    input.dateTo ? `through=${input.dateTo.toISOString().slice(0, 10)}` : null
   ].filter((filter): filter is string => Boolean(filter));
   return filters.length ? filters.join("; ") : "none";
 }

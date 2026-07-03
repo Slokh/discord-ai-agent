@@ -9,13 +9,14 @@ Owns the model loop for one user prompt.
 - Record trace spans, tool audit logs, costs, and final response memory.
 - Synthesize the final answer and files.
 - Record durable agent-runtime prompt executions through `runtimeLedger.ts` while the sandbox-backed runtime migration proceeds.
+- Persist replayable Discord turn context through `runtimeEnvelope.ts` before executing a prompt, so future sandbox executors can deserialize the same request boundary.
 - Run the current compatibility model loop through `inProcessRuntimeExecutor.ts`; future warm-sandbox execution should replace this boundary.
 
 ## Change Routing
 
 - Tool choice problems usually start in `src/tools/registry.ts`; tool behavior problems route through `src/tools/README.md` to the focused implementation module behind the `coreTools.ts` facade.
 - Prompt composition and memory/reply/image context problems start here.
-- Agent session/execution state transitions start in `runtimeLedger.ts`, then the Discord ingress/delivery or sandbox executor caller.
+- Agent session/execution state transitions start in `runtimeLedger.ts`; execution input payloads start in `runtimeEnvelope.ts`; both are called by Discord ingress/delivery or the sandbox executor caller.
 - Runtime execution changes start at `inProcessRuntimeExecutor.ts` before touching `router.ts`.
 - Discord rendering problems belong in `src/discord/responseSink.ts`, not the model loop.
 

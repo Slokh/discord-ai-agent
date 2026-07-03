@@ -1,0 +1,155 @@
+import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
+import type { ConversationMessage } from "../db/repositories.js";
+import type { DiscordAttachmentContext, DiscordReplyContext } from "../tools/types.js";
+
+export type AgentRuntimeConversationMessageSnapshot = {
+  id: number;
+  threadKey: string;
+  discordMessageId: string | null;
+  role: ConversationMessage["role"];
+  authorId: string | null;
+  authorDisplayName: string | null;
+  content: string;
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type AgentRuntimeTurnEnvelope = {
+  schemaVersion: 1;
+  source: "discord";
+  requestId: string;
+  threadKey: string;
+  guildId: string;
+  channelId: string;
+  userId: string;
+  userDisplayName: string;
+  botUserId: string | null;
+  botRoleIds: string[];
+  text: string;
+  rawContent: string;
+  discordUrl: string;
+  messageCreatedAt: string;
+  visibleChannelIds: string[];
+  mentionedUserIds: string[];
+  mentionedChannelIds: string[];
+  replyContext: DiscordReplyContext | null;
+  requestAttachments: DiscordAttachmentContext[];
+  sessionMessages: AgentRuntimeConversationMessageSnapshot[];
+  delivery: {
+    statusChannelId: string | null;
+    statusMessageId: string | null;
+  };
+  createdAt: string;
+};
+
+export function buildAgentRuntimeTurnEnvelope(input: {
+  requestId: string;
+  threadKey: string;
+  guildId: string;
+  channelId: string;
+  userId: string;
+  userDisplayName: string;
+  botUserId?: string | null;
+  botRoleIds: string[];
+  text: string;
+  rawContent: string;
+  discordUrl: string;
+  messageCreatedAt: Date;
+  visibleChannelIds: string[];
+  mentionedUserIds: string[];
+  mentionedChannelIds: string[];
+  replyContext?: DiscordReplyContext | null;
+  requestAttachments: DiscordAttachmentContext[];
+  sessionMessages: ConversationMessage[];
+  statusChannelId?: string | null;
+  statusMessageId?: string | null;
+  createdAt?: Date;
+}): AgentRuntimeTurnEnvelope {
+  return {
+    schemaVersion: 1,
+    source: "discord",
+    requestId: input.requestId,
+    threadKey: input.threadKey,
+    guildId: input.guildId,
+    channelId: input.channelId,
+    userId: input.userId,
+    userDisplayName: input.userDisplayName,
+    botUserId: input.botUserId ?? null,
+    botRoleIds: input.botRoleIds,
+    text: input.text,
+    rawContent: input.rawContent,
+    discordUrl: input.discordUrl,
+    messageCreatedAt: input.messageCreatedAt.toISOString(),
+    visibleChannelIds: input.visibleChannelIds,
+    mentionedUserIds: input.mentionedUserIds,
+    mentionedChannelIds: input.mentionedChannelIds,
+    replyContext: input.replyContext ?? null,
+    requestAttachments: input.requestAttachments,
+    sessionMessages: input.sessionMessages.map(snapshotConversationMessage),
+    delivery: {
+      statusChannelId: input.statusChannelId ?? null,
+      statusMessageId: input.statusMessageId ?? null
+    },
+    createdAt: (input.createdAt ?? new Date()).toISOString()
+  };
+}
+
+export async function storeAgentRuntimeTurnEnvelope(input: {
+  agentRuntime?: AgentRuntimeRepository;
+  session?: AgentRuntimeSessionRecord | null;
+  executionId?: string | null;
+  envelope: AgentRuntimeTurnEnvelope;
+}): Promise<string | null> {
+  if (!input.agentRuntime || !input.session || !input.executionId) return null;
+  const artifact = await input.agentRuntime.storeArtifact({
+    sessionId: input.session.sessionId,
+    executionId: input.executionId,
+    kind: "turn_envelope",
+    name: "Agent runtime turn envelope",
+    content: JSON.stringify(input.envelope, null, 2),
+    contentType: "application/json",
+    metadata: {
+      schemaVersion: input.envelope.schemaVersion,
+      source: input.envelope.source,
+      requestId: input.envelope.requestId,
+      guildId: input.envelope.guildId,
+      channelId: input.envelope.channelId,
+      userId: input.envelope.userId,
+      visibleChannelCount: input.envelope.visibleChannelIds.length,
+      sessionMessageCount: input.envelope.sessionMessages.length,
+      attachmentCount: input.envelope.requestAttachments.length,
+      hasReplyContext: Boolean(input.envelope.replyContext)
+    }
+  });
+  await input.agentRuntime.recordEvent({
+    sessionId: input.session.sessionId,
+    executionId: input.executionId,
+    traceId: input.envelope.requestId,
+    kind: "artifact",
+    eventName: "agent.execution.context_ready",
+    summary: "Stored replayable agent turn context.",
+    metadata: {
+      artifactId: artifact.artifactId,
+      kind: artifact.kind,
+      visibleChannelCount: input.envelope.visibleChannelIds.length,
+      sessionMessageCount: input.envelope.sessionMessages.length
+    }
+  });
+  return artifact.artifactId;
+}
+
+function snapshotConversationMessage(message: ConversationMessage): AgentRuntimeConversationMessageSnapshot {
+  return {
+    id: message.id,
+    threadKey: message.threadKey,
+    discordMessageId: message.discordMessageId,
+    role: message.role,
+    authorId: message.authorId,
+    authorDisplayName: message.authorDisplayName,
+    content: message.content,
+    parts: message.parts,
+    metadata: message.metadata,
+    createdAt: message.createdAt.toISOString()
+  };
+}

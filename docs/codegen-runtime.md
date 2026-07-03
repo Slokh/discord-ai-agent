@@ -27,7 +27,7 @@ The internal API now exposes generic agent control-plane objects. Authenticated 
 - `GET /api/agent/sessions/:threadKey/events` to replay normalized execution events.
 - `GET /api/agent/sessions/:threadKey/stream` to follow the replayable event trail over SSE.
 
-The first migration slice records Discord prompts and their in-process compatibility execution in this generic session ledger. The next runtime migration should route those queued executions to warm Kubernetes sandbox pods that keep a harness server alive.
+The first migration slice records Discord prompts and their in-process compatibility execution in this generic session ledger. Each Discord turn also stores a `turn_envelope` artifact with the serializable request context: prompt text, Discord IDs, visible channels, reply context, attachments, delivery message IDs, and recent channel memory. That artifact is the replay payload a warm sandbox executor should consume instead of reconstructing Discord state inside the worker process.
 
 `AGENT_RUNTIME_EXECUTION_BACKEND` selects the prompt execution backend. It defaults to `in-process`, which calls the existing model/tool router through `src/agent/inProcessRuntimeExecutor.ts`. `warm-sandbox` is reserved for the upcoming Kubernetes sandbox executor and intentionally fails startup until that backend is implemented.
 

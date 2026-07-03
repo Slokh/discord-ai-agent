@@ -15,6 +15,7 @@ This repo is a TypeScript Discord AI agent with durable code-update tasks. Keep 
 
 - Discord mentions enter through `src/discord/client.ts`, then route through `src/agent/router.ts`.
 - Discord-visible acknowledgements, lazy status replies, final replies, files, and loading-reaction cleanup should go through `src/discord/responseSink.ts`.
+- Replayable Discord turn payloads for durable/sandbox execution are built in `src/agent/runtimeEnvelope.ts`.
 - Model-selected tool contracts live in `src/tools/registry.ts`; `src/tools/coreTools.ts` is the compatibility facade for focused tool-family modules.
 - Durable agent sessions are exposed through `src/db/agentRuntimeRepository.ts` and `/api/agent/sessions/:threadKey`; code-update tasks are currently a compatibility path through `src/tools/agentTaskTools.ts`, `src/jobs/queue.ts`, `src/execution/backend.ts`, and `src/execution/sandboxRunner.ts`.
 - Agent runtime sessions, task state, trace events, command events, artifacts, and run-console data are persisted through `src/db/agentRuntimeRepository.ts` and `src/db/repositories.ts`.

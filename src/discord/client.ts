@@ -20,6 +20,7 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { executeInProcessAgentRuntime, isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
+import { buildAgentRuntimeTurnEnvelope, storeAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, ToolContext } from "../tools/types.js";
@@ -603,6 +604,7 @@ async function executeDiscordAgentRequest(
   const permissionStartedAt = Date.now();
   const member = message.member ?? (await guild.members.fetch(message.author.id));
   const mentionedChannelIds = explicitChannelMentionIds(request.rawContent);
+  const mentionedUserIds = explicitUserMentionIds(request.rawContent, botUserId);
   const referencedChannelId = message.reference?.channelId ?? null;
   const visibleChannelIds = await visibleChannelIdsForMember(guild, member, [
     message.channelId,
@@ -619,7 +621,7 @@ async function executeDiscordAgentRequest(
     {
       visibleChannelCount: visibleChannelIds.length,
       mentionedChannelIds,
-      mentionedUserIds: explicitUserMentionIds(request.rawContent, botUserId),
+      mentionedUserIds,
       replyContextMessageId: replyContext?.messageId,
       durationMs: durationMs(permissionStartedAt)
     },
@@ -631,7 +633,7 @@ async function executeDiscordAgentRequest(
     metadata: {
       visibleChannelCount: visibleChannelIds.length,
       mentionedChannelIds,
-      mentionedUserIds: explicitUserMentionIds(request.rawContent, client.user?.id),
+      mentionedUserIds,
       replyContextMessageId: replyContext?.messageId
     },
     durationMs: durationMs(permissionStartedAt)
@@ -649,6 +651,35 @@ async function executeDiscordAgentRequest(
     })
     .catch((error) => requestLogger.warn({ err: error }, "Failed to record permission span"));
 
+  const turnEnvelope = buildAgentRuntimeTurnEnvelope({
+    requestId: request.requestId,
+    threadKey,
+    guildId,
+    channelId: message.channelId,
+    userId: message.author.id,
+    userDisplayName,
+    botUserId,
+    botRoleIds: request.botRoleIds,
+    text: request.text,
+    rawContent: request.rawContent,
+    discordUrl: message.url,
+    messageCreatedAt: message.createdAt,
+    visibleChannelIds,
+    mentionedUserIds,
+    mentionedChannelIds,
+    replyContext,
+    requestAttachments,
+    sessionMessages: priorSessionMessages,
+    statusChannelId: responseSink.statusChannelId,
+    statusMessageId: responseSink.statusMessageId
+  });
+  await storeAgentRuntimeTurnEnvelope({
+    agentRuntime: input.agentRuntime,
+    session: agentRuntimeExecution?.session,
+    executionId: agentRuntimeExecution?.executionId,
+    envelope: turnEnvelope
+  }).catch((error) => requestLogger.warn({ err: error }, "Failed to store agent runtime turn envelope"));
+
   try {
     const agentStartedAt = Date.now();
     const toolContext: ToolContext = {
@@ -661,7 +692,7 @@ async function executeDiscordAgentRequest(
       userId: message.author.id,
       userDisplayName,
       visibleChannelIds,
-      mentionedUserIds: explicitUserMentionIds(request.rawContent, botUserId),
+      mentionedUserIds,
       mentionedChannelIds,
       threadKey,
       sessionMessages: priorSessionMessages,

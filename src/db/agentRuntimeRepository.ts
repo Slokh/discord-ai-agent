@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   CodegenEventKind,
   CodegenEventRecord,
+  CodegenArtifactContent,
+  CodegenArtifactRecord,
   CodegenExecutionRecord,
   CodegenMessageRecord,
   CodegenMessageRole,
@@ -18,6 +20,8 @@ export type AgentRuntimeSessionRecord = CodegenSessionRecord;
 export type AgentRuntimeExecutionRecord = CodegenExecutionRecord;
 export type AgentRuntimeMessageRecord = CodegenMessageRecord;
 export type AgentRuntimeEventRecord = CodegenEventRecord;
+export type AgentRuntimeArtifactRecord = CodegenArtifactRecord;
+export type AgentRuntimeArtifactContent = CodegenArtifactContent;
 export type AgentRuntimeSandboxLeaseRecord = CodegenSandboxLeaseRecord;
 
 export class AgentRuntimeRepository {
@@ -161,6 +165,29 @@ export class AgentRuntimeRepository {
     limit?: number | null;
   }): Promise<AgentRuntimeEventRecord[]> {
     return this.codegenRepo.listEvents(input);
+  }
+
+  async storeArtifact(input: {
+    sessionId: string;
+    executionId?: string | null;
+    kind: string;
+    name: string;
+    content: string;
+    contentType?: string | null;
+    metadata?: Record<string, unknown>;
+    expiresAt?: Date | null;
+  }): Promise<AgentRuntimeArtifactRecord> {
+    return this.codegenRepo.storeArtifact({
+      ...input,
+      metadata: {
+        runtime: "agent",
+        ...(input.metadata ?? {})
+      }
+    });
+  }
+
+  async getArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> {
+    return this.codegenRepo.getArtifact(input);
   }
 }
 

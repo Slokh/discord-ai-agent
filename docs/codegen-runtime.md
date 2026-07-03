@@ -29,6 +29,8 @@ The internal API now exposes generic agent control-plane objects. Authenticated 
 
 The first migration slice records Discord prompts and their in-process compatibility execution in this generic session ledger. The next runtime migration should route those queued executions to warm Kubernetes sandbox pods that keep a harness server alive.
 
+`AGENT_RUNTIME_EXECUTION_BACKEND` selects the prompt execution backend. It defaults to `in-process`, which calls the existing model/tool router through `src/agent/inProcessRuntimeExecutor.ts`. `warm-sandbox` is reserved for the upcoming Kubernetes sandbox executor and intentionally fails startup until that backend is implemented.
+
 ## Legacy Codegen Session API
 
 The internal API now exposes the codegen control-plane objects directly. This is the migration point from the original `agent.task` callback flow toward a Centaur-style runtime where Discord is only ingress/delivery and the API owns durable execution state.

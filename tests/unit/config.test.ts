@@ -19,6 +19,7 @@ describe("config", () => {
         "CONTROL_UI_PUBLIC_URL",
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
+        "AGENT_RUNTIME_EXECUTION_BACKEND",
         "CODEGEN_HARNESS",
         "CODEGEN_EXECUTION_BACKEND",
         "KUBERNETES_NAMESPACE",
@@ -52,6 +53,7 @@ describe("config", () => {
         expect(config.controlUi.publicUrl).toBeNull();
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
+        expect(config.agentRuntime.executionBackend).toBe("in-process");
         expect(config.execution.codegenHarness).toBe("opencode");
         expect(config.execution.codegenBackend).toBe("kubernetes-job");
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
@@ -99,6 +101,12 @@ describe("config", () => {
   it("allows configuring the Discord loading reaction", () => {
     withEnv({ DISCORD_LOADING_REACTION: "<a:loading:1521299407214084337>" }, () => {
       expect(loadConfig().discord.loadingReaction).toBe("<a:loading:1521299407214084337>");
+    });
+  });
+
+  it("allows selecting the warm-sandbox agent runtime backend", () => {
+    withEnv({ AGENT_RUNTIME_EXECUTION_BACKEND: "warm-sandbox" }, () => {
+      expect(loadConfig().agentRuntime.executionBackend).toBe("warm-sandbox");
     });
   });
 

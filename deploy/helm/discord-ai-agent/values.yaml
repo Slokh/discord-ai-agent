@@ -33,6 +33,12 @@ codegen:
   # while keeping the rest of the sandbox, verification, and PR flow unchanged.
   harness: opencode
 
+agentRuntime:
+  # in-process keeps the current compatibility model loop in the worker.
+  # warm-sandbox is reserved for the upcoming Centaur-style warm Kubernetes
+  # sandbox executor and will fail startup until that backend is implemented.
+  executionBackend: in-process
+
 secret:
   existingSecretName: discord-ai-agent-env
 

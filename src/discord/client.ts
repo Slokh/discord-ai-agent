@@ -19,7 +19,7 @@ import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink } from "./responseSink.js";
-import { handleAgentRequest } from "../agent/router.js";
+import { executeInProcessAgentRuntime, isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, ToolContext } from "../tools/types.js";
@@ -683,11 +683,11 @@ async function executeDiscordAgentRequest(
         return deleted;
       }
     };
-    const response = await withTimeout(
-      handleAgentRequest(toolContext, request.text),
-      input.config.discordAgentResponseTimeoutMs,
-      "Discord AI Agent agent request"
-    );
+    const response = await executeInProcessAgentRuntime({
+      toolContext,
+      text: request.text,
+      timeoutMs: input.config.discordAgentResponseTimeoutMs
+    });
     await input.repo
       .recordProcessRunSpan({
         runId: request.requestId,
@@ -858,7 +858,7 @@ async function executeDiscordAgentRequest(
     }
 
     requestLogger.error({ err: error }, "Agent request failed");
-    if (isTimeoutError(error)) {
+    if (isAgentRuntimeTimeoutError(error)) {
       await input.repo
         .auditTool({
           guildId: message.guildId,
@@ -1190,24 +1190,6 @@ class TimeoutError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "TimeoutError";
-  }
-}
-
-function isTimeoutError(error: unknown): error is TimeoutError {
-  return error instanceof TimeoutError;
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new TimeoutError(`${label} timed out after ${timeoutMs}ms.`)), timeoutMs);
-    timeout.unref?.();
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
   }
 }
 

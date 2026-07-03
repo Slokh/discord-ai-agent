@@ -210,7 +210,7 @@ Common optional settings:
 | `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
-| `AGENT_RUNTIME_EXECUTION_BACKEND` | `in-process` | Prompt execution backend; `warm-sandbox` is reserved for the upcoming Centaur-style Kubernetes sandbox executor |
+| `AGENT_RUNTIME_EXECUTION_BACKEND` | `in-process` | Prompt execution backend; `warm-sandbox` runs the prompt through the out-of-process envelope runner and is the seam for the upcoming Centaur-style Kubernetes sandbox executor |
 | `CODEGEN_EXECUTION_BACKEND` | `kubernetes-job` | `kubernetes-job` for per-task isolated Jobs, or `local-process` for a long-lived warm worker process |
 | `CODEGEN_HARNESS` | `opencode` | Coding harness for code-update tasks: `opencode` by default, or `codex` to run tasks through Codex |
 | `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_DISCORD_AGENT_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated codegen worker |

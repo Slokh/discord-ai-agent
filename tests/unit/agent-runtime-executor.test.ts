@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { InProcessAgentRuntimePromptExecutor, WarmSandboxAgentRuntimePromptExecutor } from "../../src/agent/runtimeExecutor.js";
 import { handleAgentRequest } from "../../src/agent/router.js";
@@ -23,16 +25,65 @@ describe("agent runtime prompt executors", () => {
     expect(handleAgentRequest).toHaveBeenCalledWith(expect.objectContaining({ requestId: "request-1" }), "hello");
   });
 
-  it("fails warm-sandbox executions at the executor boundary while the backend is being implemented", async () => {
-    const executor = new WarmSandboxAgentRuntimePromptExecutor();
+  it("runs warm-sandbox executions through the child process protocol", async () => {
+    const fakeChild = fakeSandboxChild(
+      JSON.stringify({
+        content: "hello from sandbox",
+        files: [{ name: "image.png", contentType: "image/png", dataBase64: Buffer.from("png").toString("base64") }],
+        memoryEvents: [{ role: "tool", content: "tool result" }]
+      })
+    );
+    const executor = new WarmSandboxAgentRuntimePromptExecutor({
+      spawnProcess: fakeChild.spawnProcess,
+      runnerCommand: { command: "node", args: ["runner.js"] },
+      env: { TEST_ENV: "1" }
+    });
 
     await expect(
       executor.execute({
         toolContext: { requestId: "request-1" } as never,
         text: "hello",
         timeoutMs: 1000,
-        turnEnvelope: { requestId: "request-1" } as never
+        turnEnvelope: { requestId: "request-1", text: "hello" } as never
       })
-    ).rejects.toThrow("Warm sandbox agent runtime execution is not implemented yet");
+    ).resolves.toEqual({
+      content: "hello from sandbox",
+      files: [{ name: "image.png", contentType: "image/png", data: Buffer.from("png") }],
+      memoryEvents: [{ role: "tool", content: "tool result" }]
+    });
+
+    expect(fakeChild.spawnProcess).toHaveBeenCalledWith(
+      "node",
+      ["runner.js"],
+      expect.objectContaining({ env: expect.objectContaining({ LOG_LEVEL: "silent", TEST_ENV: "1" }) })
+    );
+    expect(JSON.parse(fakeChild.stdinText())).toEqual({ envelope: expect.objectContaining({ requestId: "request-1", text: "hello" }) });
   });
 });
+
+function fakeSandboxChild(stdoutText: string) {
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  const stdinChunks: Buffer[] = [];
+  child.stdin = stdin;
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.kill = vi.fn();
+  stdin.on("data", (chunk) => stdinChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+  stdin.on("finish", () => {
+    stdout.write(`${stdoutText}\n`);
+    stdout.end();
+    child.emit("close", 0, null);
+  });
+  return {
+    spawnProcess: vi.fn(() => child as never),
+    stdinText: () => Buffer.concat(stdinChunks).toString("utf8")
+  };
+}

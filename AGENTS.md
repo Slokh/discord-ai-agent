@@ -18,10 +18,13 @@ This repo is a TypeScript Discord AI agent with durable code-update tasks. Keep 
 - Durable code-update tasks are enqueued from `src/tools/coreTools.ts`, processed in `src/jobs/queue.ts`, launched by `src/execution/backend.ts`, executed by `src/execution/sandboxRunner.ts`, and rendered back to Discord by `src/discord/taskNotifications.ts`.
 - Agent task state, trace events, command events, artifacts, and run-console data are persisted in `src/db/repositories.ts`.
 - The run console API is in `src/control/internalApi.ts`; the React console lives under `src/control/console/`.
+- Read `docs/architecture.md` before broad codegen, retrieval, observability, or Discord-flow changes.
+- Use `npm run eval -- --dry-run` for eval schema checks, and `npm run eval` when live OpenRouter/DB-backed regression runs are intended.
 
 ## Design Preferences
 
 - Prefer improving tool schemas/results/prompts over hidden message-specific branching.
 - Preserve permission filtering for Discord history.
 - Keep private server assumptions out of generic open-source behavior.
+- Put private eval prompts under `.discord-ai-agent/evals`, not committed `evals/prompts`.
 - Make observability explicit: important latency, retries, failures, and external calls should become spans, events, command logs, or artifacts.

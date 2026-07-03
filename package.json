@@ -36,6 +36,7 @@
     "embeddings:reprioritize": "tsx scripts/reprioritizeEmbeddingQueue.ts",
     "doctor": "tsx scripts/doctor.ts",
     "prompt": "tsx scripts/prompt.ts",
+    "eval": "tsx scripts/eval.ts",
     "runs:inspect": "tsx scripts/inspectRun.ts",
     "codegen:status": "tsx scripts/codegenStatus.ts",
     "invite-url": "tsx scripts/discordInviteUrl.ts",

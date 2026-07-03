@@ -139,7 +139,10 @@ npm run reindex
 npm run embeddings:backfill
 npm run embeddings:worker
 npm run prompt -- --no-memory "what can you do?"
+npm run eval -- --dry-run
 ```
+
+Use [docs/evals.md](docs/evals.md) to run regression prompts before and after retrieval, tool, prompt, or codegen changes.
 
 ## Code Updates
 
@@ -175,6 +178,7 @@ npm run sandbox-cache:clear
 For a local Kubernetes full-loop test, see [docs/local-kubernetes.md](docs/local-kubernetes.md).
 For production setup, see [docs/eks-deploy.md](docs/eks-deploy.md).
 For the cache-first runtime, durable codegen session API, and warm-sandbox direction, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
+For a concise coding-agent map of the repo, see [docs/architecture.md](docs/architecture.md).
 For a reference AWS baseline, see [deploy/terraform/aws](deploy/terraform/aws).
 
 ## Configuration

@@ -247,11 +247,14 @@ async function main() {
       process.stdout.write(
         `${JSON.stringify(
           {
+            runId: requestId,
+            traceId: requestId,
             guildId,
             channelId: currentChannel.id,
             channelName: currentChannel.name,
             visibleChannelCount: visibleChannelIds.length,
             threadKey: args.memory ? threadKey : null,
+            durationMs: Date.now() - agentStartedAt,
             content: response.content,
             files: savedFiles
           },

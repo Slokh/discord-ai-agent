@@ -258,6 +258,30 @@ async function handleRequest(input: {
     return;
   }
 
+  const agentArtifactMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/artifacts\/([^/]+)$/);
+  if (method === "GET" && agentArtifactMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentArtifactMatch[1] ?? "");
+    const artifactId = decodeURIComponent(agentArtifactMatch[2] ?? "");
+    const session = await agentRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "agent_session_not_found" });
+      return;
+    }
+    const artifact = await agentRepo.getArtifact({ artifactId });
+    if (!artifact || artifact.sessionId !== session.sessionId) {
+      sendJson(input.response, 404, { error: "artifact_not_found" });
+      return;
+    }
+    sendText(input.response, 200, artifact.content, artifact.contentType);
+    return;
+  }
+
   const agentStreamMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/stream$/);
   if (method === "GET" && agentStreamMatch) {
     if (!authorizedUi(input.config, input.request, input.response, url)) return;

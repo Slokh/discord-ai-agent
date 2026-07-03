@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig, type AppConfig } from "../../src/config/env.js";
 import { startInternalApi, type InternalApiRuntime } from "../../src/control/internalApi.js";
 import type {
+  CodegenArtifactContent,
+  CodegenArtifactRecord,
   CodegenEventRecord,
   CodegenExecutionRecord,
   CodegenMessageRecord,
@@ -195,7 +197,8 @@ describe("internal API run endpoints", () => {
       })
     });
     expect(create.status).toBe(200);
-    await expect(create.json()).resolves.toEqual(
+    const createBody = await create.json();
+    expect(createBody).toEqual(
       expect.objectContaining({
         ok: true,
         session: expect.objectContaining({
@@ -221,7 +224,8 @@ describe("internal API run endpoints", () => {
       body: JSON.stringify({ reasoningEffort: "low", metadata: { source: "test" } })
     });
     expect(execute.status).toBe(202);
-    await expect(execute.json()).resolves.toEqual(
+    const executeBody = await execute.json();
+    expect(executeBody).toEqual(
       expect.objectContaining({
         execution: expect.objectContaining({
           status: "queued",
@@ -230,6 +234,15 @@ describe("internal API run endpoints", () => {
         })
       })
     );
+    const envelopeArtifact = await codegenRepo.storeArtifact({
+      sessionId: createBody.session.sessionId,
+      executionId: executeBody.execution.executionId,
+      kind: "turn_envelope",
+      name: "Agent runtime turn envelope",
+      content: JSON.stringify({ requestId: "discord-message-2", text: "hello from Discord" }),
+      contentType: "application/json",
+      metadata: { runtime: "agent" }
+    });
 
     const detail = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}`, { headers: auth });
     expect(detail.status).toBe(200);
@@ -240,6 +253,10 @@ describe("internal API run endpoints", () => {
         events: expect.arrayContaining([expect.objectContaining({ eventName: "agent.execution.queued" })])
       })
     );
+
+    const artifact = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/artifacts/${envelopeArtifact.artifactId}`, { headers: auth });
+    expect(artifact.status).toBe(200);
+    await expect(artifact.json()).resolves.toEqual(expect.objectContaining({ requestId: "discord-message-2", text: "hello from Discord" }));
 
     const events = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/events`, { headers: auth });
     expect(events.status).toBe(200);
@@ -421,6 +438,7 @@ function fakeCodegenRepo() {
   const messages = new Map<string, CodegenMessageRecord[]>();
   const executions = new Map<string, CodegenExecutionRecord[]>();
   const events = new Map<string, CodegenEventRecord[]>();
+  const artifacts = new Map<string, CodegenArtifactContent>();
   let eventId = 1;
 
   return {
@@ -567,6 +585,34 @@ function fakeCodegenRepo() {
       (events.get(input.sessionId) ?? [])
         .filter((event) => (input.executionId ? event.executionId === input.executionId : true))
         .filter((event) => event.id > (input.afterEventId ?? 0))
-        .slice(0, input.limit ?? 200)
+        .slice(0, input.limit ?? 200),
+    storeArtifact: async (input: {
+      sessionId: string;
+      executionId?: string | null;
+      kind: string;
+      name: string;
+      content: string;
+      contentType?: string | null;
+      metadata?: Record<string, unknown>;
+    }) => {
+      const artifact: CodegenArtifactContent = {
+        artifactId: `artifact-${artifacts.size + 1}`,
+        sessionId: input.sessionId,
+        executionId: input.executionId ?? null,
+        kind: input.kind,
+        name: input.name,
+        contentType: input.contentType ?? "text/plain",
+        sizeBytes: Buffer.byteLength(input.content, "utf8"),
+        preview: input.content.slice(0, 2000),
+        redacted: true,
+        expiresAt: null,
+        metadata: input.metadata ?? {},
+        content: input.content,
+        createdAt: new Date("2026-06-30T12:00:04Z")
+      };
+      artifacts.set(artifact.artifactId, artifact);
+      return artifact as CodegenArtifactRecord;
+    },
+    getArtifact: async (input: { artifactId: string }) => artifacts.get(input.artifactId)
   };
 }

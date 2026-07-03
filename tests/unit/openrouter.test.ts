@@ -111,7 +111,14 @@ describe("OpenRouterClient", () => {
             }
           }
         ],
-        usage: { cost_usd: 0.0042 }
+        usage: {
+          cost_usd: 0.0042,
+          prompt_tokens: 11,
+          completion_tokens: 4,
+          total_tokens: 15,
+          reasoning_tokens: "2",
+          prompt_tokens_details: { cached_tokens: 3 }
+        }
       })
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -142,6 +149,13 @@ describe("OpenRouterClient", () => {
       }
     ]);
     expect(result.estimatedCostUsd).toBe(0.0042);
+    expect(result.usage).toEqual({
+      inputTokens: 11,
+      outputTokens: 4,
+      totalTokens: 15,
+      reasoningTokens: 2,
+      cachedInputTokens: 3
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://openrouter.test/api/v1/chat/completions",
       expect.objectContaining({

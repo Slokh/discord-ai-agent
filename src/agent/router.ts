@@ -191,6 +191,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         durationMs: durationMs(roundStartedAt),
         model: response.model,
         finishReason: response.finishReason,
+        usage: response.usage,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
         requestedToolRequests,
@@ -210,6 +211,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       metadata: {
         model: response.model,
         finishReason: response.finishReason,
+        usage: response.usage,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
         selectedLocalTools: modelRoutes.map((route) => route.name),
@@ -223,6 +225,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         round: round + 1,
         model: response.model,
         finishReason: response.finishReason,
+        usage: response.usage,
         outputChars: response.content.length,
         requestedToolCalls: response.toolCalls.map((call) => call.name),
         requestedToolRequests,

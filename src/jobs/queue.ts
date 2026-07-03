@@ -5,6 +5,7 @@ import type { CodegenRepository } from "../db/codegenRepository.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
 import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import { startArtifactRetentionMaintenance } from "../observability/artifactRetention.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
 import {
@@ -140,6 +141,10 @@ export async function startJobs(input: {
   const codegenLeaseScheduler =
     taskWorkerEnabled && input.agentTask && input.codegenRepo ? createCodegenLeaseScheduler(input.config, agentTaskBackendName) : null;
   let stopCodegenLeaseHeartbeat: (() => Promise<void>) | undefined;
+  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || discordAgentWorkerEnabled;
+  const artifactRetentionMaintenance = runsAnyWorker
+    ? startArtifactRetentionMaintenance({ repo: input.repo, codegenRepo: input.codegenRepo })
+    : null;
   if (codegenLeaseScheduler && input.codegenRepo) {
     await registerCodegenWorkerLease(input.codegenRepo, codegenLeaseScheduler);
     stopCodegenLeaseHeartbeat = startCodegenLeaseHeartbeat({
@@ -345,6 +350,7 @@ export async function startJobs(input: {
       return { jobId: id, taskId };
     },
     stop: async () => {
+      artifactRetentionMaintenance?.stop();
       await stopCodegenLeaseHeartbeat?.();
       await boss.stop({ graceful: true, wait: true, timeout: 100_000 });
     }

@@ -1214,6 +1214,8 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:00:04Z")
           }
         ]),
+        getProcessRun: vi.fn(async () => undefined),
+        getAgentTask: vi.fn(async () => undefined),
         auditTool
       },
       guildId: "guild",
@@ -1249,6 +1251,207 @@ describe("inspectAgentLogs", () => {
       limit: 10
     });
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectAgentLogs" }));
+  });
+
+  it("includes normalized run diagnostics when a visible run is referenced", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const run = {
+      runId: "run-1",
+      traceId: "1521541635580756031",
+      kind: "codegen",
+      status: "failed",
+      title: "Investigate timeout",
+      summary: "Codegen failed.",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      messageId: "1521541635580756031",
+      requester: "kartik",
+      source: "agent_task",
+      metadata: {
+        failureDiagnosis: {
+          category: "command_failed",
+          summary: "The verification command failed.",
+          nextAction: "Inspect the failing command output."
+        }
+      },
+      links: { run: "https://tasks.example/runs/run-1" },
+      startedAt: new Date("2026-01-01T00:00:00Z"),
+      completedAt: new Date("2026-01-01T00:15:00Z"),
+      updatedAt: new Date("2026-01-01T00:15:00Z")
+    };
+    const ctx = {
+      repo: {
+        findProcessRunByDiscordMessageId: vi.fn(async () => run),
+        findAgentTaskByDiscordMessageId: vi.fn(async () => undefined),
+        getProcessRun: vi.fn(async (runId: string) => (runId === "run-1" ? run : undefined)),
+        getAgentTask: vi.fn(async (taskId: string) =>
+          taskId === "run-1"
+            ? {
+                taskId: "run-1",
+                traceId: "1521541635580756031",
+                guildId: "guild",
+                channelId: "channel",
+                userId: "user",
+                requestedBy: "kartik",
+                title: "Investigate timeout",
+                request: "fix the timeout",
+                status: "failed",
+                statusMessage: "Codegen failed.",
+                error: "verification failed",
+                currentStep: "verify",
+                branchName: "ai/investigate-timeout",
+                prUrl: null,
+                draft: true,
+                verifyPassed: false,
+                notificationError: null,
+                retriedFromTaskId: null,
+                backend: "local-process",
+                createdAt: new Date("2026-01-01T00:00:00Z"),
+                startedAt: new Date("2026-01-01T00:00:00Z"),
+                completedAt: new Date("2026-01-01T00:15:00Z"),
+                updatedAt: new Date("2026-01-01T00:15:00Z"),
+                progressUpdatedAt: new Date("2026-01-01T00:14:59Z")
+              }
+            : undefined
+        ),
+        getProcessRunSpans: vi.fn(async () => [
+          {
+            id: 1,
+            runId: "run-1",
+            spanId: "codex",
+            parentSpanId: null,
+            name: "opencode_attempt_1",
+            status: "failed",
+            metadata: {},
+            startedAt: new Date("2026-01-01T00:01:00Z"),
+            completedAt: new Date("2026-01-01T00:14:00Z"),
+            durationMs: 780_000
+          }
+        ]),
+        getProcessRunEvents: vi.fn(async () => [
+          {
+            id: 1,
+            runId: "run-1",
+            traceId: "1521541635580756031",
+            level: "error",
+            eventName: "task.failed",
+            summary: "verification failed",
+            metadata: {},
+            durationMs: null,
+            createdAt: new Date("2026-01-01T00:15:00Z")
+          }
+        ]),
+        getProcessRunArtifacts: vi.fn(async () => []),
+        getProcessRunArtifact: vi.fn(async () => undefined),
+        getTaskEventsForTask: vi.fn(async () => []),
+        getSandboxCommandEventsForTask: vi.fn(async () => [
+          {
+            id: 1,
+            taskId: "task-1",
+            sandboxRunId: "sandbox-1",
+            step: "verify",
+            command: "npm run verify",
+            exitCode: 1,
+            outputTail: "",
+            errorTail: "test failed",
+            durationMs: 1234,
+            createdAt: new Date("2026-01-01T00:14:59Z")
+          }
+        ]),
+        getSandboxRunsForTask: vi.fn(async () => []),
+        getTraceEventsForTrace: vi.fn(async () => []),
+        getToolAuditLogsForTrace: vi.fn(async () => []),
+        listProcessRunsForTrace: vi.fn(async () => [run]),
+        listAgentTasksForTrace: vi.fn(async () => []),
+        getTraceEvents: vi.fn(async () => []),
+        getTaskEvents: vi.fn(async () => []),
+        getSandboxCommandEvents: vi.fn(async () => []),
+        getToolAuditLogs: vi.fn(async () => []),
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await inspectAgentLogs(ctx, {
+      traceId: "https://discord.com/channels/guild/channel/1521541635580756031",
+      limit: 10
+    });
+
+    expect(response).toContain("codegen run run-1");
+    expect(response).toContain("Failure diagnosis: The verification command failed.");
+    expect(response).toContain("Most time was spent in opencode_attempt_1");
+    expect(response).toContain("Terminal tail");
+    expect(response).toContain("npm run verify");
+    expect(ctx.repo.findProcessRunByDiscordMessageId).toHaveBeenCalledWith("1521541635580756031");
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resultSummary: expect.stringContaining("\"normalizedRun\":\"run-1\"")
+      })
+    );
+  });
+
+  it("does not include normalized run diagnostics for an invisible run", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const hiddenRun = {
+      runId: "run-hidden",
+      traceId: "1521541635580756032",
+      kind: "discord",
+      status: "failed",
+      title: "Private channel prompt",
+      summary: "private failure",
+      guildId: "guild",
+      channelId: "private-channel",
+      userId: "user",
+      messageId: "1521541635580756032",
+      requester: "kartik",
+      source: "discord",
+      metadata: {},
+      links: {},
+      startedAt: new Date("2026-01-01T00:00:00Z"),
+      completedAt: new Date("2026-01-01T00:00:01Z"),
+      updatedAt: new Date("2026-01-01T00:00:01Z")
+    };
+    const ctx = {
+      repo: {
+        findProcessRunByDiscordMessageId: vi.fn(async () => hiddenRun),
+        findAgentTaskByDiscordMessageId: vi.fn(async () => undefined),
+        getProcessRun: vi.fn(async () => hiddenRun),
+        getAgentTask: vi.fn(async () => undefined),
+        getProcessRunSpans: vi.fn(async () => []),
+        getProcessRunEvents: vi.fn(async () => []),
+        getProcessRunArtifacts: vi.fn(async () => []),
+        getTaskEventsForTask: vi.fn(async () => []),
+        getSandboxCommandEventsForTask: vi.fn(async () => []),
+        getSandboxRunsForTask: vi.fn(async () => []),
+        getTraceEventsForTrace: vi.fn(async () => []),
+        getToolAuditLogsForTrace: vi.fn(async () => []),
+        listProcessRunsForTrace: vi.fn(async () => []),
+        listAgentTasksForTrace: vi.fn(async () => []),
+        getTraceEvents: vi.fn(async () => []),
+        getTaskEvents: vi.fn(async () => []),
+        getSandboxCommandEvents: vi.fn(async () => []),
+        getToolAuditLogs: vi.fn(async () => []),
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await inspectAgentLogs(ctx, { traceId: "1521541635580756032" });
+
+    expect(response).toBe("No Discord AI Agent trace or tool logs matched traceId=1521541635580756032.");
+    expect(response).not.toContain("Private channel prompt");
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resultSummary: expect.not.stringContaining("run-hidden")
+      })
+    );
   });
 });
 

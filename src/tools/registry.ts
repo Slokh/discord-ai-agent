@@ -721,7 +721,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "inspectAgentLogs",
     description:
-      "Inspect Discord AI Agent's own recent trace events, task events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. traceId is usually the originating Discord message ID.",
+      "Inspect Discord AI Agent's own normalized run diagnostics, trace events, task events, terminal command events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. Pass the originating Discord message link/message ID, run ID, or trace ID when available.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -729,7 +729,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         traceId: {
           type: "string",
-          description: "Optional trace ID or originating Discord message ID to inspect."
+          description: "Optional trace ID, run ID, originating Discord message ID, or Discord message URL to inspect."
         },
         limit: {
           type: "number",

@@ -45,6 +45,28 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
 
   async execute(input: AgentRuntimePromptExecutionInput): Promise<AgentResponse> {
     const command = this.options.runnerCommand ?? resolveSandboxPromptRunnerCommand();
+    const request: SandboxPromptRequest = { envelope: input.turnEnvelope };
+    const startedAt = Date.now();
+    await storeWarmSandboxArtifact(input, {
+      protocolKind: "sandbox_prompt_request",
+      name: "Warm sandbox prompt request",
+      content: JSON.stringify(request, null, 2),
+      metadata: {
+        executor: this.name,
+        command: command.command,
+        args: command.args,
+        requestId: input.turnEnvelope.requestId
+      }
+    });
+    await recordWarmSandboxSpan(input, {
+      status: "running",
+      startedAt,
+      metadata: {
+        executor: this.name,
+        command: command.command,
+        args: command.args
+      }
+    });
     const child = (this.options.spawnProcess ?? spawnAgentProcess)(command.command, command.args, {
       env: {
         ...process.env,
@@ -52,8 +74,6 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         LOG_LEVEL: "silent"
       }
     });
-    const request: SandboxPromptRequest = { envelope: input.turnEnvelope };
-    const startedAt = Date.now();
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -62,6 +82,11 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         if (settled) return;
         settled = true;
         child.kill("SIGTERM");
+        recordWarmSandboxSpan(input, {
+          status: "failed",
+          startedAt,
+          metadata: { executor: this.name, error: `Timed out after ${input.timeoutMs}ms.`, stderrTail: stderr || null }
+        }).catch(() => undefined);
         reject(new Error(`Warm sandbox agent runtime execution timed out after ${input.timeoutMs}ms.`));
       }, input.timeoutMs);
 
@@ -75,6 +100,11 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
+        recordWarmSandboxSpan(input, {
+          status: "failed",
+          startedAt,
+          metadata: { executor: this.name, error: error.message, stderrTail: stderr || null }
+        }).catch(() => undefined);
         reject(error);
       });
       child.on("close", (code, signal) => {
@@ -82,6 +112,17 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         settled = true;
         clearTimeout(timeout);
         if (code !== 0) {
+          recordWarmSandboxSpan(input, {
+            status: "failed",
+            startedAt,
+            metadata: {
+              executor: this.name,
+              exitCode: code,
+              signal,
+              stdoutTail: stdout || null,
+              stderrTail: stderr || null
+            }
+          }).catch(() => undefined);
           reject(
             new Error(
               `Warm sandbox agent runtime exited with ${signal ? `signal ${signal}` : `code ${code}`}${stderr ? `: ${stderr.trim()}` : "."}`
@@ -90,8 +131,46 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
           return;
         }
         try {
-          resolve(deserializeAgentResponse(parseSandboxPromptResponse(stdout)));
+          const serializedResponse = parseSandboxPromptResponse(stdout);
+          const response = deserializeAgentResponse(serializedResponse);
+          Promise.all([
+            storeWarmSandboxArtifact(input, {
+              protocolKind: "sandbox_prompt_response",
+              name: "Warm sandbox prompt response",
+              content: JSON.stringify(serializedResponse, null, 2),
+              metadata: {
+                executor: this.name,
+                responseChars: response.content.length,
+                fileCount: response.files?.length ?? 0,
+                memoryEventCount: response.memoryEvents?.length ?? 0
+              }
+            }),
+            recordWarmSandboxSpan(input, {
+              status: "succeeded",
+              startedAt,
+              metadata: {
+                executor: this.name,
+                responseChars: response.content.length,
+                fileCount: response.files?.length ?? 0,
+                memoryEventCount: response.memoryEvents?.length ?? 0,
+                stdoutBytes: Buffer.byteLength(stdout, "utf8"),
+                stderrBytes: Buffer.byteLength(stderr, "utf8")
+              }
+            })
+          ])
+            .then(() => resolve(response))
+            .catch(reject);
         } catch (error) {
+          recordWarmSandboxSpan(input, {
+            status: "failed",
+            startedAt,
+            metadata: {
+              executor: this.name,
+              error: error instanceof Error ? error.message : String(error),
+              stdoutTail: stdout || null,
+              stderrTail: stderr || null
+            }
+          }).catch(() => undefined);
           reject(
             new Error(
               `Warm sandbox agent runtime returned invalid response after ${Date.now() - startedAt}ms: ${
@@ -104,6 +183,46 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
       child.stdin.end(JSON.stringify(request));
     });
   }
+}
+
+async function storeWarmSandboxArtifact(
+  input: AgentRuntimePromptExecutionInput,
+  artifact: { protocolKind: string; name: string; content: string; metadata?: Record<string, unknown> }
+) {
+  if (!input.toolContext.requestId) return;
+  await input.toolContext.repo.storeProcessRunArtifact({
+    runId: input.toolContext.requestId,
+    kind: "raw_json",
+    name: artifact.name,
+    content: artifact.content,
+    contentType: "application/json",
+    metadata: {
+      executor: "warm-sandbox",
+      protocolKind: artifact.protocolKind,
+      ...(artifact.metadata ?? {})
+    }
+  });
+}
+
+async function recordWarmSandboxSpan(
+  input: AgentRuntimePromptExecutionInput,
+  span: {
+    status: "running" | "succeeded" | "failed";
+    startedAt: number;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  if (!input.toolContext.requestId) return;
+  await input.toolContext.repo.recordProcessRunSpan({
+    runId: input.toolContext.requestId,
+    spanId: "agent.executor.warm_sandbox",
+    name: "Warm sandbox prompt runner",
+    status: span.status,
+    startedAt: new Date(span.startedAt),
+    completedAt: span.status === "running" ? undefined : new Date(),
+    durationMs: span.status === "running" ? undefined : Math.max(0, Date.now() - span.startedAt),
+    metadata: span.metadata
+  });
 }
 
 type RunnerCommand = {

@@ -32,6 +32,8 @@ The first migration slice records Discord prompts and their in-process compatibi
 
 `AGENT_RUNTIME_EXECUTION_BACKEND` selects the prompt execution backend. It defaults to `in-process`, which calls the existing model/tool router through `src/agent/inProcessRuntimeExecutor.ts`. The selection now flows through `src/agent/runtimeRunner.ts` and `src/agent/runtimeExecutor.ts` so the worker can prepare the Discord turn once, store the replay envelope, then hand response generation to the selected executor. `warm-sandbox` currently runs the prompt in an out-of-process `sandboxPromptRunner` child using the stored envelope protocol; this is the process boundary that the Kubernetes warm-pod launcher should replace next.
 
+Warm prompt executions write a `Warm sandbox prompt runner` span and `raw_json` artifacts for the serialized prompt request and response. Those artifacts are intentionally the same envelope/response contract the future remote warm-pod transport should use, so latency and protocol bugs are visible in the run console before the Kubernetes handoff is added.
+
 ## Legacy Codegen Session API
 
 The internal API now exposes the codegen control-plane objects directly. This is the migration point from the original `agent.task` callback flow toward a Centaur-style runtime where Discord is only ingress/delivery and the API owns durable execution state.

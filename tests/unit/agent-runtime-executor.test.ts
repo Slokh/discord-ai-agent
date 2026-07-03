@@ -38,10 +38,14 @@ describe("agent runtime prompt executors", () => {
       runnerCommand: { command: "node", args: ["runner.js"] },
       env: { TEST_ENV: "1" }
     });
+    const repo = {
+      storeProcessRunArtifact: vi.fn(async () => undefined),
+      recordProcessRunSpan: vi.fn(async () => undefined)
+    };
 
     await expect(
       executor.execute({
-        toolContext: { requestId: "request-1" } as never,
+        toolContext: { requestId: "request-1", repo } as never,
         text: "hello",
         timeoutMs: 1000,
         turnEnvelope: { requestId: "request-1", text: "hello" } as never
@@ -58,6 +62,38 @@ describe("agent runtime prompt executors", () => {
       expect.objectContaining({ env: expect.objectContaining({ LOG_LEVEL: "silent", TEST_ENV: "1" }) })
     );
     expect(JSON.parse(fakeChild.stdinText())).toEqual({ envelope: expect.objectContaining({ requestId: "request-1", text: "hello" }) });
+    expect(repo.storeProcessRunArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "request-1",
+        kind: "raw_json",
+        name: "Warm sandbox prompt request",
+        metadata: expect.objectContaining({ protocolKind: "sandbox_prompt_request", command: "node" })
+      })
+    );
+    expect(repo.storeProcessRunArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "request-1",
+        kind: "raw_json",
+        name: "Warm sandbox prompt response",
+        metadata: expect.objectContaining({ protocolKind: "sandbox_prompt_response", fileCount: 1, memoryEventCount: 1 })
+      })
+    );
+    expect(repo.recordProcessRunSpan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "request-1",
+        spanId: "agent.executor.warm_sandbox",
+        name: "Warm sandbox prompt runner",
+        status: "running"
+      })
+    );
+    expect(repo.recordProcessRunSpan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "request-1",
+        spanId: "agent.executor.warm_sandbox",
+        status: "succeeded",
+        metadata: expect.objectContaining({ responseChars: "hello from sandbox".length, fileCount: 1 })
+      })
+    );
   });
 });
 

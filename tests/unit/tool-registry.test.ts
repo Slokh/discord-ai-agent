@@ -46,7 +46,9 @@ describe("toolRegistry", () => {
         expect.objectContaining({
           name: "runCodingAgent",
           category: "coding",
+          toolClass: "coding",
           mutates: true,
+          outputContract: expect.arrayContaining(["PR link or failure reason"]),
           permissionRequirements: expect.arrayContaining(["explicit_user_request"]),
           auditEvents: expect.arrayContaining(["tool_audit_logs", "trace_events"]),
           examples: expect.arrayContaining(["@ai update yourself to handle Bluesky links better"])
@@ -54,12 +56,30 @@ describe("toolRegistry", () => {
         expect.objectContaining({
           name: "searchDiscordHistory",
           category: "discord",
+          toolClass: "retrieval",
+          outputContract: expect.arrayContaining(["ranked evidence snippets", "Discord message links when available"]),
           permissionRequirements: expect.arrayContaining(["requester_visible_discord_channels"]),
           examples: expect.arrayContaining(["@ai what did we say about job hunting?"])
         })
       ])
     );
-    expect(contracts.every((tool) => tool.examples.length > 0 && tool.permissionRequirements.length > 0 && tool.auditEvents.length > 0)).toBe(true);
+    expect(
+      contracts.every(
+        (tool) =>
+          tool.examples.length > 0 && tool.permissionRequirements.length > 0 && tool.auditEvents.length > 0 && tool.outputContract.length > 0
+      )
+    ).toBe(true);
+  });
+
+  it("classifies local tools into the model-facing taxonomy", () => {
+    const contracts = toolContracts();
+    expect(new Set(contracts.map((tool) => tool.toolClass))).toEqual(
+      new Set(["resolver", "retrieval", "memory", "stats", "summary", "image", "generation", "coding", "ops"])
+    );
+    expect(contracts.find((tool) => tool.name === "findDiscordUsers")?.toolClass).toBe("resolver");
+    expect(contracts.find((tool) => tool.name === "getDiscordStats")?.toolClass).toBe("stats");
+    expect(contracts.find((tool) => tool.name === "summarizeDiscordHistory")?.toolClass).toBe("summary");
+    expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.toolClass).toBe("image");
   });
 
   it("exports OpenRouter-compatible local function and server tool definitions", () => {
@@ -69,6 +89,7 @@ describe("toolRegistry", () => {
           type: "function",
           function: expect.objectContaining({
             name: "searchDiscordHistory",
+            description: expect.stringContaining("Tool class: retrieval."),
             parameters: expect.objectContaining({
               type: "object",
               required: ["query"],
@@ -92,6 +113,7 @@ describe("toolRegistry", () => {
           type: "function",
           function: expect.objectContaining({
             name: "getDiscordStats",
+            description: expect.stringContaining("Tool class: stats."),
             parameters: expect.objectContaining({
               properties: expect.objectContaining({
                 groupBy: expect.objectContaining({ enum: expect.arrayContaining(["channel", "thread", "message", "month", "hourOfDay"]) }),
@@ -117,6 +139,7 @@ describe("toolRegistry", () => {
           type: "function",
           function: expect.objectContaining({
             name: "summarizeDiscordHistory",
+            description: expect.stringContaining("Returns: question or focus; sample window; grounded summary; coverage limits."),
             parameters: expect.objectContaining({
               required: ["question"],
               properties: expect.objectContaining({
@@ -138,5 +161,6 @@ describe("toolRegistry", () => {
       "openrouter:web_fetch",
       "openrouter:datetime"
     ]);
+    expect(openRouterServerToolRegistry.every((tool) => tool.toolClass === "external" && tool.outputContract.length > 0)).toBe(true);
   });
 });

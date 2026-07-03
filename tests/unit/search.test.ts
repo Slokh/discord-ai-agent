@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildHistoryRetrievalQuery, mergeResults, resolveSearchChannelIds, searchDiscordHistory } from "../../src/memory/search.js";
+import { buildHistoryRetrievalQuery, formatSearchResults, mergeResults, resolveSearchChannelIds, searchDiscordHistory } from "../../src/memory/search.js";
+import type { RankedSearchResult } from "../../src/memory/search.js";
 import type { SearchResult } from "../../src/db/repositories.js";
 
 function result(id: string, score: number): SearchResult {
@@ -22,6 +23,15 @@ describe("mergeResults", () => {
     const merged = mergeResults([result("a", 0.2), result("b", 0.9)], [result("a", 0.7), result("c", 0.8)]);
     expect(merged.map((item) => item.messageId)).toEqual(["a", "b", "c"]);
     expect(merged[0]?.score).toBeGreaterThan(1);
+    expect(merged.find((item) => item.messageId === "a")?.matchSources).toEqual(["keyword", "semantic"]);
+    expect(merged.find((item) => item.messageId === "b")?.matchSources).toEqual(["keyword"]);
+    expect(merged.find((item) => item.messageId === "c")?.matchSources).toEqual(["semantic"]);
+  });
+
+  it("formats match-source metadata when available", () => {
+    const ranked: RankedSearchResult = { ...result("a", 0.2), matchSources: ["keyword", "semantic"] };
+    const formatted = formatSearchResults([ranked]);
+    expect(formatted).toContain("Matched by: keyword, semantic");
   });
 });
 
@@ -180,11 +190,12 @@ describe("searchDiscordHistory", () => {
     expect(repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ authorIds: ["user-id"] }));
   });
 
-  it("skips table-wide vector search for unfiltered keyword misses", async () => {
+  it("uses vector search for broad keyword misses", async () => {
+    const vectorResults = [result("vector", 0.8)];
     const repo = {
       getVisibleIndexedChannelIds: async () => ["c1", "c2"],
       keywordSearch: vi.fn(async () => []),
-      vectorSearch: vi.fn(async () => [result("vector", 0.8)])
+      vectorSearch: vi.fn(async () => vectorResults)
     };
     const openRouter = {
       embed: vi.fn(async () => [[0.1, 0.2]])
@@ -202,9 +213,18 @@ describe("searchDiscordHistory", () => {
       }
     });
 
-    expect(results).toEqual([]);
-    expect(openRouter.embed).not.toHaveBeenCalled();
-    expect(repo.vectorSearch).not.toHaveBeenCalled();
+    expect(results.map((item) => item.messageId)).toEqual(vectorResults.map((item) => item.messageId));
+    expect(results[0]?.matchSources).toEqual(["semantic"]);
+    expect(openRouter.embed).toHaveBeenCalledWith(["sampleuser birthday"], "embed", undefined);
+    expect(repo.vectorSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "g",
+        visibleChannelIds: ["c1", "c2"],
+        authorIds: [],
+        aboutUserTerms: [],
+        limit: 10
+      })
+    );
   });
 
   it("allows vector search for narrowed keyword misses", async () => {

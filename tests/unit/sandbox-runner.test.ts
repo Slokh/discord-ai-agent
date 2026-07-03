@@ -18,12 +18,14 @@ import {
   codeUpdatePullRequestTitle,
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
+  diagnoseCodegenFailure,
   dependencyCacheKey,
   fetchOpenCodeHealth,
   openCodeConfigJson,
   openCodeModelId,
   openCodeRunArgs,
   openCodeServeArgs,
+  renderCodegenFailureDiagnosis,
   renderCodegenContextPack,
   repairWorktreeRemoteForBranchPush
 } from "../../src/execution/sandboxRunner.js";
@@ -200,6 +202,101 @@ describe("sandboxRunner", () => {
     expect(body).not.toContain("Codegen model");
   });
 
+  it("classifies terminal codegen failures with actionable next steps", () => {
+    const noDiff = diagnoseCodegenFailure({
+      error: new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."),
+      timings: { repo: 120, opencode: 20_000, total: 21_000 },
+      harness: "opencode"
+    });
+
+    expect(noDiff).toEqual(
+      expect.objectContaining({
+        category: "no_diff",
+        status: "no_changes",
+        failedPhase: "opencode",
+        slowestPhase: { name: "opencode", durationMs: 20_000 }
+      })
+    );
+    expect(noDiff.summary).toContain("OpenCode finished but left the repository with no code diff");
+    expect(noDiff.nextAction).toContain("request context");
+
+    const scan = diagnoseCodegenFailure({
+      error: new Error("Release scan failed after agent task; refusing to push generated changes."),
+      timings: { repo: 100, scan: 2500, total: 3000 },
+      harness: "codex"
+    });
+
+    expect(scan).toEqual(
+      expect.objectContaining({
+        category: "release_scan",
+        status: "failed",
+        failedPhase: "scan"
+      })
+    );
+    expect(renderCodegenFailureDiagnosis(scan)).toContain("Category: release_scan");
+    expect(renderCodegenFailureDiagnosis(scan)).toContain("- scan: 2.5s");
+  });
+
+  it("distinguishes no-diff failures where the harness never made an edit", () => {
+    const error = Object.assign(new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."), {
+      name: "CodegenNoDiffError",
+      attempts: [
+        {
+          attempt: 1,
+          command: "opencode-run",
+          exitCode: 0,
+          durationMs: 12_000,
+          producedDiff: false,
+          stdoutTail: "OpenCode read files and described a plan.",
+          stderrTail: ""
+        }
+      ]
+    });
+
+    const diagnosis = diagnoseCodegenFailure({
+      error,
+      timings: { opencode: 12_000, total: 13_000 },
+      harness: "opencode"
+    });
+
+    expect(diagnosis).toEqual(
+      expect.objectContaining({
+        category: "no_first_edit",
+        status: "no_changes",
+        failedPhase: "opencode"
+      })
+    );
+    expect(diagnosis.summary).toContain("OpenCode finished without making a code edit");
+    expect(diagnosis.nextAction).toContain("early focused edit");
+    expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Attempts");
+    expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("attempt 1: command=opencode-run");
+  });
+
+  it("keeps no-diff failures with edit signals in the normal no-diff category", () => {
+    const error = Object.assign(new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."), {
+      name: "CodegenNoDiffError",
+      attempts: [
+        {
+          attempt: 1,
+          command: "opencode-run",
+          exitCode: 0,
+          durationMs: 15_000,
+          producedDiff: false,
+          stdoutTail: '{"type":"tool_use","part":{"tool":"edit","title":"src/example.ts"}}',
+          stderrTail: ""
+        }
+      ]
+    });
+
+    expect(
+      diagnoseCodegenFailure({
+        error,
+        timings: { opencode: 15_000, total: 16_000 },
+        harness: "opencode"
+      })
+    ).toEqual(expect.objectContaining({ category: "no_diff", status: "no_changes" }));
+  });
+
   it("builds a concise codegen context pack from the repository guide and project map", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-context-"));
     try {
@@ -216,6 +313,50 @@ describe("sandboxRunner", () => {
       expect(rendered).toContain("Read AGENTS.md first");
       expect(rendered).toContain("src/tools/coreTools.ts");
       expect(rendered).toContain("src/jobs/queue.ts");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes repo guide excerpts and exact focused check commands in the context pack", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-context-checks-"));
+    try {
+      await fs.mkdir(path.join(tempDir, "src", "tools"), { recursive: true });
+      await fs.mkdir(path.join(tempDir, "tests", "unit"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "AGENTS.md"), "Use rg first.\nAdd focused regression tests.\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "tsconfig.json"), '{"compilerOptions":{}}\n', "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "tools", "registry.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "tools", "coreTools.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "tests", "unit", "tool-registry.test.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "tests", "unit", "core-tools.test.ts"), "export {}\n", "utf8");
+
+      const context = await buildCodegenContextPack(tempDir, "Improve the tool schema for Discord history search.");
+      const rendered = renderCodegenContextPack(context);
+      const prompt = codeUpdatePrompt(
+        {
+          taskId: "task-1",
+          requestedBy: "kartik",
+          taskRequest: "Improve the tool schema for Discord history search."
+        },
+        context
+      );
+
+      expect(context.repoGuideExcerpt).toContain("Use rg first.");
+      expect(context.suggestedCheckCommands).toEqual([
+        {
+          command: "npm test -- tests/unit/tool-registry.test.ts tests/unit/core-tools.test.ts",
+          reason: "Run the closest focused tests for the suggested source/test area before broader checks."
+        },
+        {
+          command: "npm run typecheck",
+          reason: "Catch repository-wide TypeScript contract breakage after focused edits."
+        }
+      ]);
+      expect(rendered).toContain("Repository guide excerpt:");
+      expect(rendered).toContain("> Add focused regression tests.");
+      expect(rendered).toContain("Suggested focused checks:");
+      expect(rendered).toContain("npm test -- tests/unit/tool-registry.test.ts tests/unit/core-tools.test.ts");
+      expect(prompt).toContain("Run the suggested focused checks from the preflight context");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

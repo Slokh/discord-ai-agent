@@ -9,6 +9,7 @@ import { logger } from "../util/logger.js";
 import { verifyTaskBearerToken } from "../execution/token.js";
 import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execution/types.js";
 import { collectCodegenStatusSnapshot } from "../observability/codegenStatus.js";
+import { buildRunListAggregate } from "../observability/runAggregates.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../observability/runs.js";
 import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
@@ -123,8 +124,10 @@ async function handleRequest(input: {
     if (!authorizedUi(input.config, input.request, input.response, url)) return;
     const limit = parseLimit(url.searchParams.get("limit"), 100, 200);
     const includeEmbeddings = parseBoolean(url.searchParams.get("includeEmbeddings"));
+    const runs = await listRunSummaries(input.repo, { limit, includeEmbeddings });
     sendJson(input.response, 200, {
-      runs: await listRunSummaries(input.repo, { limit, includeEmbeddings }),
+      runs,
+      aggregate: buildRunListAggregate(runs),
       generatedAt: new Date().toISOString()
     });
     return;

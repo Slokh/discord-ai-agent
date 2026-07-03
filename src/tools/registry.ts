@@ -26,12 +26,26 @@ export type ToolName =
   | "undoConversationTurns"
   | "reportStatus";
 
+export type ToolClass =
+  | "resolver"
+  | "retrieval"
+  | "memory"
+  | "stats"
+  | "summary"
+  | "image"
+  | "generation"
+  | "coding"
+  | "ops"
+  | "external";
+
 export type ToolRegistryEntry = {
   name: ToolName;
   description: string;
   userVisible: boolean;
   mutates: boolean;
   category?: "discord" | "generation" | "memory" | "ops" | "coding";
+  toolClass?: ToolClass;
+  outputContract?: string[];
   examples?: string[];
   permissionRequirements?: string[];
   auditEvents?: string[];
@@ -42,10 +56,12 @@ export type ToolContract = {
   name: ToolName;
   description: string;
   category: NonNullable<ToolRegistryEntry["category"]>;
+  toolClass: ToolClass;
   mutates: boolean;
   userVisible: boolean;
   parameters: FunctionToolDefinition["function"]["parameters"];
   whenToUse: string;
+  outputContract: string[];
   permissionRequirements: string[];
   auditEvents: string[];
   examples: string[];
@@ -110,7 +126,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "searchDiscordHistory",
     description:
-      "Search permission-filtered indexed Discord history. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use authorIds/authorQueries for messages written by someone; use aboutUserIds/aboutUserQueries for messages about or mentioning someone. Use structured person/channel filters after findDiscordUsers/findDiscordChannels when names are ambiguous. One or two distinct searches is usually enough before answering. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
+      "Search permission-filtered indexed Discord history using hybrid keyword and semantic vector retrieval. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use authorIds/authorQueries for messages written by someone; use aboutUserIds/aboutUserQueries for messages about or mentioning someone. Use structured person/channel filters after findDiscordUsers/findDiscordChannels when names are ambiguous. One or two distinct searches is usually enough before answering. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -705,7 +721,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "inspectAgentLogs",
     description:
-      "Inspect Discord AI Agent's own recent trace events, task events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. traceId is usually the originating Discord message ID.",
+      "Inspect Discord AI Agent's own normalized run diagnostics, trace events, task events, terminal command events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. Pass the originating Discord message link/message ID, run ID, or trace ID when available.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -713,7 +729,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         traceId: {
           type: "string",
-          description: "Optional trace ID or originating Discord message ID to inspect."
+          description: "Optional trace ID, run ID, originating Discord message ID, or Discord message URL to inspect."
         },
         limit: {
           type: "number",
@@ -739,6 +755,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
 export type OpenRouterServerToolRegistryEntry = {
   type: OpenRouterServerToolDefinition["type"];
   description: string;
+  toolClass: ToolClass;
+  outputContract: string[];
   userVisible: boolean;
   parameters?: OpenRouterServerToolDefinition["parameters"];
 };
@@ -747,16 +765,22 @@ export const openRouterServerToolRegistry: OpenRouterServerToolRegistryEntry[] =
   {
     type: "openrouter:web_search",
     description: "Search the public web for current or external information.",
+    toolClass: "external",
+    outputContract: ["query", "current web result summaries", "source URLs when available"],
     userVisible: true
   },
   {
     type: "openrouter:web_fetch",
     description: "Fetch and read a specific public URL when the user provides one or web search finds one worth opening.",
+    toolClass: "external",
+    outputContract: ["requested URL", "relevant fetched page content", "source URL"],
     userVisible: true
   },
   {
     type: "openrouter:datetime",
     description: "Get the current date and time for time-sensitive questions.",
+    toolClass: "external",
+    outputContract: ["current date/time", "timezone or locale context when available"],
     userVisible: true
   }
 ];
@@ -766,7 +790,7 @@ export function localToolDefinitionsForModel(): FunctionToolDefinition[] {
     type: "function",
     function: {
       name: tool.name,
-      description: tool.description,
+      description: toolDescriptionForModel(tool),
       parameters: tool.parameters
     }
   }));
@@ -787,15 +811,23 @@ export function toolByName(name: string): ToolRegistryEntry | undefined {
   return toolRegistry.find((tool) => tool.name === name);
 }
 
+function toolDescriptionForModel(tool: ToolRegistryEntry): string {
+  const toolClass = tool.toolClass ?? defaultToolClass(tool.name);
+  const outputContract = tool.outputContract ?? defaultOutputContract(tool.name);
+  return `${tool.description}\nTool class: ${toolClass}. Returns: ${outputContract.join("; ")}.`;
+}
+
 export function toolContracts(): ToolContract[] {
   return toolRegistry.map((tool) => ({
     name: tool.name,
     description: tool.description,
     category: tool.category ?? defaultToolCategory(tool.name),
+    toolClass: tool.toolClass ?? defaultToolClass(tool.name),
     mutates: tool.mutates,
     userVisible: tool.userVisible,
     parameters: tool.parameters,
     whenToUse: tool.description,
+    outputContract: tool.outputContract ?? defaultOutputContract(tool.name),
     permissionRequirements: tool.permissionRequirements ?? defaultPermissionRequirements(tool),
     auditEvents: tool.auditEvents ?? ["tool_audit_logs", "trace_events"],
     examples: tool.examples ?? defaultToolExamples(tool.name)
@@ -835,6 +867,54 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   }
   if (name === "inspectAgentLogs" || name === "reportStatus" || name === "getDeploymentStatus" || name === "listTools") return "ops";
   return "discord";
+}
+
+const toolClassByName: Record<ToolName, ToolClass> = {
+  listTools: "ops",
+  findDiscordUsers: "resolver",
+  findDiscordChannels: "resolver",
+  searchDiscordHistory: "retrieval",
+  getRecentAgentMemory: "memory",
+  getRecentDiscordMessages: "retrieval",
+  getDiscordMessageContext: "retrieval",
+  searchDiscordAttachments: "retrieval",
+  inspectDiscordImages: "image",
+  getDiscordStats: "stats",
+  getDiscordChannelTopics: "summary",
+  summarizeDiscordHistory: "summary",
+  summarizeDiscordThread: "summary",
+  generateImage: "generation",
+  createSkillDraft: "memory",
+  runCodingAgent: "coding",
+  getAgentTaskStatus: "coding",
+  listAgentTasks: "coding",
+  retryAgentTask: "coding",
+  cancelAgentTask: "coding",
+  getDeploymentStatus: "ops",
+  inspectAgentLogs: "ops",
+  undoConversationTurns: "memory",
+  reportStatus: "ops"
+};
+
+const outputContractByToolClass: Record<ToolClass, string[]> = {
+  resolver: ["resolved IDs", "display names", "match confidence or ambiguity notes", "result count"],
+  retrieval: ["applied filters", "ranked evidence snippets", "match sources when available", "Discord message links when available", "result count"],
+  memory: ["memory scope", "durable action or retrieved turns", "audit trail"],
+  stats: ["metric", "grouping", "filters", "ranked rows", "result count"],
+  summary: ["question or focus", "sample window", "grounded summary", "coverage limits"],
+  image: ["image URLs or attachment IDs", "visual observations", "uncertainty when the image is unclear"],
+  generation: ["generation prompt", "reference image count", "attached output file or URL"],
+  coding: ["task ID and status", "run-console link when available", "PR link or failure reason", "progress summary"],
+  ops: ["requested diagnostic", "current status", "recent failures or next action"],
+  external: ["external request", "returned source data", "source URLs when available"]
+};
+
+function defaultToolClass(name: ToolName): ToolClass {
+  return toolClassByName[name];
+}
+
+function defaultOutputContract(name: ToolName): string[] {
+  return outputContractByToolClass[defaultToolClass(name)];
 }
 
 function defaultToolExamples(name: ToolName): string[] {

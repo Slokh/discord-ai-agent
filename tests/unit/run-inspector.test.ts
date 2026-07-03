@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatRunArtifacts, formatRunInspection, formatSeconds, selectArtifacts } from "../../src/observability/runInspector.js";
-import type { RunSnapshot } from "../../src/observability/runs.js";
+import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, formatSeconds, selectArtifacts } from "../../src/observability/runInspector.js";
+import type { RunSnapshot, RunSummary } from "../../src/observability/runs.js";
 
 describe("run inspector formatting", () => {
   it("formats a compact debugger report for a run snapshot", () => {
@@ -12,6 +12,9 @@ describe("run inspector formatting", () => {
     expect(report).toContain("no_changes: replace-thinking");
     expect(report).toContain("Duration: 16m 43s");
     expect(report).toContain("Bottleneck: codex (16m 1s)");
+    expect(report).toContain("Model usage:");
+    expect(report).toContain("- Token usage: input=100 output=25 total=125 cached_input=40 across 1 LLM call (z-ai/glm-5.2)");
+    expect(report).toContain("- Estimated audited cost: $0.004200 across 1 model/tool audit");
     expect(report).toContain("Slowest spans:");
     expect(report).toContain("- 16m 1s codex (task, failed)");
     expect(report).toContain("Timeline");
@@ -126,7 +129,71 @@ describe("run inspector formatting", () => {
     expect(formatSeconds(1234)).toBe("1.234s");
     expect(formatSeconds(63_000)).toBe("1m 3s");
   });
+
+  it("formats filtered run summary lists for aggregate debugging", () => {
+    const runs: RunSummary[] = [
+      runSummary({ runId: "run-fast", kind: "discord", status: "succeeded", durationMs: 1200, title: "hello" }),
+      runSummary({
+        runId: "run-slow",
+        kind: "codegen",
+        status: "no_changes",
+        durationMs: 900_000,
+        title: "replace thinking",
+        summary: "Agent task produced no diff.",
+        bottleneck: { name: "opencode_attempt_1", durationMs: 870_000 },
+        links: { pullRequest: "https://github.com/example/repo/pull/1" },
+        metadata: {
+          failureDiagnosis: {
+            category: "no_diff",
+            summary: "The coding agent completed but did not leave a repository diff.",
+            nextAction: "Inspect the transcript and clarify the requested file or expected behavior."
+          }
+        }
+      }),
+      runSummary({ runId: "run-failed", kind: "codegen", status: "failed", durationMs: 300_000, title: "fix codegen" })
+    ];
+
+    const report = formatRunSummaryList(runs, { kind: "codegen", sort: "slowest", limit: 2 });
+
+    expect(report).toContain("Runs (2 of 3)");
+    expect(report).toContain("Sort: slowest | Kind: codegen");
+    expect(report).toContain("Statuses: failed=1, no_changes=1");
+    expect(report).toContain("Codegen diagnoses: no_diff=1");
+    expect(report.indexOf("run-slow")).toBeLessThan(report.indexOf("run-failed"));
+    expect(report).toContain("bottleneck=opencode_attempt_1 14m 30s");
+    expect(report).toContain("pr=https://github.com/example/repo/pull/1");
+    expect(report).toContain("diagnosis=no_diff | The coding agent completed but did not leave a repository diff.");
+    expect(report).toContain("next=Inspect the transcript and clarify the requested file or expected behavior.");
+    expect(report).not.toContain("run-fast");
+  });
 });
+
+function runSummary(overrides: Partial<RunSummary>): RunSummary {
+  const now = new Date("2026-07-01T17:40:21.000Z");
+  return {
+    runId: "run-1",
+    traceId: "trace-1",
+    kind: "discord",
+    status: "succeeded",
+    title: "test run",
+    summary: null,
+    requester: "kartik",
+    guildId: "guild",
+    channelId: "channel",
+    userId: "user",
+    messageId: "message",
+    source: "process_run",
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+    durationMs: 1000,
+    currentStep: null,
+    bottleneck: null,
+    links: {},
+    metadata: {},
+    ...overrides
+  };
+}
 
 function snapshotFixture(): RunSnapshot {
   const startedAt = new Date("2026-07-01T17:40:21.000Z");
@@ -173,6 +240,19 @@ function snapshotFixture(): RunSnapshot {
         completedAt: new Date("2026-07-01T17:49:27.000Z"),
         durationMs: 480_000,
         metadata: { command: "codex exec" }
+      },
+      {
+        id: "llm-round-1",
+        source: "process",
+        name: "LLM round 1",
+        status: "succeeded",
+        startedAt: new Date("2026-07-01T17:40:21.000Z"),
+        completedAt: new Date("2026-07-01T17:40:44.000Z"),
+        durationMs: 23_000,
+        metadata: {
+          model: "z-ai/glm-5.2",
+          usage: { inputTokens: 100, outputTokens: 25, totalTokens: 125, cachedInputTokens: 40 }
+        }
       }
     ],
     events: [
@@ -195,6 +275,16 @@ function snapshotFixture(): RunSnapshot {
         createdAt: new Date("2026-07-01T17:40:45.000Z"),
         durationMs: 23_373,
         metadata: { tools: ["runCodingAgent"] }
+      },
+      {
+        id: "tool-chat",
+        source: "tool",
+        level: "info",
+        name: "chat",
+        summary: "final answer",
+        createdAt: new Date("2026-07-01T17:40:46.000Z"),
+        durationMs: null,
+        metadata: { model: "z-ai/glm-5.2", estimatedCostUsd: 0.0042 }
       }
     ],
     artifacts: [

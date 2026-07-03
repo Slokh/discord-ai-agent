@@ -411,7 +411,8 @@ describe("run console timeline", () => {
       runArtifact({ artifactId: "prompt-1", kind: "prompt", name: "Codex app-server prompt", createdAt: atMs(61_990), metadata: { attempt: 1 } }),
       runArtifact({ artifactId: "transcript-1", kind: "command_log", name: "Codex app-server attempt 1 transcript", createdAt: atMs(152_120) }),
       runArtifact({ artifactId: "prompt-2", kind: "prompt", name: "Codex app-server recovery prompt 2", createdAt: atMs(152_190), metadata: { attempt: 2 } }),
-      runArtifact({ artifactId: "transcript-2", kind: "command_log", name: "Codex app-server attempt 2 transcript", createdAt: atMs(212_300) })
+      runArtifact({ artifactId: "transcript-2", kind: "command_log", name: "Codex app-server attempt 2 transcript", createdAt: atMs(212_300) }),
+      runArtifact({ artifactId: "diagnosis", kind: "diagnostic", name: "Codegen failure diagnosis", createdAt: atMs(213_590), preview: "Codex finished but left the repository with no code diff." })
     ];
 
     const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts }), { events, spans, startedAt: atMs(0) });
@@ -444,6 +445,9 @@ describe("run console timeline", () => {
       "Model started reasoning",
       "Attempt ended with no diff",
       "Codex app-server attempt 1 transcript"
+    ]);
+    expect(trace?.groups.find((group) => timelineTitleText(group.parent) === "No PR opened")?.children.map((child) => timelineTitleText(child))).toEqual([
+      "Codegen failure diagnosis"
     ]);
     expect(trace?.durationMs).toBe(208_618);
     expect(trace?.slowest).toEqual({ name: "Codex attempt 1", durationMs: 90_101 });

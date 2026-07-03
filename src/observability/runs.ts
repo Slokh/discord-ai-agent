@@ -477,6 +477,11 @@ export function diagnosticsForRun(run: RunSummary, spans: RunSpan[], events: Run
 function codegenDiagnosticsForRun(run: RunSummary, events: RunEvent[]) {
   if (run.kind !== "codegen") return [];
   const diagnostics: string[] = [];
+  const failureDiagnosis = codegenFailureDiagnosisFromMetadata(run.metadata.failureDiagnosis);
+  if (failureDiagnosis) {
+    diagnostics.push(`Failure diagnosis: ${failureDiagnosis.summary}`);
+    if (failureDiagnosis.nextAction) diagnostics.push(`Suggested next action: ${failureDiagnosis.nextAction}`);
+  }
   const firstDiff = [...events].reverse().find((event) => {
     const step = eventMetadataStep(event);
     return step === "codex_first_diff" || step === "codex_app_server_first_diff" || step === "opencode_first_diff" || step === "opencode_first_edit";
@@ -493,6 +498,15 @@ function codegenDiagnosticsForRun(run: RunSummary, events: RunEvent[]) {
     diagnostics.push(`First visible edit appeared${durationMs == null ? "" : ` after ${formatDuration(durationMs)}`}.`);
   }
   return diagnostics;
+}
+
+function codegenFailureDiagnosisFromMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const summary = typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : null;
+  if (!summary) return null;
+  const nextAction = typeof record.nextAction === "string" && record.nextAction.trim() ? record.nextAction.trim() : null;
+  return { summary, nextAction };
 }
 
 function eventMetadataStep(event: RunEvent) {

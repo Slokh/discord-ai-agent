@@ -8,6 +8,7 @@ coverage/
 .DS_Store
 *.log
 .discord-ai-agent/
+.eval-runs/
 .terraform/
 terraform.tfstate
 terraform.tfstate.*

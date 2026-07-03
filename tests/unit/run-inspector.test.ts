@@ -12,6 +12,9 @@ describe("run inspector formatting", () => {
     expect(report).toContain("no_changes: replace-thinking");
     expect(report).toContain("Duration: 16m 43s");
     expect(report).toContain("Bottleneck: codex (16m 1s)");
+    expect(report).toContain("Model usage:");
+    expect(report).toContain("- Token usage: input=100 output=25 total=125 cached_input=40 across 1 LLM call (z-ai/glm-5.2)");
+    expect(report).toContain("- Estimated audited cost: $0.004200 across 1 model/tool audit");
     expect(report).toContain("Slowest spans:");
     expect(report).toContain("- 16m 1s codex (task, failed)");
     expect(report).toContain("Timeline");
@@ -226,6 +229,19 @@ function snapshotFixture(): RunSnapshot {
         completedAt: new Date("2026-07-01T17:49:27.000Z"),
         durationMs: 480_000,
         metadata: { command: "codex exec" }
+      },
+      {
+        id: "llm-round-1",
+        source: "process",
+        name: "LLM round 1",
+        status: "succeeded",
+        startedAt: new Date("2026-07-01T17:40:21.000Z"),
+        completedAt: new Date("2026-07-01T17:40:44.000Z"),
+        durationMs: 23_000,
+        metadata: {
+          model: "z-ai/glm-5.2",
+          usage: { inputTokens: 100, outputTokens: 25, totalTokens: 125, cachedInputTokens: 40 }
+        }
       }
     ],
     events: [
@@ -248,6 +264,16 @@ function snapshotFixture(): RunSnapshot {
         createdAt: new Date("2026-07-01T17:40:45.000Z"),
         durationMs: 23_373,
         metadata: { tools: ["runCodingAgent"] }
+      },
+      {
+        id: "tool-chat",
+        source: "tool",
+        level: "info",
+        name: "chat",
+        summary: "final answer",
+        createdAt: new Date("2026-07-01T17:40:46.000Z"),
+        durationMs: null,
+        metadata: { model: "z-ai/glm-5.2", estimatedCostUsd: 0.0042 }
       }
     ],
     artifacts: [

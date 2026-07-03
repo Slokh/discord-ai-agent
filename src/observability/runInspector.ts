@@ -80,6 +80,13 @@ export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectio
     for (const diagnostic of snapshot.diagnostics) lines.push(`- ${diagnostic}`);
   }
 
+  const modelUsage = formatModelUsage(snapshot);
+  if (modelUsage.length > 0) {
+    lines.push("");
+    lines.push("Model usage:");
+    lines.push(...modelUsage);
+  }
+
   const slowestSpans = [...snapshot.spans]
     .filter((span) => span.durationMs != null)
     .sort((left, right) => (right.durationMs ?? 0) - (left.durationMs ?? 0))
@@ -132,6 +139,72 @@ function compareRunSummaries(left: RunSummary, right: RunSummary, sort: NonNulla
   if (sort === "slowest") return (right.durationMs ?? -1) - (left.durationMs ?? -1);
   if (sort === "started") return right.startedAt.getTime() - left.startedAt.getTime();
   return right.updatedAt.getTime() - left.updatedAt.getTime();
+}
+
+function formatModelUsage(snapshot: RunSnapshot) {
+  const usageSources = snapshot.spans.filter((span) => usageFromMetadata(span.metadata));
+  const fallbackUsageSources =
+    usageSources.length > 0
+      ? []
+      : snapshot.events.filter((event) => event.name === "agent.model.round.complete" && usageFromMetadata(event.metadata));
+  const usageRows = [...usageSources, ...fallbackUsageSources].map((item) => ({
+    model: stringFromUnknown(item.metadata.model) ?? "unknown",
+    usage: usageFromMetadata(item.metadata)!
+  }));
+  const costRows = snapshot.events
+    .filter((event) => event.source === "tool")
+    .map((event) => ({
+      model: stringFromUnknown(event.metadata.model) ?? "unknown",
+      cost: numberFromUnknown(event.metadata.estimatedCostUsd)
+    }))
+    .filter((row): row is { model: string; cost: number } => row.cost != null);
+
+  if (usageRows.length === 0 && costRows.length === 0) return [];
+
+  const lines: string[] = [];
+  if (usageRows.length > 0) {
+    const totals = usageRows.reduce(
+      (sum, row) => ({
+        inputTokens: sum.inputTokens + (row.usage.inputTokens ?? 0),
+        outputTokens: sum.outputTokens + (row.usage.outputTokens ?? 0),
+        totalTokens: sum.totalTokens + (row.usage.totalTokens ?? 0),
+        reasoningTokens: sum.reasoningTokens + (row.usage.reasoningTokens ?? 0),
+        cachedInputTokens: sum.cachedInputTokens + (row.usage.cachedInputTokens ?? 0)
+      }),
+      { inputTokens: 0, outputTokens: 0, totalTokens: 0, reasoningTokens: 0, cachedInputTokens: 0 }
+    );
+    const modelList = [...new Set(usageRows.map((row) => row.model))].join(", ");
+    const tokenParts = [
+      totals.inputTokens > 0 ? `input=${totals.inputTokens}` : null,
+      totals.outputTokens > 0 ? `output=${totals.outputTokens}` : null,
+      totals.totalTokens > 0 ? `total=${totals.totalTokens}` : null,
+      totals.reasoningTokens > 0 ? `reasoning=${totals.reasoningTokens}` : null,
+      totals.cachedInputTokens > 0 ? `cached_input=${totals.cachedInputTokens}` : null
+    ].filter(Boolean);
+    lines.push(`- Token usage: ${tokenParts.join(" ") || "unknown"} across ${usageRows.length} LLM ${usageRows.length === 1 ? "call" : "calls"} (${modelList})`);
+  }
+  if (costRows.length > 0) {
+    const total = costRows.reduce((sum, row) => sum + row.cost, 0);
+    const byModel = new Map<string, number>();
+    for (const row of costRows) byModel.set(row.model, (byModel.get(row.model) ?? 0) + row.cost);
+    lines.push(`- Estimated audited cost: ${formatUsd(total)} across ${costRows.length} model/tool ${costRows.length === 1 ? "audit" : "audits"}`);
+    lines.push(`- Cost by model: ${[...byModel.entries()].map(([model, cost]) => `${model}=${formatUsd(cost)}`).join(", ")}`);
+  }
+  return lines;
+}
+
+function usageFromMetadata(metadata: Record<string, unknown>) {
+  const usage = metadata.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+  const record = usage as Record<string, unknown>;
+  const normalized = {
+    inputTokens: numberFromUnknown(record.inputTokens),
+    outputTokens: numberFromUnknown(record.outputTokens),
+    totalTokens: numberFromUnknown(record.totalTokens),
+    reasoningTokens: numberFromUnknown(record.reasoningTokens),
+    cachedInputTokens: numberFromUnknown(record.cachedInputTokens)
+  };
+  return Object.values(normalized).some((value) => value != null) ? normalized : null;
 }
 
 export function formatRunArtifacts(artifacts: ProcessRunArtifactContent[]): string {
@@ -272,6 +345,15 @@ function clampInteger(value: number, min: number, max: number) {
 
 function stringFromUnknown(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberFromUnknown(value: unknown) {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatUsd(value: number) {
+  return `$${value.toFixed(value < 0.01 ? 6 : 4)}`;
 }
 
 function formatOpenCodeArtifactDiagnostics(artifact: ProcessRunArtifactContent) {

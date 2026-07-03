@@ -56,6 +56,8 @@ npm run runs:inspect -- <run-id-or-discord-message-link> --terminal
 npm run codegen:status
 ```
 
+`runs:inspect` includes model token usage when providers return usage metadata and estimated spend from audited model/tool calls. Use it before digging through raw artifacts when debugging latency or cost.
+
 ## Change Guidance
 
 - Keep the Discord UX commandless: users should keep writing normal `@ai ...` prompts.

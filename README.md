@@ -142,7 +142,7 @@ npm run prompt -- --no-memory "what can you do?"
 npm run eval -- --dry-run
 ```
 
-Use [docs/evals.md](docs/evals.md) to run regression prompts before and after retrieval, tool, prompt, or codegen changes.
+Use [docs/evals.md](docs/evals.md) to run regression prompts before and after retrieval, tool, prompt, or codegen changes. Use [docs/tool-design.md](docs/tool-design.md) when changing model-facing tools.
 
 ## Code Updates
 
@@ -179,6 +179,7 @@ For a local Kubernetes full-loop test, see [docs/local-kubernetes.md](docs/local
 For production setup, see [docs/eks-deploy.md](docs/eks-deploy.md).
 For the cache-first runtime, durable codegen session API, and warm-sandbox direction, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
 For a concise coding-agent map of the repo, see [docs/architecture.md](docs/architecture.md).
+For the current improvement roadmap, see [docs/improvement-plan.md](docs/improvement-plan.md).
 For a reference AWS baseline, see [deploy/terraform/aws](deploy/terraform/aws).
 
 ## Configuration

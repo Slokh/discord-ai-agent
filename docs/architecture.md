@@ -52,7 +52,10 @@ Postgres is the durable source of truth for Discord messages, embeddings, skills
 
 - Keep the Discord UX commandless: users should keep writing normal `@ai ...` prompts.
 - Prefer improving model-facing tool descriptions, schemas, and outputs over hidden regex branches.
+- Keep model-facing tools aligned with the taxonomy/output contracts in `docs/tool-design.md`.
 - Keep retrieval permission-aware.
 - Keep private server data out of committed fixtures/docs/evals.
 - For codegen reliability, improve context packaging, observable progress, and failure classification before changing harnesses.
 - For answer quality, add or update eval prompts before tuning prompts/tools.
+
+For the broader implementation roadmap, see `docs/improvement-plan.md`.

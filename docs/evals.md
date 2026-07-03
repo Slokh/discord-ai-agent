@@ -73,4 +73,4 @@ Each result includes:
 - deterministic assertion failures
 - latency
 
-Use failed evals to decide whether the next change should target tool descriptions, tool output shape, retrieval ranking, prompt context, codegen context packaging, or observability.
+Use failed evals to decide whether the next change should target tool descriptions, tool output shape, retrieval ranking, prompt context, codegen context packaging, or observability. See `docs/tool-design.md` for the tool contract rules that should guide those changes.

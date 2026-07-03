@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildPromptCommand, evaluatePromptAssertions, evidenceFromTrace, extractPromptJson, filterPrompts, parseEvalArgs, type EvalPrompt } from "../../scripts/eval.js";
+import {
+  buildPromptCommand,
+  evaluatePromptAssertions,
+  evidenceFromTrace,
+  extractPromptJson,
+  filterPrompts,
+  formatEvalSummary,
+  parseEvalArgs,
+  type EvalPrompt,
+  type EvalRunReport
+} from "../../scripts/eval.js";
 
 const basePrompt: EvalPrompt = {
   id: "history-job",
@@ -133,5 +143,41 @@ describe("eval runner", () => {
       "answer contained forbidden text: Sources:",
       "latency 20ms exceeded 10ms"
     ]);
+  });
+
+  it("formats actionable eval summaries with requested, local, and audited tool evidence", () => {
+    const report: EvalRunReport = {
+      generatedAt: "2026-07-03T00:00:00.000Z",
+      durationMs: 1234,
+      totals: { passed: 0, failed: 1, error: 0, skipped: 0, total: 1 },
+      results: [
+        {
+          id: "web-current-external-fact",
+          category: "web",
+          prompt: "what is the next world cup match?",
+          status: "failed",
+          durationMs: 456,
+          runId: "run-1",
+          traceId: "trace-1",
+          answer: "I only found Discord history.",
+          evidence: {
+            requestedTools: ["searchDiscordHistory"],
+            selectedTools: ["searchDiscordHistory"],
+            auditedTools: ["searchDiscordHistory"],
+            traceEventCount: 2,
+            toolAuditCount: 1
+          },
+          failures: ["expected requested tool openrouter:web_search was not observed"]
+        }
+      ]
+    };
+
+    expect(formatEvalSummary(report, ".eval-runs/example/results.json")).toContain(
+      "FAILED web-current-external-fact (web; 0.456s; requested: searchDiscordHistory; local: searchDiscordHistory; audited: searchDiscordHistory; run: run-1; trace: trace-1)"
+    );
+    expect(formatEvalSummary(report, ".eval-runs/example/results.json")).toContain(
+      "expected requested tool openrouter:web_search was not observed"
+    );
+    expect(formatEvalSummary(report, ".eval-runs/example/results.json")).toContain("answer: I only found Discord history.");
   });
 });

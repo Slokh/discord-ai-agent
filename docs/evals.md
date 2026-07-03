@@ -75,4 +75,6 @@ Each result includes:
 - deterministic assertion failures
 - latency
 
+The Markdown summary includes requested, selected local, and audited tool evidence inline for each prompt. Failed/error cases also include a short answer or error preview so tool-choice failures are visible without opening `results.json` first.
+
 Use failed evals to decide whether the next change should target tool descriptions, tool output shape, retrieval ranking, prompt context, codegen context packaging, or observability. See `docs/tool-design.md` for the tool contract rules that should guide those changes.

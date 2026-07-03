@@ -436,7 +436,7 @@ async function writeEvalReport(report: EvalRunReport, outputDir: string) {
   return runDir;
 }
 
-function formatEvalSummary(report: EvalRunReport, outputPath: string) {
+export function formatEvalSummary(report: EvalRunReport, outputPath: string) {
   const lines = [
     `Eval results: ${report.totals.passed}/${report.totals.total} passed (${report.totals.failed} failed, ${report.totals.error} errors)`,
     `Duration: ${(report.durationMs / 1000).toFixed(3)}s`,
@@ -444,11 +444,32 @@ function formatEvalSummary(report: EvalRunReport, outputPath: string) {
     ""
   ];
   for (const result of report.results) {
-    const tools = result.evidence.selectedTools.length ? result.evidence.selectedTools.join(", ") : "none";
-    lines.push(`- ${result.status.toUpperCase()} ${result.id} (${result.category}, ${(result.durationMs / 1000).toFixed(3)}s, tools: ${tools})`);
+    const metadata = [
+      result.category,
+      `${(result.durationMs / 1000).toFixed(3)}s`,
+      `requested: ${compactList(result.evidence.requestedTools)}`,
+      `local: ${compactList(result.evidence.selectedTools)}`,
+      `audited: ${compactList(result.evidence.auditedTools)}`
+    ];
+    if (result.runId) metadata.push(`run: ${result.runId}`);
+    if (result.traceId && result.traceId !== result.runId) metadata.push(`trace: ${result.traceId}`);
+    lines.push(`- ${result.status.toUpperCase()} ${result.id} (${metadata.join("; ")})`);
     for (const failure of result.failures) lines.push(`  - ${failure}`);
+    if ((result.status === "failed" || result.status === "error") && result.answer.trim()) {
+      lines.push(`  - answer: ${previewForSummary(result.answer)}`);
+    }
+    if (result.error) lines.push(`  - error: ${previewForSummary(result.error)}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+function compactList(values: string[]) {
+  return values.length ? values.join(", ") : "none";
+}
+
+function previewForSummary(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
 }
 
 function countTotals(results: EvalCaseResult[]): EvalRunReport["totals"] {

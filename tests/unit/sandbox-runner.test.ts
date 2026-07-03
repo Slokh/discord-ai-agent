@@ -18,12 +18,14 @@ import {
   codeUpdatePullRequestTitle,
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
+  diagnoseCodegenFailure,
   dependencyCacheKey,
   fetchOpenCodeHealth,
   openCodeConfigJson,
   openCodeModelId,
   openCodeRunArgs,
   openCodeServeArgs,
+  renderCodegenFailureDiagnosis,
   renderCodegenContextPack,
   repairWorktreeRemoteForBranchPush
 } from "../../src/execution/sandboxRunner.js";
@@ -198,6 +200,41 @@ describe("sandboxRunner", () => {
     expect(body).not.toContain("## Context");
     expect(body).not.toContain("Task ID");
     expect(body).not.toContain("Codegen model");
+  });
+
+  it("classifies terminal codegen failures with actionable next steps", () => {
+    const noDiff = diagnoseCodegenFailure({
+      error: new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."),
+      timings: { repo: 120, opencode: 20_000, total: 21_000 },
+      harness: "opencode"
+    });
+
+    expect(noDiff).toEqual(
+      expect.objectContaining({
+        category: "no_diff",
+        status: "no_changes",
+        failedPhase: "opencode",
+        slowestPhase: { name: "opencode", durationMs: 20_000 }
+      })
+    );
+    expect(noDiff.summary).toContain("OpenCode finished but left the repository with no code diff");
+    expect(noDiff.nextAction).toContain("request context");
+
+    const scan = diagnoseCodegenFailure({
+      error: new Error("Release scan failed after agent task; refusing to push generated changes."),
+      timings: { repo: 100, scan: 2500, total: 3000 },
+      harness: "codex"
+    });
+
+    expect(scan).toEqual(
+      expect.objectContaining({
+        category: "release_scan",
+        status: "failed",
+        failedPhase: "scan"
+      })
+    );
+    expect(renderCodegenFailureDiagnosis(scan)).toContain("Category: release_scan");
+    expect(renderCodegenFailureDiagnosis(scan)).toContain("- scan: 2.5s");
   });
 
   it("builds a concise codegen context pack from the repository guide and project map", async () => {

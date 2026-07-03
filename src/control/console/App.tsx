@@ -1757,7 +1757,8 @@ export function codegenTimelineTrace(
         title: snapshot.run.status === "no_changes" ? "No PR opened" : "Run completed",
         kind: completed.level === "error" ? "error" : "response",
         summary: completed.summary ?? snapshot.run.summary ?? ""
-      })
+      }),
+      artifacts(isCodegenFailureDiagnosisArtifact)
     );
   }
 
@@ -1903,6 +1904,10 @@ function isCodegenAttemptArtifact(artifact: RunArtifact, attempt: number) {
   if (step === `opencode attempt ${attempt}` || step === `codex attempt ${attempt}` || step === `codex app server attempt ${attempt}`) return true;
   const name = normalizedTimelineName(artifact.name);
   return name.includes(`attempt ${attempt} transcript`) || name.includes(`opencode attempt ${attempt} command log`);
+}
+
+function isCodegenFailureDiagnosisArtifact(artifact: RunArtifact) {
+  return artifact.kind === "diagnostic" && /codegen failure diagnosis/i.test(artifact.name);
 }
 
 function timelineStepFromCodegenEvent(

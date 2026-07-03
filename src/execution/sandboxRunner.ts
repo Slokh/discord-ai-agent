@@ -45,7 +45,7 @@ const CODE_UPDATE_BRANCH_STOP_WORDS = new Set([
 ]);
 const DEPENDENCY_CACHE_MODE = "devdeps-v1";
 
-type CodegenHarness = "codex" | "opencode";
+export type CodegenHarness = "codex" | "opencode";
 
 type SandboxEnv = {
   taskId: string;
@@ -67,7 +67,7 @@ type SandboxEnv = {
   sandboxStartedAtMs: number | null;
 };
 
-type TaskTimings = Record<string, number>;
+export type TaskTimings = Record<string, number>;
 
 type CacheSummary = {
   repo?: "hit" | "miss";
@@ -166,6 +166,27 @@ type CommandResult = {
   durationMs: number;
 };
 
+type CodegenFailureCategory =
+  | "no_diff"
+  | "harness_startup"
+  | "release_scan"
+  | "git_push"
+  | "github_pr"
+  | "dependency_install"
+  | "command_failed"
+  | "unknown";
+
+export type CodegenFailureDiagnosis = {
+  category: CodegenFailureCategory;
+  status: "failed" | "no_changes";
+  summary: string;
+  nextAction: string;
+  error: string;
+  failedPhase: string | null;
+  slowestPhase: { name: string; durationMs: number } | null;
+  timingsMs: TaskTimings;
+};
+
 async function main() {
   const env = loadSandboxEnv();
   const timings: TaskTimings = {};
@@ -183,14 +204,164 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     timings.total = Date.now() - totalStartedAt;
+    const diagnosis = diagnoseCodegenFailure({ error, timings, harness: env.codegenHarness });
+    await recordCodegenFailureDiagnosis(env, diagnosis).catch((diagnosisError) => {
+      console.error("Failed to record codegen failure diagnosis", diagnosisError);
+    });
     await complete(env, {
-      status: message.includes("produced no diff") ? "no_changes" : "failed",
+      status: diagnosis.status,
       error: message,
-      metadata: { timingsMs: timings }
+      metadata: { timingsMs: timings, failureDiagnosis: diagnosis }
     }).catch((callbackError) => {
       console.error("Failed to post terminal task callback", callbackError);
     });
     throw error;
+  }
+}
+
+export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTimings; harness?: CodegenHarness }): CodegenFailureDiagnosis {
+  const error = input.error instanceof Error ? input.error : new Error(String(input.error));
+  const message = error.message;
+  const failedPhase = inferFailedCodegenPhase(message, input.timings, input.harness);
+  const slowestPhase = slowestCodegenPhase(input.timings);
+  const category = classifyCodegenFailure(message, error.name, failedPhase, input.harness);
+  const status = category === "no_diff" ? "no_changes" : "failed";
+  const summary = codegenFailureSummary(category, input.harness);
+  return {
+    category,
+    status,
+    summary,
+    nextAction: codegenFailureNextAction(category, failedPhase),
+    error: message,
+    failedPhase,
+    slowestPhase,
+    timingsMs: { ...input.timings }
+  };
+}
+
+export function renderCodegenFailureDiagnosis(diagnosis: CodegenFailureDiagnosis) {
+  const lines = [
+    "# Codegen Failure Diagnosis",
+    "",
+    `Category: ${diagnosis.category}`,
+    `Status: ${diagnosis.status}`,
+    `Summary: ${diagnosis.summary}`,
+    `Next action: ${diagnosis.nextAction}`,
+    `Failed phase: ${diagnosis.failedPhase ?? "unknown"}`,
+    `Slowest phase: ${diagnosis.slowestPhase ? `${diagnosis.slowestPhase.name} (${formatDuration(diagnosis.slowestPhase.durationMs)})` : "unknown"}`,
+    "",
+    "## Error",
+    "",
+    diagnosis.error,
+    "",
+    "## Timings",
+    ""
+  ];
+  const timings = Object.entries(diagnosis.timingsMs).filter(([, value]) => Number.isFinite(value));
+  if (timings.length === 0) {
+    lines.push("- none recorded");
+  } else {
+    for (const [phase, durationMs] of timings) lines.push(`- ${phase}: ${formatDuration(durationMs)}`);
+  }
+  return lines.join("\n");
+}
+
+async function recordCodegenFailureDiagnosis(env: SandboxEnv, diagnosis: CodegenFailureDiagnosis) {
+  await progress(env, "failure_diagnosis", diagnosis.summary, {
+    category: diagnosis.category,
+    status: diagnosis.status,
+    failedPhase: diagnosis.failedPhase,
+    slowestPhase: diagnosis.slowestPhase,
+    nextAction: diagnosis.nextAction
+  }).catch(() => undefined);
+  await recordArtifact(env, {
+    kind: "diagnostic",
+    name: "Codegen failure diagnosis",
+    content: renderCodegenFailureDiagnosis(diagnosis),
+    contentType: "text/markdown",
+    metadata: {
+      category: diagnosis.category,
+      status: diagnosis.status,
+      failedPhase: diagnosis.failedPhase,
+      slowestPhase: diagnosis.slowestPhase
+    }
+  });
+}
+
+function classifyCodegenFailure(message: string, errorName: string, failedPhase: string | null, harness: CodegenHarness | undefined): CodegenFailureCategory {
+  const text = message.toLowerCase();
+  if (errorName === "CodegenNoDiffError" || text.includes("produced no diff")) return "no_diff";
+  if (errorName === "CodexAppServerStartupError" || text.includes("failed before starting a usable model turn") || text.includes("health probe timed out")) {
+    return "harness_startup";
+  }
+  if (text.includes("release scan failed") || failedPhase === "scan") return "release_scan";
+  if (text.includes("git push") || failedPhase === "push") return "git_push";
+  if (text.includes("pull request") || text.includes("pulls.create") || failedPhase === "pr") return "github_pr";
+  if (text.includes("npm ci") || text.includes("npm install") || failedPhase === "dependencies") return "dependency_install";
+  if (text.includes("codex") || text.includes("opencode") || harness) return "command_failed";
+  return "unknown";
+}
+
+function inferFailedCodegenPhase(message: string, timings: TaskTimings, harness: CodegenHarness | undefined) {
+  const text = message.toLowerCase();
+  if (text.includes("release scan")) return "scan";
+  if (text.includes("git push")) return "push";
+  if (text.includes("pull request")) return "pr";
+  if (text.includes("npm ci") || text.includes("npm install")) return "dependencies";
+  if (text.includes("opencode")) return "opencode";
+  if (text.includes("codex")) return harness === "opencode" ? "opencode" : "codex";
+  const phases = Object.entries(timings).filter(([phase, durationMs]) => phase !== "total" && Number.isFinite(durationMs));
+  return phases.at(-1)?.[0] ?? null;
+}
+
+function slowestCodegenPhase(timings: TaskTimings) {
+  const phases = Object.entries(timings)
+    .filter(([phase, durationMs]) => phase !== "total" && Number.isFinite(durationMs))
+    .map(([name, durationMs]) => ({ name, durationMs }));
+  if (phases.length === 0) return null;
+  return phases.reduce((slowest, phase) => (phase.durationMs > slowest.durationMs ? phase : slowest), phases[0]!);
+}
+
+function codegenFailureSummary(category: CodegenFailureCategory, harness: CodegenHarness | undefined) {
+  const harnessName = harness ? codegenHarnessDisplayName(harness) : "The coding harness";
+  switch (category) {
+    case "no_diff":
+      return `${harnessName} finished but left the repository with no code diff, so no PR was opened.`;
+    case "harness_startup":
+      return `${harnessName} failed before a usable model turn started.`;
+    case "release_scan":
+      return "The agent produced changes, but the release scan failed before the branch was pushed.";
+    case "git_push":
+      return "The agent produced changes, but pushing the generated branch to GitHub failed.";
+    case "github_pr":
+      return "The agent produced changes, but opening or updating the GitHub pull request failed.";
+    case "dependency_install":
+      return "Dependency preparation failed before the coding harness could complete.";
+    case "command_failed":
+      return `${harnessName} or one of its sandbox commands failed.`;
+    case "unknown":
+      return "The code-update task failed without a recognized failure category.";
+  }
+}
+
+function codegenFailureNextAction(category: CodegenFailureCategory, failedPhase: string | null) {
+  switch (category) {
+    case "no_diff":
+      return "Inspect the harness transcript and request context; improve context packaging or the coding prompt if the task should have produced a change.";
+    case "harness_startup":
+      return "Inspect harness startup logs, model/provider configuration, and sandbox tool availability.";
+    case "release_scan":
+      return "Inspect the release scan command log and either fix the generated change or the scan false positive.";
+    case "git_push":
+      return "Inspect git authentication, branch naming, remote configuration, and repository permissions.";
+    case "github_pr":
+      return "Inspect GitHub API errors, base branch configuration, and pull request permissions.";
+    case "dependency_install":
+      return "Inspect dependency command logs and cache state; verify the sandbox includes dev dependencies.";
+    case "command_failed":
+      return `Inspect the ${failedPhase ?? "latest"} command log and harness transcript for the first non-zero exit or thrown error.`;
+    case "unknown":
+      return "Inspect the terminal command log and failure artifact, then add a classifier if this is a recurring failure mode.";
   }
 }
 

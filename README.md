@@ -151,8 +151,8 @@ When someone asks `@ai update yourself to ...`, the bot creates a durable `agent
 1. Refreshes a cached bare clone of the configured GitHub repo.
 2. Creates a per-task worktree and branch.
 3. Restores dependencies from a package manifest/lockfile-keyed cache, or seeds that cache with `npm ci`.
-4. Runs Codex with the requested change.
-5. Refreshes dependencies again if Codex changed `package.json` or `package-lock.json`.
+4. Runs the configured coding harness, OpenCode by default or Codex when selected, with the requested change.
+5. Refreshes dependencies again if the coding harness changed `package.json` or `package-lock.json`.
 6. Runs verification and release scanning.
 7. Pushes a branch.
 8. Opens a GitHub PR only if there is a real diff.
@@ -161,7 +161,7 @@ When someone asks `@ai update yourself to ...`, the bot creates a durable `agent
 The original Discord reply is edited with progress and the final PR link plus compact timing/cache details.
 If a sandbox crashes, disappears, or exits without sending its terminal callback, the worker reconciler marks the task failed in Postgres and later cleans up the sandbox Job, Secret, and ConfigMap.
 
-The sandbox also installs ephemeral helper CLIs on Codex's `PATH`:
+The sandbox also installs ephemeral helper CLIs on the coding harness `PATH`:
 
 - `agent-task-context` prints the task/repo/cache context.
 - `agent-cache-info` prints cache entry counts from inside the sandbox.
@@ -179,6 +179,7 @@ For a local Kubernetes full-loop test, see [docs/local-kubernetes.md](docs/local
 For production setup, see [docs/eks-deploy.md](docs/eks-deploy.md).
 For the cache-first runtime, durable codegen session API, and warm-sandbox direction, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
 For a concise coding-agent map of the repo, see [docs/architecture.md](docs/architecture.md).
+For source ownership maps used by coding agents, start with [src/README.md](src/README.md) and the nearest folder README.
 For the current improvement roadmap, see [docs/improvement-plan.md](docs/improvement-plan.md).
 For a reference AWS baseline, see [deploy/terraform/aws](deploy/terraform/aws).
 

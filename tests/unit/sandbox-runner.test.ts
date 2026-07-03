@@ -409,7 +409,7 @@ describe("sandboxRunner", () => {
     expect(recovery).toContain("looked at task notifications");
   });
 
-  it("guides Codex toward lifecycle-first implementation before broad exploration", () => {
+  it("guides the coding agent toward lifecycle-first implementation before broad exploration", () => {
     const prompt = codeUpdatePrompt({
       taskId: "task-1",
       requestedBy: "kartik",
@@ -495,12 +495,41 @@ describe("sandboxRunner", () => {
           expect.stringContaining("task notifier"),
           expect.stringContaining("Terminal task rendering")
         ])
-      );
+    );
     expect(contextPack.suggestedFiles?.map((file) => file.path)).toEqual(
-      expect.arrayContaining(["src/discord/taskNotifications.ts", "src/tools/coreTools.ts"])
+      expect.arrayContaining(["src/discord/taskNotifications.ts", "src/tools/agentTaskTools.ts"])
     );
     expect(contextPack.firstInvariant).toContain("without leaving stale loading/progress text after completion");
     expect(contextPack.suggestedFirstEdit).toContain("focused task notification or repository test");
+  });
+
+  it("routes Discord knowledge/indexing changes to storage owners instead of generated tool-name anchors", async () => {
+    const taskRequest = [
+      "Fully exclude channel ID 1172353113471074314 (#trivia-sucks) from all current and future knowledge.",
+      "Remove indexed messages, embeddings, message index, search index, stats, everything.",
+      "Ensure searchDiscordHistory, getRecentDiscordMessages, getDiscordStats, summarizeDiscordHistory, getDiscordChannelTopics, searchDiscordAttachments, and any other retrieval tool filters out this channel."
+    ].join(" ");
+
+    const contextPack = await buildCodegenContextPack(process.cwd(), taskRequest);
+    const renderedContext = renderCodegenContextPack(contextPack);
+
+    expect(contextPack.focus).toBe("discord_knowledge_lifecycle");
+    expect(contextPack.requestAnchors).not.toEqual(expect.arrayContaining(["searchDiscordHistory", "getDiscordStats", "searchDiscordAttachments"]));
+    expect(contextPack.suggestedFiles?.map((file) => file.path)).toEqual(
+      expect.arrayContaining(["src/db/repositories.ts", "src/discord/crawler.ts", "src/discord/messagePersistence.ts"])
+    );
+    expect(contextPack.suggestedFiles?.map((file) => file.path).slice(0, 3)).not.toContain("src/tools/registry.ts");
+    expect(renderedContext).toContain("Focus: discord_knowledge_lifecycle");
+    expect(renderedContext).toContain("Do not start in the tool registry");
+  });
+
+  it("keeps tool names as anchors when the request is actually about tool schemas", async () => {
+    const taskRequest = "Improve the tool schema and tool description for searchDiscordHistory so the model chooses the right tool arguments.";
+
+    const contextPack = await buildCodegenContextPack(process.cwd(), taskRequest);
+
+    expect(contextPack.focus).toBe("model_tool_routing");
+    expect(contextPack.requestAnchors).toEqual(expect.arrayContaining(["searchDiscordHistory"]));
   });
 
   it("prioritizes exact request anchors before broad lifecycle guesses", async () => {

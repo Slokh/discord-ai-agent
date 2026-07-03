@@ -1,6 +1,6 @@
 import { AttachmentBuilder, type Client, type Message } from "discord.js";
 import type { Logger } from "pino";
-import { cleanResponse } from "../tools/coreTools.js";
+import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentFile } from "../tools/types.js";
 
 export const DEFAULT_DISCORD_LOADING_REACTION = "<a:loading:1521299407214084337>";

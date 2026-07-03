@@ -24,7 +24,7 @@ export async function renderRunConsolePage() {
   <main>
     <h1>Agent Runs</h1>
     <p>The console frontend has not been built yet.</p>
-    <p>Run <code>npm run console:build</code> for production assets or <code>npm run console:dev</code> while iterating locally.</p>
+    <p>Run <code>npm run console:build</code> for production assets, <code>npm run console:dev:live</code> for real run data, or <code>npm run console:dev</code> for fixtures.</p>
   </main>
 </body>
 </html>`;

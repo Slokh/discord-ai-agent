@@ -1,6 +1,5 @@
 import {
   answerFromHistory,
-  cleanResponse,
   createSkillFromRequest,
   createAgentUpdateFromRequest,
   cancelAgentTask,
@@ -25,6 +24,7 @@ import {
   summarizeCurrentThread,
   undoConversationTurns
 } from "../tools/coreTools.js";
+import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ChatMessage } from "../models/openrouter.js";
 import type { ConversationMessage, ServerOverlay } from "../db/repositories.js";
 import type { AgentFile, AgentResponse, DiscordAttachmentContext, DiscordReplyContext, ToolContext } from "../tools/types.js";

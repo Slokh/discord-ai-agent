@@ -1328,6 +1328,102 @@ button.count-chip:hover {
   min-width: 0;
 }
 
+.opencode-round-timeline {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.opencode-round-step {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.opencode-round-rail {
+  display: grid;
+  justify-content: center;
+  position: relative;
+}
+
+.opencode-round-rail::after {
+  background: var(--border);
+  bottom: -8px;
+  content: "";
+  position: absolute;
+  top: 22px;
+  width: 1px;
+}
+
+.opencode-round-step:last-child .opencode-round-rail::after {
+  display: none;
+}
+
+.opencode-round-dot {
+  background: var(--border-strong);
+  border: 2px solid var(--pane-2);
+  border-radius: 999px;
+  height: 9px;
+  margin-top: 14px;
+  width: 9px;
+  z-index: 1;
+}
+
+.opencode-round-step.message .opencode-round-dot {
+  background: var(--accent);
+}
+
+.opencode-round-step.error .opencode-round-dot {
+  background: var(--bad);
+}
+
+.opencode-round-step.tokens .opencode-round-dot {
+  background: var(--muted);
+}
+
+.opencode-round-step.active .opencode-round-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 14%, transparent);
+}
+
+.opencode-round-card {
+  margin-bottom: 8px;
+}
+
+.opencode-promoted-round .timeline-card > p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.opencode-promoted-round .timeline-card > code,
+.opencode-promoted-round .timeline-card > pre {
+  background: color-mix(in oklab, black 18%, var(--pane-3));
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: #d9dee4;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  min-width: 0;
+}
+
+.opencode-promoted-round .timeline-card > code {
+  overflow-wrap: anywhere;
+  padding: 7px 8px;
+  white-space: pre-wrap;
+}
+
+.opencode-promoted-round .timeline-card > pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 9px;
+  white-space: pre-wrap;
+}
+
 .codex-transcript-item {
   background: color-mix(in oklab, var(--pane) 28%, transparent);
   border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);

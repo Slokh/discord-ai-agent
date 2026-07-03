@@ -5,45 +5,31 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Octokit } from "@octokit/rest";
+import {
+  anchorTargetFilesFromMatches,
+  extractCodegenRequestAnchors,
+  findCodegenAnchorMatches,
+  type CodegenAnchorMatch
+} from "./codegenAnchors.js";
 import { CodexAppServerClient, providerForModel, type CodexAppServerNotification } from "./codexAppServer.js";
+import { diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
+import { selectCodegenContextRule, type CodegenContextRule } from "./codegenContextRules.js";
+import { codeUpdatePrompt, codeUpdateRecoveryPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
+import { codeUpdateBranchName, codeUpdatePullRequestBody, codeUpdatePullRequestTitle } from "./prFormatting.js";
 import { slugify } from "../util/text.js";
+
+export { codeUpdatePrompt, codeUpdateRecoveryPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
+export { diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
+export { codeUpdateBranchName, codeUpdatePullRequestBody, codeUpdatePullRequestTitle } from "./prFormatting.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const MAX_ACTIVITY_COMMAND_OUTPUT = 12_000;
-const MAX_CONTEXT_TEXT = 16_000;
 const MAX_REPO_GUIDE_EXCERPT = 3_000;
 const MAX_RECOVERY_TAIL = 10_000;
-const MAX_CODEGEN_ANCHORS = 12;
-const MAX_ANCHOR_MATCHES_PER_ANCHOR = 5;
-const MAX_ANCHOR_MATCHES_TOTAL = 30;
-const MAX_ANCHOR_TARGET_FILES = 8;
-const MAX_ANCHOR_SCAN_FILE_BYTES = 512_000;
 const STALE_WORKSPACE_MS = 6 * 60 * 60 * 1000;
 const CODEX_APP_SERVER_MAX_ATTEMPTS = 2;
 const CODEX_EXEC_FALLBACK_MAX_ATTEMPTS = 1;
 const OPENCODE_HEALTH_PROBE_TIMEOUT_MS = 1_000;
-const CODE_UPDATE_BRANCH_PREFIX = "ai";
-const CODE_UPDATE_BRANCH_SLUG_MAX_CHARS = 40;
-const CODE_UPDATE_BRANCH_SUFFIX_CHARS = 4;
-const CODE_UPDATE_BRANCH_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "as",
-  "can",
-  "for",
-  "from",
-  "in",
-  "instead",
-  "of",
-  "on",
-  "or",
-  "please",
-  "the",
-  "to",
-  "with",
-  "you"
-]);
 const DEPENDENCY_CACHE_MODE = "devdeps-v1";
 
 export type CodegenHarness = "codex" | "opencode";
@@ -101,13 +87,6 @@ export type CodegenContextPack = {
     files: string[];
     checks: string[];
   }>;
-};
-
-type CodegenAnchorMatch = {
-  anchor: string;
-  file: string;
-  line: number;
-  preview: string;
 };
 
 type CodexAttemptSummary = {
@@ -172,29 +151,6 @@ type CommandResult = {
   durationMs: number;
 };
 
-type CodegenFailureCategory =
-  | "no_first_edit"
-  | "no_diff"
-  | "harness_startup"
-  | "release_scan"
-  | "git_push"
-  | "github_pr"
-  | "dependency_install"
-  | "command_failed"
-  | "unknown";
-
-export type CodegenFailureDiagnosis = {
-  category: CodegenFailureCategory;
-  status: "failed" | "no_changes";
-  summary: string;
-  nextAction: string;
-  error: string;
-  failedPhase: string | null;
-  slowestPhase: { name: string; durationMs: number } | null;
-  timingsMs: TaskTimings;
-  attempts?: Array<Pick<CodexAttemptSummary, "attempt" | "command" | "exitCode" | "durationMs" | "producedDiff">>;
-};
-
 async function main() {
   const env = loadSandboxEnv();
   const timings: TaskTimings = {};
@@ -227,95 +183,6 @@ async function main() {
   }
 }
 
-export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTimings; harness?: CodegenHarness }): CodegenFailureDiagnosis {
-  const error = input.error instanceof Error ? input.error : new Error(String(input.error));
-  const message = error.message;
-  const attempts = codegenAttemptsFromError(error);
-  const failedPhase = inferFailedCodegenPhase(message, input.timings, input.harness);
-  const slowestPhase = slowestCodegenPhase(input.timings);
-  const category = classifyCodegenFailure(message, error.name, failedPhase, input.harness, attempts);
-  const status = category === "no_diff" || category === "no_first_edit" ? "no_changes" : "failed";
-  const summary = codegenFailureSummary(category, input.harness);
-  return {
-    category,
-    status,
-    summary,
-    nextAction: codegenFailureNextAction(category, failedPhase),
-    error: message,
-    failedPhase,
-    slowestPhase,
-    timingsMs: { ...input.timings },
-    attempts: attempts.length
-      ? attempts.map((attempt) => ({
-          attempt: attempt.attempt,
-          command: attempt.command,
-          exitCode: attempt.exitCode,
-          durationMs: attempt.durationMs,
-          producedDiff: attempt.producedDiff
-        }))
-      : undefined
-  };
-}
-
-function codegenAttemptsFromError(error: Error): CodexAttemptSummary[] {
-  if (error instanceof CodegenNoDiffError) return error.attempts;
-  const value = (error as { attempts?: unknown }).attempts;
-  if (!Array.isArray(value)) return [];
-  return value.filter(isCodexAttemptSummary);
-}
-
-function isCodexAttemptSummary(value: unknown): value is CodexAttemptSummary {
-  if (!value || typeof value !== "object") return false;
-  const attempt = value as Partial<CodexAttemptSummary>;
-  return (
-    typeof attempt.attempt === "number" &&
-    ["app-server", "exec", "resume", "opencode-run"].includes(String(attempt.command)) &&
-    typeof attempt.exitCode === "number" &&
-    typeof attempt.durationMs === "number" &&
-    typeof attempt.producedDiff === "boolean" &&
-    typeof attempt.stdoutTail === "string" &&
-    typeof attempt.stderrTail === "string"
-  );
-}
-
-export function renderCodegenFailureDiagnosis(diagnosis: CodegenFailureDiagnosis) {
-  const lines = [
-    "# Codegen Failure Diagnosis",
-    "",
-    `Category: ${diagnosis.category}`,
-    `Status: ${diagnosis.status}`,
-    `Summary: ${diagnosis.summary}`,
-    `Next action: ${diagnosis.nextAction}`,
-    `Failed phase: ${diagnosis.failedPhase ?? "unknown"}`,
-    `Slowest phase: ${diagnosis.slowestPhase ? `${diagnosis.slowestPhase.name} (${formatDuration(diagnosis.slowestPhase.durationMs)})` : "unknown"}`,
-    "",
-    "## Error",
-    "",
-    diagnosis.error,
-    "",
-    ...(diagnosis.attempts?.length
-      ? [
-          "## Attempts",
-          "",
-          ...diagnosis.attempts.map(
-            (attempt) =>
-              `- attempt ${attempt.attempt}: command=${attempt.command}, exit=${attempt.exitCode}, duration=${formatDuration(attempt.durationMs)}, producedDiff=${attempt.producedDiff}`
-          ),
-          ""
-        ]
-      : []),
-    "## Timings",
-    ""
-  ];
-  const timings = Object.entries(diagnosis.timingsMs).filter(([, value]) => Number.isFinite(value));
-  if (timings.length === 0) {
-    lines.push("- none recorded");
-  } else {
-    for (const [phase, durationMs] of timings) lines.push(`- ${phase}: ${formatDuration(durationMs)}`);
-  }
-  return lines.join("\n");
-}
-
 async function recordCodegenFailureDiagnosis(env: SandboxEnv, diagnosis: CodegenFailureDiagnosis) {
   await progress(env, "failure_diagnosis", diagnosis.summary, {
     category: diagnosis.category,
@@ -336,101 +203,6 @@ async function recordCodegenFailureDiagnosis(env: SandboxEnv, diagnosis: Codegen
       slowestPhase: diagnosis.slowestPhase
     }
   });
-}
-
-function classifyCodegenFailure(
-  message: string,
-  errorName: string,
-  failedPhase: string | null,
-  harness: CodegenHarness | undefined,
-  attempts: CodexAttemptSummary[] = []
-): CodegenFailureCategory {
-  const text = message.toLowerCase();
-  if (errorName === "CodegenNoDiffError" || text.includes("produced no diff")) {
-    return attempts.length > 0 && !attempts.some((attempt) => attemptProducedEditSignal(attempt)) ? "no_first_edit" : "no_diff";
-  }
-  if (errorName === "CodexAppServerStartupError" || text.includes("failed before starting a usable model turn") || text.includes("health probe timed out")) {
-    return "harness_startup";
-  }
-  if (text.includes("release scan failed") || failedPhase === "scan") return "release_scan";
-  if (text.includes("git push") || failedPhase === "push") return "git_push";
-  if (text.includes("pull request") || text.includes("pulls.create") || failedPhase === "pr") return "github_pr";
-  if (text.includes("npm ci") || text.includes("npm install") || failedPhase === "dependencies") return "dependency_install";
-  if (text.includes("codex") || text.includes("opencode") || harness) return "command_failed";
-  return "unknown";
-}
-
-function attemptProducedEditSignal(attempt: CodexAttemptSummary) {
-  if (attempt.producedDiff) return true;
-  const text = `${attempt.stdoutTail}\n${attempt.stderrTail}`.toLowerCase();
-  return /(?:\bfirst[_ -]?edit\b|\bfirst[_ -]?diff\b|\bapply_patch\b|\bedit_file\b|\bfile_edit\b|\btool_use\b.*\bedit\b|"name"\s*:\s*"edit"|"tool"\s*:\s*"edit")/.test(text);
-}
-
-function inferFailedCodegenPhase(message: string, timings: TaskTimings, harness: CodegenHarness | undefined) {
-  const text = message.toLowerCase();
-  if (text.includes("release scan")) return "scan";
-  if (text.includes("git push")) return "push";
-  if (text.includes("pull request")) return "pr";
-  if (text.includes("npm ci") || text.includes("npm install")) return "dependencies";
-  if (text.includes("opencode")) return "opencode";
-  if (text.includes("codex")) return harness === "opencode" ? "opencode" : "codex";
-  const phases = Object.entries(timings).filter(([phase, durationMs]) => phase !== "total" && Number.isFinite(durationMs));
-  return phases.at(-1)?.[0] ?? null;
-}
-
-function slowestCodegenPhase(timings: TaskTimings) {
-  const phases = Object.entries(timings)
-    .filter(([phase, durationMs]) => phase !== "total" && Number.isFinite(durationMs))
-    .map(([name, durationMs]) => ({ name, durationMs }));
-  if (phases.length === 0) return null;
-  return phases.reduce((slowest, phase) => (phase.durationMs > slowest.durationMs ? phase : slowest), phases[0]!);
-}
-
-function codegenFailureSummary(category: CodegenFailureCategory, harness: CodegenHarness | undefined) {
-  const harnessName = harness ? codegenHarnessDisplayName(harness) : "The coding harness";
-  switch (category) {
-    case "no_first_edit":
-      return `${harnessName} finished without making a code edit, so no PR was opened.`;
-    case "no_diff":
-      return `${harnessName} finished but left the repository with no code diff, so no PR was opened.`;
-    case "harness_startup":
-      return `${harnessName} failed before a usable model turn started.`;
-    case "release_scan":
-      return "The agent produced changes, but the release scan failed before the branch was pushed.";
-    case "git_push":
-      return "The agent produced changes, but pushing the generated branch to GitHub failed.";
-    case "github_pr":
-      return "The agent produced changes, but opening or updating the GitHub pull request failed.";
-    case "dependency_install":
-      return "Dependency preparation failed before the coding harness could complete.";
-    case "command_failed":
-      return `${harnessName} or one of its sandbox commands failed.`;
-    case "unknown":
-      return "The code-update task failed without a recognized failure category.";
-  }
-}
-
-function codegenFailureNextAction(category: CodegenFailureCategory, failedPhase: string | null) {
-  switch (category) {
-    case "no_first_edit":
-      return "Inspect the harness transcript, prompt, and preflight context; improve context packaging or task instructions so the agent makes an early focused edit.";
-    case "no_diff":
-      return "Inspect the harness transcript and request context; improve context packaging or the coding prompt if the task should have produced a change.";
-    case "harness_startup":
-      return "Inspect harness startup logs, model/provider configuration, and sandbox tool availability.";
-    case "release_scan":
-      return "Inspect the release scan command log and either fix the generated change or the scan false positive.";
-    case "git_push":
-      return "Inspect git authentication, branch naming, remote configuration, and repository permissions.";
-    case "github_pr":
-      return "Inspect GitHub API errors, base branch configuration, and pull request permissions.";
-    case "dependency_install":
-      return "Inspect dependency command logs and cache state; verify the sandbox includes dev dependencies.";
-    case "command_failed":
-      return `Inspect the ${failedPhase ?? "latest"} command log and harness transcript for the first non-zero exit or thrown error.`;
-    case "unknown":
-      return "Inspect the terminal command log and failure artifact, then add a classifier if this is a recurring failure mode.";
-  }
 }
 
 async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStartedAt: number) {
@@ -1154,49 +926,6 @@ function parseGitHubRepository(repository: string) {
   const [owner, repo] = repository.split("/");
   if (!owner || !repo) throw new Error(`Invalid GITHUB_REPOSITORY "${repository}". Expected owner/repo.`);
   return { owner, repo };
-}
-
-export function codeUpdateBranchName(title: string, taskId?: string) {
-  const suffix = codeUpdateBranchSuffix(taskId);
-  const maxSlugChars = suffix
-    ? Math.max(12, CODE_UPDATE_BRANCH_SLUG_MAX_CHARS - suffix.length - 1)
-    : CODE_UPDATE_BRANCH_SLUG_MAX_CHARS;
-  const slug = conciseBranchSlug(title, maxSlugChars) || "update";
-  return `${CODE_UPDATE_BRANCH_PREFIX}/${suffix ? `${slug}-${suffix}` : slug}`;
-}
-
-export function codeUpdatePullRequestTitle(title: string) {
-  const trimmed = title.trim().replace(/(?:--?retry)$/i, "").trim();
-  const humanized = looksLikeKebabTitle(trimmed) ? trimmed.split("-").filter(Boolean).join(" ") : trimmed;
-  const cleaned = humanized
-    .replace(/\b(?:open|create|make)\s+(?:a\s+)?(?:github\s+)?(?:pull request|pr)\b[.!?]?/gi, "")
-    .replace(/\s+/g, " ")
-    .replace(/[.!?]+$/g, "")
-    .trim();
-  if (!cleaned) return "Agent update";
-  return `${cleaned[0]?.toUpperCase() ?? ""}${cleaned.slice(1)}`;
-}
-
-function conciseBranchSlug(title: string, maxChars: number) {
-  const words = slugify(codeUpdatePullRequestTitle(title))
-    .split("-")
-    .filter((word) => word && !CODE_UPDATE_BRANCH_STOP_WORDS.has(word));
-  const slug = words.join("-") || slugify(title);
-  return trimSlug(slug, maxChars);
-}
-
-function trimSlug(slug: string, maxChars: number) {
-  if (slug.length <= maxChars) return slug;
-  return slug.slice(0, maxChars).replace(/-[^-]*$/, "").replace(/^-+|-+$/g, "") || slug.slice(0, maxChars).replace(/^-+|-+$/g, "");
-}
-
-function codeUpdateBranchSuffix(taskId: string | undefined) {
-  if (!taskId) return "";
-  return taskId.replace(/[^a-z0-9]/gi, "").slice(-CODE_UPDATE_BRANCH_SUFFIX_CHARS).toLowerCase();
-}
-
-function looksLikeKebabTitle(value: string) {
-  return /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(value);
 }
 
 async function gitAuthEnv(token: string, workRoot: string): Promise<NodeJS.ProcessEnv> {
@@ -2070,117 +1799,6 @@ async function runCodexExecWithRecovery(input: {
   );
 }
 
-type CodegenContextRule = Required<
-  Pick<CodegenContextPack, "focus" | "rationale" | "likelyMechanisms" | "suggestedFiles" | "firstInvariant" | "suggestedFirstEdit" | "avoid">
->;
-
-const CODEGEN_CONTEXT_RULES: CodegenContextRule[] = [
-  {
-    focus: "agent_task_status_lifecycle",
-    rationale:
-      "The request mentions code updates, coding agents, progress, loading, completion, PRs, or sandbox behavior, so start with the durable agent task lifecycle.",
-    likelyMechanisms: [
-      "A Discord request can acknowledge immediately with the response sink, then create a lazy status reply only when progress needs to be visible.",
-      "Code-update tool calls enqueue an agent task with the current Discord status message as the durable render target.",
-      "The task notifier renders queued/running/terminal state back into the original Discord message.",
-      "Terminal task rendering must win over stale progress, late callbacks, and notification failures."
-    ],
-    suggestedFiles: [
-      { path: "src/tools/coreTools.ts", reason: "Enqueues code-update tasks and creates the initial user-visible status." },
-      { path: "src/discord/responseSink.ts", reason: "Owns Discord acknowledgement, lazy status replies, final replies, files, and loading-reaction cleanup." },
-      { path: "src/discord/taskNotifications.ts", reason: "Renders task progress and terminal PR/failure states back to Discord." },
-      { path: "src/db/repositories.ts", reason: "Persists task status, render signatures, and terminal task state." },
-      { path: "src/jobs/queue.ts", reason: "Starts sandbox work and records task progress." },
-      { path: "tests/unit/task-notifications.test.ts", reason: "Focused coverage for task message rendering." },
-      { path: "tests/integration/repository-db.test.ts", reason: "Database coverage for terminal state and late progress behavior." }
-    ],
-    firstInvariant:
-      "A code-update request should transition the same Discord status message to a terminal PR/failure/no-change state without leaving stale loading/progress text after completion.",
-    suggestedFirstEdit:
-      "Add or update a focused task notification or repository test proving terminal code-update state replaces stale progress after earlier render/status problems.",
-    avoid: ["Do not search only for the user's exact wording; map product terms like loading/progress/done to task state and Discord message rendering."]
-  },
-  {
-    focus: "discord_response_lifecycle",
-    rationale:
-      "The request mentions Discord-visible acknowledgement, replies, reactions, status/progress messages, files, or cleanup, so start with the shared response lifecycle.",
-    likelyMechanisms: [
-      "Discord mentions should acknowledge immediately without forcing a visible status message for every request.",
-      "The response sink owns loading reactions, lazy status messages, final replies, file attachments, and cleanup.",
-      "Queued worker execution must use the same response lifecycle as inline execution after refetching the source message.",
-      "Code-update progress uses the current sink status message as the durable task-notification target."
-    ],
-    suggestedFiles: [
-      { path: "src/discord/responseSink.ts", reason: "Single owner for Discord acknowledgements, status updates, final replies, attachments, and cleanup." },
-      { path: "src/discord/client.ts", reason: "Wires Discord mention handling, queued request execution, and tool context status callbacks." },
-      { path: "src/tools/coreTools.ts", reason: "Uses status callbacks when model-selected tools need durable progress, especially codegen." },
-      { path: "src/discord/taskNotifications.ts", reason: "Edits the durable status message for running and terminal code-update state." },
-      { path: "tests/unit/discord-response-sink.test.ts", reason: "Focused coverage for the shared response lifecycle." },
-      { path: "tests/unit/discord-client.test.ts", reason: "Discord adapter coverage." },
-      { path: "tests/unit/task-notifications.test.ts", reason: "Task progress rendering coverage." }
-    ],
-    firstInvariant:
-      "One Discord prompt should have a single coherent lifecycle: immediate acknowledgement, optional progress/status updates, exactly one final user-visible reply/update, and acknowledgement cleanup.",
-    suggestedFirstEdit:
-      "Patch the response sink or the client/sink wiring first, then update the nearest focused response-lifecycle test before broad exploration.",
-    avoid: [
-      "Do not patch separate inline and queued Discord reply paths independently when a shared response sink can own the behavior.",
-      "Do not make every prompt create a progress message if a lightweight acknowledgement is enough."
-    ]
-  },
-  {
-    focus: "discord_interaction_lifecycle",
-    rationale: "The request mentions Discord messages, replies, memory, timeouts, or conversation behavior.",
-    likelyMechanisms: [
-      "Discord messages enter through the client adapter, are persisted, and are routed through the model/tool loop.",
-      "Conversation memory is per Discord channel/thread and final responses are stored back into the session."
-    ],
-    suggestedFiles: [
-      { path: "src/discord/client.ts", reason: "Discord message handling and reply/edit behavior." },
-      { path: "src/discord/responseSink.ts", reason: "Discord acknowledgement/status/final-response lifecycle." },
-      { path: "src/agent/router.ts", reason: "Agent runtime, model/tool loop, and final response synthesis." },
-      { path: "src/discord/messagePersistence.ts", reason: "Message persistence and incremental sync behavior." },
-      { path: "tests/unit/discord-client.test.ts", reason: "Discord adapter coverage." },
-      { path: "tests/integration/agent.test.ts", reason: "End-to-end agent behavior coverage." }
-    ],
-    firstInvariant: "Encode the requested Discord-visible behavior as one observable message/reply/session invariant.",
-    suggestedFirstEdit: "Start with the closest Discord adapter or agent integration test, then make the minimal implementation change.",
-    avoid: ["Do not bypass permission filtering or conversation memory contracts."]
-  },
-  {
-    focus: "model_tool_routing",
-    rationale: "The request mentions tools, search, model behavior, prompts, schemas, stats, or routing.",
-    likelyMechanisms: [
-      "The model chooses from explicit tools registered in the tool registry.",
-      "Tool quality should usually improve through descriptions, schemas, result formatting, and retrieval behavior rather than hidden request-specific branches."
-    ],
-    suggestedFiles: [
-      { path: "src/tools/registry.ts", reason: "Tool descriptions and schemas visible to the model." },
-      { path: "src/tools/coreTools.ts", reason: "Core Discord/search/status/codegen tool implementations." },
-      { path: "src/agent/router.ts", reason: "Model/tool execution loop." },
-      { path: "tests/unit/tool-registry.test.ts", reason: "Tool schema coverage." },
-      { path: "tests/unit/core-tools.test.ts", reason: "Tool behavior coverage." }
-    ],
-    firstInvariant: "Make the model have a better general-purpose tool affordance for the request class without adding hidden semantic branching.",
-    suggestedFirstEdit: "Improve the narrowest tool schema/result/test that would let the model choose and use the right capability.",
-    avoid: ["Do not add regex-only request routing when a tool contract can be improved instead."]
-  },
-  {
-    focus: "general_implementation",
-    rationale: "No narrower lifecycle matched confidently, so start from the likely adapter/tool/runtime boundary and nearest tests.",
-    likelyMechanisms: ["Most user-visible behavior enters through the Discord adapter, model router, tool registry, or core tool implementations."],
-    suggestedFiles: [
-      { path: "src/discord/client.ts", reason: "Discord-facing behavior and request lifecycle." },
-      { path: "src/agent/router.ts", reason: "Model-led agent behavior and final response synthesis." },
-      { path: "src/tools/coreTools.ts", reason: "Tool implementations." },
-      { path: "tests/integration/agent.test.ts", reason: "End-to-end model/tool behavior tests." }
-    ],
-    firstInvariant: "Turn the requested behavior into one focused observable invariant, implement the smallest code path that satisfies it, then broaden only as needed.",
-    suggestedFirstEdit: "Start by adding or updating the closest existing test around the likely entry point before broad repository exploration.",
-    avoid: ["Do not start with broad repository-wide exploration when a likely entry point is available."]
-  }
-];
-
 export async function buildCodegenContextPack(checkoutDir: string, taskRequest = ""): Promise<CodegenContextPack> {
   const repoGuidePath = (await pathExists(path.join(checkoutDir, "AGENTS.md"))) ? "AGENTS.md" : undefined;
   const repoGuideExcerpt = repoGuidePath ? await readRepoGuideExcerpt(path.join(checkoutDir, repoGuidePath)) : undefined;
@@ -2193,6 +1811,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       area: "Code-update task lifecycle",
       purpose: "Requests to update the bot become durable agent tasks, Kubernetes sandbox runs, Discord progress edits, and PRs.",
       files: [
+        "src/tools/agentTaskTools.ts",
         "src/tools/coreTools.ts",
         "src/jobs/queue.ts",
         "src/execution/backend.ts",
@@ -2211,7 +1830,15 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     {
       area: "Model-led tools",
       purpose: "Tools are explicit capabilities selected by the model; prefer improving schemas/results over hidden message-specific branching.",
-      files: ["src/tools/registry.ts", "src/tools/coreTools.ts", "src/tools/types.ts", "src/agent/router.ts"],
+      files: [
+        "src/tools/registry.ts",
+        "src/tools/coreTools.ts",
+        "src/tools/agentTaskTools.ts",
+        "src/tools/discordHistoryFormatting.ts",
+        "src/tools/discordStatsFormatting.ts",
+        "src/tools/types.ts",
+        "src/agent/router.ts"
+      ],
       checks: ["tests/unit/tool-registry.test.ts", "tests/unit/core-tools.test.ts", "tests/integration/agent.test.ts"]
     },
     {
@@ -2259,266 +1886,6 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
   };
 }
 
-function extractCodegenRequestAnchors(taskRequest: string) {
-  const anchors: string[] = [];
-  const seen = new Set<string>();
-
-  const add = (value: string, options: { exact?: boolean } = {}) => {
-    const cleaned = value.trim().replace(/\s+/g, " ");
-    if (!isUsefulCodegenAnchor(cleaned, options)) return;
-    const key = cleaned.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    anchors.push(cleaned);
-  };
-
-  for (const regex of [/"([^"\n]{3,120})"/g, /`([^`\n]{3,120})`/g, /(?:^|[^A-Za-z])'([^'\n]{3,120})'(?![A-Za-z])/g, /“([^”]{3,120})”/g, /‘([^’]{3,120})’/g]) {
-    for (const match of taskRequest.matchAll(regex)) add(match[1] ?? "", { exact: true });
-  }
-
-  for (const match of taskRequest.matchAll(/\b(?:src|tests|scripts|docs|infra|k8s|migrations|skills|\.github)\/[A-Za-z0-9._/-]+\b/g)) {
-    add(match[0], { exact: true });
-  }
-
-  for (const match of taskRequest.matchAll(/(?:^|\s)(\/[a-z][a-z0-9/_:-]{2,})\b/g)) {
-    add(match[1] ?? "", { exact: true });
-  }
-
-  for (const match of taskRequest.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b/g)) {
-    add(match[0]);
-  }
-
-  for (const match of taskRequest.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*[A-Z][A-Za-z0-9_]*\b/g)) {
-    add(match[0]);
-  }
-
-  for (const match of taskRequest.matchAll(/\b[A-Z][A-Z0-9_]{3,}\b/g)) {
-    add(match[0]);
-  }
-
-  return anchors.slice(0, MAX_CODEGEN_ANCHORS);
-}
-
-function isUsefulCodegenAnchor(value: string, options: { exact?: boolean }) {
-  if (value.length < 3 || value.length > 120) return false;
-  if (/^https?:\/\//i.test(value)) return false;
-  if (/^\d+$/.test(value)) return false;
-  if (options.exact) return true;
-  const normalized = value.toLowerCase();
-  const genericTerms = new Set([
-    "agent",
-    "agents",
-    "bot",
-    "bots",
-    "code",
-    "discord",
-    "finish",
-    "loading",
-    "message",
-    "messages",
-    "progress",
-    "reply",
-    "request",
-    "requests",
-    "status",
-    "thinking",
-    "update",
-    "updates"
-  ]);
-  return !genericTerms.has(normalized);
-}
-
-async function findCodegenAnchorMatches(checkoutDir: string, anchors: string[]): Promise<CodegenAnchorMatch[]> {
-  const matches: CodegenAnchorMatch[] = [];
-  for (const anchor of anchors) {
-    const output = await rgFixedString(checkoutDir, anchor);
-    const parsed = output
-      .split("\n")
-      .map((line) => parseRgMatchLine(line, anchor))
-      .filter((match): match is CodegenAnchorMatch => Boolean(match))
-      .filter((match) => !isLowValueAnchorMatch(match.file))
-      .slice(0, MAX_ANCHOR_MATCHES_PER_ANCHOR);
-    matches.push(...parsed);
-    if (matches.length >= MAX_ANCHOR_MATCHES_TOTAL) break;
-  }
-  return matches.slice(0, MAX_ANCHOR_MATCHES_TOTAL);
-}
-
-async function rgFixedString(checkoutDir: string, anchor: string) {
-  return new Promise<string>((resolve) => {
-    execFile(
-      "rg",
-      [
-        "--fixed-strings",
-        "--line-number",
-        "--no-heading",
-        "--color",
-        "never",
-        "--glob",
-        "!node_modules/**",
-        "--glob",
-        "!dist/**",
-        "--glob",
-        "!coverage/**",
-        "--glob",
-        "!*.map",
-        "--glob",
-        "!package-lock.json",
-        "--",
-        anchor,
-        "."
-      ],
-      { cwd: checkoutDir, maxBuffer: 512_000 },
-      async (error, stdout) => {
-        if (error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-          resolve(await nodeFixedStringSearch(checkoutDir, anchor));
-          return;
-        }
-        resolve(stdout.toString());
-      }
-    );
-  });
-}
-
-async function nodeFixedStringSearch(checkoutDir: string, anchor: string) {
-  const lines: string[] = [];
-  await scanAnchorDirectory(checkoutDir, checkoutDir, anchor, lines);
-  return lines.join("\n");
-}
-
-async function scanAnchorDirectory(rootDir: string, currentDir: string, anchor: string, matches: string[]) {
-  let entries: Array<import("node:fs").Dirent>;
-  try {
-    entries = await fs.readdir(currentDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const fullPath = path.join(currentDir, entry.name);
-    const relativePath = normalizeRgRelativePath(path.relative(rootDir, fullPath));
-    if (!relativePath || isLowValueAnchorMatch(relativePath)) continue;
-
-    if (entry.isDirectory()) {
-      await scanAnchorDirectory(rootDir, fullPath, anchor, matches);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-
-    await scanAnchorFile(rootDir, fullPath, anchor, matches);
-  }
-}
-
-async function scanAnchorFile(rootDir: string, filePath: string, anchor: string, matches: string[]) {
-  let stat: import("node:fs").Stats;
-  try {
-    stat = await fs.stat(filePath);
-  } catch {
-    return;
-  }
-  if (stat.size > MAX_ANCHOR_SCAN_FILE_BYTES) return;
-
-  let content: string;
-  try {
-    content = await fs.readFile(filePath, "utf8");
-  } catch {
-    return;
-  }
-  if (!content.includes(anchor)) return;
-
-  const relativePath = normalizeRgRelativePath(path.relative(rootDir, filePath));
-  const contentLines = content.split(/\r?\n/);
-  for (const [index, line] of contentLines.entries()) {
-    if (line.includes(anchor)) matches.push(`${relativePath}:${index + 1}:${line}`);
-  }
-}
-
-function parseRgMatchLine(line: string, anchor: string): CodegenAnchorMatch | null {
-  const match = /^(.+?):(\d+):(.*)$/.exec(line);
-  if (!match) return null;
-  const file = normalizeRgRelativePath(match[1] ?? "");
-  const lineNumber = Number(match[2]);
-  if (!file || !Number.isFinite(lineNumber)) return null;
-  return {
-    anchor,
-    file,
-    line: lineNumber,
-    preview: (match[3] ?? "").trim().slice(0, 220)
-  };
-}
-
-function normalizeRgRelativePath(file: string) {
-  return file.replace(/^\.\//, "");
-}
-
-function isLowValueAnchorMatch(file: string) {
-  return (
-    file === ".git" ||
-    file === "node_modules" ||
-    file === "dist" ||
-    file === "coverage" ||
-    file.startsWith(".git/") ||
-    file.startsWith("node_modules/") ||
-    file.startsWith("dist/") ||
-    file.startsWith("coverage/") ||
-    file.endsWith(".map") ||
-    file === "package-lock.json"
-  );
-}
-
-function anchorTargetFilesFromMatches(matches: CodegenAnchorMatch[]) {
-  const byFile = new Map<string, { anchors: Set<string>; lines: number[]; score: number }>();
-  for (const match of matches) {
-    const current = byFile.get(match.file) ?? { anchors: new Set<string>(), lines: [], score: sourceFileScore(match.file) };
-    current.anchors.add(match.anchor);
-    current.lines.push(match.line);
-    current.score += anchorMatchScore(match);
-    byFile.set(match.file, current);
-  }
-
-  return [...byFile.entries()]
-    .sort(
-      (left, right) =>
-        anchorTargetFileRank(right[0]) - anchorTargetFileRank(left[0]) ||
-        right[1].score - left[1].score ||
-        left[0].localeCompare(right[0])
-    )
-    .slice(0, MAX_ANCHOR_TARGET_FILES)
-    .map(([file, value]) => {
-      const anchors = [...value.anchors].slice(0, 3).map((anchor) => JSON.stringify(anchor)).join(", ");
-      const lines = uniqueNumbers(value.lines).slice(0, 4).join(", ");
-      return {
-        path: file,
-        reason: `Exact request anchor${value.anchors.size === 1 ? "" : "s"} ${anchors} matched at line${value.lines.length === 1 ? "" : "s"} ${lines}.`
-      };
-    });
-}
-
-function sourceFileScore(file: string) {
-  if (file.startsWith("src/")) return 6;
-  if (file.startsWith("tests/")) return 4;
-  if (file.endsWith(".ts") || file.endsWith(".tsx")) return 3;
-  if (file === "AGENTS.md" || file.endsWith(".md")) return 1;
-  return 0;
-}
-
-function anchorTargetFileRank(file: string) {
-  if (file.startsWith("src/")) return 4;
-  if (file.startsWith("tests/")) return 2;
-  if (file.endsWith(".ts") || file.endsWith(".tsx")) return 3;
-  if (file === "AGENTS.md" || file.endsWith(".md")) return 1;
-  return 0;
-}
-
-function anchorMatchScore(match: CodegenAnchorMatch) {
-  let score = 2;
-  if (/[{};]|=>|\b(?:await|const|let|function|return|class|import|export)\b/.test(match.preview)) score += 3;
-  if (match.preview.length <= 140) score += 1;
-  if (/\b(?:description|schema|prompt|instructions?)\b/i.test(match.preview) && match.preview.length > 140) score -= 2;
-  return score;
-}
-
 function mergeSuggestedFiles(
   anchorTargetFiles: Array<{ path: string; reason: string }>,
   suggestedFiles: Array<{ path: string; reason: string }>
@@ -2529,55 +1896,6 @@ function mergeSuggestedFiles(
     seen.add(file.path);
     return true;
   });
-}
-
-function uniqueNumbers(values: number[]) {
-  return [...new Set(values)].sort((left, right) => left - right);
-}
-
-function selectCodegenContextRule(taskRequest: string, anchorMatches: CodegenAnchorMatch[] = []): CodegenContextRule {
-  const text = taskRequest.toLowerCase();
-  const anchorFiles = new Set(anchorMatches.map((match) => match.file));
-  const hasDiscordClientAnchor = [...anchorFiles].some((file) => file === "src/discord/client.ts" || file.startsWith("src/discord/"));
-  const hasTaskLifecycleAnchor = [...anchorFiles].some((file) =>
-    ["src/discord/taskNotifications.ts", "src/tools/coreTools.ts", "src/jobs/queue.ts", "src/db/repositories.ts"].includes(file)
-  );
-  if (hasDiscordClientAnchor && !hasTaskLifecycleAnchor && includesAny(text, ["thinking", "reply", "reaction", "message", "discord"])) {
-    return codegenContextRule("discord_response_lifecycle");
-  }
-  const hasCodeUpdateTerm = includesAny(text, [
-    "code update",
-    "coding agent",
-    "codegen",
-    "sandbox",
-    "pull request",
-    " pr",
-    "github",
-    "update itself",
-    "update yourself",
-    "self-update",
-    "self update",
-    "agent task"
-  ]);
-  const hasStatusTerm = includesAny(text, ["loading", "thinking", "status", "progress", "stuck", "hang", "finish", "done", "complete"]);
-  const hasResponseLifecycleTerm = includesAny(text, ["reply", "replies", "reaction", "react", "loading", "thinking", "status message", "progress message", "acknowledge", "acknowledgement", "attachment", "files"]);
-  if (hasCodeUpdateTerm || (hasStatusTerm && includesAny(text, ["code", "agent", "bot", "request"]))) return codegenContextRule("agent_task_status_lifecycle");
-  if (hasDiscordClientAnchor && hasResponseLifecycleTerm) return codegenContextRule("discord_response_lifecycle");
-  if (includesAny(text, ["tool", "search", "history", "web", "model", "prompt", "router", "schema", "stats"])) return codegenContextRule("model_tool_routing");
-  if (includesAny(text, ["discord", "mention", "reply", "message", "timeout", "content filter", "conversation", "memory"])) {
-    return hasResponseLifecycleTerm ? codegenContextRule("discord_response_lifecycle") : codegenContextRule("discord_interaction_lifecycle");
-  }
-  return codegenContextRule("general_implementation");
-}
-
-function codegenContextRule(focus: string) {
-  const rule = CODEGEN_CONTEXT_RULES.find((candidate) => candidate.focus === focus);
-  if (!rule) throw new Error(`Missing codegen context rule: ${focus}`);
-  return rule;
-}
-
-function includesAny(text: string, needles: string[]) {
-  return needles.some((needle) => text.includes(needle));
 }
 
 async function existingSuggestedFiles(checkoutDir: string, files: CodegenContextRule["suggestedFiles"]) {
@@ -2640,122 +1958,6 @@ function shellQuoteArg(value: string) {
   return /^[A-Za-z0-9._/@:-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-export function renderCodegenContextPack(context: CodegenContextPack) {
-  const lines = [
-    ...(context.requestAnchors?.length || context.anchorTargetFiles?.length
-      ? [
-          "Concrete request anchors:",
-          ...(context.requestAnchors?.length ? context.requestAnchors.map((anchor) => `- ${anchor}`) : ["- none found"]),
-          "",
-          ...(context.anchorTargetFiles?.length
-            ? [
-                "Target files from exact request evidence:",
-                ...context.anchorTargetFiles.map((file) => `- ${file.path}: ${file.reason}`),
-                "",
-                "Anchor guidance:",
-                "- Concrete request anchors outrank broad lifecycle guesses. Inspect these target files first and make the first focused edit there unless the code proves they are unrelated.",
-                ""
-              ]
-            : []),
-          ...(context.anchorMatches?.length
-            ? [
-                "Anchor match samples:",
-                ...context.anchorMatches.slice(0, 12).map((match) => `- ${match.file}:${match.line} (${match.anchor}): ${match.preview}`),
-                ""
-              ]
-            : [])
-        ]
-      : []),
-    ...(context.focus
-      ? [
-          `Focus: ${context.focus}`,
-          "",
-          `Why this context: ${context.rationale ?? "Matched from the requested update."}`,
-          "",
-          "Likely mechanisms:",
-          ...(context.likelyMechanisms ?? []).map((mechanism) => `- ${mechanism}`),
-          "",
-          "Suggested first files:",
-          ...(context.suggestedFiles ?? []).map((file) => `- ${file.path}: ${file.reason}`),
-          "",
-          ...(context.suggestedCheckCommands?.length
-            ? [
-                "Suggested focused checks:",
-                ...context.suggestedCheckCommands.map((check) => `- ${check.command}: ${check.reason}`),
-                ""
-              ]
-            : []),
-          "First implementable invariant:",
-          context.firstInvariant ?? "Make the requested behavior observable with the smallest focused change.",
-          "",
-          "Suggested first edit:",
-          context.suggestedFirstEdit ?? "Add or update the closest focused test before broad exploration.",
-          "",
-          "Avoid:",
-          ...(context.avoid ?? []).map((warning) => `- ${warning}`),
-          ""
-        ]
-      : []),
-    "Repository guide:",
-    context.repoGuidePath ? `- ${context.repoGuidePath}` : "- none found",
-    ...(context.repoGuideExcerpt
-      ? [
-          "",
-          "Repository guide excerpt:",
-          ...context.repoGuideExcerpt.split("\n").map((line) => `> ${line}`)
-        ]
-      : []),
-    "",
-    "Sandbox contract:",
-    ...context.sandboxContract.map((item) => `- ${item}`),
-    "",
-    "First move rules:",
-    ...context.firstMoveRules.map((item) => `- ${item}`),
-    "",
-    "Project map:"
-  ];
-  for (const entry of context.projectMap) {
-    lines.push(`- ${entry.area}: ${entry.purpose}`);
-    if (entry.files.length) lines.push(`  Files: ${entry.files.join(", ")}`);
-    if (entry.checks.length) lines.push(`  Checks: ${entry.checks.join(", ")}`);
-  }
-  return tail(lines.join("\n"), MAX_CONTEXT_TEXT);
-}
-
-export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" | "taskRequest">, contextPack?: CodegenContextPack) {
-  const contextText = contextPack ? renderCodegenContextPack(contextPack) : "";
-  return [
-    "You are implementing a Discord-requested update to this TypeScript Discord AI Agent repository.",
-    "",
-    "Execution contract:",
-    "- If AGENTS.md exists, read it before editing and follow it.",
-    "- Use the preflight context as a starting map, not a research backlog.",
-    "- Inspect the likely owner, nearest caller/helper, and closest test; then make the first focused code diff.",
-    "- If exact request anchors or target files are present, inspect those first and patch the owning source file unless it is clearly unrelated.",
-    "- When user wording is product behavior, map it to the lifecycle: trigger -> acknowledgement/status -> work -> success response -> error path -> cleanup.",
-    "- Prefer a small shared lifecycle owner over patching duplicated inline and queued paths independently.",
-    "- Add or update focused tests for the changed behavior.",
-    "- Run the suggested focused checks from the preflight context when they match your edit. Do not run `npm run verify`; CI runs full verification after the PR opens.",
-    "- Do not commit, push, open a PR, or edit GitHub state yourself.",
-    "- Do not add request-only documentation artifacts; the PR body records the request.",
-    "- Helper CLIs are available under `$AGENT_TOOL_SHIM_DIR`: `agent-task-context`, `agent-cache-info`, and `agent-progress <step> <message>`.",
-    "- After the first meaningful edit, run `$AGENT_TOOL_SHIM_DIR/agent-progress first_edit \"Made the first focused code edit\"`.",
-    "",
-    `Task ID: ${env.taskId}`,
-    `Requested by: ${env.requestedBy}`,
-    contextText ? "" : undefined,
-    contextText ? "Codegen preflight context:" : undefined,
-    contextText || undefined,
-    contextText ? "Make the first implementable invariant true. Concrete anchors from the request outrank broad lifecycle guesses." : undefined,
-    "",
-    "Requested update:",
-    env.taskRequest.trim(),
-    ""
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
-}
-
 export function codexExecArgs(input: { checkoutDir: string; model: string }) {
   return [
     "exec",
@@ -2775,84 +1977,6 @@ export function codexResumeExecArgs(input: { model: string }) {
 
 function codexAttemptArgs(input: { command: "exec" | "resume"; model: string }) {
   return input.command === "exec" ? codexExecArgs({ checkoutDir: ".", model: input.model }) : codexResumeExecArgs({ model: input.model });
-}
-
-export function codeUpdateRecoveryPrompt(
-  env: SandboxEnv,
-  input: { attempt: number; totalAttempts: number; attempts: CodexAttemptSummary[]; gitStatus: string; contextPack?: CodegenContextPack }
-) {
-  const previous = input.attempts.at(-1);
-  const anchorTargetText = recoveryAnchorTargetText(input.contextPack);
-  return [
-    "Continue the same code-update task in this existing sandbox checkout.",
-    "",
-    "The previous Codex attempt did not leave a code diff. Do not restart broad analysis.",
-    "You have enough context to act: make the smallest focused test or implementation edit now, then run the most relevant check.",
-    "If you need one more file, inspect it briefly and edit immediately after. Do not run more than one read/search command before the first patch on this attempt.",
-    "Use apply_patch for the recovery edit when available; otherwise use the smallest reliable edit command. A small first diff is better than more clean-checkout analysis.",
-    anchorTargetText ? "Patch-first targets from the original request anchors:" : undefined,
-    anchorTargetText || undefined,
-    anchorTargetText
-      ? "On this recovery attempt, edit one of these files before additional broad searching unless the file is clearly unrelated."
-      : undefined,
-    "",
-    `Task ID: ${env.taskId}`,
-    `Attempt: ${input.attempt}/${input.totalAttempts}`,
-    "",
-    "Requested update:",
-    env.taskRequest.trim(),
-    "",
-    "Current git status:",
-    input.gitStatus.trim() || "(clean)",
-    "",
-    previous
-      ? [
-          "Previous attempt summary:",
-          `- exit code: ${previous.exitCode}`,
-          `- duration: ${formatDuration(previous.durationMs)}`,
-          previous.stdoutTail ? `- stdout tail:\n${previous.stdoutTail}` : "",
-          previous.stderrTail ? `- stderr tail:\n${previous.stderrTail}` : ""
-        ]
-          .filter(Boolean)
-          .join("\n")
-      : "",
-    "",
-    "Finish with a real code diff. Do not commit, push, or open a PR yourself."
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
-}
-
-function recoveryAnchorTargetText(contextPack?: CodegenContextPack) {
-  const targets = contextPack?.anchorTargetFiles ?? [];
-  if (!targets.length) return "";
-  return targets
-    .slice(0, 5)
-    .map((file) => `- ${file.path}: ${file.reason}`)
-    .join("\n");
-}
-
-export function codeUpdatePullRequestBody(input: { env: Pick<SandboxEnv, "taskRequest" | "requestedBy"> }) {
-  return [
-    "## Why",
-    "",
-    input.env.taskRequest.trim(),
-    "",
-    "## Changes",
-    "",
-    "- Implemented by the Discord AI Agent sandbox.",
-    "- See the PR diff for the exact code changes.",
-    "",
-    "## Testing",
-    "",
-    "- Agent ran focused checks in the sandbox where applicable.",
-    "- `npm run scan:release`: passed",
-    "- Full verification is handled by CI after the PR opens.",
-    "",
-    "---",
-    "",
-    `Prompted by: ${input.env.requestedBy}`
-  ].join("\n");
 }
 
 async function runCommand(

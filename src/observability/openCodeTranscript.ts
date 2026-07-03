@@ -25,6 +25,8 @@ export type ParsedOpenCodeTranscript = {
   repeatedReads: Array<{ title: string; count: number }>;
   firstToolAtMs: number | null;
   firstEditAtMs: number | null;
+  firstEditRound: number | null;
+  roundsBeforeFirstEdit: number | null;
   slowestRound: { round: number; durationMs: number; title: string } | null;
   activeRound: { round: number; durationMs: number; tools: string[]; lastEventAt: string } | null;
   items: Array<{
@@ -118,7 +120,10 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
   const repeatedReads = repeatedOpenCodeReads(analysisSteps);
   const tokenTotal = lastNumber(steps.map((step) => numericMetadata(objectValue(step.finish?.tokens)?.total)));
   const firstToolAtMs = firstTimestamp == null ? null : firstToolOffsetMs(analysisSteps, firstTimestamp, () => true);
-  const firstEditAtMs = firstTimestamp == null ? null : firstToolOffsetMs(analysisSteps, firstTimestamp, (tool) => tool.name === "edit");
+  const firstEdit = firstTimestamp == null ? null : firstToolMatch(analysisSteps, firstTimestamp, (tool) => tool.name === "edit");
+  const firstEditAtMs = firstEdit?.offsetMs ?? null;
+  const firstEditRound = firstEdit?.round ?? null;
+  const roundsBeforeFirstEdit = firstEditRound == null ? null : Math.max(0, firstEditRound - 1);
   const slowestRound =
     items
       .filter((item): item is (typeof items)[number] & { durationMs: number } => item.durationMs != null)
@@ -155,6 +160,8 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
     repeatedReads,
     firstToolAtMs,
     firstEditAtMs,
+    firstEditRound,
+    roundsBeforeFirstEdit,
     slowestRound,
     activeRound,
     items
@@ -169,6 +176,7 @@ export function formatOpenCodeTranscriptDiagnostics(transcript: ParsedOpenCodeTr
     `tool_time=${formatDuration(transcript.toolDurationMs)}`,
     transcript.interRoundGapMs > 0 ? `gaps=${formatDuration(transcript.interRoundGapMs)}` : null,
     transcript.firstEditAtMs == null ? "first_edit=none" : `first_edit=${formatDuration(transcript.firstEditAtMs)}`,
+    transcript.roundsBeforeFirstEdit == null ? null : `rounds_before_first_edit=${transcript.roundsBeforeFirstEdit}`,
     `rounds=${transcript.rounds}`,
     `tool_calls=${transcript.toolCalls}`,
     transcript.failedTools > 0 ? `failed_tools=${transcript.failedTools}` : null
@@ -294,9 +302,18 @@ function openCodeToolOutput(toolName: string, output: string) {
 }
 
 function firstToolOffsetMs(steps: Array<{ start: number; tools: OpenCodeToolSummary[] }>, firstTimestamp: number, predicate: (tool: OpenCodeToolSummary) => boolean) {
+  return firstToolMatch(steps, firstTimestamp, predicate)?.offsetMs ?? null;
+}
+
+function firstToolMatch(steps: Array<{ start: number; tools: OpenCodeToolSummary[] }>, firstTimestamp: number, predicate: (tool: OpenCodeToolSummary) => boolean) {
   for (const step of steps) {
     const tool = step.tools.find(predicate);
-    if (tool) return Math.max(0, (tool.startedAtMs ?? step.start) - firstTimestamp);
+    if (tool) {
+      return {
+        round: steps.indexOf(step) + 1,
+        offsetMs: Math.max(0, (tool.startedAtMs ?? step.start) - firstTimestamp)
+      };
+    }
   }
   return null;
 }

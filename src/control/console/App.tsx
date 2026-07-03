@@ -20,7 +20,21 @@ import {
 import { Button, Copy, Status, Tabs, Tag } from "regen-ui";
 import { parseOpenCodeTranscript, type ParsedOpenCodeTranscript } from "../../observability/openCodeTranscript.js";
 import { fetchArtifact, fetchRunList, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
+import { parseCodexTranscript } from "./codexTranscript.js";
+import {
+  formatToolArgumentValue,
+  isModelRoundTimelineStep,
+  parseToolArgumentsText,
+  stringArrayMetadata,
+  timelineStepSummaryText,
+  timelineTitleText,
+  timelineToolRequests,
+  toolRequestArgumentsText,
+  type TimelineToolRequest
+} from "./timelineText.js";
 import type { EventLevel, RunArtifact, RunCount, RunKind, RunListAggregate, RunEvent, RunSnapshot, RunSpan, RunStatus, RunSummary, TerminalEntry } from "./types.js";
+
+export { timelineStepSummaryText, timelineSummaryText, timelineTitleText, timelineToolRequests } from "./timelineText.js";
 
 type StatusFilter = "all" | "active" | "done" | "attention" | RunStatus;
 type DetailTab = "overview" | "timeline" | "terminal" | "artifacts" | "raw";
@@ -44,11 +58,6 @@ export type TimelineStep = {
   level: EventLevel | null;
   metadata: Record<string, unknown>;
   artifact?: RunArtifact;
-};
-export type TimelineToolRequest = {
-  id?: string | null;
-  name: string;
-  argumentsText?: string | null;
 };
 export type TimelineStepGroup = {
   id: string;
@@ -75,31 +84,7 @@ type FlowItem = {
   metadata: Record<string, unknown>;
   artifact?: RunArtifact;
 };
-type CodexTranscriptItemKind = "message" | "command" | "warning" | "error" | "lifecycle" | "tokens" | "reasoning";
 type OpenCodeTranscriptItem = ParsedOpenCodeTranscript["items"][number];
-type CodexCommandStart = {
-  timestamp: string;
-  command: string | null;
-  summary: string;
-};
-export type ParsedCodexTranscript = {
-  isTranscript: boolean;
-  launchCommand: string | null;
-  agentMessages: number;
-  commands: number;
-  reasoningDeltaCount: number;
-  reasoningChars: number;
-  tokenTotal: number | null;
-  items: Array<{
-    id: string;
-    kind: CodexTranscriptItemKind;
-    title: string;
-    timestamp: string;
-    body: string;
-    command: string;
-    output: string;
-  }>;
-};
 
 type ConsoleUrlState = {
   runId: string;
@@ -1014,145 +999,6 @@ function ToolArguments({ argumentsText }: { argumentsText?: string | null }) {
   return <code className="tool-args-raw">{argumentsText.trim()}</code>;
 }
 
-export function timelineStepSummaryText(step: Pick<TimelineStep, "title" | "summary" | "metadata">) {
-  const modelSummary = modelRoundSummaryText(step);
-  if (modelSummary) return modelSummary;
-  return timelineSummaryText(step.summary);
-}
-
-export function timelineSummaryText(summary: string) {
-  const trimmed = summary.trim();
-  if (!trimmed) return "";
-  if (/^no summary(?: recorded)?\.?$/i.test(trimmed)) return "";
-  if (/^sent thinking reply\.?$/i.test(trimmed)) return "";
-  if (/^thinking\.\.\.$/i.test(trimmed)) return "";
-  if (/^[\w -]+ work took \d+(?:\.\d+)?s\.?$/i.test(trimmed)) return "";
-  if (/^[\w -]+ work took \d+m \d+s\.?$/i.test(trimmed)) return "";
-  return trimmed;
-}
-
-function modelRoundSummaryText(step: Pick<TimelineStep, "title" | "summary" | "metadata">) {
-  if (!isModelRoundTimelineStep(step)) return "";
-  const usableTools = timelineToolRequests(step).map((request) => request.name);
-  if (usableTools.length > 0) return `Requested tools: ${formatToolCallList(usableTools)}`;
-  const outputChars = typeof step.metadata.outputChars === "number" ? step.metadata.outputChars : null;
-  if (outputChars != null && outputChars > 0) return `Returned text: ${outputChars} chars`;
-  if (outputChars === 0) return "No tool calls or text returned";
-  const finishReason = typeof step.metadata.finishReason === "string" ? step.metadata.finishReason : "";
-  if (finishReason) return `Finished: ${finishReason}`;
-  return timelineSummaryText(step.summary);
-}
-
-function stringArrayMetadata(value: unknown) {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
-}
-
-export function timelineToolRequests(step: Pick<TimelineStep, "title" | "metadata">): TimelineToolRequest[] {
-  if (!isModelRoundTimelineStep(step)) return [];
-  const structuredSelected = toolRequestArrayMetadata(step.metadata.selectedLocalToolRequests);
-  if (structuredSelected.length > 0) return structuredSelected;
-  const enrichedRequests = toolRequestArrayMetadata(step.metadata.timelineToolRequests);
-  if (enrichedRequests.length > 0) return enrichedRequests;
-  const structuredRequested = toolRequestArrayMetadata(step.metadata.requestedToolRequests);
-  if (structuredRequested.length > 0) return structuredRequested;
-  const selectedTools = stringArrayMetadata(step.metadata.selectedLocalTools).map((name) => ({ name }));
-  if (selectedTools.length > 0) return selectedTools;
-  return stringArrayMetadata(step.metadata.requestedToolCalls).map((name) => ({ name }));
-}
-
-function toolRequestArrayMetadata(value: unknown): TimelineToolRequest[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item): TimelineToolRequest[] => {
-    if (typeof item === "string" && item.trim()) return [{ name: item.trim() }];
-    if (!item || typeof item !== "object") return [];
-    const record = item as Record<string, unknown>;
-    const name = typeof record.name === "string" ? record.name.trim() : "";
-    if (!name) return [];
-    const id = typeof record.id === "string" && record.id.trim() ? record.id : null;
-    return [
-      {
-        ...(id ? { id } : {}),
-        name,
-        argumentsText: toolRequestArgumentsText(record)
-      }
-    ];
-  });
-}
-
-function toolRequestArgumentsText(record: Record<string, unknown>) {
-  for (const key of ["argumentsText", "argumentsPreview", "argumentsSummary"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  const value = record.arguments;
-  if (value == null) return null;
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function formatToolCallList(tools: string[]) {
-  const counts = new Map<string, number>();
-  for (const tool of tools) counts.set(tool, (counts.get(tool) ?? 0) + 1);
-  return [...counts.entries()].map(([tool, count]) => (count > 1 ? `${tool} x${count}` : tool)).join(", ");
-}
-
-function parseToolArgumentsText(argumentsText?: string | null): Record<string, unknown> | null {
-  if (!argumentsText?.trim()) return null;
-  try {
-    const parsed = JSON.parse(argumentsText);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function formatToolArgumentValue(value: unknown) {
-  if (value == null) return "null";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return JSON.stringify(value);
-}
-
-function isModelRoundTimelineStep(step: Pick<TimelineStep, "title">) {
-  return /\bagent model round complete\b/.test(normalizedTimelineName(step.title));
-}
-
-export function timelineTitleText(step: Pick<TimelineStep, "title" | "summary" | "kind" | "source">) {
-  const title = normalizedTimelineName(step.title);
-  const toolName = toolNameFromSummary(step.summary);
-  if (/\b(discord mention received|discord user prompt|user prompt)\b/.test(title)) return "User prompt";
-  if (/\b(discord thinking sent|thinking reply sent)\b/.test(title)) return "Acknowledgement sent";
-  if (/\b(load channel memory|load memory)\b/.test(title)) return "Load conversation memory";
-  if (/\b(resolve discord permissions|permissions visibility resolved)\b/.test(title)) return "Check user access";
-  if (/\b(discord reply context resolved|reply context resolved)\b/.test(title)) return "Load reply context";
-  if (/\bagent model round complete\b/.test(title)) {
-    const round = step.summary.match(/^Round\s+(\d+)/i)?.[1];
-    return round ? `LLM call ${round}` : "LLM call";
-  }
-  if (/\bagent tool complete\b/.test(title)) return toolName ? `Tool call: ${toolName}` : "Tool call";
-  if (/\bget discord channel topics\b/.test(title)) return "Channel topics query";
-  if (/\bcompose channel topics\b/.test(title)) return "Topic summary composed";
-  if (/\bget discord stats\b/.test(title)) return "Discord stats query";
-  if (/\bmodel tool router\b/.test(title)) return "Tool selection";
-  if (/\bagent tool started\b/.test(title)) return toolName ? `Start tool: ${toolName}` : "Start tool";
-  if (/\bagent request started\b/.test(title)) return "Start agent run";
-  if (/\bagent response ready\b/.test(title)) return "Answer ready";
-  if (/\bagent final synthesis started\b/.test(title)) return "Compose final answer";
-  if (/\b(discord final response|final response)\b/.test(title)) return "Final answer sent";
-  if (/\bchat\b/.test(title) && step.source === "tool") return "LLM response";
-  return step.title;
-}
-
-function toolNameFromSummary(summary: string) {
-  const match = summary.match(/^([A-Za-z][\w.-]*)(?::|\b)/);
-  return match?.[1] ?? "";
-}
-
 function TimelineStepHeader({ step, child = false }: { step: TimelineStep; child?: boolean }) {
   return (
     <div className={child ? "timeline-child-title" : "timeline-title"}>
@@ -1240,6 +1086,7 @@ function OpenCodeTranscript({ content }: { content: string }) {
         <Metric label="Model wait" value={transcript.modelWaitMs == null ? "unknown" : formatDuration(transcript.modelWaitMs)} />
         <Metric label="Tool time" value={formatDuration(transcript.toolDurationMs)} />
         <Metric label="First edit" value={transcript.firstEditAtMs == null ? "none" : formatDuration(transcript.firstEditAtMs)} />
+        <Metric label="Pre-edit rounds" value={transcript.roundsBeforeFirstEdit == null ? "unknown" : String(transcript.roundsBeforeFirstEdit)} />
         <Metric label="Tokens" value={transcript.tokenTotal == null ? "unknown" : transcript.tokenTotal.toLocaleString()} />
       </div>
       <div className="opencode-transcript-insights">
@@ -2266,284 +2113,6 @@ function isOpenCodeTranscriptArtifact(artifact: RunArtifact) {
   if (artifact.kind !== "command_log") return false;
   const step = normalizedTimelineName(stringMetadata(artifact.metadata.step) ?? artifact.name);
   return /\bopencode attempt \d+\b/.test(step);
-}
-
-export function parseCodexTranscript(content: string): ParsedCodexTranscript {
-  const lines = content.split(/\r?\n/);
-  const launchCommand = lines.find((line) => line.startsWith("$ "))?.slice(2).trim() || null;
-  const records = lines.flatMap(parseCodexTranscriptRecord);
-  const items: ParsedCodexTranscript["items"] = [];
-  const commandStarts = new Map<string, CodexCommandStart>();
-  let agentMessages = 0;
-  let commands = 0;
-  let reasoningDeltaCount = 0;
-  let reasoningChars = 0;
-  let tokenTotal: number | null = null;
-  let tokenCached: number | null = null;
-  let tokenOutput: number | null = null;
-
-  if (launchCommand) {
-    items.push({
-      id: "launch-command",
-      kind: "lifecycle",
-      title: "App-server launched",
-      timestamp: records[0]?.timestamp ?? new Date(0).toISOString(),
-      body: "",
-      command: launchCommand,
-      output: ""
-    });
-  }
-
-  for (const record of records) {
-    const params = parseParamsPreview(record.metadata.paramsPreview);
-    const item = objectValue(params?.item);
-    const itemType = stringValue(record.metadata.itemType) ?? stringValue(item?.type);
-
-    if (record.method === "warning") {
-      items.push(transcriptItem(record, "warning", "Warning", stringValue(params?.message) ?? record.message));
-      continue;
-    }
-    if (record.method === "thread/started") {
-      const thread = objectValue(params?.thread);
-      const modelProvider = stringValue(thread?.modelProvider);
-      const cwd = stringValue(thread?.cwd);
-      items.push(transcriptItem(record, "lifecycle", "Thread started", [modelProvider ? `Provider: ${modelProvider}` : "", cwd ? `cwd: ${cwd}` : ""].filter(Boolean).join("\n")));
-      continue;
-    }
-    if (record.method === "turn/started") {
-      items.push(transcriptItem(record, "lifecycle", "Turn started", ""));
-      continue;
-    }
-    if (record.method === "thread/tokenUsage/updated") {
-      const total = objectValue(objectValue(params?.tokenUsage)?.total);
-      tokenTotal = numericMetadata(total?.totalTokens) ?? tokenTotal;
-      tokenCached = numericMetadata(total?.cachedInputTokens) ?? tokenCached;
-      tokenOutput = numericMetadata(total?.outputTokens) ?? tokenOutput;
-      continue;
-    }
-    if (record.method === "item/reasoning/textDelta") {
-      reasoningDeltaCount += 1;
-      reasoningChars += stringValue(params?.delta)?.length ?? 0;
-      continue;
-    }
-    if (record.method !== "item/completed" && record.method !== "item/started") continue;
-    if (record.method === "item/started" && itemType !== "commandExecution") continue;
-
-    if (itemType === "commandExecution" && record.method === "item/started") {
-      const itemId = commandItemId(record, item);
-      if (!itemId) continue;
-      commandStarts.set(itemId, {
-        timestamp: record.timestamp,
-        command: stringValue(item?.command) ?? paramsPreviewStringField(record.metadata.paramsPreview, "command"),
-        summary: commandActionSummary(item?.commandActions)
-      });
-      continue;
-    }
-
-    if (itemType === "agentMessage" && record.method === "item/completed") {
-      const text = stringValue(item?.text);
-      if (!text) continue;
-      agentMessages += 1;
-      items.push(transcriptItem(record, "message", `Assistant message ${agentMessages}`, text));
-      continue;
-    }
-    if (itemType === "commandExecution" && record.method === "item/completed") {
-      const commandStart = commandStarts.get(commandItemId(record, item) ?? "");
-      const command = stringValue(item?.command) ?? paramsPreviewStringField(record.metadata.paramsPreview, "command") ?? commandStart?.command;
-      if (!command) continue;
-      commands += 1;
-      const status = stringValue(item?.status) ?? paramsPreviewStringField(record.metadata.paramsPreview, "status");
-      const durationMs = numericMetadata(item?.durationMs) ?? paramsPreviewNumberField(record.metadata.paramsPreview, "durationMs") ?? commandDurationFromTimestamps(commandStart?.timestamp, record.timestamp);
-      const exitCode = numericMetadata(item?.exitCode) ?? paramsPreviewNumberField(record.metadata.paramsPreview, "exitCode");
-      const actionSummary = commandActionSummary(item?.commandActions) || commandStart?.summary || "";
-      const body = [
-        status ? `Status: ${status}` : "",
-        exitCode != null ? `Exit: ${exitCode}` : "",
-        durationMs != null ? `Duration: ${formatDuration(durationMs)}` : "",
-        actionSummary
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      items.push({
-        ...transcriptItem(record, "command", `Command ${commands}`, body),
-        command,
-        output: stringValue(item?.aggregatedOutput) ?? paramsPreviewStringField(record.metadata.paramsPreview, "aggregatedOutput", { allowTruncated: true }) ?? ""
-      });
-    }
-  }
-
-  if (reasoningDeltaCount > 0) {
-    const firstRecord = records.find((record) => record.method === "item/reasoning/textDelta") ?? records[0];
-    if (firstRecord) {
-      items.push(
-        transcriptItem(
-          firstRecord,
-          "reasoning",
-          "Reasoning stream",
-          `${reasoningDeltaCount.toLocaleString()} streamed chunks, ${reasoningChars.toLocaleString()} chars. Content is summarized here because the raw stream is noisy and token-level.`
-        )
-      );
-    }
-  }
-
-  const stderr = transcriptSection(content, "stderr:");
-  if (stderr) {
-    const timestamp = records.at(-1)?.timestamp ?? new Date(0).toISOString();
-    items.push({ id: "stderr", kind: "error", title: "Codex stderr", timestamp, body: "Process stderr captured before exit; this is not necessarily the stop reason.", command: "", output: stderr });
-  }
-  const terminalError = transcriptSection(content, "error:");
-  if (terminalError) {
-    const timestamp = records.at(-1)?.timestamp ?? new Date(0).toISOString();
-    items.push({ id: "terminal-error", kind: "error", title: "App-server closed", timestamp, body: terminalError, command: "", output: "" });
-  }
-  if (tokenTotal != null) {
-    const timestamp = records.at(-1)?.timestamp ?? new Date(0).toISOString();
-    items.push({
-      id: "token-usage",
-      kind: "tokens",
-      title: "Final token usage",
-      timestamp,
-      body: [
-        `Total: ${tokenTotal.toLocaleString()}`,
-        tokenCached != null ? `Cached input: ${tokenCached.toLocaleString()}` : "",
-        tokenOutput != null ? `Output: ${tokenOutput.toLocaleString()}` : ""
-      ]
-        .filter(Boolean)
-        .join(" · "),
-      command: "",
-      output: ""
-    });
-  }
-
-  return {
-    isTranscript: launchCommand != null && records.length > 0,
-    launchCommand,
-    agentMessages,
-    commands,
-    reasoningDeltaCount,
-    reasoningChars,
-    tokenTotal,
-    items: items.sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime())
-  };
-}
-
-function parseCodexTranscriptRecord(line: string) {
-  if (!line.startsWith("{")) return [];
-  try {
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    const timestamp = stringValue(parsed.timestamp);
-    const method = stringValue(parsed.method);
-    if (!timestamp || !method) return [];
-    return [
-      {
-        timestamp,
-        method,
-        message: stringValue(parsed.message) ?? method,
-        metadata: objectValue(parsed.metadata) ?? {}
-      }
-    ];
-  } catch {
-    return [];
-  }
-}
-
-function parseParamsPreview(value: unknown) {
-  if (typeof value !== "string" || !value.trim()) return null;
-  try {
-    return JSON.parse(value) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function commandItemId(record: ReturnType<typeof parseCodexTranscriptRecord>[number], item: Record<string, unknown> | null) {
-  return stringValue(record.metadata.itemId) ?? stringValue(item?.id) ?? paramsPreviewStringField(record.metadata.paramsPreview, "id");
-}
-
-function commandDurationFromTimestamps(startedAt: string | null | undefined, completedAt: string) {
-  if (!startedAt) return null;
-  const started = new Date(startedAt).getTime();
-  const completed = new Date(completedAt).getTime();
-  if (!Number.isFinite(started) || !Number.isFinite(completed) || completed < started) return null;
-  return completed - started;
-}
-
-function commandActionSummary(value: unknown) {
-  if (!Array.isArray(value)) return "";
-  const actions = value.flatMap((action) => {
-    const record = objectValue(action);
-    if (!record) return [];
-    const type = stringValue(record.type);
-    const name = stringValue(record.name);
-    const command = stringValue(record.command);
-    if (type && name) return `${type} ${name}`;
-    if (type && command) return `${type} ${command}`;
-    if (type) return type;
-    return [];
-  });
-  return actions.slice(0, 3).join(", ");
-}
-
-function paramsPreviewStringField(value: unknown, key: string, options: { allowTruncated?: boolean } = {}) {
-  if (typeof value !== "string") return null;
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = value.match(new RegExp(`"${escapedKey}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`));
-  if (match?.[1]) return decodeJsonStringFragment(match[1]);
-  if (!options.allowTruncated) return null;
-  const start = value.search(new RegExp(`"${escapedKey}"\\s*:\\s*"`));
-  if (start < 0) return null;
-  const prefix = value.slice(start).match(new RegExp(`^"${escapedKey}"\\s*:\\s*"`))?.[0];
-  if (!prefix) return null;
-  const rest = value.slice(start + prefix.length);
-  const closing = rest.match(/"[,}]/);
-  const raw = (closing ? rest.slice(0, closing.index) : rest).replace(/\.\.\.$/, "");
-  return decodeJsonStringFragment(raw);
-}
-
-function paramsPreviewNumberField(value: unknown, key: string) {
-  if (typeof value !== "string") return null;
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = value.match(new RegExp(`"${escapedKey}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`));
-  if (!match?.[1]) return null;
-  const number = Number(match[1]);
-  return Number.isFinite(number) ? number : null;
-}
-
-function decodeJsonStringFragment(value: string) {
-  try {
-    return JSON.parse(`"${value}"`) as string;
-  } catch {
-    return value;
-  }
-}
-
-function transcriptItem(record: ReturnType<typeof parseCodexTranscriptRecord>[number], kind: CodexTranscriptItemKind, title: string, body: string) {
-  return {
-    id: `${kind}-${record.timestamp}-${title}`,
-    kind,
-    title,
-    timestamp: record.timestamp,
-    body,
-    command: "",
-    output: ""
-  };
-}
-
-function transcriptSection(content: string, marker: string) {
-  const index = content.indexOf(`\n${marker}`);
-  if (index < 0) return "";
-  const afterMarker = content.slice(index + marker.length + 1);
-  const nextKnownSection = afterMarker.search(/\n(?:stderr:|error:|\[exit )/);
-  const section = nextKnownSection > 0 ? afterMarker.slice(0, nextKnownSection) : afterMarker;
-  return section.trim();
-}
-
-function objectValue(value: unknown) {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" ? value : null;
 }
 
 function sortTimelineSteps(steps: TimelineStep[]) {

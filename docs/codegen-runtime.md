@@ -3,7 +3,7 @@
 Discord AI Agent supports two code-update execution backends:
 
 - `kubernetes-job` (default): each task gets an isolated Kubernetes Job and branch
-- `local-process`: a long-lived worker pod starts sandbox runner child processes locally, avoiding per-task Kubernetes Job creation and keeping repo/dependency/Codex caches warm in the worker
+- `local-process`: a long-lived worker pod starts sandbox runner child processes locally, avoiding per-task Kubernetes Job creation and keeping repo, dependency, and harness caches warm in the worker
 
 Both modes are cache-first:
 
@@ -29,21 +29,31 @@ Authenticated clients can:
 
 The old task callback endpoints remain for the current sandbox runner. New codegen runtime work should attach to the session API first, then route executions to warm sandboxes, harness servers, and Discord delivery from that durable event stream.
 
-Today, `enqueueAgentTask` creates or reuses the durable codegen session, appends the code-update request as a `user` message, and creates a queued `codex-app-server` execution before handing work to the existing `agent.task` queue. This keeps the current Discord behavior intact while making the codegen session/event trail the durable source of truth for future scheduler and UI work.
+Today, `enqueueAgentTask` creates or reuses the durable codegen session, appends the code-update request as a `user` message, and creates a queued harness execution before handing work to the existing `agent.task` queue. This keeps the current Discord behavior intact while making the codegen session/event trail the durable source of truth for future scheduler and UI work.
 
 ## Harness Profile
 
 Code-update tasks use their own coding harness model via `OPENROUTER_CODEGEN_MODEL`, falling back to `OPENROUTER_CHAT_MODEL` when unset. This lets normal Discord chat stay on a cheap conversational model while code updates can move independently to a model better suited to repository edits.
 
-The sandbox writes an ephemeral Codex profile with the same posture used by Centaur-style coding harnesses:
+The sandbox writes an ephemeral harness profile with the same posture used by Centaur-style coding harnesses:
 
 - `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` because Kubernetes is the external sandbox boundary
-- `model_reasoning_effort = "low"`, `model_verbosity = "low"`, `personality = "pragmatic"`, and `service_tier = "fast"`
-- Codex `fast_mode` and `runtime_metrics` enabled
-- `codex app-server` as the primary transport so turn notifications, item updates, token usage, and errors are captured as structured events
-- `codex exec --json` as a fallback if app-server fails before producing a diff
+- low reasoning/verbosity, pragmatic response style, and fast service tier where the selected harness supports those options
+- structured streaming enabled where available so turn notifications, item updates, token usage, and errors are captured as events
+- OpenCode is the default harness; Codex app-server/exec remains available when `CODEGEN_HARNESS=codex`
 
-The next runtime migration should preserve this harness profile while moving from per-task app-server processes to a long-lived app-server session inside each warm worker.
+The next runtime migration should preserve this harness posture while moving from per-task harness processes to a long-lived harness server/session inside each warm worker.
+
+## Prompt And Context Policy
+
+Codegen prompts should stay generic and architecture-driven:
+
+- Start from `AGENTS.md`, `docs/architecture.md`, and the nearest `src/**/README.md`.
+- Use preflight context as a map, not a research backlog.
+- Prefer domain classification over long generated file lists.
+- Treat model-facing tool names as strong anchors only when the request is about tool schemas, routing, arguments, descriptions, or contracts.
+- For product behavior requests, route to the owning lifecycle first: Discord response, knowledge/indexing/retrieval, agent task status, run console, or sandbox execution.
+- Track first-edit latency and repeated reads as prompt/context quality signals. If the agent spends many rounds before editing, improve ownership maps or context classification before adding task-specific prompt instructions.
 
 ## Current Isolation Model
 
@@ -62,7 +72,7 @@ The retained cache contains:
 - `node_modules/`: dependency snapshots keyed by Node version, `package.json`, and `package-lock.json`
 - `locks/`: filesystem lock directories for cache mutation
 
-If Codex changes `package.json` or `package-lock.json`, the sandbox refreshes dependencies before verification so tests run with the generated dependency graph.
+If the coding harness changes `package.json` or `package-lock.json`, the sandbox refreshes dependencies before verification so tests run with the generated dependency graph.
 
 ## Backend Selection
 
@@ -87,7 +97,7 @@ Override these with `CODEGEN_LEASE_HEARTBEAT_SECONDS`, `CODEGEN_LEASE_STALE_SECO
 The next Centaur-like steps are:
 
 1. Move from the dedicated warm codegen worker pod to true warm sandbox pods that keep a harness server alive behind the same lease table.
-2. Keep a Codex app-server process warm per worker and reuse threads/sessions across recovery turns instead of spawning app-server per task.
+2. Keep the selected harness server/session warm per worker and reuse threads/sessions across recovery turns instead of spawning a fresh process per task.
 3. Add queue routing/fallback so a task uses a warm worker when one is available and falls back to `kubernetes-job` when the warm pool is saturated.
 4. Move credential access toward a control-plane or proxy boundary so sandboxes can use task-scoped credentials without receiving broad long-lived secrets directly.
 
@@ -95,7 +105,7 @@ The existing `ExecutionBackend` interface, task event stream, cache metrics, and
 
 ## Task Terminal UI
 
-The internal API serves a lightweight task viewer at `/tasks`. It shows recent code-update tasks, task status, sandbox metadata, completed command tails, and live stdout/stderr snippets from long-running Codex, verify, scan, and dependency-install steps.
+The internal API serves a lightweight task viewer at `/tasks`. It shows recent code-update tasks, task status, sandbox metadata, completed command tails, and live stdout/stderr snippets from long-running harness, verify, scan, and dependency-install steps.
 
 By default, the API service is cluster-internal. Open it locally with:
 

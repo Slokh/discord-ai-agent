@@ -125,7 +125,7 @@ For GitHub Actions deploys, set repository variables instead:
 - optional `SANDBOX_CACHE_SIZE`
 - optional `SANDBOX_CACHE_STORAGE_CLASS`
 
-That deployment consumes only `agent.task`, uses the `local-process` backend, registers a lease in Postgres, and keeps repo/dependency/Codex caches warm on the mounted sandbox cache volume. The regular worker automatically stops consuming code-update task jobs while continuing crawl, embedding, and Discord request work.
+That deployment consumes only `agent.task`, uses the `local-process` backend, registers a lease in Postgres, and keeps repo, dependency, and harness caches warm on the mounted sandbox cache volume. The regular worker automatically stops consuming code-update task jobs while continuing crawl, embedding, and Discord request work.
 
 The default warm lease settings heartbeat every 15 seconds, mark stale leases after 120 seconds, poll every 5 seconds while waiting, and wait up to 30 minutes for the warm slot. For hobby deployments where queued code updates should fail faster instead of sitting behind a wedged worker, lower `CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS`.
 
@@ -137,7 +137,7 @@ The Helm chart creates a sandbox cache PVC by default. Sandbox Jobs mount it at 
 - the npm download cache
 - a `node_modules` snapshot keyed by Node version plus `package.json` and `package-lock.json`
 
-Per-task Git worktrees are created on sandbox-local temporary storage and cleaned up after each run; the shared cache is intentionally retained. If Codex changes `package.json` or `package-lock.json`, the sandbox refreshes dependencies again before verification so tests do not run against stale dependencies.
+Per-task Git worktrees are created on sandbox-local temporary storage and cleaned up after each run; the shared cache is intentionally retained. If the coding harness changes `package.json` or `package-lock.json`, the sandbox refreshes dependencies again before verification so tests do not run against stale dependencies.
 
 The default chart uses a `ReadWriteOnce` cache PVC and `worker.replicas=1`. Keep that shape unless your storage class supports the access mode and scheduling behavior you need for concurrent code-update tasks. For multi-worker or warm-pool deployments, move cache/sandbox ownership to an explicit lease model before scaling codegen horizontally.
 

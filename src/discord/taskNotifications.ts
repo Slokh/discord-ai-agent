@@ -1,7 +1,8 @@
 import type { Client, Message } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentTaskRecord, DiscordAiAgentRepository, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
-import { formatAgentTaskResult, cleanResponse } from "../tools/coreTools.js";
+import { formatAgentTaskResult } from "../tools/coreTools.js";
+import { cleanResponse } from "../tools/responseFormatting.js";
 import { durationMs, logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
 

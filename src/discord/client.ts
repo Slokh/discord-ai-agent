@@ -19,7 +19,7 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { handleAgentRequest } from "../agent/router.js";
-import { cleanResponse } from "../tools/coreTools.js";
+import { cleanResponse } from "../tools/responseFormatting.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, ToolContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";

@@ -4,7 +4,6 @@ import {
   compactTimelineSteps,
   enrichModelRoundToolRequests,
   groupTimelineSteps,
-  parseCodexTranscript,
   relatedRunTimelineSteps,
   summedStepDuration,
   timelineStepSummaryText,
@@ -13,6 +12,7 @@ import {
   timelineToolRequests,
   type TimelineStep
 } from "../../src/control/console/App.js";
+import { parseCodexTranscript } from "../../src/control/console/codexTranscript.js";
 import type { RunArtifact, RunEvent, RunSnapshot, RunSpan } from "../../src/control/console/types.js";
 import { parseOpenCodeTranscript } from "../../src/observability/openCodeTranscript.js";
 
@@ -585,6 +585,8 @@ describe("run console timeline", () => {
     expect(transcript.repeatedReads).toEqual([]);
     expect(transcript.firstToolAtMs).toBe(5_000);
     expect(transcript.firstEditAtMs).toBe(14_000);
+    expect(transcript.firstEditRound).toBe(2);
+    expect(transcript.roundsBeforeFirstEdit).toBe(1);
     expect(transcript.tokenTotal).toBe(220);
     expect(transcript.slowestRound).toEqual({ round: 1, durationMs: 10_000, title: "Round 1: read" });
     expect(transcript.items.map((item) => item.title)).toEqual(["Round 1: read", "Round 2: edit", "Final token usage"]);

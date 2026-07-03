@@ -237,6 +237,66 @@ describe("sandboxRunner", () => {
     expect(renderCodegenFailureDiagnosis(scan)).toContain("- scan: 2.5s");
   });
 
+  it("distinguishes no-diff failures where the harness never made an edit", () => {
+    const error = Object.assign(new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."), {
+      name: "CodegenNoDiffError",
+      attempts: [
+        {
+          attempt: 1,
+          command: "opencode-run",
+          exitCode: 0,
+          durationMs: 12_000,
+          producedDiff: false,
+          stdoutTail: "OpenCode read files and described a plan.",
+          stderrTail: ""
+        }
+      ]
+    });
+
+    const diagnosis = diagnoseCodegenFailure({
+      error,
+      timings: { opencode: 12_000, total: 13_000 },
+      harness: "opencode"
+    });
+
+    expect(diagnosis).toEqual(
+      expect.objectContaining({
+        category: "no_first_edit",
+        status: "no_changes",
+        failedPhase: "opencode"
+      })
+    );
+    expect(diagnosis.summary).toContain("OpenCode finished without making a code edit");
+    expect(diagnosis.nextAction).toContain("early focused edit");
+    expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Attempts");
+    expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("attempt 1: command=opencode-run");
+  });
+
+  it("keeps no-diff failures with edit signals in the normal no-diff category", () => {
+    const error = Object.assign(new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."), {
+      name: "CodegenNoDiffError",
+      attempts: [
+        {
+          attempt: 1,
+          command: "opencode-run",
+          exitCode: 0,
+          durationMs: 15_000,
+          producedDiff: false,
+          stdoutTail: '{"type":"tool_use","part":{"tool":"edit","title":"src/example.ts"}}',
+          stderrTail: ""
+        }
+      ]
+    });
+
+    expect(
+      diagnoseCodegenFailure({
+        error,
+        timings: { opencode: 15_000, total: 16_000 },
+        harness: "opencode"
+      })
+    ).toEqual(expect.objectContaining({ category: "no_diff", status: "no_changes" }));
+  });
+
   it("builds a concise codegen context pack from the repository guide and project map", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-context-"));
     try {

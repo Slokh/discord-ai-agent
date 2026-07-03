@@ -1315,8 +1315,12 @@ export function formatAgentTaskResult(input: {
   }
 
   if (job.status === "no_changes") {
+    const diagnosis = agentTaskFailureDiagnosis(input.taskEvents);
     return withRunConsole([
-      `No PR opened: the coding agent did not produce a code diff. Task ID: \`${input.taskId}\`.`,
+      diagnosis
+        ? `No PR opened: ${diagnosis.summary} Task ID: \`${input.taskId}\`.`
+        : `No PR opened: the coding agent did not produce a code diff. Task ID: \`${input.taskId}\`.`,
+      diagnosis?.nextAction ? `Next: ${diagnosis.nextAction}` : "",
       formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
@@ -1334,8 +1338,12 @@ export function formatAgentTaskResult(input: {
   }
 
   if (job.status === "failed") {
+    const diagnosis = agentTaskFailureDiagnosis(input.taskEvents);
     return withRunConsole([
-      `No PR opened: the sandbox failed. ${truncateForDiscord(job.error ?? "unknown error", 900)}`,
+      diagnosis
+        ? `No PR opened: ${diagnosis.summary}`
+        : `No PR opened: the sandbox failed. ${truncateForDiscord(job.error ?? "unknown error", 900)}`,
+      diagnosis?.nextAction ? `Next: ${diagnosis.nextAction}` : "",
       formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
@@ -1343,6 +1351,24 @@ export function formatAgentTaskResult(input: {
   }
 
   return withRunConsole(`I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`);
+}
+
+function agentTaskFailureDiagnosis(taskEvents: TaskEvent[] | undefined) {
+  for (const event of [...(taskEvents ?? [])].reverse()) {
+    const diagnosis = objectRecord(event.metadata?.failureDiagnosis);
+    const summary = typeof diagnosis?.summary === "string" ? diagnosis.summary.trim() : "";
+    if (!summary) continue;
+    const nextAction = typeof diagnosis?.nextAction === "string" ? diagnosis.nextAction.trim() : "";
+    return {
+      summary: truncateForDiscord(summary, 700),
+      nextAction: nextAction ? truncateForDiscord(nextAction, 700) : ""
+    };
+  }
+  return null;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function agentTaskRunConsoleUrl(config: ToolContext["config"], taskId: string) {

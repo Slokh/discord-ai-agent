@@ -105,6 +105,14 @@ kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080
 
 Then visit `http://localhost:8080/runs`.
 
+For local React console iteration against real run data, use:
+
+```sh
+npm run console:dev:live
+```
+
+This command prefers an explicit `CONSOLE_API_TARGET`, then `CONTROL_UI_PUBLIC_URL`, then the deployed Kubernetes app's `CONTROL_UI_PUBLIC_URL` and auth secret when `kubectl` can read them, and finally `http://localhost:8080`. The intended default is production run data when available, with a local API fallback.
+
 If you expose the API service on a public hostname, set `CONTROL_UI_AUTH_PASSWORD` in the runtime Secret first. Browser access uses Basic auth with username `admin`; scripts may also use `Authorization: Bearer $CONTROL_UI_AUTH_PASSWORD`. Set `CONTROL_UI_PUBLIC_URL` to the externally reachable console origin, such as `https://tasks.example.com`, so Discord code-update progress messages include a direct `/runs/<taskId>` console link. Do not include `/runs` in the value; the bot appends the run path itself.
 
 To share a pre-authenticated link, append `?auth=$CONTROL_UI_AUTH_PASSWORD` to any run-console URL. The server validates the token, stores an HttpOnly cookie for 30 days, then redirects to the same URL without the auth query parameter.

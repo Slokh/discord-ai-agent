@@ -16,7 +16,7 @@
     "start:all": "node dist/src/index.js all",
     "build": "npm run console:build && tsc -p tsconfig.json",
     "console:dev": "vite --config vite.console.config.ts --mode fixture",
-    "console:dev:live": "vite --config vite.console.config.ts --mode live",
+    "console:dev:live": "tsx scripts/consoleDevLive.ts",
     "console:build": "vite build --config vite.console.config.ts",
     "console:preview": "vite preview --config vite.console.config.ts",
     "test": "vitest run",

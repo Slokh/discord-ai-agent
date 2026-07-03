@@ -25,7 +25,7 @@ Use classes to audit whether a new user problem is missing a real primitive or w
 
 Each local tool contract includes an `outputContract`. This is the model-facing promise for the shape of useful output. Tool implementations should keep outputs compact but include the fields needed for the model to answer directly:
 
-- Retrieval tools should include applied filters, ranked evidence snippets, message links when available, and result counts.
+- Retrieval tools should use hybrid keyword/vector search where useful and include applied filters, ranked evidence snippets, message links when available, and result counts.
 - Stats tools should include metric, grouping, filters, ranked rows, and result counts.
 - Summary tools should include focus/question, sample window, grounded summary, and coverage limits.
 - Coding tools should include task status, run-console link when available, progress summary, and PR link or failure reason.

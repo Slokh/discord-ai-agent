@@ -180,11 +180,12 @@ describe("searchDiscordHistory", () => {
     expect(repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ authorIds: ["user-id"] }));
   });
 
-  it("skips table-wide vector search for unfiltered keyword misses", async () => {
+  it("uses vector search for broad keyword misses", async () => {
+    const vectorResults = [result("vector", 0.8)];
     const repo = {
       getVisibleIndexedChannelIds: async () => ["c1", "c2"],
       keywordSearch: vi.fn(async () => []),
-      vectorSearch: vi.fn(async () => [result("vector", 0.8)])
+      vectorSearch: vi.fn(async () => vectorResults)
     };
     const openRouter = {
       embed: vi.fn(async () => [[0.1, 0.2]])
@@ -202,9 +203,17 @@ describe("searchDiscordHistory", () => {
       }
     });
 
-    expect(results).toEqual([]);
-    expect(openRouter.embed).not.toHaveBeenCalled();
-    expect(repo.vectorSearch).not.toHaveBeenCalled();
+    expect(results).toEqual(vectorResults);
+    expect(openRouter.embed).toHaveBeenCalledWith(["sampleuser birthday"], "embed", undefined);
+    expect(repo.vectorSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "g",
+        visibleChannelIds: ["c1", "c2"],
+        authorIds: [],
+        aboutUserTerms: [],
+        limit: 10
+      })
+    );
   });
 
   it("allows vector search for narrowed keyword misses", async () => {

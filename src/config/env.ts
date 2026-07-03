@@ -41,6 +41,7 @@ const defaults = {
   discordClientId: "",
   discordGuildId: "",
   discordBotName: "ai",
+  discordLoadingReaction: "⏳",
   databaseUrl: defaultDatabaseUrl(),
   embeddingDimensions: 1536,
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
@@ -102,6 +103,7 @@ const envSchema = z.object({
   DISCORD_CLIENT_ID: z.string().default(defaults.discordClientId),
   DISCORD_GUILD_ID: z.string().default(defaults.discordGuildId),
   BOT_NAME: z.string().default(defaults.discordBotName),
+  DISCORD_LOADING_REACTION: z.string().trim().min(1).default(defaults.discordLoadingReaction),
 
   DATABASE_URL: z.string().default(defaults.databaseUrl),
   EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(defaults.embeddingDimensions),
@@ -187,7 +189,8 @@ export function loadConfig() {
       token: parsed.data.DISCORD_TOKEN,
       clientId: parsed.data.DISCORD_CLIENT_ID,
       guildId: parsed.data.DISCORD_GUILD_ID,
-      botName: parsed.data.BOT_NAME
+      botName: parsed.data.BOT_NAME,
+      loadingReaction: parsed.data.DISCORD_LOADING_REACTION
     },
     databaseUrl: parsed.data.DATABASE_URL,
     embeddingDimensions: parsed.data.EMBEDDING_DIMENSIONS,

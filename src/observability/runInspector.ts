@@ -1,4 +1,5 @@
 import type { ProcessRunArtifactContent } from "../db/repositories.js";
+import { formatOpenCodeTranscriptDiagnostics, parseOpenCodeTranscript } from "./openCodeTranscript.js";
 import type { RunArtifactSummary, RunSnapshot, RunSpan, RunTerminalEntry } from "./runs.js";
 
 export type RunInspectionOptions = {
@@ -90,6 +91,11 @@ export function formatRunArtifacts(artifacts: ProcessRunArtifactContent[]): stri
   const lines: string[] = [];
   for (const artifact of artifacts) {
     lines.push(`--- ${artifact.name} (${artifact.artifactId}, ${artifact.kind}, ${formatBytes(artifact.sizeBytes)}) ---`);
+    const openCodeDiagnostics = formatOpenCodeArtifactDiagnostics(artifact);
+    if (openCodeDiagnostics) {
+      lines.push(openCodeDiagnostics);
+      lines.push("");
+    }
     lines.push(artifact.content.trimEnd());
     lines.push("");
   }
@@ -218,4 +224,9 @@ function clampInteger(value: number, min: number, max: number) {
 
 function stringFromUnknown(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function formatOpenCodeArtifactDiagnostics(artifact: ProcessRunArtifactContent) {
+  if (artifact.kind !== "command_log" || !/\bopencode\b/i.test(artifact.name)) return "";
+  return formatOpenCodeTranscriptDiagnostics(parseOpenCodeTranscript(artifact.content), formatSeconds);
 }

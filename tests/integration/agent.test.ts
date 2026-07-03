@@ -1468,6 +1468,62 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "runCodingAgent" }));
   });
 
+  it("uses the lazily-created Discord status message when enqueueing codegen jobs", async () => {
+    const enqueueAgentTask = vi.fn(async () => ({
+      jobId: "job-1",
+      taskId: "task-lazy-status"
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, github: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        chat: vi.fn().mockResolvedValueOnce({
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "runCodingAgent",
+              argumentsText: JSON.stringify({ request: "add better task progress updates", title: "Improve task progress updates" })
+            }
+          ]
+        })
+      },
+      github: {},
+      jobs: {
+        enqueueAgentTask
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      statusChannelId: undefined,
+      statusMessageId: undefined,
+      updateStatus: vi.fn(async () => {
+        ctx.statusChannelId = "c";
+        ctx.statusMessageId = "lazy-reply-1";
+      })
+    } as unknown as ToolContext & { statusChannelId?: string; statusMessageId?: string };
+
+    const response = await handleAgentRequest(ctx, "update yourself to show better task progress");
+
+    expect(response.content).toContain("Task ID: `task-lazy-status`");
+    expect(ctx.updateStatus).toHaveBeenCalledWith("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
+    expect(enqueueAgentTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Improve task progress updates",
+        request: "add better task progress updates",
+        discordResponseChannelId: "c",
+        discordResponseMessageId: "lazy-reply-1"
+      })
+    );
+  });
+
   it("audits failed agent requests before surfacing the error to Discord", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {

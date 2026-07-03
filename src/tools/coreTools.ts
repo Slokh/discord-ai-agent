@@ -1,5 +1,7 @@
 import { buildHistoryRetrievalQuery, searchDiscordHistory, formatSearchResults } from "../memory/search.js";
 import { MESSAGE_EMBEDDING_INPUT_VERSION } from "../memory/embedding.js";
+import { formatRunInspection } from "../observability/runInspector.js";
+import { getRunSnapshot, resolveRunReference, type RunSnapshot } from "../observability/runs.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
@@ -1670,7 +1672,8 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
 export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: string; limit?: number } = {}): Promise<string> {
   const limit = clampInteger(input.limit, 1, 50, 20);
   const traceId = input.traceId?.trim() || undefined;
-  const [events, taskEvents, commandEvents, toolLogs] = await Promise.all([
+  const [runSnapshot, events, taskEvents, commandEvents, toolLogs] = await Promise.all([
+    traceId ? resolveVisibleRunSnapshot(ctx, traceId) : Promise.resolve(undefined),
     ctx.repo.getTraceEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
@@ -1704,6 +1707,7 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     toolName: "inspectAgentLogs",
     argumentsSummary: summarizeForAudit({ traceId, limit }),
     resultSummary: summarizeForAudit({
+      normalizedRun: runSnapshot?.run.runId,
       traceEvents: events.length,
       taskEvents: taskEvents.length,
       commandEvents: commandEvents.length,
@@ -1711,12 +1715,13 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     })
   });
 
-  if (events.length === 0 && taskEvents.length === 0 && commandEvents.length === 0 && toolLogs.length === 0) {
+  if (!runSnapshot && events.length === 0 && taskEvents.length === 0 && commandEvents.length === 0 && toolLogs.length === 0) {
     return traceId ? `No Discord AI Agent trace or tool logs matched traceId=${traceId}.` : "No recent Discord AI Agent trace or tool logs matched visible channels.";
   }
 
   return [
     traceId ? `Discord AI Agent logs for trace ${traceId}:` : "Recent Discord AI Agent logs:",
+    runSnapshot ? `\n${formatVisibleRunInspection(runSnapshot)}` : "",
     "",
     formatTraceEvents(events),
     "",
@@ -1788,6 +1793,33 @@ function formatToolAuditLogs(logs: ToolAuditLog[]) {
         return `- ${log.createdAt.toISOString()} ${log.toolName}${bits.length ? ` (${bits.join(", ")})` : ""}${result}`;
       })
   ].join("\n");
+}
+
+async function resolveVisibleRunSnapshot(ctx: ToolContext, reference: string): Promise<RunSnapshot | undefined> {
+  const resolved = await resolveRunReference(ctx.repo, reference);
+  const runId = resolved?.run.runId ?? reference.trim();
+  if (!runId) return undefined;
+  const snapshot = await getRunSnapshot(ctx.repo, runId);
+  if (!snapshot || !isRunSnapshotVisibleToRequester(ctx, snapshot)) return undefined;
+  return snapshot;
+}
+
+function isRunSnapshotVisibleToRequester(ctx: ToolContext, snapshot: RunSnapshot) {
+  const run = snapshot.run;
+  if (run.guildId && run.guildId !== ctx.guildId) return false;
+  if (!run.channelId) return true;
+  return run.channelId === ctx.channelId || ctx.visibleChannelIds.includes(run.channelId);
+}
+
+function formatVisibleRunInspection(snapshot: RunSnapshot) {
+  return truncateForDiscord(
+    formatRunInspection(snapshot, {
+      eventLimit: 20,
+      terminalLimit: snapshot.run.kind === "codegen" ? 8 : 4,
+      includeTerminal: snapshot.terminal.entries.length > 0
+    }),
+    6000
+  );
 }
 
 async function resolveVisibleAgentTask(

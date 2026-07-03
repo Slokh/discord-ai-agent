@@ -898,7 +898,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
   resolver: ["resolved IDs", "display names", "match confidence or ambiguity notes", "result count"],
-  retrieval: ["applied filters", "ranked evidence snippets", "Discord message links when available", "result count"],
+  retrieval: ["applied filters", "ranked evidence snippets", "match sources when available", "Discord message links when available", "result count"],
   memory: ["memory scope", "durable action or retrieved turns", "audit trail"],
   stats: ["metric", "grouping", "filters", "ranked rows", "result count"],
   summary: ["question or focus", "sample window", "grounded summary", "coverage limits"],

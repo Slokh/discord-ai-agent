@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildHistoryRetrievalQuery, mergeResults, resolveSearchChannelIds, searchDiscordHistory } from "../../src/memory/search.js";
+import { buildHistoryRetrievalQuery, formatSearchResults, mergeResults, resolveSearchChannelIds, searchDiscordHistory } from "../../src/memory/search.js";
+import type { RankedSearchResult } from "../../src/memory/search.js";
 import type { SearchResult } from "../../src/db/repositories.js";
 
 function result(id: string, score: number): SearchResult {
@@ -22,6 +23,15 @@ describe("mergeResults", () => {
     const merged = mergeResults([result("a", 0.2), result("b", 0.9)], [result("a", 0.7), result("c", 0.8)]);
     expect(merged.map((item) => item.messageId)).toEqual(["a", "b", "c"]);
     expect(merged[0]?.score).toBeGreaterThan(1);
+    expect(merged.find((item) => item.messageId === "a")?.matchSources).toEqual(["keyword", "semantic"]);
+    expect(merged.find((item) => item.messageId === "b")?.matchSources).toEqual(["keyword"]);
+    expect(merged.find((item) => item.messageId === "c")?.matchSources).toEqual(["semantic"]);
+  });
+
+  it("formats match-source metadata when available", () => {
+    const ranked: RankedSearchResult = { ...result("a", 0.2), matchSources: ["keyword", "semantic"] };
+    const formatted = formatSearchResults([ranked]);
+    expect(formatted).toContain("Matched by: keyword, semantic");
   });
 });
 
@@ -203,7 +213,8 @@ describe("searchDiscordHistory", () => {
       }
     });
 
-    expect(results).toEqual(vectorResults);
+    expect(results.map((item) => item.messageId)).toEqual(vectorResults.map((item) => item.messageId));
+    expect(results[0]?.matchSources).toEqual(["semantic"]);
     expect(openRouter.embed).toHaveBeenCalledWith(["sampleuser birthday"], "embed", undefined);
     expect(repo.vectorSearch).toHaveBeenCalledWith(
       expect.objectContaining({

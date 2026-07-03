@@ -3,6 +3,12 @@ import type { DiscordAiAgentRepository, SearchResult } from "../db/repositories.
 import type { OpenRouterClient } from "../models/openrouter.js";
 import { normalizeMessageContent } from "./normalize.js";
 
+export type RetrievalMatchSource = "keyword" | "semantic";
+
+export type RankedSearchResult = SearchResult & {
+  matchSources?: RetrievalMatchSource[];
+};
+
 export type HistorySearchInput = {
   guildId: string;
   userVisibleChannelIds: string[];
@@ -22,7 +28,7 @@ export async function searchDiscordHistory(input: {
   openRouter: OpenRouterClient;
   config: AppConfig;
   search: HistorySearchInput;
-}): Promise<SearchResult[]> {
+}): Promise<RankedSearchResult[]> {
   const limit = input.search.limit ?? input.config.maxHistoryResults;
   const normalizedQuery = buildHistoryRetrievalQuery(input.search.query);
   const visibleIndexedChannels =
@@ -113,19 +119,23 @@ export async function resolveSearchChannelIds(input: {
   return requestedIndexedChannels.filter((channelId) => visible.has(channelId));
 }
 
-export function mergeResults(keyword: SearchResult[], vector: SearchResult[]): SearchResult[] {
-  const byId = new Map<string, SearchResult>();
+export function mergeResults(keyword: SearchResult[], vector: SearchResult[]): RankedSearchResult[] {
+  const byId = new Map<string, RankedSearchResult>();
 
   for (const result of keyword) {
-    byId.set(result.messageId, { ...result, score: result.score + 0.25 });
+    byId.set(result.messageId, { ...result, score: result.score + 0.25, matchSources: ["keyword"] });
   }
 
   for (const result of vector) {
     const existing = byId.get(result.messageId);
     if (existing) {
-      byId.set(result.messageId, { ...existing, score: existing.score + result.score + 0.5 });
+      byId.set(result.messageId, {
+        ...existing,
+        score: existing.score + result.score + 0.5,
+        matchSources: mergeMatchSources(existing.matchSources, ["semantic"])
+      });
     } else {
-      byId.set(result.messageId, result);
+      byId.set(result.messageId, { ...result, matchSources: ["semantic"] });
     }
   }
 
@@ -138,7 +148,13 @@ export function formatSearchResults(results: SearchResult[]): string {
   return results
     .map((result, index) => {
       const author = result.authorUsername ? `@${result.authorUsername}` : result.authorId;
-      return `[${index + 1}] ${author} at ${result.createdAt.toISOString()}\n${result.normalizedContent}\n${result.link}`;
+      const matchSources = (result as RankedSearchResult).matchSources;
+      const matchLine = matchSources?.length ? `\nMatched by: ${matchSources.join(", ")}` : "";
+      return `[${index + 1}] ${author} at ${result.createdAt.toISOString()}\n${result.normalizedContent}\n${result.link}${matchLine}`;
     })
     .join("\n\n");
+}
+
+function mergeMatchSources(left: RetrievalMatchSource[] | undefined, right: RetrievalMatchSource[]) {
+  return [...new Set([...(left ?? []), ...right])];
 }

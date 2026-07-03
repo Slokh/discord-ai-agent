@@ -407,7 +407,6 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
     });
 
     let skippedRedundantToolThisRound = false;
-    let completedTerminalToolThisRound = false;
     for (const route of modelRoutes) {
       const toolUseCount = (toolUseCounts.get(route.name) ?? 0) + 1;
       toolUseCounts.set(route.name, toolUseCount);
@@ -458,9 +457,6 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         skippedRedundantToolThisRound = true;
       } else {
         successfulToolCallKeys.add(routeKey);
-      }
-      if ((route.name === "summarizeDiscordHistory" || route.name === "getDiscordMessageContext") && !isRedundantToolCall) {
-        completedTerminalToolThisRound = true;
       }
       if (result.files?.length) files.push(...result.files);
       if (!isRedundantToolCall) {
@@ -522,17 +518,6 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       });
     }
 
-    if (completedTerminalToolThisRound) {
-      return await synthesizeFinalAnswerWithoutTools(ctx, {
-        reason: "terminal evidence tool complete",
-        text,
-        messages,
-        files,
-        memoryEvents,
-        requestLogger,
-        startedAt
-      });
-    }
   }
 
   await ctx.repo.auditTool({

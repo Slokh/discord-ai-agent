@@ -157,6 +157,8 @@ describe("run inspector formatting", () => {
 
     expect(report).toContain("Runs (2 of 3)");
     expect(report).toContain("Sort: slowest | Kind: codegen");
+    expect(report).toContain("Statuses: failed=1, no_changes=1");
+    expect(report).toContain("Codegen diagnoses: no_diff=1");
     expect(report.indexOf("run-slow")).toBeLessThan(report.indexOf("run-failed"));
     expect(report).toContain("bottleneck=opencode_attempt_1 14m 30s");
     expect(report).toContain("pr=https://github.com/example/repo/pull/1");

@@ -28,6 +28,7 @@ export function formatRunSummaryList(runs: RunSummary[], options: RunSummaryList
   const lines = [
     `Runs (${filtered.length}${runs.length > filtered.length ? ` of ${runs.length}` : ""})`,
     `Sort: ${options.sort ?? "updated"}${options.kind ? ` | Kind: ${options.kind}` : ""}${options.status ? ` | Status: ${options.status}` : ""}`,
+    ...runSummaryAggregateLines(filtered),
     ""
   ];
   if (filtered.length === 0) {
@@ -145,6 +146,37 @@ function compareRunSummaries(left: RunSummary, right: RunSummary, sort: NonNulla
   if (sort === "slowest") return (right.durationMs ?? -1) - (left.durationMs ?? -1);
   if (sort === "started") return right.startedAt.getTime() - left.startedAt.getTime();
   return right.updatedAt.getTime() - left.updatedAt.getTime();
+}
+
+function runSummaryAggregateLines(runs: RunSummary[]) {
+  if (runs.length === 0) return [];
+  const lines = [`Statuses: ${formatCounts(countBy(runs, (run) => run.status))}`];
+  const kinds = countBy(runs, (run) => run.kind);
+  if (kinds.size > 1) lines.push(`Kinds: ${formatCounts(kinds)}`);
+  const diagnosisCategories = countBy(
+    runs
+      .map((run) => codegenFailureDiagnosisFromMetadata(run.metadata.failureDiagnosis)?.category)
+      .filter((category): category is string => Boolean(category)),
+    (category) => category
+  );
+  if (diagnosisCategories.size > 0) lines.push(`Codegen diagnoses: ${formatCounts(diagnosisCategories)}`);
+  return lines;
+}
+
+function countBy<T>(items: T[], keyForItem: (item: T) => string) {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = keyForItem(item);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function formatCounts(counts: Map<string, number>) {
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([key, count]) => `${key}=${count}`)
+    .join(", ");
 }
 
 function formatModelUsage(snapshot: RunSnapshot) {

@@ -496,8 +496,9 @@ describe("agent router", () => {
             content: "",
             model: "final-model",
             raw: {},
-            toolCalls: [{ id: "call-ignored", name: "searchDiscordHistory", argumentsText: "{}" }]
+            toolCalls: []
           })
+          .mockResolvedValueOnce({ content: "", model: "empty-final-model", raw: {}, toolCalls: [] })
       },
       github: {},
       guildId: "g",
@@ -513,7 +514,7 @@ describe("agent router", () => {
     expect(response.content).toContain("Moving in with girlfriend next week");
     expect(response.content).not.toContain("I found relevant evidence, but I could not compose");
     expect(response.content).not.toBe("Done.");
-    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(4);
   });
 
   it("allows the model to refine history searches within a turn", async () => {
@@ -577,7 +578,7 @@ describe("agent router", () => {
     expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
   });
 
-  it("synthesizes after message context instead of entering another search loop", async () => {
+  it("lets the model answer after message context evidence", async () => {
     const auditTool = vi.fn(async () => undefined);
     const keywordSearch = vi.fn(async () => [
       agentSearchResult({
@@ -634,9 +635,7 @@ describe("agent router", () => {
             content: "Yeah, @alice said they got the job.",
             model: "final-model",
             raw: {},
-            toolCalls: [
-              { id: "call-ignored", name: "searchDiscordHistory", argumentsText: JSON.stringify({ query: "another job search" }) }
-            ]
+            toolCalls: []
           })
       },
       github: {},
@@ -653,8 +652,14 @@ describe("agent router", () => {
     expect(keywordSearch).toHaveBeenCalledTimes(2);
     expect(messageContext).toHaveBeenCalledTimes(1);
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
-    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "function", function: expect.objectContaining({ name: "getDiscordMessageContext" }) })])
+    expect((ctx.openRouter.chat as any).mock.calls[2][0].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "tool",
+          name: "getDiscordMessageContext",
+          content: expect.stringContaining("Got the job")
+        })
+      ])
     );
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDiscordMessageContext" }));
     expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "tool_round_limit" }));
@@ -1471,6 +1476,95 @@ describe("agent router", () => {
     );
     expect(ctx.updateStatus).toHaveBeenCalledWith("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "runCodingAgent" }));
+  });
+
+  it("continues after linked Discord evidence when a code-update request still needs a PR tool", async () => {
+    const enqueueAgentTask = vi.fn(async () => ({
+      jobId: "job-1",
+      taskId: "task-exclude-channel"
+    }));
+    const auditTool = vi.fn(async () => undefined);
+    const messageContext = vi.fn(async () => [
+      agentSearchResult({
+        messageId: "333333333333333333",
+        channelId: "trivia",
+        normalizedContent: "The trivia-sucks channel should not be part of the bot knowledge base.",
+        link: "https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333"
+      })
+    ]);
+    const ctx = {
+      config: { maxReplyChars: 1800, github: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        messageContext,
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-context",
+                name: "getDiscordMessageContext",
+                argumentsText: JSON.stringify({
+                  messageIdOrUrl: "https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333"
+                })
+              }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-codegen",
+                name: "runCodingAgent",
+                argumentsText: JSON.stringify({
+                  request:
+                    "Fully remove the trivia-sucks channel from current and future Discord knowledge, including storage, indexing, embeddings, retrieval, stats, summaries, and attachment search.",
+                  title: "Exclude trivia-sucks from knowledge"
+                })
+              }
+            ]
+          })
+      },
+      github: {},
+      jobs: {
+        enqueueAgentTask
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c", "trivia"],
+      threadKey: "discord:g:c",
+      statusChannelId: "c",
+      statusMessageId: "reply-1",
+      updateStatus: vi.fn(async () => undefined)
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "open pr to fully remove trivia-sucks from your current and future knowledge https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333"
+    );
+
+    expect(response.content).toContain("Task ID: `task-exclude-channel`");
+    expect(messageContext).toHaveBeenCalledWith(expect.objectContaining({ messageId: "333333333333333333" }));
+    expect(enqueueAgentTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Exclude trivia-sucks from knowledge",
+        request: expect.stringContaining("Fully remove the trivia-sucks channel"),
+        taskType: "code_update"
+      })
+    );
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDiscordMessageContext" }));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "runCodingAgent" }));
   });
 
   it("uses the lazily-created Discord status message when enqueueing codegen jobs", async () => {

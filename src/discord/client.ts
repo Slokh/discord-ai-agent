@@ -19,7 +19,8 @@ import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink } from "./responseSink.js";
-import { executeInProcessAgentRuntime, isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
+import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
+import { InProcessAgentRuntimePromptExecutor, type AgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
 import { buildAgentRuntimeTurnEnvelope, storeAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
@@ -42,6 +43,7 @@ export function createDiscordAiAgentBot(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   agentRuntime?: AgentRuntimeRepository;
+  agentExecutor?: AgentRuntimePromptExecutor;
   openRouter: OpenRouterClient;
   crawler: DiscordCrawler;
   jobs?: JobRuntime;
@@ -439,6 +441,7 @@ export async function runQueuedAgentRuntimeExecution(
     openRouter: OpenRouterClient;
     jobs?: JobRuntime;
     client: Client;
+    agentExecutor?: AgentRuntimePromptExecutor;
   },
   job: DiscordAgentRequestJob
 ) {
@@ -493,6 +496,7 @@ async function executeDiscordAgentRequest(
     config: AppConfig;
     repo: DiscordAiAgentRepository;
     agentRuntime?: AgentRuntimeRepository;
+    agentExecutor?: AgentRuntimePromptExecutor;
     openRouter: OpenRouterClient;
     jobs?: JobRuntime;
   },
@@ -510,6 +514,7 @@ async function executeDiscordAgentRequest(
   }
 ) {
   if (!message.guildId || !message.guild) throw new Error("Discord agent request message is not attached to a guild.");
+  const agentExecutor = input.agentExecutor ?? new InProcessAgentRuntimePromptExecutor();
   const guildId = message.guildId;
   const guild = message.guild;
   const botUserId = client.user?.id ?? "";
@@ -714,10 +719,11 @@ async function executeDiscordAgentRequest(
         return deleted;
       }
     };
-    const response = await executeInProcessAgentRuntime({
+    const response = await agentExecutor.execute({
       toolContext,
       text: request.text,
-      timeoutMs: input.config.discordAgentResponseTimeoutMs
+      timeoutMs: input.config.discordAgentResponseTimeoutMs,
+      turnEnvelope
     });
     await input.repo
       .recordProcessRunSpan({
@@ -729,6 +735,7 @@ async function executeDiscordAgentRequest(
         completedAt: new Date(),
         durationMs: durationMs(agentStartedAt),
         metadata: {
+          executor: agentExecutor.name,
           responseChars: response.content.length,
           fileCount: response.files?.length ?? 0,
           memoryEventCount: response.memoryEvents?.length ?? 0
@@ -748,6 +755,7 @@ async function executeDiscordAgentRequest(
       eventName: "agent.response.ready",
       summary: `Agent returned ${response.content.length} chars`,
       metadata: {
+        executor: agentExecutor.name,
         responseChars: response.content.length,
         fileCount: response.files?.length ?? 0,
         memoryEventCount: response.memoryEvents?.length ?? 0
@@ -920,7 +928,7 @@ async function executeDiscordAgentRequest(
         startedAt: new Date(request.messageStartedAt),
         completedAt: new Date(),
         durationMs: durationMs(request.messageStartedAt),
-        metadata: { error: error instanceof Error ? error.message : String(error) }
+        metadata: { executor: agentExecutor.name, error: error instanceof Error ? error.message : String(error) }
       })
       .catch((runError) => requestLogger.warn({ err: runError }, "Failed to record failed agent span"));
     await input.repo

@@ -11,11 +11,12 @@ import { startSandboxReconciler } from "./execution/reconciler.js";
 import { OpenRouterClient } from "./models/openrouter.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
-import { createDiscordAiAgentBot, runQueuedAgentRuntimeExecution } from "./discord/client.js";
+import { createDiscordAiAgentBot } from "./discord/client.js";
 import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
-import { startJobs, type AgentRuntimeExecutionRunner } from "./jobs/queue.js";
+import { startJobs } from "./jobs/queue.js";
 import { startStaleRunReconciler } from "./observability/staleRuns.js";
 import { logger } from "./util/logger.js";
+import { createAgentRuntimeRunner } from "./agent/runtimeRunner.js";
 
 async function main() {
   const config = loadConfig();
@@ -191,33 +192,6 @@ async function main() {
   } else {
     logger.info("Discord AI Agent process is online");
   }
-}
-
-function createAgentRuntimeRunner(input: {
-  config: ReturnType<typeof loadConfig>;
-  repo: DiscordAiAgentRepository;
-  agentRuntimeRepo: AgentRuntimeRepository;
-  openRouter: OpenRouterClient;
-  client: Client;
-}): AgentRuntimeExecutionRunner {
-  if (input.config.agentRuntime.executionBackend === "warm-sandbox") {
-    throw new Error("AGENT_RUNTIME_EXECUTION_BACKEND=warm-sandbox is reserved for the warm Kubernetes sandbox executor and is not implemented yet.");
-  }
-  return {
-    run: async (job, context) => {
-      await runQueuedAgentRuntimeExecution(
-        {
-          config: input.config,
-          repo: input.repo,
-          agentRuntime: input.agentRuntimeRepo,
-          openRouter: input.openRouter,
-          jobs: context.jobs,
-          client: input.client
-        },
-        job
-      );
-    }
-  };
 }
 
 main().catch((error) => {

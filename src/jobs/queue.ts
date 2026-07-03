@@ -52,8 +52,8 @@ export type DiscordAgentRequestJob = {
   channelId: string;
   messageId: string;
   userId: string;
-  responseChannelId: string;
-  responseMessageId: string;
+  responseChannelId?: string;
+  responseMessageId?: string;
   text: string;
   rawContent: string;
   mentionKind: string;

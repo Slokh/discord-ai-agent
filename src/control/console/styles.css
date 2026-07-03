@@ -1218,7 +1218,7 @@ kbd {
 .codex-transcript-summary {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
 }
 
 .codex-transcript-stop {
@@ -1247,6 +1247,11 @@ kbd {
 .opencode-transcript-insight {
   background: color-mix(in oklab, var(--accent) 8%, transparent);
   border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
+}
+
+.opencode-transcript-insights {
+  display: grid;
+  gap: 8px;
 }
 
 .codex-transcript-list {

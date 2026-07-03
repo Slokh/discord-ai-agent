@@ -90,6 +90,11 @@ export function formatRunArtifacts(artifacts: ProcessRunArtifactContent[]): stri
   const lines: string[] = [];
   for (const artifact of artifacts) {
     lines.push(`--- ${artifact.name} (${artifact.artifactId}, ${artifact.kind}, ${formatBytes(artifact.sizeBytes)}) ---`);
+    const openCodeDiagnostics = formatOpenCodeArtifactDiagnostics(artifact);
+    if (openCodeDiagnostics) {
+      lines.push(openCodeDiagnostics);
+      lines.push("");
+    }
     lines.push(artifact.content.trimEnd());
     lines.push("");
   }
@@ -218,4 +223,162 @@ function clampInteger(value: number, min: number, max: number) {
 
 function stringFromUnknown(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberFromUnknown(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function formatOpenCodeArtifactDiagnostics(artifact: ProcessRunArtifactContent) {
+  if (artifact.kind !== "command_log" || !/\bopencode\b/i.test(artifact.name)) return "";
+  const diagnostics = parseOpenCodeDiagnostics(artifact.content);
+  if (!diagnostics) return "";
+  const parts = [
+    `total=${formatSeconds(diagnostics.totalDurationMs)}`,
+    `model_wait=${formatSeconds(diagnostics.modelWaitMs)}`,
+    `tool_time=${formatSeconds(diagnostics.toolDurationMs)}`,
+    diagnostics.interRoundGapMs > 0 ? `gaps=${formatSeconds(diagnostics.interRoundGapMs)}` : null,
+    diagnostics.firstEditAtMs == null ? "first_edit=none" : `first_edit=${formatSeconds(diagnostics.firstEditAtMs)}`,
+    `rounds=${diagnostics.rounds}`,
+    `tool_calls=${diagnostics.toolCalls}`,
+    diagnostics.failedTools > 0 ? `failed_tools=${diagnostics.failedTools}` : null
+  ].filter(Boolean);
+  const lines = [`OpenCode latency: ${parts.join(" | ")}`];
+  if (diagnostics.slowestRound) {
+    lines.push(`Slowest round: round ${diagnostics.slowestRound.round} ${formatSeconds(diagnostics.slowestRound.durationMs)} (${diagnostics.slowestRound.tools.join(", ") || "no tools"})`);
+  }
+  if (diagnostics.repeatedReads.length > 0) {
+    lines.push(`Repeated reads: ${diagnostics.repeatedReads.map((read) => `${read.title} x${read.count}`).join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
+type OpenCodeDiagnosticRecord = {
+  type: string;
+  timestamp: number;
+  part: Record<string, unknown>;
+};
+
+type OpenCodeDiagnosticTool = {
+  name: string;
+  status: string | null;
+  title: string;
+  durationMs: number | null;
+  startedAtMs: number | null;
+};
+
+function parseOpenCodeDiagnostics(content: string) {
+  const records = content.split(/\r?\n/).flatMap(parseOpenCodeDiagnosticRecord);
+  if (!records.some((record) => record.type === "step_start" || record.type === "tool_use")) return null;
+  const steps: Array<{ start: number; end: number; tools: OpenCodeDiagnosticTool[] }> = [];
+  let current: (typeof steps)[number] | null = null;
+  for (const record of records) {
+    if (record.type === "step_start") {
+      current = { start: record.timestamp, end: record.timestamp, tools: [] };
+      continue;
+    }
+    if (!current) continue;
+    if (record.type === "tool_use") {
+      current.tools.push(openCodeDiagnosticTool(record.part));
+      continue;
+    }
+    if (record.type === "step_finish") {
+      current.end = record.timestamp;
+      steps.push(current);
+      current = null;
+    }
+  }
+  if (steps.length === 0) return null;
+  const firstTimestamp = records[0]?.timestamp ?? steps[0]?.start ?? 0;
+  const lastTimestamp = records.at(-1)?.timestamp ?? steps.at(-1)?.end ?? firstTimestamp;
+  const toolDurationMs = steps.reduce((total, step) => total + step.tools.reduce((stepTotal, tool) => stepTotal + (tool.durationMs ?? 0), 0), 0);
+  const roundDurationMs = steps.reduce((total, step) => total + Math.max(0, step.end - step.start), 0);
+  const toolCalls = steps.reduce((total, step) => total + step.tools.length, 0);
+  const slowestRound =
+    steps
+      .map((step, index) => ({
+        round: index + 1,
+        durationMs: Math.max(0, step.end - step.start),
+        tools: uniqueStrings(step.tools.map((tool) => tool.name).filter(Boolean))
+      }))
+      .sort((left, right) => right.durationMs - left.durationMs)[0] ?? null;
+  return {
+    rounds: steps.length,
+    toolCalls,
+    totalDurationMs: Math.max(0, lastTimestamp - firstTimestamp),
+    modelWaitMs: Math.max(0, roundDurationMs - toolDurationMs),
+    toolDurationMs,
+    interRoundGapMs: steps.reduce((total, step, index) => {
+      const next = steps[index + 1];
+      return next ? total + Math.max(0, next.start - step.end) : total;
+    }, 0),
+    firstEditAtMs: firstToolOffsetMs(steps, firstTimestamp, (tool) => tool.name === "edit"),
+    failedTools: steps.reduce((total, step) => total + step.tools.filter((tool) => tool.status === "error" || tool.status === "failed").length, 0),
+    repeatedReads: repeatedOpenCodeReads(steps),
+    slowestRound
+  };
+}
+
+function parseOpenCodeDiagnosticRecord(line: string): OpenCodeDiagnosticRecord[] {
+  const index = line.indexOf('{"type"');
+  if (index < 0) return [];
+  try {
+    const parsed = JSON.parse(line.slice(index)) as Record<string, unknown>;
+    const type = stringFromUnknown(parsed.type);
+    const timestamp = numberFromUnknown(parsed.timestamp);
+    if (!type || timestamp == null) return [];
+    return [{ type, timestamp, part: recordFromUnknown(parsed.part) ?? {} }];
+  } catch {
+    return [];
+  }
+}
+
+function openCodeDiagnosticTool(part: Record<string, unknown>): OpenCodeDiagnosticTool {
+  const state = recordFromUnknown(part.state);
+  const input = recordFromUnknown(state?.input);
+  const time = recordFromUnknown(state?.time);
+  const startedAt = numberFromUnknown(time?.start);
+  const endedAt = numberFromUnknown(time?.end);
+  return {
+    name: stringFromUnknown(part.tool) ?? "tool",
+    status: stringFromUnknown(state?.status),
+    title: stringFromUnknown(state?.title) ?? stringFromUnknown(input?.command) ?? stringFromUnknown(input?.filePath) ?? "",
+    durationMs: startedAt != null && endedAt != null && endedAt >= startedAt ? endedAt - startedAt : null,
+    startedAtMs: startedAt
+  };
+}
+
+function firstToolOffsetMs(
+  steps: Array<{ start: number; tools: OpenCodeDiagnosticTool[] }>,
+  firstTimestamp: number,
+  predicate: (tool: OpenCodeDiagnosticTool) => boolean
+) {
+  for (const step of steps) {
+    const tool = step.tools.find(predicate);
+    if (tool) return Math.max(0, (tool.startedAtMs ?? step.start) - firstTimestamp);
+  }
+  return null;
+}
+
+function repeatedOpenCodeReads(steps: Array<{ tools: OpenCodeDiagnosticTool[] }>) {
+  const counts = new Map<string, number>();
+  for (const step of steps) {
+    for (const tool of step.tools) {
+      if (tool.name !== "read" || !tool.title) continue;
+      counts.set(tool.title, (counts.get(tool.title) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 5)
+    .map(([title, count]) => ({ title, count }));
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values)];
 }

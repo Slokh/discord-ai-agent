@@ -42,6 +42,53 @@ describe("run inspector formatting", () => {
     ).toContain("full prompt body");
   });
 
+  it("adds OpenCode latency diagnostics to command log artifacts", () => {
+    const artifact = {
+      ...snapshotFixture().artifacts[0]!,
+      kind: "command_log" as const,
+      name: "OpenCode attempt 1 transcript",
+      content: [
+        "$ opencode run --model openrouter/z-ai/glm-5.2 [prompt]",
+        JSON.stringify({ type: "step_start", timestamp: Date.parse("2026-07-01T00:00:00.000Z"), part: {} }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse("2026-07-01T00:00:05.000Z"),
+          part: {
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "src/discord/client.ts" },
+              time: { start: Date.parse("2026-07-01T00:00:05.000Z"), end: Date.parse("2026-07-01T00:00:05.025Z") }
+            }
+          }
+        }),
+        JSON.stringify({ type: "step_finish", timestamp: Date.parse("2026-07-01T00:00:10.000Z"), part: {} }),
+        JSON.stringify({ type: "step_start", timestamp: Date.parse("2026-07-01T00:00:12.000Z"), part: {} }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: Date.parse("2026-07-01T00:00:14.000Z"),
+          part: {
+            tool: "edit",
+            state: {
+              status: "completed",
+              input: { filePath: "src/discord/client.ts" },
+              time: { start: Date.parse("2026-07-01T00:00:14.000Z"), end: Date.parse("2026-07-01T00:00:14.011Z") }
+            }
+          }
+        }),
+        JSON.stringify({ type: "step_finish", timestamp: Date.parse("2026-07-01T00:00:20.000Z"), part: {} })
+      ].join("\n")
+    };
+
+    const report = formatRunArtifacts([artifact]);
+
+    expect(report).toContain("OpenCode latency: total=20.000s");
+    expect(report).toContain("model_wait=17.964s");
+    expect(report).toContain("tool_time=0.036s");
+    expect(report).toContain("first_edit=14.000s");
+    expect(report).toContain("Slowest round: round 1 10.000s (read)");
+  });
+
   it("formats durations as seconds instead of milliseconds", () => {
     expect(formatSeconds(42)).toBe("0.042s");
     expect(formatSeconds(1234)).toBe("1.234s");

@@ -552,12 +552,20 @@ describe("run console timeline", () => {
     expect(transcript.isTranscript).toBe(true);
     expect(transcript.rounds).toBe(2);
     expect(transcript.toolCalls).toBe(2);
-    expect(transcript.firstToolAtMs).toBe(0);
-    expect(transcript.firstEditAtMs).toBe(12_000);
+    expect(transcript.totalDurationMs).toBe(20_000);
+    expect(transcript.toolDurationMs).toBe(36);
+    expect(transcript.modelWaitMs).toBe(17_964);
+    expect(transcript.interRoundGapMs).toBe(2_000);
+    expect(transcript.failedTools).toBe(0);
+    expect(transcript.repeatedReads).toEqual([]);
+    expect(transcript.firstToolAtMs).toBe(5_000);
+    expect(transcript.firstEditAtMs).toBe(14_000);
     expect(transcript.tokenTotal).toBe(220);
     expect(transcript.slowestRound).toEqual({ round: 1, durationMs: 10_000, title: "Round 1: read" });
     expect(transcript.items.map((item) => item.title)).toEqual(["Round 1: read", "Round 2: edit", "Final token usage"]);
     expect(transcript.items[1]?.body).toContain("Making the edit");
+    expect(transcript.items[1]?.body).toContain("Model wait: 7.989s");
+    expect(transcript.items[1]?.body).toContain("Tool time: 0.011s");
   });
 
   it("formats Codex app-server transcripts into high-signal items", () => {

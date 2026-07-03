@@ -243,6 +243,7 @@ describe("sandboxRunner", () => {
 
     const initial = codeUpdatePrompt(env as any, context);
     expect(initial).toContain("If AGENTS.md exists, read it before editing");
+    expect(initial).toContain("Use the preflight context as a starting map");
     expect(initial).toContain("Make a focused regression test early");
     expect(initial).toContain("src/discord/taskNotifications.ts");
 
@@ -274,16 +275,11 @@ describe("sandboxRunner", () => {
       taskRequest: "Change the user-visible loading state."
     });
 
-    expect(prompt).toContain("map the lifecycle before editing");
-    expect(prompt).toContain("User wording may describe product behavior instead of exact code symbols");
-    expect(prompt).toContain("map the phrase to the closest existing mechanism in the lifecycle");
-    expect(prompt).toContain("trigger -> temporary state -> progress/update paths -> success response -> error/timeout/cancellation -> cleanup");
-    expect(prompt).toContain("introduce or reuse a small abstraction that owns the lifecycle");
-    expect(prompt).toContain("Preserve existing invariants that other code may depend on");
-    expect(prompt).toContain("encode the requested behavior as a focused invariant");
-    expect(prompt).toContain("stop searching for exact request vocabulary");
+    expect(prompt).toContain("map it to the lifecycle");
+    expect(prompt).toContain("trigger -> acknowledgement/status -> work -> success response -> error path -> cleanup");
+    expect(prompt).toContain("Prefer a small shared lifecycle owner");
+    expect(prompt).toContain("Inspect the likely owner, nearest caller/helper, and closest test");
     expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-progress first_edit");
-    expect(prompt).toContain("Produce a real code diff promptly");
   });
 
   it("forces codegen dependency installs to include dev dependencies even under production service env", () => {
@@ -352,13 +348,13 @@ describe("sandboxRunner", () => {
     );
 
     expect(contextPack.focus).toBe("agent_task_status_lifecycle");
-    expect(contextPack.likelyMechanisms).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("temporary/status reply"),
-        expect.stringContaining("task notifier"),
-        expect.stringContaining("Terminal task rendering")
-      ])
-    );
+      expect(contextPack.likelyMechanisms).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("response sink"),
+          expect.stringContaining("task notifier"),
+          expect.stringContaining("Terminal task rendering")
+        ])
+      );
     expect(contextPack.suggestedFiles?.map((file) => file.path)).toEqual(
       expect.arrayContaining(["src/discord/taskNotifications.ts", "src/tools/coreTools.ts"])
     );
@@ -412,15 +408,14 @@ describe("sandboxRunner", () => {
       );
       expect(contextPack.anchorTargetFiles?.[0]?.path).toBe("src/discord/client.ts");
       expect(contextPack.suggestedFiles?.[0]?.path).toBe("src/discord/client.ts");
-      expect(contextPack.focus).toBe("discord_interaction_lifecycle");
+      expect(contextPack.focus).toBe("discord_response_lifecycle");
       expect(renderedContext).toContain("Concrete request anchors:");
       expect(renderedContext).toContain("Target files from exact request evidence:");
       expect(renderedContext).toContain("Concrete request anchors outrank broad lifecycle guesses");
       expect(renderedContext).toContain("Do not spend more than three targeted file reads before the first code diff");
-      expect(prompt).toContain("If exact request anchor target files are present");
-      expect(prompt).toContain("Patch-first budget:");
-      expect(prompt).toContain("Use `apply_patch` for the first focused edit when available");
-      expect(prompt).toContain("patch that owner before reading broad project-map files");
+      expect(prompt).toContain("If exact request anchors or target files are present");
+      expect(prompt).toContain("patch the owning source file");
+      expect(prompt).toContain("Prefer a small shared lifecycle owner");
       expect(recovery).toContain("Patch-first targets from the original request anchors:");
       expect(recovery).toContain("Do not run more than one read/search command before the first patch");
       expect(recovery).toContain("Use apply_patch for the recovery edit when available");

@@ -105,6 +105,8 @@ type OpenCodeToolSummary = {
   title: string;
   output: string;
   durationMs: number | null;
+  startedAtMs: number | null;
+  endedAtMs: number | null;
 };
 export type ParsedOpenCodeTranscript = {
   isTranscript: boolean;
@@ -113,6 +115,12 @@ export type ParsedOpenCodeTranscript = {
   toolCalls: number;
   textMessages: number;
   tokenTotal: number | null;
+  totalDurationMs: number | null;
+  modelWaitMs: number | null;
+  toolDurationMs: number;
+  interRoundGapMs: number;
+  failedTools: number;
+  repeatedReads: Array<{ title: string; count: number }>;
   firstToolAtMs: number | null;
   firstEditAtMs: number | null;
   slowestRound: { round: number; durationMs: number; title: string } | null;
@@ -1110,16 +1118,38 @@ function OpenCodeTranscript({ content }: { content: string }) {
     <div className="codex-transcript opencode-transcript">
       <div className="codex-transcript-summary">
         <Metric label="Rounds" value={transcript.rounds} />
-        <Metric label="Tool calls" value={transcript.toolCalls} />
+        <Metric label="Total" value={transcript.totalDurationMs == null ? "unknown" : formatDuration(transcript.totalDurationMs)} />
+        <Metric label="Model wait" value={transcript.modelWaitMs == null ? "unknown" : formatDuration(transcript.modelWaitMs)} />
+        <Metric label="Tool time" value={formatDuration(transcript.toolDurationMs)} />
         <Metric label="First edit" value={transcript.firstEditAtMs == null ? "none" : formatDuration(transcript.firstEditAtMs)} />
         <Metric label="Tokens" value={transcript.tokenTotal == null ? "unknown" : transcript.tokenTotal.toLocaleString()} />
       </div>
-      {transcript.slowestRound && (
-        <div className="codex-transcript-stop opencode-transcript-insight">
-          <strong>Slowest model round: {transcript.slowestRound.title}</strong>
-          <span>{formatDuration(transcript.slowestRound.durationMs)}</span>
-        </div>
-      )}
+      <div className="opencode-transcript-insights">
+        {transcript.slowestRound && (
+          <div className="codex-transcript-stop opencode-transcript-insight">
+            <strong>Slowest round: {transcript.slowestRound.title}</strong>
+            <span>{formatDuration(transcript.slowestRound.durationMs)}</span>
+          </div>
+        )}
+        {transcript.interRoundGapMs > 0 && (
+          <div className="codex-transcript-stop opencode-transcript-insight">
+            <strong>Between-round gap</strong>
+            <span>{formatDuration(transcript.interRoundGapMs)}</span>
+          </div>
+        )}
+        {transcript.failedTools > 0 && (
+          <div className="codex-transcript-stop opencode-transcript-insight">
+            <strong>Failed tools</strong>
+            <span>{transcript.failedTools}</span>
+          </div>
+        )}
+        {transcript.repeatedReads.length > 0 && (
+          <div className="codex-transcript-stop opencode-transcript-insight">
+            <strong>Repeated reads</strong>
+            <span>{transcript.repeatedReads.map((read) => `${read.title || "untitled"} x${read.count}`).join(", ")}</span>
+          </div>
+        )}
+      </div>
       <div className="codex-transcript-list">
         {transcript.items.map((item) => (
           <article key={item.id} className={`codex-transcript-item ${item.kind}`}>
@@ -1999,9 +2029,20 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
   }
 
   const firstTimestamp = records[0]?.timestamp ?? null;
+  const lastTimestamp = records.at(-1)?.timestamp ?? null;
   const items = steps.map((step, index) => openCodeRoundItem(step, index + 1));
   const toolCalls = items.reduce((total, item) => total + item.tools.length, 0);
   const textMessages = items.filter((item) => item.kind === "message").length;
+  const totalDurationMs = firstTimestamp == null || lastTimestamp == null ? null : Math.max(0, lastTimestamp - firstTimestamp);
+  const toolDurationMs = steps.reduce((total, step) => total + step.tools.reduce((stepTotal, tool) => stepTotal + (tool.durationMs ?? 0), 0), 0);
+  const roundDurationMs = steps.reduce((total, step) => total + Math.max(0, step.end - step.start), 0);
+  const modelWaitMs = steps.length === 0 ? null : Math.max(0, roundDurationMs - toolDurationMs);
+  const interRoundGapMs = steps.reduce((total, step, index) => {
+    const next = steps[index + 1];
+    return next ? total + Math.max(0, next.start - step.end) : total;
+  }, 0);
+  const failedTools = steps.reduce((total, step) => total + step.tools.filter((tool) => tool.status === "error" || tool.status === "failed").length, 0);
+  const repeatedReads = repeatedOpenCodeReads(steps);
   const tokenTotal = lastNumber(
     steps.map((step) => numericMetadata(objectValue(step.finish?.tokens)?.total))
   );
@@ -2035,6 +2076,12 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
     toolCalls,
     textMessages,
     tokenTotal,
+    totalDurationMs,
+    modelWaitMs,
+    toolDurationMs,
+    interRoundGapMs,
+    failedTools,
+    repeatedReads,
     firstToolAtMs,
     firstEditAtMs,
     slowestRound,
@@ -2068,6 +2115,8 @@ function openCodeRoundItem(
 ): ParsedOpenCodeTranscript["items"][number] {
   const durationMs = Math.max(0, step.end - step.start);
   const toolNames = step.tools.map((tool) => tool.name).filter(Boolean);
+  const toolDurationMs = step.tools.reduce((total, tool) => total + (tool.durationMs ?? 0), 0);
+  const modelWaitMs = Math.max(0, durationMs - toolDurationMs);
   const finishReason = stringValue(step.finish?.reason);
   const tokens = objectValue(step.finish?.tokens);
   const reasoningTokens = numericMetadata(tokens?.reasoning);
@@ -2075,6 +2124,8 @@ function openCodeRoundItem(
   const title = toolNames.length > 0 ? `Round ${round}: ${formatToolCallList(toolNames)}` : step.texts.length > 0 ? `Round ${round}: assistant message` : `Round ${round}`;
   const body = [
     finishReason ? `Finished: ${finishReason}` : "",
+    durationMs > 0 ? `Model wait: ${formatDuration(modelWaitMs)}` : "",
+    toolDurationMs > 0 ? `Tool time: ${formatDuration(toolDurationMs)}` : "",
     totalTokens != null ? `Tokens: ${totalTokens.toLocaleString()}` : "",
     reasoningTokens != null ? `Reasoning: ${reasoningTokens.toLocaleString()}` : "",
     step.texts.length > 0 ? step.texts.map((text) => truncateSingleLine(text, 280)).join("\n") : ""
@@ -2110,7 +2161,9 @@ function openCodeToolSummary(part: Record<string, unknown>): OpenCodeToolSummary
     status,
     title,
     output,
-    durationMs: startedAt != null && endedAt != null && endedAt >= startedAt ? endedAt - startedAt : null
+    durationMs: startedAt != null && endedAt != null && endedAt >= startedAt ? endedAt - startedAt : null,
+    startedAtMs: startedAt,
+    endedAtMs: endedAt
   };
 }
 
@@ -2123,9 +2176,27 @@ function openCodeToolOutput(toolName: string, output: string) {
 
 function firstToolOffsetMs(steps: Array<{ start: number; tools: OpenCodeToolSummary[] }>, firstTimestamp: number, predicate: (tool: OpenCodeToolSummary) => boolean) {
   for (const step of steps) {
-    if (step.tools.some(predicate)) return Math.max(0, step.start - firstTimestamp);
+    const tool = step.tools.find(predicate);
+    if (tool) return Math.max(0, (tool.startedAtMs ?? step.start) - firstTimestamp);
   }
   return null;
+}
+
+function repeatedOpenCodeReads(steps: Array<{ tools: OpenCodeToolSummary[] }>) {
+  const counts = new Map<string, number>();
+  for (const step of steps) {
+    for (const tool of step.tools) {
+      if (tool.name !== "read") continue;
+      const title = tool.title.trim();
+      if (!title) continue;
+      counts.set(title, (counts.get(title) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 5)
+    .map(([title, count]) => ({ title, count }));
 }
 
 function lastNumber(values: Array<number | null>) {

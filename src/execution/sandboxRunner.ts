@@ -1839,13 +1839,14 @@ const CODEGEN_CONTEXT_RULES: CodegenContextRule[] = [
     rationale:
       "The request mentions code updates, coding agents, progress, loading, completion, PRs, or sandbox behavior, so start with the durable agent task lifecycle.",
     likelyMechanisms: [
-      "A Discord request first creates a temporary/status reply that is edited while work progresses.",
-      "Code-update tool calls enqueue an agent task with a Discord response channel/message target.",
+      "A Discord request can acknowledge immediately with the response sink, then create a lazy status reply only when progress needs to be visible.",
+      "Code-update tool calls enqueue an agent task with the current Discord status message as the durable render target.",
       "The task notifier renders queued/running/terminal state back into the original Discord message.",
       "Terminal task rendering must win over stale progress, late callbacks, and notification failures."
     ],
     suggestedFiles: [
       { path: "src/tools/coreTools.ts", reason: "Enqueues code-update tasks and creates the initial user-visible status." },
+      { path: "src/discord/responseSink.ts", reason: "Owns Discord acknowledgement, lazy status replies, final replies, files, and loading-reaction cleanup." },
       { path: "src/discord/taskNotifications.ts", reason: "Renders task progress and terminal PR/failure states back to Discord." },
       { path: "src/db/repositories.ts", reason: "Persists task status, render signatures, and terminal task state." },
       { path: "src/jobs/queue.ts", reason: "Starts sandbox work and records task progress." },
@@ -1859,6 +1860,34 @@ const CODEGEN_CONTEXT_RULES: CodegenContextRule[] = [
     avoid: ["Do not search only for the user's exact wording; map product terms like loading/progress/done to task state and Discord message rendering."]
   },
   {
+    focus: "discord_response_lifecycle",
+    rationale:
+      "The request mentions Discord-visible acknowledgement, replies, reactions, status/progress messages, files, or cleanup, so start with the shared response lifecycle.",
+    likelyMechanisms: [
+      "Discord mentions should acknowledge immediately without forcing a visible status message for every request.",
+      "The response sink owns loading reactions, lazy status messages, final replies, file attachments, and cleanup.",
+      "Queued worker execution must use the same response lifecycle as inline execution after refetching the source message.",
+      "Code-update progress uses the current sink status message as the durable task-notification target."
+    ],
+    suggestedFiles: [
+      { path: "src/discord/responseSink.ts", reason: "Single owner for Discord acknowledgements, status updates, final replies, attachments, and cleanup." },
+      { path: "src/discord/client.ts", reason: "Wires Discord mention handling, queued request execution, and tool context status callbacks." },
+      { path: "src/tools/coreTools.ts", reason: "Uses status callbacks when model-selected tools need durable progress, especially codegen." },
+      { path: "src/discord/taskNotifications.ts", reason: "Edits the durable status message for running and terminal code-update state." },
+      { path: "tests/unit/discord-response-sink.test.ts", reason: "Focused coverage for the shared response lifecycle." },
+      { path: "tests/unit/discord-client.test.ts", reason: "Discord adapter coverage." },
+      { path: "tests/unit/task-notifications.test.ts", reason: "Task progress rendering coverage." }
+    ],
+    firstInvariant:
+      "One Discord prompt should have a single coherent lifecycle: immediate acknowledgement, optional progress/status updates, exactly one final user-visible reply/update, and acknowledgement cleanup.",
+    suggestedFirstEdit:
+      "Patch the response sink or the client/sink wiring first, then update the nearest focused response-lifecycle test before broad exploration.",
+    avoid: [
+      "Do not patch separate inline and queued Discord reply paths independently when a shared response sink can own the behavior.",
+      "Do not make every prompt create a progress message if a lightweight acknowledgement is enough."
+    ]
+  },
+  {
     focus: "discord_interaction_lifecycle",
     rationale: "The request mentions Discord messages, replies, memory, timeouts, or conversation behavior.",
     likelyMechanisms: [
@@ -1867,6 +1896,7 @@ const CODEGEN_CONTEXT_RULES: CodegenContextRule[] = [
     ],
     suggestedFiles: [
       { path: "src/discord/client.ts", reason: "Discord message handling and reply/edit behavior." },
+      { path: "src/discord/responseSink.ts", reason: "Discord acknowledgement/status/final-response lifecycle." },
       { path: "src/agent/router.ts", reason: "Agent runtime, model/tool loop, and final response synthesis." },
       { path: "src/discord/messagePersistence.ts", reason: "Message persistence and incremental sync behavior." },
       { path: "tests/unit/discord-client.test.ts", reason: "Discord adapter coverage." },
@@ -1933,8 +1963,8 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     {
       area: "Discord mention and reply lifecycle",
       purpose: "Incoming Discord messages are persisted, routed through the model/tool loop, and answered or updated in Discord.",
-      files: ["src/discord/client.ts", "src/agent/router.ts", "src/discord/messagePersistence.ts", "src/db/repositories.ts"],
-      checks: ["tests/unit/discord-client.test.ts", "tests/integration/agent.test.ts", "tests/unit/message-persistence.test.ts"]
+      files: ["src/discord/client.ts", "src/discord/responseSink.ts", "src/agent/router.ts", "src/discord/messagePersistence.ts", "src/db/repositories.ts"],
+      checks: ["tests/unit/discord-response-sink.test.ts", "tests/unit/discord-client.test.ts", "tests/integration/agent.test.ts", "tests/unit/message-persistence.test.ts"]
     },
     {
       area: "Model-led tools",
@@ -1977,7 +2007,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after your focused checks pass.",
       "Use helper CLIs by absolute shim path when useful: $AGENT_TOOL_SHIM_DIR/agent-task-context, $AGENT_TOOL_SHIM_DIR/agent-cache-info, $AGENT_TOOL_SHIM_DIR/agent-progress <step> <message>.",
       "Use apply_patch for focused file edits when available; otherwise use the smallest reliable edit command.",
-      "Prefer rg for search, then read only the files needed for the next concrete edit."
+      "Prefer rg for search, then read only the files needed for the next concrete edit. If rg is unavailable, use the local search fallback or a minimal Node search rather than broad shell loops."
     ],
     firstMoveRules,
     projectMap
@@ -2268,7 +2298,7 @@ function selectCodegenContextRule(taskRequest: string, anchorMatches: CodegenAnc
     ["src/discord/taskNotifications.ts", "src/tools/coreTools.ts", "src/jobs/queue.ts", "src/db/repositories.ts"].includes(file)
   );
   if (hasDiscordClientAnchor && !hasTaskLifecycleAnchor && includesAny(text, ["thinking", "reply", "reaction", "message", "discord"])) {
-    return CODEGEN_CONTEXT_RULES[1]!;
+    return codegenContextRule("discord_response_lifecycle");
   }
   const hasCodeUpdateTerm = includesAny(text, [
     "code update",
@@ -2285,12 +2315,20 @@ function selectCodegenContextRule(taskRequest: string, anchorMatches: CodegenAnc
     "agent task"
   ]);
   const hasStatusTerm = includesAny(text, ["loading", "thinking", "status", "progress", "stuck", "hang", "finish", "done", "complete"]);
-  if (hasCodeUpdateTerm || (hasStatusTerm && includesAny(text, ["code", "agent", "bot", "request"]))) return CODEGEN_CONTEXT_RULES[0]!;
+  const hasResponseLifecycleTerm = includesAny(text, ["reply", "replies", "reaction", "react", "loading", "thinking", "status message", "progress message", "acknowledge", "acknowledgement", "attachment", "files"]);
+  if (hasCodeUpdateTerm || (hasStatusTerm && includesAny(text, ["code", "agent", "bot", "request"]))) return codegenContextRule("agent_task_status_lifecycle");
+  if (hasDiscordClientAnchor && hasResponseLifecycleTerm) return codegenContextRule("discord_response_lifecycle");
   if (includesAny(text, ["discord", "mention", "reply", "message", "timeout", "content filter", "conversation", "memory"])) {
-    return CODEGEN_CONTEXT_RULES[1]!;
+    return hasResponseLifecycleTerm ? codegenContextRule("discord_response_lifecycle") : codegenContextRule("discord_interaction_lifecycle");
   }
-  if (includesAny(text, ["tool", "search", "history", "web", "model", "prompt", "router", "schema", "stats"])) return CODEGEN_CONTEXT_RULES[2]!;
-  return CODEGEN_CONTEXT_RULES[3]!;
+  if (includesAny(text, ["tool", "search", "history", "web", "model", "prompt", "router", "schema", "stats"])) return codegenContextRule("model_tool_routing");
+  return codegenContextRule("general_implementation");
+}
+
+function codegenContextRule(focus: string) {
+  const rule = CODEGEN_CONTEXT_RULES.find((candidate) => candidate.focus === focus);
+  if (!rule) throw new Error(`Missing codegen context rule: ${focus}`);
+  return rule;
 }
 
 function includesAny(text: string, needles: string[]) {
@@ -2391,60 +2429,26 @@ export function codeUpdatePrompt(env: Pick<SandboxEnv, "taskId" | "requestedBy" 
   return [
     "You are implementing a Discord-requested update to this TypeScript Discord AI Agent repository.",
     "",
-    "Working style:",
-    "- Move like a senior maintainer: understand just enough, make the smallest coherent change, then validate it.",
-    "- Be decisive once the relevant files are identified.",
-    "- Do not spend the whole run inspecting. Make a focused test or implementation edit early.",
-    "- Do not ask follow-up questions. When the request has multiple plausible interpretations, choose the one that preserves existing workflows and makes the requested behavior true.",
-    "- Prefer the existing architecture and tests over new abstractions.",
-    "- If you are unsure between two nearby files, inspect both briefly, then edit.",
-    "",
-    "Requirements:",
+    "Execution contract:",
     "- If AGENTS.md exists, read it before editing and follow it.",
-    "- Read the relevant code before editing.",
-    "- Implement the requested behavior with a real code diff.",
-    "- Keep changes focused and consistent with the existing architecture.",
-    "- Add or update tests for the changed behavior.",
+    "- Use the preflight context as a starting map, not a research backlog.",
+    "- Inspect the likely owner, nearest caller/helper, and closest test; then make the first focused code diff.",
+    "- If exact request anchors or target files are present, inspect those first and patch the owning source file unless it is clearly unrelated.",
+    "- When user wording is product behavior, map it to the lifecycle: trigger -> acknowledgement/status -> work -> success response -> error path -> cleanup.",
+    "- Prefer a small shared lifecycle owner over patching duplicated inline and queued paths independently.",
+    "- Add or update focused tests for the changed behavior.",
+    "- Run the most relevant focused checks you can. Do not run `npm run verify`; CI runs full verification after the PR opens.",
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the PR body records the request.",
-    "- Before finishing, run the most relevant focused checks you can. Do not run `npm run verify`; CI runs full verification after the PR opens.",
-    "- Helper CLIs are available under `$AGENT_TOOL_SHIM_DIR`; use `$AGENT_TOOL_SHIM_DIR/agent-task-context`, `$AGENT_TOOL_SHIM_DIR/agent-cache-info`, and `$AGENT_TOOL_SHIM_DIR/agent-progress <step> <message>` so login shells cannot hide them.",
+    "- Helper CLIs are available under `$AGENT_TOOL_SHIM_DIR`: `agent-task-context`, `agent-cache-info`, and `agent-progress <step> <message>`.",
+    "- After the first meaningful edit, run `$AGENT_TOOL_SHIM_DIR/agent-progress first_edit \"Made the first focused code edit\"`.",
     "",
     `Task ID: ${env.taskId}`,
     `Requested by: ${env.requestedBy}`,
     contextText ? "" : undefined,
     contextText ? "Codegen preflight context:" : undefined,
     contextText || undefined,
-    contextText
-      ? "Use the preflight context as an execution map, not a research backlog. If exact request anchor target files are present, inspect those before lifecycle files. Concrete anchors from the request outrank broad lifecycle guesses. Make the suggested first edit and first implementable invariant true."
-      : undefined,
-    "",
-    "Patch-first budget:",
-    "- Read AGENTS.md if present, then inspect only the smallest snippets needed to make the first edit.",
-    "- When exact request anchor targets are present, read the top target file around the matched line and patch that owner before reading broad project-map files.",
-    "- If no anchor targets exist, read the likely entry point, one helper/adapter, and one closest test, then edit.",
-    "- Treat the first inspection pass as capped: AGENTS.md, the top target file, and at most one nearest caller/test before the first code diff.",
-    "- Use `apply_patch` for the first focused edit when available. The first patch can be small and imperfect; refine it after tests or caller reads.",
-    "- Batch adjacent edits into one coherent patch. If an exact replacement fails once, switch to a line-numbered patch or smaller anchored edit instead of retrying the same replacement.",
-    "- Do not inspect status plumbing, queue code, observability UI, or extra tests before the first edit unless one of those files is the top target or required by the code you are changing.",
-    "- If you are unsure, make a small reversible implementation edit in the best target file and refine it after tests or callers reveal more.",
-    "",
-    "Implementation workflow:",
-    "- First inspection pass: read the likely entry point, the closest existing helper/adapter, and the closest tests. Avoid broad repository archaeology before the first edit.",
-    "- If the preflight found exact quoted text, paths, symbols, env vars, routes, or tool names from the request, treat those matches as the first inspection result and patch the owning file unless it is clearly unrelated.",
-    "- User wording may describe product behavior instead of exact code symbols. If literal searches miss, map the phrase to the closest existing mechanism in the lifecycle, such as a Discord reply edit, status callback, reaction, queue state, or persisted run status.",
-    "- If the request changes user-visible behavior, map the lifecycle before editing: trigger -> temporary state -> progress/update paths -> success response -> error/timeout/cancellation -> cleanup.",
-    "- If the behavior spans more than one path, introduce or reuse a small abstraction that owns the lifecycle instead of patching each call site independently.",
-    "- Preserve existing invariants that other code may depend on. If replacing a visible mechanism, keep any underlying state or callback contract intact unless the request explicitly says to remove it.",
-    "- For bug fixes, encode the requested behavior as a focused invariant in code or tests early. Do not conclude that existing behavior is fine merely because the first matching path appears intentional.",
-    "- Make a focused first edit after the likely lifecycle owner is identified, then run `$AGENT_TOOL_SHIM_DIR/agent-progress first_edit \"Made the first focused code edit\"`.",
-    "- After the first edit, broaden the search only to cover callers, failure paths, and tests touched by that lifecycle.",
-    "",
-    "Stall avoidance:",
-    "- Do not repeatedly reread the same file or expand into unrelated UI, observability, deployment, or queue code unless the lifecycle map shows it is required.",
-    "- After a few targeted searches, stop searching for exact request vocabulary and act on the closest mechanism you found.",
-    "- Do not leave the checkout clean after you understand the target. Create a diff, then inspect more only to refine it.",
-    "- Produce a real code diff promptly; pure analysis without edits is a failed attempt.",
+    contextText ? "Make the first implementable invariant true. Concrete anchors from the request outrank broad lifecycle guesses." : undefined,
     "",
     "Requested update:",
     env.taskRequest.trim(),

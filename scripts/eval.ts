@@ -41,6 +41,7 @@ export type EvalArgs = {
   dirs: string[];
   includePrivate: boolean;
   outputDir: string;
+  comparePath?: string;
   filter?: string;
   category?: string;
   dryRun: boolean;
@@ -99,6 +100,29 @@ export type EvalRunReport = {
   results: EvalCaseResult[];
 };
 
+export type EvalComparisonStatus = "improved" | "regressed" | "changed" | "unchanged" | "new" | "removed";
+
+export type EvalComparisonCase = {
+  id: string;
+  status: EvalComparisonStatus;
+  beforeStatus: EvalCaseResult["status"] | null;
+  afterStatus: EvalCaseResult["status"] | null;
+  beforeDurationMs: number | null;
+  afterDurationMs: number | null;
+  beforeFailures: string[];
+  afterFailures: string[];
+  beforeRequestedTools: string[];
+  afterRequestedTools: string[];
+  beforeSelectedTools: string[];
+  afterSelectedTools: string[];
+};
+
+export type EvalComparisonReport = {
+  baselinePath: string;
+  totals: Record<EvalComparisonStatus, number>;
+  cases: EvalComparisonCase[];
+};
+
 type TraceEventLike = {
   eventName?: string;
   summary?: string | null;
@@ -127,15 +151,16 @@ async function main() {
   }
 
   const report = await runEvalPrompts(selectedPrompts, args);
-  const outputPath = await writeEvalReport(report, args.outputDir);
+  const comparison = args.comparePath ? compareEvalReports(await loadEvalReport(args.comparePath), report, args.comparePath) : null;
+  const outputPath = await writeEvalReport(report, args.outputDir, comparison);
   const hasFailures = report.totals.failed > 0 || report.totals.error > 0;
   if (args.json) {
-    process.stdout.write(`${JSON.stringify({ outputPath, ...report }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ outputPath, comparison, ...report }, null, 2)}\n`);
     process.exitCode = hasFailures ? 1 : 0;
     return;
   }
 
-  process.stdout.write(formatEvalSummary(report, outputPath));
+  process.stdout.write(formatEvalSummary(report, outputPath, comparison));
   process.exitCode = hasFailures ? 1 : 0;
 }
 
@@ -170,6 +195,10 @@ export function parseEvalArgs(argv: string[]): EvalArgs {
       args.outputDir = requiredNext(argv, ++index, arg);
     } else if (arg.startsWith("--output-dir=")) {
       args.outputDir = valueAfterEquals(arg);
+    } else if (arg === "--compare") {
+      args.comparePath = requiredNext(argv, ++index, arg);
+    } else if (arg.startsWith("--compare=")) {
+      args.comparePath = valueAfterEquals(arg);
     } else if (arg === "--filter") {
       args.filter = requiredNext(argv, ++index, arg);
     } else if (arg.startsWith("--filter=")) {
@@ -428,15 +457,16 @@ export function evidenceFromTrace(traceEvents: TraceEventLike[], toolAudits: Too
   };
 }
 
-async function writeEvalReport(report: EvalRunReport, outputDir: string) {
+async function writeEvalReport(report: EvalRunReport, outputDir: string, comparison: EvalComparisonReport | null = null) {
   const runDir = path.join(outputDir, report.generatedAt.replace(/[:.]/g, "-"));
   await fs.mkdir(runDir, { recursive: true });
   await fs.writeFile(path.join(runDir, "results.json"), `${JSON.stringify(report, null, 2)}\n`);
-  await fs.writeFile(path.join(runDir, "summary.md"), formatEvalSummary(report, path.join(runDir, "results.json")));
+  if (comparison) await fs.writeFile(path.join(runDir, "comparison.json"), `${JSON.stringify(comparison, null, 2)}\n`);
+  await fs.writeFile(path.join(runDir, "summary.md"), formatEvalSummary(report, path.join(runDir, "results.json"), comparison));
   return runDir;
 }
 
-export function formatEvalSummary(report: EvalRunReport, outputPath: string) {
+export function formatEvalSummary(report: EvalRunReport, outputPath: string, comparison: EvalComparisonReport | null = null) {
   const lines = [
     `Eval results: ${report.totals.passed}/${report.totals.total} passed (${report.totals.failed} failed, ${report.totals.error} errors)`,
     `Duration: ${(report.durationMs / 1000).toFixed(3)}s`,
@@ -460,7 +490,81 @@ export function formatEvalSummary(report: EvalRunReport, outputPath: string) {
     }
     if (result.error) lines.push(`  - error: ${previewForSummary(result.error)}`);
   }
+  if (comparison) {
+    lines.push("", ...formatEvalComparison(comparison));
+  }
   return `${lines.join("\n")}\n`;
+}
+
+export function compareEvalReports(baseline: EvalRunReport, current: EvalRunReport, baselinePath: string): EvalComparisonReport {
+  const beforeById = new Map(baseline.results.map((result) => [result.id, result]));
+  const afterById = new Map(current.results.map((result) => [result.id, result]));
+  const ids = [...new Set([...beforeById.keys(), ...afterById.keys()])].sort();
+  const totals: Record<EvalComparisonStatus, number> = {
+    improved: 0,
+    regressed: 0,
+    changed: 0,
+    unchanged: 0,
+    new: 0,
+    removed: 0
+  };
+  const cases = ids.map((id) => {
+    const before = beforeById.get(id) ?? null;
+    const after = afterById.get(id) ?? null;
+    const status = comparisonStatus(before?.status ?? null, after?.status ?? null);
+    totals[status] += 1;
+    return {
+      id,
+      status,
+      beforeStatus: before?.status ?? null,
+      afterStatus: after?.status ?? null,
+      beforeDurationMs: before?.durationMs ?? null,
+      afterDurationMs: after?.durationMs ?? null,
+      beforeFailures: before?.failures ?? [],
+      afterFailures: after?.failures ?? [],
+      beforeRequestedTools: before?.evidence.requestedTools ?? [],
+      afterRequestedTools: after?.evidence.requestedTools ?? [],
+      beforeSelectedTools: before?.evidence.selectedTools ?? [],
+      afterSelectedTools: after?.evidence.selectedTools ?? []
+    };
+  });
+  return { baselinePath, totals, cases };
+}
+
+function comparisonStatus(before: EvalCaseResult["status"] | null, after: EvalCaseResult["status"] | null): EvalComparisonStatus {
+  if (!before) return "new";
+  if (!after) return "removed";
+  if (before !== "passed" && after === "passed") return "improved";
+  if (before === "passed" && after !== "passed") return "regressed";
+  if (before !== after) return "changed";
+  return "unchanged";
+}
+
+function formatEvalComparison(comparison: EvalComparisonReport) {
+  const lines = [
+    `Comparison: ${comparison.baselinePath}`,
+    `Improved: ${comparison.totals.improved}, regressed: ${comparison.totals.regressed}, changed: ${comparison.totals.changed}, new: ${comparison.totals.new}, removed: ${comparison.totals.removed}, unchanged: ${comparison.totals.unchanged}`
+  ];
+  const notable = comparison.cases.filter((result) => result.status !== "unchanged");
+  for (const result of notable) {
+    lines.push(`- ${result.status.toUpperCase()} ${result.id}: ${result.beforeStatus ?? "none"} -> ${result.afterStatus ?? "none"}${formatDurationDelta(result.beforeDurationMs, result.afterDurationMs)}`);
+    for (const failure of result.afterFailures) lines.push(`  - ${failure}`);
+    if (!sameStringList(result.beforeRequestedTools, result.afterRequestedTools)) {
+      lines.push(`  - requested: ${compactList(result.beforeRequestedTools)} -> ${compactList(result.afterRequestedTools)}`);
+    }
+    if (!sameStringList(result.beforeSelectedTools, result.afterSelectedTools)) {
+      lines.push(`  - local: ${compactList(result.beforeSelectedTools)} -> ${compactList(result.afterSelectedTools)}`);
+    }
+  }
+  return lines;
+}
+
+async function loadEvalReport(inputPath: string): Promise<EvalRunReport> {
+  const stats = await fs.stat(inputPath);
+  const reportPath = stats.isDirectory() ? path.join(inputPath, "results.json") : inputPath;
+  const parsed = JSON.parse(await fs.readFile(reportPath, "utf8")) as EvalRunReport;
+  if (!parsed || !Array.isArray(parsed.results)) throw new Error(`Invalid eval report: ${reportPath}`);
+  return parsed;
 }
 
 function compactList(values: string[]) {
@@ -470,6 +574,18 @@ function compactList(values: string[]) {
 function previewForSummary(value: string) {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
+}
+
+function formatDurationDelta(before: number | null, after: number | null) {
+  if (before == null || after == null) return "";
+  const deltaSeconds = (after - before) / 1000;
+  const sign = deltaSeconds > 0 ? "+" : "";
+  return ` (${sign}${deltaSeconds.toFixed(3)}s)`;
+}
+
+function sameStringList(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
 }
 
 function countTotals(results: EvalCaseResult[]): EvalRunReport["totals"] {
@@ -591,6 +707,7 @@ Options:
   --dir <path>               Load all JSON suites under a directory. Defaults to evals/prompts.
   --include-private          Also load .discord-ai-agent/evals, which is gitignored.
   --output-dir <path>        Report output directory. Defaults to .eval-runs.
+  --compare <path>           Compare against a previous results.json file or eval run directory.
   --filter <text>            Keep prompts whose id, category, prompt, or notes include text.
   --category <name>          Keep prompts in one category.
   --prompt-timeout-ms <ms>   Per-prompt timeout. Defaults to 300000.

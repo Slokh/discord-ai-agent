@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPromptCommand,
+  compareEvalReports,
   evaluatePromptAssertions,
   evidenceFromTrace,
   extractPromptJson,
@@ -28,12 +29,13 @@ const basePrompt: EvalPrompt = {
 
 describe("eval runner", () => {
   it("parses eval CLI options", () => {
-    expect(parseEvalArgs(["--file", "evals/prompts/core.json", "--include-private", "--category=history", "--filter", "job", "--json"])).toEqual(
+    expect(parseEvalArgs(["--file", "evals/prompts/core.json", "--include-private", "--category=history", "--filter", "job", "--compare=.eval-runs/base", "--json"])).toEqual(
       expect.objectContaining({
         files: ["evals/prompts/core.json"],
         includePrivate: true,
         category: "history",
         filter: "job",
+        comparePath: ".eval-runs/base",
         json: true
       })
     );
@@ -179,5 +181,93 @@ describe("eval runner", () => {
       "expected requested tool openrouter:web_search was not observed"
     );
     expect(formatEvalSummary(report, ".eval-runs/example/results.json")).toContain("answer: I only found Discord history.");
+  });
+
+  it("compares eval reports and highlights regressions and improvements", () => {
+    const baseline: EvalRunReport = {
+      generatedAt: "2026-07-03T00:00:00.000Z",
+      durationMs: 1000,
+      totals: { passed: 1, failed: 1, error: 0, skipped: 0, total: 2 },
+      results: [
+        {
+          id: "web-current-external-fact",
+          category: "web",
+          prompt: "what is the next world cup match?",
+          status: "passed",
+          durationMs: 500,
+          runId: "before-web",
+          traceId: "before-web",
+          answer: "Used web.",
+          evidence: {
+            requestedTools: ["openrouter:web_search"],
+            selectedTools: [],
+            auditedTools: [],
+            traceEventCount: 1,
+            toolAuditCount: 0
+          },
+          failures: []
+        },
+        {
+          id: "stats-channel-popularity-normalized",
+          category: "stats",
+          prompt: "rank the channels by messages per day",
+          status: "failed",
+          durationMs: 800,
+          runId: "before-stats",
+          traceId: "before-stats",
+          answer: "Wrong tool.",
+          evidence: {
+            requestedTools: ["searchDiscordHistory"],
+            selectedTools: ["searchDiscordHistory"],
+            auditedTools: ["searchDiscordHistory"],
+            traceEventCount: 1,
+            toolAuditCount: 1
+          },
+          failures: ["expected tool getDiscordStats was not observed"]
+        }
+      ]
+    };
+    const current: EvalRunReport = {
+      ...baseline,
+      totals: { passed: 1, failed: 1, error: 0, skipped: 0, total: 2 },
+      results: [
+        {
+          ...baseline.results[0],
+          status: "failed",
+          durationMs: 650,
+          answer: "Only searched Discord.",
+          evidence: {
+            requestedTools: ["searchDiscordHistory"],
+            selectedTools: ["searchDiscordHistory"],
+            auditedTools: ["searchDiscordHistory"],
+            traceEventCount: 1,
+            toolAuditCount: 1
+          },
+          failures: ["expected requested tool openrouter:web_search was not observed"]
+        },
+        {
+          ...baseline.results[1],
+          status: "passed",
+          durationMs: 700,
+          answer: "Used stats.",
+          evidence: {
+            requestedTools: ["getDiscordStats"],
+            selectedTools: ["getDiscordStats"],
+            auditedTools: ["getDiscordStats"],
+            traceEventCount: 1,
+            toolAuditCount: 1
+          },
+          failures: []
+        }
+      ]
+    };
+
+    const comparison = compareEvalReports(baseline, current, ".eval-runs/base");
+    expect(comparison.totals).toEqual({ improved: 1, regressed: 1, changed: 0, unchanged: 0, new: 0, removed: 0 });
+    const summary = formatEvalSummary(current, ".eval-runs/current/results.json", comparison);
+    expect(summary).toContain("Improved: 1, regressed: 1");
+    expect(summary).toContain("REGRESSED web-current-external-fact: passed -> failed (+0.150s)");
+    expect(summary).toContain("requested: openrouter:web_search -> searchDiscordHistory");
+    expect(summary).toContain("IMPROVED stats-channel-popularity-normalized: failed -> passed (-0.100s)");
   });
 });

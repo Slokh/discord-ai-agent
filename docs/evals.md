@@ -10,9 +10,12 @@ npm run eval -- --dry-run
 npm run eval -- --list
 npm run eval -- --category history
 npm run eval -- --filter job
+npm run eval -- --include-private --compare .eval-runs/<previous-run>
 ```
 
 Reports are written to `.eval-runs/<timestamp>/`, which is gitignored.
+
+Use `--compare` with a previous eval run directory or `results.json` file to summarize improved, regressed, changed, new, removed, and unchanged prompts.
 
 The default suite is intentionally safe for committed source. Costly or mutating cases, such as image generation and codegen PR creation, are documented but skipped.
 
@@ -76,5 +79,7 @@ Each result includes:
 - latency
 
 The Markdown summary includes requested, selected local, and audited tool evidence inline for each prompt. Failed/error cases also include a short answer or error preview so tool-choice failures are visible without opening `results.json` first.
+
+When `--compare` is provided, the summary also includes status changes, duration deltas, changed requested tools, and changed selected local tools. A machine-readable `comparison.json` is written beside `results.json`.
 
 Use failed evals to decide whether the next change should target tool descriptions, tool output shape, retrieval ranking, prompt context, codegen context packaging, or observability. See `docs/tool-design.md` for the tool contract rules that should guide those changes.

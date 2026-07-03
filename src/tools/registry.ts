@@ -126,7 +126,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "searchDiscordHistory",
     description:
-      "Search permission-filtered indexed Discord history. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use authorIds/authorQueries for messages written by someone; use aboutUserIds/aboutUserQueries for messages about or mentioning someone. Use structured person/channel filters after findDiscordUsers/findDiscordChannels when names are ambiguous. One or two distinct searches is usually enough before answering. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
+      "Search permission-filtered indexed Discord history using hybrid keyword and semantic vector retrieval. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use authorIds/authorQueries for messages written by someone; use aboutUserIds/aboutUserQueries for messages about or mentioning someone. Use structured person/channel filters after findDiscordUsers/findDiscordChannels when names are ambiguous. One or two distinct searches is usually enough before answering. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -721,7 +721,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "inspectAgentLogs",
     description:
-      "Inspect Discord AI Agent's own recent trace events, task events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. traceId is usually the originating Discord message ID.",
+      "Inspect Discord AI Agent's own normalized run diagnostics, trace events, task events, terminal command events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. Pass the originating Discord message link/message ID, run ID, or trace ID when available.",
     userVisible: true,
     mutates: false,
     parameters: {
@@ -729,7 +729,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         traceId: {
           type: "string",
-          description: "Optional trace ID or originating Discord message ID to inspect."
+          description: "Optional trace ID, run ID, originating Discord message ID, or Discord message URL to inspect."
         },
         limit: {
           type: "number",
@@ -898,7 +898,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
   resolver: ["resolved IDs", "display names", "match confidence or ambiguity notes", "result count"],
-  retrieval: ["applied filters", "ranked evidence snippets", "Discord message links when available", "result count"],
+  retrieval: ["applied filters", "ranked evidence snippets", "match sources when available", "Discord message links when available", "result count"],
   memory: ["memory scope", "durable action or retrieved turns", "audit trail"],
   stats: ["metric", "grouping", "filters", "ranked rows", "result count"],
   summary: ["question or focus", "sample window", "grounded summary", "coverage limits"],

@@ -122,3 +122,45 @@ When you do not have direct database access, point the same command at the authe
 ```sh
 npm run codegen:status -- --source api --api-url https://tasks.example.com
 ```
+
+## Local Codegen Smoke Tests
+
+Use the smoke runner when you need to test a real coding harness loop without Discord or Kubernetes:
+
+```sh
+npm run smoke:codegen -- --harness opencode --model z-ai/glm-5.2 --close-pr
+```
+
+The script starts a temporary local task callback server, runs `src/execution/sandboxRunner.ts` directly, records callbacks and artifacts under `.discord-ai-agent/codegen-smoke/<task-id>/`, and writes a `summary.md` with duration, completion status, failure diagnosis, PR URL, and callback timeline.
+
+For long or exact Discord prompts, put the prompt in a local file and pass:
+
+```sh
+npm run smoke:codegen -- --request-file .discord-ai-agent/codegen-smoke/request.txt --close-pr
+```
+
+To run a repeatable local codegen regression suite, put cases in a gitignored JSON file:
+
+```json
+{
+  "version": 1,
+  "name": "private-codegen-regressions",
+  "cases": [
+    {
+      "id": "tool-schema-context",
+      "title": "Improve tool schema context",
+      "request": "Make the coding agent handle tool schema changes with a focused test first."
+    }
+  ]
+}
+```
+
+Then run:
+
+```sh
+npm run smoke:codegen -- --suite .discord-ai-agent/codegen-smoke/suite.json --harness opencode --model z-ai/glm-5.2 --close-pr
+```
+
+Suite reports are written under `.discord-ai-agent/codegen-smoke/suites/` with aggregate `summary.md` and `results.json` files. Cases can override `harness`, `model`, `timeoutMs`, `closePr`, `title`, `request`, or `requestFile`; use `skip` and `skipReason` to keep costly cases documented but disabled.
+
+Use `--close-pr` for iteration runs that should automatically close the generated smoke PR and delete its branch. Omit it only when you intentionally want to inspect the opened PR on GitHub.

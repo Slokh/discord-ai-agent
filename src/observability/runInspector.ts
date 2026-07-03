@@ -1,6 +1,6 @@
 import type { ProcessRunArtifactContent } from "../db/repositories.js";
 import { formatOpenCodeTranscriptDiagnostics, parseOpenCodeTranscript } from "./openCodeTranscript.js";
-import type { RunArtifactSummary, RunSnapshot, RunSpan, RunTerminalEntry } from "./runs.js";
+import type { RunArtifactSummary, RunSnapshot, RunSpan, RunSummary, RunTerminalEntry } from "./runs.js";
 
 export type RunInspectionOptions = {
   eventLimit?: number;
@@ -9,6 +9,55 @@ export type RunInspectionOptions = {
   includeTerminal?: boolean;
   terminalLimit?: number;
 };
+
+export type RunSummaryListOptions = {
+  kind?: string;
+  status?: string;
+  sort?: "updated" | "started" | "slowest";
+  limit?: number;
+};
+
+export function formatRunSummaryList(runs: RunSummary[], options: RunSummaryListOptions = {}): string {
+  const limit = clampInteger(options.limit ?? 20, 1, 500);
+  const filtered = runs
+    .filter((run) => !options.kind || run.kind === options.kind)
+    .filter((run) => !options.status || run.status === options.status)
+    .sort((left, right) => compareRunSummaries(left, right, options.sort ?? "updated"))
+    .slice(0, limit);
+
+  const lines = [
+    `Runs (${filtered.length}${runs.length > filtered.length ? ` of ${runs.length}` : ""})`,
+    `Sort: ${options.sort ?? "updated"}${options.kind ? ` | Kind: ${options.kind}` : ""}${options.status ? ` | Status: ${options.status}` : ""}`,
+    ...runSummaryAggregateLines(filtered),
+    ""
+  ];
+  if (filtered.length === 0) {
+    lines.push("No matching runs.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  for (const run of filtered) {
+    lines.push(`- ${run.runId} | ${run.kind} | ${run.status} | ${formatSeconds(run.durationMs)} | ${truncateSingleLine(run.title, 100)}`);
+    const detail = [
+      run.requester ? `requester=${run.requester}` : null,
+      run.currentStep ? `step=${run.currentStep}` : null,
+      run.bottleneck ? `bottleneck=${run.bottleneck.name} ${formatSeconds(run.bottleneck.durationMs)}` : null,
+      run.links.pullRequest ? `pr=${String(run.links.pullRequest)}` : null,
+      run.messageId ? `message=${run.messageId}` : null
+    ]
+      .filter(Boolean)
+      .join(" | ");
+    if (detail) lines.push(`  ${detail}`);
+    const failureDiagnosis = codegenFailureDiagnosisFromMetadata(run.metadata.failureDiagnosis);
+    if (failureDiagnosis) {
+      lines.push(
+        `  diagnosis=${failureDiagnosis.category ?? "unknown"} | ${truncateSingleLine(failureDiagnosis.summary, 180)} | next=${truncateSingleLine(failureDiagnosis.nextAction, 180)}`
+      );
+    }
+    if (run.summary) lines.push(`  ${truncateSingleLine(run.summary, 220)}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
 
 export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectionOptions = {}): string {
   const eventLimit = clampInteger(options.eventLimit ?? 80, 1, 500);
@@ -36,6 +85,13 @@ export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectio
     lines.push("");
     lines.push("Diagnostics:");
     for (const diagnostic of snapshot.diagnostics) lines.push(`- ${diagnostic}`);
+  }
+
+  const modelUsage = formatModelUsage(snapshot);
+  if (modelUsage.length > 0) {
+    lines.push("");
+    lines.push("Model usage:");
+    lines.push(...modelUsage);
   }
 
   const slowestSpans = [...snapshot.spans]
@@ -84,6 +140,122 @@ export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectio
   lines.push("");
   lines.push(`Generated: ${formatDateTime(snapshot.generatedAt)}`);
   return `${lines.join("\n")}\n`;
+}
+
+function compareRunSummaries(left: RunSummary, right: RunSummary, sort: NonNullable<RunSummaryListOptions["sort"]>) {
+  if (sort === "slowest") return (right.durationMs ?? -1) - (left.durationMs ?? -1);
+  if (sort === "started") return right.startedAt.getTime() - left.startedAt.getTime();
+  return right.updatedAt.getTime() - left.updatedAt.getTime();
+}
+
+function runSummaryAggregateLines(runs: RunSummary[]) {
+  if (runs.length === 0) return [];
+  const lines = [`Statuses: ${formatCounts(countBy(runs, (run) => run.status))}`];
+  const kinds = countBy(runs, (run) => run.kind);
+  if (kinds.size > 1) lines.push(`Kinds: ${formatCounts(kinds)}`);
+  const diagnosisCategories = countBy(
+    runs
+      .map((run) => codegenFailureDiagnosisFromMetadata(run.metadata.failureDiagnosis)?.category)
+      .filter((category): category is string => Boolean(category)),
+    (category) => category
+  );
+  if (diagnosisCategories.size > 0) lines.push(`Codegen diagnoses: ${formatCounts(diagnosisCategories)}`);
+  return lines;
+}
+
+function countBy<T>(items: T[], keyForItem: (item: T) => string) {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = keyForItem(item);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function formatCounts(counts: Map<string, number>) {
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([key, count]) => `${key}=${count}`)
+    .join(", ");
+}
+
+function formatModelUsage(snapshot: RunSnapshot) {
+  const usageSources = snapshot.spans.filter((span) => usageFromMetadata(span.metadata));
+  const fallbackUsageSources =
+    usageSources.length > 0
+      ? []
+      : snapshot.events.filter((event) => event.name === "agent.model.round.complete" && usageFromMetadata(event.metadata));
+  const usageRows = [...usageSources, ...fallbackUsageSources].map((item) => ({
+    model: stringFromUnknown(item.metadata.model) ?? "unknown",
+    usage: usageFromMetadata(item.metadata)!
+  }));
+  const costRows = snapshot.events
+    .filter((event) => event.source === "tool")
+    .map((event) => ({
+      model: stringFromUnknown(event.metadata.model) ?? "unknown",
+      cost: numberFromUnknown(event.metadata.estimatedCostUsd)
+    }))
+    .filter((row): row is { model: string; cost: number } => row.cost != null);
+
+  if (usageRows.length === 0 && costRows.length === 0) return [];
+
+  const lines: string[] = [];
+  if (usageRows.length > 0) {
+    const totals = usageRows.reduce(
+      (sum, row) => ({
+        inputTokens: sum.inputTokens + (row.usage.inputTokens ?? 0),
+        outputTokens: sum.outputTokens + (row.usage.outputTokens ?? 0),
+        totalTokens: sum.totalTokens + (row.usage.totalTokens ?? 0),
+        reasoningTokens: sum.reasoningTokens + (row.usage.reasoningTokens ?? 0),
+        cachedInputTokens: sum.cachedInputTokens + (row.usage.cachedInputTokens ?? 0)
+      }),
+      { inputTokens: 0, outputTokens: 0, totalTokens: 0, reasoningTokens: 0, cachedInputTokens: 0 }
+    );
+    const modelList = [...new Set(usageRows.map((row) => row.model))].join(", ");
+    const tokenParts = [
+      totals.inputTokens > 0 ? `input=${totals.inputTokens}` : null,
+      totals.outputTokens > 0 ? `output=${totals.outputTokens}` : null,
+      totals.totalTokens > 0 ? `total=${totals.totalTokens}` : null,
+      totals.reasoningTokens > 0 ? `reasoning=${totals.reasoningTokens}` : null,
+      totals.cachedInputTokens > 0 ? `cached_input=${totals.cachedInputTokens}` : null
+    ].filter(Boolean);
+    lines.push(`- Token usage: ${tokenParts.join(" ") || "unknown"} across ${usageRows.length} LLM ${usageRows.length === 1 ? "call" : "calls"} (${modelList})`);
+  }
+  if (costRows.length > 0) {
+    const total = costRows.reduce((sum, row) => sum + row.cost, 0);
+    const byModel = new Map<string, number>();
+    for (const row of costRows) byModel.set(row.model, (byModel.get(row.model) ?? 0) + row.cost);
+    lines.push(`- Estimated audited cost: ${formatUsd(total)} across ${costRows.length} model/tool ${costRows.length === 1 ? "audit" : "audits"}`);
+    lines.push(`- Cost by model: ${[...byModel.entries()].map(([model, cost]) => `${model}=${formatUsd(cost)}`).join(", ")}`);
+  }
+  return lines;
+}
+
+function usageFromMetadata(metadata: Record<string, unknown>) {
+  const usage = metadata.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+  const record = usage as Record<string, unknown>;
+  const normalized = {
+    inputTokens: numberFromUnknown(record.inputTokens),
+    outputTokens: numberFromUnknown(record.outputTokens),
+    totalTokens: numberFromUnknown(record.totalTokens),
+    reasoningTokens: numberFromUnknown(record.reasoningTokens),
+    cachedInputTokens: numberFromUnknown(record.cachedInputTokens)
+  };
+  return Object.values(normalized).some((value) => value != null) ? normalized : null;
+}
+
+function codegenFailureDiagnosisFromMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const summary = stringFromUnknown(record.summary);
+  const nextAction = stringFromUnknown(record.nextAction);
+  if (!summary || !nextAction) return null;
+  return {
+    category: stringFromUnknown(record.category),
+    summary,
+    nextAction
+  };
 }
 
 export function formatRunArtifacts(artifacts: ProcessRunArtifactContent[]): string {
@@ -224,6 +396,15 @@ function clampInteger(value: number, min: number, max: number) {
 
 function stringFromUnknown(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberFromUnknown(value: unknown) {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatUsd(value: number) {
+  return `$${value.toFixed(value < 0.01 ? 6 : 4)}`;
 }
 
 function formatOpenCodeArtifactDiagnostics(artifact: ProcessRunArtifactContent) {

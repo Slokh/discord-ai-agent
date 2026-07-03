@@ -74,6 +74,25 @@ describe("run summaries", () => {
 
     expect(diagnosticsForRun(run, [], events)).toContain("Coding agent finished without leaving a code diff.");
   });
+
+  it("surfaces structured codegen failure diagnosis metadata", () => {
+    const run = codegenRun({
+      status: "failed",
+      metadata: {
+        failureDiagnosis: {
+          summary: "The agent produced changes, but the release scan failed before the branch was pushed.",
+          nextAction: "Inspect the release scan command log."
+        }
+      }
+    });
+
+    expect(diagnosticsForRun(run, [], [])).toEqual(
+      expect.arrayContaining([
+        "Failure diagnosis: The agent produced changes, but the release scan failed before the branch was pushed.",
+        "Suggested next action: Inspect the release scan command log."
+      ])
+    );
+  });
 });
 
 function codegenRun(overrides: Partial<RunSummary> = {}): RunSummary {

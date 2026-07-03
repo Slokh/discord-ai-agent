@@ -1,5 +1,7 @@
 import { buildHistoryRetrievalQuery, searchDiscordHistory, formatSearchResults } from "../memory/search.js";
 import { MESSAGE_EMBEDDING_INPUT_VERSION } from "../memory/embedding.js";
+import { formatRunInspection } from "../observability/runInspector.js";
+import { getRunSnapshot, resolveRunReference, type RunSnapshot } from "../observability/runs.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit, truncateForDiscord } from "../util/text.js";
@@ -13,6 +15,7 @@ import type {
   DiscordChannelLookupResult,
   DiscordChannelTopicCandidate,
   DiscordStats,
+  DiscordStatsSort,
   DiscordUserLookupResult,
   SearchResult,
   SandboxCommandEvent,
@@ -301,17 +304,22 @@ export async function getDiscordStats(
     ...normalizeIds(input.channelIds),
     ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
   ]);
+  const dateFrom = coerceDateStart(input.dateFrom);
+  const dateTo = coerceDateEnd(input.dateTo);
+  const groupBy = discordStatsGroupBy(input.groupBy);
+  const metric = discordStatsMetric(input.metric);
+  const sort = discordStatsSort(input.sort);
   const stats = await ctx.repo.discordStats({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
     authorIds,
     channelIds,
-    dateFrom: coerceDateStart(input.dateFrom),
-    dateTo: coerceDateEnd(input.dateTo),
-    groupBy: discordStatsGroupBy(input.groupBy),
-    metric: discordStatsMetric(input.metric),
+    dateFrom,
+    dateTo,
+    groupBy,
+    metric,
     includeBots: Boolean(input.includeBots),
-    sort: discordStatsSort(input.sort),
+    sort,
     query: input.query,
     attachmentContentType: input.attachmentContentType,
     limit: resolvedLimit
@@ -324,7 +332,17 @@ export async function getDiscordStats(
     argumentsSummary: summarizeForAudit({ ...input, authorIds, channelIds, limit: resolvedLimit }),
     resultSummary: summarizeForAudit(stats)
   });
-  return formatDiscordStats(stats);
+  return formatDiscordStats(stats, {
+    authorIds,
+    channelIds,
+    dateFrom,
+    dateTo,
+    query: input.query,
+    attachmentContentType: input.attachmentContentType,
+    includeBots: Boolean(input.includeBots),
+    sort,
+    limit: resolvedLimit
+  });
 }
 
 export async function getDiscordChannelTopics(
@@ -352,12 +370,14 @@ export async function getDiscordChannelTopics(
     ...normalizeIds(input.channelIds),
     ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
   ]);
+  const dateFrom = coerceDateStart(input.dateFrom);
+  const dateTo = coerceDateEnd(input.dateTo);
   const candidates = await ctx.repo.discordChannelTopicCandidates({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
     channelIds,
-    dateFrom: coerceDateStart(input.dateFrom),
-    dateTo: coerceDateEnd(input.dateTo),
+    dateFrom,
+    dateTo,
     channelLimit,
     samplesPerChannel,
     minChannelMessages,
@@ -411,7 +431,18 @@ export async function getDiscordChannelTopics(
     estimatedCostUsd: response.estimatedCostUsd
   });
 
-  return response.content;
+  return formatChannelTopicsResult(response.content, {
+    channelIds,
+    dateFrom,
+    dateTo,
+    channelLimit,
+    topicsPerChannel,
+    samplesPerChannel,
+    minChannelMessages,
+    minMessageChars,
+    includeBots: Boolean(input.includeBots),
+    candidates
+  });
 }
 
 export async function summarizeDiscordHistory(
@@ -511,7 +542,20 @@ export async function summarizeDiscordHistory(
     estimatedCostUsd: response.estimatedCostUsd
   });
 
-  return summary;
+  return formatDiscordHistorySummaryResult(summary, {
+    question,
+    authorIds,
+    aboutUserIds,
+    channelIds,
+    dateFrom,
+    dateTo: explicitDateTo,
+    retrievalQuery: evidence.retrievalQuery,
+    counts: evidence.counts,
+    sampleCount: samples.length,
+    sampleLimit,
+    evidenceDates: historyEvidenceDateSummary(samples),
+    evidenceAuthors: historyEvidenceAuthors(samples)
+  });
 }
 
 async function collectDiscordSummaryEvidence(
@@ -1628,7 +1672,8 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
 export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: string; limit?: number } = {}): Promise<string> {
   const limit = clampInteger(input.limit, 1, 50, 20);
   const traceId = input.traceId?.trim() || undefined;
-  const [events, taskEvents, commandEvents, toolLogs] = await Promise.all([
+  const [runSnapshot, events, taskEvents, commandEvents, toolLogs] = await Promise.all([
+    traceId ? resolveVisibleRunSnapshot(ctx, traceId) : Promise.resolve(undefined),
     ctx.repo.getTraceEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
@@ -1662,6 +1707,7 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     toolName: "inspectAgentLogs",
     argumentsSummary: summarizeForAudit({ traceId, limit }),
     resultSummary: summarizeForAudit({
+      normalizedRun: runSnapshot?.run.runId,
       traceEvents: events.length,
       taskEvents: taskEvents.length,
       commandEvents: commandEvents.length,
@@ -1669,12 +1715,13 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     })
   });
 
-  if (events.length === 0 && taskEvents.length === 0 && commandEvents.length === 0 && toolLogs.length === 0) {
+  if (!runSnapshot && events.length === 0 && taskEvents.length === 0 && commandEvents.length === 0 && toolLogs.length === 0) {
     return traceId ? `No Discord AI Agent trace or tool logs matched traceId=${traceId}.` : "No recent Discord AI Agent trace or tool logs matched visible channels.";
   }
 
   return [
     traceId ? `Discord AI Agent logs for trace ${traceId}:` : "Recent Discord AI Agent logs:",
+    runSnapshot ? `\n${formatVisibleRunInspection(runSnapshot)}` : "",
     "",
     formatTraceEvents(events),
     "",
@@ -1746,6 +1793,33 @@ function formatToolAuditLogs(logs: ToolAuditLog[]) {
         return `- ${log.createdAt.toISOString()} ${log.toolName}${bits.length ? ` (${bits.join(", ")})` : ""}${result}`;
       })
   ].join("\n");
+}
+
+async function resolveVisibleRunSnapshot(ctx: ToolContext, reference: string): Promise<RunSnapshot | undefined> {
+  const resolved = await resolveRunReference(ctx.repo, reference);
+  const runId = resolved?.run.runId ?? reference.trim();
+  if (!runId) return undefined;
+  const snapshot = await getRunSnapshot(ctx.repo, runId);
+  if (!snapshot || !isRunSnapshotVisibleToRequester(ctx, snapshot)) return undefined;
+  return snapshot;
+}
+
+function isRunSnapshotVisibleToRequester(ctx: ToolContext, snapshot: RunSnapshot) {
+  const run = snapshot.run;
+  if (run.guildId && run.guildId !== ctx.guildId) return false;
+  if (!run.channelId) return true;
+  return run.channelId === ctx.channelId || ctx.visibleChannelIds.includes(run.channelId);
+}
+
+function formatVisibleRunInspection(snapshot: RunSnapshot) {
+  return truncateForDiscord(
+    formatRunInspection(snapshot, {
+      eventLimit: 20,
+      terminalLimit: snapshot.run.kind === "codegen" ? 8 : 4,
+      includeTerminal: snapshot.terminal.entries.length > 0
+    }),
+    6000
+  );
 }
 
 async function resolveVisibleAgentTask(
@@ -1960,6 +2034,51 @@ function formatChannelTopicEvidence(candidates: DiscordChannelTopicCandidate[], 
   ].join("\n\n");
 }
 
+function formatChannelTopicsResult(
+  summary: string,
+  input: {
+    channelIds: string[];
+    dateFrom?: Date;
+    dateTo?: Date;
+    channelLimit: number;
+    topicsPerChannel: number;
+    samplesPerChannel: number;
+    minChannelMessages: number;
+    minMessageChars: number;
+    includeBots: boolean;
+    candidates: DiscordChannelTopicCandidate[];
+  }
+) {
+  const channelCount = groupTopicCandidates(input.candidates).size;
+  const embeddedCount = input.candidates.filter((candidate) => candidate.embedding).length;
+  return [
+    "Discord channel topics summary:",
+    "- Scope: requester-visible indexed Discord messages",
+    `- Applied filters: ${formatChannelTopicFilters(input)}`,
+    `- Sampling: ${input.candidates.length} candidate messages across ${channelCount} channels (${embeddedCount} embedded)`,
+    `- Limits: channelLimit=${input.channelLimit}; topicsPerChannel=${input.topicsPerChannel}; samplesPerChannel=${input.samplesPerChannel}; minChannelMessages=${input.minChannelMessages}; minMessageChars=${input.minMessageChars}`,
+    "- Coverage: directional semantic sample, not an exhaustive exact phrase count",
+    "",
+    "Summary:",
+    summary.trim()
+  ].join("\n");
+}
+
+function formatChannelTopicFilters(input: {
+  channelIds: string[];
+  dateFrom?: Date;
+  dateTo?: Date;
+  includeBots: boolean;
+}) {
+  const filters = [
+    input.channelIds.length ? `channelIds=${input.channelIds.join(",")}` : null,
+    input.dateFrom ? `from=${input.dateFrom.toISOString().slice(0, 10)}` : null,
+    input.dateTo ? `through=${input.dateTo.toISOString().slice(0, 10)}` : null,
+    input.includeBots ? "includeBots=true" : null
+  ].filter((filter): filter is string => Boolean(filter));
+  return filters.length ? filters.join("; ") : "none";
+}
+
 function groupTopicCandidates(candidates: DiscordChannelTopicCandidate[]) {
   const groups = new Map<string, DiscordChannelTopicCandidate[]>();
   for (const candidate of candidates) {
@@ -2053,11 +2172,26 @@ function topicSnippet(content: string) {
   return truncateForDiscord(content.replace(/https?:\/\/\S+/gi, "[link]").replace(/\s+/g, " ").trim(), 180);
 }
 
-function formatDiscordStats(stats: DiscordStats) {
+type DiscordStatsFormatOptions = {
+  authorIds: string[];
+  channelIds: string[];
+  dateFrom?: Date;
+  dateTo?: Date;
+  query?: string;
+  attachmentContentType?: string;
+  includeBots: boolean;
+  sort?: DiscordStatsSort;
+  limit: number;
+};
+
+function formatDiscordStats(stats: DiscordStats, options: DiscordStatsFormatOptions) {
   const metric = discordStatsMetricLabel(stats.metric);
   const groupedBy = discordStatsGroupByLabel(stats.groupBy);
   const lines = [
     "Discord indexed stats:",
+    "- Scope: requester-visible indexed Discord messages",
+    `- Applied filters: ${formatDiscordStatsFilters(options)}`,
+    `- Row limit: ${options.limit}`,
     `- Metric: ${metric}`,
     `- Grouped by: ${groupedBy}`,
     `- Messages: ${stats.totalMessages}`
@@ -2091,6 +2225,71 @@ function formatDiscordStats(stats: DiscordStats) {
       : ["  none"])
   );
   return lines.join("\n");
+}
+
+function formatDiscordStatsFilters(options: DiscordStatsFormatOptions) {
+  const filters = [
+    options.authorIds.length ? `authorIds=${options.authorIds.join(",")}` : null,
+    options.channelIds.length ? `channelIds=${options.channelIds.join(",")}` : null,
+    options.dateFrom ? `from=${options.dateFrom.toISOString().slice(0, 10)}` : null,
+    options.dateTo ? `through=${options.dateTo.toISOString().slice(0, 10)}` : null,
+    options.query?.trim() ? `query="${truncateForDiscord(options.query.trim(), 120)}"` : null,
+    options.attachmentContentType?.trim() ? `attachmentContentType=${options.attachmentContentType.trim()}` : null,
+    options.includeBots ? "includeBots=true" : null,
+    options.sort ? `sort=${options.sort}` : null
+  ].filter((filter): filter is string => Boolean(filter));
+  return filters.length ? filters.join("; ") : "none";
+}
+
+function formatDiscordHistorySummaryResult(
+  summary: string,
+  input: {
+    question: string;
+    authorIds: string[];
+    aboutUserIds: string[];
+    channelIds: string[];
+    dateFrom?: Date;
+    dateTo?: Date;
+    retrievalQuery: string;
+    counts: DiscordSummaryEvidence["counts"];
+    sampleCount: number;
+    sampleLimit: number;
+    evidenceDates: string;
+    evidenceAuthors: string;
+  }
+) {
+  return [
+    "Discord history summary:",
+    "- Scope: requester-visible indexed Discord messages",
+    `- Question: ${input.question}`,
+    `- Applied filters: ${formatDiscordHistorySummaryFilters(input)}`,
+    `- Retrieval query: ${input.retrievalQuery || "(broad summary)"}`,
+    `- Retrieval mix: semantic=${input.counts.semantic}, keyword=${input.counts.keyword}, recent=${input.counts.recent}, representative=${input.counts.representative}`,
+    `- Sample count: ${input.sampleCount}/${input.sampleLimit}`,
+    `- Evidence dates: ${input.evidenceDates}`,
+    `- Evidence authors: ${input.evidenceAuthors}`,
+    "- Coverage: representative sample, not exhaustive",
+    "",
+    "Summary:",
+    summary.trim()
+  ].join("\n");
+}
+
+function formatDiscordHistorySummaryFilters(input: {
+  authorIds: string[];
+  aboutUserIds: string[];
+  channelIds: string[];
+  dateFrom?: Date;
+  dateTo?: Date;
+}) {
+  const filters = [
+    input.authorIds.length ? `authorIds=${input.authorIds.join(",")}` : null,
+    input.aboutUserIds.length ? `aboutUserIds=${input.aboutUserIds.join(",")}` : null,
+    input.channelIds.length ? `channelIds=${input.channelIds.join(",")}` : null,
+    input.dateFrom ? `from=${input.dateFrom.toISOString().slice(0, 10)}` : null,
+    input.dateTo ? `through=${input.dateTo.toISOString().slice(0, 10)}` : null
+  ].filter((filter): filter is string => Boolean(filter));
+  return filters.length ? filters.join("; ") : "none";
 }
 
 function formatDiscordStatsRowLabel(row: DiscordStats["rows"][number]) {

@@ -570,6 +570,25 @@ export class CodegenRepository {
     };
   }
 
+  async cleanupExpiredArtifacts(limit = 500): Promise<number> {
+    const result = await this.pool.query(
+      `
+        WITH expired AS (
+          SELECT artifact_id
+          FROM codegen_artifacts
+          WHERE expires_at IS NOT NULL
+            AND expires_at <= now()
+          ORDER BY expires_at ASC, artifact_id ASC
+          LIMIT $1
+        )
+        DELETE FROM codegen_artifacts
+        WHERE artifact_id IN (SELECT artifact_id FROM expired)
+      `,
+      [Math.max(1, Math.min(5000, Math.trunc(limit)))]
+    );
+    return result.rowCount ?? 0;
+  }
+
   async upsertSandboxLease(input: {
     sandboxId: string;
     repo: string;

@@ -306,7 +306,12 @@ describe("agent router", () => {
           expect.objectContaining({
             role: "tool",
             name: "getDiscordChannelTopics",
-            content: "#stonks: job hunting and market talk"
+            content: expect.stringContaining("#stonks: job hunting and market talk")
+          }),
+          expect.objectContaining({
+            role: "tool",
+            name: "getDiscordChannelTopics",
+            content: expect.stringContaining("Discord channel topics summary:")
           })
         ])
       })

@@ -19,10 +19,10 @@ import {
 } from "lucide-react";
 import { Button, Copy, Status, Tabs, Tag } from "regen-ui";
 import { parseOpenCodeTranscript } from "../../observability/openCodeTranscript.js";
-import { fetchArtifact, fetchRuns, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
-import type { EventLevel, RunArtifact, RunEvent, RunKind, RunSnapshot, RunSpan, RunStatus, RunSummary, TerminalEntry } from "./types.js";
+import { fetchArtifact, fetchRunList, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
+import type { EventLevel, RunArtifact, RunCount, RunKind, RunListAggregate, RunEvent, RunSnapshot, RunSpan, RunStatus, RunSummary, TerminalEntry } from "./types.js";
 
-type StatusFilter = "all" | "active" | "done" | "attention";
+type StatusFilter = "all" | "active" | "done" | "attention" | RunStatus;
 type DetailTab = "overview" | "timeline" | "terminal" | "artifacts" | "raw";
 type TerminalStream = TerminalEntry["stream"];
 type HistoryMode = "push" | "replace";
@@ -117,7 +117,7 @@ const detailTabs = [
   { id: "raw", label: "Raw", icon: <FileText /> }
 ] as const;
 
-const statusFilters = ["all", "active", "done", "attention"] as const;
+const statusFilters = ["all", "active", "attention", "queued", "running", "failed", "no_changes", "cancelled", "succeeded", "done"] as const;
 const runKinds = ["all", "codegen", "discord", "crawl", "embedding", "prompt", "workflow", "ops"] as const;
 const managedSearchParams = new Set(["tab", "status", "filter", "kind", "q", "embeddings", "includeEmbeddings"]);
 
@@ -130,6 +130,7 @@ const terminalStreamLabels: Record<TerminalStream, string> = {
 
 export function App() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [runAggregate, setRunAggregate] = useState<RunListAggregate | null>(null);
   const [selectedRunId, setSelectedRunId] = useState(() => readConsoleUrlState().runId);
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [loadingRuns, setLoadingRuns] = useState(true);
@@ -174,10 +175,11 @@ export function App() {
     setLoadingRuns(true);
     setError(null);
     try {
-      const nextRuns = await fetchRuns({ includeEmbeddings });
-      setRuns(nextRuns);
-      if (!selectedRunId && nextRuns[0]) {
-        updateConsoleState({ runId: nextRuns[0].runId }, "replace");
+      const nextList = await fetchRunList({ includeEmbeddings });
+      setRuns(nextList.runs);
+      setRunAggregate(nextList.aggregate);
+      if (!selectedRunId && nextList.runs[0]) {
+        updateConsoleState({ runId: nextList.runs[0].runId }, "replace");
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -261,6 +263,7 @@ export function App() {
       if (filter === "active" && isTerminal(run.status)) return false;
       if (filter === "done" && !isTerminal(run.status)) return false;
       if (filter === "attention" && run.status !== "failed" && run.status !== "cancelled" && run.status !== "no_changes") return false;
+      if (isExactRunStatusFilter(filter) && run.status !== filter) return false;
       if (!normalizedQuery) return true;
       return [run.runId, run.traceId, run.title, run.summary, run.requester, run.currentStep, run.kind, run.status]
         .filter(Boolean)
@@ -269,7 +272,8 @@ export function App() {
   }, [runs, filter, includeEmbeddings, kind, query]);
 
   const selectedRun = snapshot?.run ?? runs.find((run) => run.runId === selectedRunId) ?? null;
-  const summary = summarizeRuns(runs, includeEmbeddings);
+  const summary = summarizeRuns(runs, includeEmbeddings, runAggregate);
+  const visibleAggregate = aggregateConsoleRuns(filteredRuns);
 
   function selectRun(runId: string) {
     updateConsoleState({ runId });
@@ -347,7 +351,7 @@ export function App() {
 
         <section className="summary-strip" aria-label="Run summary">
           <Metric label="Active" value={summary.active} tone={summary.active > 0 ? "info" : "normal"} />
-          <Metric label="Failed" value={summary.failed} tone={summary.failed > 0 ? "bad" : "normal"} />
+          <Metric label="Attention" value={summary.attention} tone={summary.attention > 0 ? "bad" : "normal"} />
           <Metric label="Code" value={summary.codegen} tone={summary.codegen > 0 ? "good" : "normal"} />
         </section>
 
@@ -363,7 +367,7 @@ export function App() {
         <div className="filter-row" aria-label="Run status filters">
           {statusFilters.map((value) => (
             <button key={value} className={filter === value ? "filter active" : "filter"} type="button" onClick={() => updateConsoleState({ filter: value })}>
-              {value}
+              {formatCountName(value)}
             </button>
           ))}
         </div>
@@ -385,6 +389,14 @@ export function App() {
             {!includeEmbeddings && summary.hiddenEmbeddings > 0 && <small>{summary.hiddenEmbeddings} hidden</small>}
           </label>
         </section>
+
+        <RunListBreakdown
+          aggregate={visibleAggregate}
+          onStatus={(nextStatus) => updateConsoleState({ filter: nextStatus })}
+          onKind={changeKind}
+          selectedStatus={filter}
+          selectedKind={kind}
+        />
 
         <section className="run-list" aria-live="polite">
           {loadingRuns && runs.length === 0 ? (
@@ -1362,6 +1374,81 @@ function StatusTag({ status }: { status: RunStatus }) {
   );
 }
 
+function RunListBreakdown({
+  aggregate,
+  selectedStatus,
+  selectedKind,
+  onStatus,
+  onKind
+}: {
+  aggregate: RunListAggregate;
+  selectedStatus: StatusFilter;
+  selectedKind: RunKind | "all";
+  onStatus: (status: StatusFilter) => void;
+  onKind: (kind: RunKind | "all") => void;
+}) {
+  return (
+    <section className="run-breakdown" aria-label="Visible run breakdown">
+      <div className="run-breakdown-header">
+        <span>Visible</span>
+        <strong>{aggregate.total}</strong>
+      </div>
+      <CountChips
+        label="Status"
+        counts={aggregate.byStatus}
+        selected={selectedStatus}
+        onSelect={(name) => onStatus(isRunStatus(name) ? name : "all")}
+      />
+      <CountChips
+        label="Kind"
+        counts={aggregate.byKind}
+        selected={selectedKind}
+        onSelect={(name) => onKind(isRunKind(name) ? name : "all")}
+      />
+      {aggregate.codegenDiagnoses.length > 0 && <CountChips label="Codegen diagnosis" counts={aggregate.codegenDiagnoses} selected="" />}
+    </section>
+  );
+}
+
+function CountChips({
+  label,
+  counts,
+  selected,
+  onSelect
+}: {
+  label: string;
+  counts: RunCount[];
+  selected: string;
+  onSelect?: (name: string) => void;
+}) {
+  if (counts.length === 0) return null;
+  return (
+    <div className="count-chip-group">
+      <span>{label}</span>
+      <div>
+        {counts.slice(0, 6).map((item) => {
+          const active = selected === item.name;
+          const content = (
+            <>
+              <span>{formatCountName(item.name)}</span>
+              <strong>{item.count}</strong>
+            </>
+          );
+          return onSelect ? (
+            <button key={item.name} className={active ? "count-chip active" : "count-chip"} type="button" onClick={() => onSelect(item.name)}>
+              {content}
+            </button>
+          ) : (
+            <span key={item.name} className="count-chip">
+              {content}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Metric({ label, value, tone = "normal" }: { label: string; value: string | number; tone?: "normal" | "bad" | "good" | "info" }) {
   return (
     <div className={`metric ${tone}`}>
@@ -1427,14 +1514,53 @@ function Empty({ label }: { label: string }) {
   );
 }
 
-function summarizeRuns(runs: RunSummary[], includeEmbeddings: boolean) {
+function summarizeRuns(runs: RunSummary[], includeEmbeddings: boolean, aggregate: RunListAggregate | null) {
   const visible = includeEmbeddings ? runs : runs.filter((run) => run.kind !== "embedding");
+  const visibleAggregate = aggregate ?? aggregateConsoleRuns(visible);
   return {
-    active: visible.filter((run) => !isTerminal(run.status)).length,
-    failed: visible.filter((run) => run.status === "failed").length,
-    codegen: visible.filter((run) => run.kind === "codegen").length,
+    active: visibleAggregate.active,
+    attention: visibleAggregate.attention,
+    codegen: countFromAggregate(visibleAggregate.byKind, "codegen"),
     hiddenEmbeddings: includeEmbeddings ? 0 : runs.filter((run) => run.kind === "embedding").length
   };
+}
+
+function aggregateConsoleRuns(runs: RunSummary[]): RunListAggregate {
+  return {
+    total: runs.length,
+    active: runs.filter((run) => !isTerminal(run.status)).length,
+    attention: runs.filter((run) => run.status === "failed" || run.status === "cancelled" || run.status === "no_changes").length,
+    terminal: runs.filter((run) => isTerminal(run.status)).length,
+    byStatus: countRunsBy(runs, (run) => run.status),
+    byKind: countRunsBy(runs, (run) => run.kind),
+    codegenDiagnoses: countRunsBy(
+      runs
+        .map((run) => codegenDiagnosisCategory(run.metadata.failureDiagnosis))
+        .filter((category): category is string => Boolean(category)),
+      (category) => category
+    )
+  };
+}
+
+function countRunsBy<T>(items: T[], keyForItem: (item: T) => string): RunCount[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const key = keyForItem(item);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([name, count]) => ({ name, count }));
+}
+
+function countFromAggregate(counts: RunCount[], name: string) {
+  return counts.find((item) => item.name === name)?.count ?? 0;
+}
+
+function codegenDiagnosisCategory(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const category = (value as Record<string, unknown>).category;
+  return typeof category === "string" && category.trim() ? category.trim() : null;
 }
 
 function legacyTerminalEntries(content: string): TerminalEntry[] {
@@ -1532,6 +1658,18 @@ function parseStatusFilter(value: string | null): StatusFilter {
 
 function parseKind(value: string | null): RunKind | "all" {
   return runKinds.includes(value as RunKind | "all") ? (value as RunKind | "all") : "all";
+}
+
+function isExactRunStatusFilter(value: StatusFilter): value is RunStatus {
+  return isRunStatus(value);
+}
+
+function isRunStatus(value: string): value is RunStatus {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "no_changes" || value === "cancelled";
+}
+
+function isRunKind(value: string): value is RunKind {
+  return value === "codegen" || value === "discord" || value === "crawl" || value === "embedding" || value === "prompt" || value === "workflow" || value === "ops";
 }
 
 function isTerminal(status: RunStatus) {
@@ -1757,7 +1895,8 @@ export function codegenTimelineTrace(
         title: snapshot.run.status === "no_changes" ? "No PR opened" : "Run completed",
         kind: completed.level === "error" ? "error" : "response",
         summary: completed.summary ?? snapshot.run.summary ?? ""
-      })
+      }),
+      artifacts(isCodegenFailureDiagnosisArtifact)
     );
   }
 
@@ -1903,6 +2042,10 @@ function isCodegenAttemptArtifact(artifact: RunArtifact, attempt: number) {
   if (step === `opencode attempt ${attempt}` || step === `codex attempt ${attempt}` || step === `codex app server attempt ${attempt}`) return true;
   const name = normalizedTimelineName(artifact.name);
   return name.includes(`attempt ${attempt} transcript`) || name.includes(`opencode attempt ${attempt} command log`);
+}
+
+function isCodegenFailureDiagnosisArtifact(artifact: RunArtifact) {
+  return artifact.kind === "diagnostic" && /codegen failure diagnosis/i.test(artifact.name);
 }
 
 function timelineStepFromCodegenEvent(
@@ -2778,6 +2921,10 @@ function metadataValue(value: unknown) {
   if (value == null) return "null";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(value);
+}
+
+function formatCountName(value: string) {
+  return value.replaceAll("_", " ");
 }
 
 function shortId(value: string) {

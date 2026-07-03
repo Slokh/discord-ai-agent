@@ -2,6 +2,21 @@ export type RunKind = "codegen" | "discord" | "crawl" | "embedding" | "prompt" |
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
 export type EventLevel = "debug" | "info" | "warn" | "error";
 
+export type RunCount = {
+  name: string;
+  count: number;
+};
+
+export type RunListAggregate = {
+  total: number;
+  active: number;
+  attention: number;
+  terminal: number;
+  byStatus: RunCount[];
+  byKind: RunCount[];
+  codegenDiagnoses: RunCount[];
+};
+
 export type RunSummary = {
   runId: string;
   traceId: string | null;
@@ -80,5 +95,11 @@ export type RunSnapshot = {
   diagnostics: string[];
   raw: Record<string, unknown>;
   relatedRuns: RunSummary[];
+  generatedAt: string;
+};
+
+export type RunListResponse = {
+  runs: RunSummary[];
+  aggregate: RunListAggregate;
   generatedAt: string;
 };

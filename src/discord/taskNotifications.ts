@@ -68,7 +68,9 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
     },
     async () => {
       const runConsoleUrl = agentTaskRunConsoleUrl(input.config, task.taskId);
-      const rendered = renderAgentTaskMessage(task, undefined, undefined, { runConsoleUrl });
+      const terminal = isTerminalAgentTaskStatus(task.status);
+      const progressEvents = terminal ? undefined : await recentTaskEvents(input.repo, task);
+      const rendered = renderAgentTaskMessage(task, progressEvents, undefined, { runConsoleUrl });
       if (!shouldRenderAgentTask(task, rendered)) {
         if (!rendered.terminal && task.lastRenderedSignature === rendered.signature) {
           await input.repo.markAgentTaskRendered({ taskId: task.taskId, signature: rendered.signature, terminal: false });
@@ -136,7 +138,7 @@ export function renderAgentTaskMessage(
   const terminal = isTerminalAgentTaskStatus(task.status);
   const baseContent = terminal
     ? formatAgentTaskResult({ taskId: task.taskId, jobId: task.pgBossJobId, job: task, taskEvents, commandEvents })
-    : progressAgentTaskMessage(task);
+    : progressAgentTaskMessage(task, taskEvents);
   const content = appendRunConsoleLink(baseContent, options.runConsoleUrl);
   return {
     content,
@@ -151,6 +153,7 @@ export function renderAgentTaskMessage(
       verifyPassed: task.verifyPassed,
       error: task.error,
       runConsoleUrl: options.runConsoleUrl,
+      progressEvents: terminal ? undefined : taskEvents?.map((event) => [event.id, event.summary, event.metadata?.step]),
       terminalDetails: terminal ? content : undefined
     })
   };
@@ -164,13 +167,66 @@ function shouldRenderAgentTask(task: AgentTaskRecord, rendered: { signature: str
   return Date.now() - task.lastRenderedAt.getTime() >= NONTERMINAL_RENDER_THROTTLE_MS;
 }
 
-function progressAgentTaskMessage(task: AgentTaskRecord) {
+function progressAgentTaskMessage(task: AgentTaskRecord, taskEvents: TaskEvent[] | undefined) {
   const rawDetail = task.statusMessage?.trim();
   const title = task.title.trim() || "code update";
   const heading = task.status === "queued" ? `Queued \`${title}\`.` : `Working on \`${title}\`.`;
   const latest = rawDetail || (task.status === "queued" ? "Waiting for a sandbox to start." : "Starting the coding agent.");
   const step = task.currentStep ? humanizeTaskStep(task.currentStep) : null;
-  return [heading, latest, step ? `Latest step: ${step}` : "", `Task ID: \`${task.taskId}\``].filter(Boolean).join("\n");
+  const timing = progressTimingLine(task);
+  const activity = progressActivityLines(taskEvents, task);
+  return [
+    heading,
+    latest,
+    step ? `Current phase: ${step}` : "",
+    timing,
+    activity.length ? "Recent activity:" : "",
+    ...activity,
+    `Task ID: \`${task.taskId}\``
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function progressTimingLine(task: AgentTaskRecord) {
+  const startedAt = task.startedAt ?? task.createdAt;
+  const pieces = [`Started ${discordRelativeTime(startedAt)}`];
+  if (task.progressUpdatedAt) pieces.push(`last progress ${discordRelativeTime(task.progressUpdatedAt)}`);
+  return pieces.join(" · ");
+}
+
+function progressActivityLines(taskEvents: TaskEvent[] | undefined, task: AgentTaskRecord) {
+  const seen = new Set<string>();
+  const latestStatus = task.statusMessage?.trim();
+  const currentStep = task.currentStep ? humanizeTaskStep(task.currentStep) : null;
+  const events = [...(taskEvents ?? [])]
+    .filter((event) => event.summary?.trim())
+    .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id - left.id);
+  const lines: string[] = [];
+  for (const event of events) {
+    const summary = event.summary!.trim();
+    const step = typeof event.metadata?.step === "string" ? humanizeTaskStep(event.metadata.step) : null;
+    const key = `${step ?? ""}:${summary}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (latestStatus && currentStep && step === currentStep && summary === latestStatus) continue;
+    const label = step ? `${step}: ${summary}` : summary;
+    lines.push(`- ${discordShortTime(event.createdAt)} ${truncateProgressLine(label)}`);
+    if (lines.length >= 3) break;
+  }
+  return lines.reverse();
+}
+
+function truncateProgressLine(value: string) {
+  return value.length <= 140 ? value : `${value.slice(0, 137)}...`;
+}
+
+function discordRelativeTime(date: Date) {
+  return `<t:${Math.floor(date.getTime() / 1000)}:R>`;
+}
+
+function discordShortTime(date: Date) {
+  return `<t:${Math.floor(date.getTime() / 1000)}:T>`;
 }
 
 function humanizeTaskStep(step: string) {
@@ -236,6 +292,13 @@ async function taskDetails(
     })
   ]);
   return [taskEvents, commandEvents];
+}
+
+async function recentTaskEvents(repo: DiscordAiAgentRepository, task: AgentTaskRecord): Promise<TaskEvent[] | undefined> {
+  return repo.getTaskEventsForTask({ taskId: task.taskId, limit: 8 }).catch((error) => {
+    logger.warn({ err: error, taskId: task.taskId }, "Failed to load recent agent task events for Discord progress render");
+    return undefined;
+  });
 }
 
 async function fetchTaskReply(client: Client, task: AgentTaskRecord): Promise<Message> {

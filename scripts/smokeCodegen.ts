@@ -21,9 +21,46 @@ type SmokeArgs = {
   title: string;
   request: string;
   requestFile?: string;
+  suiteFile?: string;
+  caseId?: string;
   closePr: boolean;
   timeoutMs: number;
   useBuiltRunner: boolean;
+};
+
+type SmokeSuiteCase = {
+  id: string;
+  title?: string;
+  request?: string;
+  requestFile?: string;
+  harness?: "codex" | "opencode";
+  model?: string;
+  timeoutMs?: number;
+  closePr?: boolean;
+  skip?: boolean;
+  skipReason?: string;
+};
+
+type SmokeSuite = {
+  version: 1;
+  name: string;
+  cases: SmokeSuiteCase[];
+};
+
+type SmokeRunResult = {
+  id?: string;
+  title: string;
+  harness: string;
+  model: string;
+  taskId?: string;
+  status: string;
+  durationMs: number;
+  summaryPath?: string;
+  workDir?: string;
+  prUrl?: string;
+  error?: string;
+  skipped?: boolean;
+  skipReason?: string;
 };
 
 async function main() {
@@ -31,7 +68,23 @@ async function main() {
   const config = loadConfig();
   if (!config.openRouter.apiKey) throw new Error("OPENROUTER_API_KEY is required.");
   const githubToken = await resolveGitHubTaskToken(config);
-  const taskId = `task-local-${args.harness}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  if (args.suiteFile) {
+    const suite = await loadSmokeSuite(args.suiteFile);
+    const result = await runSmokeSuite({ args, suite, config, githubToken });
+    if (result.failed > 0) throw new Error(`Codegen smoke suite failed: ${result.failed}/${result.total} failed. See ${result.summaryPath}`);
+    return;
+  }
+
+  const result = await runCodegenSmokeCase({ args, config, githubToken });
+  if (result.status !== "succeeded") {
+    throw new Error(`Codegen smoke failed: status=${result.status}. See ${result.summaryPath ?? result.workDir ?? "smoke output"}`);
+  }
+}
+
+async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<typeof loadConfig>; githubToken: string }): Promise<SmokeRunResult> {
+  const { args, config, githubToken } = input;
+  const caseSlug = args.caseId ? `${safeFileName(args.caseId)}-` : "";
+  const taskId = `task-local-${args.harness}-${caseSlug}${Date.now()}-${randomUUID().slice(0, 8)}`;
   const sandboxRunId = `run-local-${randomUUID()}`;
   const taskToken = `local-smoke-${randomUUID()}`;
   const workDir = path.resolve(".discord-ai-agent", "codegen-smoke", taskId);
@@ -142,12 +195,141 @@ async function main() {
     await closePullRequest({ configRepository: config.github.repository, token: githubToken, prUrl: String(completion.prUrl), branchName: nullableString(completion.branchName) });
   }
 
-  if (exit.code !== 0 || !completion || completion.status !== "succeeded") {
-    throw new Error(`Codegen smoke failed: exit=${exit.code} status=${String(completion?.status ?? "missing")}. See ${summaryPath}`);
+  const status = exit.code !== 0 || !completion ? terminalStatus(completion, exit) : String(completion.status ?? "unknown");
+  if (status === "succeeded") {
+    process.stdout.write(`smoke ok: ${completion?.prUrl}\n`);
+    if (args.closePr) process.stdout.write("smoke cleanup: PR closed and branch delete attempted\n");
+  }
+  return {
+    id: args.caseId,
+    title: args.title,
+    harness: args.harness,
+    model: args.model,
+    taskId,
+    status,
+    durationMs: Date.now() - startedAt,
+    summaryPath,
+    workDir,
+    prUrl: typeof completion?.prUrl === "string" ? completion.prUrl : undefined,
+    error: typeof completion?.error === "string" ? completion.error : undefined
+  };
+}
+
+async function runSmokeSuite(input: { args: SmokeArgs; suite: SmokeSuite; config: ReturnType<typeof loadConfig>; githubToken: string }) {
+  const suiteStartedAt = Date.now();
+  const suiteDir = path.resolve(".discord-ai-agent", "codegen-smoke", "suites", `${safeFileName(input.suite.name)}-${suiteStartedAt}`);
+  await fs.mkdir(suiteDir, { recursive: true });
+  const results: SmokeRunResult[] = [];
+  process.stdout.write(`suite: ${input.suite.name}\n`);
+  process.stdout.write(`suite output: ${suiteDir}\n`);
+
+  for (const testCase of input.suite.cases) {
+    if (testCase.skip) {
+      const skipped = skippedSuiteResult(testCase, input.args);
+      results.push(skipped);
+      process.stdout.write(`[suite] skipped ${testCase.id}: ${skipped.skipReason ?? "skip=true"}\n`);
+      continue;
+    }
+
+    const caseArgs = await argsForSuiteCase(input.args, testCase, path.dirname(input.args.suiteFile!));
+    process.stdout.write(`[suite] running ${testCase.id}: ${caseArgs.title}\n`);
+    try {
+      results.push(await runCodegenSmokeCase({ args: caseArgs, config: input.config, githubToken: input.githubToken }));
+    } catch (error) {
+      results.push({
+        id: testCase.id,
+        title: caseArgs.title,
+        harness: caseArgs.harness,
+        model: caseArgs.model,
+        status: "error",
+        durationMs: 0,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
-  process.stdout.write(`smoke ok: ${completion.prUrl}\n`);
-  if (args.closePr) process.stdout.write("smoke cleanup: PR closed and branch delete attempted\n");
+  const report = {
+    suite: input.suite.name,
+    suiteFile: input.args.suiteFile,
+    startedAt: new Date(suiteStartedAt).toISOString(),
+    durationMs: Date.now() - suiteStartedAt,
+    total: results.filter((result) => !result.skipped).length,
+    skipped: results.filter((result) => result.skipped).length,
+    passed: results.filter((result) => result.status === "succeeded").length,
+    failed: results.filter((result) => !result.skipped && result.status !== "succeeded").length,
+    results
+  };
+  const resultsPath = path.join(suiteDir, "results.json");
+  const summaryPath = path.join(suiteDir, "summary.md");
+  await fs.writeFile(resultsPath, JSON.stringify(report, null, 2), "utf8");
+  await fs.writeFile(summaryPath, formatSmokeSuiteSummary(report), "utf8");
+  process.stdout.write(`suite summary: ${summaryPath}\n`);
+  return { ...report, resultsPath, summaryPath };
+}
+
+function skippedSuiteResult(testCase: SmokeSuiteCase, defaults: SmokeArgs): SmokeRunResult {
+  return {
+    id: testCase.id,
+    title: testCase.title ?? testCase.id,
+    harness: testCase.harness ?? defaults.harness,
+    model: testCase.model ?? defaults.model,
+    status: "skipped",
+    durationMs: 0,
+    skipped: true,
+    skipReason: testCase.skipReason ?? "skip=true"
+  };
+}
+
+async function argsForSuiteCase(defaults: SmokeArgs, testCase: SmokeSuiteCase, suiteDir: string): Promise<SmokeArgs> {
+  const requestFile = testCase.requestFile ? path.resolve(suiteDir, testCase.requestFile) : undefined;
+  if (!testCase.request && !requestFile) throw new Error(`Codegen smoke suite case ${testCase.id} must define request or requestFile.`);
+  return {
+    ...defaults,
+    caseId: testCase.id,
+    suiteFile: undefined,
+    harness: testCase.harness ?? defaults.harness,
+    model: testCase.model ?? defaults.model,
+    title: testCase.title ?? testCase.id,
+    request: requestFile ? await fs.readFile(requestFile, "utf8") : testCase.request!,
+    requestFile,
+    closePr: testCase.closePr ?? defaults.closePr,
+    timeoutMs: testCase.timeoutMs ?? defaults.timeoutMs
+  };
+}
+
+export function formatSmokeSuiteSummary(input: {
+  suite: string;
+  suiteFile?: string;
+  startedAt: string;
+  durationMs: number;
+  total: number;
+  skipped: number;
+  passed: number;
+  failed: number;
+  results: SmokeRunResult[];
+}) {
+  const lines = [
+    "# Codegen Smoke Suite",
+    "",
+    `Suite: ${input.suite}`,
+    input.suiteFile ? `Suite file: ${input.suiteFile}` : undefined,
+    `Started: ${input.startedAt}`,
+    `Duration: ${formatDuration(input.durationMs)}`,
+    `Passed: ${input.passed}/${input.total}`,
+    `Failed: ${input.failed}`,
+    `Skipped: ${input.skipped}`,
+    "",
+    "## Cases",
+    ""
+  ].filter((line): line is string => line !== undefined);
+  for (const result of input.results) {
+    lines.push(`- ${result.id ?? result.taskId ?? result.title}: ${result.status} (${result.harness} / ${result.model}, ${formatDuration(result.durationMs)})`);
+    if (result.summaryPath) lines.push(`  Summary: ${result.summaryPath}`);
+    if (result.prUrl) lines.push(`  PR: ${result.prUrl}`);
+    if (result.error) lines.push(`  Error: ${result.error}`);
+    if (result.skipped && result.skipReason) lines.push(`  Skip reason: ${result.skipReason}`);
+  }
+  return lines.join("\n");
 }
 
 function spawnRunner(input: { env: NodeJS.ProcessEnv; useBuiltRunner: boolean }) {
@@ -309,9 +491,63 @@ async function closePullRequest(input: { configRepository: string; token: string
   }
 }
 
+export async function loadSmokeSuite(suiteFile: string): Promise<SmokeSuite> {
+  const suitePath = path.resolve(suiteFile);
+  const raw = JSON.parse(await fs.readFile(suitePath, "utf8")) as unknown;
+  const suite = objectRecord(raw);
+  if (!suite) throw new Error(`Invalid codegen smoke suite ${suitePath}: expected JSON object.`);
+  if (suite.version !== 1) throw new Error(`Invalid codegen smoke suite ${suitePath}: version must be 1.`);
+  if (typeof suite.name !== "string" || !suite.name.trim()) throw new Error(`Invalid codegen smoke suite ${suitePath}: name is required.`);
+  if (!Array.isArray(suite.cases)) throw new Error(`Invalid codegen smoke suite ${suitePath}: cases must be an array.`);
+  return {
+    version: 1,
+    name: suite.name.trim(),
+    cases: suite.cases.map((value, index) => normalizeSmokeSuiteCase(value, index, suitePath))
+  };
+}
+
+function normalizeSmokeSuiteCase(value: unknown, index: number, suitePath: string): SmokeSuiteCase {
+  const item = objectRecord(value);
+  if (!item) throw new Error(`Invalid codegen smoke suite ${suitePath}: cases[${index}] must be an object.`);
+  const id = stringField(item, "id") ?? `case-${index + 1}`;
+  const harness = stringField(item, "harness");
+  if (harness && harness !== "codex" && harness !== "opencode") {
+    throw new Error(`Invalid codegen smoke suite ${suitePath}: cases[${index}].harness must be codex or opencode.`);
+  }
+  const timeoutMs = numberField(item, "timeoutMs");
+  return {
+    id,
+    title: stringField(item, "title"),
+    request: stringField(item, "request"),
+    requestFile: stringField(item, "requestFile"),
+    harness: harness as SmokeSuiteCase["harness"],
+    model: stringField(item, "model"),
+    timeoutMs,
+    closePr: booleanField(item, "closePr"),
+    skip: booleanField(item, "skip"),
+    skipReason: stringField(item, "skipReason")
+  };
+}
+
+function stringField(value: Record<string, unknown>, key: string) {
+  const field = value[key];
+  return typeof field === "string" && field.trim() ? field.trim() : undefined;
+}
+
+function numberField(value: Record<string, unknown>, key: string) {
+  const field = value[key];
+  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
+}
+
+function booleanField(value: Record<string, unknown>, key: string) {
+  const field = value[key];
+  return typeof field === "boolean" ? field : undefined;
+}
+
 export async function parseArgs(values: string[]): Promise<SmokeArgs> {
   const harness = valueFor(values, "--harness") ?? "opencode";
   if (harness !== "codex" && harness !== "opencode") throw new Error("--harness must be codex or opencode");
+  const suiteFile = valueFor(values, "--suite");
   const requestFile = valueFor(values, "--request-file");
   const request = requestFile
     ? await fs.readFile(path.resolve(requestFile), "utf8")
@@ -323,6 +559,7 @@ export async function parseArgs(values: string[]): Promise<SmokeArgs> {
     title: valueFor(values, "--title") ?? "Local codegen smoke test",
     request,
     requestFile: requestFile ? path.resolve(requestFile) : undefined,
+    suiteFile: suiteFile ? path.resolve(suiteFile) : undefined,
     closePr: values.includes("--close-pr"),
     timeoutMs: Number(valueFor(values, "--timeout-ms") ?? 20 * 60_000),
     useBuiltRunner: values.includes("--built")

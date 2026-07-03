@@ -207,6 +207,18 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(codegenRepo.getArtifact({ artifactId: artifact.artifactId })).resolves.toEqual(
       expect.objectContaining({ content: expect.not.stringContaining("ghp_") })
     );
+    const expiredArtifact = await codegenRepo.storeArtifact({
+      sessionId,
+      executionId,
+      kind: "command_log",
+      name: "Expired command log",
+      content: "expired codegen artifact",
+      contentType: "text/plain",
+      expiresAt: new Date(Date.now() - 1000)
+    });
+    await expect(codegenRepo.getArtifact({ artifactId: expiredArtifact.artifactId })).resolves.toEqual(expect.objectContaining({ artifactId: expiredArtifact.artifactId }));
+    await expect(codegenRepo.cleanupExpiredArtifacts()).resolves.toBeGreaterThanOrEqual(1);
+    await expect(codegenRepo.getArtifact({ artifactId: expiredArtifact.artifactId })).resolves.toBeUndefined();
 
     await codegenRepo.upsertSandboxLease({ sandboxId, repo: "Slokh/discord-ai-agent" });
     const lease = await codegenRepo.acquireSandboxLease({

@@ -13,6 +13,7 @@ import type {
   DiscordChannelLookupResult,
   DiscordChannelTopicCandidate,
   DiscordStats,
+  DiscordStatsSort,
   DiscordUserLookupResult,
   SearchResult,
   SandboxCommandEvent,
@@ -301,17 +302,22 @@ export async function getDiscordStats(
     ...normalizeIds(input.channelIds),
     ...(await resolveChannelQueries(ctx, input.channelQueries ?? []))
   ]);
+  const dateFrom = coerceDateStart(input.dateFrom);
+  const dateTo = coerceDateEnd(input.dateTo);
+  const groupBy = discordStatsGroupBy(input.groupBy);
+  const metric = discordStatsMetric(input.metric);
+  const sort = discordStatsSort(input.sort);
   const stats = await ctx.repo.discordStats({
     guildId: ctx.guildId,
     visibleChannelIds: visibleIndexedChannels,
     authorIds,
     channelIds,
-    dateFrom: coerceDateStart(input.dateFrom),
-    dateTo: coerceDateEnd(input.dateTo),
-    groupBy: discordStatsGroupBy(input.groupBy),
-    metric: discordStatsMetric(input.metric),
+    dateFrom,
+    dateTo,
+    groupBy,
+    metric,
     includeBots: Boolean(input.includeBots),
-    sort: discordStatsSort(input.sort),
+    sort,
     query: input.query,
     attachmentContentType: input.attachmentContentType,
     limit: resolvedLimit
@@ -324,7 +330,17 @@ export async function getDiscordStats(
     argumentsSummary: summarizeForAudit({ ...input, authorIds, channelIds, limit: resolvedLimit }),
     resultSummary: summarizeForAudit(stats)
   });
-  return formatDiscordStats(stats);
+  return formatDiscordStats(stats, {
+    authorIds,
+    channelIds,
+    dateFrom,
+    dateTo,
+    query: input.query,
+    attachmentContentType: input.attachmentContentType,
+    includeBots: Boolean(input.includeBots),
+    sort,
+    limit: resolvedLimit
+  });
 }
 
 export async function getDiscordChannelTopics(
@@ -2053,11 +2069,26 @@ function topicSnippet(content: string) {
   return truncateForDiscord(content.replace(/https?:\/\/\S+/gi, "[link]").replace(/\s+/g, " ").trim(), 180);
 }
 
-function formatDiscordStats(stats: DiscordStats) {
+type DiscordStatsFormatOptions = {
+  authorIds: string[];
+  channelIds: string[];
+  dateFrom?: Date;
+  dateTo?: Date;
+  query?: string;
+  attachmentContentType?: string;
+  includeBots: boolean;
+  sort?: DiscordStatsSort;
+  limit: number;
+};
+
+function formatDiscordStats(stats: DiscordStats, options: DiscordStatsFormatOptions) {
   const metric = discordStatsMetricLabel(stats.metric);
   const groupedBy = discordStatsGroupByLabel(stats.groupBy);
   const lines = [
     "Discord indexed stats:",
+    "- Scope: requester-visible indexed Discord messages",
+    `- Applied filters: ${formatDiscordStatsFilters(options)}`,
+    `- Row limit: ${options.limit}`,
     `- Metric: ${metric}`,
     `- Grouped by: ${groupedBy}`,
     `- Messages: ${stats.totalMessages}`
@@ -2091,6 +2122,20 @@ function formatDiscordStats(stats: DiscordStats) {
       : ["  none"])
   );
   return lines.join("\n");
+}
+
+function formatDiscordStatsFilters(options: DiscordStatsFormatOptions) {
+  const filters = [
+    options.authorIds.length ? `authorIds=${options.authorIds.join(",")}` : null,
+    options.channelIds.length ? `channelIds=${options.channelIds.join(",")}` : null,
+    options.dateFrom ? `from=${options.dateFrom.toISOString().slice(0, 10)}` : null,
+    options.dateTo ? `through=${options.dateTo.toISOString().slice(0, 10)}` : null,
+    options.query?.trim() ? `query="${truncateForDiscord(options.query.trim(), 120)}"` : null,
+    options.attachmentContentType?.trim() ? `attachmentContentType=${options.attachmentContentType.trim()}` : null,
+    options.includeBots ? "includeBots=true" : null,
+    options.sort ? `sort=${options.sort}` : null
+  ].filter((filter): filter is string => Boolean(filter));
+  return filters.length ? filters.join("; ") : "none";
 }
 
 function formatDiscordStatsRowLabel(row: DiscordStats["rows"][number]) {

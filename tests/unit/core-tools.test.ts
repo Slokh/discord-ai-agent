@@ -248,6 +248,9 @@ describe("getDiscordStats", () => {
     const response = await getDiscordStats(ctx);
 
     expect(response).toContain("Messages: 10");
+    expect(response).toContain("Scope: requester-visible indexed Discord messages");
+    expect(response).toContain("Applied filters: none");
+    expect(response).toContain("Row limit: 10");
     expect(response).toContain("@alice: 7");
     expect(response).toContain("#general: 10");
   });
@@ -297,6 +300,8 @@ describe("getDiscordStats", () => {
     });
 
     expect(response).toContain("Grouped by: channel");
+    expect(response).toContain("Applied filters: authorIds=hunter-id");
+    expect(response).toContain("Row limit: 20");
     expect(response).toContain("#general: 9");
     expect(ctx.repo.discordStats).toHaveBeenCalledWith(
       expect.objectContaining({

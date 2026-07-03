@@ -59,6 +59,7 @@ export type AgentRuntimeExecutionJob = {
   userId: string;
   responseChannelId?: string;
   responseMessageId?: string;
+  turnEnvelopeArtifactId?: string | null;
   text: string;
   rawContent: string;
   mentionKind: string;

@@ -12,7 +12,7 @@ import {
 } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import type { ConversationMessage, DiscordAiAgentRepository } from "../db/repositories.js";
 import { isOpenRouterContentFilterError, type OpenRouterClient } from "../models/openrouter.js";
 import { embeddingPriorityForMessageTimestamp, type DiscordAgentRequestJob, type JobRuntime } from "../jobs/queue.js";
 import type { DiscordCrawler } from "./crawler.js";
@@ -21,8 +21,14 @@ import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor, type AgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
-import { buildAgentRuntimeTurnEnvelope, storeAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
-import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
+import {
+  buildAgentRuntimeTurnEnvelope,
+  loadAgentRuntimeTurnEnvelope,
+  storeAgentRuntimeTurnEnvelope,
+  type AgentRuntimeTurnEnvelope
+} from "../agent/runtimeEnvelope.js";
+import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution, type AgentPromptExecutionRef } from "../agent/runtimeLedger.js";
+import { conversationMessagesFromEnvelope } from "../agent/sandboxPromptProtocol.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, ToolContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
@@ -31,6 +37,32 @@ import type { Logger } from "pino";
 
 const SESSION_CONTEXT_MESSAGE_LIMIT = 24;
 const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 8;
+
+type DiscordAgentRequestInput = {
+  config: AppConfig;
+  repo: DiscordAiAgentRepository;
+  agentRuntime?: AgentRuntimeRepository;
+  agentExecutor?: AgentRuntimePromptExecutor;
+  openRouter: OpenRouterClient;
+  jobs?: JobRuntime;
+};
+
+type DiscordAgentExecutionRequest = {
+  requestId: string;
+  agentSessionId?: string;
+  agentExecutionId?: string;
+  text: string;
+  rawContent: string;
+  botRoleIds: string[];
+  messageStartedAt: number;
+  turnEnvelope?: AgentRuntimeTurnEnvelope | null;
+};
+
+type PreparedDiscordAgentTurn = {
+  turnEnvelope: AgentRuntimeTurnEnvelope;
+  turnEnvelopeArtifactId: string | null;
+  priorSessionMessages: ConversationMessage[];
+};
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -191,13 +223,7 @@ export function createDiscordAiAgentBot(input: {
 }
 
 async function handleMessageCreate(
-  input: {
-    config: AppConfig;
-    repo: DiscordAiAgentRepository;
-    agentRuntime?: AgentRuntimeRepository;
-    openRouter: OpenRouterClient;
-    jobs?: JobRuntime;
-  },
+  input: DiscordAgentRequestInput,
   client: Client,
   message: Message
 ) {
@@ -370,6 +396,24 @@ async function handleMessageCreate(
   if (input.jobs) {
     const enqueuedAt = new Date();
     try {
+      const preparedTurn = await prepareDiscordAgentTurn({
+        context: input,
+        client,
+        message,
+        responseSink,
+        request: {
+          requestId,
+          agentSessionId: agentRuntimeExecution?.session.sessionId,
+          agentExecutionId: agentRuntimeExecution?.executionId,
+          text,
+          rawContent: message.content,
+          botRoleIds: mentionContext.botRoleIds,
+          messageStartedAt
+        },
+        agentRuntimeExecution,
+        requestLogger,
+        source: "discord.ingress"
+      });
       const jobId = await input.jobs.enqueueAgentRuntimeExecution({
         runId: message.id,
         traceId: message.id,
@@ -380,6 +424,9 @@ async function handleMessageCreate(
         channelId: message.channelId,
         messageId: message.id,
         userId: message.author.id,
+        responseChannelId: responseSink.statusChannelId,
+        responseMessageId: responseSink.statusMessageId,
+        turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId,
         text,
         rawContent: message.content,
         mentionKind: mentionContext.kind ?? "unknown",
@@ -398,18 +445,25 @@ async function handleMessageCreate(
             queuedAt: enqueuedAt.toISOString(),
             acknowledgement: "loading_reaction",
             agentSessionId: agentRuntimeExecution?.session.sessionId ?? null,
-            agentExecutionId: agentRuntimeExecution?.executionId ?? null
+            agentExecutionId: agentRuntimeExecution?.executionId ?? null,
+            turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId
           }
         })
         .catch((error) => requestLogger.warn({ err: error }, "Failed to mark Discord run queued"));
       await recordTraceEvent(input.repo, {
         eventName: "discord.agent_request.enqueued",
         summary: "Queued Discord mention for worker processing",
-        metadata: { jobId }
+        metadata: { jobId, turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId }
       });
       return;
     } catch (error) {
       requestLogger.error({ err: error }, "Failed to enqueue Discord agent request");
+      await input.repo
+        .deleteConversationMessagesByDiscordMessageIds({
+          threadKey: discordChannelThreadKey(message.guildId, message.channelId),
+          discordMessageIds: [message.id]
+        })
+        .catch((deleteError) => requestLogger.warn({ err: deleteError }, "Failed to remove failed queued user turn from channel memory"));
       const errorContent = `I hit an error: ${error instanceof Error ? error.message : String(error)}`;
       const finalReply = (await responseSink.sendError(errorContent)).message;
       await input.repo
@@ -434,15 +488,7 @@ async function handleMessageCreate(
 }
 
 export async function runQueuedAgentRuntimeExecution(
-  input: {
-    config: AppConfig;
-    repo: DiscordAiAgentRepository;
-    agentRuntime?: AgentRuntimeRepository;
-    openRouter: OpenRouterClient;
-    jobs?: JobRuntime;
-    client: Client;
-    agentExecutor?: AgentRuntimePromptExecutor;
-  },
+  input: DiscordAgentRequestInput & { client: Client },
   job: DiscordAgentRequestJob
 ) {
   await waitForDiscordClientReady(input.client);
@@ -452,8 +498,6 @@ export async function runQueuedAgentRuntimeExecution(
     return;
   }
 
-  const message = await fetchDiscordMessage(input.client, job.channelId, job.messageId);
-  if (!message.inGuild()) throw new Error("Queued agent runtime execution source message is no longer a guild message.");
   const requestLogger = logger.child({
     traceId: job.traceId ?? job.runId,
     requestId: job.runId,
@@ -462,10 +506,21 @@ export async function runQueuedAgentRuntimeExecution(
     messageId: job.messageId,
     userId: job.userId
   });
+  const turnEnvelope = await loadAgentRuntimeTurnEnvelope({
+    agentRuntime: input.agentRuntime,
+    artifactId: job.turnEnvelopeArtifactId
+  }).catch((error) => {
+    requestLogger.warn({ err: error, turnEnvelopeArtifactId: job.turnEnvelopeArtifactId }, "Failed to load queued agent turn envelope");
+    return null;
+  });
+  const message = await fetchDiscordMessage(input.client, job.channelId, job.messageId);
+  if (!message.inGuild()) throw new Error("Queued agent runtime execution source message is no longer a guild message.");
+  const responseChannelId = job.responseChannelId ?? turnEnvelope?.delivery.statusChannelId ?? undefined;
+  const responseMessageId = job.responseMessageId ?? turnEnvelope?.delivery.statusMessageId ?? undefined;
   const statusMessage =
-    job.responseChannelId && job.responseMessageId
-      ? await fetchDiscordMessage(input.client, job.responseChannelId, job.responseMessageId).catch((error) => {
-          requestLogger.warn({ err: error, responseChannelId: job.responseChannelId, responseMessageId: job.responseMessageId }, "Failed to fetch queued Discord status message");
+    responseChannelId && responseMessageId
+      ? await fetchDiscordMessage(input.client, responseChannelId, responseMessageId).catch((error) => {
+          requestLogger.warn({ err: error, responseChannelId, responseMessageId }, "Failed to fetch queued Discord status message");
           return null;
         })
       : null;
@@ -485,39 +540,23 @@ export async function runQueuedAgentRuntimeExecution(
     text: job.text,
     rawContent: job.rawContent,
     botRoleIds: job.botRoleIds,
-    messageStartedAt: parseDateMs(job.enqueuedAt) ?? Date.now()
+    messageStartedAt: parseDateMs(job.enqueuedAt) ?? Date.now(),
+    turnEnvelope
   });
 }
 
 export const runQueuedDiscordAgentRequest = runQueuedAgentRuntimeExecution;
 
 async function executeDiscordAgentRequest(
-  input: {
-    config: AppConfig;
-    repo: DiscordAiAgentRepository;
-    agentRuntime?: AgentRuntimeRepository;
-    agentExecutor?: AgentRuntimePromptExecutor;
-    openRouter: OpenRouterClient;
-    jobs?: JobRuntime;
-  },
+  input: DiscordAgentRequestInput,
   client: Client,
   message: Message,
   responseSink: DiscordResponseSink,
-  request: {
-    requestId: string;
-    agentSessionId?: string;
-    agentExecutionId?: string;
-    text: string;
-    rawContent: string;
-    botRoleIds: string[];
-    messageStartedAt: number;
-  }
+  request: DiscordAgentExecutionRequest
 ) {
   if (!message.guildId || !message.guild) throw new Error("Discord agent request message is not attached to a guild.");
   const agentExecutor = input.agentExecutor ?? new InProcessAgentRuntimePromptExecutor();
   const guildId = message.guildId;
-  const guild = message.guild;
-  const botUserId = client.user?.id ?? "";
   const requestLogger = logger.child({
     traceId: request.requestId,
     requestId: request.requestId,
@@ -526,16 +565,15 @@ async function executeDiscordAgentRequest(
     messageId: message.id,
     userId: message.author.id
   });
-  const threadKey = discordChannelThreadKey(guildId, message.channelId);
-  const userDisplayName = message.member?.displayName ?? message.author.username;
-  const requestAttachments = discordAttachmentContextsFromMessage(message);
+  const fallbackThreadKey = discordChannelThreadKey(guildId, message.channelId);
+  const fallbackUserDisplayName = message.member?.displayName ?? message.author.username;
   const agentRuntimeExecution = await ensureAgentRuntimePromptExecution({
     agentRuntime: input.agentRuntime,
     guildId,
     channelId: message.channelId,
     userId: message.author.id,
-    userDisplayName,
-    threadKey,
+    userDisplayName: fallbackUserDisplayName,
+    threadKey: request.turnEnvelope?.threadKey ?? fallbackThreadKey,
     agentSessionId: request.agentSessionId,
     agentExecutionId: request.agentExecutionId,
     requestId: request.requestId,
@@ -548,142 +586,32 @@ async function executeDiscordAgentRequest(
     requestLogger.warn({ err: error }, "Failed to mark agent runtime execution running");
     return null;
   });
-  const sessionStartedAt = Date.now();
-  await input.repo.ensureConversationSession({
-    threadKey,
-    guildId,
-    channelId: message.channelId,
-    metadata: {
-      kind: "discord_channel",
-      channelId: message.channelId
-    }
-  });
-  requestLogger.debug({ threadKey }, "Ensured conversation session");
-
-  const priorSessionMessages = await input.repo.recentConversationMessages({
-    threadKey,
-    limit: SESSION_CONTEXT_MESSAGE_LIMIT
-  });
-  requestLogger.info(
-    {
-      threadKey,
-      sessionMessageCount: priorSessionMessages.length,
-      durationMs: durationMs(sessionStartedAt)
-    },
-    "Loaded channel conversation memory"
-  );
-  await recordTraceEvent(input.repo, {
-    eventName: "memory.session.loaded",
-    summary: `Loaded ${priorSessionMessages.length} channel memory messages`,
-    metadata: { threadKey, sessionMessageCount: priorSessionMessages.length },
-    durationMs: durationMs(sessionStartedAt)
-  });
-  await input.repo
-    .recordProcessRunSpan({
-      runId: request.requestId,
-      spanId: "memory.session",
-      name: "Load channel memory",
-      status: "succeeded",
-      startedAt: new Date(sessionStartedAt),
-      completedAt: new Date(),
-      durationMs: durationMs(sessionStartedAt),
-      metadata: { threadKey, sessionMessageCount: priorSessionMessages.length }
-    })
-    .catch((error) => requestLogger.warn({ err: error }, "Failed to record memory span"));
-  await input.repo.appendConversationMessage({
-    threadKey,
-    role: "user",
-    discordMessageId: message.id,
-    authorId: message.author.id,
-    authorDisplayName: userDisplayName,
-    content: request.text,
-    createdAt: message.createdAt,
-    metadata: {
-      discordUrl: message.url,
-      rawContent: request.rawContent,
-      attachments: requestAttachments
-    }
-  });
-  requestLogger.debug({ threadKey }, "Stored user turn in channel memory");
-
-  const permissionStartedAt = Date.now();
-  const member = message.member ?? (await guild.members.fetch(message.author.id));
-  const mentionedChannelIds = explicitChannelMentionIds(request.rawContent);
-  const mentionedUserIds = explicitUserMentionIds(request.rawContent, botUserId);
-  const referencedChannelId = message.reference?.channelId ?? null;
-  const visibleChannelIds = await visibleChannelIdsForMember(guild, member, [
-    message.channelId,
-    ...mentionedChannelIds,
-    ...(referencedChannelId ? [referencedChannelId] : [])
-  ]);
-  const replyContext = await resolveDiscordReplyContext({
-    repo: input.repo,
-    message,
-    visibleChannelIds,
-    requestLogger
-  });
-  requestLogger.info(
-    {
-      visibleChannelCount: visibleChannelIds.length,
-      mentionedChannelIds,
-      mentionedUserIds,
-      replyContextMessageId: replyContext?.messageId,
-      durationMs: durationMs(permissionStartedAt)
-    },
-    "Resolved requester visibility"
-  );
-  await recordTraceEvent(input.repo, {
-    eventName: "permissions.visibility.resolved",
-    summary: `Resolved ${visibleChannelIds.length} visible channels`,
-    metadata: {
-      visibleChannelCount: visibleChannelIds.length,
-      mentionedChannelIds,
-      mentionedUserIds,
-      replyContextMessageId: replyContext?.messageId
-    },
-    durationMs: durationMs(permissionStartedAt)
-  });
-  await input.repo
-    .recordProcessRunSpan({
-      runId: request.requestId,
-      spanId: "permissions.visibility",
-      name: "Resolve Discord permissions",
-      status: "succeeded",
-      startedAt: new Date(permissionStartedAt),
-      completedAt: new Date(),
-      durationMs: durationMs(permissionStartedAt),
-      metadata: { visibleChannelCount: visibleChannelIds.length, mentionedChannelIds }
-    })
-    .catch((error) => requestLogger.warn({ err: error }, "Failed to record permission span"));
-
-  const turnEnvelope = buildAgentRuntimeTurnEnvelope({
-    requestId: request.requestId,
-    threadKey,
-    guildId,
-    channelId: message.channelId,
-    userId: message.author.id,
-    userDisplayName,
-    botUserId,
-    botRoleIds: request.botRoleIds,
-    text: request.text,
-    rawContent: request.rawContent,
-    discordUrl: message.url,
-    messageCreatedAt: message.createdAt,
-    visibleChannelIds,
-    mentionedUserIds,
-    mentionedChannelIds,
-    replyContext,
-    requestAttachments,
-    sessionMessages: priorSessionMessages,
-    statusChannelId: responseSink.statusChannelId,
-    statusMessageId: responseSink.statusMessageId
-  });
-  await storeAgentRuntimeTurnEnvelope({
-    agentRuntime: input.agentRuntime,
-    session: agentRuntimeExecution?.session,
-    executionId: agentRuntimeExecution?.executionId,
-    envelope: turnEnvelope
-  }).catch((error) => requestLogger.warn({ err: error }, "Failed to store agent runtime turn envelope"));
+  const preparedTurn = request.turnEnvelope
+    ? await replayPreparedDiscordAgentTurn({
+        context: input,
+        request,
+        turnEnvelope: request.turnEnvelope,
+        requestLogger
+      })
+    : await prepareDiscordAgentTurn({
+        context: input,
+        client,
+        message,
+        responseSink,
+        request,
+        agentRuntimeExecution,
+        requestLogger,
+        source: "discord.worker"
+      });
+  const turnEnvelope = preparedTurn.turnEnvelope;
+  const threadKey = turnEnvelope.threadKey;
+  const userDisplayName = turnEnvelope.userDisplayName;
+  const visibleChannelIds = turnEnvelope.visibleChannelIds;
+  const mentionedUserIds = turnEnvelope.mentionedUserIds;
+  const mentionedChannelIds = turnEnvelope.mentionedChannelIds;
+  const replyContext = turnEnvelope.replyContext ?? undefined;
+  const requestAttachments = turnEnvelope.requestAttachments;
+  const priorSessionMessages = preparedTurn.priorSessionMessages;
 
   try {
     const agentStartedAt = Date.now();
@@ -692,9 +620,9 @@ async function executeDiscordAgentRequest(
       repo: input.repo,
       openRouter: input.openRouter,
       jobs: input.jobs,
-      guildId,
-      channelId: message.channelId,
-      userId: message.author.id,
+      guildId: turnEnvelope.guildId,
+      channelId: turnEnvelope.channelId,
+      userId: turnEnvelope.userId,
       userDisplayName,
       visibleChannelIds,
       mentionedUserIds,
@@ -975,6 +903,222 @@ async function executeDiscordAgentRequest(
     });
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention failed");
   }
+}
+
+async function prepareDiscordAgentTurn(input: {
+  context: DiscordAgentRequestInput;
+  client: Client;
+  message: Message;
+  responseSink: DiscordResponseSink;
+  request: DiscordAgentExecutionRequest;
+  agentRuntimeExecution: AgentPromptExecutionRef | null;
+  requestLogger: Logger;
+  source: string;
+}): Promise<PreparedDiscordAgentTurn> {
+  const guildId = input.message.guildId;
+  const guild = input.message.guild;
+  if (!guildId || !guild) throw new Error("Discord agent request message is not attached to a guild.");
+  const botUserId = input.client.user?.id ?? "";
+  const threadKey = discordChannelThreadKey(guildId, input.message.channelId);
+  const userDisplayName = input.message.member?.displayName ?? input.message.author.username;
+  const requestAttachments = discordAttachmentContextsFromMessage(input.message);
+  const sessionStartedAt = Date.now();
+  await input.context.repo.ensureConversationSession({
+    threadKey,
+    guildId,
+    channelId: input.message.channelId,
+    metadata: {
+      kind: "discord_channel",
+      channelId: input.message.channelId
+    }
+  });
+  input.requestLogger.debug({ threadKey, source: input.source }, "Ensured conversation session");
+
+  const priorSessionMessages = await input.context.repo.recentConversationMessages({
+    threadKey,
+    limit: SESSION_CONTEXT_MESSAGE_LIMIT
+  });
+  input.requestLogger.info(
+    {
+      threadKey,
+      source: input.source,
+      sessionMessageCount: priorSessionMessages.length,
+      durationMs: durationMs(sessionStartedAt)
+    },
+    "Loaded channel conversation memory"
+  );
+  await recordTraceEvent(input.context.repo, {
+    eventName: "memory.session.loaded",
+    summary: `Loaded ${priorSessionMessages.length} channel memory messages`,
+    metadata: { threadKey, source: input.source, sessionMessageCount: priorSessionMessages.length },
+    durationMs: durationMs(sessionStartedAt)
+  });
+  await input.context.repo
+    .recordProcessRunSpan({
+      runId: input.request.requestId,
+      spanId: "memory.session",
+      name: "Load channel memory",
+      status: "succeeded",
+      startedAt: new Date(sessionStartedAt),
+      completedAt: new Date(),
+      durationMs: durationMs(sessionStartedAt),
+      metadata: { threadKey, source: input.source, sessionMessageCount: priorSessionMessages.length }
+    })
+    .catch((error) => input.requestLogger.warn({ err: error }, "Failed to record memory span"));
+  await input.context.repo.appendConversationMessage({
+    threadKey,
+    role: "user",
+    discordMessageId: input.message.id,
+    authorId: input.message.author.id,
+    authorDisplayName: userDisplayName,
+    content: input.request.text,
+    createdAt: input.message.createdAt,
+    metadata: {
+      discordUrl: input.message.url,
+      rawContent: input.request.rawContent,
+      attachments: requestAttachments
+    }
+  });
+  input.requestLogger.debug({ threadKey, source: input.source }, "Stored user turn in channel memory");
+
+  const permissionStartedAt = Date.now();
+  const member = input.message.member ?? (await guild.members.fetch(input.message.author.id));
+  const mentionedChannelIds = explicitChannelMentionIds(input.request.rawContent);
+  const mentionedUserIds = explicitUserMentionIds(input.request.rawContent, botUserId);
+  const referencedChannelId = input.message.reference?.channelId ?? null;
+  const visibleChannelIds = await visibleChannelIdsForMember(guild, member, [
+    input.message.channelId,
+    ...mentionedChannelIds,
+    ...(referencedChannelId ? [referencedChannelId] : [])
+  ]);
+  const replyContext = await resolveDiscordReplyContext({
+    repo: input.context.repo,
+    message: input.message,
+    visibleChannelIds,
+    requestLogger: input.requestLogger
+  });
+  input.requestLogger.info(
+    {
+      source: input.source,
+      visibleChannelCount: visibleChannelIds.length,
+      mentionedChannelIds,
+      mentionedUserIds,
+      replyContextMessageId: replyContext?.messageId,
+      durationMs: durationMs(permissionStartedAt)
+    },
+    "Resolved requester visibility"
+  );
+  await recordTraceEvent(input.context.repo, {
+    eventName: "permissions.visibility.resolved",
+    summary: `Resolved ${visibleChannelIds.length} visible channels`,
+    metadata: {
+      source: input.source,
+      visibleChannelCount: visibleChannelIds.length,
+      mentionedChannelIds,
+      mentionedUserIds,
+      replyContextMessageId: replyContext?.messageId
+    },
+    durationMs: durationMs(permissionStartedAt)
+  });
+  await input.context.repo
+    .recordProcessRunSpan({
+      runId: input.request.requestId,
+      spanId: "permissions.visibility",
+      name: "Resolve Discord permissions",
+      status: "succeeded",
+      startedAt: new Date(permissionStartedAt),
+      completedAt: new Date(),
+      durationMs: durationMs(permissionStartedAt),
+      metadata: { source: input.source, visibleChannelCount: visibleChannelIds.length, mentionedChannelIds }
+    })
+    .catch((error) => input.requestLogger.warn({ err: error }, "Failed to record permission span"));
+
+  const turnEnvelope = buildAgentRuntimeTurnEnvelope({
+    requestId: input.request.requestId,
+    threadKey,
+    guildId,
+    channelId: input.message.channelId,
+    userId: input.message.author.id,
+    userDisplayName,
+    botUserId,
+    botRoleIds: input.request.botRoleIds,
+    text: input.request.text,
+    rawContent: input.request.rawContent,
+    discordUrl: input.message.url,
+    messageCreatedAt: input.message.createdAt,
+    visibleChannelIds,
+    mentionedUserIds,
+    mentionedChannelIds,
+    replyContext,
+    requestAttachments,
+    sessionMessages: priorSessionMessages,
+    statusChannelId: input.responseSink.statusChannelId,
+    statusMessageId: input.responseSink.statusMessageId
+  });
+  const turnEnvelopeArtifactId = await storeAgentRuntimeTurnEnvelope({
+    agentRuntime: input.context.agentRuntime,
+    session: input.agentRuntimeExecution?.session,
+    executionId: input.agentRuntimeExecution?.executionId,
+    envelope: turnEnvelope
+  }).catch((error) => {
+    input.requestLogger.warn({ err: error }, "Failed to store agent runtime turn envelope");
+    return null;
+  });
+  return {
+    turnEnvelope,
+    turnEnvelopeArtifactId,
+    priorSessionMessages
+  };
+}
+
+async function replayPreparedDiscordAgentTurn(input: {
+  context: DiscordAgentRequestInput;
+  request: DiscordAgentExecutionRequest;
+  turnEnvelope: AgentRuntimeTurnEnvelope;
+  requestLogger: Logger;
+}): Promise<PreparedDiscordAgentTurn> {
+  const startedAt = Date.now();
+  const priorSessionMessages = conversationMessagesFromEnvelope(input.turnEnvelope);
+  input.requestLogger.info(
+    {
+      threadKey: input.turnEnvelope.threadKey,
+      sessionMessageCount: priorSessionMessages.length,
+      visibleChannelCount: input.turnEnvelope.visibleChannelIds.length,
+      durationMs: durationMs(startedAt)
+    },
+    "Replayed stored agent turn envelope"
+  );
+  await recordTraceEvent(input.context.repo, {
+    eventName: "agent.execution.context_replayed",
+    summary: "Replayed stored agent turn context",
+    metadata: {
+      threadKey: input.turnEnvelope.threadKey,
+      sessionMessageCount: priorSessionMessages.length,
+      visibleChannelCount: input.turnEnvelope.visibleChannelIds.length
+    },
+    durationMs: durationMs(startedAt)
+  });
+  await input.context.repo
+    .recordProcessRunSpan({
+      runId: input.request.requestId,
+      spanId: "agent.turn_envelope.replay",
+      name: "Replay stored turn envelope",
+      status: "succeeded",
+      startedAt: new Date(startedAt),
+      completedAt: new Date(),
+      durationMs: durationMs(startedAt),
+      metadata: {
+        threadKey: input.turnEnvelope.threadKey,
+        sessionMessageCount: priorSessionMessages.length,
+        visibleChannelCount: input.turnEnvelope.visibleChannelIds.length
+      }
+    })
+    .catch((error) => input.requestLogger.warn({ err: error }, "Failed to record turn envelope replay span"));
+  return {
+    turnEnvelope: input.turnEnvelope,
+    turnEnvelopeArtifactId: null,
+    priorSessionMessages
+  };
 }
 
 function queueIncomingMessageEmbedding(

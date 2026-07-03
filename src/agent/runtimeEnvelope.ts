@@ -139,6 +139,20 @@ export async function storeAgentRuntimeTurnEnvelope(input: {
   return artifact.artifactId;
 }
 
+export async function loadAgentRuntimeTurnEnvelope(input: {
+  agentRuntime?: AgentRuntimeRepository;
+  artifactId?: string | null;
+}): Promise<AgentRuntimeTurnEnvelope | null> {
+  if (!input.agentRuntime || !input.artifactId) return null;
+  const artifact = await input.agentRuntime.getArtifact({ artifactId: input.artifactId });
+  if (!artifact?.content) return null;
+  const parsed = JSON.parse(artifact.content) as AgentRuntimeTurnEnvelope;
+  if (parsed.schemaVersion !== 1 || parsed.source !== "discord") {
+    throw new Error(`Unsupported agent runtime turn envelope artifact: ${input.artifactId}`);
+  }
+  return parsed;
+}
+
 function snapshotConversationMessage(message: ConversationMessage): AgentRuntimeConversationMessageSnapshot {
   return {
     id: message.id,

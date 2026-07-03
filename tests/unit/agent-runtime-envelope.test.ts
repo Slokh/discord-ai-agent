@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildAgentRuntimeTurnEnvelope, storeAgentRuntimeTurnEnvelope } from "../../src/agent/runtimeEnvelope.js";
+import { buildAgentRuntimeTurnEnvelope, loadAgentRuntimeTurnEnvelope, storeAgentRuntimeTurnEnvelope } from "../../src/agent/runtimeEnvelope.js";
 import type { ConversationMessage } from "../../src/db/repositories.js";
 
 describe("agent runtime envelope", () => {
@@ -129,6 +129,37 @@ describe("agent runtime envelope", () => {
         metadata: expect.objectContaining({ artifactId: "artifact-1" })
       })
     );
+  });
+
+  it("loads a stored turn envelope from an artifact pointer", async () => {
+    const envelope = buildAgentRuntimeTurnEnvelope({
+      requestId: "message-1",
+      threadKey: "discord:guild:channel",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      userDisplayName: "Kartik",
+      botRoleIds: [],
+      text: "hello",
+      rawContent: "hello",
+      discordUrl: "https://discord.com/channels/guild/channel/message-1",
+      messageCreatedAt: new Date("2026-07-01T12:00:00Z"),
+      visibleChannelIds: ["channel"],
+      mentionedUserIds: [],
+      mentionedChannelIds: [],
+      requestAttachments: [],
+      sessionMessages: [],
+      createdAt: new Date("2026-07-01T12:00:01Z")
+    });
+    const agentRuntime = {
+      getArtifact: vi.fn(async () => ({
+        artifactId: "artifact-1",
+        content: JSON.stringify(envelope)
+      }))
+    };
+
+    await expect(loadAgentRuntimeTurnEnvelope({ agentRuntime: agentRuntime as never, artifactId: "artifact-1" })).resolves.toEqual(envelope);
+    expect(agentRuntime.getArtifact).toHaveBeenCalledWith({ artifactId: "artifact-1" });
   });
 });
 

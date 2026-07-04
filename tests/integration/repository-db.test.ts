@@ -255,6 +255,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const taskId = `task-${randomUUID()}`;
     const sessionId = `codegen-session-${taskId}`;
     const executionId = `codegen-execution-${taskId}`;
+    const agentSessionId = `agent-session-${taskId}`;
+    const agentExecutionId = `agent-task-execution-${taskId}`;
     const traceId = `trace-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;
@@ -285,6 +287,27 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "tester"
     });
     await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running" });
+    await codegenRepo.upsertSession({
+      sessionId: agentSessionId,
+      traceId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "Bridge test",
+      request: "change a file",
+      requestedBy: "tester",
+      metadata: { runtime: "agent" }
+    });
+    await codegenRepo.createExecution({
+      executionId: agentExecutionId,
+      sessionId: agentSessionId,
+      taskId,
+      traceId,
+      status: "running",
+      harness: "runCodingAgent",
+      metadata: { runtime: "agent" }
+    });
 
     await repo.markAgentTaskProgress({
       taskId,
@@ -306,6 +329,18 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       })
     ]);
     expect(progress.rows[0].metadata).toEqual(expect.objectContaining({ step: "verify", command: "npm test" }));
+    const agentProgress = await pool.query(
+      "SELECT kind, event_name, summary, metadata FROM codegen_events WHERE execution_id = $1 ORDER BY sequence",
+      [agentExecutionId]
+    );
+    expect(agentProgress.rows).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        event_name: "agent.task.progress",
+        summary: "Running tests."
+      })
+    ]);
+    expect(agentProgress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "verify", command: "npm test" }));
 
     await repo.markAgentTaskSucceeded({
       taskId,
@@ -326,6 +361,27 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         pr_url: "https://github.com/Slokh/discord-ai-agent/pull/999",
         verify_passed: true
       })
+    );
+    const terminalAgent = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM codegen_executions WHERE execution_id = $1", [
+      agentExecutionId
+    ]);
+    expect(terminalAgent.rows[0]).toEqual(
+      expect.objectContaining({
+        status: "succeeded",
+        branch_name: "kartik/bridge-test",
+        pr_url: "https://github.com/Slokh/discord-ai-agent/pull/999",
+        verify_passed: true
+      })
+    );
+    const terminalEvents = await pool.query(
+      "SELECT execution_id, event_name, summary, metadata FROM codegen_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
+      [[executionId, agentExecutionId]]
+    );
+    expect(terminalEvents.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ execution_id: executionId, event_name: "codegen.completed", summary: "Opened pull request." }),
+        expect.objectContaining({ execution_id: agentExecutionId, event_name: "agent.task.completed", summary: "Opened pull request." })
+      ])
     );
   });
 
@@ -2073,12 +2129,20 @@ async function cleanupTestRows(pool: DbPool) {
     `
   );
   await pool.query("DELETE FROM codegen_sandbox_leases WHERE sandbox_id LIKE 'codegen-sandbox-%' OR execution_id LIKE 'codegen-execution-%'");
-  await pool.query("DELETE FROM codegen_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%')");
-  await pool.query("DELETE FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%'");
-  await pool.query("DELETE FROM codegen_events WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%'");
-  await pool.query("DELETE FROM codegen_executions WHERE execution_id LIKE 'codegen-execution-%' OR session_id LIKE 'codegen-session-%'");
-  await pool.query("DELETE FROM codegen_messages WHERE session_id LIKE 'codegen-session-%'");
-  await pool.query("DELETE FROM codegen_sessions WHERE session_id LIKE 'codegen-session-%' OR trace_id LIKE 'trace-%'");
+  await pool.query(
+    "DELETE FROM codegen_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%')"
+  );
+  await pool.query(
+    "DELETE FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
+  );
+  await pool.query(
+    "DELETE FROM codegen_events WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
+  );
+  await pool.query(
+    "DELETE FROM codegen_executions WHERE execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%' OR session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'"
+  );
+  await pool.query("DELETE FROM codegen_messages WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'");
+  await pool.query("DELETE FROM codegen_sessions WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR trace_id LIKE 'trace-%'");
   await pool.query("DELETE FROM process_runs WHERE run_id LIKE 'run-%' OR trace_id LIKE 'trace-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM skill_changes WHERE skill_name LIKE 'skill-%' OR requester_id LIKE 'user-%'");
   await pool.query("DELETE FROM skills WHERE name LIKE 'skill-%'");

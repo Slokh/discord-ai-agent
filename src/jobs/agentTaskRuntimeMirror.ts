@@ -151,34 +151,6 @@ export async function markAgentTaskRuntimeStarted(input: {
   });
 }
 
-export async function recordAgentTaskRuntimeProgress(input: {
-  agentRuntimeRepo?: AgentRuntimeRepository;
-  job: AgentTaskJob;
-  step: string;
-  message: string;
-  backendName: string;
-  sandboxId?: string | null;
-  metadata?: Record<string, unknown>;
-}) {
-  if (!input.agentRuntimeRepo) return;
-  await input.agentRuntimeRepo.recordEvent({
-    sessionId: agentRuntimeSessionId(agentRuntimeThreadKeyForTask(input.job)),
-    executionId: agentRuntimeExecutionIdForTask(input.job),
-    traceId: input.job.traceId,
-    kind: eventKindForStep(input.step),
-    level: /failed|error/i.test(input.step) ? "error" : "info",
-    eventName: "agent.task.progress",
-    summary: input.message,
-    metadata: {
-      taskId: input.job.taskId,
-      step: input.step,
-      backend: input.backendName,
-      sandboxId: input.sandboxId ?? null,
-      ...(input.metadata ?? {})
-    }
-  });
-}
-
 export async function updateAgentTaskRuntimeSandboxRun(input: {
   agentRuntimeRepo?: AgentRuntimeRepository;
   job: AgentTaskJob;
@@ -199,43 +171,6 @@ export async function updateAgentTaskRuntimeSandboxRun(input: {
   });
 }
 
-export async function markAgentTaskRuntimeFailed(input: {
-  agentRuntimeRepo?: AgentRuntimeRepository;
-  job: AgentTaskJob;
-  status: "failed" | "no_changes";
-  error: string;
-}) {
-  if (!input.agentRuntimeRepo) return;
-  await input.agentRuntimeRepo.updateExecution({
-    executionId: agentRuntimeExecutionIdForTask(input.job),
-    status: input.status,
-    error: input.error
-  });
-  await input.agentRuntimeRepo.recordEvent({
-    sessionId: agentRuntimeSessionId(agentRuntimeThreadKeyForTask(input.job)),
-    executionId: agentRuntimeExecutionIdForTask(input.job),
-    traceId: input.job.traceId,
-    kind: input.status === "failed" ? "error" : "status",
-    level: input.status === "failed" ? "error" : "info",
-    eventName: "agent.task.completed",
-    summary: input.error,
-    metadata: {
-      taskId: input.job.taskId,
-      status: input.status,
-      error: input.error
-    }
-  });
-}
-
 function providerForCodegenModel(model: string) {
   return model.includes("/") ? "openrouter" : "openai";
-}
-
-function eventKindForStep(step: string): "harness" | "model" | "tool" | "command" | "git" | "status" | "error" | "artifact" {
-  if (/codex|harness|model/i.test(step)) return "harness";
-  if (/git|branch|push|pr|diff|commit/i.test(step)) return "git";
-  if (/command|verify|scan|dependencies|repo|checkout|test|lint|typecheck/i.test(step)) return "command";
-  if (/failed|error/i.test(step)) return "error";
-  if (/artifact|prompt/i.test(step)) return "artifact";
-  return "status";
 }

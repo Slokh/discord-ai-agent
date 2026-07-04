@@ -2531,21 +2531,24 @@ export class DiscordAiAgentRepository {
       .query(
         `
           WITH target AS (
-            SELECT session_id, execution_id, trace_id
+            SELECT
+              session_id,
+              execution_id,
+              trace_id,
+              metadata->>'runtime' = 'agent' AS is_agent_runtime
             FROM codegen_executions
             WHERE task_id = $1
-            ORDER BY created_at DESC
-            LIMIT 1
           ),
           next_sequence AS (
             SELECT
               target.session_id,
               target.execution_id,
               target.trace_id,
+              target.is_agent_runtime,
               coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
             FROM target
             LEFT JOIN codegen_events ON codegen_events.execution_id = target.execution_id
-            GROUP BY target.session_id, target.execution_id, target.trace_id
+            GROUP BY target.session_id, target.execution_id, target.trace_id, target.is_agent_runtime
           )
           INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
@@ -2562,9 +2565,9 @@ export class DiscordAiAgentRepository {
               ELSE 'status'
             END,
             CASE WHEN $2 ~* 'failed|error' THEN 'error' ELSE 'info' END,
-            'codegen.progress',
+            CASE WHEN is_agent_runtime THEN 'agent.task.progress' ELSE 'codegen.progress' END,
             $3,
-            jsonb_build_object('step', $2) || $4::jsonb
+            jsonb_build_object('taskId', $1, 'step', $2) || $4::jsonb
           FROM next_sequence
         `,
         [input.taskId, input.step, input.statusMessage, JSON.stringify(input.metadata ?? {})]
@@ -2703,7 +2706,7 @@ export class DiscordAiAgentRepository {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE task_id = $1
-            RETURNING session_id, execution_id, trace_id
+            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
           ),
           session_update AS (
             UPDATE codegen_sessions
@@ -2728,13 +2731,23 @@ export class DiscordAiAgentRepository {
               updated_execution.session_id,
               updated_execution.execution_id,
               updated_execution.trace_id,
+              updated_execution.is_agent_runtime,
               coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
             FROM updated_execution
             LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
-            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
           INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
-          SELECT session_id, execution_id, trace_id, sequence, 'git', 'info', 'codegen.completed', 'Opened pull request.', $6::jsonb
+          SELECT
+            session_id,
+            execution_id,
+            trace_id,
+            sequence,
+            'git',
+            'info',
+            CASE WHEN is_agent_runtime THEN 'agent.task.completed' ELSE 'codegen.completed' END,
+            'Opened pull request.',
+            jsonb_build_object('taskId', $1, 'status', 'succeeded') || $6::jsonb
           FROM next_sequence
         `,
         [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
@@ -2796,7 +2809,7 @@ export class DiscordAiAgentRepository {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE task_id = $1
-            RETURNING session_id, execution_id, trace_id
+            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
           ),
           session_update AS (
             UPDATE codegen_sessions
@@ -2821,10 +2834,11 @@ export class DiscordAiAgentRepository {
               updated_execution.session_id,
               updated_execution.execution_id,
               updated_execution.trace_id,
+              updated_execution.is_agent_runtime,
               coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
             FROM updated_execution
             LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
-            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
           INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
@@ -2834,9 +2848,9 @@ export class DiscordAiAgentRepository {
             sequence,
             CASE WHEN $2 = 'cancelled' THEN 'status' ELSE 'error' END,
             CASE WHEN $2 = 'cancelled' THEN 'info' ELSE 'error' END,
-            'codegen.completed',
+            CASE WHEN is_agent_runtime THEN 'agent.task.completed' ELSE 'codegen.completed' END,
             $3,
-            jsonb_build_object('status', $2, 'error', $3) || $4::jsonb
+            jsonb_build_object('taskId', $1, 'status', $2, 'error', $3) || $4::jsonb
           FROM next_sequence
         `,
         [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
@@ -3113,7 +3127,7 @@ export class DiscordAiAgentRepository {
                   completed_at = coalesce(completed_at, now()),
                   updated_at = now()
               WHERE task_id = $1
-              RETURNING session_id, execution_id, trace_id
+              RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
             ),
             session_update AS (
               UPDATE codegen_sessions
@@ -3138,10 +3152,11 @@ export class DiscordAiAgentRepository {
                 updated_execution.session_id,
                 updated_execution.execution_id,
                 updated_execution.trace_id,
+                updated_execution.is_agent_runtime,
                 coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
               FROM updated_execution
               LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
-              GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+              GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
             )
             INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
             SELECT
@@ -3151,9 +3166,9 @@ export class DiscordAiAgentRepository {
               sequence,
               'status',
               'info',
-              'codegen.completed',
+              CASE WHEN is_agent_runtime THEN 'agent.task.completed' ELSE 'codegen.completed' END,
               $2,
-              jsonb_build_object('status', 'cancelled', 'error', $2)
+              jsonb_build_object('taskId', $1, 'status', 'cancelled', 'error', $2)
             FROM next_sequence
           `,
           [input.taskId, message]

@@ -17,10 +17,8 @@ import {
   type CodegenLeaseScheduler
 } from "./codegenLeaseScheduler.js";
 import {
-  markAgentTaskRuntimeFailed,
   markAgentTaskRuntimeStarted,
   mirrorAgentTaskQueuedToAgentRuntime,
-  recordAgentTaskRuntimeProgress,
   updateAgentTaskRuntimeSandboxRun
 } from "./agentTaskRuntimeMirror.js";
 
@@ -589,28 +587,6 @@ export async function startJobs(input: {
                     statusMessage: event.message,
                     metadata: { backend: backendName, ...event.metadata }
                   });
-                  await input.codegenRepo
-                    ?.recordEvent({
-                      sessionId,
-                      executionId,
-                      traceId: job.data.traceId,
-                      kind: codegenEventKindForStep(event.step),
-                      eventName: "codegen.progress",
-                      summary: event.message,
-                      metadata: { step: event.step, backend: backendName, sandboxId: acquiredLease?.sandboxId ?? null, ...event.metadata }
-                    })
-                    .catch((error) => logger.warn({ err: error, taskId: job.data.taskId, step: event.step }, "Failed to record codegen progress"));
-                  await recordAgentTaskRuntimeProgress({
-                    agentRuntimeRepo,
-                    job: job.data,
-                    step: event.step,
-                    message: event.message,
-                    backendName,
-                    sandboxId: acquiredLease?.sandboxId ?? null,
-                    metadata: event.metadata
-                  }).catch((error) =>
-                    logger.warn({ err: error, taskId: job.data.taskId, step: event.step }, "Failed to record agent runtime task progress")
-                  );
                 }
               });
               await input.codegenRepo
@@ -670,12 +646,6 @@ export async function startJobs(input: {
                   error: message
                 })
                 .catch((codegenError) => logger.warn({ err: codegenError, taskId: job.data.taskId }, "Failed to mark codegen execution failed"));
-              await markAgentTaskRuntimeFailed({
-                agentRuntimeRepo,
-                job: job.data,
-                status: isNoChangesTaskError(message) ? "no_changes" : "failed",
-                error: message
-              }).catch((runtimeError) => logger.warn({ err: runtimeError, taskId: job.data.taskId }, "Failed to mark agent runtime task execution failed"));
               if (acquiredLease && input.codegenRepo) {
                 await input.codegenRepo
                   .releaseSandboxLease({
@@ -852,15 +822,6 @@ async function acquireLeaseForAgentTask(input: {
 
 function providerForCodegenModel(model: string) {
   return model.includes("/") ? "openrouter" : "openai";
-}
-
-function codegenEventKindForStep(step: string): "harness" | "model" | "tool" | "command" | "git" | "status" | "error" | "artifact" {
-  if (/codex|harness|model/i.test(step)) return "harness";
-  if (/git|branch|push|pr|diff|commit/i.test(step)) return "git";
-  if (/command|verify|scan|dependencies|repo|checkout/i.test(step)) return "command";
-  if (/failed|error/i.test(step)) return "error";
-  if (/artifact|prompt/i.test(step)) return "artifact";
-  return "status";
 }
 
 function startingAgentTaskStatusMessage(backendName: string) {

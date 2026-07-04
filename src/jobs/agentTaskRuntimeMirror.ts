@@ -1,0 +1,241 @@
+import type { AppConfig } from "../config/env.js";
+import { agentRuntimeSessionId, type AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
+import type { AgentTaskJob } from "../execution/types.js";
+
+export function agentRuntimeThreadKeyForTask(job: Pick<AgentTaskJob, "taskId" | "threadKey">) {
+  return job.threadKey ?? `agent-task:${job.taskId}`;
+}
+
+export function agentRuntimeExecutionIdForTask(job: Pick<AgentTaskJob, "taskId">) {
+  return `agent-task-execution-${job.taskId}`;
+}
+
+export function agentRuntimeMessageIdForTask(job: Pick<AgentTaskJob, "taskId">) {
+  return `agent-task-message-${job.taskId}`;
+}
+
+export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
+  agentRuntimeRepo?: AgentRuntimeRepository;
+  config: AppConfig;
+  job: AgentTaskJob;
+  backendName: string;
+  pgBossJobId: string | null;
+  codegenSessionId?: string | null;
+  codegenExecutionId?: string | null;
+}) {
+  if (!input.agentRuntimeRepo) return;
+  const threadKey = agentRuntimeThreadKeyForTask(input.job);
+  const session = await input.agentRuntimeRepo.upsertSession({
+    threadKey,
+    traceId: input.job.traceId,
+    guildId: input.job.guildId,
+    channelId: input.job.channelId,
+    userId: input.job.userId,
+    title: input.job.title,
+    request: input.job.request,
+    requestedBy: input.job.requestedBy,
+    status: "queued",
+    harness: "runCodingAgent",
+    model: input.config.openRouter.codegenModel,
+    provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+    metadata: {
+      taskId: input.job.taskId,
+      taskType: input.job.taskType,
+      backend: input.backendName,
+      pgbossJobId: input.pgBossJobId,
+      codegenSessionId: input.codegenSessionId ?? null,
+      codegenExecutionId: input.codegenExecutionId ?? null,
+      retriedFromTaskId: input.job.retriedFromTaskId ?? null,
+      source: "agent.task.enqueue"
+    }
+  });
+  await input.agentRuntimeRepo.appendMessage({
+    messageId: agentRuntimeMessageIdForTask(input.job),
+    sessionId: session.sessionId,
+    clientMessageId: input.job.taskId,
+    role: "tool",
+    parts: [
+      {
+        type: "tool_result",
+        toolName: "runCodingAgent",
+        taskId: input.job.taskId,
+        title: input.job.title,
+        request: input.job.request,
+        status: "queued",
+        jobId: input.pgBossJobId
+      }
+    ],
+    metadata: {
+      taskId: input.job.taskId,
+      traceId: input.job.traceId,
+      backend: input.backendName,
+      pgbossJobId: input.pgBossJobId,
+      codegenSessionId: input.codegenSessionId ?? null,
+      codegenExecutionId: input.codegenExecutionId ?? null,
+      source: "agent.task.enqueue"
+    }
+  });
+  await input.agentRuntimeRepo.createExecution({
+    executionId: agentRuntimeExecutionIdForTask(input.job),
+    sessionId: session.sessionId,
+    taskId: input.job.taskId,
+    traceId: input.job.traceId,
+    status: "queued",
+    harness: "runCodingAgent",
+    model: input.config.openRouter.codegenModel,
+    provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+    reasoningEffort: "low",
+    metadata: {
+      taskType: input.job.taskType,
+      backend: input.backendName,
+      pgbossJobId: input.pgBossJobId,
+      codegenSessionId: input.codegenSessionId ?? null,
+      codegenExecutionId: input.codegenExecutionId ?? null,
+      retriedFromTaskId: input.job.retriedFromTaskId ?? null
+    }
+  });
+  await input.agentRuntimeRepo.recordEvent({
+    sessionId: session.sessionId,
+    executionId: agentRuntimeExecutionIdForTask(input.job),
+    traceId: input.job.traceId,
+    kind: "tool",
+    eventName: input.pgBossJobId ? "agent.task.enqueued" : "agent.task.queued",
+    summary: input.pgBossJobId ? "Enqueued code-update task." : "Queued code-update task.",
+    metadata: {
+      taskId: input.job.taskId,
+      jobId: input.pgBossJobId,
+      backend: input.backendName,
+      codegenSessionId: input.codegenSessionId ?? null,
+      codegenExecutionId: input.codegenExecutionId ?? null
+    }
+  });
+}
+
+export async function markAgentTaskRuntimeStarted(input: {
+  agentRuntimeRepo?: AgentRuntimeRepository;
+  job: AgentTaskJob;
+  backendName: string;
+  pgBossJobId: string;
+  sandboxId?: string | null;
+  leaseOwner?: string | null;
+  workerStartedAt: Date;
+}) {
+  if (!input.agentRuntimeRepo) return;
+  const sessionId = agentRuntimeSessionId(agentRuntimeThreadKeyForTask(input.job));
+  const executionId = agentRuntimeExecutionIdForTask(input.job);
+  await input.agentRuntimeRepo.updateExecution({
+    executionId,
+    status: "running",
+    sandboxId: input.sandboxId ?? null,
+    metadata: {
+      backend: input.backendName,
+      workerStartedAt: input.workerStartedAt.toISOString(),
+      pgbossJobId: input.pgBossJobId,
+      leaseOwner: input.leaseOwner ?? null
+    }
+  });
+  await input.agentRuntimeRepo.recordEvent({
+    sessionId,
+    executionId,
+    traceId: input.job.traceId,
+    kind: "status",
+    eventName: "agent.task.started",
+    summary: "Starting code-update task execution.",
+    metadata: {
+      taskId: input.job.taskId,
+      backend: input.backendName,
+      pgbossJobId: input.pgBossJobId,
+      sandboxId: input.sandboxId ?? null,
+      leaseOwner: input.leaseOwner ?? null
+    }
+  });
+}
+
+export async function recordAgentTaskRuntimeProgress(input: {
+  agentRuntimeRepo?: AgentRuntimeRepository;
+  job: AgentTaskJob;
+  step: string;
+  message: string;
+  backendName: string;
+  sandboxId?: string | null;
+  metadata?: Record<string, unknown>;
+}) {
+  if (!input.agentRuntimeRepo) return;
+  await input.agentRuntimeRepo.recordEvent({
+    sessionId: agentRuntimeSessionId(agentRuntimeThreadKeyForTask(input.job)),
+    executionId: agentRuntimeExecutionIdForTask(input.job),
+    traceId: input.job.traceId,
+    kind: eventKindForStep(input.step),
+    level: /failed|error/i.test(input.step) ? "error" : "info",
+    eventName: "agent.task.progress",
+    summary: input.message,
+    metadata: {
+      taskId: input.job.taskId,
+      step: input.step,
+      backend: input.backendName,
+      sandboxId: input.sandboxId ?? null,
+      ...(input.metadata ?? {})
+    }
+  });
+}
+
+export async function updateAgentTaskRuntimeSandboxRun(input: {
+  agentRuntimeRepo?: AgentRuntimeRepository;
+  job: AgentTaskJob;
+  backendJobName?: string | null;
+  sandboxRunId?: string | null;
+  sandboxId?: string | null;
+  leaseOwner?: string | null;
+}) {
+  if (!input.agentRuntimeRepo) return;
+  await input.agentRuntimeRepo.updateExecution({
+    executionId: agentRuntimeExecutionIdForTask(input.job),
+    sandboxId: input.sandboxId ?? null,
+    sandboxRunId: input.sandboxRunId ?? null,
+    metadata: {
+      backendJobName: input.backendJobName ?? null,
+      leaseOwner: input.leaseOwner ?? null
+    }
+  });
+}
+
+export async function markAgentTaskRuntimeFailed(input: {
+  agentRuntimeRepo?: AgentRuntimeRepository;
+  job: AgentTaskJob;
+  status: "failed" | "no_changes";
+  error: string;
+}) {
+  if (!input.agentRuntimeRepo) return;
+  await input.agentRuntimeRepo.updateExecution({
+    executionId: agentRuntimeExecutionIdForTask(input.job),
+    status: input.status,
+    error: input.error
+  });
+  await input.agentRuntimeRepo.recordEvent({
+    sessionId: agentRuntimeSessionId(agentRuntimeThreadKeyForTask(input.job)),
+    executionId: agentRuntimeExecutionIdForTask(input.job),
+    traceId: input.job.traceId,
+    kind: input.status === "failed" ? "error" : "status",
+    level: input.status === "failed" ? "error" : "info",
+    eventName: "agent.task.completed",
+    summary: input.error,
+    metadata: {
+      taskId: input.job.taskId,
+      status: input.status,
+      error: input.error
+    }
+  });
+}
+
+function providerForCodegenModel(model: string) {
+  return model.includes("/") ? "openrouter" : "openai";
+}
+
+function eventKindForStep(step: string): "harness" | "model" | "tool" | "command" | "git" | "status" | "error" | "artifact" {
+  if (/codex|harness|model/i.test(step)) return "harness";
+  if (/git|branch|push|pr|diff|commit/i.test(step)) return "git";
+  if (/command|verify|scan|dependencies|repo|checkout|test|lint|typecheck/i.test(step)) return "command";
+  if (/failed|error/i.test(step)) return "error";
+  if (/artifact|prompt/i.test(step)) return "artifact";
+  return "status";
+}

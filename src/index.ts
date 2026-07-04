@@ -120,6 +120,7 @@ async function main() {
     config,
     repo,
     codegenRepo,
+    agentRuntimeRepo,
     crawler,
     agentTask: executionBackend
       ? {

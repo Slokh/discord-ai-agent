@@ -69,6 +69,8 @@ The old task callback endpoints remain for the current sandbox runner. New runti
 
 Today, `enqueueAgentTask` creates or reuses the durable codegen session, appends the code-update request as a `user` message, and creates a queued harness execution before handing work to the existing `agent.task` queue. This keeps the current Discord behavior intact while making the codegen session/event trail the durable source of truth for future scheduler and UI work.
 
+The same enqueue path now also calls `src/jobs/agentTaskRuntimeMirror.ts` to mirror code-update tasks into the generic agent runtime session for the originating Discord thread. The mirror writes a `runCodingAgent` tool message, a task-linked execution with the same `taskId`, and `agent.task.*` events for queue, start, progress, sandbox attachment, and immediate start failures. This is the bridge from the legacy `agent.task` queue toward Centaur-style sessions where code updates are just long-running work inside the conversation.
+
 ## Harness Profile
 
 Code-update tasks use their own coding harness model via `OPENROUTER_CODEGEN_MODEL`, falling back to `OPENROUTER_CHAT_MODEL` when unset. This lets normal Discord chat stay on a cheap conversational model while code updates can move independently to a model better suited to repository edits.

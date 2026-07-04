@@ -1,6 +1,7 @@
 import PgBoss from "pg-boss";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
+import { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { CodegenRepository } from "../db/codegenRepository.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
 import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
@@ -15,6 +16,13 @@ import {
   waitForCodegenSandboxLease,
   type CodegenLeaseScheduler
 } from "./codegenLeaseScheduler.js";
+import {
+  markAgentTaskRuntimeFailed,
+  markAgentTaskRuntimeStarted,
+  mirrorAgentTaskQueuedToAgentRuntime,
+  recordAgentTaskRuntimeProgress,
+  updateAgentTaskRuntimeSandboxRun
+} from "./agentTaskRuntimeMirror.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
@@ -104,6 +112,7 @@ export async function startJobs(input: {
   pgBossSchema?: string;
   repo?: DiscordAiAgentRepository;
   codegenRepo?: CodegenRepository;
+  agentRuntimeRepo?: AgentRuntimeRepository;
 }): Promise<JobRuntime> {
   const crawlWorkerEnabled = input.crawlWorker ?? input.worker !== false;
   const embeddingWorkerEnabled = input.embeddingWorker ?? input.worker !== false;
@@ -157,6 +166,7 @@ export async function startJobs(input: {
   const artifactRetentionMaintenance = runsAnyWorker
     ? startArtifactRetentionMaintenance({ repo: input.repo, codegenRepo: input.codegenRepo })
     : null;
+  const agentRuntimeRepo = input.agentRuntimeRepo ?? (input.codegenRepo ? new AgentRuntimeRepository(input.codegenRepo) : undefined);
   if (codegenLeaseScheduler && input.codegenRepo) {
     await registerCodegenWorkerLease(input.codegenRepo, codegenLeaseScheduler);
     stopCodegenLeaseHeartbeat = startCodegenLeaseHeartbeat({
@@ -316,6 +326,15 @@ export async function startJobs(input: {
           metadata: { backend: backendName, pgbossJobId: null }
         })
         .catch((error) => logger.warn({ err: error, taskId }, "Failed to create codegen execution mirror"));
+      await mirrorAgentTaskQueuedToAgentRuntime({
+        agentRuntimeRepo,
+        config: input.config,
+        job: data,
+        backendName,
+        pgBossJobId: null,
+        codegenSessionId: codegenSessionIdForTask(data),
+        codegenExecutionId: codegenExecutionIdForTask(data)
+      }).catch((error) => logger.warn({ err: error, taskId }, "Failed to create agent runtime task mirror"));
       let id: string | null;
       try {
         id =
@@ -361,6 +380,15 @@ export async function startJobs(input: {
           metadata: { backend: backendName, pgbossJobId: id }
         })
         .catch((error) => logger.warn({ err: error, taskId }, "Failed to update codegen execution enqueue metadata"));
+      await mirrorAgentTaskQueuedToAgentRuntime({
+        agentRuntimeRepo,
+        config: input.config,
+        job: data,
+        backendName,
+        pgBossJobId: id,
+        codegenSessionId: codegenSessionIdForTask(data),
+        codegenExecutionId: codegenExecutionIdForTask(data)
+      }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update agent runtime task mirror"));
       logger.info({ queue: AGENT_TASK_JOB, taskId, jobId: id }, "Agent task enqueue complete");
       return { jobId: id, taskId };
     },
@@ -541,6 +569,15 @@ export async function startJobs(input: {
                 metadata: { backend: backendName, pgbossJobId: job.id, sandboxId: acquiredLease?.sandboxId ?? null }
               })
               .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to record codegen execution start"));
+            await markAgentTaskRuntimeStarted({
+              agentRuntimeRepo,
+              job: job.data,
+              backendName,
+              pgBossJobId: job.id,
+              sandboxId: acquiredLease?.sandboxId ?? null,
+              leaseOwner: acquiredLease?.leaseOwner ?? null,
+              workerStartedAt: new Date(startedAt)
+            }).catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to mark agent runtime task execution running"));
             try {
               const result = await input.agentTask!.start(job.data, {
                 sandboxId: acquiredLease?.sandboxId ?? null,
@@ -563,6 +600,17 @@ export async function startJobs(input: {
                       metadata: { step: event.step, backend: backendName, sandboxId: acquiredLease?.sandboxId ?? null, ...event.metadata }
                     })
                     .catch((error) => logger.warn({ err: error, taskId: job.data.taskId, step: event.step }, "Failed to record codegen progress"));
+                  await recordAgentTaskRuntimeProgress({
+                    agentRuntimeRepo,
+                    job: job.data,
+                    step: event.step,
+                    message: event.message,
+                    backendName,
+                    sandboxId: acquiredLease?.sandboxId ?? null,
+                    metadata: event.metadata
+                  }).catch((error) =>
+                    logger.warn({ err: error, taskId: job.data.taskId, step: event.step }, "Failed to record agent runtime task progress")
+                  );
                 }
               });
               await input.codegenRepo
@@ -573,6 +621,14 @@ export async function startJobs(input: {
                   metadata: { backendJobName: result.backendJobName, leaseOwner: acquiredLease?.leaseOwner ?? null }
                 })
                 .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to attach sandbox run to codegen execution"));
+              await updateAgentTaskRuntimeSandboxRun({
+                agentRuntimeRepo,
+                job: job.data,
+                backendJobName: result.backendJobName,
+                sandboxRunId: result.sandboxRunId,
+                sandboxId: acquiredLease?.sandboxId ?? null,
+                leaseOwner: acquiredLease?.leaseOwner ?? null
+              }).catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to attach sandbox run to agent runtime task execution"));
               await input.repo?.recordSandboxRun({
                 taskId: job.data.taskId,
                 sandboxRunId: result.sandboxRunId,
@@ -614,6 +670,12 @@ export async function startJobs(input: {
                   error: message
                 })
                 .catch((codegenError) => logger.warn({ err: codegenError, taskId: job.data.taskId }, "Failed to mark codegen execution failed"));
+              await markAgentTaskRuntimeFailed({
+                agentRuntimeRepo,
+                job: job.data,
+                status: isNoChangesTaskError(message) ? "no_changes" : "failed",
+                error: message
+              }).catch((runtimeError) => logger.warn({ err: runtimeError, taskId: job.data.taskId }, "Failed to mark agent runtime task execution failed"));
               if (acquiredLease && input.codegenRepo) {
                 await input.codegenRepo
                   .releaseSandboxLease({

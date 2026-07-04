@@ -30,6 +30,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
   const existingSession = input.pgBossJobId ? await input.agentRuntimeRepo.getSession({ threadKey }).catch(() => undefined) : undefined;
   const selection = codegenExecutionSelection(input.config);
   const parentMetadata = agentTaskRuntimeParentMetadata(input.job);
+  const targetMetadata = agentTaskTargetMetadata(input.job);
   const session =
     existingSession ??
     (await input.agentRuntimeRepo.upsertSession({
@@ -55,6 +56,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
         codegenExecutionId: input.codegenExecutionId ?? null,
         retriedFromTaskId: input.job.retriedFromTaskId ?? null,
         source: "agent.task.enqueue",
+        ...targetMetadata,
         ...parentMetadata,
         ...selection
       }
@@ -72,7 +74,8 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
         title: input.job.title,
         request: input.job.request,
         status: "queued",
-        jobId: input.pgBossJobId
+        jobId: input.pgBossJobId,
+        ...targetMetadata
       }
     ],
     metadata: {
@@ -84,6 +87,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       codegenSessionId: input.codegenSessionId ?? null,
       codegenExecutionId: input.codegenExecutionId ?? null,
       source: "agent.task.enqueue",
+      ...targetMetadata,
       ...parentMetadata,
       ...selection
     }
@@ -96,6 +100,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
     codegenSessionId: input.codegenSessionId ?? null,
     codegenExecutionId: input.codegenExecutionId ?? null,
     retriedFromTaskId: input.job.retriedFromTaskId ?? null,
+    ...targetMetadata,
     ...parentMetadata,
     ...selection
   };
@@ -146,8 +151,17 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       queue: "agent.task",
       codegenSessionId: input.codegenSessionId ?? null,
       codegenExecutionId: input.codegenExecutionId ?? null,
+      ...targetMetadata,
       ...parentMetadata,
       ...selection
     }
   });
+}
+
+function agentTaskTargetMetadata(job: AgentTaskJob) {
+  return {
+    targetBranch: job.targetBranch ?? null,
+    targetPullRequestNumber: job.targetPullRequestNumber ?? null,
+    targetPullRequestUrl: job.targetPullRequestUrl ?? null
+  };
 }

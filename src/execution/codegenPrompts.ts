@@ -22,6 +22,9 @@ export type CodegenPromptEnv = {
   taskId: string;
   requestedBy: string;
   taskRequest: string;
+  targetBranch?: string | null;
+  targetPullRequestNumber?: number | null;
+  targetPullRequestUrl?: string | null;
 };
 
 export type CodegenRecoveryAttempt = {
@@ -124,6 +127,11 @@ export function codeUpdatePrompt(env: CodegenPromptEnv, contextPack?: CodegenPro
     "",
     `Task ID: ${env.taskId}`,
     `Requested by: ${env.requestedBy}`,
+    env.targetBranch || env.targetPullRequestNumber || env.targetPullRequestUrl ? "" : undefined,
+    env.targetBranch || env.targetPullRequestNumber || env.targetPullRequestUrl ? "Target update destination:" : undefined,
+    env.targetBranch ? `- Branch: ${env.targetBranch}` : undefined,
+    env.targetPullRequestNumber ? `- Pull request: #${env.targetPullRequestNumber}` : undefined,
+    env.targetPullRequestUrl ? `- Pull request URL: ${env.targetPullRequestUrl}` : undefined,
     contextText ? "" : undefined,
     contextText ? "Repository navigation context:" : undefined,
     contextText || undefined,
@@ -157,6 +165,11 @@ export function codeUpdateRecoveryPrompt(
     "",
     `Task ID: ${env.taskId}`,
     `Attempt: ${input.attempt}/${input.totalAttempts}`,
+    env.targetBranch || env.targetPullRequestNumber || env.targetPullRequestUrl ? "" : undefined,
+    env.targetBranch || env.targetPullRequestNumber || env.targetPullRequestUrl ? "Target update destination:" : undefined,
+    env.targetBranch ? `- Branch: ${env.targetBranch}` : undefined,
+    env.targetPullRequestNumber ? `- Pull request: #${env.targetPullRequestNumber}` : undefined,
+    env.targetPullRequestUrl ? `- Pull request URL: ${env.targetPullRequestUrl}` : undefined,
     "",
     "Requested update:",
     env.taskRequest.trim(),

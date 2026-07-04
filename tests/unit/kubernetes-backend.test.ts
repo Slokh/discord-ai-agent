@@ -96,7 +96,12 @@ describe("KubernetesExecutionBackend", () => {
         const clients = fakeClients();
         const backend = new KubernetesExecutionBackend(loadConfig(), clients);
 
-        await backend.start(agentTask());
+        await backend.start({
+          ...agentTask(),
+          targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+          targetPullRequestNumber: 120,
+          targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+        });
 
         expect(clients.core.createNamespacedConfigMap).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -106,7 +111,10 @@ describe("KubernetesExecutionBackend", () => {
                 OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5",
                 CODEGEN_HARNESS: "opencode",
                 SANDBOX_CACHE_DIR: "/var/cache/discord-ai-agent",
-                SANDBOX_STARTED_AT_MS: expect.any(String)
+                SANDBOX_STARTED_AT_MS: expect.any(String),
+                TARGET_BRANCH: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+                TARGET_PULL_REQUEST_NUMBER: "120",
+                TARGET_PULL_REQUEST_URL: "https://github.com/Slokh/discord-ai-agent/pull/120"
               })
             })
           })
@@ -213,7 +221,15 @@ describe("LocalProcessExecutionBackend", () => {
         });
         const progress = vi.fn(async () => undefined);
 
-        const result = await backend.start(agentTask(), { progress });
+        const result = await backend.start(
+          {
+            ...agentTask(),
+            targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+            targetPullRequestNumber: 120,
+            targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+          },
+          { progress }
+        );
 
         expect(result).toEqual(
           expect.objectContaining({
@@ -238,6 +254,9 @@ describe("LocalProcessExecutionBackend", () => {
               TASK_TITLE: "Update the README",
               TASK_REQUEST: "Update the README.",
               REQUESTED_BY: "user-1",
+              TARGET_BRANCH: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+              TARGET_PULL_REQUEST_NUMBER: "120",
+              TARGET_PULL_REQUEST_URL: "https://github.com/Slokh/discord-ai-agent/pull/120",
               CONTROL_PLANE_INTERNAL_URL: "http://agent-api:8080",
               GITHUB_TOKEN: "resolved-github-token",
               GITHUB_REPOSITORY: "example/discord-ai-agent",
@@ -338,7 +357,12 @@ describe("LocalProcessExecutionBackend", () => {
     expect(
       buildSandboxRunnerEnv({
         config,
-        job: agentTask(),
+        job: {
+          ...agentTask(),
+          targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+          targetPullRequestNumber: 120,
+          targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+        },
         sandboxRunId: "run-123",
         taskToken: "task-token",
         githubToken: "github-token",
@@ -353,7 +377,10 @@ describe("LocalProcessExecutionBackend", () => {
         GITHUB_TOKEN: "github-token",
         OPENROUTER_API_KEY: "sk-test",
         CODEGEN_HARNESS: "opencode",
-        AGENT_TASK_TOKEN: "task-token"
+        AGENT_TASK_TOKEN: "task-token",
+        TARGET_BRANCH: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+        TARGET_PULL_REQUEST_NUMBER: "120",
+        TARGET_PULL_REQUEST_URL: "https://github.com/Slokh/discord-ai-agent/pull/120"
       })
     );
   });

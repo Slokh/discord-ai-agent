@@ -18,11 +18,22 @@ import {
 const ACTIVE_AGENT_TASK_STATUSES: AgentTaskStatus[] = ["queued", "running"];
 const GITHUB_API_BASE_URL = "https://api.github.com";
 
-export async function createAgentUpdateFromRequest(ctx: ToolContext, request: string, title?: string | null): Promise<string> {
+export type AgentUpdateTarget = {
+  targetBranch?: string | null;
+  targetPullRequestNumber?: number | null;
+  targetPullRequestUrl?: string | null;
+};
+
+export async function createAgentUpdateFromRequest(
+  ctx: ToolContext,
+  request: string,
+  title?: string | null,
+  target: AgentUpdateTarget = {}
+): Promise<string> {
   const updateName = agentUpdateTitleFromRequest(request, title);
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
-  const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy });
+  const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy, ...target });
   const runConsoleUrl = agentTaskRunConsoleUrl(ctx.config, result.taskId);
   const response = formatAgentTaskResult({ ...result, runConsoleUrl });
   await ctx.updateStatus?.(response);
@@ -32,7 +43,7 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "runCodingAgent",
-    argumentsSummary: summarizeForAudit({ request, updateName }),
+    argumentsSummary: summarizeForAudit({ request, updateName, ...target }),
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
   });
 
@@ -41,7 +52,15 @@ export async function createAgentUpdateFromRequest(ctx: ToolContext, request: st
 
 async function enqueueAgentCodeUpdateTask(
   ctx: ToolContext,
-  input: { request: string; updateName: string; requestedBy: string; retriedFromTaskId?: string | null }
+  input: {
+    request: string;
+    updateName: string;
+    requestedBy: string;
+    retriedFromTaskId?: string | null;
+    targetBranch?: string | null;
+    targetPullRequestNumber?: number | null;
+    targetPullRequestUrl?: string | null;
+  }
 ): Promise<{ taskId: string; jobId: string | null; job?: AgentTaskRecord }> {
   if (!ctx.jobs) {
     throw new Error("Agent task queue is unavailable in this process.");
@@ -65,7 +84,10 @@ async function enqueueAgentCodeUpdateTask(
       requestedBy: input.requestedBy,
       discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
       discordResponseMessageId: ctx.statusMessageId,
-      retriedFromTaskId: input.retriedFromTaskId ?? undefined
+      retriedFromTaskId: input.retriedFromTaskId ?? undefined,
+      targetBranch: nonEmptyString(input.targetBranch),
+      targetPullRequestNumber: finitePositiveInteger(input.targetPullRequestNumber),
+      targetPullRequestUrl: nonEmptyString(input.targetPullRequestUrl)
     });
   }
   return ctx.jobs.enqueueAgentTask({
@@ -80,7 +102,10 @@ async function enqueueAgentCodeUpdateTask(
     threadKey: ctx.threadKey,
     discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
     discordResponseMessageId: ctx.statusMessageId,
-    retriedFromTaskId: input.retriedFromTaskId ?? undefined
+    retriedFromTaskId: input.retriedFromTaskId ?? undefined,
+    targetBranch: nonEmptyString(input.targetBranch),
+    targetPullRequestNumber: finitePositiveInteger(input.targetPullRequestNumber),
+    targetPullRequestUrl: nonEmptyString(input.targetPullRequestUrl)
   });
 }
 
@@ -577,6 +602,17 @@ function clampInteger(value: number | undefined, min: number, max: number, fallb
   if (typeof value !== "number" || !Number.isInteger(value)) return fallback;
   const integer = Math.trunc(value);
   return Math.max(min, Math.min(max, integer));
+}
+
+function nonEmptyString(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function finitePositiveInteger(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const integer = Math.trunc(value);
+  return integer > 0 ? integer : undefined;
 }
 
 function uniqueStrings(values: string[]) {

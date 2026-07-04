@@ -49,7 +49,12 @@ describe("agent runtime prompt executors", () => {
 
     await expect(
       executor.execute({
-        toolContext: { requestId: "request-1", repo } as never,
+        toolContext: {
+          requestId: "request-1",
+          repo,
+          agentRuntimeSession: { sessionId: "agent-session-1" },
+          agentRuntimeExecutionId: "agent-execution-1"
+        } as never,
         text: "hello",
         timeoutMs: 1000,
         turnEnvelope: { requestId: "request-1", text: "hello" } as never,
@@ -69,6 +74,9 @@ describe("agent runtime prompt executors", () => {
     );
     expect(JSON.parse(fakeChild.stdinText())).toEqual({
       envelope: expect.objectContaining({ requestId: "request-1", text: "hello" }),
+      agentSessionId: "agent-session-1",
+      agentExecutionId: "agent-execution-1",
+      inputLinesArtifactId: "input-lines-1",
       inputLines: ['{"type":"user"}', '{"type":"turn.completed"}']
     });
     expect(repo.storeProcessRunArtifact).toHaveBeenCalledWith(
@@ -80,6 +88,8 @@ describe("agent runtime prompt executors", () => {
           protocolKind: "sandbox_prompt_request",
           command: "node",
           inputLinesArtifactId: "input-lines-1",
+          agentSessionId: "agent-session-1",
+          agentExecutionId: "agent-execution-1",
           inputLineCount: 2
         })
       })
@@ -128,7 +138,12 @@ describe("agent runtime prompt executors", () => {
 
     await expect(
       executor.execute({
-        toolContext: { requestId: "request-http", repo } as never,
+        toolContext: {
+          requestId: "request-http",
+          repo,
+          agentRuntimeSession: { sessionId: "agent-session-http" },
+          agentRuntimeExecutionId: "agent-execution-http"
+        } as never,
         text: "hello",
         timeoutMs: 1000,
         turnEnvelope: { requestId: "request-http", text: "hello" } as never,
@@ -148,6 +163,9 @@ describe("agent runtime prompt executors", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           envelope: { requestId: "request-http", text: "hello" },
+          agentSessionId: "agent-session-http",
+          agentExecutionId: "agent-execution-http",
+          inputLinesArtifactId: "input-lines-http",
           inputLines: ['{"type":"user","text":"hello"}']
         })
       })
@@ -162,6 +180,8 @@ describe("agent runtime prompt executors", () => {
           url: "http://warm-sandbox:8090",
           command: null,
           inputLinesArtifactId: "input-lines-http",
+          agentSessionId: "agent-session-http",
+          agentExecutionId: "agent-execution-http",
           inputLineCount: 1
         })
       })

@@ -50,6 +50,9 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
   async execute(input: AgentRuntimePromptExecutionInput): Promise<AgentResponse> {
     const request: SandboxPromptRequest = {
       envelope: input.turnEnvelope,
+      agentSessionId: input.toolContext.agentRuntimeSession?.sessionId ?? null,
+      agentExecutionId: input.toolContext.agentRuntimeExecutionId ?? null,
+      inputLinesArtifactId: input.inputLinesArtifactId ?? null,
       ...(input.inputLines?.length ? { inputLines: input.inputLines } : {})
     };
     const startedAt = Date.now();
@@ -68,6 +71,8 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         url: transport === "http" ? this.options.warmSandboxUrl : null,
         requestId: input.turnEnvelope.requestId,
         inputLinesArtifactId: input.inputLinesArtifactId ?? null,
+        agentSessionId: request.agentSessionId ?? null,
+        agentExecutionId: request.agentExecutionId ?? null,
         inputLineCount
       }
     });
@@ -81,6 +86,8 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         args: command?.args ?? null,
         url: transport === "http" ? this.options.warmSandboxUrl : null,
         inputLinesArtifactId: input.inputLinesArtifactId ?? null,
+        agentSessionId: request.agentSessionId ?? null,
+        agentExecutionId: request.agentExecutionId ?? null,
         inputLineCount
       }
     });

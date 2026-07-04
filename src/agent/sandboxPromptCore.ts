@@ -22,13 +22,16 @@ export async function executeSandboxPromptRequest(input: {
   jobs?: JobRuntime;
 }): Promise<SandboxPromptResponse> {
   const envelope = input.request.envelope;
-  const agentRuntimeSession = input.agentRuntime ? await input.agentRuntime.getSession({ threadKey: envelope.threadKey }) : null;
+  const agentRuntimeSession = await resolveAgentRuntimeSession({
+    agentRuntime: input.agentRuntime,
+    request: input.request
+  });
   const toolContext: ToolContext = {
     config: input.config,
     repo: input.repo,
     agentRuntime: input.agentRuntime,
     agentRuntimeSession: agentRuntimeSession ?? null,
-    agentRuntimeExecutionId: null,
+    agentRuntimeExecutionId: input.request.agentExecutionId ?? null,
     openRouter: input.openRouter,
     jobs: input.jobs,
     guildId: envelope.guildId,
@@ -48,4 +51,13 @@ export async function executeSandboxPromptRequest(input: {
   };
 
   return serializeAgentResponse(await handleAgentRequest(toolContext, promptTextFromAgentRuntimeInputLines(input.request.inputLines) ?? envelope.text));
+}
+
+async function resolveAgentRuntimeSession(input: { agentRuntime?: AgentRuntimeRepository; request: SandboxPromptRequest }) {
+  if (!input.agentRuntime) return null;
+  if (input.request.agentSessionId) {
+    const session = await input.agentRuntime.getSession({ sessionId: input.request.agentSessionId });
+    if (session) return session;
+  }
+  return input.agentRuntime.getSession({ threadKey: input.request.envelope.threadKey });
 }

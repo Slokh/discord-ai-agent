@@ -1327,12 +1327,12 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:00:02Z")
           }
         ]),
-        getTaskEvents: vi.fn(async () => [
+        getTaskProgressEvents: vi.fn(async () => [
           {
             id: 1,
             taskId: "task-1",
             traceId: "trace-1",
-            eventName: "task.progress",
+            eventName: "agent.task.progress",
             level: "info",
             summary: "Kubernetes sandbox is running the task.",
             metadata: { step: "sandbox_running" },
@@ -1367,7 +1367,7 @@ describe("inspectAgentLogs", () => {
 
     expect(response).toContain("Discord AI Agent logs for trace trace-1");
     expect(response).toContain("agent.request.complete 1234ms");
-    expect(response).toContain("task.progress task=task-1");
+    expect(response).toContain("agent.task.progress task=task-1");
     expect(response).toContain("Sandbox commands:");
     expect(response).toContain("npm run scan:release");
     expect(response).toContain("searchDiscordHistory");
@@ -1377,7 +1377,7 @@ describe("inspectAgentLogs", () => {
       traceId: "trace-1",
       limit: 10
     });
-    expect(ctx.repo.getTaskEvents).toHaveBeenCalledWith({
+    expect(ctx.repo.getTaskProgressEvents).toHaveBeenCalledWith({
       guildId: "guild",
       visibleChannelIds: ["channel"],
       traceId: "trace-1",
@@ -1505,6 +1505,7 @@ describe("inspectAgentLogs", () => {
         listProcessRunsForTrace: vi.fn(async () => [run]),
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
+        getTaskProgressEvents: vi.fn(async () => []),
         getTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
@@ -1573,6 +1574,7 @@ describe("inspectAgentLogs", () => {
         listProcessRunsForTrace: vi.fn(async () => []),
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
+        getTaskProgressEvents: vi.fn(async () => []),
         getTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),

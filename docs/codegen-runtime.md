@@ -71,7 +71,7 @@ Today, `enqueueAgentTask` creates or reuses the durable codegen session, appends
 
 The same enqueue path now also calls `src/jobs/agentTaskRuntimeMirror.ts` to mirror code-update tasks into the generic agent runtime session for the originating Discord thread. The mirror writes a `runCodingAgent` tool message, a task-linked execution with the same `taskId`, and `agent.task.*` events for queue, start, progress, sandbox attachment, and immediate start failures. This is the bridge from the legacy `agent.task` queue toward Centaur-style sessions where code updates are just long-running work inside the conversation.
 
-Discord task progress rendering, codegen run snapshots, and the model-facing task-status tool now read those mirrored `agent.task.*` runtime events first and fall back to legacy `task_events` only when a runtime mirror is not available. That makes the user-facing delivery and debugging paths follow the replayable session event stream without requiring the sandbox runner callback protocol to be removed in the same migration slice.
+Discord task progress rendering, codegen run snapshots, trace log inspection, and the model-facing task-status tool now read those mirrored `agent.task.*` runtime events first and fall back to legacy `task_events` only when a runtime mirror is not available. That makes the user-facing delivery and debugging paths follow the replayable session event stream without requiring the sandbox runner callback protocol to be removed in the same migration slice.
 
 ## Harness Profile
 

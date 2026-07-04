@@ -913,7 +913,7 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
       traceId,
       limit
     }),
-    ctx.repo.getTaskEvents({
+    ctx.repo.getTaskProgressEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
       traceId,

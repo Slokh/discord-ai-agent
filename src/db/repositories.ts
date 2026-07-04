@@ -4232,6 +4232,54 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToTaskEvent);
   }
 
+  async getAgentRuntimeTaskEvents(input: {
+    guildId: string;
+    visibleChannelIds: string[];
+    traceId?: string;
+    limit: number;
+  }): Promise<TaskEvent[]> {
+    const limit = Math.max(1, Math.min(100, Math.trunc(input.limit)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          ce.id,
+          coalesce(ce.metadata->>'taskId', cex.task_id, at.task_id) AS task_id,
+          coalesce(ce.trace_id, cex.trace_id, at.trace_id) AS trace_id,
+          ce.event_name,
+          ce.level,
+          ce.summary,
+          ce.metadata,
+          ce.created_at
+        FROM codegen_events ce
+        JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+        JOIN agent_tasks at ON at.task_id = cex.task_id
+        WHERE at.guild_id = $1
+          AND ($2::text IS NULL OR ce.trace_id = $2 OR cex.trace_id = $2 OR at.trace_id = $2 OR cex.task_id = $2 OR at.task_id = $2)
+          AND (at.channel_id IS NULL OR at.channel_id = ANY($3::text[]))
+          AND cex.metadata->>'runtime' = 'agent'
+          AND ce.event_name LIKE 'agent.task.%'
+        ORDER BY ce.created_at DESC, ce.id DESC
+        LIMIT $4
+      `,
+      [input.guildId, input.traceId ?? null, input.visibleChannelIds, limit]
+    );
+    return result.rows.map(rowToTaskEvent);
+  }
+
+  async getTaskProgressEvents(input: {
+    guildId: string;
+    visibleChannelIds: string[];
+    traceId?: string;
+    limit: number;
+  }): Promise<TaskEvent[]> {
+    const [runtimeEvents, legacyEvents] = await Promise.all([this.getAgentRuntimeTaskEvents(input), this.getTaskEvents(input)]);
+    if (runtimeEvents.length === 0) return legacyEvents;
+    const runtimeTaskIds = new Set(runtimeEvents.map((event) => event.taskId));
+    return [...runtimeEvents, ...legacyEvents.filter((event) => !runtimeTaskIds.has(event.taskId))]
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id - left.id)
+      .slice(0, Math.max(1, Math.min(100, Math.trunc(input.limit))));
+  }
+
   async getTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
     const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
     const result = await this.pool.query(

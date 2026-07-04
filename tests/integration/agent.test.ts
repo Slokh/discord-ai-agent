@@ -1258,6 +1258,150 @@ describe("agent router", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
   });
 
+  it("preserves reply context and fresh tool evidence when recovering leaked hosted tool markup", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const storeProcessRunArtifact = vi.fn(async () => ({ artifactId: "artifact-leaked-hosted-tool" }));
+    const leakedHostedToolMarkup =
+      "<tool_call>openrouter_web_fetch<arg_key>url</arg_key><arg_value>https://github.com/Slokh/discord-ai-agent/pull/111</arg_value></tool_call>";
+    const task = {
+      taskId: "task-1",
+      traceId: "trace-1",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      threadKey: "discord:g:c",
+      discordResponseChannelId: "c",
+      discordResponseMessageId: "bot-reply",
+      retriedFromTaskId: null,
+      taskType: "code_update",
+      title: "Fix CI task",
+      request: "fix the failing test",
+      requestedBy: "User",
+      status: "succeeded",
+      backend: "kubernetes",
+      currentStep: "done",
+      statusMessage: "Opened pull request.",
+      branchName: "ai/fix-ci-task",
+      prUrl: "https://github.com/Slokh/discord-ai-agent/pull/111",
+      draft: false,
+      verifyPassed: null,
+      error: null,
+      createdAt: new Date("2026-07-04T00:00:00.000Z"),
+      startedAt: new Date("2026-07-04T00:00:01.000Z"),
+      cancelledAt: null,
+      completedAt: new Date("2026-07-04T00:10:00.000Z"),
+      notifiedAt: null,
+      notificationError: null,
+      progressUpdatedAt: new Date("2026-07-04T00:10:00.000Z"),
+      lastRenderedSignature: null,
+      lastRenderedAt: null,
+      terminalRenderedAt: null,
+      updatedAt: new Date("2026-07-04T00:10:00.000Z")
+    };
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{ id: "call-1", name: "getAgentTaskStatus", argumentsText: JSON.stringify({ taskId: "task-1" }) }]
+      })
+      .mockResolvedValueOnce({
+        content: leakedHostedToolMarkup,
+        model: "tool-leak-model",
+        raw: {},
+        toolCalls: []
+      })
+      .mockImplementationOnce(async (input: { messages: Array<{ role: string; content: string; name?: string }> }) => {
+        const recoveryContext = JSON.stringify(input.messages);
+        expect(recoveryContext).toContain("The current user message is a Discord reply");
+        expect(recoveryContext).toContain("Fresh local tool result from getAgentTaskStatus");
+        expect(recoveryContext).toContain("PR: https://github.com/Slokh/discord-ai-agent/pull/111");
+        expect(recoveryContext).toContain("Using the conversation, reply context, and fresh local tool results above");
+        expect(recoveryContext).toContain("openrouter:web_fetch");
+        expect(recoveryContext).toContain("https://github.com/Slokh/discord-ai-agent/pull/111");
+        expect(recoveryContext).toContain("call the matching hosted tool through the provided tool channel now");
+        return {
+          content: "PR #111 is the relevant PR; check its CI details there.",
+          model: "recovery-model",
+          raw: {},
+          toolCalls: []
+        };
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, github: {} },
+      repo: {
+        getAgentTask: vi.fn(async () => task),
+        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getSandboxCommandEvents: vi.fn(async () => []),
+        storeProcessRunArtifact,
+        auditTool
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      requestId: "prompt-message-1",
+      visibleChannelIds: ["c"],
+      replyContext: {
+        rootMessageId: "root",
+        messageId: "parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "Discord AI Agent",
+        authorIsBot: true,
+        content: "Done: https://github.com/Slokh/discord-ai-agent/pull/111",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: "2026-07-04T00:10:00.000Z",
+        url: "https://discord.com/channels/g/c/parent",
+        chain: [
+          {
+            messageId: "parent",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "Discord AI Agent",
+            authorIsBot: true,
+            content: "Done: https://github.com/Slokh/discord-ai-agent/pull/111",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-04T00:10:00.000Z",
+            url: "https://discord.com/channels/g/c/parent"
+          }
+        ]
+      }
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "there's a CI error");
+
+    expect(response.content).toBe("PR #111 is the relevant PR; check its CI details there.");
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect(storeProcessRunArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "prompt-message-1",
+        kind: "model_transcript",
+        name: "Malformed hosted tool output round 2",
+        content: leakedHostedToolMarkup,
+        metadata: expect.objectContaining({
+          model: "tool-leak-model",
+          round: 2,
+          reason: "hosted_tool_markup_leaked",
+          intendedHostedTools: [
+            {
+              type: "openrouter:web_fetch",
+              arguments: { url: "https://github.com/Slokh/discord-ai-agent/pull/111" }
+            }
+          ]
+        })
+      })
+    );
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
+  });
+
   it("passes prior channel session memory to the model for follow-up continuity", async () => {
     const ctx = {
       config: { maxReplyChars: 1800 },

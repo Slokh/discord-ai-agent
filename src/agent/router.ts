@@ -239,7 +239,10 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       const responseContent = stripLeakedHostedToolMarkup(response.content).trim();
       if (!responseContent && isLeakedHostedToolMarkup(response.content)) {
         return await recoverFromLeakedHostedToolMarkup(ctx, {
+          round: round + 1,
           text,
+          messages,
+          leakedContent: response.content,
           files,
           memoryEvents,
           requestLogger,
@@ -925,7 +928,11 @@ async function synthesizeFinalAnswerWithoutTools(
   }
   let content = stripLeakedHostedToolMarkup(response.content).trim();
   if (!content && isLeakedHostedToolMarkup(response.content)) {
-    const recovery = await hostedToolMarkupRecoveryResponse(ctx, input.text);
+    const recovery = await hostedToolMarkupRecoveryResponse(ctx, {
+      text: input.text,
+      messages: finalSynthesisMessages(input.text, input.memoryEvents),
+      leakedContent: response.content
+    });
     content = recovery.content;
   }
   content = content || toolEvidenceFallback(input.memoryEvents) || "I found relevant evidence, but I could not compose a clean answer from it.";
@@ -970,7 +977,10 @@ async function synthesizeFinalAnswerWithoutTools(
 async function recoverFromLeakedHostedToolMarkup(
   ctx: ToolContext,
   input: {
+    round?: number;
     text: string;
+    messages: ChatMessage[];
+    leakedContent: string;
     files: AgentFile[];
     memoryEvents: NonNullable<AgentResponse["memoryEvents"]>;
     requestLogger: Logger;
@@ -979,9 +989,18 @@ async function recoverFromLeakedHostedToolMarkup(
     estimatedCostUsd?: number;
   }
 ): Promise<AgentResponse> {
+  const intendedHostedTools = parseLeakedHostedToolCalls(input.leakedContent);
+  const leakedOutputArtifact = await storeMalformedHostedToolOutputArtifact(ctx, {
+    round: input.round,
+    model: input.model,
+    content: input.leakedContent,
+    intendedHostedTools
+  });
   input.requestLogger.warn(
     {
-      model: input.model
+      model: input.model,
+      intendedHostedTools,
+      leakedOutputArtifactId: leakedOutputArtifact?.artifactId
     },
     "Model leaked hosted tool markup"
   );
@@ -990,7 +1009,9 @@ async function recoverFromLeakedHostedToolMarkup(
     level: "warn",
     summary: "Model returned raw hosted tool markup instead of a user-visible answer",
     metadata: {
-      model: input.model
+      model: input.model,
+      intendedHostedTools,
+      leakedOutputArtifactId: leakedOutputArtifact?.artifactId
     }
   });
   await ctx.repo.auditTool({
@@ -1004,13 +1025,20 @@ async function recoverFromLeakedHostedToolMarkup(
     estimatedCostUsd: input.estimatedCostUsd
   });
 
-  const recovery = await hostedToolMarkupRecoveryResponse(ctx, input.text);
+  const recovery = await hostedToolMarkupRecoveryResponse(ctx, {
+    text: input.text,
+    messages: input.messages,
+    leakedContent: input.leakedContent,
+    intendedHostedTools
+  });
   input.requestLogger.info(
     {
       durationMs: durationMs(input.startedAt),
       finalChars: recovery.content.length,
       fileCount: input.files.length,
-      memoryEventCount: input.memoryEvents.length
+      memoryEventCount: input.memoryEvents.length,
+      recoveryContextMessageCount: input.messages.length,
+      recoveryToolResultCount: input.messages.filter((message) => message.role === "tool").length
     },
     "Agent request complete after hosted tool markup recovery"
   );
@@ -1020,7 +1048,9 @@ async function recoverFromLeakedHostedToolMarkup(
     metadata: {
       finalChars: recovery.content.length,
       fileCount: input.files.length,
-      memoryEventCount: input.memoryEvents.length
+      memoryEventCount: input.memoryEvents.length,
+      recoveryContextMessageCount: input.messages.length,
+      recoveryToolResultCount: input.messages.filter((message) => message.role === "tool").length
     },
     durationMs: durationMs(input.startedAt)
   });
@@ -1031,15 +1061,16 @@ async function recoverFromLeakedHostedToolMarkup(
   };
 }
 
-async function hostedToolMarkupRecoveryResponse(ctx: ToolContext, text: string) {
+async function hostedToolMarkupRecoveryResponse(
+  ctx: ToolContext,
+  input: { text: string; messages?: ChatMessage[]; leakedContent?: string; intendedHostedTools?: LeakedHostedToolCall[] }
+) {
+  const messages = hostedToolMarkupRecoveryMessages(input.text, input.messages);
+  const intendedHostedTools = input.intendedHostedTools ?? parseLeakedHostedToolCalls(input.leakedContent ?? "");
   const response = await ctx.openRouter.chat({
     messages: [
-      {
-        role: "system",
-        content:
-          "Your previous response emitted raw hosted tool-call markup. Answer the user in plain text. You may use hosted web tools if needed, but never print <tool_call> tags, XML-like tool markup, tool names, or arguments."
-      },
-      { role: "user", content: text }
+      ...messages,
+      ...hostedToolRetryMessages(intendedHostedTools)
     ],
     tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
@@ -1053,6 +1084,159 @@ async function hostedToolMarkupRecoveryResponse(ctx: ToolContext, text: string) 
     model: response.model,
     estimatedCostUsd: response.estimatedCostUsd
   };
+}
+
+type LeakedHostedToolCall = {
+  type: "openrouter:web_search" | "openrouter:web_fetch" | "openrouter:datetime";
+  arguments: Record<string, string>;
+};
+
+async function storeMalformedHostedToolOutputArtifact(
+  ctx: ToolContext,
+  input: { round?: number; model: string; content: string; intendedHostedTools: LeakedHostedToolCall[] }
+) {
+  if (!ctx.requestId) return undefined;
+  const storeArtifact = (ctx.repo as unknown as {
+    storeProcessRunArtifact?: ToolContext["repo"]["storeProcessRunArtifact"];
+  }).storeProcessRunArtifact;
+  if (!storeArtifact) return undefined;
+  return await storeArtifact
+    .call(ctx.repo, {
+      runId: ctx.requestId,
+      kind: "model_transcript",
+      name: input.round ? `Malformed hosted tool output round ${input.round}` : "Malformed hosted tool output",
+      content: input.content,
+      contentType: "text/plain",
+      metadata: {
+        model: input.model,
+        round: input.round ?? null,
+        reason: "hosted_tool_markup_leaked",
+        intendedHostedTools: input.intendedHostedTools
+      }
+    })
+    .catch((error: unknown) => {
+      logger.warn({ err: error, requestId: ctx.requestId, round: input.round }, "Failed to store malformed hosted tool output artifact");
+      return undefined;
+    });
+}
+
+function hostedToolRetryMessages(intendedHostedTools: LeakedHostedToolCall[]): ChatMessage[] {
+  if (intendedHostedTools.length === 0) return [];
+  return [
+    {
+      role: "system",
+      content:
+        "The previous assistant response attempted hosted tool request(s) but printed them as plain text instead of using the API tool channel:\n" +
+        intendedHostedTools.map((tool, index) => `${index + 1}. ${tool.type} ${JSON.stringify(tool.arguments)}`).join("\n") +
+        "\nIf this external data is still needed, call the matching hosted tool through the provided tool channel now. Do not print XML-like tool markup."
+    }
+  ];
+}
+
+function hostedToolMarkupRecoveryMessages(text: string, messages: ChatMessage[] | undefined): ChatMessage[] {
+  const contextMessages = messages?.length ? sanitizeMessagesForHostedToolMarkupRecovery(messages) : [];
+  return [
+    ...(contextMessages.length
+      ? contextMessages
+      : [
+          {
+            role: "user" as const,
+            content: text
+          }
+        ]),
+    {
+      role: "user" as const,
+      content:
+        "Your previous draft emitted raw hosted tool-call markup instead of a user-visible answer. " +
+        "Using the conversation, reply context, and fresh local tool results above, answer the user's latest request in plain text. " +
+        "You may use hosted web tools if needed, but never print <tool_call> tags, XML-like tool markup, tool names, or arguments."
+    }
+  ];
+}
+
+function parseLeakedHostedToolCalls(content: string): LeakedHostedToolCall[] {
+  const calls: LeakedHostedToolCall[] = [];
+  const callPattern = /<tool_call>\s*(openrouter_(?:web_search|web_fetch|datetime))\b([\s\S]*?)(?:<\/tool_call>|$)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = callPattern.exec(content)) != null) {
+    const toolName = match[1] ?? "";
+    const body = match[2] ?? "";
+    const type = hostedToolTypeFromMarkupName(toolName);
+    if (!type) continue;
+    calls.push({
+      type,
+      arguments: parseLeakedHostedToolArguments(body)
+    });
+  }
+  return calls.slice(0, 5);
+}
+
+function hostedToolTypeFromMarkupName(name: string): LeakedHostedToolCall["type"] | undefined {
+  if (name === "openrouter_web_search") return "openrouter:web_search";
+  if (name === "openrouter_web_fetch") return "openrouter:web_fetch";
+  if (name === "openrouter_datetime") return "openrouter:datetime";
+  return undefined;
+}
+
+function parseLeakedHostedToolArguments(body: string) {
+  const args: Record<string, string> = {};
+  const argPattern = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = argPattern.exec(body)) != null) {
+    const key = decodeXmlText((match[1] ?? "").trim());
+    const value = decodeXmlText((match[2] ?? "").trim());
+    if (key) args[key] = value;
+  }
+  return args;
+}
+
+function decodeXmlText(value: string) {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function sanitizeMessagesForHostedToolMarkupRecovery(messages: ChatMessage[]): ChatMessage[] {
+  return messages.flatMap((message): ChatMessage[] => {
+    if (message.role === "tool") {
+      return [
+        {
+          role: "system",
+          content: `Fresh local tool result${message.name ? ` from ${message.name}` : ""}:\n${stringChatContent(message.content)}`
+        }
+      ];
+    }
+    if (message.role === "assistant" && message.tool_calls?.length) {
+      const toolNames = message.tool_calls.map((call) => call.function.name).join(", ");
+      const text = stringChatContent(message.content).trim();
+      return [
+        {
+          role: "system",
+          content: `The assistant requested local tool call(s): ${toolNames}.${text ? `\nAssistant text: ${text}` : ""}`
+        }
+      ];
+    }
+    return [
+      {
+        role: message.role,
+        content: message.content,
+        name: message.name
+      }
+    ];
+  });
+}
+
+function stringChatContent(content: ChatMessage["content"]) {
+  if (typeof content === "string") return content;
+  return content
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      return `[image: ${part.image_url.url}]`;
+    })
+    .join("\n");
 }
 
 function finalSynthesisMessages(userText: string, memoryEvents: NonNullable<AgentResponse["memoryEvents"]>): ChatMessage[] {

@@ -221,7 +221,16 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         })
       );
       const session = await codegenRepo.getSession({ sessionId: `codegen-session-${taskId}` });
-      expect(session).toEqual(expect.objectContaining({ status: "running", harness: "codex" }));
+      expect(session).toEqual(
+        expect.objectContaining({
+          status: "running",
+          harness: "opencode",
+          metadata: expect.objectContaining({
+            codegenHarness: "opencode",
+            codegenModel: "z-ai/glm-5.2"
+          })
+        })
+      );
       await expect(codegenRepo.listMessages({ sessionId: `codegen-session-${taskId}` })).resolves.toEqual([
         expect.objectContaining({
           clientMessageId: taskId,
@@ -230,7 +239,16 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         })
       ]);
       await expect(codegenRepo.listExecutions({ sessionId: `codegen-session-${taskId}` })).resolves.toEqual([
-        expect.objectContaining({ taskId, status: "running", harness: "codex-app-server", sandboxRunId: "sandbox-run-1" })
+        expect.objectContaining({
+          taskId,
+          status: "running",
+          harness: "opencode",
+          sandboxRunId: "sandbox-run-1",
+          metadata: expect.objectContaining({
+            codegenHarness: "opencode",
+            codegenModel: "z-ai/glm-5.2"
+          })
+        })
       ]);
     } finally {
       await runtime.stop();

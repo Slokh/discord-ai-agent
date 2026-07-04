@@ -20,9 +20,12 @@ export type ParsedOpenCodeTranscript = {
   totalDurationMs: number | null;
   modelWaitMs: number | null;
   toolDurationMs: number;
+  roundDurationMs: number;
   interRoundGapMs: number;
+  outsideRoundMs: number | null;
   failedTools: number;
   repeatedReads: Array<{ title: string; count: number }>;
+  slowestGaps: Array<{ afterRound: number; beforeRound: number; durationMs: number }>;
   firstToolAtMs: number | null;
   firstEditAtMs: number | null;
   firstEditRound: number | null;
@@ -38,6 +41,9 @@ export type ParsedOpenCodeTranscript = {
     command: string;
     output: string;
     durationMs: number | null;
+    modelWaitMs: number | null;
+    toolDurationMs: number;
+    gapBeforeMs: number | null;
     tools: OpenCodeToolSummary[];
     active?: boolean;
   }>;
@@ -102,9 +108,9 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
         }
       : null;
   const analysisSteps = current ? [...steps, current] : steps;
-  const items = steps.map((step, index) => openCodeRoundItem(step, index + 1));
+  const items = steps.map((step, index) => openCodeRoundItem(step, index + 1, steps[index - 1] ?? null));
   if (current && activeRound) {
-    items.push(openCodeActiveRoundItem(current, activeRound.round, lastTimestamp ?? current.start));
+    items.push(openCodeActiveRoundItem(current, activeRound.round, lastTimestamp ?? current.start, steps.at(-1) ?? null));
   }
   const toolCalls = analysisSteps.reduce((total, step) => total + step.tools.length, 0);
   const textMessages = items.filter((item) => item.kind === "message").length;
@@ -116,6 +122,8 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
     const next = analysisSteps[index + 1];
     return next ? total + Math.max(0, next.start - step.end) : total;
   }, 0);
+  const outsideRoundMs = totalDurationMs == null ? null : Math.max(0, totalDurationMs - roundDurationMs - interRoundGapMs);
+  const slowestGaps = slowestOpenCodeGaps(analysisSteps);
   const failedTools = analysisSteps.reduce((total, step) => total + step.tools.filter((tool) => tool.status === "error" || tool.status === "failed").length, 0);
   const repeatedReads = repeatedOpenCodeReads(analysisSteps);
   const tokenTotal = lastNumber(steps.map((step) => numericMetadata(objectValue(step.finish?.tokens)?.total)));
@@ -141,6 +149,9 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
       command: "",
       output: "",
       durationMs: null,
+      modelWaitMs: null,
+      toolDurationMs: 0,
+      gapBeforeMs: null,
       tools: []
     });
   }
@@ -155,9 +166,12 @@ export function parseOpenCodeTranscript(content: string): ParsedOpenCodeTranscri
     totalDurationMs,
     modelWaitMs,
     toolDurationMs,
+    roundDurationMs,
     interRoundGapMs,
+    outsideRoundMs,
     failedTools,
     repeatedReads,
+    slowestGaps,
     firstToolAtMs,
     firstEditAtMs,
     firstEditRound,
@@ -174,7 +188,9 @@ export function formatOpenCodeTranscriptDiagnostics(transcript: ParsedOpenCodeTr
     `total=${transcript.totalDurationMs == null ? "unknown" : formatDuration(transcript.totalDurationMs)}`,
     `model_wait=${transcript.modelWaitMs == null ? "unknown" : formatDuration(transcript.modelWaitMs)}`,
     `tool_time=${formatDuration(transcript.toolDurationMs)}`,
+    `round_time=${formatDuration(transcript.roundDurationMs)}`,
     transcript.interRoundGapMs > 0 ? `gaps=${formatDuration(transcript.interRoundGapMs)}` : null,
+    transcript.outsideRoundMs && transcript.outsideRoundMs > 0 ? `outside_rounds=${formatDuration(transcript.outsideRoundMs)}` : null,
     transcript.firstEditAtMs == null ? "first_edit=none" : `first_edit=${formatDuration(transcript.firstEditAtMs)}`,
     transcript.roundsBeforeFirstEdit == null ? null : `rounds_before_first_edit=${transcript.roundsBeforeFirstEdit}`,
     `rounds=${transcript.rounds}`,
@@ -190,6 +206,9 @@ export function formatOpenCodeTranscriptDiagnostics(transcript: ParsedOpenCodeTr
   }
   if (transcript.repeatedReads.length > 0) {
     lines.push(`Repeated reads: ${transcript.repeatedReads.map((read) => `${read.title} x${read.count}`).join(", ")}`);
+  }
+  if (transcript.slowestGaps.length > 0) {
+    lines.push(`Slowest gaps: ${transcript.slowestGaps.map((gap) => `round ${gap.afterRound}->${gap.beforeRound} ${formatDuration(gap.durationMs)}`).join(", ")}`);
   }
   return lines.join("\n");
 }
@@ -208,11 +227,12 @@ function parseOpenCodeTranscriptRecord(line: string): OpenCodeTranscriptRecord[]
   }
 }
 
-function openCodeRoundItem(step: OpenCodeStep, round: number): ParsedOpenCodeTranscript["items"][number] {
+function openCodeRoundItem(step: OpenCodeStep, round: number, previousStep: OpenCodeStep | null): ParsedOpenCodeTranscript["items"][number] {
   const durationMs = Math.max(0, step.end - step.start);
   const toolNames = step.tools.map((tool) => tool.name).filter(Boolean);
   const toolDurationMs = step.tools.reduce((total, tool) => total + (tool.durationMs ?? 0), 0);
   const modelWaitMs = Math.max(0, durationMs - toolDurationMs);
+  const gapBeforeMs = previousStep ? Math.max(0, step.start - previousStep.end) : null;
   const finishReason = stringValue(step.finish?.reason);
   const tokens = objectValue(step.finish?.tokens);
   const reasoningTokens = numericMetadata(tokens?.reasoning);
@@ -220,8 +240,6 @@ function openCodeRoundItem(step: OpenCodeStep, round: number): ParsedOpenCodeTra
   const title = toolNames.length > 0 ? `Round ${round}: ${formatToolCallList(toolNames)}` : step.texts.length > 0 ? `Round ${round}: assistant message` : `Round ${round}`;
   const body = [
     finishReason ? `Finished: ${finishReason}` : "",
-    durationMs > 0 ? `Model wait: ${formatOpenCodeDuration(modelWaitMs)}` : "",
-    toolDurationMs > 0 ? `Tool time: ${formatOpenCodeDuration(toolDurationMs)}` : "",
     totalTokens != null ? `Tokens: ${totalTokens.toLocaleString()}` : "",
     reasoningTokens != null ? `Reasoning: ${reasoningTokens.toLocaleString()}` : "",
     step.texts.length > 0 ? step.texts.map((text) => truncateSingleLine(text, 280)).join("\n") : ""
@@ -238,21 +256,22 @@ function openCodeRoundItem(step: OpenCodeStep, round: number): ParsedOpenCodeTra
     command: "",
     output: "",
     durationMs,
+    modelWaitMs,
+    toolDurationMs,
+    gapBeforeMs,
     tools: step.tools
   };
 }
 
-function openCodeActiveRoundItem(step: OpenCodeStep, round: number, lastTimestamp: number): ParsedOpenCodeTranscript["items"][number] {
+function openCodeActiveRoundItem(step: OpenCodeStep, round: number, lastTimestamp: number, previousStep: OpenCodeStep | null): ParsedOpenCodeTranscript["items"][number] {
   const durationMs = Math.max(0, lastTimestamp - step.start);
   const toolNames = step.tools.map((tool) => tool.name).filter(Boolean);
   const toolDurationMs = step.tools.reduce((total, tool) => total + (tool.durationMs ?? 0), 0);
   const modelWaitMs = Math.max(0, durationMs - toolDurationMs);
+  const gapBeforeMs = previousStep ? Math.max(0, step.start - previousStep.end) : null;
   const title = toolNames.length > 0 ? `Round ${round}: ${formatToolCallList(toolNames)}` : step.texts.length > 0 ? `Round ${round}: assistant message` : `Round ${round}`;
   const body = [
     "In progress",
-    durationMs > 0 ? `Running for ${formatOpenCodeDuration(durationMs)}` : "",
-    modelWaitMs > 0 ? `Model wait so far: ${formatOpenCodeDuration(modelWaitMs)}` : "",
-    toolDurationMs > 0 ? `Tool time so far: ${formatOpenCodeDuration(toolDurationMs)}` : "",
     step.tools.some((tool) => tool.status === "error" || tool.status === "failed") ? "Some tools failed" : "",
     step.texts.length > 0 ? step.texts.map((text) => truncateSingleLine(text, 280)).join("\n") : ""
   ]
@@ -268,6 +287,9 @@ function openCodeActiveRoundItem(step: OpenCodeStep, round: number, lastTimestam
     command: "",
     output: "",
     durationMs,
+    modelWaitMs,
+    toolDurationMs,
+    gapBeforeMs,
     tools: step.tools,
     active: true
   };
@@ -333,6 +355,22 @@ function repeatedOpenCodeReads(steps: Array<{ tools: OpenCodeToolSummary[] }>) {
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .slice(0, 5)
     .map(([title, count]) => ({ title, count }));
+}
+
+function slowestOpenCodeGaps(steps: OpenCodeStep[]) {
+  return steps
+    .slice(1)
+    .map((step, index) => {
+      const previousStep = steps[index];
+      return {
+        afterRound: index + 1,
+        beforeRound: index + 2,
+        durationMs: Math.max(0, step.start - previousStep.end)
+      };
+    })
+    .filter((gap) => gap.durationMs > 0)
+    .sort((left, right) => right.durationMs - left.durationMs)
+    .slice(0, 5);
 }
 
 function formatToolCallList(tools: string[]) {

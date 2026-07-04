@@ -1128,6 +1128,8 @@ function OpenCodeTranscript({ content }: { content: string }) {
         <Metric label="Total" value={transcript.totalDurationMs == null ? "unknown" : formatDuration(transcript.totalDurationMs)} />
         <Metric label="Model wait" value={transcript.modelWaitMs == null ? "unknown" : formatDuration(transcript.modelWaitMs)} />
         <Metric label="Tool time" value={formatDuration(transcript.toolDurationMs)} />
+        <Metric label="Round time" value={formatDuration(transcript.roundDurationMs)} />
+        <Metric label="Gaps" value={formatDuration(transcript.interRoundGapMs)} />
         <Metric label="First edit" value={transcript.firstEditAtMs == null ? "none" : formatDuration(transcript.firstEditAtMs)} />
         <Metric label="Pre-edit rounds" value={transcript.roundsBeforeFirstEdit == null ? "unknown" : String(transcript.roundsBeforeFirstEdit)} />
         <Metric label="Tokens" value={transcript.tokenTotal == null ? "unknown" : transcript.tokenTotal.toLocaleString()} />
@@ -1143,6 +1145,18 @@ function OpenCodeTranscript({ content }: { content: string }) {
           <div className="codex-transcript-stop opencode-transcript-insight">
             <strong>Between-round gap</strong>
             <span>{formatDuration(transcript.interRoundGapMs)}</span>
+          </div>
+        )}
+        {transcript.outsideRoundMs != null && transcript.outsideRoundMs > 0 && (
+          <div className="codex-transcript-stop opencode-transcript-insight">
+            <strong>Outside model rounds</strong>
+            <span>{formatDuration(transcript.outsideRoundMs)}</span>
+          </div>
+        )}
+        {transcript.slowestGaps.length > 0 && (
+          <div className="codex-transcript-stop opencode-transcript-insight">
+            <strong>Largest idle gaps</strong>
+            <span>{transcript.slowestGaps.map((gap) => `${gap.afterRound}->${gap.beforeRound}: ${formatDuration(gap.durationMs)}`).join(", ")}</span>
           </div>
         )}
         {transcript.activeRound && (
@@ -1191,6 +1205,11 @@ function OpenCodeRoundContent({ item }: { item: OpenCodeTranscriptItem }) {
   return (
     <>
       {item.active && <span className="codex-transcript-active-pill">Active round</span>}
+      <div className="opencode-round-metrics">
+        {item.gapBeforeMs != null && item.gapBeforeMs > 0 && <span>gap before {formatDuration(item.gapBeforeMs)}</span>}
+        {item.modelWaitMs != null && <span>model wait {formatDuration(item.modelWaitMs)}</span>}
+        {item.toolDurationMs > 0 && <span>tools {formatDuration(item.toolDurationMs)}</span>}
+      </div>
       {item.body && <p>{item.body}</p>}
       {item.tools.length > 0 && (
         <div className="opencode-tool-list">

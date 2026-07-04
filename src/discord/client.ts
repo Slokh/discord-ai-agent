@@ -8,7 +8,9 @@ import {
   type Message,
   type MessageReaction,
   type PartialMessage,
-  type PartialMessageReaction
+  type PartialMessageReaction,
+  type PartialUser,
+  type User
 } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
@@ -162,8 +164,15 @@ export function createDiscordAiAgentBot(input: {
     await Promise.all(messageIds.map((messageId) => input.repo.markMessageDeleted(messageId).catch(() => undefined)));
   });
 
-  client.on(Events.MessageReactionAdd, async (reaction) => {
+  client.on(Events.MessageReactionAdd, async (reaction, user) => {
     await runWithTrace(discordMessageTraceContext(reaction.message), async () => {
+      if (user && !isSelfUser(user, client.user?.id)) {
+        const handled = await handleUndoCrossReaction(input, client, reaction, user).catch((error) => {
+          logger.warn({ err: error }, "Failed to handle ❌ undo reaction");
+          return false;
+        });
+        if (handled) return;
+      }
       await persistReactionMessageUpdate(input, reaction).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction add");
       });
@@ -1555,6 +1564,49 @@ async function persistReactionMessageUpdate(
 ) {
   const fetchedReaction = reaction.partial ? await reaction.fetch() : reaction;
   await persistReactionMessage(input, fetchedReaction.message);
+}
+
+export async function handleUndoCrossReaction(
+  input: DiscordAgentRequestInput & { client?: Client },
+  client: Client,
+  reaction: MessageReaction | PartialMessageReaction,
+  user: User | PartialUser
+): Promise<boolean> {
+  const fetchedReaction = reaction.partial ? await reaction.fetch() : reaction;
+  const emojiName = fetchedReaction.emoji?.name ?? null;
+  if (emojiName !== "❌") return false;
+  if (isSelfUser(user, client.user?.id)) return false;
+
+  const message = fetchedReaction.message;
+  const fetchedMessage = message.partial ? await message.fetch() : message;
+  if (!fetchedMessage.inGuild()) return false;
+  if (!shouldProcessGuildEvent(input.config.discord.guildId, fetchedMessage.guildId)) return false;
+  if (!isSelfMessage(fetchedMessage as Message, client.user?.id)) return false;
+
+  const threadKey = discordChannelThreadKey(fetchedMessage.guildId, fetchedMessage.channelId);
+  const deletedMemoryRows = await input.repo
+    .deleteConversationMessagesByDiscordMessageIds({ threadKey, discordMessageIds: [fetchedMessage.id] })
+    .catch((error) => {
+      logger.warn({ err: error, messageId: fetchedMessage.id }, "Failed to delete undone bot reply from conversation memory");
+      return 0;
+    });
+  await deleteDiscordMessageById(fetchedMessage as Message, fetchedMessage.id).catch((error) => {
+    logger.warn({ err: error, messageId: fetchedMessage.id }, "Failed to delete undone Discord bot reply");
+  });
+  await recordTraceEvent(input.repo, {
+    eventName: "discord.reply.undone_by_reaction",
+    summary: "Removed bot reply from memory after ❌ reaction",
+    metadata: {
+      replyMessageId: fetchedMessage.id,
+      deletedMemoryRows,
+      reactorUserId: user.id
+    }
+  });
+  return true;
+}
+
+function isSelfUser(user: Pick<User, "id"> | null | undefined, selfUserId?: string | null) {
+  return Boolean(selfUserId && user?.id === selfUserId);
 }
 
 export async function persistReactionMessage(

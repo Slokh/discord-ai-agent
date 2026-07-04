@@ -11,6 +11,11 @@ export type DiscordResponseResult = {
   usedStatusMessage: boolean;
 };
 
+export type DiscordResponseFooter = {
+  traceUrl?: string | null;
+  durationMs?: number | null;
+};
+
 export class DiscordResponseSink {
   private readonly client: Client;
   private readonly sourceMessage: Message;
@@ -77,9 +82,10 @@ export class DiscordResponseSink {
     return this.statusMessage;
   }
 
-  async sendFinal(input: { content: string; files?: AgentFile[] }): Promise<DiscordResponseResult> {
+  async sendFinal(input: { content: string; files?: AgentFile[]; footer?: DiscordResponseFooter | null }): Promise<DiscordResponseResult> {
     const files = input.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }));
-    const payload = files?.length ? { content: input.content, files } : { content: input.content };
+    const content = appendDiscordResponseFooter(input.content, this.maxReplyChars, input.footer);
+    const payload = files?.length ? { content, files } : { content };
     const usedStatusMessage = Boolean(this.statusMessage);
     const message = this.statusMessage ? await this.statusMessage.edit(payload) : await this.sourceMessage.reply(payload);
     this.statusMessage = message;
@@ -87,8 +93,8 @@ export class DiscordResponseSink {
     return { message, usedStatusMessage };
   }
 
-  async sendError(content: string): Promise<DiscordResponseResult> {
-    const result = await this.sendFinal({ content: cleanResponse(content, this.maxReplyChars) });
+  async sendError(content: string, footer?: DiscordResponseFooter | null): Promise<DiscordResponseResult> {
+    const result = await this.sendFinal({ content, footer });
     return result;
   }
 
@@ -107,6 +113,31 @@ export class DiscordResponseSink {
       this.logger.warn({ err: error, emoji: this.loadingReactionEmoji }, "Failed to remove Discord loading reaction");
     }
   }
+}
+
+export function appendDiscordResponseFooter(content: string, maxChars: number, footer?: DiscordResponseFooter | null) {
+  const footerLine = formatDiscordResponseFooter(footer);
+  if (!footerLine) return cleanResponse(content, maxChars);
+
+  const separator = "\n\n";
+  const bodyMaxChars = Math.max(0, maxChars - separator.length - footerLine.length);
+  const body = cleanResponse(content, bodyMaxChars).trimEnd();
+  if (!body) return cleanResponse(footerLine, maxChars);
+  return cleanResponse(`${body}${separator}${footerLine}`, maxChars);
+}
+
+export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | null) {
+  const traceUrl = footer?.traceUrl?.trim();
+  if (!traceUrl) return null;
+  const parts = [`[trace](${traceUrl})`];
+  if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
+    parts.push(formatFooterDuration(footer.durationMs));
+  }
+  return `-# ${parts.join(" · ")}`;
+}
+
+function formatFooterDuration(ms: number) {
+  return `${(Math.max(0, ms) / 1000).toFixed(3)}s`;
 }
 
 type DiscordReactionMatch = {

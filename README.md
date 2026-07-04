@@ -219,7 +219,7 @@ Common optional settings:
 | `SANDBOX_IMAGE` | `discord-ai-agent-sandbox:latest` | Kubernetes sandbox image |
 | `SANDBOX_CACHE_DIR` | `/var/cache/discord-ai-agent` | Sandbox repo/npm/dependency cache path |
 | `SANDBOX_CACHE_PVC_NAME` | unset | Optional Kubernetes PVC mounted at `SANDBOX_CACHE_DIR` |
-| `CONTROL_UI_PUBLIC_URL` | unset | Public console origin, for example `https://tasks.example.com`; when set, Discord code-update progress messages include a run-console link |
+| `CONTROL_UI_PUBLIC_URL` | unset | Public console origin, for example `https://tasks.example.com`; when set, Discord replies include a trace footer and code-update progress messages include a run-console link |
 | `CONTROL_PLANE_INTERNAL_URL` | `http://discord-ai-agent-api:8080` | Sandbox callback URL |
 | `DISCORD_AGENT_RESPONSE_TIMEOUT_MS` | `1800000` | Max time a Discord request can run before returning an error; code-update PR work continues through background task rendering |
 | `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all` |

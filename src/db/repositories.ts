@@ -4681,7 +4681,24 @@ export class DiscordAiAgentRepository {
     metadata?: Record<string, unknown>;
     createdAt?: Date;
   }) {
-    await this.pool.query(
+    await this.appendConversationMessageWithClient(this.pool, input);
+  }
+
+  private async appendConversationMessageWithClient(
+    client: Pick<DbPool, "query">,
+    input: {
+      threadKey: string;
+      role: ConversationRole;
+      content: string;
+      discordMessageId?: string | null;
+      authorId?: string | null;
+      authorDisplayName?: string | null;
+      parts?: unknown[];
+      metadata?: Record<string, unknown>;
+      createdAt?: Date;
+    }
+  ) {
+    await client.query(
       `
         INSERT INTO conversation_messages(
           thread_key, discord_message_id, role, author_id, author_display_name,
@@ -4695,7 +4712,7 @@ export class DiscordAiAgentRepository {
           author_display_name = EXCLUDED.author_display_name,
           content = EXCLUDED.content,
           parts = EXCLUDED.parts,
-          metadata = EXCLUDED.metadata,
+          metadata = conversation_messages.metadata || EXCLUDED.metadata,
           created_at = EXCLUDED.created_at
       `,
       [
@@ -4712,9 +4729,128 @@ export class DiscordAiAgentRepository {
     );
   }
 
-  async recentConversationMessages(input: { threadKey: string; limit: number }): Promise<ConversationMessage[]> {
+  async appendConversationTurn(input: {
+    threadKey: string;
+    turnId: string;
+    user: {
+      content: string;
+      discordMessageId: string;
+      authorId?: string | null;
+      authorDisplayName?: string | null;
+      parts?: unknown[];
+      metadata?: Record<string, unknown>;
+      createdAt?: Date;
+    };
+    assistant: {
+      content: string;
+      discordMessageId: string;
+      authorId?: string | null;
+      authorDisplayName?: string | null;
+      parts?: unknown[];
+      metadata?: Record<string, unknown>;
+      createdAt?: Date;
+    };
+  }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await this.appendConversationMessageWithClient(client, {
+        threadKey: input.threadKey,
+        role: "user",
+        content: input.user.content,
+        discordMessageId: input.user.discordMessageId,
+        authorId: input.user.authorId,
+        authorDisplayName: input.user.authorDisplayName,
+        parts: input.user.parts,
+        metadata: {
+          ...(input.user.metadata ?? {}),
+          turnId: input.turnId,
+          turnStatus: "completed",
+          replyMessageId: input.assistant.discordMessageId
+        },
+        createdAt: input.user.createdAt
+      });
+      await this.appendConversationMessageWithClient(client, {
+        threadKey: input.threadKey,
+        role: "assistant",
+        content: input.assistant.content,
+        discordMessageId: input.assistant.discordMessageId,
+        authorId: input.assistant.authorId,
+        authorDisplayName: input.assistant.authorDisplayName,
+        parts: input.assistant.parts,
+        metadata: {
+          ...(input.assistant.metadata ?? {}),
+          turnId: input.turnId,
+          turnStatus: "completed",
+          promptDiscordMessageId: input.user.discordMessageId
+        },
+        createdAt: input.assistant.createdAt
+      });
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recentConversationMessages(input: { threadKey: string; limit: number; includeToolResults?: boolean }): Promise<ConversationMessage[]> {
+    const includeToolResults = input.includeToolResults ?? false;
     const result = await this.pool.query(
       `
+        WITH eligible AS (
+          SELECT
+            m.id,
+            m.thread_key,
+            m.discord_message_id,
+            m.role,
+            m.author_id,
+            m.author_display_name,
+            m.content,
+            m.parts,
+            m.metadata,
+            m.created_at,
+            CASE
+              WHEN m.role = 'user' THEN coalesce(reply.created_at, m.created_at)
+              WHEN m.role = 'tool' THEN coalesce(tool_reply.created_at, m.created_at)
+              ELSE m.created_at
+            END AS turn_completed_at,
+            CASE m.role
+              WHEN 'user' THEN 0
+              WHEN 'tool' THEN 1
+              ELSE 2
+            END AS turn_order
+          FROM conversation_messages m
+          LEFT JOIN conversation_messages reply
+            ON reply.thread_key = m.thread_key
+           AND reply.role = 'assistant'
+           AND reply.discord_message_id = m.metadata->>'replyMessageId'
+          LEFT JOIN conversation_messages tool_reply
+            ON tool_reply.thread_key = m.thread_key
+           AND tool_reply.role = 'assistant'
+           AND tool_reply.metadata->>'turnId' = m.metadata->>'turnId'
+           AND m.metadata->>'turnId' IS NOT NULL
+          WHERE m.thread_key = $1
+            AND m.content <> ''
+            AND (
+              m.role = 'assistant'
+              OR (
+                m.role = 'user'
+                AND (
+                  m.metadata->>'turnStatus' = 'completed'
+                  OR m.metadata->>'replyMessageId' IS NOT NULL
+                )
+              )
+              OR ($3::boolean AND m.role = 'tool' AND m.metadata->>'turnStatus' = 'completed')
+            )
+        ),
+        recent AS (
+          SELECT *
+          FROM eligible
+          ORDER BY turn_completed_at DESC, turn_order DESC, created_at DESC, id DESC
+          LIMIT $2
+        )
         SELECT
           id,
           thread_key,
@@ -4726,15 +4862,12 @@ export class DiscordAiAgentRepository {
           parts,
           metadata,
           created_at
-        FROM conversation_messages
-        WHERE thread_key = $1
-          AND content <> ''
-        ORDER BY created_at DESC, id DESC
-        LIMIT $2
+        FROM recent
+        ORDER BY turn_completed_at ASC, turn_order ASC, created_at ASC, id ASC
       `,
-      [input.threadKey, input.limit]
+      [input.threadKey, input.limit, includeToolResults]
     );
-    return result.rows.map(rowToConversationMessage).reverse();
+    return result.rows.map(rowToConversationMessage);
   }
 
   async deleteConversationMessagesByDiscordMessageIds(input: { threadKey: string; discordMessageIds: string[] }): Promise<number> {

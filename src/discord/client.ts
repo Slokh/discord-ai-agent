@@ -31,6 +31,7 @@ import { InProcessAgentRuntimePromptExecutor, type AgentRuntimePromptExecutor } 
 import {
   buildAgentRuntimeTurnEnvelope,
   loadAgentRuntimeTurnEnvelope,
+  replaceAgentRuntimeTurnEnvelopeSessionMessages,
   storeAgentRuntimeTurnEnvelope,
   type AgentRuntimeTurnEnvelope
 } from "../agent/runtimeEnvelope.js";
@@ -763,30 +764,34 @@ async function executeDiscordAgentRequest(
       executorName: agentExecutor.name
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to mark agent runtime execution succeeded"));
 
-    for (const memoryEvent of response.memoryEvents ?? []) {
-      await input.repo.appendConversationMessage({
-        threadKey,
-        role: memoryEvent.role,
-        content: memoryEvent.content,
-        authorId: client.user?.id ?? null,
-        authorDisplayName: client.user?.username ?? null,
-        metadata: memoryEvent.metadata
-      });
-    }
     if (response.memoryEvents?.length) {
-      requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Stored tool results in channel memory");
+      requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Kept tool results in trace memory only");
     }
 
-    await input.repo.appendConversationMessage({
+    await input.repo.appendConversationTurn({
       threadKey,
-      role: "assistant",
-      discordMessageId: finalReply.id,
-      authorId: client.user?.id ?? null,
-      authorDisplayName: client.user?.username ?? null,
-      content: response.content,
-      metadata: {
-        discordUrl: finalReply.url,
-        files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+      turnId: request.requestId,
+      user: {
+        discordMessageId: message.id,
+        authorId: message.author.id,
+        authorDisplayName: userDisplayName,
+        content: request.text,
+        createdAt: message.createdAt,
+        metadata: {
+          discordUrl: message.url,
+          rawContent: request.rawContent,
+          attachments: requestAttachments
+        }
+      },
+      assistant: {
+        discordMessageId: finalReply.id,
+        authorId: client.user?.id ?? null,
+        authorDisplayName: client.user?.username ?? null,
+        content: response.content,
+        metadata: {
+          discordUrl: finalReply.url,
+          files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+        }
       }
     });
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention handled");
@@ -965,16 +970,30 @@ async function executeDiscordAgentRequest(
       durationMs: durationMs(request.messageStartedAt),
       executorName: agentExecutor.name
     }).catch((runtimeError) => requestLogger.warn({ err: runtimeError }, "Failed to mark failed agent runtime execution"));
-    await input.repo.appendConversationMessage({
+    await input.repo.appendConversationTurn({
       threadKey,
-      role: "assistant",
-      discordMessageId: finalReply.id,
-      authorId: client.user?.id ?? null,
-      authorDisplayName: client.user?.username ?? null,
-      content: errorContent,
-      metadata: {
-        discordUrl: finalReply.url,
-        error: true
+      turnId: request.requestId,
+      user: {
+        discordMessageId: message.id,
+        authorId: message.author.id,
+        authorDisplayName: userDisplayName,
+        content: request.text,
+        createdAt: message.createdAt,
+        metadata: {
+          discordUrl: message.url,
+          rawContent: request.rawContent,
+          attachments: requestAttachments
+        }
+      },
+      assistant: {
+        discordMessageId: finalReply.id,
+        authorId: client.user?.id ?? null,
+        authorDisplayName: client.user?.username ?? null,
+        content: errorContent,
+        metadata: {
+          discordUrl: finalReply.url,
+          error: true
+        }
       }
     });
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention failed");
@@ -1041,22 +1060,6 @@ async function prepareDiscordAgentTurn(input: {
       metadata: { threadKey, source: input.source, sessionMessageCount: priorSessionMessages.length }
     })
     .catch((error) => input.requestLogger.warn({ err: error }, "Failed to record memory span"));
-  await input.context.repo.appendConversationMessage({
-    threadKey,
-    role: "user",
-    discordMessageId: input.message.id,
-    authorId: input.message.author.id,
-    authorDisplayName: userDisplayName,
-    content: input.request.text,
-    createdAt: input.message.createdAt,
-    metadata: {
-      discordUrl: input.message.url,
-      rawContent: input.request.rawContent,
-      attachments: requestAttachments
-    }
-  });
-  input.requestLogger.debug({ threadKey, source: input.source }, "Stored user turn in channel memory");
-
   const permissionStartedAt = Date.now();
   const member = input.message.member ?? (await guild.members.fetch(input.message.author.id));
   const mentionedChannelIds = explicitChannelMentionIds(input.request.rawContent);
@@ -1168,23 +1171,39 @@ async function replayPreparedDiscordAgentTurn(input: {
   requestLogger: Logger;
 }): Promise<PreparedDiscordAgentTurn> {
   const startedAt = Date.now();
-  const priorSessionMessages = conversationMessagesFromEnvelope(input.turnEnvelope);
+  let priorSessionMessages = conversationMessagesFromEnvelope(input.turnEnvelope);
+  let turnEnvelope = input.turnEnvelope;
+  let refreshed = false;
+  try {
+    priorSessionMessages = await input.context.repo.recentConversationMessages({
+      threadKey: input.turnEnvelope.threadKey,
+      limit: SESSION_CONTEXT_MESSAGE_LIMIT
+    });
+    turnEnvelope = replaceAgentRuntimeTurnEnvelopeSessionMessages(input.turnEnvelope, priorSessionMessages);
+    refreshed = true;
+  } catch (error) {
+    input.requestLogger.warn({ err: error, threadKey: input.turnEnvelope.threadKey }, "Failed to refresh queued channel memory; using stored envelope memory");
+  }
   input.requestLogger.info(
     {
-      threadKey: input.turnEnvelope.threadKey,
+      threadKey: turnEnvelope.threadKey,
       sessionMessageCount: priorSessionMessages.length,
-      visibleChannelCount: input.turnEnvelope.visibleChannelIds.length,
+      staleSessionMessageCount: input.turnEnvelope.sessionMessages.length,
+      visibleChannelCount: turnEnvelope.visibleChannelIds.length,
+      refreshed,
       durationMs: durationMs(startedAt)
     },
-    "Replayed stored agent turn envelope"
+    refreshed ? "Refreshed queued agent turn memory" : "Replayed stored agent turn envelope"
   );
   await recordTraceEvent(input.context.repo, {
     eventName: "agent.execution.context_replayed",
-    summary: "Replayed stored agent turn context",
+    summary: refreshed ? "Refreshed queued agent turn context" : "Replayed stored agent turn context",
     metadata: {
-      threadKey: input.turnEnvelope.threadKey,
+      threadKey: turnEnvelope.threadKey,
       sessionMessageCount: priorSessionMessages.length,
-      visibleChannelCount: input.turnEnvelope.visibleChannelIds.length
+      staleSessionMessageCount: input.turnEnvelope.sessionMessages.length,
+      visibleChannelCount: turnEnvelope.visibleChannelIds.length,
+      refreshed
     },
     durationMs: durationMs(startedAt)
   });
@@ -1198,14 +1217,16 @@ async function replayPreparedDiscordAgentTurn(input: {
       completedAt: new Date(),
       durationMs: durationMs(startedAt),
       metadata: {
-        threadKey: input.turnEnvelope.threadKey,
+        threadKey: turnEnvelope.threadKey,
         sessionMessageCount: priorSessionMessages.length,
-        visibleChannelCount: input.turnEnvelope.visibleChannelIds.length
+        staleSessionMessageCount: input.turnEnvelope.sessionMessages.length,
+        visibleChannelCount: turnEnvelope.visibleChannelIds.length,
+        refreshed
       }
     })
     .catch((error) => input.requestLogger.warn({ err: error }, "Failed to record turn envelope replay span"));
   return {
-    turnEnvelope: input.turnEnvelope,
+    turnEnvelope,
     turnEnvelopeArtifactId: null,
     inputLinesArtifactId: input.request.inputLinesArtifactId ?? null,
     priorSessionMessages

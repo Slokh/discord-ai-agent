@@ -153,6 +153,18 @@ export async function loadAgentRuntimeTurnEnvelope(input: {
   return parsed;
 }
 
+export function replaceAgentRuntimeTurnEnvelopeSessionMessages(
+  envelope: AgentRuntimeTurnEnvelope,
+  sessionMessages: ConversationMessage[],
+  createdAt: Date = new Date()
+): AgentRuntimeTurnEnvelope {
+  return {
+    ...envelope,
+    sessionMessages: sessionMessages.map(snapshotConversationMessage),
+    createdAt: createdAt.toISOString()
+  };
+}
+
 function snapshotConversationMessage(message: ConversationMessage): AgentRuntimeConversationMessageSnapshot {
   return {
     id: message.id,

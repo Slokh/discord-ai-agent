@@ -10,6 +10,7 @@ import {
   hasExplicitBotMention,
   isSelfMessage,
   persistReactionMessage,
+  resolveBotMentionContext,
   shouldProcessGuildEvent,
   stripBotAddress
 } from "../../src/discord/client.js";
@@ -61,6 +62,70 @@ describe("explicit mention parsing", () => {
     expect(explicitChannelMentionIds("<#123> pizza <#456> <#123>")).toEqual(["123", "456"]);
   });
 });
+
+describe("resolveBotMentionContext", () => {
+  it("treats an explicit user mention as addressed", async () => {
+    const message = fakeReplyableMessage("<@bot-1> hello", undefined);
+    const result = await resolveBotMentionContext(message as any, "bot-1");
+    expect(result).toEqual({ addressed: true, kind: "user", botRoleIds: [] });
+    expect(message.fetchReference).not.toHaveBeenCalled();
+  });
+
+  it("treats a reply to a bot message as addressed without an explicit mention", async () => {
+    const message = fakeReplyableMessage("continuing the thread", {
+      messageId: "parent-1",
+      authorId: "bot-1"
+    });
+    const result = await resolveBotMentionContext(message as any, "bot-1");
+    expect(result).toEqual({ addressed: true, kind: "reply", botRoleIds: [] });
+  });
+
+  it("does not treat a reply to another user as addressed", async () => {
+    const message = fakeReplyableMessage("replying to a human", {
+      messageId: "parent-1",
+      authorId: "human-1"
+    });
+    const result = await resolveBotMentionContext(message as any, "bot-1");
+    expect(result).toEqual({ addressed: false, kind: null, botRoleIds: [] });
+  });
+
+  it("does not treat a message without a reply as addressed", async () => {
+    const message = fakeReplyableMessage("just talking", undefined);
+    const result = await resolveBotMentionContext(message as any, "bot-1");
+    expect(result).toEqual({ addressed: false, kind: null, botRoleIds: [] });
+  });
+
+  it("falls back to not addressed when the reply reference cannot be fetched", async () => {
+    const message = fakeReplyableMessage("replying", { messageId: "parent-1", authorId: "bot-1", fetchThrows: true });
+    const result = await resolveBotMentionContext(message as any, "bot-1");
+    expect(result).toEqual({ addressed: false, kind: null, botRoleIds: [] });
+  });
+});
+
+function fakeReplyableMessage(
+  content: string,
+  reference:
+    | { messageId: string; authorId: string; fetchThrows?: boolean }
+    | undefined
+) {
+  const fetchReference = vi.fn(async () => {
+    if (reference?.fetchThrows) throw new Error("fetch failed");
+    if (!reference) throw new Error("no reference");
+    return {
+      author: { id: reference.authorId },
+      inGuild: () => true,
+      guildId: "guild-a",
+      channelId: "channel-1"
+    };
+  });
+  return {
+    id: "message-1",
+    content,
+    reference: reference ? { messageId: reference.messageId, channelId: "channel-1", guildId: "guild-a" } : undefined,
+    fetchReference,
+    guild: { id: "guild-a", name: "Test Guild", roles: { fetch: vi.fn(async () => undefined), cache: { filter: () => ({ map: () => [] }) } } }
+  };
+}
 
 describe("single-guild event filters", () => {
   it("processes events only for the configured guild", () => {

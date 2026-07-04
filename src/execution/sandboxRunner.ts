@@ -1846,6 +1846,12 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       purpose: "Runs, spans, events, artifacts, and the React console explain what happened and where latency went.",
       files: ["src/observability/runs.ts", "src/control/internalApi.ts", "src/control/console/App.tsx", "src/control/console/styles.css"],
       checks: ["tests/unit/observability.test.ts", "tests/unit/internal-api-runs.test.ts", "tests/unit/run-console-timeline.test.ts"]
+    },
+    {
+      area: "Architecture guides",
+      purpose: "Repo-level and folder-level docs explain ownership boundaries so code updates can avoid broad source archaeology.",
+      files: ["AGENTS.md", "docs/architecture.md", "docs/tool-design.md", "src/discord/README.md", "src/agent/README.md", "src/tools/README.md", "src/execution/README.md"],
+      checks: []
     }
   ]);
   const focusedSuggestedFiles = await existingSuggestedFiles(checkoutDir, focusedRule.suggestedFiles);
@@ -1858,9 +1864,12 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
           "Do not spend more than three targeted file reads before the first code diff when anchor targets exist."
         ]
       : []),
+    "Batch the first reconnaissance pass: read the closest owner, nearest helper/caller, closest README, and closest test together when possible.",
+    "Avoid repeated search/read cycles once the owner is clear; make the first patch, then let focused checks guide follow-up reads.",
     "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
     "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
     "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",
+    "Run only the closest relevant tests first; use npm run typecheck for TypeScript contract changes, and leave broad verification to CI.",
     "Stop when the requested behavior is implemented and the most relevant checks have run."
   ];
 
@@ -1878,6 +1887,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       "The checkout is a writable task branch. Edit files directly in the current repository.",
       "Do not create commits, push branches, open PRs, or mutate GitHub state; the sandbox runner handles that after your focused checks pass.",
       "Use helper CLIs by absolute shim path when useful: $AGENT_TOOL_SHIM_DIR/agent-task-context, $AGENT_TOOL_SHIM_DIR/agent-cache-info, $AGENT_TOOL_SHIM_DIR/agent-progress <step> <message>.",
+      "Dependency cache is prepared before the harness runs. Inspect cache state with agent-cache-info only when relevant; do not reinstall dependencies unless package manifests changed.",
       "Use apply_patch for focused file edits when available; otherwise use the smallest reliable edit command.",
       "Prefer rg for search, then read only the files needed for the next concrete edit. If rg is unavailable, use the local search fallback or a minimal Node search rather than broad shell loops."
     ],
@@ -1934,13 +1944,13 @@ async function buildSuggestedCheckCommands(checkoutDir: string, files: Array<{ p
   if (existingTests.length > 0) {
     commands.push({
       command: `npm test -- ${existingTests.map(shellQuoteArg).join(" ")}`,
-      reason: "Run the closest focused tests for the suggested source/test area before broader checks."
+      reason: "Run the closest focused tests for the suggested source/test area; avoid broad suites unless their output is directly needed."
     });
   }
   if (files.some((file) => isTypeScriptPath(file.path)) && (await pathExists(path.join(checkoutDir, "tsconfig.json")))) {
     commands.push({
       command: "npm run typecheck",
-      reason: "Catch repository-wide TypeScript contract breakage after focused edits."
+      reason: "Catch TypeScript contract breakage after focused edits; this should usually be the final local check."
     });
   }
   return commands;

@@ -345,11 +345,11 @@ describe("sandboxRunner", () => {
       expect(context.suggestedCheckCommands).toEqual([
         {
           command: "npm test -- tests/unit/tool-registry.test.ts tests/unit/core-tools.test.ts",
-          reason: "Run the closest focused tests for the suggested source/test area before broader checks."
+          reason: "Run the closest focused tests for the suggested source/test area; avoid broad suites unless their output is directly needed."
         },
         {
           command: "npm run typecheck",
-          reason: "Catch repository-wide TypeScript contract breakage after focused edits."
+          reason: "Catch TypeScript contract breakage after focused edits; this should usually be the final local check."
         }
       ]);
       expect(rendered).toContain("Repository guide excerpt:");
@@ -357,6 +357,8 @@ describe("sandboxRunner", () => {
       expect(rendered).toContain("Suggested focused checks:");
       expect(rendered).toContain("npm test -- tests/unit/tool-registry.test.ts tests/unit/core-tools.test.ts");
       expect(prompt).toContain("Run the suggested focused checks from the preflight context");
+      expect(prompt).toContain("Validation ladder");
+      expect(prompt).toContain("Do not run `npm run verify` or broad test suites");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -385,6 +387,7 @@ describe("sandboxRunner", () => {
     const initial = codeUpdatePrompt(env as any, context);
     expect(initial).toContain("If AGENTS.md exists, read it before editing");
     expect(initial).toContain("Use the preflight context as a starting map");
+    expect(initial).toContain("Batch initial reconnaissance");
     expect(initial).toContain("Make a focused regression test early");
     expect(initial).toContain("src/discord/taskNotifications.ts");
 
@@ -419,7 +422,8 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("map it to the lifecycle");
     expect(prompt).toContain("trigger -> acknowledgement/status -> work -> success response -> error path -> cleanup");
     expect(prompt).toContain("Prefer a small shared lifecycle owner");
-    expect(prompt).toContain("Inspect the likely owner, nearest caller/helper, and closest test");
+    expect(prompt).toContain("Batch initial reconnaissance");
+    expect(prompt).toContain("Do not keep alternating search/read/search/read");
     expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-progress first_edit");
   });
 

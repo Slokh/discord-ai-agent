@@ -652,7 +652,10 @@ describe("run console timeline", () => {
     expect(transcript.totalDurationMs).toBe(20_000);
     expect(transcript.toolDurationMs).toBe(36);
     expect(transcript.modelWaitMs).toBe(17_964);
+    expect(transcript.roundDurationMs).toBe(18_000);
     expect(transcript.interRoundGapMs).toBe(2_000);
+    expect(transcript.outsideRoundMs).toBe(0);
+    expect(transcript.slowestGaps).toEqual([{ afterRound: 1, beforeRound: 2, durationMs: 2_000 }]);
     expect(transcript.failedTools).toBe(0);
     expect(transcript.repeatedReads).toEqual([]);
     expect(transcript.firstToolAtMs).toBe(5_000);
@@ -662,9 +665,12 @@ describe("run console timeline", () => {
     expect(transcript.tokenTotal).toBe(220);
     expect(transcript.slowestRound).toEqual({ round: 1, durationMs: 10_000, title: "Round 1: read" });
     expect(transcript.items.map((item) => item.title)).toEqual(["Round 1: read", "Round 2: edit", "Final token usage"]);
+    expect(transcript.items[1]?.gapBeforeMs).toBe(2_000);
+    expect(transcript.items[1]?.modelWaitMs).toBe(7_989);
+    expect(transcript.items[1]?.toolDurationMs).toBe(11);
     expect(transcript.items[1]?.body).toContain("Making the edit");
-    expect(transcript.items[1]?.body).toContain("Model wait: 7.989s");
-    expect(transcript.items[1]?.body).toContain("Tool time: 0.011s");
+    expect(transcript.items[1]?.body).not.toContain("Model wait:");
+    expect(transcript.items[1]?.body).not.toContain("Tool time:");
   });
 
   it("keeps unfinished OpenCode rounds visible while the harness is still running", () => {
@@ -693,6 +699,8 @@ describe("run console timeline", () => {
     expect(transcript.totalDurationMs).toBe(5_000);
     expect(transcript.toolDurationMs).toBe(20);
     expect(transcript.modelWaitMs).toBe(4_980);
+    expect(transcript.roundDurationMs).toBe(5_000);
+    expect(transcript.outsideRoundMs).toBe(0);
     expect(transcript.firstToolAtMs).toBe(5_000);
     expect(transcript.activeRound).toEqual({
       round: 1,
@@ -704,6 +712,8 @@ describe("run console timeline", () => {
     const activeItem = transcript.items.find((item) => item.active);
     expect(activeItem?.title).toBe("Round 1: read");
     expect(activeItem?.durationMs).toBe(5_000);
+    expect(activeItem?.modelWaitMs).toBe(4_980);
+    expect(activeItem?.toolDurationMs).toBe(20);
     expect(activeItem?.tools.map((tool) => tool.name)).toEqual(["read"]);
   });
 

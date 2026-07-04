@@ -34,6 +34,8 @@ The first migration slices record Discord prompts and their compatibility execut
 
 `AGENT_RUNTIME_EXECUTION_BACKEND` selects the prompt execution backend. It defaults to `in-process`, which calls the existing model/tool router through `src/agent/inProcessRuntimeExecutor.ts`. The selection now flows through `src/agent/runtimeRunner.ts` and `src/agent/runtimeExecutor.ts` so the worker can prepare the Discord turn once, store the replay envelope, then hand response generation to the selected executor. `warm-sandbox` sends that envelope to `AGENT_RUNTIME_WARM_SANDBOX_URL` when configured; otherwise it falls back to the out-of-process `sandboxPromptRunner` child for local compatibility.
 
+Durable prompt session/execution rows and `agent.execution.*` events record the selected executor name. This keeps the run console aligned with the actual runtime path, especially when the worker is using `warm-sandbox` instead of the compatibility in-process model loop.
+
 Warm prompt executions write a `Warm sandbox prompt runner` span and `raw_json` artifacts for the serialized prompt request and response. Span/artifact metadata includes the selected transport (`http` or `child_process`) plus HTTP status or process byte counts, so latency and protocol bugs are visible in the run console.
 
 Run a local warm prompt server with:

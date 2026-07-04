@@ -20,8 +20,10 @@ export async function ensureAgentRuntimePromptExecution(input: {
   discordUrl: string;
   status: Extract<AgentRuntimeStatus, "queued" | "running">;
   source: string;
+  executorName?: string | null;
 }): Promise<AgentPromptExecutionRef | null> {
   if (!input.agentRuntime) return null;
+  const executorName = input.executorName?.trim() || "in-process";
   const executionId = input.agentExecutionId ?? `agent-execution-${input.requestId}`;
   const session = await input.agentRuntime.upsertSession({
     sessionId: input.agentSessionId,
@@ -34,10 +36,11 @@ export async function ensureAgentRuntimePromptExecution(input: {
     request: input.text,
     requestedBy: `${input.userDisplayName} (${input.userId})`,
     status: input.status,
-    harness: "in-process",
+    harness: executorName,
     metadata: {
       kind: "discord_channel",
       source: input.source,
+      executor: executorName,
       currentMessageId: input.requestId,
       discordUrl: input.discordUrl
     }
@@ -59,9 +62,10 @@ export async function ensureAgentRuntimePromptExecution(input: {
     sessionId: session.sessionId,
     traceId: input.requestId,
     status: input.status,
-    harness: "in-process",
+    harness: executorName,
     metadata: {
       source: input.source,
+      executor: executorName,
       discordMessageId: input.requestId,
       discordUrl: input.discordUrl
     }
@@ -76,7 +80,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
     metadata: {
       source: input.source,
       discordMessageId: input.requestId,
-      executor: "in_process_model_loop"
+      executor: executorName
     }
   });
   return { session, executionId };
@@ -92,8 +96,10 @@ export async function finishAgentRuntimePromptExecution(input: {
   responseContent: string;
   error?: string | null;
   durationMs: number;
+  executorName?: string | null;
 }) {
   if (!input.agentRuntime || !input.session || !input.executionId) return;
+  const executorName = input.executorName?.trim() || "in-process";
   await input.agentRuntime.appendMessage({
     sessionId: input.session.sessionId,
     messageId: `agent-assistant-message-${input.replyMessageId}`,
@@ -114,7 +120,7 @@ export async function finishAgentRuntimePromptExecution(input: {
       replyUrl: input.replyUrl,
       responseChars: input.responseContent.length,
       durationMs: input.durationMs,
-      executor: "in_process_model_loop"
+      executor: executorName
     }
   });
   await input.agentRuntime.recordEvent({
@@ -128,7 +134,7 @@ export async function finishAgentRuntimePromptExecution(input: {
     metadata: {
       replyMessageId: input.replyMessageId,
       replyUrl: input.replyUrl,
-      executor: "in_process_model_loop"
+      executor: executorName
     },
     durationMs: input.durationMs
   });

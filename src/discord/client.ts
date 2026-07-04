@@ -378,7 +378,8 @@ async function handleMessageCreate(
     rawContent: message.content,
     discordUrl: message.url,
     status: "queued",
-    source: "discord.ingress"
+    source: "discord.ingress",
+    executorName: input.agentExecutor?.name ?? input.config.agentRuntime.executionBackend
   }).catch((error) => {
     requestLogger.warn({ err: error }, "Failed to record agent runtime prompt session");
     return null;
@@ -604,7 +605,8 @@ async function executeDiscordAgentRequest(
     rawContent: request.rawContent,
     discordUrl: message.url,
     status: "running",
-    source: "discord.worker"
+    source: "discord.worker",
+    executorName: agentExecutor.name
   }).catch((error) => {
     requestLogger.warn({ err: error }, "Failed to mark agent runtime execution running");
     return null;
@@ -737,7 +739,8 @@ async function executeDiscordAgentRequest(
       replyMessageId: finalReply.id,
       replyUrl: finalReply.url,
       responseContent: response.content,
-      durationMs: durationMs(request.messageStartedAt)
+      durationMs: durationMs(request.messageStartedAt),
+      executorName: agentExecutor.name
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to mark agent runtime execution succeeded"));
 
     for (const memoryEvent of response.memoryEvents ?? []) {
@@ -859,7 +862,8 @@ async function executeDiscordAgentRequest(
         replyUrl: finalReply.url,
         responseContent: filteredContent,
         error: error.message,
-        durationMs: durationMs(request.messageStartedAt)
+        durationMs: durationMs(request.messageStartedAt),
+        executorName: agentExecutor.name
       }).catch((runtimeError) => requestLogger.warn({ err: runtimeError }, "Failed to mark content-filtered agent runtime execution"));
       return;
     }
@@ -936,7 +940,8 @@ async function executeDiscordAgentRequest(
       replyUrl: finalReply.url,
       responseContent: errorContent,
       error: error instanceof Error ? error.message : String(error),
-      durationMs: durationMs(request.messageStartedAt)
+      durationMs: durationMs(request.messageStartedAt),
+      executorName: agentExecutor.name
     }).catch((runtimeError) => requestLogger.warn({ err: runtimeError }, "Failed to mark failed agent runtime execution"));
     await input.repo.appendConversationMessage({
       threadKey,

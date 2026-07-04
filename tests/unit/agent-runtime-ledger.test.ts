@@ -42,6 +42,16 @@ describe("agent runtime ledger", () => {
         metadata: expect.objectContaining({ executor: "warm-sandbox" })
       })
     );
+    expect(agentRuntime.appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "user",
+        metadata: expect.objectContaining({
+          traceId: "message",
+          promptMessageId: "message",
+          executionId: "agent-execution-message"
+        })
+      })
+    );
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         eventName: "agent.execution.queued",
@@ -53,6 +63,7 @@ describe("agent runtime ledger", () => {
       agentRuntime: agentRuntime as never,
       session: ref?.session,
       executionId: ref?.executionId,
+      traceId: "message",
       status: "succeeded",
       replyMessageId: "reply",
       replyUrl: "https://discord.com/channels/guild/channel/reply",
@@ -61,7 +72,17 @@ describe("agent runtime ledger", () => {
       executorName: "warm-sandbox"
     });
 
-    expect(agentRuntime.appendMessage).toHaveBeenCalledWith(expect.objectContaining({ role: "assistant", clientMessageId: "reply" }));
+    expect(agentRuntime.appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "assistant",
+        clientMessageId: "reply",
+        metadata: expect.objectContaining({
+          traceId: "message",
+          promptMessageId: "message",
+          executionId: "agent-execution-message"
+        })
+      })
+    );
     expect(agentRuntime.updateExecution).toHaveBeenCalledWith(
       expect.objectContaining({
         executionId: "agent-execution-message",
@@ -72,6 +93,7 @@ describe("agent runtime ledger", () => {
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         eventName: "agent.execution.succeeded",
+        traceId: "message",
         durationMs: 42,
         metadata: expect.objectContaining({ executor: "warm-sandbox" })
       })
@@ -82,7 +104,7 @@ describe("agent runtime ledger", () => {
 function fakeAgentRuntime() {
   const session = {
     sessionId: "agent-session-channel",
-    traceId: "message",
+    traceId: "old-message",
     threadKey: "discord:guild:channel",
     guildId: "guild",
     channelId: "channel",

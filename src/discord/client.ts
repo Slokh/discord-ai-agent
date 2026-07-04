@@ -52,6 +52,7 @@ type DiscordAgentExecutionRequest = {
   requestId: string;
   agentSessionId?: string;
   agentExecutionId?: string;
+  inputLinesArtifactId?: string | null;
   text: string;
   rawContent: string;
   botRoleIds: string[];
@@ -520,7 +521,8 @@ export async function runQueuedAgentRuntimeExecution(
     guildId: job.guildId,
     channelId: job.channelId,
     messageId: job.messageId,
-    userId: job.userId
+    userId: job.userId,
+    inputLinesArtifactId: job.inputLinesArtifactId ?? null
   });
   const turnEnvelope = await loadAgentRuntimeTurnEnvelope({
     agentRuntime: input.agentRuntime,
@@ -553,6 +555,7 @@ export async function runQueuedAgentRuntimeExecution(
     requestId: job.runId,
     agentSessionId: job.agentSessionId,
     agentExecutionId: job.agentExecutionId,
+    inputLinesArtifactId: job.inputLinesArtifactId ?? null,
     text: job.text,
     rawContent: job.rawContent,
     botRoleIds: job.botRoleIds,
@@ -579,7 +582,8 @@ async function executeDiscordAgentRequest(
     guildId,
     channelId: message.channelId,
     messageId: message.id,
-    userId: message.author.id
+    userId: message.author.id,
+    inputLinesArtifactId: request.inputLinesArtifactId ?? null
   });
   const fallbackThreadKey = discordChannelThreadKey(guildId, message.channelId);
   const fallbackUserDisplayName = message.member?.displayName ?? message.author.username;
@@ -631,6 +635,13 @@ async function executeDiscordAgentRequest(
 
   try {
     const agentStartedAt = Date.now();
+    const inputLines = await loadAgentRuntimeInputLines({
+      agentRuntime: input.agentRuntime,
+      repo: input.repo,
+      requestId: request.requestId,
+      artifactId: request.inputLinesArtifactId,
+      requestLogger
+    });
     const toolContext: ToolContext = {
       config: input.config,
       repo: input.repo,
@@ -667,7 +678,9 @@ async function executeDiscordAgentRequest(
       toolContext,
       text: request.text,
       timeoutMs: input.config.discordAgentResponseTimeoutMs,
-      turnEnvelope
+      turnEnvelope,
+      inputLinesArtifactId: request.inputLinesArtifactId ?? null,
+      inputLines
     });
     await input.repo
       .recordProcessRunSpan({
@@ -680,6 +693,7 @@ async function executeDiscordAgentRequest(
         durationMs: durationMs(agentStartedAt),
         metadata: {
           executor: agentExecutor.name,
+          inputLinesArtifactId: request.inputLinesArtifactId ?? null,
           responseChars: response.content.length,
           fileCount: response.files?.length ?? 0,
           memoryEventCount: response.memoryEvents?.length ?? 0
@@ -700,6 +714,7 @@ async function executeDiscordAgentRequest(
       summary: `Agent returned ${response.content.length} chars`,
       metadata: {
         executor: agentExecutor.name,
+        inputLinesArtifactId: request.inputLinesArtifactId ?? null,
         responseChars: response.content.length,
         fileCount: response.files?.length ?? 0,
         memoryEventCount: response.memoryEvents?.length ?? 0
@@ -775,6 +790,7 @@ async function executeDiscordAgentRequest(
         metadata: {
           replyMessageId: finalReply.id,
           durationMs: durationMs(request.messageStartedAt),
+          inputLinesArtifactId: request.inputLinesArtifactId ?? null,
           responseChars: response.content.length
         }
       })
@@ -825,7 +841,7 @@ async function executeDiscordAgentRequest(
           runId: request.requestId,
           status: "failed",
           summary: "Provider content filter blocked the request",
-          metadata: { error: error.message, deletedMemoryRows }
+          metadata: { error: error.message, deletedMemoryRows, inputLinesArtifactId: request.inputLinesArtifactId ?? null }
         })
         .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark content-filtered run"));
       await finishAgentRuntimePromptExecution({
@@ -875,7 +891,11 @@ async function executeDiscordAgentRequest(
         startedAt: new Date(request.messageStartedAt),
         completedAt: new Date(),
         durationMs: durationMs(request.messageStartedAt),
-        metadata: { executor: agentExecutor.name, error: error instanceof Error ? error.message : String(error) }
+        metadata: {
+          executor: agentExecutor.name,
+          inputLinesArtifactId: request.inputLinesArtifactId ?? null,
+          error: error instanceof Error ? error.message : String(error)
+        }
       })
       .catch((runError) => requestLogger.warn({ err: runError }, "Failed to record failed agent span"));
     await input.repo
@@ -894,7 +914,11 @@ async function executeDiscordAgentRequest(
         status: "failed",
         summary: error instanceof Error ? error.message : String(error),
         links: { discordReply: finalReply.url },
-        metadata: { error: error instanceof Error ? error.message : String(error), durationMs: durationMs(request.messageStartedAt) }
+        metadata: {
+          error: error instanceof Error ? error.message : String(error),
+          durationMs: durationMs(request.messageStartedAt),
+          inputLinesArtifactId: request.inputLinesArtifactId ?? null
+        }
       })
       .catch((runError) => requestLogger.warn({ err: runError }, "Failed to mark Discord run failed"));
     await finishAgentRuntimePromptExecution({
@@ -1138,6 +1162,66 @@ async function replayPreparedDiscordAgentTurn(input: {
     turnEnvelopeArtifactId: null,
     priorSessionMessages
   };
+}
+
+async function loadAgentRuntimeInputLines(input: {
+  agentRuntime?: AgentRuntimeRepository;
+  repo: DiscordAiAgentRepository;
+  requestId: string;
+  artifactId?: string | null;
+  requestLogger: Logger;
+}): Promise<string[]> {
+  if (!input.artifactId) return [];
+  const startedAt = Date.now();
+  try {
+    if (!input.agentRuntime) {
+      throw new Error("Agent runtime input lines were requested, but the agent runtime repository is unavailable.");
+    }
+    const artifact = await input.agentRuntime.getArtifact({ artifactId: input.artifactId });
+    if (!artifact) throw new Error(`Agent runtime input lines artifact ${input.artifactId} was not found.`);
+    if (artifact.kind !== "input_lines") {
+      throw new Error(`Agent runtime artifact ${input.artifactId} is ${artifact.kind}, not input_lines.`);
+    }
+    const inputLines = artifact.content.split(/\r?\n/).filter((line) => line.length > 0);
+    input.requestLogger.info(
+      { inputLinesArtifactId: input.artifactId, inputLineCount: inputLines.length, durationMs: durationMs(startedAt) },
+      "Loaded agent runtime input lines"
+    );
+    await input.repo
+      .recordProcessRunSpan({
+        runId: input.requestId,
+        spanId: "agent.input_lines.load",
+        name: "Load runtime input lines",
+        status: "succeeded",
+        startedAt: new Date(startedAt),
+        completedAt: new Date(),
+        durationMs: durationMs(startedAt),
+        metadata: {
+          inputLinesArtifactId: input.artifactId,
+          inputLineCount: inputLines.length,
+          sizeBytes: artifact.sizeBytes
+        }
+      })
+      .catch((error) => input.requestLogger.warn({ err: error }, "Failed to record input-lines load span"));
+    return inputLines;
+  } catch (error) {
+    await input.repo
+      .recordProcessRunSpan({
+        runId: input.requestId,
+        spanId: "agent.input_lines.load",
+        name: "Load runtime input lines",
+        status: "failed",
+        startedAt: new Date(startedAt),
+        completedAt: new Date(),
+        durationMs: durationMs(startedAt),
+        metadata: {
+          inputLinesArtifactId: input.artifactId,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      })
+      .catch((spanError) => input.requestLogger.warn({ err: spanError }, "Failed to record failed input-lines load span"));
+    throw error;
+  }
 }
 
 async function attachPromptTasksToDiscordReply(

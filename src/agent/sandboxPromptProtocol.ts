@@ -4,6 +4,7 @@ import type { AgentRuntimeTurnEnvelope } from "./runtimeEnvelope.js";
 
 export type SandboxPromptRequest = {
   envelope: AgentRuntimeTurnEnvelope;
+  inputLines?: string[];
 };
 
 export type SerializedAgentFile = {

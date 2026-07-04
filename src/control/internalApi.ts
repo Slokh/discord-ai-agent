@@ -263,7 +263,10 @@ async function handleRequest(input: {
           session,
           execution,
           threadKey,
-          queue: body
+          queue: {
+            ...body,
+            inputLinesArtifactId
+          }
         });
         jobId = result.jobId;
       } catch (error) {

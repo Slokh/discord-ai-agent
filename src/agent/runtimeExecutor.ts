@@ -13,6 +13,8 @@ export type AgentRuntimePromptExecutionInput = {
   text: string;
   timeoutMs: number;
   turnEnvelope: AgentRuntimeTurnEnvelope;
+  inputLinesArtifactId?: string | null;
+  inputLines?: string[];
 };
 
 export type AgentRuntimePromptExecutor = {
@@ -46,10 +48,14 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
   ) {}
 
   async execute(input: AgentRuntimePromptExecutionInput): Promise<AgentResponse> {
-    const request: SandboxPromptRequest = { envelope: input.turnEnvelope };
+    const request: SandboxPromptRequest = {
+      envelope: input.turnEnvelope,
+      ...(input.inputLines?.length ? { inputLines: input.inputLines } : {})
+    };
     const startedAt = Date.now();
     const transport = this.options.warmSandboxUrl ? "http" : "child_process";
     const command = transport === "child_process" ? this.options.runnerCommand ?? resolveSandboxPromptRunnerCommand() : null;
+    const inputLineCount = input.inputLines?.length ?? 0;
     await storeWarmSandboxArtifact(input, {
       protocolKind: "sandbox_prompt_request",
       name: "Warm sandbox prompt request",
@@ -60,7 +66,9 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         command: command?.command ?? null,
         args: command?.args ?? null,
         url: transport === "http" ? this.options.warmSandboxUrl : null,
-        requestId: input.turnEnvelope.requestId
+        requestId: input.turnEnvelope.requestId,
+        inputLinesArtifactId: input.inputLinesArtifactId ?? null,
+        inputLineCount
       }
     });
     await recordWarmSandboxSpan(input, {
@@ -71,7 +79,9 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         transport,
         command: command?.command ?? null,
         args: command?.args ?? null,
-        url: transport === "http" ? this.options.warmSandboxUrl : null
+        url: transport === "http" ? this.options.warmSandboxUrl : null,
+        inputLinesArtifactId: input.inputLinesArtifactId ?? null,
+        inputLineCount
       }
     });
     if (this.options.warmSandboxUrl) {

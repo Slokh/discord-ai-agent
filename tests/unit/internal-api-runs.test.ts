@@ -277,6 +277,7 @@ describe("internal API run endpoints", () => {
         userId: "user-1",
         responseChannelId: "channel-1",
         responseMessageId: "thinking-message-1",
+        inputLinesArtifactId: "artifact-1",
         text: "hello from Discord",
         rawContent: "<@ai> hello from Discord",
         mentionKind: "user",
@@ -310,7 +311,10 @@ describe("internal API run endpoints", () => {
         events: expect.arrayContaining([
           expect.objectContaining({ eventName: "agent.execution.queued" }),
           expect.objectContaining({ eventName: "agent.execution.input_lines_stored" }),
-          expect.objectContaining({ eventName: "agent.execution.job_enqueued" })
+          expect.objectContaining({
+            eventName: "agent.execution.job_enqueued",
+            metadata: expect.objectContaining({ inputLinesArtifactId: "artifact-1" })
+          })
         ])
       })
     );

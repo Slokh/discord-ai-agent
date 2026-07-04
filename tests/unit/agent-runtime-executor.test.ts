@@ -52,7 +52,9 @@ describe("agent runtime prompt executors", () => {
         toolContext: { requestId: "request-1", repo } as never,
         text: "hello",
         timeoutMs: 1000,
-        turnEnvelope: { requestId: "request-1", text: "hello" } as never
+        turnEnvelope: { requestId: "request-1", text: "hello" } as never,
+        inputLinesArtifactId: "input-lines-1",
+        inputLines: ['{"type":"user"}', '{"type":"turn.completed"}']
       })
     ).resolves.toEqual({
       content: "hello from sandbox",
@@ -65,13 +67,21 @@ describe("agent runtime prompt executors", () => {
       ["runner.js"],
       expect.objectContaining({ env: expect.objectContaining({ LOG_LEVEL: "silent", TEST_ENV: "1" }) })
     );
-    expect(JSON.parse(fakeChild.stdinText())).toEqual({ envelope: expect.objectContaining({ requestId: "request-1", text: "hello" }) });
+    expect(JSON.parse(fakeChild.stdinText())).toEqual({
+      envelope: expect.objectContaining({ requestId: "request-1", text: "hello" }),
+      inputLines: ['{"type":"user"}', '{"type":"turn.completed"}']
+    });
     expect(repo.storeProcessRunArtifact).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "request-1",
         kind: "raw_json",
         name: "Warm sandbox prompt request",
-        metadata: expect.objectContaining({ protocolKind: "sandbox_prompt_request", command: "node" })
+        metadata: expect.objectContaining({
+          protocolKind: "sandbox_prompt_request",
+          command: "node",
+          inputLinesArtifactId: "input-lines-1",
+          inputLineCount: 2
+        })
       })
     );
     expect(repo.storeProcessRunArtifact).toHaveBeenCalledWith(
@@ -121,7 +131,9 @@ describe("agent runtime prompt executors", () => {
         toolContext: { requestId: "request-http", repo } as never,
         text: "hello",
         timeoutMs: 1000,
-        turnEnvelope: { requestId: "request-http", text: "hello" } as never
+        turnEnvelope: { requestId: "request-http", text: "hello" } as never,
+        inputLinesArtifactId: "input-lines-http",
+        inputLines: ['{"type":"user","text":"hello"}']
       })
     ).resolves.toEqual({
       content: "hello from warm server",
@@ -134,7 +146,10 @@ describe("agent runtime prompt executors", () => {
       expect.objectContaining({
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ envelope: { requestId: "request-http", text: "hello" } })
+        body: JSON.stringify({
+          envelope: { requestId: "request-http", text: "hello" },
+          inputLines: ['{"type":"user","text":"hello"}']
+        })
       })
     );
     expect(repo.storeProcessRunArtifact).toHaveBeenCalledWith(
@@ -145,7 +160,9 @@ describe("agent runtime prompt executors", () => {
           protocolKind: "sandbox_prompt_request",
           transport: "http",
           url: "http://warm-sandbox:8090",
-          command: null
+          command: null,
+          inputLinesArtifactId: "input-lines-http",
+          inputLineCount: 1
         })
       })
     );

@@ -11,6 +11,7 @@ export type AgentRuntimeExecutionQueueInput = {
   responseChannelId?: string | null;
   responseMessageId?: string | null;
   turnEnvelopeArtifactId?: string | null;
+  inputLinesArtifactId?: string | null;
   text?: string | null;
   rawContent?: string | null;
   mentionKind?: string | null;
@@ -126,7 +127,8 @@ export async function enqueueAgentRuntimeSessionExecution(input: {
       runId: job.runId,
       messageId: job.messageId,
       responseMessageId: job.responseMessageId ?? null,
-      turnEnvelopeArtifactId: job.turnEnvelopeArtifactId ?? null
+      turnEnvelopeArtifactId: job.turnEnvelopeArtifactId ?? null,
+      inputLinesArtifactId: job.inputLinesArtifactId ?? null
     }
   });
   return { job, jobId };
@@ -161,6 +163,7 @@ export function agentRuntimeExecutionJobFromSession(input: {
     responseChannelId: input.queue.responseChannelId ?? metadataString(metadata, "responseChannelId") ?? undefined,
     responseMessageId: input.queue.responseMessageId ?? metadataString(metadata, "responseMessageId") ?? undefined,
     turnEnvelopeArtifactId: input.queue.turnEnvelopeArtifactId ?? metadataString(metadata, "turnEnvelopeArtifactId"),
+    inputLinesArtifactId: input.queue.inputLinesArtifactId ?? metadataString(metadata, "inputLinesArtifactId"),
     text,
     rawContent: input.queue.rawContent ?? text,
     mentionKind: input.queue.mentionKind ?? metadataString(metadata, "mentionKind") ?? "user",

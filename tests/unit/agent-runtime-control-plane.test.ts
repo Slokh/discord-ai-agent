@@ -62,6 +62,7 @@ describe("agent runtime control plane", () => {
         responseChannelId: "channel",
         responseMessageId: "thinking-1",
         turnEnvelopeArtifactId: "artifact-1",
+        inputLinesArtifactId: "input-lines-1",
         text: "hello",
         rawContent: "<@ai> hello",
         mentionKind: "user",
@@ -85,6 +86,7 @@ describe("agent runtime control plane", () => {
         userId: "user",
         responseMessageId: "thinking-1",
         turnEnvelopeArtifactId: "artifact-1",
+        inputLinesArtifactId: "input-lines-1",
         text: "hello"
       })
     );
@@ -97,7 +99,12 @@ describe("agent runtime control plane", () => {
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         eventName: "agent.execution.job_enqueued",
-        metadata: expect.objectContaining({ jobId: "job-1", runId: "message-1", messageId: "message-1" })
+        metadata: expect.objectContaining({
+          jobId: "job-1",
+          runId: "message-1",
+          messageId: "message-1",
+          inputLinesArtifactId: "input-lines-1"
+        })
       })
     );
   });

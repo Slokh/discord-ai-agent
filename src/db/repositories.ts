@@ -4283,6 +4283,12 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToTaskEvent);
   }
 
+  async getTaskProgressEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
+    const runtimeEvents = await this.getAgentRuntimeTaskEventsForTask(input);
+    if (runtimeEvents.length > 0) return runtimeEvents;
+    return this.getTaskEventsForTask(input);
+  }
+
   async ensureConversationSession(input: {
     threadKey: string;
     guildId: string;

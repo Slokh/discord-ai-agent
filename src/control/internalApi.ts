@@ -671,7 +671,7 @@ async function handleRequest(input: {
       return;
     }
     const [events, commands, runs] = await Promise.all([
-      input.repo.getTaskEventsForTask({ taskId, limit: parseLimit(url.searchParams.get("events"), 200, 300) }),
+      input.repo.getTaskProgressEventsForTask({ taskId, limit: parseLimit(url.searchParams.get("events"), 200, 300) }),
       input.repo.getSandboxCommandEventsForTask({ taskId, limit: parseLimit(url.searchParams.get("commands"), 50, 100) }),
       input.repo.getSandboxRunsForTask(taskId)
     ]);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../../src/observability/redaction.js";
-import { diagnosticsForRun, extractDiscordMessageId, relatedRunSummaries, summaryFromTask } from "../../src/observability/runs.js";
-import type { AgentTaskRecord } from "../../src/db/repositories.js";
+import { diagnosticsForRun, extractDiscordMessageId, getRunSnapshot, relatedRunSummaries, summaryFromTask } from "../../src/observability/runs.js";
+import type { AgentTaskRecord, DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import type { RunEvent, RunSummary } from "../../src/observability/runs.js";
 
 describe("observability redaction", () => {
@@ -52,6 +52,51 @@ describe("run summaries", () => {
         kind: "codegen",
         status: "running",
         title: "Child task"
+      })
+    ]);
+  });
+
+  it("builds codegen run timelines from runtime-first task progress events", async () => {
+    const task = agentTaskRecord({ status: "running", completedAt: null, currentStep: "repo_complete" });
+    const snapshot = await getRunSnapshot(
+      {
+        getProcessRun: async () => undefined,
+        getAgentTask: async (taskId: string) => (taskId === task.taskId ? task : undefined),
+        getTaskProgressEventsForTask: async () => [
+          {
+            id: 2,
+            taskId: task.taskId,
+            traceId: task.traceId,
+            eventName: "agent.task.progress",
+            level: "info",
+            summary: "Runtime progress event.",
+            metadata: { taskId: task.taskId, step: "repo_complete", durationMs: 1234 },
+            createdAt: new Date("2026-06-30T12:01:00Z")
+          }
+        ],
+        getSandboxCommandEventsForTask: async () => [],
+        getSandboxRunsForTask: async () => [],
+        getTraceEventsForTrace: async () => [],
+        getToolAuditLogsForTrace: async () => [],
+        listProcessRunsForTrace: async () => [],
+        listAgentTasksForTrace: async () => []
+      } as unknown as DiscordAiAgentRepository,
+      task.taskId
+    );
+
+    expect(snapshot?.events).toEqual([
+      expect.objectContaining({
+        source: "task",
+        name: "agent.task.progress",
+        summary: "Runtime progress event.",
+        metadata: expect.objectContaining({ taskId: task.taskId, step: "repo_complete" })
+      })
+    ]);
+    expect(snapshot?.spans).toEqual([
+      expect.objectContaining({
+        source: "task",
+        name: "repo",
+        durationMs: 1234
       })
     ]);
   });

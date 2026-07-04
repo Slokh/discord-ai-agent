@@ -291,14 +291,8 @@ async function taskDetails(
 }
 
 async function recentTaskEvents(repo: DiscordAiAgentRepository, task: AgentTaskRecord, limit = 8): Promise<TaskEvent[] | undefined> {
-  const runtimeEvents = await repo.getAgentRuntimeTaskEventsForTask({ taskId: task.taskId, limit }).catch((error) => {
-    logger.warn({ err: error, taskId: task.taskId }, "Failed to load recent agent runtime task events for Discord progress render");
-    return undefined;
-  });
-  if (runtimeEvents?.length) return runtimeEvents;
-
-  return repo.getTaskEventsForTask({ taskId: task.taskId, limit }).catch((error) => {
-    logger.warn({ err: error, taskId: task.taskId }, "Failed to load recent legacy agent task events for Discord progress render");
+  return repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit }).catch((error) => {
+    logger.warn({ err: error, taskId: task.taskId }, "Failed to load recent agent task progress events for Discord progress render");
     return undefined;
   });
 }

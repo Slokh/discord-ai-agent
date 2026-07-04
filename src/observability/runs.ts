@@ -150,7 +150,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     processRun ? repo.getProcessRunSpans(processRun.runId) : Promise.resolve([]),
     processRun ? repo.getProcessRunEvents({ runId: processRun.runId, limit: 500 }) : Promise.resolve([]),
     processRun ? repo.getProcessRunArtifacts(processRun.runId) : Promise.resolve([]),
-    task ? repo.getTaskEventsForTask({ taskId: task.taskId, limit: 300 }) : Promise.resolve([]),
+    task ? repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit: 300 }) : Promise.resolve([]),
     task ? repo.getSandboxCommandEventsForTask({ taskId: task.taskId, limit: 100 }) : Promise.resolve([]),
     task ? repo.getSandboxRunsForTask(task.taskId) : Promise.resolve([]),
     traceId ? repo.getTraceEventsForTrace({ traceId, limit: 500 }) : Promise.resolve([]),

@@ -1199,7 +1199,7 @@ describe("getDeploymentStatus", () => {
 });
 
 describe("getAgentTaskStatus", () => {
-  it("prefers runtime task events over legacy task events", async () => {
+  it("renders task progress events from the shared runtime-first event source", async () => {
     const auditTool = vi.fn(async () => undefined);
     const task = {
       taskId: "task-1",
@@ -1236,7 +1236,7 @@ describe("getAgentTaskStatus", () => {
       terminalRenderedAt: null,
       updatedAt: new Date("2026-07-01T12:01:00.000Z")
     };
-    const getAgentRuntimeTaskEventsForTask = vi.fn(async () => [
+    const getTaskProgressEventsForTask = vi.fn(async () => [
       {
         id: 2,
         taskId: "task-1",
@@ -1248,23 +1248,10 @@ describe("getAgentTaskStatus", () => {
         createdAt: new Date("2026-07-01T12:01:00.000Z")
       }
     ]);
-    const getTaskEventsForTask = vi.fn(async () => [
-      {
-        id: 1,
-        taskId: "task-1",
-        traceId: "trace-1",
-        eventName: "task.progress",
-        level: "info",
-        summary: "Legacy event should not be shown.",
-        metadata: { step: "repo" },
-        createdAt: new Date("2026-07-01T12:00:30.000Z")
-      }
-    ]);
     const ctx = {
       repo: {
         getAgentTask: vi.fn(async () => task),
-        getAgentRuntimeTaskEventsForTask,
-        getTaskEventsForTask,
+        getTaskProgressEventsForTask,
         getSandboxCommandEvents: vi.fn(async () => []),
         auditTool
       },
@@ -1277,9 +1264,7 @@ describe("getAgentTaskStatus", () => {
     const response = await getAgentTaskStatus(ctx, { taskId: "task-1", limit: 3 });
 
     expect(response).toContain("agent.task.progress task=task-1 - Runtime event won.");
-    expect(response).not.toContain("Legacy event should not be shown.");
-    expect(getAgentRuntimeTaskEventsForTask).toHaveBeenCalledWith({ taskId: "task-1", limit: 3 });
-    expect(getTaskEventsForTask).not.toHaveBeenCalled();
+    expect(getTaskProgressEventsForTask).toHaveBeenCalledWith({ taskId: "task-1", limit: 3 });
     expect(auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "getAgentTaskStatus",
@@ -1498,6 +1483,7 @@ describe("inspectAgentLogs", () => {
         ]),
         getProcessRunArtifacts: vi.fn(async () => []),
         getProcessRunArtifact: vi.fn(async () => undefined),
+        getTaskProgressEventsForTask: vi.fn(async () => []),
         getTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => [
           {
@@ -1578,6 +1564,7 @@ describe("inspectAgentLogs", () => {
         getProcessRunSpans: vi.fn(async () => []),
         getProcessRunEvents: vi.fn(async () => []),
         getProcessRunArtifacts: vi.fn(async () => []),
+        getTaskProgressEventsForTask: vi.fn(async () => []),
         getTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => []),
         getSandboxRunsForTask: vi.fn(async () => []),

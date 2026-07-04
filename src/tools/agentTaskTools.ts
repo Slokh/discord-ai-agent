@@ -102,9 +102,7 @@ export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: str
 }
 
 async function getTaskStatusEvents(ctx: ToolContext, task: AgentTaskRecord, limit: number): Promise<TaskEvent[]> {
-  const runtimeEvents = await ctx.repo.getAgentRuntimeTaskEventsForTask({ taskId: task.taskId, limit });
-  if (runtimeEvents.length > 0) return runtimeEvents;
-  return ctx.repo.getTaskEventsForTask({ taskId: task.taskId, limit });
+  return ctx.repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit });
 }
 
 export async function listAgentTasks(ctx: ToolContext, input: { statuses?: string[]; limit?: number } = {}): Promise<string> {

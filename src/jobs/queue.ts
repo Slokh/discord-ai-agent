@@ -553,13 +553,14 @@ export async function startJobs(input: {
               taskId: job.data.taskId,
               backendName
             });
-            await input.codegenRepo
-              ?.updateExecution({
-                executionId,
-                sandboxId: acquiredLease?.sandboxId ?? null,
-                metadata: { leaseOwner: acquiredLease?.leaseOwner ?? null }
-              })
-              .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to attach codegen execution lease"));
+            if (acquiredLease) {
+              await input.repo?.recordAgentTaskSandboxLease({
+                taskId: job.data.taskId,
+                backend: backendName,
+                sandboxId: acquiredLease.sandboxId,
+                leaseOwner: acquiredLease.leaseOwner
+              });
+            }
             try {
               const result = await input.agentTask!.start(job.data, {
                 sandboxId: acquiredLease?.sandboxId ?? null,

@@ -2654,6 +2654,44 @@ export class DiscordAiAgentRepository {
     }).catch(() => undefined);
   }
 
+  async recordAgentTaskSandboxLease(input: {
+    taskId: string;
+    backend?: string | null;
+    sandboxId: string;
+    leaseOwner?: string | null;
+    metadata?: Record<string, unknown>;
+  }) {
+    const executionMetadata = removeUndefinedValues({
+      ...(input.metadata ?? {}),
+      backend: input.backend ?? undefined,
+      sandboxId: input.sandboxId,
+      leaseOwner: input.leaseOwner ?? undefined
+    });
+    await this.pool
+      .query(
+        `
+          WITH updated_executions AS (
+            UPDATE codegen_executions
+            SET sandbox_id = coalesce($2::text, sandbox_id),
+                metadata = metadata || $3::jsonb,
+                updated_at = now()
+            WHERE task_id = $1
+            RETURNING session_id
+          )
+          UPDATE codegen_sessions
+          SET updated_at = now()
+          WHERE session_id IN (SELECT session_id FROM updated_executions)
+        `,
+        [input.taskId, input.sandboxId, JSON.stringify(executionMetadata)]
+      )
+      .catch(() => undefined);
+    await this.updateProcessRun({
+      runId: input.taskId,
+      status: "running",
+      metadata: executionMetadata
+    }).catch(() => undefined);
+  }
+
   async recordSandboxRun(input: {
     taskId: string;
     sandboxRunId: string;

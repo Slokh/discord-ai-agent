@@ -317,6 +317,38 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       pgBossJobId: "pgboss-job-1",
       workerStartedAt: new Date("2026-07-01T12:00:00.000Z")
     });
+    await repo.recordAgentTaskSandboxLease({
+      taskId,
+      backend: "kubernetes-sandbox",
+      sandboxId: "warm-sandbox-1",
+      leaseOwner: "lease-owner-1"
+    });
+    const leasedExecutions = await pool.query(
+      "SELECT execution_id, sandbox_id, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      [[executionId, agentExecutionId]]
+    );
+    expect(leasedExecutions.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: executionId,
+          sandbox_id: "warm-sandbox-1",
+          metadata: expect.objectContaining({
+            backend: "kubernetes-sandbox",
+            sandboxId: "warm-sandbox-1",
+            leaseOwner: "lease-owner-1"
+          })
+        }),
+        expect.objectContaining({
+          execution_id: agentExecutionId,
+          sandbox_id: "warm-sandbox-1",
+          metadata: expect.objectContaining({
+            backend: "kubernetes-sandbox",
+            sandboxId: "warm-sandbox-1",
+            leaseOwner: "lease-owner-1"
+          })
+        })
+      ])
+    );
     await repo.markAgentTaskProgress({
       taskId,
       backend: "kubernetes-sandbox",

@@ -1,3 +1,4 @@
+import { enqueueAgentRuntimeCodeUpdateTask } from "../agent/runtimeControlPlane.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentTaskRecord, AgentTaskStatus, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
 import type { ToolContext } from "./types.js";
@@ -43,6 +44,26 @@ async function enqueueAgentCodeUpdateTask(
     throw new Error("Agent task queue is unavailable in this process.");
   }
   await ctx.updateStatus?.("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
+  if (ctx.agentRuntime && ctx.agentRuntimeSession) {
+    return enqueueAgentRuntimeCodeUpdateTask({
+      config: ctx.config,
+      agentRuntime: ctx.agentRuntime,
+      jobs: ctx.jobs,
+      session: ctx.agentRuntimeSession,
+      traceId: ctx.requestId,
+      guildId: ctx.guildId,
+      channelId: ctx.channelId,
+      userId: ctx.userId,
+      threadKey: ctx.threadKey,
+      parentExecutionId: ctx.agentRuntimeExecutionId,
+      request: input.request.trim(),
+      title: input.updateName,
+      requestedBy: input.requestedBy,
+      discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
+      discordResponseMessageId: ctx.statusMessageId,
+      retriedFromTaskId: input.retriedFromTaskId ?? undefined
+    });
+  }
   return ctx.jobs.enqueueAgentTask({
     traceId: ctx.requestId,
     guildId: ctx.guildId,

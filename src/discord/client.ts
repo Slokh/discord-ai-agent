@@ -645,6 +645,9 @@ async function executeDiscordAgentRequest(
     const toolContext: ToolContext = {
       config: input.config,
       repo: input.repo,
+      agentRuntime: input.agentRuntime,
+      agentRuntimeSession: agentRuntimeExecution?.session ?? null,
+      agentRuntimeExecutionId: agentRuntimeExecution?.executionId ?? null,
       openRouter: input.openRouter,
       jobs: input.jobs,
       guildId: turnEnvelope.guildId,

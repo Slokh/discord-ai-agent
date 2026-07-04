@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
+import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeExecutionRecord, AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
+import type { AgentTaskJob } from "../execution/types.js";
 import type { AgentRuntimeExecutionJob, JobRuntime } from "../jobs/queue.js";
 
 export type AgentRuntimeExecutionQueueInput = {
@@ -28,6 +31,155 @@ export type AgentRuntimeSessionExecutionEnqueueResult = {
   job: AgentRuntimeExecutionJob;
   jobId: string | null;
 };
+
+export type AgentRuntimeCodeUpdateEnqueueResult = {
+  taskId: string;
+  jobId: string | null;
+};
+
+export async function enqueueAgentRuntimeCodeUpdateTask(input: {
+  config: AppConfig;
+  agentRuntime: AgentRuntimeRepository;
+  jobs: Pick<JobRuntime, "enqueueAgentTask">;
+  session: AgentRuntimeSessionRecord;
+  request: string;
+  title: string;
+  requestedBy: string;
+  traceId?: string | null;
+  guildId?: string | null;
+  channelId?: string | null;
+  userId?: string | null;
+  threadKey?: string | null;
+  discordResponseChannelId?: string | null;
+  discordResponseMessageId?: string | null;
+  retriedFromTaskId?: string | null;
+  parentExecutionId?: string | null;
+  taskId?: string | null;
+}): Promise<AgentRuntimeCodeUpdateEnqueueResult> {
+  const taskId = input.taskId?.trim() || `task-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const executionId = agentRuntimeCodeUpdateExecutionId(taskId);
+  const threadKey = input.threadKey ?? input.session.threadKey ?? `agent-task:${taskId}`;
+  const traceId = input.traceId ?? input.session.traceId ?? taskId;
+  const job: Omit<AgentTaskJob, "taskType"> = {
+    taskId,
+    traceId,
+    request: input.request,
+    title: input.title,
+    requestedBy: input.requestedBy,
+    guildId: input.guildId ?? input.session.guildId ?? undefined,
+    channelId: input.channelId ?? input.session.channelId ?? undefined,
+    userId: input.userId ?? input.session.userId ?? undefined,
+    threadKey,
+    discordResponseChannelId: input.discordResponseChannelId ?? undefined,
+    discordResponseMessageId: input.discordResponseMessageId ?? undefined,
+    retriedFromTaskId: input.retriedFromTaskId ?? undefined
+  };
+  await input.agentRuntime.appendMessage({
+    messageId: agentRuntimeCodeUpdateMessageId(taskId),
+    sessionId: input.session.sessionId,
+    clientMessageId: taskId,
+    role: "tool",
+    parts: [
+      {
+        type: "tool_result",
+        toolName: "runCodingAgent",
+        taskId,
+        title: input.title,
+        request: input.request,
+        status: "queued"
+      }
+    ],
+    metadata: {
+      taskId,
+      traceId,
+      source: "agent.runtime.tool",
+      toolName: "runCodingAgent",
+      parentExecutionId: input.parentExecutionId ?? null,
+      retriedFromTaskId: input.retriedFromTaskId ?? null
+    }
+  });
+  await input.agentRuntime.createExecution({
+    executionId,
+    sessionId: input.session.sessionId,
+    taskId,
+    traceId,
+    status: "queued",
+    harness: "runCodingAgent",
+    model: input.config.openRouter.codegenModel,
+    provider: providerForModel(input.config.openRouter.codegenModel),
+    reasoningEffort: "low",
+    metadata: {
+      taskType: "code_update",
+      source: "agent.runtime.tool",
+      parentExecutionId: input.parentExecutionId ?? null,
+      requestedBy: input.requestedBy,
+      retriedFromTaskId: input.retriedFromTaskId ?? null
+    }
+  });
+  await input.agentRuntime.recordEvent({
+    sessionId: input.session.sessionId,
+    executionId,
+    traceId,
+    kind: "tool",
+    eventName: "agent.task.queued",
+    summary: "Queued code-update task from the agent runtime session.",
+    metadata: {
+      taskId,
+      toolName: "runCodingAgent",
+      title: input.title,
+      retriedFromTaskId: input.retriedFromTaskId ?? null
+    }
+  });
+  let jobId: string | null = null;
+  try {
+    const result = await input.jobs.enqueueAgentTask({
+      ...job,
+      taskType: "code_update",
+      runtimeMirror: "external"
+    });
+    jobId = result.jobId;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await input.agentRuntime.updateExecution({
+      executionId,
+      status: "failed",
+      error: message,
+      metadata: { enqueueFailed: true }
+    });
+    await input.agentRuntime.recordEvent({
+      sessionId: input.session.sessionId,
+      executionId,
+      traceId,
+      kind: "error",
+      level: "error",
+      eventName: "agent.task.enqueue_failed",
+      summary: message,
+      metadata: { taskId, toolName: "runCodingAgent" }
+    });
+    throw error;
+  }
+  await input.agentRuntime.updateExecution({
+    executionId,
+    metadata: {
+      pgbossJobId: jobId,
+      queue: "agent.task"
+    }
+  });
+  await input.agentRuntime.recordEvent({
+    sessionId: input.session.sessionId,
+    executionId,
+    traceId,
+    kind: "tool",
+    eventName: "agent.task.enqueued",
+    summary: "Enqueued code-update task.",
+    metadata: {
+      taskId,
+      jobId,
+      toolName: "runCodingAgent"
+    }
+  });
+  return { taskId, jobId };
+}
 
 export async function storeAgentRuntimeExecutionInputLines(input: {
   agentRuntime: AgentRuntimeRepository;
@@ -187,4 +339,16 @@ export function missingAgentRuntimeExecutionJobContext(input: { session: AgentRu
 function metadataString(metadata: Record<string, unknown>, key: string) {
   const value = metadata[key];
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function agentRuntimeCodeUpdateExecutionId(taskId: string) {
+  return `agent-task-execution-${taskId}`;
+}
+
+function agentRuntimeCodeUpdateMessageId(taskId: string) {
+  return `agent-task-message-${taskId}`;
+}
+
+function providerForModel(model: string) {
+  return model.includes("/") ? "openrouter" : "openai";
 }

@@ -83,15 +83,19 @@ export type AgentRuntimeExecutionRunner = {
 
 export type DiscordAgentRequestRunner = AgentRuntimeExecutionRunner;
 
+export type AgentTaskEnqueueInput = Omit<AgentTaskJob, "taskId" | "taskType"> & {
+  taskId?: string;
+  taskType?: AgentTaskJob["taskType"];
+  runtimeMirror?: "external";
+};
+
 export type JobRuntime = {
   boss: PgBoss;
   enqueueGuildCrawl: () => Promise<string | null>;
   enqueueMessageEmbedding: (messageId: string, options?: MessageEmbeddingEnqueueOptions) => Promise<string | null>;
   enqueueAgentRuntimeExecution: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
   enqueueDiscordAgentRequest: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
-  enqueueAgentTask: (
-    job: Omit<AgentTaskJob, "taskId" | "taskType"> & { taskId?: string; taskType?: AgentTaskJob["taskType"] }
-  ) => Promise<{ jobId: string | null; taskId: string }>;
+  enqueueAgentTask: (job: AgentTaskEnqueueInput) => Promise<{ jobId: string | null; taskId: string }>;
   stop: () => Promise<void>;
 };
 
@@ -237,18 +241,20 @@ export async function startJobs(input: {
       return runtime.enqueueAgentRuntimeExecution(job);
     },
     enqueueAgentTask: async (job) => {
+      const { runtimeMirror, ...jobInput } = job;
+      const shouldMirrorAgentRuntime = runtimeMirror !== "external";
       const trace = currentTraceContext();
-      const taskId = job.taskId ?? `task-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+      const taskId = jobInput.taskId ?? `task-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
       const data: AgentTaskJob = {
-        ...job,
+        ...jobInput,
         taskId,
-        taskType: job.taskType ?? "code_update",
-        traceId: trace?.traceId ?? job.traceId ?? taskId,
-        guildId: trace?.guildId ?? job.guildId,
-        channelId: trace?.channelId ?? job.channelId,
-        userId: trace?.userId ?? job.userId
+        taskType: jobInput.taskType ?? "code_update",
+        traceId: trace?.traceId ?? jobInput.traceId ?? taskId,
+        guildId: trace?.guildId ?? jobInput.guildId,
+        channelId: trace?.channelId ?? jobInput.channelId,
+        userId: trace?.userId ?? jobInput.userId
       };
-      logger.info({ queue: AGENT_TASK_JOB, taskId, title: job.title }, "Enqueueing agent task");
+      logger.info({ queue: AGENT_TASK_JOB, taskId, title: jobInput.title, runtimeMirror }, "Enqueueing agent task");
       const backendName = input.agentTask?.name ?? "kubernetes-sandbox";
       await input.repo?.upsertAgentTaskQueued({
         taskId,
@@ -324,15 +330,17 @@ export async function startJobs(input: {
           metadata: { backend: backendName, pgbossJobId: null }
         })
         .catch((error) => logger.warn({ err: error, taskId }, "Failed to create codegen execution mirror"));
-      await mirrorAgentTaskQueuedToAgentRuntime({
-        agentRuntimeRepo,
-        config: input.config,
-        job: data,
-        backendName,
-        pgBossJobId: null,
-        codegenSessionId: codegenSessionIdForTask(data),
-        codegenExecutionId: codegenExecutionIdForTask(data)
-      }).catch((error) => logger.warn({ err: error, taskId }, "Failed to create agent runtime task mirror"));
+      if (shouldMirrorAgentRuntime) {
+        await mirrorAgentTaskQueuedToAgentRuntime({
+          agentRuntimeRepo,
+          config: input.config,
+          job: data,
+          backendName,
+          pgBossJobId: null,
+          codegenSessionId: codegenSessionIdForTask(data),
+          codegenExecutionId: codegenExecutionIdForTask(data)
+        }).catch((error) => logger.warn({ err: error, taskId }, "Failed to create agent runtime task mirror"));
+      }
       let id: string | null;
       try {
         id =
@@ -378,15 +386,17 @@ export async function startJobs(input: {
           metadata: { backend: backendName, pgbossJobId: id }
         })
         .catch((error) => logger.warn({ err: error, taskId }, "Failed to update codegen execution enqueue metadata"));
-      await mirrorAgentTaskQueuedToAgentRuntime({
-        agentRuntimeRepo,
-        config: input.config,
-        job: data,
-        backendName,
-        pgBossJobId: id,
-        codegenSessionId: codegenSessionIdForTask(data),
-        codegenExecutionId: codegenExecutionIdForTask(data)
-      }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update agent runtime task mirror"));
+      if (shouldMirrorAgentRuntime) {
+        await mirrorAgentTaskQueuedToAgentRuntime({
+          agentRuntimeRepo,
+          config: input.config,
+          job: data,
+          backendName,
+          pgBossJobId: id,
+          codegenSessionId: codegenSessionIdForTask(data),
+          codegenExecutionId: codegenExecutionIdForTask(data)
+        }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update agent runtime task mirror"));
+      }
       logger.info({ queue: AGENT_TASK_JOB, taskId, jobId: id }, "Agent task enqueue complete");
       return { jobId: id, taskId };
     },

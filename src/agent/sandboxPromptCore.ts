@@ -1,4 +1,5 @@
 import type { AppConfig } from "../config/env.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { JobRuntime } from "../jobs/queue.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
@@ -10,13 +11,18 @@ export async function executeSandboxPromptRequest(input: {
   request: SandboxPromptRequest;
   config: AppConfig;
   repo: DiscordAiAgentRepository;
+  agentRuntime?: AgentRuntimeRepository;
   openRouter: OpenRouterClient;
   jobs?: JobRuntime;
 }): Promise<SandboxPromptResponse> {
   const envelope = input.request.envelope;
+  const agentRuntimeSession = input.agentRuntime ? await input.agentRuntime.getSession({ threadKey: envelope.threadKey }) : null;
   const toolContext: ToolContext = {
     config: input.config,
     repo: input.repo,
+    agentRuntime: input.agentRuntime,
+    agentRuntimeSession: agentRuntimeSession ?? null,
+    agentRuntimeExecutionId: null,
     openRouter: input.openRouter,
     jobs: input.jobs,
     guildId: envelope.guildId,

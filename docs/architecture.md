@@ -39,8 +39,8 @@ For durable knowledge changes such as excluding a channel, deleting indexed hist
 ### Code Update Request To PR
 
 1. The model calls `runCodingAgent` when the user explicitly asks the bot to update itself.
-2. `src/tools/agentTaskTools.ts` enqueues a durable agent task through the tool facade and edits the Discord status message with progress.
-   The queue layer mirrors that task into the generic agent-runtime session as a `runCodingAgent` tool message plus a task-linked execution/event stream, while keeping the legacy per-task codegen session for sandbox callbacks.
+2. `src/tools/agentTaskTools.ts` edits the Discord status message with progress and, when a durable agent session is available, creates the `runCodingAgent` tool message plus task-linked execution in that session before enqueueing the sandbox worker.
+   The legacy queue-side mirror remains as compatibility fallback for callers that do not yet carry agent-runtime context.
 3. `src/jobs/queue.ts` claims the task and launches the configured execution backend.
 4. `src/execution/backend.ts` starts either a Kubernetes Job or local process sandbox.
 5. `src/execution/sandboxRunner.ts` prepares the repo, prompt, cache, harness config, tests, scan, push, and PR. Use `src/execution/README.md` before changing this path.

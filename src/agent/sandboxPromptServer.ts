@@ -1,6 +1,7 @@
 import "dotenv/config";
 import http from "node:http";
 import { loadConfig, type AppConfig } from "../config/env.js";
+import { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import { CodegenRepository } from "../db/codegenRepository.js";
 import { createPool } from "../db/pool.js";
 import { DiscordAiAgentRepository } from "../db/repositories.js";
@@ -35,12 +36,15 @@ export async function startSandboxPromptServer(input: {
       return new DiscordAiAgentRepository(pool);
     })();
   const openRouter = input.openRouter ?? new OpenRouterClient(config.openRouter);
+  const codegenRepo = input.jobs ? undefined : new CodegenRepository(pool ?? (codegenPool = createPool(config)));
+  const agentRuntime = codegenRepo ? new AgentRuntimeRepository(codegenRepo) : undefined;
   const jobs =
     input.jobs ??
     (await startJobs({
       config,
       repo,
-      codegenRepo: new CodegenRepository(pool ?? (codegenPool = createPool(config))),
+      codegenRepo: codegenRepo!,
+      agentRuntimeRepo: agentRuntime,
       crawler: {
         crawlConfiguredGuild: async () => {
           throw new Error("Crawl jobs are unavailable in the warm sandbox prompt server.");
@@ -63,7 +67,7 @@ export async function startSandboxPromptServer(input: {
         return;
       }
       const body = (await readJsonBody(request)) as SandboxPromptRequest;
-      sendJson(response, 200, await executeSandboxPromptRequest({ request: body, config, repo, openRouter, jobs }));
+      sendJson(response, 200, await executeSandboxPromptRequest({ request: body, config, repo, agentRuntime, openRouter, jobs }));
     } catch (error) {
       logger.error({ err: error }, "Sandbox prompt server request failed");
       sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });

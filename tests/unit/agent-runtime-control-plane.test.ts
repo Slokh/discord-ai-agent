@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  enqueueAgentRuntimeCodeUpdateTask,
   enqueueAgentRuntimeSessionExecution,
   missingAgentRuntimeExecutionJobContext,
   storeAgentRuntimeExecutionInputLines
@@ -109,6 +110,71 @@ describe("agent runtime control plane", () => {
     );
   });
 
+  it("creates code-update task executions before handing work to the legacy task queue", async () => {
+    const agentRuntime = fakeAgentRuntime();
+    const jobs = {
+      enqueueAgentTask: vi.fn(async () => ({ jobId: "job-task-1", taskId: "task-runtime-first" }))
+    };
+
+    const result = await enqueueAgentRuntimeCodeUpdateTask({
+      config: { openRouter: { codegenModel: "z-ai/glm-5.2" } } as never,
+      agentRuntime: agentRuntime as never,
+      jobs,
+      session: fakeSession(),
+      taskId: "task-runtime-first",
+      traceId: "message-1",
+      request: "make code updates runtime-first",
+      title: "Runtime-first code updates",
+      requestedBy: "Kartik",
+      threadKey: "discord:guild:channel",
+      discordResponseChannelId: "channel",
+      discordResponseMessageId: "thinking-1"
+    });
+
+    expect(result).toEqual({ taskId: "task-runtime-first", jobId: "job-task-1" });
+    expect(agentRuntime.appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        messageId: "agent-task-message-task-runtime-first",
+        role: "tool",
+        parts: [
+          expect.objectContaining({
+            type: "tool_result",
+            toolName: "runCodingAgent",
+            taskId: "task-runtime-first",
+            status: "queued"
+          })
+        ]
+      })
+    );
+    expect(agentRuntime.createExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionId: "agent-task-execution-task-runtime-first",
+        sessionId: "agent-session-1",
+        taskId: "task-runtime-first",
+        status: "queued",
+        harness: "runCodingAgent",
+        model: "z-ai/glm-5.2"
+      })
+    );
+    expect(jobs.enqueueAgentTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "task-runtime-first",
+        runtimeMirror: "external",
+        request: "make code updates runtime-first",
+        title: "Runtime-first code updates",
+        discordResponseMessageId: "thinking-1"
+      })
+    );
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "agent.task.queued" }));
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: "agent.task.enqueued",
+        metadata: expect.objectContaining({ taskId: "task-runtime-first", jobId: "job-task-1" })
+      })
+    );
+  });
+
   it("marks executions failed when the queue handoff fails", async () => {
     const agentRuntime = fakeAgentRuntime();
     const jobs = {
@@ -158,6 +224,8 @@ describe("agent runtime control plane", () => {
 
 function fakeAgentRuntime() {
   return {
+    appendMessage: vi.fn(async () => undefined),
+    createExecution: vi.fn(async () => undefined),
     updateExecution: vi.fn(async () => undefined),
     recordEvent: vi.fn(async () => undefined),
     storeArtifact: vi.fn(async (input: { content: string }) => ({

@@ -1651,6 +1651,7 @@ function chatMessages(
         "For GitHub, PR, CI, check, test, deployment, repository, or self-update debugging/fixing, call runCodingAgent unless the user only asks for quick read-only status that getAgentTaskStatus can answer directly. Prefer runCodingAgent over hosted web tools for GitHub/CI/repo investigation because the sandbox can use gh CLI, the checked-out repo, local tests, and progress updates. " +
         "After one or two Discord history searches, synthesize one natural Discord reply instead of repeatedly searching or fetching contexts, unless the user explicitly asks for exact surrounding context. Do not add a separate Sources section unless the user asks. If evidence is weak, say the blunt verdict first, like 'No winner', then the shortest reason. " +
         "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, run a coding PR update, or undo/delete/forget prior agent turns. " +
+        "The final user message is the only request you should answer. Prior channel memory is background continuity for explicit follow-ups only; never continue or answer older unrelated messages from memory. " +
         "Use prior channel memory and reply-chain context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
@@ -1659,6 +1660,10 @@ function chatMessages(
     ...sessionMessagesForPrompt(sessionMessages),
     ...replyContextMessagesForPrompt(replyContext),
     ...imageContextMessagesForPrompt(requestAttachments, replyContext),
+    {
+      role: "system" as const,
+      content: "Answer only the next user message. Ignore unrelated prior channel memory unless the next user message explicitly asks about it or clearly depends on it."
+    },
     { role: "user" as const, content: text }
   ];
 }
@@ -1809,8 +1814,8 @@ function sessionMessagesForPrompt(sessionMessages: ConversationMessage[]): ChatM
     {
       role: "system",
       content:
-        "Recent persistent memory for this Discord channel follows. It may include earlier user mentions, Discord AI Agent replies, and local tool results from this channel. " +
-        "Use it for continuity and references like 'that'. " +
+        "Recent completed Discord AI Agent turns for this channel follow. They are background only. " +
+        "Use them for explicit follow-ups and references like 'that', but do not answer or continue older unrelated requests from this memory. " +
         "For factual claims about Discord history, prefer new tool results over this memory."
     },
     ...sessionMessages.map(sessionMessageToChatMessage)

@@ -2172,42 +2172,46 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
 
     const userDiscordMessageId = `message-${randomUUID()}`;
-    await repo.appendConversationMessage({
+    const assistantDiscordMessageId = `message-${randomUUID()}`;
+    await repo.appendConversationTurn({
       threadKey,
-      role: "user",
-      discordMessageId: userDiscordMessageId,
-      authorId: userId,
-      authorDisplayName: "Kartik",
-      content: "make an image of a wizard eating nachos",
-      createdAt: new Date("2026-01-01T00:00:00.000Z")
+      turnId: userDiscordMessageId,
+      user: {
+        discordMessageId: userDiscordMessageId,
+        authorId: userId,
+        authorDisplayName: "Kartik",
+        content: "make an image of a wizard eating nachos",
+        createdAt: new Date("2026-01-01T00:00:00.000Z")
+      },
+      assistant: {
+        discordMessageId: assistantDiscordMessageId,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Generated image for: a wizard eating nachos",
+        createdAt: new Date("2026-01-01T00:00:02.000Z")
+      }
     });
     await repo.appendConversationMessage({
       threadKey,
       role: "tool",
       content: "Generated image for: a wizard eating nachos",
-      metadata: { toolName: "generateImage" },
+      metadata: { toolName: "generateImage", turnId: userDiscordMessageId, turnStatus: "completed" },
       createdAt: new Date("2026-01-01T00:00:01.000Z")
-    });
-    await repo.appendConversationMessage({
-      threadKey,
-      role: "assistant",
-      discordMessageId: `message-${randomUUID()}`,
-      authorId: "bot",
-      authorDisplayName: "ai",
-      content: "Generated image for: a wizard eating nachos",
-      createdAt: new Date("2026-01-01T00:00:02.000Z")
     });
 
     const messages = await repo.recentConversationMessages({ threadKey, limit: 10 });
+    const messagesWithTools = await repo.recentConversationMessages({ threadKey, limit: 10, includeToolResults: true });
 
-    expect(messages.map((message) => message.role)).toEqual(["user", "tool", "assistant"]);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(messagesWithTools.map((message) => message.role)).toEqual(["user", "tool", "assistant"]);
     expect(messages[0]).toEqual(
       expect.objectContaining({
         authorDisplayName: "Kartik",
         content: "make an image of a wizard eating nachos"
       })
     );
-    expect(messages[1]?.metadata).toEqual(expect.objectContaining({ toolName: "generateImage" }));
+    expect(messages[0]?.metadata).toEqual(expect.objectContaining({ turnStatus: "completed", replyMessageId: assistantDiscordMessageId }));
+    expect(messagesWithTools[1]?.metadata).toEqual(expect.objectContaining({ toolName: "generateImage" }));
 
     const deleted = await repo.deleteConversationMessagesByDiscordMessageIds({
       threadKey,
@@ -2216,7 +2220,96 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const afterDelete = await repo.recentConversationMessages({ threadKey, limit: 10 });
 
     expect(deleted).toBe(1);
-    expect(afterDelete.map((message) => message.role)).toEqual(["tool", "assistant"]);
+    expect(afterDelete.map((message) => message.role)).toEqual(["assistant"]);
+  });
+
+  it("excludes pending user prompts and intermediate tools from default conversation memory", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const threadKey = `discord:${guildId}:${channelId}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.ensureConversationSession({ threadKey, guildId, channelId });
+
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "completed-1",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorDisplayName: "Kartik",
+        content: "completed question",
+        createdAt: new Date("2026-01-01T00:00:00.000Z")
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorDisplayName: "ai",
+        content: "completed answer",
+        createdAt: new Date("2026-01-01T00:00:01.000Z")
+      }
+    });
+    await repo.appendConversationMessage({
+      threadKey,
+      role: "user",
+      discordMessageId: `message-${randomUUID()}`,
+      authorDisplayName: "Other person",
+      content: "pending unrelated prompt",
+      createdAt: new Date("2026-01-01T00:00:02.000Z")
+    });
+    await repo.appendConversationMessage({
+      threadKey,
+      role: "tool",
+      content: "intermediate search result",
+      metadata: { toolName: "searchDiscordHistory" },
+      createdAt: new Date("2026-01-01T00:00:03.000Z")
+    });
+
+    const messages = await repo.recentConversationMessages({ threadKey, limit: 10 });
+
+    expect(messages.map((message) => message.content)).toEqual(["completed question", "completed answer"]);
+  });
+
+  it("keeps completed turns together when slower prompts finish after newer prompts", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const threadKey = `discord:${guildId}:${channelId}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.ensureConversationSession({ threadKey, guildId, channelId });
+
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "slow-turn",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        content: "slow question",
+        createdAt: new Date("2026-01-01T00:00:00.000Z")
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        content: "slow answer",
+        createdAt: new Date("2026-01-01T00:05:00.000Z")
+      }
+    });
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "fast-turn",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        content: "fast question",
+        createdAt: new Date("2026-01-01T00:01:00.000Z")
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        content: "fast answer",
+        createdAt: new Date("2026-01-01T00:02:00.000Z")
+      }
+    });
+
+    const messages = await repo.recentConversationMessages({ threadKey, limit: 10 });
+
+    expect(messages.map((message) => message.content)).toEqual(["fast question", "fast answer", "slow question", "slow answer"]);
   });
 
   it("deletes the most recent user/tool/assistant conversation turns", async () => {

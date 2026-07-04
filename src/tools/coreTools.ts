@@ -838,14 +838,14 @@ export async function getRecentAgentMemory(
 ): Promise<string> {
   const threadKey = ctx.threadKey ?? `discord:${ctx.guildId}:${ctx.channelId}`;
   const limit = boundedLimit(input.limit, 12, 1, 30);
-  const includeToolResults = input.includeToolResults ?? true;
+  const includeToolResults = input.includeToolResults ?? false;
   const messages = (
     await ctx.repo.recentConversationMessages({
       threadKey,
-      limit
+      limit,
+      includeToolResults
     })
   )
-    .filter((message) => includeToolResults || message.role !== "tool")
     .filter((message) => !ctx.requestId || message.discordMessageId !== ctx.requestId);
 
   await ctx.repo.auditTool({

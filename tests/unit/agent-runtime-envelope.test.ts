@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildAgentRuntimeTurnEnvelope, loadAgentRuntimeTurnEnvelope, storeAgentRuntimeTurnEnvelope } from "../../src/agent/runtimeEnvelope.js";
+import {
+  buildAgentRuntimeTurnEnvelope,
+  loadAgentRuntimeTurnEnvelope,
+  replaceAgentRuntimeTurnEnvelopeSessionMessages,
+  storeAgentRuntimeTurnEnvelope
+} from "../../src/agent/runtimeEnvelope.js";
 import type { ConversationMessage } from "../../src/db/repositories.js";
 
 describe("agent runtime envelope", () => {
@@ -160,6 +165,57 @@ describe("agent runtime envelope", () => {
 
     await expect(loadAgentRuntimeTurnEnvelope({ agentRuntime: agentRuntime as never, artifactId: "artifact-1" })).resolves.toEqual(envelope);
     expect(agentRuntime.getArtifact).toHaveBeenCalledWith({ artifactId: "artifact-1" });
+  });
+
+  it("replaces session messages without changing the Discord request context", () => {
+    const envelope = buildAgentRuntimeTurnEnvelope({
+      requestId: "message-1",
+      threadKey: "discord:guild:channel",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      userDisplayName: "Kartik",
+      botRoleIds: [],
+      text: "current request",
+      rawContent: "<@bot> current request",
+      discordUrl: "https://discord.com/channels/guild/channel/message-1",
+      messageCreatedAt: new Date("2026-07-01T12:00:00Z"),
+      visibleChannelIds: ["channel"],
+      mentionedUserIds: [],
+      mentionedChannelIds: [],
+      requestAttachments: [],
+      sessionMessages: [conversationMessage()],
+      createdAt: new Date("2026-07-01T12:00:01Z")
+    });
+
+    const replaced = replaceAgentRuntimeTurnEnvelopeSessionMessages(
+      envelope,
+      [
+        {
+          ...conversationMessage(),
+          id: 2,
+          discordMessageId: "fresh",
+          content: "fresh memory"
+        }
+      ],
+      new Date("2026-07-01T12:05:00Z")
+    );
+
+    expect(replaced).toEqual(
+      expect.objectContaining({
+        requestId: "message-1",
+        text: "current request",
+        discordUrl: "https://discord.com/channels/guild/channel/message-1",
+        createdAt: "2026-07-01T12:05:00.000Z"
+      })
+    );
+    expect(replaced.sessionMessages).toEqual([
+      expect.objectContaining({
+        id: 2,
+        discordMessageId: "fresh",
+        content: "fresh memory"
+      })
+    ]);
   });
 });
 

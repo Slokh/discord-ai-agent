@@ -593,7 +593,47 @@ describe("run console timeline", () => {
 
     const trace = codegenTimelineTrace(codegenSnapshot({ events, spans, artifacts: [] }), { events, spans, startedAt: atMs(0) });
 
-    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["Tool: read"]);
+    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["Round 1: read"]);
+  });
+
+  it("creates a live OpenCode attempt from start progress before the command span exists", () => {
+    const events: RunEvent[] = [
+      runEvent({
+        id: "attempt-start",
+        source: "task",
+        name: "task.progress",
+        summary: "Starting OpenCode server attempt 1/1.",
+        createdAt: atMs(1_000),
+        metadata: { step: "opencode_attempt_1", attempt: 1, command: "opencode-run", harness: "opencode-server" }
+      }),
+      runEvent({
+        id: "attempt-start-duplicate",
+        source: "trace",
+        name: "task.progress",
+        summary: "Starting OpenCode server attempt 1/1.",
+        createdAt: atMs(1_005),
+        metadata: { step: "opencode_attempt_1", attempt: 1, command: "opencode-run", harness: "opencode-server" }
+      }),
+      runEvent({ id: "round", source: "task", name: "task.progress", summary: "OpenCode started round 1.", createdAt: atMs(2_000), metadata: { step: "opencode_round_started", attempt: 1, round: 1 } }),
+      runEvent({ id: "tool", source: "task", name: "task.progress", summary: "OpenCode is reading src/discord/client.ts.", createdAt: atMs(3_000), metadata: { step: "opencode_tool_read", attempt: 1, tool: "read", title: "src/discord/client.ts" } }),
+      runEvent({
+        id: "attempt-activity",
+        source: "process",
+        name: "task.progress",
+        summary: "opencode_attempt_1 is still running after 30s.",
+        createdAt: atMs(31_000),
+        metadata: { step: "opencode_attempt_1_activity", attempt: 1, durationMs: 30_000 }
+      })
+    ];
+
+    const trace = codegenTimelineTrace(codegenSnapshot({ events, spans: [], artifacts: [], generatedAt: atMs(8_000) }), { events, spans: [], startedAt: atMs(0) });
+
+    expect(trace?.groups.map((group) => timelineTitleText(group.parent))).toEqual(["OpenCode attempt 1"]);
+    expect(trace?.groups[0]?.parent.status).toBe("running");
+    expect(trace?.groups[0]?.parent.durationMs).toBe(7_000);
+    expect(trace?.groups[0]?.children.map((child) => timelineTitleText(child))).toEqual(["Round 1: read"]);
+    expect(trace?.groups[0]?.children[0]?.status).toBe("running");
+    expect(trace?.groups[0]?.children[0]?.durationMs).toBe(6_000);
   });
 
   it("formats OpenCode command logs into model-round breakdowns", () => {
@@ -855,7 +895,17 @@ function timelineStep(input: Pick<TimelineStep, "id" | "title" | "createdAt" | "
   };
 }
 
-function codegenSnapshot({ events, spans, artifacts = [] }: { events: RunEvent[]; spans: RunSpan[]; artifacts?: RunArtifact[] }): RunSnapshot {
+function codegenSnapshot({
+  events,
+  spans,
+  artifacts = [],
+  generatedAt = atMs(183_700)
+}: {
+  events: RunEvent[];
+  spans: RunSpan[];
+  artifacts?: RunArtifact[];
+  generatedAt?: string;
+}): RunSnapshot {
   return {
     run: {
       runId: "task-1",
@@ -886,7 +936,7 @@ function codegenSnapshot({ events, spans, artifacts = [] }: { events: RunEvent[]
     diagnostics: [],
     raw: {},
     relatedRuns: [],
-    generatedAt: atMs(183_700)
+    generatedAt
   };
 }
 

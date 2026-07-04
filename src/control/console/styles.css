@@ -661,6 +661,59 @@ button.count-chip:hover {
   margin-top: 12px;
 }
 
+.agent-transcript-preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.agent-transcript-row {
+  background: var(--pane-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 8px;
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.agent-transcript-row.model {
+  border-left-color: var(--info);
+}
+
+.agent-transcript-row.tool {
+  border-left-color: var(--accent);
+}
+
+.agent-transcript-row.response {
+  border-left-color: var(--good);
+}
+
+.agent-transcript-row > div {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.agent-transcript-row strong,
+.agent-transcript-row p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-transcript-row span {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.agent-transcript-row p {
+  color: var(--muted);
+}
+
 .related-run-card {
   background: var(--pane-2);
   border: 1px solid var(--border);

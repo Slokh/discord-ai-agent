@@ -18,8 +18,7 @@ import { codeUpdateBranchName, codeUpdatePullRequestBody, codeUpdatePullRequestT
 import {
   detectExistingPrReference,
   hasMergeConflictKeyword,
-  hasPrFollowupKeyword,
-  type ExistingPrReference
+  hasPrFollowupKeyword
 } from "./prBranchReuse.js";
 import { slugify } from "../util/text.js";
 

@@ -17,8 +17,7 @@ import {
   type CodegenLeaseScheduler
 } from "./codegenLeaseScheduler.js";
 import {
-  mirrorAgentTaskQueuedToAgentRuntime,
-  updateAgentTaskRuntimeSandboxRun
+  mirrorAgentTaskQueuedToAgentRuntime
 } from "./agentTaskRuntimeMirror.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
@@ -574,22 +573,6 @@ export async function startJobs(input: {
                   });
                 }
               });
-              await input.codegenRepo
-                ?.updateExecution({
-                  executionId,
-                  sandboxId: acquiredLease?.sandboxId ?? null,
-                  sandboxRunId: result.sandboxRunId,
-                  metadata: { backendJobName: result.backendJobName, leaseOwner: acquiredLease?.leaseOwner ?? null }
-                })
-                .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to attach sandbox run to codegen execution"));
-              await updateAgentTaskRuntimeSandboxRun({
-                agentRuntimeRepo,
-                job: job.data,
-                backendJobName: result.backendJobName,
-                sandboxRunId: result.sandboxRunId,
-                sandboxId: acquiredLease?.sandboxId ?? null,
-                leaseOwner: acquiredLease?.leaseOwner ?? null
-              }).catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to attach sandbox run to agent runtime task execution"));
               await input.repo?.recordSandboxRun({
                 taskId: job.data.taskId,
                 sandboxRunId: result.sandboxRunId,
@@ -597,7 +580,8 @@ export async function startJobs(input: {
                 backendJobName: result.backendJobName,
                 namespace: result.namespace ?? input.config.execution.kubernetes.namespace,
                 image: result.image ?? input.config.execution.kubernetes.sandboxImage,
-                metadata: { sandboxId: acquiredLease?.sandboxId ?? null, leaseOwner: acquiredLease?.leaseOwner ?? null }
+                sandboxId: acquiredLease?.sandboxId ?? null,
+                leaseOwner: acquiredLease?.leaseOwner ?? null
               });
               await input.repo?.markAgentTaskProgress({
                 taskId: job.data.taskId,

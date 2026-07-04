@@ -361,6 +361,48 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ]);
     expect(agentProgress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" }));
     expect(agentProgress.rows[1].metadata).toEqual(expect.objectContaining({ taskId, step: "verify", command: "npm test" }));
+    await repo.recordSandboxRun({
+      taskId,
+      sandboxRunId: "sandbox-run-1",
+      backend: "kubernetes-sandbox",
+      namespace: "discord-ai-agent",
+      backendJobName: "agent-task-test",
+      image: "sandbox:test",
+      sandboxId: "warm-sandbox-1",
+      leaseOwner: "lease-owner-1"
+    });
+    const attachedExecutions = await pool.query(
+      "SELECT execution_id, sandbox_run_id, sandbox_id, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      [[executionId, agentExecutionId]]
+    );
+    expect(attachedExecutions.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: executionId,
+          sandbox_run_id: "sandbox-run-1",
+          sandbox_id: "warm-sandbox-1",
+          metadata: expect.objectContaining({
+            backend: "kubernetes-sandbox",
+            backendJobName: "agent-task-test",
+            sandboxRunId: "sandbox-run-1",
+            sandboxId: "warm-sandbox-1",
+            leaseOwner: "lease-owner-1"
+          })
+        }),
+        expect.objectContaining({
+          execution_id: agentExecutionId,
+          sandbox_run_id: "sandbox-run-1",
+          sandbox_id: "warm-sandbox-1",
+          metadata: expect.objectContaining({
+            backend: "kubernetes-sandbox",
+            backendJobName: "agent-task-test",
+            sandboxRunId: "sandbox-run-1",
+            sandboxId: "warm-sandbox-1",
+            leaseOwner: "lease-owner-1"
+          })
+        })
+      ])
+    );
     await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
       expect.objectContaining({
         taskId,

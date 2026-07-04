@@ -111,26 +111,6 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
   });
 }
 
-export async function updateAgentTaskRuntimeSandboxRun(input: {
-  agentRuntimeRepo?: AgentRuntimeRepository;
-  job: AgentTaskJob;
-  backendJobName?: string | null;
-  sandboxRunId?: string | null;
-  sandboxId?: string | null;
-  leaseOwner?: string | null;
-}) {
-  if (!input.agentRuntimeRepo) return;
-  await input.agentRuntimeRepo.updateExecution({
-    executionId: agentRuntimeExecutionIdForTask(input.job),
-    sandboxId: input.sandboxId ?? null,
-    sandboxRunId: input.sandboxRunId ?? null,
-    metadata: {
-      backendJobName: input.backendJobName ?? null,
-      leaseOwner: input.leaseOwner ?? null
-    }
-  });
-}
-
 function providerForCodegenModel(model: string) {
   return model.includes("/") ? "openrouter" : "openai";
 }

@@ -2661,8 +2661,20 @@ export class DiscordAiAgentRepository {
     namespace?: string | null;
     backendJobName?: string | null;
     image?: string | null;
+    sandboxId?: string | null;
+    leaseOwner?: string | null;
     metadata?: Record<string, unknown>;
   }) {
+    const executionMetadata = removeUndefinedValues({
+      ...(input.metadata ?? {}),
+      backend: input.backend,
+      backendJobName: input.backendJobName ?? undefined,
+      namespace: input.namespace ?? undefined,
+      image: input.image ?? undefined,
+      sandboxRunId: input.sandboxRunId,
+      sandboxId: input.sandboxId ?? undefined,
+      leaseOwner: input.leaseOwner ?? undefined
+    });
     await this.pool.query(
       `
         INSERT INTO sandbox_runs(
@@ -2704,9 +2716,28 @@ export class DiscordAiAgentRepository {
         input.namespace ?? null,
         input.backendJobName ?? null,
         input.image ?? null,
-        JSON.stringify(input.metadata ?? {})
+        JSON.stringify(executionMetadata)
       ]
     );
+    await this.pool
+      .query(
+        `
+          WITH updated_executions AS (
+            UPDATE codegen_executions
+            SET sandbox_run_id = coalesce($2::text, sandbox_run_id),
+                sandbox_id = coalesce($3::text, sandbox_id),
+                metadata = metadata || $4::jsonb,
+                updated_at = now()
+            WHERE task_id = $1
+            RETURNING session_id
+          )
+          UPDATE codegen_sessions
+          SET updated_at = now()
+          WHERE session_id IN (SELECT session_id FROM updated_executions)
+        `,
+        [input.taskId, input.sandboxRunId, input.sandboxId ?? null, JSON.stringify(executionMetadata)]
+      )
+      .catch(() => undefined);
   }
 
   async markAgentTaskSucceeded(input: {

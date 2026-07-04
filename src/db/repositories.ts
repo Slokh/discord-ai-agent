@@ -4094,7 +4094,9 @@ export class DiscordAiAgentRepository {
         WHERE pr.run_id = $1
            OR pr.message_id = $1
            OR pr.metadata->>'discordResponseMessageId' = $1
+           OR pr.metadata->>'replyMessageId' = $1
            OR pr.links->>'discordMessage' LIKE '%' || $1
+           OR pr.links->>'discordReply' LIKE '%' || $1
            OR (
              pr.trace_id IS NOT NULL
              AND EXISTS (
@@ -4109,8 +4111,10 @@ export class DiscordAiAgentRepository {
             WHEN pr.run_id = $1 THEN 0
             WHEN pr.message_id = $1 THEN 1
             WHEN pr.metadata->>'discordResponseMessageId' = $1 THEN 2
-            WHEN pr.links->>'discordMessage' LIKE '%' || $1 THEN 3
-            ELSE 4
+            WHEN pr.metadata->>'replyMessageId' = $1 THEN 3
+            WHEN pr.links->>'discordMessage' LIKE '%' || $1 THEN 4
+            WHEN pr.links->>'discordReply' LIKE '%' || $1 THEN 5
+            ELSE 6
           END,
           pr.updated_at DESC,
           pr.started_at DESC

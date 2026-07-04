@@ -14,13 +14,18 @@ import {
 } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import type { ConversationMessage, DiscordAiAgentRepository } from "../db/repositories.js";
+import type { ConversationMessage, DiscordAiAgentRepository, ProcessRunRecord } from "../db/repositories.js";
 import { isOpenRouterContentFilterError, type OpenRouterClient } from "../models/openrouter.js";
 import { embeddingPriorityForMessageTimestamp, type DiscordAgentRequestJob, type JobRuntime } from "../jobs/queue.js";
 import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink } from "./responseSink.js";
+import {
+  canTriggerReplyRegeneration,
+  isRegenerateReplyReaction,
+  involvesCodingAgentTools
+} from "./regenerateReaction.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor, type AgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
 import {
@@ -173,9 +178,14 @@ export function createDiscordAiAgentBot(input: {
         });
         if (handled) return;
       }
-      await persistReactionMessageUpdate(input, reaction).catch((error) => {
-        logger.warn({ err: error }, "Failed to persist reaction add");
-      });
+      await Promise.all([
+        persistReactionMessageUpdate(input, reaction).catch((error) => {
+          logger.warn({ err: error }, "Failed to persist reaction add");
+        }),
+        handleRegenerateReplyReaction(input, client, reaction, user).catch((error) => {
+          logger.warn({ err: error }, "Failed to handle regenerate reply reaction");
+        })
+      ]);
     });
   });
 
@@ -1617,6 +1627,182 @@ export async function persistReactionMessage(
   if (!fetchedMessage.inGuild()) return;
   if (!shouldProcessGuildEvent(input.config.discord.guildId, fetchedMessage.guildId)) return;
   await persistDiscordMessage(input.repo, fetchedMessage);
+}
+
+async function handleRegenerateReplyReaction(
+  input: DiscordAgentRequestInput,
+  client: Client,
+  reaction: MessageReaction | PartialMessageReaction,
+  user: User | PartialUser | null
+) {
+  if (!isRegenerateReplyReaction(reaction?.emoji)) return;
+  if (!user || user.bot) return;
+  const reactorId = user.id;
+  if (!reactorId) return;
+
+  const fetchedReaction = reaction.partial ? await reaction.fetch() : reaction;
+  const message = fetchedReaction.message.partial ? await fetchedReaction.message.fetch() : fetchedReaction.message;
+  if (!message.inGuild()) return;
+  if (!shouldProcessGuildEvent(input.config.discord.guildId, message.guildId)) return;
+  if (!isSelfMessage(message as Message, client.user?.id)) return;
+
+  const reactionLogger = logger.child({
+    traceId: message.id,
+    guildId: message.guildId,
+    channelId: message.channelId,
+    replyMessageId: message.id,
+    reactorId
+  });
+
+  const run = await input.repo.findProcessRunByDiscordMessageId(message.id).catch((error) => {
+    reactionLogger.warn({ err: error }, "Failed to look up process run for regenerate reaction");
+    return undefined;
+  });
+  if (!run) {
+    reactionLogger.debug("Skipping regenerate reaction because no process run was found for the reply");
+    return;
+  }
+  if (!run.messageId || !run.channelId || !run.guildId) {
+    reactionLogger.debug({ runId: run.runId }, "Skipping regenerate reaction because the original request message is unavailable");
+    return;
+  }
+
+  let memberPermissions: { has: (permission: bigint) => boolean } | null | undefined;
+  try {
+    const member = await message.guild.members.fetch(reactorId);
+    memberPermissions = member.permissions as unknown as { has: (permission: bigint) => boolean };
+  } catch (error) {
+    reactionLogger.warn({ err: error, reactorId }, "Failed to fetch reacting member for regenerate reaction permission check");
+    memberPermissions = null;
+  }
+  if (
+    !canTriggerReplyRegeneration({
+      reactorId,
+      originalRequesterId: run.userId,
+      memberPermissions
+    })
+  ) {
+    reactionLogger.info("Skipping regenerate reaction because the reactor is not the original requester or an admin");
+    return;
+  }
+
+  const traceId = run.traceId ?? run.runId;
+  const toolLogs = await input.repo.getToolAuditLogsForTrace({ traceId, limit: 200 }).catch((error) => {
+    reactionLogger.warn({ err: error, traceId }, "Failed to load tool audit logs for regenerate reaction");
+    return [];
+  });
+  if (involvesCodingAgentTools(toolLogs.map((log) => log.toolName))) {
+    reactionLogger.info(
+      { toolCount: toolLogs.length, toolNames: toolLogs.map((log) => log.toolName) },
+      "Skipping regenerate reaction because the reply involved a coding-agent tool"
+    );
+    await removeRegenerateReaction(message as Message, reactorId, reactionLogger);
+    return;
+  }
+
+  await recordTraceEvent(input.repo, {
+    eventName: "discord.reply.regenerate.requested",
+    summary: "Regenerate reply requested via magnifying-glass reaction",
+    metadata: {
+      replyMessageId: message.id,
+      runId: run.runId,
+      traceId,
+      reactorId,
+      originalRequesterId: run.userId ?? null
+    }
+  }).catch(() => undefined);
+  await removeRegenerateReaction(message as Message, reactorId, reactionLogger);
+
+  await regenerateDiscordAgentReply({
+    input,
+    client,
+    run,
+    replyMessage: message as Message,
+    reactionLogger
+  }).catch((error) => {
+    reactionLogger.error({ err: error }, "Regenerate reply failed");
+  });
+}
+
+async function removeRegenerateReaction(message: Message, reactorId: string, requestLogger: Logger) {
+  const reaction = message.reactions.cache.find((candidate) => isRegenerateReplyReaction(candidate.emoji));
+  if (!reaction) return;
+  try {
+    await reaction.users.remove(reactorId);
+    requestLogger.debug({ emoji: reaction.emoji.name }, "Removed regenerate reaction");
+  } catch (error) {
+    requestLogger.warn({ err: error, emoji: reaction.emoji.name }, "Failed to remove regenerate reaction");
+  }
+}
+
+async function regenerateDiscordAgentReply(input: {
+  input: DiscordAgentRequestInput;
+  client: Client;
+  run: ProcessRunRecord;
+  replyMessage: Message;
+  reactionLogger: Logger;
+}) {
+  const { input: ctx, client, run, replyMessage, reactionLogger } = input;
+  const original = await fetchOriginalRequestMessage({ client, run, requestLogger: reactionLogger });
+  if (!original) {
+    reactionLogger.warn({ runId: run.runId, originalMessageId: run.messageId }, "Could not fetch original request message for regenerate");
+    return;
+  }
+  const botRoleIds = Array.isArray((run.metadata as Record<string, unknown>).botRoleIds)
+    ? ((run.metadata as Record<string, unknown>).botRoleIds as string[])
+    : [];
+  const text = stripBotAddress(original.content, client.user?.id ?? "", botRoleIds).trim();
+  if (!text) {
+    reactionLogger.warn({ runId: run.runId }, "Skipping regenerate because original prompt text could not be recovered");
+    return;
+  }
+
+  const threadKey = discordChannelThreadKey(run.guildId ?? original.guildId ?? "", run.channelId ?? original.channelId ?? "");
+  await ctx.repo
+    .deleteConversationMessagesByDiscordMessageIds({
+      threadKey,
+      discordMessageIds: [run.messageId ?? original.id, replyMessage.id]
+    })
+    .catch((error) => reactionLogger.warn({ err: error }, "Failed to remove prior turns before regenerating reply"));
+
+  const responseSink = new DiscordResponseSink({
+    client,
+    sourceMessage: original,
+    maxReplyChars: ctx.config.maxReplyChars,
+    loadingReactionEmoji: ctx.config.discord.loadingReaction,
+    logger: reactionLogger,
+    statusMessage: replyMessage
+  });
+  await responseSink.acknowledge();
+  await responseSink.updateStatus("Regenerating that response...").catch((error) => {
+    reactionLogger.warn({ err: error }, "Failed to post regenerate status update");
+  });
+  reactionLogger.info({ runId: run.runId, originalMessageId: original.id, replyMessageId: replyMessage.id }, "Regenerating Discord reply");
+
+  await executeDiscordAgentRequest(ctx, client, original, responseSink, {
+    requestId: run.runId,
+    text,
+    rawContent: original.content,
+    botRoleIds,
+    messageStartedAt: Date.now()
+  });
+}
+
+async function fetchOriginalRequestMessage(input: {
+  client: Client;
+  run: ProcessRunRecord;
+  requestLogger: Logger;
+}): Promise<Message | null> {
+  if (!input.run.messageId || !input.run.channelId) return null;
+  try {
+    return await fetchDiscordMessage(input.client, input.run.channelId, input.run.messageId);
+  } catch (error) {
+    input.requestLogger.warn(
+      { err: error, runId: input.run.runId, originalMessageId: input.run.messageId, channelId: input.run.channelId },
+      "Failed to fetch original request message for regenerate"
+    );
+    return null;
+  }
 }
 
 export function hasExplicitBotMention(content: string, botUserId: string): boolean {

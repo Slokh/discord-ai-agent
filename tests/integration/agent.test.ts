@@ -51,6 +51,48 @@ describe("agent router", () => {
     );
   });
 
+  it("injects a prominent self-referential identity instruction for the current requester", async () => {
+    const chat = vi.fn(async () => ({
+      content: "ok",
+      model: "chat-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "luke-id",
+      userDisplayName: "Luke",
+      visibleChannelIds: ["c"],
+      sessionMessages: []
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "who am I");
+
+    const calls = (chat as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const messages = (calls[0]?.[0] as { messages?: { role: string; content: string }[] })?.messages ?? [];
+    const requesterIndex = messages.findIndex(
+      (m) => m.role === "system" && m.content.includes("Current Discord requester: Luke (user ID luke-id)")
+    );
+    expect(requesterIndex).toBeGreaterThanOrEqual(0);
+
+    const requesterMessage = messages[requesterIndex];
+    expect(requesterMessage.content).toContain("who am I");
+    expect(requesterMessage.content).toContain("Do not use skill content");
+    expect(requesterMessage.content).toContain("name: Luke");
+
+    const skillIndex = messages.findIndex(
+      (m) => m.role === "system" && m.content.startsWith("Loaded skills:")
+    );
+    expect(skillIndex).toBeGreaterThanOrEqual(0);
+    expect(requesterIndex).toBeLessThan(skillIndex);
+  });
+
   it("lets the model route status requests to reportStatus", async () => {
     const ctx = {
       config: { maxReplyChars: 1800, openRouter: { embeddingModel: "test/embed" }, discord: { clientId: "bot" } },

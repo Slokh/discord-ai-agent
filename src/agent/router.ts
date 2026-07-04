@@ -1617,6 +1617,7 @@ function chatMessages(
   requester?: { userId: string; userDisplayName: string }
 ): ChatMessage[] {
   return [
+    ...requesterMessagesForPrompt(requester),
     {
       role: "system" as const,
       content:
@@ -1653,7 +1654,6 @@ function chatMessages(
         "Use prior channel memory and reply-chain context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
         "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
     },
-    ...requesterMessagesForPrompt(requester),
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
     ...serverOverlayMessagesForPrompt(serverOverlay),
     ...sessionMessagesForPrompt(sessionMessages),
@@ -1671,7 +1671,10 @@ function requesterMessagesForPrompt(requester?: { userId: string; userDisplayNam
       role: "system",
       content:
         `Current Discord requester: ${displayName} (user ID ${requester.userId}). ` +
-        "First-person pronouns in the latest user request, including I/me/my/mine, refer to this requester unless the request explicitly names someone else."
+        "First-person pronouns in the latest user request, including I/me/my/mine, refer to this requester unless the request explicitly names someone else. " +
+        `When a user asks "who am I" or any self-referential identity question (such as "what is my name", "who's talking", or "do you know who I am"), answer using the Current Discord requester info above (name: ${displayName}, user ID: ${requester.userId}). ` +
+        "Do not use skill content, loaded skills, server overlay, or any other user's identity to answer self-referential questions. Skill content may mention other people (such as who created or requested a skill); that is not the current requester. " +
+        "If the requester asks who they are, reply with the requester's display name and user ID from the Current Discord requester line, not from skill context."
     }
   ];
 }

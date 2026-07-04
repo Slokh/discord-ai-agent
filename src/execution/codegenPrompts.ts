@@ -6,14 +6,8 @@ export type CodegenPromptContextPack = {
   requestAnchors?: string[];
   anchorMatches?: Array<{ anchor: string; file: string; line: number; preview: string }>;
   anchorTargetFiles?: Array<{ path: string; reason: string }>;
-  focus?: string;
-  rationale?: string;
-  likelyMechanisms?: string[];
   suggestedFiles?: Array<{ path: string; reason: string }>;
   suggestedCheckCommands?: Array<{ command: string; reason: string }>;
-  firstInvariant?: string;
-  suggestedFirstEdit?: string;
-  avoid?: string[];
   sandboxContract: string[];
   firstMoveRules: string[];
   projectMap: Array<{
@@ -53,7 +47,7 @@ export function renderCodegenContextPack(context: CodegenPromptContextPack) {
                 ...context.anchorTargetFiles.map((file) => `- ${file.path}: ${file.reason}`),
                 "",
                 "Anchor guidance:",
-                "- Concrete request anchors outrank broad lifecycle guesses. Inspect these target files first and make the first focused edit there unless the code proves they are unrelated.",
+                "- Concrete request anchors are narrow evidence, not lifecycle classification. Inspect these files first, then follow repository docs and source ownership if they prove unrelated.",
                 ""
               ]
             : []),
@@ -66,33 +60,10 @@ export function renderCodegenContextPack(context: CodegenPromptContextPack) {
             : [])
         ]
       : []),
-    ...(context.focus
+    ...(context.suggestedCheckCommands?.length
       ? [
-          `Focus: ${context.focus}`,
-          "",
-          `Why this context: ${context.rationale ?? "Matched from the requested update."}`,
-          "",
-          "Likely mechanisms:",
-          ...(context.likelyMechanisms ?? []).map((mechanism) => `- ${mechanism}`),
-          "",
-          "Suggested first files:",
-          ...(context.suggestedFiles ?? []).map((file) => `- ${file.path}: ${file.reason}`),
-          "",
-          ...(context.suggestedCheckCommands?.length
-            ? [
-                "Suggested focused checks:",
-                ...context.suggestedCheckCommands.map((check) => `- ${check.command}: ${check.reason}`),
-                ""
-              ]
-            : []),
-          "First implementable invariant:",
-          context.firstInvariant ?? "Make the requested behavior observable with the smallest focused change.",
-          "",
-          "Suggested first edit:",
-          context.suggestedFirstEdit ?? "Add or update the closest focused test before broad exploration.",
-          "",
-          "Avoid:",
-          ...(context.avoid ?? []).map((warning) => `- ${warning}`),
+          "Suggested anchor checks:",
+          ...context.suggestedCheckCommands.map((check) => `- ${check.command}: ${check.reason}`),
           ""
         ]
       : []),
@@ -129,15 +100,14 @@ export function codeUpdatePrompt(env: CodegenPromptEnv, contextPack?: CodegenPro
     "",
     "Execution contract:",
     "- If AGENTS.md exists, read it before editing and follow it.",
-    "- Use the preflight context as a starting map, not a research backlog.",
+    "- Use repository guides, exact anchors, and the project map as navigation aids, not mandatory routing.",
     "- Batch initial reconnaissance: inspect the likely owner, nearest caller/helper, closest README/guide, and closest test in one targeted pass when possible.",
     "- Make the first focused code diff after that targeted pass. Do not keep alternating search/read/search/read once the owner is clear.",
     "- If exact request anchors or target files are present, inspect those first and patch the owning source file unless it is clearly unrelated.",
-    "- When user wording is product behavior, map it to the lifecycle: trigger -> acknowledgement/status -> work -> success response -> error path -> cleanup.",
-    "- Prefer a small shared lifecycle owner over patching duplicated inline and queued paths independently.",
+    "- Let repo docs, folder READMEs, source ownership, and tests determine the implementation path.",
     "- Add or update focused tests for the changed behavior.",
     "- Validation ladder: run the closest focused tests once, fix failures from their direct output, then run `npm run typecheck` only when TypeScript contracts changed.",
-    "- Run the suggested focused checks from the preflight context when they match your edit. Do not run `npm run verify` or broad test suites; CI runs full verification after the PR opens.",
+    "- Run suggested anchor checks or the closest checks from repo docs when they match your edit. Do not run `npm run verify` or broad test suites; CI runs full verification after the PR opens.",
     "- If a check fails, inspect only the failing test/output and the directly owned code before patching again.",
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
     "- Do not add request-only documentation artifacts; the PR body records the request.",
@@ -148,9 +118,8 @@ export function codeUpdatePrompt(env: CodegenPromptEnv, contextPack?: CodegenPro
     `Task ID: ${env.taskId}`,
     `Requested by: ${env.requestedBy}`,
     contextText ? "" : undefined,
-    contextText ? "Codegen preflight context:" : undefined,
+    contextText ? "Repository navigation context:" : undefined,
     contextText || undefined,
-    contextText ? "Make the first implementable invariant true. Concrete anchors from the request outrank broad lifecycle guesses." : undefined,
     "",
     "Requested update:",
     env.taskRequest.trim(),

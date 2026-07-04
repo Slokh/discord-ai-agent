@@ -99,11 +99,11 @@ The next runtime migration should preserve this harness posture while moving fro
 Codegen prompts should stay generic and architecture-driven:
 
 - Start from `AGENTS.md`, `docs/architecture.md`, and the nearest `src/**/README.md`.
-- Use preflight context as a map, not a research backlog.
-- Prefer domain classification over long generated file lists.
-- Treat model-facing tool names as strong anchors only when the request is about tool schemas, routing, arguments, descriptions, or contracts.
-- For product behavior requests, route to the owning lifecycle first: Discord response, knowledge/indexing/retrieval, agent task status, run console, or sandbox execution.
-- Track first-edit latency and repeated reads as prompt/context quality signals. If the agent spends many rounds before editing, improve ownership maps or context classification before adding task-specific prompt instructions.
+- Use repository navigation context as optional wayfinding, not a mandatory route.
+- Do not inject generated lifecycle classifications into production codegen prompts.
+- Treat exact request anchors as narrow evidence; inspect matching files first, then follow repository docs and source ownership if they prove unrelated.
+- Keep the project map broad and stable enough that the agent can choose the domain: Discord response, knowledge/indexing/retrieval, agent task status, run console, sandbox execution, or model-led tools.
+- Track first-edit latency and repeated reads as prompt/context quality signals. If the agent spends many rounds before editing, improve ownership maps, folder READMEs, or source organization before adding task-specific prompt instructions.
 
 ## Current Isolation Model
 

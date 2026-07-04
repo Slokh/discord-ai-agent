@@ -197,9 +197,9 @@ function codegenFailureSummary(category: CodegenFailureCategory, harness: Codege
 function codegenFailureNextAction(category: CodegenFailureCategory, failedPhase: string | null) {
   switch (category) {
     case "no_first_edit":
-      return "Inspect the harness transcript, prompt, and preflight context; improve context packaging or task instructions so the agent makes an early focused edit.";
+      return "Inspect the harness transcript, prompt, and repository navigation context; improve repo ownership docs or task instructions so the agent makes an early focused edit.";
     case "no_diff":
-      return "Inspect the harness transcript and request context; improve context packaging or the coding prompt if the task should have produced a change.";
+      return "Inspect the harness transcript and repository navigation context; improve repo ownership docs or the coding prompt if the task should have produced a change.";
     case "harness_startup":
       return "Inspect harness startup logs, model/provider configuration, and sandbox tool availability.";
     case "release_scan":

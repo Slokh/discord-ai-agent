@@ -263,6 +263,7 @@ function reviveRunSnapshot(value: unknown): RunSnapshot {
     artifact.createdAt = new Date(artifact.createdAt);
     artifact.expiresAt = artifact.expiresAt ? new Date(artifact.expiresAt) : null;
   }
+  for (const message of snapshot.agentTranscript ?? []) message.createdAt = new Date(message.createdAt);
   for (const entry of snapshot.terminal.entries) entry.createdAt = new Date(entry.createdAt);
   snapshot.generatedAt = new Date(snapshot.generatedAt);
   return snapshot;

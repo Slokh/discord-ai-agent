@@ -1,5 +1,6 @@
 import type {
   AgentRuntimeEvent,
+  AgentRuntimeMessage,
   AgentTaskRecord,
   DiscordAiAgentRepository,
   ProcessRunArtifactRecord,
@@ -62,6 +63,16 @@ export type RunEvent = {
 
 export type RunArtifactSummary = ProcessRunArtifactRecord;
 
+export type RunAgentTranscriptMessage = {
+  id: string;
+  sessionId: string;
+  clientMessageId: string | null;
+  role: "system" | "user" | "assistant" | "tool";
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 export type RunTerminalEntry = {
   id: string;
   source: "command";
@@ -88,6 +99,7 @@ export type RunSnapshot = {
     task?: AgentTaskRecord;
     sandboxRuns: SandboxRunRecord[];
   };
+  agentTranscript: RunAgentTranscriptMessage[];
   relatedRuns: RunSummary[];
   generatedAt: Date;
 };
@@ -158,6 +170,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     sandboxRuns,
     traceEvents,
     runtimeEvents,
+    runtimeMessages,
     toolLogs,
     relatedProcessRuns,
     parentProcessRun,
@@ -172,6 +185,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     task ? repo.getSandboxRunsForTask(task.taskId) : Promise.resolve([]),
     traceId ? repo.getTraceEventsForTrace({ traceId, limit: 500 }) : Promise.resolve([]),
     traceId ? repo.getAgentRuntimeEventsForTrace({ traceId, limit: 500 }) : Promise.resolve([]),
+    traceId ? repo.getAgentRuntimeMessagesForTrace({ traceId, limit: 150 }) : Promise.resolve([]),
     traceId ? repo.getToolAuditLogsForTrace({ traceId, limit: 200 }) : Promise.resolve([]),
     traceId ? repo.listProcessRunsForTrace({ traceId, limit: 20 }) : Promise.resolve([]),
     originAgentExecutionId ? repo.findProcessRunByAgentExecutionId(originAgentExecutionId) : Promise.resolve(undefined),
@@ -203,6 +217,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     terminal,
     diagnostics: diagnosticsForRun(run, spans, events),
     raw: { processRun, task, sandboxRuns },
+    agentTranscript: runtimeMessages.map(agentTranscriptMessageFromRuntime),
     relatedRuns: relatedRunSummaries({
       processRun,
       task,
@@ -210,6 +225,18 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
       relatedTasks
     }),
     generatedAt: new Date()
+  };
+}
+
+function agentTranscriptMessageFromRuntime(message: AgentRuntimeMessage): RunAgentTranscriptMessage {
+  return {
+    id: message.messageId,
+    sessionId: message.sessionId,
+    clientMessageId: message.clientMessageId,
+    role: message.role,
+    parts: message.parts,
+    metadata: message.metadata,
+    createdAt: message.createdAt
   };
 }
 

@@ -1,6 +1,6 @@
 import type { ProcessRunArtifactContent } from "../db/repositories.js";
 import { formatOpenCodeTranscriptDiagnostics, parseOpenCodeTranscript } from "./openCodeTranscript.js";
-import type { RunArtifactSummary, RunSnapshot, RunSpan, RunSummary, RunTerminalEntry } from "./runs.js";
+import type { RunAgentTranscriptMessage, RunArtifactSummary, RunSnapshot, RunSpan, RunSummary, RunTerminalEntry } from "./runs.js";
 
 export type RunInspectionOptions = {
   eventLimit?: number;
@@ -104,6 +104,13 @@ export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectio
     lines.push(...modelUsage);
   }
 
+  const agentTranscript = formatAgentTranscript(snapshot.agentTranscript);
+  if (agentTranscript.length > 0) {
+    lines.push("");
+    lines.push(`Agent transcript (${snapshot.agentTranscript.length} messages):`);
+    lines.push(...agentTranscript);
+  }
+
   const slowestSpans = [...snapshot.spans]
     .filter((span) => span.durationMs != null)
     .sort((left, right) => (right.durationMs ?? 0) - (left.durationMs ?? 0))
@@ -202,6 +209,42 @@ function formatRelatedRunDetail(run: RunSummary) {
   ]
     .filter(Boolean)
     .join(" | ");
+}
+
+function formatAgentTranscript(messages: RunAgentTranscriptMessage[]) {
+  return messages.slice(0, 24).map((message) => {
+    const source = stringFromUnknown(message.metadata.source);
+    const round = numberFromUnknown(message.metadata.round);
+    const detail = [source, round == null ? null : `round ${round}`].filter(Boolean).join(" | ");
+    const suffix = detail ? ` (${detail})` : "";
+    return `- ${formatDateTime(message.createdAt)} ${message.role}${suffix}: ${truncateSingleLine(agentTranscriptMessageSummary(message), 260)}`;
+  });
+}
+
+function agentTranscriptMessageSummary(message: RunAgentTranscriptMessage) {
+  const summaries = message.parts.map(agentTranscriptPartSummary).filter(Boolean);
+  return summaries.join(" | ") || compactJson(message.parts, 260);
+}
+
+function agentTranscriptPartSummary(part: unknown): string {
+  if (!part || typeof part !== "object" || Array.isArray(part)) return truncateSingleLine(String(part ?? ""), 120);
+  const record = part as Record<string, unknown>;
+  const type = stringFromUnknown(record.type);
+  if (type === "text") return truncateSingleLine(stringFromUnknown(record.text) ?? "", 220);
+  if (type === "assistant_tool_calls") {
+    const toolCalls = Array.isArray(record.toolCalls) ? record.toolCalls : [];
+    const names = toolCalls.map((call) => (call && typeof call === "object" ? stringFromUnknown((call as Record<string, unknown>).name) : null)).filter(Boolean);
+    return `requested ${names.length === 0 ? "tools" : names.join(", ")}`;
+  }
+  if (type === "tool_result") {
+    const toolName = stringFromUnknown(record.toolName) ?? "tool";
+    const taskId = stringFromUnknown(record.taskId);
+    const status = stringFromUnknown(record.status);
+    const content = stringFromUnknown(record.content);
+    if (taskId) return `${toolName} ${taskId}${status ? ` ${status}` : ""}`;
+    return `${toolName}: ${truncateSingleLine(content ?? "", 220)}`;
+  }
+  return compactJson(record, 260);
 }
 
 function formatModelUsage(snapshot: RunSnapshot) {

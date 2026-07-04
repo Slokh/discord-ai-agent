@@ -421,6 +421,16 @@ export type AgentRuntimeEvent = {
   createdAt: Date;
 };
 
+export type AgentRuntimeMessage = {
+  messageId: string;
+  sessionId: string;
+  clientMessageId: string | null;
+  role: "system" | "user" | "assistant" | "tool";
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 export type SandboxRunRecord = {
   sandboxRunId: string;
   taskId: string;
@@ -4506,6 +4516,49 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToAgentRuntimeEvent);
   }
 
+  async getAgentRuntimeMessagesForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeMessage[]> {
+    const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 100)));
+    const clientMessagePrefix = `${input.traceId}:transcript:%`;
+    const result = await this.pool.query(
+      `
+        SELECT
+          cm.message_id,
+          cm.session_id,
+          cm.client_message_id,
+          cm.role,
+          cm.parts,
+          cm.metadata,
+          cm.created_at
+        FROM codegen_messages cm
+        JOIN codegen_sessions cs ON cs.session_id = cm.session_id
+        WHERE cs.metadata->>'runtime' = 'agent'
+          AND (
+            cs.trace_id = $1
+            OR cm.client_message_id = $1
+            OR cm.client_message_id LIKE $2
+            OR cm.metadata->>'traceId' = $1
+            OR cm.metadata->>'promptMessageId' = $1
+            OR cm.metadata->>'executionId' IN (
+              SELECT execution_id
+              FROM codegen_executions
+              WHERE trace_id = $1
+                 OR metadata->>'parentAgentExecutionId' = (
+                   SELECT metadata->>'agentExecutionId'
+                   FROM process_runs
+                   WHERE trace_id = $1 OR run_id = $1
+                   ORDER BY updated_at DESC
+                   LIMIT 1
+                 )
+            )
+          )
+        ORDER BY cm.created_at ASC, cm.message_id ASC
+        LIMIT $3
+      `,
+      [input.traceId, clientMessagePrefix, limit]
+    );
+    return result.rows.map(rowToAgentRuntimeMessage);
+  }
+
   async getTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
     const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
     const result = await this.pool.query(
@@ -5058,6 +5111,18 @@ function rowToAgentRuntimeEvent(row: any): AgentRuntimeEvent {
     summary: row.summary == null ? null : String(row.summary),
     metadata: typeof row.metadata === "object" && row.metadata != null ? row.metadata : {},
     durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+    createdAt: new Date(row.created_at)
+  };
+}
+
+function rowToAgentRuntimeMessage(row: any): AgentRuntimeMessage {
+  return {
+    messageId: String(row.message_id),
+    sessionId: String(row.session_id),
+    clientMessageId: row.client_message_id == null ? null : String(row.client_message_id),
+    role: String(row.role) as AgentRuntimeMessage["role"],
+    parts: Array.isArray(row.parts) ? row.parts : [],
+    metadata: jsonObject(row.metadata),
     createdAt: new Date(row.created_at)
   };
 }

@@ -76,6 +76,16 @@ export type RunArtifact = {
   createdAt: string;
 };
 
+export type AgentTranscriptMessage = {
+  id: string;
+  sessionId: string;
+  clientMessageId: string | null;
+  role: "system" | "user" | "assistant" | "tool";
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type TerminalEntry = {
   id: string;
   source: "command";
@@ -94,6 +104,7 @@ export type RunSnapshot = {
   terminal: { lineCount: number; content: string; entries: TerminalEntry[] };
   diagnostics: string[];
   raw: Record<string, unknown>;
+  agentTranscript?: AgentTranscriptMessage[];
   relatedRuns: RunSummary[];
   generatedAt: string;
 };

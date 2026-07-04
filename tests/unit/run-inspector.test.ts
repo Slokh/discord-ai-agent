@@ -15,6 +15,9 @@ describe("run inspector formatting", () => {
     expect(report).toContain("Model usage:");
     expect(report).toContain("- Token usage: input=100 output=25 total=125 cached_input=40 across 1 LLM call (z-ai/glm-5.2)");
     expect(report).toContain("- Estimated audited cost: $0.004200 across 1 model/tool audit");
+    expect(report).toContain("Agent transcript (2 messages):");
+    expect(report).toContain("assistant (agent.router | round 1): requested runCodingAgent");
+    expect(report).toContain("tool (agent.runtime.tool): runCodingAgent task-1 queued");
     expect(report).toContain("Related runs:");
     expect(report).toContain("- 1520000000000000000 | discord | succeeded | 1.234s | User asked for a code update");
     expect(report).toContain("trace=1520000000000000000 | message=1520000000000000000");
@@ -324,6 +327,38 @@ function snapshotFixture(): RunSnapshot {
     },
     diagnostics: ["codex was the bottleneck"],
     raw: { sandboxRuns: [] },
+    agentTranscript: [
+      {
+        id: "agent-transcript-message-assistant-round-1",
+        sessionId: "agent-session-1",
+        clientMessageId: "message:transcript:assistant-round-1",
+        role: "assistant",
+        parts: [
+          {
+            type: "assistant_tool_calls",
+            toolCalls: [{ id: "call-1", name: "runCodingAgent", arguments: { request: "replace Thinking" } }]
+          }
+        ],
+        metadata: { source: "agent.router", round: 1 },
+        createdAt: new Date("2026-07-01T17:40:45.000Z")
+      },
+      {
+        id: "agent-task-message-task-1",
+        sessionId: "agent-session-1",
+        clientMessageId: "task-1",
+        role: "tool",
+        parts: [
+          {
+            type: "tool_result",
+            toolName: "runCodingAgent",
+            taskId: "task-1",
+            status: "queued"
+          }
+        ],
+        metadata: { source: "agent.runtime.tool" },
+        createdAt: new Date("2026-07-01T17:40:46.000Z")
+      }
+    ],
     relatedRuns: [
       runSummary({
         runId: "1520000000000000000",

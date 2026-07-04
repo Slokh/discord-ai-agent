@@ -370,20 +370,13 @@ export async function startJobs(input: {
         requestedBy: data.requestedBy,
         backend: backendName
       });
-      await input.codegenRepo
-        ?.createExecution({
-          executionId: codegenExecutionIdForTask(data),
-          sessionId: codegenSessionIdForTask(data),
-          taskId,
-          traceId: data.traceId,
-          status: "queued",
-          harness: "codex-app-server",
-          model: input.config.openRouter.codegenModel,
-          provider: providerForCodegenModel(input.config.openRouter.codegenModel),
-          reasoningEffort: "low",
-          metadata: { backend: backendName, pgbossJobId: id }
-        })
-        .catch((error) => logger.warn({ err: error, taskId }, "Failed to update codegen execution enqueue metadata"));
+      await attachCodegenQueueHandoff({
+        codegenRepo: input.codegenRepo,
+        config: input.config,
+        job: data,
+        backendName,
+        pgBossJobId: id
+      }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update codegen execution enqueue metadata"));
       if (shouldMirrorAgentRuntime) {
         await mirrorAgentTaskQueuedToAgentRuntime({
           agentRuntimeRepo,
@@ -737,6 +730,34 @@ function codegenExecutionIdForTask(job: Pick<AgentTaskJob, "taskId">) {
 
 function codegenMessageIdForTask(job: Pick<AgentTaskJob, "taskId">) {
   return `codegen-message-${job.taskId}`;
+}
+
+async function attachCodegenQueueHandoff(input: {
+  codegenRepo?: CodegenRepository;
+  config: AppConfig;
+  job: AgentTaskJob;
+  backendName: string;
+  pgBossJobId: string | null;
+}) {
+  if (!input.codegenRepo) return;
+  const executionId = codegenExecutionIdForTask(input.job);
+  const updated = await input.codegenRepo.updateExecution({
+    executionId,
+    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId }
+  });
+  if (updated) return;
+  await input.codegenRepo.createExecution({
+    executionId,
+    sessionId: codegenSessionIdForTask(input.job),
+    taskId: input.job.taskId,
+    traceId: input.job.traceId,
+    status: "queued",
+    harness: "codex-app-server",
+    model: input.config.openRouter.codegenModel,
+    provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+    reasoningEffort: "low",
+    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId }
+  });
 }
 
 async function acquireLeaseForAgentTask(input: {

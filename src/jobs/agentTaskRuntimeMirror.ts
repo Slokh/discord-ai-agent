@@ -25,30 +25,33 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
 }) {
   if (!input.agentRuntimeRepo) return;
   const threadKey = agentRuntimeThreadKeyForTask(input.job);
-  const session = await input.agentRuntimeRepo.upsertSession({
-    threadKey,
-    traceId: input.job.traceId,
-    guildId: input.job.guildId,
-    channelId: input.job.channelId,
-    userId: input.job.userId,
-    title: input.job.title,
-    request: input.job.request,
-    requestedBy: input.job.requestedBy,
-    status: "queued",
-    harness: "runCodingAgent",
-    model: input.config.openRouter.codegenModel,
-    provider: providerForCodegenModel(input.config.openRouter.codegenModel),
-    metadata: {
-      taskId: input.job.taskId,
-      taskType: input.job.taskType,
-      backend: input.backendName,
-      pgbossJobId: input.pgBossJobId,
-      codegenSessionId: input.codegenSessionId ?? null,
-      codegenExecutionId: input.codegenExecutionId ?? null,
-      retriedFromTaskId: input.job.retriedFromTaskId ?? null,
-      source: "agent.task.enqueue"
-    }
-  });
+  const existingSession = input.pgBossJobId ? await input.agentRuntimeRepo.getSession({ threadKey }).catch(() => undefined) : undefined;
+  const session =
+    existingSession ??
+    (await input.agentRuntimeRepo.upsertSession({
+      threadKey,
+      traceId: input.job.traceId,
+      guildId: input.job.guildId,
+      channelId: input.job.channelId,
+      userId: input.job.userId,
+      title: input.job.title,
+      request: input.job.request,
+      requestedBy: input.job.requestedBy,
+      status: "queued",
+      harness: "runCodingAgent",
+      model: input.config.openRouter.codegenModel,
+      provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+      metadata: {
+        taskId: input.job.taskId,
+        taskType: input.job.taskType,
+        backend: input.backendName,
+        pgbossJobId: input.pgBossJobId,
+        codegenSessionId: input.codegenSessionId ?? null,
+        codegenExecutionId: input.codegenExecutionId ?? null,
+        retriedFromTaskId: input.job.retriedFromTaskId ?? null,
+        source: "agent.task.enqueue"
+      }
+    }));
   await input.agentRuntimeRepo.appendMessage({
     messageId: agentRuntimeMessageIdForTask(input.job),
     sessionId: session.sessionId,
@@ -75,25 +78,47 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       source: "agent.task.enqueue"
     }
   });
-  await input.agentRuntimeRepo.createExecution({
-    executionId: agentRuntimeExecutionIdForTask(input.job),
-    sessionId: session.sessionId,
-    taskId: input.job.taskId,
-    traceId: input.job.traceId,
-    status: "queued",
-    harness: "runCodingAgent",
-    model: input.config.openRouter.codegenModel,
-    provider: providerForCodegenModel(input.config.openRouter.codegenModel),
-    reasoningEffort: "low",
-    metadata: {
-      taskType: input.job.taskType,
-      backend: input.backendName,
-      pgbossJobId: input.pgBossJobId,
-      codegenSessionId: input.codegenSessionId ?? null,
-      codegenExecutionId: input.codegenExecutionId ?? null,
-      retriedFromTaskId: input.job.retriedFromTaskId ?? null
+  const executionMetadata = {
+    taskType: input.job.taskType,
+    backend: input.backendName,
+    pgbossJobId: input.pgBossJobId,
+    codegenSessionId: input.codegenSessionId ?? null,
+    codegenExecutionId: input.codegenExecutionId ?? null,
+    retriedFromTaskId: input.job.retriedFromTaskId ?? null
+  };
+  if (input.pgBossJobId) {
+    const updated = await input.agentRuntimeRepo.updateExecution({
+      executionId: agentRuntimeExecutionIdForTask(input.job),
+      metadata: executionMetadata
+    });
+    if (!updated) {
+      await input.agentRuntimeRepo.createExecution({
+        executionId: agentRuntimeExecutionIdForTask(input.job),
+        sessionId: session.sessionId,
+        taskId: input.job.taskId,
+        traceId: input.job.traceId,
+        status: "queued",
+        harness: "runCodingAgent",
+        model: input.config.openRouter.codegenModel,
+        provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+        reasoningEffort: "low",
+        metadata: executionMetadata
+      });
     }
-  });
+  } else {
+    await input.agentRuntimeRepo.createExecution({
+      executionId: agentRuntimeExecutionIdForTask(input.job),
+      sessionId: session.sessionId,
+      taskId: input.job.taskId,
+      traceId: input.job.traceId,
+      status: "queued",
+      harness: "runCodingAgent",
+      model: input.config.openRouter.codegenModel,
+      provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+      reasoningEffort: "low",
+      metadata: executionMetadata
+    });
+  }
   await input.agentRuntimeRepo.recordEvent({
     sessionId: session.sessionId,
     executionId: agentRuntimeExecutionIdForTask(input.job),

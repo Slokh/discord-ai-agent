@@ -6,8 +6,10 @@ import type { AgentTaskJob } from "../../src/execution/types.js";
 describe("agent runtime task mirror", () => {
   it("mirrors code-update tasks into the durable agent session ledger", async () => {
     const agentRuntimeRepo = {
+      getSession: vi.fn(async () => undefined),
       upsertSession: vi.fn(async () => ({ sessionId: "agent-session-1" })),
       appendMessage: vi.fn(async () => undefined),
+      updateExecution: vi.fn(async () => undefined),
       createExecution: vi.fn(async () => undefined),
       recordEvent: vi.fn(async () => undefined)
     };
@@ -89,6 +91,48 @@ describe("agent runtime task mirror", () => {
           jobId: "pgboss-job-1",
           backend: "local-process-sandbox"
         })
+      })
+    );
+  });
+
+  it("adopts an existing runtime execution after queue handoff without resetting queued state", async () => {
+    const agentRuntimeRepo = {
+      getSession: vi.fn(async () => ({ sessionId: "agent-session-1", status: "running" })),
+      upsertSession: vi.fn(async () => ({ sessionId: "agent-session-1" })),
+      appendMessage: vi.fn(async () => undefined),
+      updateExecution: vi.fn(async () => ({ executionId: "agent-task-execution-task-1", status: "running" })),
+      createExecution: vi.fn(async () => undefined),
+      recordEvent: vi.fn(async () => undefined)
+    };
+
+    await mirrorAgentTaskQueuedToAgentRuntime({
+      agentRuntimeRepo: agentRuntimeRepo as never,
+      config: loadConfig(),
+      job: agentTaskJob(),
+      backendName: "local-process-sandbox",
+      pgBossJobId: "pgboss-job-1",
+      codegenSessionId: "codegen-session-task-1",
+      codegenExecutionId: "codegen-execution-task-1"
+    });
+
+    expect(agentRuntimeRepo.getSession).toHaveBeenCalledWith({ threadKey: "discord:guild:channel" });
+    expect(agentRuntimeRepo.upsertSession).not.toHaveBeenCalled();
+    expect(agentRuntimeRepo.updateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionId: "agent-task-execution-task-1",
+        metadata: expect.objectContaining({
+          backend: "local-process-sandbox",
+          pgbossJobId: "pgboss-job-1"
+        })
+      })
+    );
+    expect(agentRuntimeRepo.createExecution).not.toHaveBeenCalled();
+    expect(agentRuntimeRepo.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        executionId: "agent-task-execution-task-1",
+        eventName: "agent.task.enqueued",
+        metadata: expect.objectContaining({ taskId: "task-1", jobId: "pgboss-job-1" })
       })
     );
   });

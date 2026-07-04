@@ -4253,6 +4253,36 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToTaskEvent);
   }
 
+  async getAgentRuntimeTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
+    const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM (
+          SELECT
+            ce.id,
+            coalesce(ce.metadata->>'taskId', cex.task_id, $1) AS task_id,
+            ce.trace_id,
+            ce.event_name,
+            ce.level,
+            ce.summary,
+            ce.metadata,
+            ce.created_at
+          FROM codegen_events ce
+          JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+          WHERE cex.task_id = $1
+            AND cex.metadata->>'runtime' = 'agent'
+            AND ce.event_name LIKE 'agent.task.%'
+          ORDER BY ce.created_at DESC, ce.id DESC
+          LIMIT $2
+        ) recent
+        ORDER BY created_at ASC, id ASC
+      `,
+      [input.taskId, limit]
+    );
+    return result.rows.map(rowToTaskEvent);
+  }
+
   async ensureConversationSession(input: {
     threadKey: string;
     guildId: string;

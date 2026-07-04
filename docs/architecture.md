@@ -45,7 +45,7 @@ For durable knowledge changes such as excluding a channel, deleting indexed hist
 4. `src/execution/backend.ts` starts either a Kubernetes Job or local process sandbox.
 5. `src/execution/sandboxRunner.ts` prepares the repo, prompt, cache, harness config, tests, scan, push, and PR. Use `src/execution/README.md` before changing this path.
 6. Sandbox callbacks hit `src/control/internalApi.ts`, which persists command events, artifacts, spans, and terminal output.
-7. `src/discord/taskNotifications.ts` edits the original Discord status message with current progress and final PR/failure details.
+7. `src/discord/taskNotifications.ts` edits the original Discord status message with current progress and final PR/failure details, preferring `agent.task.*` events from the generic runtime session and falling back to legacy task events while the sandbox callback path still exists.
 
 Code-update tasks are being folded into the generic agent runtime. New control-plane work should prefer `src/db/agentRuntimeRepository.ts` and `/api/agent/sessions/:threadKey` over adding new codegen-only APIs.
 

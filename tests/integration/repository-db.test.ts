@@ -341,6 +341,15 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       })
     ]);
     expect(agentProgress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "verify", command: "npm test" }));
+    await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        taskId,
+        traceId,
+        eventName: "agent.task.progress",
+        summary: "Running tests.",
+        metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+      })
+    ]);
 
     await repo.markAgentTaskSucceeded({
       taskId,

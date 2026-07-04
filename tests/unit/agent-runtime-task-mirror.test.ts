@@ -41,7 +41,12 @@ describe("agent runtime task mirror", () => {
           pgbossJobId: "pgboss-job-1",
           codegenSessionId: "codegen-session-task-1",
           codegenExecutionId: "codegen-execution-task-1",
-          source: "agent.task.enqueue"
+          source: "agent.task.enqueue",
+          queue: "agent.task",
+          codegenBackend: "kubernetes-job",
+          codegenHarness: "opencode",
+          codegenModel: "z-ai/glm-5.2",
+          codegenProvider: "openrouter"
         })
       })
     );
@@ -75,7 +80,10 @@ describe("agent runtime task mirror", () => {
           backend: "local-process-sandbox",
           pgbossJobId: "pgboss-job-1",
           codegenSessionId: "codegen-session-task-1",
-          codegenExecutionId: "codegen-execution-task-1"
+          codegenExecutionId: "codegen-execution-task-1",
+          queue: "agent.task",
+          codegenHarness: "opencode",
+          codegenModel: "z-ai/glm-5.2"
         })
       })
     );
@@ -89,7 +97,10 @@ describe("agent runtime task mirror", () => {
         metadata: expect.objectContaining({
           taskId: "task-1",
           jobId: "pgboss-job-1",
-          backend: "local-process-sandbox"
+          backend: "local-process-sandbox",
+          queue: "agent.task",
+          codegenHarness: "opencode",
+          codegenModel: "z-ai/glm-5.2"
         })
       })
     );
@@ -122,7 +133,8 @@ describe("agent runtime task mirror", () => {
         executionId: "agent-task-execution-task-1",
         metadata: expect.objectContaining({
           backend: "local-process-sandbox",
-          pgbossJobId: "pgboss-job-1"
+          pgbossJobId: "pgboss-job-1",
+          codegenHarness: "opencode"
         })
       })
     );

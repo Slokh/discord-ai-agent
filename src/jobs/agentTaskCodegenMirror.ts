@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config/env.js";
 import type { CodegenRepository } from "../db/codegenRepository.js";
+import { codegenExecutionSelection } from "../execution/codegenSelection.js";
 import type { AgentTaskJob } from "../execution/types.js";
 
 export type CodegenMirrorPhase = "session" | "message" | "message_event" | "execution";
@@ -37,6 +38,7 @@ export async function mirrorAgentTaskQueuedToCodegen(input: {
       return undefined;
     }
   };
+  const selection = codegenExecutionSelection(input.config);
 
   await capture(
     "session",
@@ -51,10 +53,10 @@ export async function mirrorAgentTaskQueuedToCodegen(input: {
       request: input.job.request,
       requestedBy: input.job.requestedBy,
       status: "queued",
-      harness: "codex",
-      model: input.config.openRouter.codegenModel,
-      provider: providerForCodegenModel(input.config.openRouter.codegenModel),
-      metadata: { taskId: input.job.taskId, retriedFromTaskId: input.job.retriedFromTaskId }
+      harness: selection.codegenHarness,
+      model: selection.codegenModel,
+      provider: selection.codegenProvider,
+      metadata: { taskId: input.job.taskId, retriedFromTaskId: input.job.retriedFromTaskId, ...selection }
     })
   );
   await capture(
@@ -93,11 +95,11 @@ export async function mirrorAgentTaskQueuedToCodegen(input: {
       taskId: input.job.taskId,
       traceId: input.job.traceId,
       status: "queued",
-      harness: "codex-app-server",
-      model: input.config.openRouter.codegenModel,
-      provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+      harness: selection.codegenHarness,
+      model: selection.codegenModel,
+      provider: selection.codegenProvider,
       reasoningEffort: "low",
-      metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId }
+      metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...selection }
     })
   );
 }
@@ -111,9 +113,10 @@ export async function attachCodegenQueueHandoff(input: {
 }) {
   if (!input.codegenRepo) return;
   const executionId = codegenExecutionIdForTask(input.job);
+  const selection = codegenExecutionSelection(input.config);
   const updated = await input.codegenRepo.updateExecution({
     executionId,
-    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId }
+    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...selection }
   });
   if (updated) return;
   await input.codegenRepo.createExecution({
@@ -122,14 +125,10 @@ export async function attachCodegenQueueHandoff(input: {
     taskId: input.job.taskId,
     traceId: input.job.traceId,
     status: "queued",
-    harness: "codex-app-server",
-    model: input.config.openRouter.codegenModel,
-    provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+    harness: selection.codegenHarness,
+    model: selection.codegenModel,
+    provider: selection.codegenProvider,
     reasoningEffort: "low",
-    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId }
+    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...selection }
   });
-}
-
-function providerForCodegenModel(model: string) {
-  return model.includes("/") ? "openrouter" : "openai";
 }

@@ -30,8 +30,14 @@ describe("agent task codegen mirror", () => {
         request: "make code-update tasks visible in the codegen ledger",
         requestedBy: "Kartik (user)",
         status: "queued",
-        harness: "codex",
-        metadata: expect.objectContaining({ taskId: "task-1" })
+        harness: "opencode",
+        metadata: expect.objectContaining({
+          taskId: "task-1",
+          codegenBackend: "kubernetes-job",
+          codegenHarness: "opencode",
+          codegenModel: "z-ai/glm-5.2",
+          codegenProvider: "openrouter"
+        })
       })
     );
     expect(codegenRepo.appendMessage).toHaveBeenCalledWith(
@@ -56,8 +62,13 @@ describe("agent task codegen mirror", () => {
         sessionId: "codegen-session-task-1",
         taskId: "task-1",
         status: "queued",
-        harness: "codex-app-server",
-        metadata: expect.objectContaining({ backend: "local-process-sandbox", pgbossJobId: null })
+        harness: "opencode",
+        metadata: expect.objectContaining({
+          backend: "local-process-sandbox",
+          pgbossJobId: null,
+          codegenHarness: "opencode",
+          codegenModel: "z-ai/glm-5.2"
+        })
       })
     );
   });
@@ -77,7 +88,14 @@ describe("agent task codegen mirror", () => {
 
     expect(codegenRepo.updateExecution).toHaveBeenCalledWith({
       executionId: "codegen-execution-task-1",
-      metadata: { backend: "local-process-sandbox", pgbossJobId: "pgboss-job-1" }
+      metadata: expect.objectContaining({
+        backend: "local-process-sandbox",
+        pgbossJobId: "pgboss-job-1",
+        codegenBackend: "kubernetes-job",
+        codegenHarness: "opencode",
+        codegenModel: "z-ai/glm-5.2",
+        codegenProvider: "openrouter"
+      })
     });
     expect(codegenRepo.createExecution).not.toHaveBeenCalled();
   });

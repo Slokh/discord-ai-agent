@@ -1490,7 +1490,12 @@ describe("agent router", () => {
       updateExecution: vi.fn(async () => undefined)
     };
     const ctx = {
-      config: { maxReplyChars: 1800, github: {}, openRouter: { codegenModel: "z-ai/glm-5.2" } },
+      config: {
+        maxReplyChars: 1800,
+        github: {},
+        openRouter: { codegenModel: "z-ai/glm-5.2" },
+        execution: { codegenBackend: "local-process", codegenHarness: "opencode" }
+      },
       repo: {
         auditTool: vi.fn(async () => undefined)
       },

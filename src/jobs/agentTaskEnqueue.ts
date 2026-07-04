@@ -6,6 +6,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import { logger } from "../util/logger.js";
 import { currentTraceContext } from "../util/trace.js";
+import { codegenExecutionSelection, type CodegenExecutionSelection } from "../execution/codegenSelection.js";
 import { attachCodegenQueueHandoff, codegenExecutionIdForTask, codegenSessionIdForTask, mirrorAgentTaskQueuedToCodegen } from "./agentTaskCodegenMirror.js";
 import { mirrorAgentTaskQueuedToAgentRuntime } from "./agentTaskRuntimeMirror.js";
 
@@ -13,6 +14,13 @@ export type AgentTaskEnqueueInput = Omit<AgentTaskJob, "taskId" | "taskType"> & 
   taskId?: string;
   taskType?: AgentTaskJob["taskType"];
   runtimeMirror?: "external";
+};
+
+export type AgentTaskEnqueueResult = CodegenExecutionSelection & {
+  jobId: string | null;
+  taskId: string;
+  queueName: string;
+  backendName: string;
 };
 
 export async function enqueueAgentTaskJob(input: {
@@ -24,11 +32,12 @@ export async function enqueueAgentTaskJob(input: {
   agentRuntimeRepo?: AgentRuntimeRepository;
   backendName: string;
   job: AgentTaskEnqueueInput;
-}): Promise<{ jobId: string | null; taskId: string }> {
+}): Promise<AgentTaskEnqueueResult> {
   const { runtimeMirror, ...jobInput } = input.job;
   const shouldMirrorAgentRuntime = runtimeMirror !== "external";
   const trace = currentTraceContext();
   const taskId = jobInput.taskId ?? `task-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  const selection = codegenExecutionSelection(input.config);
   const data: AgentTaskJob = {
     ...jobInput,
     taskId,
@@ -124,5 +133,11 @@ export async function enqueueAgentTaskJob(input: {
     }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update agent runtime task mirror"));
   }
   logger.info({ queue: input.queueName, taskId, jobId: id }, "Agent task enqueue complete");
-  return { jobId: id, taskId };
+  return {
+    jobId: id,
+    taskId,
+    queueName: input.queueName,
+    backendName: input.backendName,
+    ...selection
+  };
 }

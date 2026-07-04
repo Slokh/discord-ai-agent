@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../../src/config/env.js";
 import {
   enqueueAgentRuntimeCodeUpdateTask,
   enqueueAgentRuntimeSessionExecution,
@@ -144,11 +145,20 @@ describe("agent runtime control plane", () => {
   it("creates code-update task executions before handing work to the legacy task queue", async () => {
     const agentRuntime = fakeAgentRuntime();
     const jobs = {
-      enqueueAgentTask: vi.fn(async () => ({ jobId: "job-task-1", taskId: "task-runtime-first" }))
+      enqueueAgentTask: vi.fn(async () => ({
+        jobId: "job-task-1",
+        taskId: "task-runtime-first",
+        queueName: "agent.task",
+        backendName: "local-process-sandbox",
+        codegenBackend: "local-process" as const,
+        codegenHarness: "opencode" as const,
+        codegenModel: "z-ai/glm-5.2",
+        codegenProvider: "openrouter"
+      }))
     };
 
     const result = await enqueueAgentRuntimeCodeUpdateTask({
-      config: { openRouter: { codegenModel: "z-ai/glm-5.2" } } as never,
+      config: fakeConfig(),
       agentRuntime: agentRuntime as never,
       jobs,
       session: fakeSession(),
@@ -185,7 +195,14 @@ describe("agent runtime control plane", () => {
         taskId: "task-runtime-first",
         status: "queued",
         harness: "runCodingAgent",
-        model: "z-ai/glm-5.2"
+        model: "z-ai/glm-5.2",
+        metadata: expect.objectContaining({
+          queue: "agent.task",
+          codegenBackend: "local-process",
+          codegenHarness: "opencode",
+          codegenModel: "z-ai/glm-5.2",
+          codegenProvider: "openrouter"
+        })
       })
     );
     expect(jobs.enqueueAgentTask).toHaveBeenCalledWith(
@@ -201,7 +218,12 @@ describe("agent runtime control plane", () => {
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         eventName: "agent.task.enqueued",
-        metadata: expect.objectContaining({ taskId: "task-runtime-first", jobId: "job-task-1" })
+        metadata: expect.objectContaining({
+          taskId: "task-runtime-first",
+          jobId: "job-task-1",
+          backend: "local-process-sandbox",
+          codegenHarness: "opencode"
+        })
       })
     );
   });
@@ -304,5 +326,21 @@ function fakeExecution(): Pick<AgentRuntimeExecutionRecord, "executionId" | "tra
   return {
     executionId: "agent-execution-1",
     traceId: "message-1"
+  };
+}
+
+function fakeConfig() {
+  const config = loadConfig();
+  return {
+    ...config,
+    openRouter: {
+      ...config.openRouter,
+      codegenModel: "z-ai/glm-5.2"
+    },
+    execution: {
+      ...config.execution,
+      codegenBackend: "local-process" as const,
+      codegenHarness: "opencode" as const
+    }
   };
 }

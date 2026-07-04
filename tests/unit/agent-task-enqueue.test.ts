@@ -32,7 +32,18 @@ describe("agent task enqueue", () => {
       }
     });
 
-    expect(result).toEqual({ jobId: "pgboss-job-1", taskId: "task-1" });
+    expect(result).toEqual(
+      expect.objectContaining({
+        jobId: "pgboss-job-1",
+        taskId: "task-1",
+        queueName: "agent.task",
+        backendName: "local-process-sandbox",
+        codegenBackend: "kubernetes-job",
+        codegenHarness: "opencode",
+        codegenModel: "z-ai/glm-5.2",
+        codegenProvider: "openrouter"
+      })
+    );
     expect(boss.send).toHaveBeenCalledWith(
       "agent.task",
       expect.objectContaining({
@@ -68,7 +79,12 @@ describe("agent task enqueue", () => {
     );
     expect(codegenRepo.updateExecution).toHaveBeenCalledWith({
       executionId: "codegen-execution-task-1",
-      metadata: { backend: "local-process-sandbox", pgbossJobId: "pgboss-job-1" }
+      metadata: expect.objectContaining({
+        backend: "local-process-sandbox",
+        pgbossJobId: "pgboss-job-1",
+        codegenHarness: "opencode",
+        codegenModel: "z-ai/glm-5.2"
+      })
     });
     expect(agentRuntimeRepo.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({

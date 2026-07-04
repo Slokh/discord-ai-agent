@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
+import { codegenExecutionSelection } from "../execution/codegenSelection.js";
 import type { AgentTaskJob } from "../execution/types.js";
 
 export function agentRuntimeThreadKeyForTask(job: Pick<AgentTaskJob, "taskId" | "threadKey">) {
@@ -26,6 +27,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
   if (!input.agentRuntimeRepo) return;
   const threadKey = agentRuntimeThreadKeyForTask(input.job);
   const existingSession = input.pgBossJobId ? await input.agentRuntimeRepo.getSession({ threadKey }).catch(() => undefined) : undefined;
+  const selection = codegenExecutionSelection(input.config);
   const session =
     existingSession ??
     (await input.agentRuntimeRepo.upsertSession({
@@ -39,17 +41,19 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       requestedBy: input.job.requestedBy,
       status: "queued",
       harness: "runCodingAgent",
-      model: input.config.openRouter.codegenModel,
-      provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+      model: selection.codegenModel,
+      provider: selection.codegenProvider,
       metadata: {
         taskId: input.job.taskId,
         taskType: input.job.taskType,
         backend: input.backendName,
+        queue: "agent.task",
         pgbossJobId: input.pgBossJobId,
         codegenSessionId: input.codegenSessionId ?? null,
         codegenExecutionId: input.codegenExecutionId ?? null,
         retriedFromTaskId: input.job.retriedFromTaskId ?? null,
-        source: "agent.task.enqueue"
+        source: "agent.task.enqueue",
+        ...selection
       }
     }));
   await input.agentRuntimeRepo.appendMessage({
@@ -72,19 +76,23 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       taskId: input.job.taskId,
       traceId: input.job.traceId,
       backend: input.backendName,
+      queue: "agent.task",
       pgbossJobId: input.pgBossJobId,
       codegenSessionId: input.codegenSessionId ?? null,
       codegenExecutionId: input.codegenExecutionId ?? null,
-      source: "agent.task.enqueue"
+      source: "agent.task.enqueue",
+      ...selection
     }
   });
   const executionMetadata = {
     taskType: input.job.taskType,
     backend: input.backendName,
+    queue: "agent.task",
     pgbossJobId: input.pgBossJobId,
     codegenSessionId: input.codegenSessionId ?? null,
     codegenExecutionId: input.codegenExecutionId ?? null,
-    retriedFromTaskId: input.job.retriedFromTaskId ?? null
+    retriedFromTaskId: input.job.retriedFromTaskId ?? null,
+    ...selection
   };
   if (input.pgBossJobId) {
     const updated = await input.agentRuntimeRepo.updateExecution({
@@ -99,8 +107,8 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
         traceId: input.job.traceId,
         status: "queued",
         harness: "runCodingAgent",
-        model: input.config.openRouter.codegenModel,
-        provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+        model: selection.codegenModel,
+        provider: selection.codegenProvider,
         reasoningEffort: "low",
         metadata: executionMetadata
       });
@@ -113,8 +121,8 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       traceId: input.job.traceId,
       status: "queued",
       harness: "runCodingAgent",
-      model: input.config.openRouter.codegenModel,
-      provider: providerForCodegenModel(input.config.openRouter.codegenModel),
+      model: selection.codegenModel,
+      provider: selection.codegenProvider,
       reasoningEffort: "low",
       metadata: executionMetadata
     });
@@ -130,12 +138,10 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       taskId: input.job.taskId,
       jobId: input.pgBossJobId,
       backend: input.backendName,
+      queue: "agent.task",
       codegenSessionId: input.codegenSessionId ?? null,
-      codegenExecutionId: input.codegenExecutionId ?? null
+      codegenExecutionId: input.codegenExecutionId ?? null,
+      ...selection
     }
   });
-}
-
-function providerForCodegenModel(model: string) {
-  return model.includes("/") ? "openrouter" : "openai";
 }

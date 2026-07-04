@@ -9,7 +9,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { startArtifactRetentionMaintenance } from "../observability/artifactRetention.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
-import { enqueueAgentTaskJob, type AgentTaskEnqueueInput } from "./agentTaskEnqueue.js";
+import { enqueueAgentTaskJob, type AgentTaskEnqueueInput, type AgentTaskEnqueueResult } from "./agentTaskEnqueue.js";
 import {
   createCodegenLeaseScheduler,
   registerCodegenWorkerLease,
@@ -86,7 +86,7 @@ export type JobRuntime = {
   enqueueMessageEmbedding: (messageId: string, options?: MessageEmbeddingEnqueueOptions) => Promise<string | null>;
   enqueueAgentRuntimeExecution: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
   enqueueDiscordAgentRequest: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
-  enqueueAgentTask: (job: AgentTaskEnqueueInput) => Promise<{ jobId: string | null; taskId: string }>;
+  enqueueAgentTask: (job: AgentTaskEnqueueInput) => Promise<AgentTaskEnqueueResult>;
   stop: () => Promise<void>;
 };
 

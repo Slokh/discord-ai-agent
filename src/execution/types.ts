@@ -14,6 +14,9 @@ export type AgentTaskJob = {
   discordResponseChannelId?: string;
   discordResponseMessageId?: string;
   retriedFromTaskId?: string;
+  parentAgentSessionId?: string;
+  parentAgentExecutionId?: string;
+  parentAgentThreadKey?: string;
 };
 
 export type AgentTaskStartResult = {

@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import PgBoss from "pg-boss";
 import { loadConfig } from "../../src/config/env.js";
-import { AGENT_TASK_JOB, CRAWL_GUILD_JOB, DISCORD_AGENT_REQUEST_JOB, EMBED_MESSAGE_JOB, startJobs, type JobRuntime } from "../../src/jobs/queue.js";
+import {
+  AGENT_RUNTIME_EXECUTION_JOB,
+  AGENT_TASK_JOB,
+  CRAWL_GUILD_JOB,
+  EMBED_MESSAGE_JOB,
+  startJobs,
+  type JobRuntime
+} from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { CodegenRepository } from "../../src/db/codegenRepository.js";
@@ -165,6 +172,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     const repo = new DiscordAiAgentRepository(pool);
     const codegenRepo = new CodegenRepository(pool);
     const processedRequests: string[] = [];
+    const processedJobs: unknown[] = [];
     const runtime = await startJobs({
       config,
       repo,
@@ -180,6 +188,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         name: "test-sandbox-backend",
         start: async (job, context) => {
           processedRequests.push(job.request);
+          processedJobs.push(job);
           await context?.progress?.({ step: "test-step", message: "Starting test sandbox." });
           return {
             sandboxRunId: "sandbox-run-1",
@@ -194,12 +203,22 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       const { jobId, taskId } = await runtime.enqueueAgentTask({
         request: "add a calendar integration",
         title: "calendar integration",
-        requestedBy: "test"
+        requestedBy: "test",
+        parentAgentSessionId: "agent-session-parent",
+        parentAgentExecutionId: "agent-execution-parent",
+        parentAgentThreadKey: "discord:guild:channel"
       });
       expect(jobId).toEqual(expect.any(String));
       expect(taskId).toEqual(expect.any(String));
 
       await waitFor(() => processedRequests.includes("add a calendar integration"), 10_000);
+      expect(processedJobs).toEqual([
+        expect.objectContaining({
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent",
+          parentAgentThreadKey: "discord:guild:channel"
+        })
+      ]);
       await waitFor(async () => {
         const job = await repo.getAgentTask(taskId);
         return job?.status === "running" && job.currentStep === "sandbox_running";
@@ -214,7 +233,18 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         })
       );
       const session = await codegenRepo.getSession({ sessionId: `codegen-session-${taskId}` });
-      expect(session).toEqual(expect.objectContaining({ status: "running", harness: "codex" }));
+      expect(session).toEqual(
+        expect.objectContaining({
+          status: "running",
+          harness: "opencode",
+          metadata: expect.objectContaining({
+            codegenHarness: "opencode",
+            codegenModel: "z-ai/glm-5.2",
+            parentAgentSessionId: "agent-session-parent",
+            parentAgentExecutionId: "agent-execution-parent"
+          })
+        })
+      );
       await expect(codegenRepo.listMessages({ sessionId: `codegen-session-${taskId}` })).resolves.toEqual([
         expect.objectContaining({
           clientMessageId: taskId,
@@ -223,8 +253,28 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         })
       ]);
       await expect(codegenRepo.listExecutions({ sessionId: `codegen-session-${taskId}` })).resolves.toEqual([
-        expect.objectContaining({ taskId, status: "running", harness: "codex-app-server", sandboxRunId: "sandbox-run-1" })
+        expect.objectContaining({
+          taskId,
+          status: "running",
+          harness: "opencode",
+          sandboxRunId: "sandbox-run-1",
+          metadata: expect.objectContaining({
+            codegenHarness: "opencode",
+            codegenModel: "z-ai/glm-5.2",
+            parentAgentSessionId: "agent-session-parent",
+            parentAgentExecutionId: "agent-execution-parent"
+          })
+        })
       ]);
+      await expect(repo.getProcessRun(taskId)).resolves.toEqual(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            parentAgentSessionId: "agent-session-parent",
+            parentAgentExecutionId: "agent-execution-parent",
+            parentAgentThreadKey: "discord:guild:channel"
+          })
+        })
+      );
     } finally {
       await runtime.stop();
       await pool.end();
@@ -258,7 +308,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
-  it("processes queued Discord agent requests when the Discord worker is enabled", async () => {
+  it("processes queued agent runtime executions when the runtime worker is enabled", async () => {
     const config = testConfig();
     const processedRunIds: string[] = [];
     const runtime = await startJobs({
@@ -271,7 +321,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       crawler: {
         crawlConfiguredGuild: async () => undefined
       },
-      discordAgent: {
+      agentRuntime: {
         run: async (job) => {
           processedRunIds.push(job.runId);
         }
@@ -279,7 +329,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     });
     runtimes.push(runtime);
 
-    const jobId = await runtime.enqueueDiscordAgentRequest({
+    const jobId = await runtime.enqueueAgentRuntimeExecution({
       runId: "discord-run-worker",
       traceId: "discord-run-worker",
       guildId: "guild",
@@ -301,7 +351,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
-  it("can enqueue Discord agent requests without running the Discord worker", async () => {
+  it("can enqueue agent runtime executions without running the runtime worker", async () => {
     const config = testConfig();
     const processedRunIds: string[] = [];
     const runtime = await startJobs({
@@ -314,7 +364,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       crawler: {
         crawlConfiguredGuild: async () => undefined
       },
-      discordAgent: {
+      agentRuntime: {
         run: async (job) => {
           processedRunIds.push(job.runId);
         }
@@ -322,7 +372,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     });
     runtimes.push(runtime);
 
-    const jobId = await runtime.enqueueDiscordAgentRequest({
+    const jobId = await runtime.enqueueAgentRuntimeExecution({
       runId: "discord-run-pending",
       traceId: "discord-run-pending",
       guildId: "guild",
@@ -342,7 +392,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(processedRunIds).toEqual([]);
-    await runtime.boss.deleteJob(DISCORD_AGENT_REQUEST_JOB, jobId!);
+    await runtime.boss.deleteJob(AGENT_RUNTIME_EXECUTION_JOB, jobId!);
     await runtime.stop();
   });
 

@@ -7,22 +7,25 @@ This file is the short map for coding agents. Prefer this and the nearest `src/*
 Discord AI Agent is a TypeScript Node app with three production roles:
 
 - `bot`: Discord gateway, mention detection, response rendering, per-channel conversation memory.
-- `worker`: queue consumers for crawl, embeddings, Discord agent requests, codegen tasks, reconciliation, and cleanup.
+- `worker`: queue consumers for crawl, embeddings, agent runtime executions, codegen tasks, reconciliation, and cleanup.
 - `api`: internal control plane for sandbox callbacks, run console APIs, metrics, and authenticated debugging UI.
 
-Postgres is the durable source of truth for Discord messages, embeddings, skills, conversation memory, traces, process runs, task events, sandbox runs, and codegen sessions.
+Postgres is the durable source of truth for Discord messages, embeddings, skills, conversation memory, traces, process runs, task events, sandbox runs, codegen sessions, and the generic agent-runtime session facade that is replacing codegen-only execution.
 
 ## Core Flows
 
 ### Discord Message To Answer
 
 1. `src/discord/client.ts` receives a Discord message and checks whether the bot should respond.
-2. The client persists message/edit/delete state, resolves reply context and image attachments, creates a run/trace, and builds a `ToolContext`.
-3. `src/agent/router.ts` sends the user request, channel memory, reply context, image context, skills, and tool schemas to the model.
-4. The model selects local tools from `src/tools/registry.ts` or OpenRouter-hosted tools.
-5. Local tools execute through the `src/tools/coreTools.ts` facade; use `src/tools/README.md` to find the owning tool-family module before editing.
-6. The router records trace events/tool audit rows and returns the final response/files.
-7. `src/discord/responseSink.ts` renders the loading reaction, status message, final reply, attachments, or errors.
+2. The client persists message/edit/delete state, creates a run/trace, records the prompt in the durable agent-runtime session ledger, and stores a replayable turn envelope.
+3. Queued execution loads that turn envelope when available, builds a `ToolContext`, and calls the selected prompt executor. The generic `/api/agent/sessions/:threadKey/execute` endpoint accepts durable `input_lines` artifacts and can enqueue this runtime job when called with Discord delivery context, which lets future chat adapters stay thin and route through the durable session API. Discord ingress and the API share the same `src/agent/runtimeControlPlane.ts` queue-handoff helper so the durable session event stream records `agent.execution.job_enqueued` consistently.
+4. `src/agent/router.ts` sends the user request, channel memory, reply context, image context, skills, and tool schemas to the model.
+5. The model selects local tools from `src/tools/registry.ts` or OpenRouter-hosted tools.
+6. Local tools execute through the `src/tools/coreTools.ts` facade; use `src/tools/README.md` to find the owning tool-family module before editing.
+7. The router records trace events/tool audit rows and returns the final response/files.
+8. `src/discord/responseSink.ts` renders the loading reaction, status message, final reply, attachments, or errors, then the agent-runtime execution is marked terminal.
+
+The migration target is Centaur-style execution: Discord ingress appends a turn to the durable agent session, warm Kubernetes sandbox pods run the harness/tool loop, and Discord delivery follows the streamed session events.
 
 ### Discord Memory And Retrieval
 
@@ -36,12 +39,15 @@ For durable knowledge changes such as excluding a channel, deleting indexed hist
 ### Code Update Request To PR
 
 1. The model calls `runCodingAgent` when the user explicitly asks the bot to update itself.
-2. `src/tools/agentTaskTools.ts` enqueues a durable agent task through the tool facade and edits the Discord status message with progress.
-3. `src/jobs/queue.ts` claims the task and launches the configured execution backend.
+2. `src/tools/agentTaskTools.ts` edits the Discord status message with progress and, when a durable agent session is available, creates the `runCodingAgent` tool message plus task-linked execution in that session before enqueueing the sandbox worker.
+   The legacy queue-side mirror remains as compatibility fallback for callers that do not yet carry agent-runtime context.
+3. `src/jobs/agentTaskEnqueue.ts` owns the queue handoff transaction, then `src/jobs/queue.ts` claims the task and launches the configured execution backend.
 4. `src/execution/backend.ts` starts either a Kubernetes Job or local process sandbox.
 5. `src/execution/sandboxRunner.ts` prepares the repo, prompt, cache, harness config, tests, scan, push, and PR. Use `src/execution/README.md` before changing this path.
-6. Sandbox callbacks hit `src/control/internalApi.ts`, which persists command events, artifacts, spans, and terminal output.
-7. `src/discord/taskNotifications.ts` edits the original Discord status message with current progress and final PR/failure details.
+6. Sandbox callbacks hit `src/control/internalApi.ts`, which persists command events, artifacts, spans, and terminal output. Worker lifecycle state such as start, warm-lease attachment, sandbox-run attachment, progress, and completion is recorded through repository lifecycle methods that fan out to both legacy codegen events and `agent.task.*` runtime events.
+7. `src/discord/taskNotifications.ts` edits the original Discord status message with current progress and final PR/failure details, preferring `agent.task.*` events from the generic runtime session and falling back to legacy task events while the sandbox callback path still exists. The run console, trace log inspection, and model-facing task-status tool follow the same source order for code-update task progress.
+
+Code-update tasks are being folded into the generic agent runtime. New control-plane work should prefer `src/db/agentRuntimeRepository.ts` and `/api/agent/sessions/:threadKey` over adding new codegen-only APIs.
 
 ### Run Console And Debugging
 

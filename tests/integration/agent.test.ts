@@ -101,6 +101,100 @@ describe("agent router", () => {
     );
   });
 
+  it("mirrors model-selected tool turns into the durable agent runtime session", async () => {
+    const appendMessage = vi.fn(async () => undefined);
+    const ctx = {
+      config: { maxReplyChars: 1800, openRouter: { embeddingModel: "test/embed" }, discord: { clientId: "bot" } },
+      repo: {
+        health: vi.fn(async () => ({ messages: 1, embeddings: 1, toolCalls: 0 })),
+        getCrawlStatus: vi.fn(async () => [{ status: "complete", channels: 1, messages: 1 }]),
+        embeddingBacklog: vi.fn(async () => 0),
+        interactionBlockCount: vi.fn(async () => 0),
+        auditTool: vi.fn(async () => undefined)
+      },
+      agentRuntime: { appendMessage },
+      agentRuntimeSession: { sessionId: "agent-session-1" },
+      agentRuntimeExecutionId: "agent-execution-1",
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            estimatedCostUsd: 0.001,
+            toolCalls: [{ id: "call-1", name: "reportStatus", argumentsText: "{}" }]
+          })
+          .mockResolvedValueOnce({
+            content: "Messages indexed: 1",
+            model: "chat-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      requestId: "prompt-message-1"
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "status");
+
+    expect(appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        messageId: "agent-transcript-prompt-message-1-assistant-round-1",
+        clientMessageId: "prompt-message-1:transcript:assistant-round-1",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            type: "assistant_tool_calls",
+            toolCalls: [
+              expect.objectContaining({
+                id: "call-1",
+                name: "reportStatus",
+                arguments: {},
+                argumentsText: "{}"
+              })
+            ]
+          })
+        ],
+        metadata: expect.objectContaining({
+          source: "agent.router",
+          promptMessageId: "prompt-message-1",
+          executionId: "agent-execution-1",
+          round: 1,
+          model: "router-model"
+        })
+      })
+    );
+    expect(appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        messageId: "agent-transcript-prompt-message-1-tool-call-1",
+        clientMessageId: "prompt-message-1:transcript:tool-call-1",
+        role: "tool",
+        parts: [
+          expect.objectContaining({
+            type: "tool_result",
+            toolCallId: "call-1",
+            toolName: "reportStatus",
+            content: expect.stringContaining("Messages indexed: 1")
+          })
+        ],
+        metadata: expect.objectContaining({
+          source: "agent.router",
+          promptMessageId: "prompt-message-1",
+          executionId: "agent-execution-1",
+          round: 1,
+          toolName: "reportStatus"
+        })
+      })
+    );
+  });
+
   it.each(["what can you do", "what can you do?", "tools?", "help"])(
     "lets the model route natural-language tool-list request %j",
     async (request) => {
@@ -1478,6 +1572,115 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "runCodingAgent" }));
   });
 
+  it("creates model-selected code-update jobs through the current agent runtime session when available", async () => {
+    const enqueueAgentTask = vi.fn(async (job: { taskId?: string }) => ({
+      jobId: "job-1",
+      taskId: job.taskId ?? "task-runtime-first"
+    }));
+    const agentRuntime = {
+      appendMessage: vi.fn(async () => undefined),
+      createExecution: vi.fn(async () => undefined),
+      recordEvent: vi.fn(async () => undefined),
+      updateExecution: vi.fn(async () => undefined)
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        github: {},
+        openRouter: { codegenModel: "z-ai/glm-5.2" },
+        execution: { codegenBackend: "local-process", codegenHarness: "opencode" }
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      agentRuntime,
+      agentRuntimeSession: {
+        sessionId: "agent-session-channel",
+        traceId: "prompt-message-1",
+        threadKey: "discord:g:c",
+        guildId: "g",
+        channelId: "c",
+        userId: "u",
+        title: "Channel session",
+        request: "how should we track events?",
+        requestedBy: "User",
+        status: "running",
+        harness: "in-process",
+        model: null,
+        provider: null,
+        codexThreadId: null,
+        metadata: {},
+        createdAt: new Date(),
+        startedAt: null,
+        completedAt: null,
+        updatedAt: new Date()
+      },
+      openRouter: {
+        chat: vi.fn().mockResolvedValueOnce({
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "runCodingAgent",
+              argumentsText: JSON.stringify({ request: "add a calendar integration", title: "Add calendar support" })
+            }
+          ]
+        })
+      },
+      github: {},
+      jobs: {
+        enqueueAgentTask
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      requestId: "prompt-message-1",
+      agentRuntimeExecutionId: "agent-execution-prompt",
+      statusChannelId: "c",
+      statusMessageId: "reply-1",
+      updateStatus: vi.fn(async () => undefined)
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "how should we track events?");
+    const taskId = enqueueAgentTask.mock.calls[0]?.[0].taskId;
+
+    expect(taskId).toEqual(expect.stringMatching(/^task-/));
+    expect(response.content).toContain(`Task ID: \`${taskId}\``);
+    expect(agentRuntime.appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-channel",
+        role: "tool",
+        parts: [expect.objectContaining({ toolName: "runCodingAgent", taskId })]
+      })
+    );
+    expect(agentRuntime.createExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-channel",
+        taskId,
+        harness: "runCodingAgent"
+      })
+    );
+    expect(enqueueAgentTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId,
+        runtimeMirror: "external",
+        traceId: "prompt-message-1",
+        parentAgentSessionId: "agent-session-channel",
+        parentAgentExecutionId: "agent-execution-prompt",
+        parentAgentThreadKey: "discord:g:c",
+        title: "Add calendar support",
+        request: "add a calendar integration",
+        discordResponseChannelId: "c",
+        discordResponseMessageId: "reply-1"
+      })
+    );
+  });
+
   it("continues after linked Discord evidence when a code-update request still needs a PR tool", async () => {
     const enqueueAgentTask = vi.fn(async () => ({
       jobId: "job-1",
@@ -1619,6 +1822,60 @@ describe("agent router", () => {
         request: "add better task progress updates",
         discordResponseChannelId: "c",
         discordResponseMessageId: "lazy-reply-1"
+      })
+    );
+  });
+
+  it("preserves prompt trace and Discord scope when warm runtimes enqueue codegen without a status updater", async () => {
+    const enqueueAgentTask = vi.fn(async () => ({
+      jobId: "job-1",
+      taskId: "task-warm-runtime"
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, github: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        chat: vi.fn().mockResolvedValueOnce({
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "runCodingAgent",
+              argumentsText: JSON.stringify({ request: "make warm runtime task updates reliable", title: "Fix warm task updates" })
+            }
+          ]
+        })
+      },
+      github: {},
+      jobs: {
+        enqueueAgentTask
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      requestId: "prompt-message-1"
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "update yourself so warm runtime task updates work");
+
+    expect(response.content).toContain("Task ID: `task-warm-runtime`");
+    expect(enqueueAgentTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        traceId: "prompt-message-1",
+        guildId: "g",
+        channelId: "c",
+        userId: "u",
+        title: "Fix warm task updates",
+        request: "make warm runtime task updates reliable",
+        discordResponseChannelId: "c",
+        discordResponseMessageId: undefined
       })
     );
   });

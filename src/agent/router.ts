@@ -392,6 +392,14 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       model: response.model,
       estimatedCostUsd: response.estimatedCostUsd
     });
+    await appendAgentRuntimeAssistantToolCalls(ctx, {
+      round: round + 1,
+      responseContent: response.content,
+      model: response.model,
+      finishReason: response.finishReason,
+      estimatedCostUsd: response.estimatedCostUsd,
+      routes: modelRoutes
+    });
 
     messages.push({
       role: "assistant",
@@ -453,6 +461,15 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         },
         durationMs: durationMs(toolStartedAt)
       });
+      if (route.name !== "runCodingAgent") {
+        await appendAgentRuntimeToolResult(ctx, {
+          round: round + 1,
+          route,
+          result,
+          durationMs: durationMs(toolStartedAt),
+          skippedRedundantToolCall: isRedundantToolCall
+        });
+      }
       if (isRedundantToolCall) {
         skippedRedundantToolThisRound = true;
       } else {
@@ -1165,6 +1182,109 @@ async function recordTraceEvent(
   await recorder.call(ctx.repo, input).catch((error) => {
     logger.warn({ err: error, eventName: input.eventName }, "Failed to record agent trace event");
   });
+}
+
+async function appendAgentRuntimeAssistantToolCalls(
+  ctx: ToolContext,
+  input: {
+    round: number;
+    responseContent: string;
+    model?: string | null;
+    finishReason?: string | null;
+    estimatedCostUsd?: number | null;
+    routes: AgentToolRoute[];
+  }
+) {
+  if (!ctx.agentRuntime || !ctx.agentRuntimeSession || !ctx.agentRuntimeExecutionId || !ctx.requestId) return;
+  await ctx.agentRuntime
+    .appendMessage({
+      sessionId: ctx.agentRuntimeSession.sessionId,
+      messageId: agentRuntimeTranscriptMessageId(ctx, `assistant-round-${input.round}`),
+      clientMessageId: agentRuntimeTranscriptClientMessageId(ctx, `assistant-round-${input.round}`),
+      role: "assistant",
+      parts: [
+        {
+          type: "assistant_tool_calls",
+          text: input.responseContent,
+          toolCalls: input.routes.map((route) => ({
+            id: route.id,
+            name: route.name,
+            arguments: route.arguments ?? {},
+            argumentsText: route.argumentsText
+          }))
+        }
+      ],
+      metadata: {
+        source: "agent.router",
+        traceId: ctx.requestId,
+        promptMessageId: ctx.requestId,
+        executionId: ctx.agentRuntimeExecutionId,
+        round: input.round,
+        model: input.model ?? null,
+        finishReason: input.finishReason ?? null,
+        estimatedCostUsd: input.estimatedCostUsd ?? null
+      }
+    })
+    .catch((error) => {
+      logger.warn({ err: error, requestId: ctx.requestId, round: input.round }, "Failed to append agent runtime assistant tool calls");
+    });
+}
+
+async function appendAgentRuntimeToolResult(
+  ctx: ToolContext,
+  input: {
+    round: number;
+    route: AgentToolRoute;
+    result: AgentResponse;
+    durationMs: number;
+    skippedRedundantToolCall: boolean;
+  }
+) {
+  if (!ctx.agentRuntime || !ctx.agentRuntimeSession || !ctx.agentRuntimeExecutionId || !ctx.requestId) return;
+  await ctx.agentRuntime
+    .appendMessage({
+      sessionId: ctx.agentRuntimeSession.sessionId,
+      messageId: agentRuntimeTranscriptMessageId(ctx, `tool-${input.route.id}`),
+      clientMessageId: agentRuntimeTranscriptClientMessageId(ctx, `tool-${input.route.id}`),
+      role: "tool",
+      parts: [
+        {
+          type: "tool_result",
+          toolCallId: input.route.id,
+          toolName: input.route.name,
+          content: input.result.content,
+          files: input.result.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+        }
+      ],
+      metadata: {
+        source: "agent.router",
+        traceId: ctx.requestId,
+        promptMessageId: ctx.requestId,
+        executionId: ctx.agentRuntimeExecutionId,
+        round: input.round,
+        toolCallId: input.route.id,
+        toolName: input.route.name,
+        arguments: input.route.arguments ?? {},
+        outputChars: input.result.content.length,
+        fileCount: input.result.files?.length ?? 0,
+        skippedRedundantToolCall: input.skippedRedundantToolCall || undefined,
+        durationMs: input.durationMs
+      }
+    })
+    .catch((error) => {
+      logger.warn(
+        { err: error, requestId: ctx.requestId, round: input.round, toolName: input.route.name },
+        "Failed to append agent runtime tool result"
+      );
+    });
+}
+
+function agentRuntimeTranscriptMessageId(ctx: ToolContext, suffix: string) {
+  return `agent-transcript-${ctx.requestId}-${suffix}`;
+}
+
+function agentRuntimeTranscriptClientMessageId(ctx: ToolContext, suffix: string) {
+  return `${ctx.requestId}:transcript:${suffix}`;
 }
 
 function toolRouteKey(route: AgentToolRoute): string {

@@ -33,6 +33,17 @@ codegen:
   # while keeping the rest of the sandbox, verification, and PR flow unchanged.
   harness: opencode
 
+agentRuntime:
+  # in-process keeps the current compatibility model loop in the worker.
+  # warm-sandbox dispatches Discord prompt execution to a warm prompt server
+  # when warmSandbox.enabled=true, with local child-process fallback otherwise.
+  executionBackend: in-process
+  warmSandbox:
+    enabled: false
+    replicas: 1
+    port: 8090
+    resources: {}
+
 secret:
   existingSecretName: discord-ai-agent-env
 

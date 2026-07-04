@@ -51,9 +51,29 @@ export type CodegenStatusLease = {
   updatedAt: Date;
 };
 
+export type AgentRuntimeStatusSession = {
+  sessionId: string;
+  traceId: string | null;
+  threadKey: string | null;
+  title: string;
+  requestedBy: string | null;
+  status: string;
+  harness: string | null;
+  model: string | null;
+  executionId: string | null;
+  executionStatus: string | null;
+  createdAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  updatedAt: Date;
+  executionUpdatedAt: Date | null;
+};
+
 export type CodegenStatusSnapshot = {
   generatedAt: Date;
   staleAfterMs: number;
+  agentSessionCounts: CodegenStatusCount[];
+  activeAgentSessions: AgentRuntimeStatusSession[];
   taskCounts: CodegenStatusCount[];
   queueCounts: CodegenStatusCount[];
   activeTasks: CodegenStatusTask[];
@@ -71,7 +91,22 @@ export type CodegenStatusOptions = {
 export async function collectCodegenStatusSnapshot(pool: DbPool, options: CodegenStatusOptions = {}): Promise<CodegenStatusSnapshot> {
   const limit = clampInteger(options.limit ?? 10, 1, 100);
   const generatedAt = new Date();
-  const [taskCounts, queueCounts, activeTasks, recentTerminalTasks, activeSandboxRuns, pendingSandboxCleanup, leases] = await Promise.all([
+  const [
+    agentSessionCounts,
+    activeAgentSessions,
+    taskCounts,
+    queueCounts,
+    activeTasks,
+    recentTerminalTasks,
+    activeSandboxRuns,
+    pendingSandboxCleanup,
+    leases
+  ] = await Promise.all([
+    queryCounts(
+      pool,
+      "SELECT status AS name, count(*)::int AS count FROM codegen_sessions WHERE metadata->>'runtime' = 'agent' GROUP BY status ORDER BY status"
+    ),
+    queryAgentRuntimeSessions(pool, limit),
     queryCounts(pool, "SELECT status AS name, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
     queryCounts(pool, "SELECT state AS name, count(*)::int AS count FROM pgboss.job WHERE name = 'agent.task' GROUP BY state ORDER BY state"),
     queryTasks(
@@ -132,6 +167,8 @@ export async function collectCodegenStatusSnapshot(pool: DbPool, options: Codege
   return {
     generatedAt,
     staleAfterMs: options.staleAfterMs ?? 15 * 60 * 1000,
+    agentSessionCounts,
+    activeAgentSessions,
     taskCounts,
     queueCounts,
     activeTasks,
@@ -152,6 +189,7 @@ export function formatCodegenStatusSnapshot(snapshot: CodegenStatusSnapshot): st
   lines.push(`Generated: ${formatDateTime(snapshot.generatedAt)} | stale threshold: ${formatSeconds(snapshot.staleAfterMs)}`);
   lines.push(
     [
+      `active agent sessions: ${snapshot.activeAgentSessions.length}`,
       `active tasks: ${snapshot.activeTasks.length}`,
       `stale active: ${activeStaleTasks.length}`,
       `active sandboxes: ${snapshot.activeSandboxRuns.length}`,
@@ -160,6 +198,8 @@ export function formatCodegenStatusSnapshot(snapshot: CodegenStatusSnapshot): st
     ].join(" | ")
   );
 
+  appendCounts(lines, "Agent runtime session counts", snapshot.agentSessionCounts);
+  appendAgentRuntimeSessions(lines, "Active agent runtime sessions", snapshot.activeAgentSessions, snapshot);
   appendCounts(lines, "Task counts", snapshot.taskCounts);
   appendCounts(lines, "pg-boss agent.task queue", snapshot.queueCounts);
   appendDiagnostics(lines, diagnostics);
@@ -255,6 +295,36 @@ function appendTasks(lines: string[], title: string, tasks: CodegenStatusTask[],
   }
 }
 
+function appendAgentRuntimeSessions(
+  lines: string[],
+  title: string,
+  sessions: AgentRuntimeStatusSession[],
+  snapshot: CodegenStatusSnapshot
+) {
+  lines.push("");
+  lines.push(`${title}: ${sessions.length === 0 ? "none" : ""}`.trimEnd());
+  for (const session of sessions) {
+    const ageMs = snapshot.generatedAt.getTime() - session.createdAt.getTime();
+    const updatedMs = snapshot.generatedAt.getTime() - session.updatedAt.getTime();
+    const executionUpdatedMs = session.executionUpdatedAt ? snapshot.generatedAt.getTime() - session.executionUpdatedAt.getTime() : null;
+    lines.push(
+      `- ${session.sessionId} ${session.status}${session.executionStatus ? ` | execution=${session.executionStatus}` : ""}${
+        session.harness ? ` | harness=${session.harness}` : ""
+      }`
+    );
+    lines.push(`  ${session.title}${session.requestedBy ? ` | by=${session.requestedBy}` : ""}`);
+    if (session.model) lines.push(`  model: ${session.model}`);
+    if (session.threadKey) lines.push(`  thread: ${session.threadKey}`);
+    if (session.executionId) lines.push(`  execution: ${session.executionId}`);
+    if (session.traceId) lines.push(`  trace: ${session.traceId}`);
+    lines.push(
+      `  created ${formatAge(ageMs)} | updated ${formatAge(updatedMs)}${
+        executionUpdatedMs == null ? "" : ` | execution updated ${formatAge(executionUpdatedMs)}`
+      }`
+    );
+  }
+}
+
 function appendLeases(lines: string[], snapshot: CodegenStatusSnapshot) {
   lines.push("");
   lines.push(`Codegen sandbox leases: ${snapshot.leases.length === 0 ? "none" : ""}`.trimEnd());
@@ -320,6 +390,33 @@ async function querySandboxRuns(pool: DbPool, sql: string, params: unknown[]): P
   return rows.map(rowToSandboxRun);
 }
 
+async function queryAgentRuntimeSessions(pool: DbPool, limit: number): Promise<AgentRuntimeStatusSession[]> {
+  const rows = await optionalRows(
+    pool,
+    `
+      SELECT
+        s.session_id, s.trace_id, s.thread_key, s.title, s.requested_by,
+        s.status, s.harness, s.model, s.created_at, s.started_at, s.completed_at,
+        s.updated_at,
+        e.execution_id, e.status AS execution_status, e.updated_at AS execution_updated_at
+      FROM codegen_sessions s
+      LEFT JOIN LATERAL (
+        SELECT execution_id, status, updated_at
+        FROM codegen_executions
+        WHERE session_id = s.session_id
+        ORDER BY created_at DESC, execution_id DESC
+        LIMIT 1
+      ) e ON true
+      WHERE s.metadata->>'runtime' = 'agent'
+        AND s.status IN ('queued', 'running')
+      ORDER BY coalesce(e.updated_at, s.updated_at) ASC, s.created_at ASC
+      LIMIT $1
+    `,
+    [limit]
+  );
+  return rows.map(rowToAgentRuntimeSession);
+}
+
 async function queryLeases(pool: DbPool, limit: number): Promise<CodegenStatusLease[]> {
   const rows = await optionalRows(
     pool,
@@ -382,6 +479,26 @@ function rowToSandboxRun(row: Record<string, unknown>): CodegenStatusSandboxRun 
     completedAt: nullableDate(row.completed_at),
     cleanedUpAt: nullableDate(row.cleaned_up_at),
     updatedAt: dateValue(row.updated_at)
+  };
+}
+
+function rowToAgentRuntimeSession(row: Record<string, unknown>): AgentRuntimeStatusSession {
+  return {
+    sessionId: stringValue(row.session_id),
+    traceId: nullableString(row.trace_id),
+    threadKey: nullableString(row.thread_key),
+    title: stringValue(row.title),
+    requestedBy: nullableString(row.requested_by),
+    status: stringValue(row.status),
+    harness: nullableString(row.harness),
+    model: nullableString(row.model),
+    executionId: nullableString(row.execution_id),
+    executionStatus: nullableString(row.execution_status),
+    createdAt: dateValue(row.created_at),
+    startedAt: nullableDate(row.started_at),
+    completedAt: nullableDate(row.completed_at),
+    updatedAt: dateValue(row.updated_at),
+    executionUpdatedAt: nullableDate(row.execution_updated_at)
   };
 }
 

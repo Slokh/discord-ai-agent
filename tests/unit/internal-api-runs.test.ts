@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig, type AppConfig } from "../../src/config/env.js";
 import { startInternalApi, type InternalApiRuntime } from "../../src/control/internalApi.js";
 import type {
+  CodegenArtifactContent,
+  CodegenArtifactRecord,
   CodegenEventRecord,
   CodegenExecutionRecord,
   CodegenMessageRecord,
@@ -55,7 +57,21 @@ describe("internal API run endpoints", () => {
 
     const detail = await fetch(`${runtime.url}/api/runs/run-1`, { headers: auth });
     expect(detail.status).toBe(200);
-    await expect(detail.json()).resolves.toEqual(expect.objectContaining({ run: expect.objectContaining({ runId: "run-1" }) }));
+    await expect(detail.json()).resolves.toEqual(
+      expect.objectContaining({
+        run: expect.objectContaining({ runId: "run-1" }),
+        relatedRuns: [expect.objectContaining({ runId: "task-1", kind: "codegen", currentStep: "opencode_attempt_1" })]
+      })
+    );
+
+    const childDetail = await fetch(`${runtime.url}/api/runs/task-1`, { headers: auth });
+    expect(childDetail.status).toBe(200);
+    await expect(childDetail.json()).resolves.toEqual(
+      expect.objectContaining({
+        run: expect.objectContaining({ runId: "task-1" }),
+        relatedRuns: [expect.objectContaining({ runId: "run-1", kind: "prompt" })]
+      })
+    );
 
     const events = await fetch(`${runtime.url}/api/runs/run-1/events`, { headers: auth });
     expect(events.status).toBe(200);
@@ -173,6 +189,165 @@ describe("internal API run endpoints", () => {
     await reader.cancel();
     expect(Buffer.from(chunk.value ?? new Uint8Array()).toString("utf8")).toContain("event: codegen.event");
   });
+
+  it("serves a generic agent session control-plane API", async () => {
+    const codegenRepo = fakeCodegenRepo();
+    const enqueuedJobs: unknown[] = [];
+    runtime = await startInternalApi({
+      config: testConfig(),
+      repo: fakeRepo(),
+      codegenRepo: codegenRepo as never,
+      jobs: {
+        enqueueAgentRuntimeExecution: async (job) => {
+          enqueuedJobs.push(job);
+          return "agent-runtime-job-1";
+        }
+      }
+    });
+    const auth = {
+      authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}`,
+      "content-type": "application/json"
+    };
+    const threadKey = "discord:111:222";
+    const encodedThreadKey = encodeURIComponent(threadKey);
+
+    const create = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        request: "answer the Discord prompt through a warm sandbox session",
+        requestedBy: "kartik",
+        guildId: "guild-1",
+        channelId: "channel-1",
+        userId: "user-1",
+        model: "z-ai/glm-5.2",
+        harness: "opencode"
+      })
+    });
+    expect(create.status).toBe(200);
+    const createBody = await create.json();
+    expect(createBody).toEqual(
+      expect.objectContaining({
+        ok: true,
+        session: expect.objectContaining({
+          threadKey,
+          request: "answer the Discord prompt through a warm sandbox session",
+          model: "z-ai/glm-5.2",
+          metadata: expect.objectContaining({ runtime: "agent" })
+        })
+      })
+    );
+
+    const append = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/messages`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ role: "user", text: "hello from Discord", clientMessageId: "discord-message-2" })
+    });
+    expect(append.status).toBe(200);
+    await expect(append.json()).resolves.toEqual(expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }));
+
+    const execute = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/execute`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        reasoningEffort: "low",
+        metadata: { source: "test" },
+        enqueue: true,
+        input_lines: ['{"type":"user","message":{"content":[{"type":"text","text":"hello from Discord"}]}}'],
+        runId: "discord-run-2",
+        messageId: "discord-message-2",
+        responseChannelId: "channel-1",
+        responseMessageId: "thinking-message-1",
+        mentionKind: "user",
+        botRoleIds: ["bot-role-1"],
+        requesterDisplayName: "kartik"
+      })
+    });
+    expect(execute.status).toBe(202);
+    const executeBody = await execute.json();
+    expect(executeBody).toEqual(
+      expect.objectContaining({
+        jobId: "agent-runtime-job-1",
+        inputLinesArtifactId: "artifact-1",
+        execution: expect.objectContaining({
+          status: "queued",
+          reasoningEffort: "low",
+          metadata: expect.objectContaining({ runtime: "agent", source: "test" })
+        })
+      })
+    );
+    expect(enqueuedJobs).toEqual([
+      expect.objectContaining({
+        runId: "discord-run-2",
+        traceId: "discord-run-2",
+        agentSessionId: createBody.session.sessionId,
+        agentExecutionId: executeBody.execution.executionId,
+        agentThreadKey: threadKey,
+        guildId: "guild-1",
+        channelId: "channel-1",
+        messageId: "discord-message-2",
+        userId: "user-1",
+        responseChannelId: "channel-1",
+        responseMessageId: "thinking-message-1",
+        inputLinesArtifactId: "artifact-1",
+        text: "hello from Discord",
+        rawContent: "hello from Discord",
+        mentionKind: "user",
+        botRoleIds: ["bot-role-1"],
+        requesterDisplayName: "kartik"
+      })
+    ]);
+    const inputLinesArtifact = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/artifacts/${executeBody.inputLinesArtifactId}`, {
+      headers: auth
+    });
+    expect(inputLinesArtifact.status).toBe(200);
+    await expect(inputLinesArtifact.text()).resolves.toBe(
+      '{"type":"user","message":{"content":[{"type":"text","text":"hello from Discord"}]}}\n'
+    );
+    const envelopeArtifact = await codegenRepo.storeArtifact({
+      sessionId: createBody.session.sessionId,
+      executionId: executeBody.execution.executionId,
+      kind: "turn_envelope",
+      name: "Agent runtime turn envelope",
+      content: JSON.stringify({ requestId: "discord-message-2", text: "hello from Discord" }),
+      contentType: "application/json",
+      metadata: { runtime: "agent" }
+    });
+
+    const detail = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}`, { headers: auth });
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toEqual(
+      expect.objectContaining({
+        messages: [expect.objectContaining({ clientMessageId: "discord-message-2" })],
+        executions: [expect.objectContaining({ status: "queued" })],
+        events: expect.arrayContaining([
+          expect.objectContaining({ eventName: "agent.execution.queued" }),
+          expect.objectContaining({ eventName: "agent.execution.input_lines_stored" }),
+          expect.objectContaining({
+            eventName: "agent.execution.job_enqueued",
+            metadata: expect.objectContaining({ inputLinesArtifactId: "artifact-1" })
+          })
+        ])
+      })
+    );
+
+    const artifact = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/artifacts/${envelopeArtifact.artifactId}`, { headers: auth });
+    expect(artifact.status).toBe(200);
+    await expect(artifact.json()).resolves.toEqual(expect.objectContaining({ requestId: "discord-message-2", text: "hello from Discord" }));
+
+    const events = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/events`, { headers: auth });
+    expect(events.status).toBe(200);
+    await expect(events.json()).resolves.toEqual(
+      expect.objectContaining({ events: expect.arrayContaining([expect.objectContaining({ eventName: "agent.message.appended" })]) })
+    );
+
+    const stream = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/stream`, { headers: auth });
+    expect(stream.status).toBe(200);
+    const reader = stream.body!.getReader();
+    const chunk = await reader.read();
+    await reader.cancel();
+    expect(Buffer.from(chunk.value ?? new Uint8Array()).toString("utf8")).toContain("event: agent.event");
+  });
 });
 
 function testConfig(): AppConfig {
@@ -199,11 +374,30 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     messageId: "1521541635580756031",
     requester: "test",
     source: "test",
-    metadata: {},
+    metadata: { agentExecutionId: "agent-execution-1" },
     links: {},
     startedAt: new Date("2026-06-30T12:00:00Z"),
     completedAt: new Date("2026-06-30T12:00:01Z"),
     updatedAt: new Date("2026-06-30T12:00:01Z")
+  };
+  const childRun: ProcessRunRecord = {
+    runId: "task-1",
+    traceId: "trace-child",
+    kind: "codegen",
+    status: "running",
+    title: "Update console visibility",
+    summary: "Running code update.",
+    guildId: null,
+    channelId: null,
+    userId: null,
+    messageId: null,
+    requester: "test",
+    source: "agent_task",
+    metadata: { parentAgentExecutionId: "agent-execution-1", currentStep: "opencode_attempt_1" },
+    links: {},
+    startedAt: new Date("2026-06-30T12:00:02Z"),
+    completedAt: null,
+    updatedAt: new Date("2026-06-30T12:00:03Z")
   };
   const event: ProcessRunEventRecord = {
     id: 1,
@@ -243,14 +437,23 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     findAgentTaskByDiscordMessageId: async () => undefined,
     listRecentAgentTasks: async () => [],
     listProcessRunsForTrace: async () => [run],
+    listProcessRunsByParentAgentExecutionId: async (input: { parentAgentExecutionId: string }) =>
+      input.parentAgentExecutionId === "agent-execution-1" ? [childRun] : [],
+    findProcessRunByAgentExecutionId: async (agentExecutionId: string) => (agentExecutionId === "agent-execution-1" ? run : undefined),
     listAgentTasksForTrace: async () => [],
-    getProcessRun: async (runId: string) => (runId === "run-1" ? run : undefined),
+    getProcessRun: async (runId: string) => {
+      if (runId === "run-1") return run;
+      if (runId === "task-1") return childRun;
+      return undefined;
+    },
     getAgentTask: async () => undefined,
     getProcessRunSpans: async () => [],
     getProcessRunEvents: async () => [event],
     getProcessRunArtifacts: async () => [artifact],
     getProcessRunArtifact: async (input: { artifactId: string }) => (input.artifactId === "artifact-1" ? artifactContent : undefined),
     getTraceEventsForTrace: async () => [],
+    getAgentRuntimeEventsForTrace: async () => [],
+    getAgentRuntimeMessagesForTrace: async () => [],
     getToolAuditLogsForTrace: async () => []
   } as unknown as DiscordAiAgentRepository;
 }
@@ -340,6 +543,7 @@ function fakeCodegenRepo() {
   const messages = new Map<string, CodegenMessageRecord[]>();
   const executions = new Map<string, CodegenExecutionRecord[]>();
   const events = new Map<string, CodegenEventRecord[]>();
+  const artifacts = new Map<string, CodegenArtifactContent>();
   let eventId = 1;
 
   return {
@@ -453,6 +657,43 @@ function fakeCodegenRepo() {
       executions.set(input.sessionId, [execution, ...(executions.get(input.sessionId) ?? [])]);
       return execution;
     },
+    updateExecution: async (input: {
+      executionId: string;
+      status?: CodegenExecutionRecord["status"];
+      branchName?: string | null;
+      prUrl?: string | null;
+      draft?: boolean | null;
+      verifyPassed?: boolean | null;
+      error?: string | null;
+      sandboxId?: string | null;
+      sandboxRunId?: string | null;
+      codexThreadId?: string | null;
+      metadata?: Record<string, unknown>;
+    }) => {
+      for (const [sessionId, sessionExecutions] of executions.entries()) {
+        const index = sessionExecutions.findIndex((execution) => execution.executionId === input.executionId);
+        if (index < 0) continue;
+        const existing = sessionExecutions[index]!;
+        const updated: CodegenExecutionRecord = {
+          ...existing,
+          status: input.status ?? existing.status,
+          branchName: input.branchName ?? existing.branchName,
+          prUrl: input.prUrl ?? existing.prUrl,
+          draft: input.draft ?? existing.draft,
+          verifyPassed: input.verifyPassed ?? existing.verifyPassed,
+          error: input.error ?? existing.error,
+          sandboxId: input.sandboxId ?? existing.sandboxId,
+          sandboxRunId: input.sandboxRunId ?? existing.sandboxRunId,
+          metadata: { ...existing.metadata, ...(input.metadata ?? {}) },
+          updatedAt: new Date("2026-06-30T12:00:02Z")
+        };
+        const nextExecutions = [...sessionExecutions];
+        nextExecutions[index] = updated;
+        executions.set(sessionId, nextExecutions);
+        return updated;
+      }
+      return undefined;
+    },
     listExecutions: async (input: { sessionId: string }) => executions.get(input.sessionId) ?? [],
     recordEvent: async (input: {
       sessionId: string;
@@ -486,6 +727,34 @@ function fakeCodegenRepo() {
       (events.get(input.sessionId) ?? [])
         .filter((event) => (input.executionId ? event.executionId === input.executionId : true))
         .filter((event) => event.id > (input.afterEventId ?? 0))
-        .slice(0, input.limit ?? 200)
+        .slice(0, input.limit ?? 200),
+    storeArtifact: async (input: {
+      sessionId: string;
+      executionId?: string | null;
+      kind: string;
+      name: string;
+      content: string;
+      contentType?: string | null;
+      metadata?: Record<string, unknown>;
+    }) => {
+      const artifact: CodegenArtifactContent = {
+        artifactId: `artifact-${artifacts.size + 1}`,
+        sessionId: input.sessionId,
+        executionId: input.executionId ?? null,
+        kind: input.kind,
+        name: input.name,
+        contentType: input.contentType ?? "text/plain",
+        sizeBytes: Buffer.byteLength(input.content, "utf8"),
+        preview: input.content.slice(0, 2000),
+        redacted: true,
+        expiresAt: null,
+        metadata: input.metadata ?? {},
+        content: input.content,
+        createdAt: new Date("2026-06-30T12:00:04Z")
+      };
+      artifacts.set(artifact.artifactId, artifact);
+      return artifact as CodegenArtifactRecord;
+    },
+    getArtifact: async (input: { artifactId: string }) => artifacts.get(input.artifactId)
   };
 }

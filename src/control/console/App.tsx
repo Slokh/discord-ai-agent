@@ -32,7 +32,20 @@ import {
   toolRequestArgumentsText,
   type TimelineToolRequest
 } from "./timelineText.js";
-import type { EventLevel, RunArtifact, RunCount, RunKind, RunListAggregate, RunEvent, RunSnapshot, RunSpan, RunStatus, RunSummary, TerminalEntry } from "./types.js";
+import type {
+  AgentTranscriptMessage,
+  EventLevel,
+  RunArtifact,
+  RunCount,
+  RunKind,
+  RunListAggregate,
+  RunEvent,
+  RunSnapshot,
+  RunSpan,
+  RunStatus,
+  RunSummary,
+  TerminalEntry
+} from "./types.js";
 
 export { timelineStepSummaryText, timelineSummaryText, timelineTitleText, timelineToolRequests } from "./timelineText.js";
 
@@ -524,6 +537,7 @@ function Overview({ snapshot }: { snapshot: RunSnapshot }) {
   const slowest = latencyRows[0] ?? null;
   const signalEvents = snapshot.events.filter((event) => event.level === "error" || event.level === "warn").slice(-4).reverse();
   const relatedRuns = snapshot.relatedRuns ?? [];
+  const agentTranscript = snapshot.agentTranscript ?? [];
   const activeRelatedRuns = relatedRuns.filter((run) => !isTerminal(run.status));
   return (
     <div className="overview-grid">
@@ -541,8 +555,18 @@ function Overview({ snapshot }: { snapshot: RunSnapshot }) {
         <Metric label="Duration" value={formatDuration(snapshot.run.durationMs)} />
         <Metric label="Slowest" value={slowest ? `${slowest.name} (${formatDuration(slowest.durationMs)})` : "none"} tone={slowest ? "info" : "normal"} />
         <Metric label="Events" value={snapshot.events.length} />
+        {agentTranscript.length > 0 && <Metric label="Transcript" value={agentTranscript.length} tone="info" />}
         {relatedRuns.length > 0 && <Metric label="Related" value={relatedRuns.length} tone={activeRelatedRuns.length > 0 ? "info" : "normal"} />}
       </section>
+      {agentTranscript.length > 0 && (
+        <section className="panel wide">
+          <div className="panel-title">
+            <MessageSquare />
+            <h3>Agent Transcript</h3>
+          </div>
+          <AgentTranscriptPreview messages={agentTranscript} />
+        </section>
+      )}
       {relatedRuns.length > 0 && (
         <section className="panel wide">
           <div className="panel-title">
@@ -592,6 +616,23 @@ function Overview({ snapshot }: { snapshot: RunSnapshot }) {
           <Fact label="Terminal" value={`${snapshot.terminal.lineCount} lines`} />
         </dl>
       </section>
+    </div>
+  );
+}
+
+function AgentTranscriptPreview({ messages }: { messages: AgentTranscriptMessage[] }) {
+  const visible = messages.slice(-6);
+  return (
+    <div className="agent-transcript-preview">
+      {visible.map((message) => (
+        <article key={message.id} className={`agent-transcript-row ${agentTranscriptKind(message)}`}>
+          <div>
+            <strong>{agentTranscriptTitle(message)}</strong>
+            <span>{[message.role, stringMetadata(message.metadata.source), formatDate(message.createdAt)].filter(Boolean).join(" · ")}</span>
+          </div>
+          <p>{agentTranscriptSummary(message)}</p>
+        </article>
+      ))}
     </div>
   );
 }
@@ -938,6 +979,8 @@ function openCodeRoundTimelineKind(item: OpenCodeTranscriptItem): TimelineStepKi
 function TimelineStepDetails({ step }: { step: TimelineStep }) {
   if (step.artifact) return null;
   if (step.kind === "run") return <RelatedRunInline step={step} />;
+  const transcriptRequests = agentTranscriptToolRequests(step);
+  if (transcriptRequests.length > 0) return <RequestedTools requests={transcriptRequests} />;
   const toolRequests = timelineToolRequests(step);
   if (isModelRoundTimelineStep(step) && toolRequests.length > 0) return <RequestedTools requests={toolRequests} />;
   const summary = timelineStepSummaryText(step);
@@ -2034,6 +2077,10 @@ function stringMetadata(value: unknown) {
   return typeof value === "string" ? value : null;
 }
 
+function numberMetadata(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function isRepositorySetupArtifact(artifact: RunArtifact) {
   if (artifact.kind !== "command_log") return false;
   const step = stringMetadata(artifact.metadata.step);
@@ -2556,6 +2603,7 @@ function normalizedTimelineName(value: string) {
 }
 
 function conversationFlow(snapshot: RunSnapshot): FlowItem[] {
+  const transcriptItems = agentTranscriptFlowItems(snapshot);
   const eventItems = snapshot.events.filter(isFlowEvent).map((event): FlowItem => {
     const callType = callKind(event);
     return {
@@ -2582,7 +2630,129 @@ function conversationFlow(snapshot: RunSnapshot): FlowItem[] {
     metadata: artifact.metadata,
     artifact
   }));
-  return [...eventItems, ...artifactItems].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+  return [...eventItems, ...artifactItems, ...transcriptItems].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+}
+
+export function agentTranscriptFlowItems(snapshot: Pick<RunSnapshot, "agentTranscript">): FlowItem[] {
+  return (snapshot.agentTranscript ?? []).map((message): FlowItem => {
+    const toolRequests = agentTranscriptToolRequestsFromMessage(message);
+    return {
+      id: `agent-transcript-${message.id}`,
+      kind: agentTranscriptKind(message),
+      title: agentTranscriptTitle(message),
+      summary: agentTranscriptSummary(message),
+      createdAt: message.createdAt,
+      durationMs: numberMetadata(message.metadata.durationMs),
+      source: "agent session",
+      level: null,
+      metadata: {
+        ...message.metadata,
+        agentTranscript: true,
+        agentTranscriptMessageId: message.id,
+        role: message.role,
+        clientMessageId: message.clientMessageId,
+        ...(toolRequests.length > 0 ? { timelineToolRequests: toolRequests } : {})
+      }
+    };
+  });
+}
+
+function agentTranscriptKind(message: AgentTranscriptMessage): FlowItemKind {
+  if (message.role === "tool") return "tool";
+  if (message.role === "assistant") return agentTranscriptToolRequestsFromMessage(message).length > 0 ? "model" : "response";
+  if (message.role === "user") return "input";
+  return "artifact";
+}
+
+function agentTranscriptTitle(message: AgentTranscriptMessage) {
+  if (message.role === "user") return "User prompt";
+  if (message.role === "assistant" && agentTranscriptToolRequestsFromMessage(message).length > 0) return "Assistant requested tools";
+  if (message.role === "assistant") return "Assistant reply";
+  if (message.role === "tool") {
+    const toolName = agentTranscriptToolName(message);
+    return toolName ? `Tool result: ${toolName}` : "Tool result";
+  }
+  return "Session message";
+}
+
+function agentTranscriptSummary(message: AgentTranscriptMessage) {
+  const summaries = message.parts.map(agentTranscriptPartSummary).filter(Boolean);
+  return summaries.join(" | ") || metadataValue(message.parts);
+}
+
+function agentTranscriptPartSummary(part: unknown): string {
+  if (typeof part === "string") return part;
+  if (!part || typeof part !== "object" || Array.isArray(part)) return String(part ?? "");
+  const record = part as Record<string, unknown>;
+  const type = stringMetadata(record.type);
+  if (type === "text") return stringMetadata(record.text) ?? "";
+  if (type === "assistant_tool_calls") {
+    const requests = agentTranscriptToolRequestsFromPart(record);
+    return requests.length > 0 ? `Requested tools: ${requests.map((request) => request.name).join(", ")}` : "Requested tools";
+  }
+  if (type === "tool_result") {
+    const toolName = stringMetadata(record.toolName) ?? "tool";
+    const taskId = stringMetadata(record.taskId);
+    const status = stringMetadata(record.status);
+    const content = stringMetadata(record.content);
+    if (taskId) return `${toolName} ${taskId}${status ? ` ${status}` : ""}`;
+    return `${toolName}: ${content ?? ""}`.trim();
+  }
+  return metadataValue(record);
+}
+
+function agentTranscriptToolName(message: AgentTranscriptMessage) {
+  for (const part of message.parts) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+    const toolName = stringMetadata((part as Record<string, unknown>).toolName);
+    if (toolName) return toolName;
+  }
+  return stringMetadata(message.metadata.toolName);
+}
+
+function agentTranscriptToolRequestsFromMessage(message: AgentTranscriptMessage): TimelineToolRequest[] {
+  return message.parts.flatMap((part) => {
+    if (!part || typeof part !== "object" || Array.isArray(part)) return [];
+    return agentTranscriptToolRequestsFromPart(part as Record<string, unknown>);
+  });
+}
+
+function agentTranscriptToolRequestsFromPart(part: Record<string, unknown>): TimelineToolRequest[] {
+  const calls = Array.isArray(part.toolCalls) ? part.toolCalls : [];
+  return calls.flatMap((call): TimelineToolRequest[] => {
+    if (!call || typeof call !== "object") return [];
+    const record = call as Record<string, unknown>;
+    const name = stringMetadata(record.name);
+    if (!name) return [];
+    const id = stringMetadata(record.id);
+    return [
+      {
+        ...(id ? { id } : {}),
+        name,
+        argumentsText: toolRequestArgumentsText(record)
+      }
+    ];
+  });
+}
+
+function agentTranscriptToolRequests(step: TimelineStep): TimelineToolRequest[] {
+  if (!step.metadata.agentTranscript) return [];
+  const requests = step.metadata.timelineToolRequests;
+  if (!Array.isArray(requests)) return [];
+  return requests.flatMap((request): TimelineToolRequest[] => {
+    if (!request || typeof request !== "object") return [];
+    const record = request as Record<string, unknown>;
+    const name = stringMetadata(record.name);
+    if (!name) return [];
+    const id = stringMetadata(record.id);
+    return [
+      {
+        ...(id ? { id } : {}),
+        name,
+        argumentsText: stringMetadata(record.argumentsText)
+      }
+    ];
+  });
 }
 
 function isFlowEvent(event: RunEvent) {

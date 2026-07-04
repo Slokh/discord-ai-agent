@@ -279,12 +279,7 @@ async function taskDetails(
   task: AgentTaskRecord
 ): Promise<[TaskEvent[] | undefined, SandboxCommandEvent[] | undefined]> {
   const [taskEvents, commandEvents] = await Promise.all([
-    repo.getTaskEvents({
-      guildId: task.guildId ?? "",
-      visibleChannelIds: task.channelId ? [task.channelId] : [],
-      traceId: task.taskId,
-      limit: 30
-    }),
+    recentTaskEvents(repo, task, 30),
     repo.getSandboxCommandEvents({
       guildId: task.guildId ?? "",
       visibleChannelIds: task.channelId ? [task.channelId] : undefined,
@@ -295,9 +290,9 @@ async function taskDetails(
   return [taskEvents, commandEvents];
 }
 
-async function recentTaskEvents(repo: DiscordAiAgentRepository, task: AgentTaskRecord): Promise<TaskEvent[] | undefined> {
-  return repo.getTaskEventsForTask({ taskId: task.taskId, limit: 8 }).catch((error) => {
-    logger.warn({ err: error, taskId: task.taskId }, "Failed to load recent agent task events for Discord progress render");
+async function recentTaskEvents(repo: DiscordAiAgentRepository, task: AgentTaskRecord, limit = 8): Promise<TaskEvent[] | undefined> {
+  return repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit }).catch((error) => {
+    logger.warn({ err: error, taskId: task.taskId }, "Failed to load recent agent task progress events for Discord progress render");
     return undefined;
   });
 }

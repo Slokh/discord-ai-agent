@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../../src/observability/redaction.js";
-import { diagnosticsForRun, extractDiscordMessageId, relatedRunSummaries, summaryFromTask } from "../../src/observability/runs.js";
-import type { AgentTaskRecord } from "../../src/db/repositories.js";
+import { diagnosticsForRun, extractDiscordMessageId, getRunSnapshot, relatedRunSummaries, summaryFromTask } from "../../src/observability/runs.js";
+import type { AgentTaskRecord, DiscordAiAgentRepository, ProcessRunRecord } from "../../src/db/repositories.js";
 import type { RunEvent, RunSummary } from "../../src/observability/runs.js";
 
 describe("observability redaction", () => {
@@ -52,6 +52,161 @@ describe("run summaries", () => {
         kind: "codegen",
         status: "running",
         title: "Child task"
+      })
+    ]);
+  });
+
+  it("builds codegen run timelines from runtime-first task progress events", async () => {
+    const task = agentTaskRecord({ status: "running", completedAt: null, currentStep: "repo_complete" });
+    const snapshot = await getRunSnapshot(
+      {
+        getProcessRun: async () => undefined,
+        getAgentTask: async (taskId: string) => (taskId === task.taskId ? task : undefined),
+        getTaskProgressEventsForTask: async () => [
+          {
+            id: 2,
+            taskId: task.taskId,
+            traceId: task.traceId,
+            eventName: "agent.task.progress",
+            level: "info",
+            summary: "Runtime progress event.",
+            metadata: { taskId: task.taskId, step: "repo_complete", durationMs: 1234 },
+            createdAt: new Date("2026-06-30T12:01:00Z")
+          }
+        ],
+        getSandboxCommandEventsForTask: async () => [],
+        getSandboxRunsForTask: async () => [],
+        getTraceEventsForTrace: async () => [],
+        getAgentRuntimeEventsForTrace: async () => [],
+        getAgentRuntimeMessagesForTrace: async () => [],
+        getToolAuditLogsForTrace: async () => [],
+        listProcessRunsForTrace: async () => [],
+        listAgentTasksForTrace: async () => []
+      } as unknown as DiscordAiAgentRepository,
+      task.taskId
+    );
+
+    expect(snapshot?.events).toEqual([
+      expect.objectContaining({
+        source: "task",
+        name: "agent.task.progress",
+        summary: "Runtime progress event.",
+        metadata: expect.objectContaining({ taskId: task.taskId, step: "repo_complete" })
+      })
+    ]);
+    expect(snapshot?.spans).toEqual([
+      expect.objectContaining({
+        source: "task",
+        name: "repo",
+        durationMs: 1234
+      })
+    ]);
+  });
+
+  it("includes durable agent runtime ledger events in prompt snapshots", async () => {
+    const run = processRunRecord({
+      runId: "message-1",
+      traceId: "trace-1",
+      kind: "discord",
+      title: "Discord prompt",
+      metadata: { agentExecutionId: "agent-execution-1" }
+    });
+    const snapshot = await getRunSnapshot(
+      {
+        getProcessRun: async (runId: string) => (runId === run.runId ? run : undefined),
+        getAgentTask: async () => undefined,
+        getProcessRunSpans: async () => [],
+        getProcessRunEvents: async () => [],
+        getProcessRunArtifacts: async () => [],
+        getTraceEventsForTrace: async () => [],
+        getAgentRuntimeEventsForTrace: async (input: { traceId: string }) =>
+          input.traceId === "trace-1"
+            ? [
+                {
+                  id: 7,
+                  sessionId: "agent-session-1",
+                  executionId: "agent-execution-1",
+                  traceId: "trace-1",
+                  kind: "status",
+                  level: "info",
+                  eventName: "agent.execution.job_enqueued",
+                  summary: "Enqueued agent runtime execution job.",
+                  metadata: { jobId: "job-1" },
+                  durationMs: 42,
+                  createdAt: new Date("2026-06-30T12:00:01Z")
+                }
+              ]
+            : [],
+        getAgentRuntimeMessagesForTrace: async () => [],
+        getToolAuditLogsForTrace: async () => [],
+        listProcessRunsForTrace: async () => [run],
+        findProcessRunByAgentExecutionId: async () => undefined,
+        listProcessRunsByParentAgentExecutionId: async () => [],
+        listAgentTasksForTrace: async () => []
+      } as unknown as DiscordAiAgentRepository,
+      "message-1"
+    );
+
+    expect(snapshot?.events).toEqual([
+      expect.objectContaining({
+        source: "runtime",
+        name: "agent.execution.job_enqueued",
+        summary: "Enqueued agent runtime execution job.",
+        durationMs: 42,
+        metadata: expect.objectContaining({
+          sessionId: "agent-session-1",
+          executionId: "agent-execution-1",
+          jobId: "job-1"
+        })
+      })
+    ]);
+  });
+
+  it("includes durable agent runtime transcript messages in prompt snapshots", async () => {
+    const run = processRunRecord({
+      runId: "message-1",
+      traceId: "trace-1",
+      kind: "discord",
+      title: "Discord prompt"
+    });
+    const snapshot = await getRunSnapshot(
+      {
+        getProcessRun: async (runId: string) => (runId === run.runId ? run : undefined),
+        getAgentTask: async () => undefined,
+        getProcessRunSpans: async () => [],
+        getProcessRunEvents: async () => [],
+        getProcessRunArtifacts: async () => [],
+        getTraceEventsForTrace: async () => [],
+        getAgentRuntimeEventsForTrace: async () => [],
+        getAgentRuntimeMessagesForTrace: async (input: { traceId: string }) =>
+          input.traceId === "trace-1"
+            ? [
+                {
+                  messageId: "agent-transcript-message-1-assistant-round-1",
+                  sessionId: "agent-session-1",
+                  clientMessageId: "message-1:transcript:assistant-round-1",
+                  role: "assistant",
+                  parts: [{ type: "assistant_tool_calls", toolCalls: [{ id: "call-1", name: "reportStatus", arguments: {} }] }],
+                  metadata: { source: "agent.router", round: 1, promptMessageId: "message-1" },
+                  createdAt: new Date("2026-06-30T12:00:01Z")
+                }
+              ]
+            : [],
+        getToolAuditLogsForTrace: async () => [],
+        listProcessRunsForTrace: async () => [run],
+        findProcessRunByAgentExecutionId: async () => undefined,
+        listProcessRunsByParentAgentExecutionId: async () => [],
+        listAgentTasksForTrace: async () => []
+      } as unknown as DiscordAiAgentRepository,
+      "message-1"
+    );
+
+    expect(snapshot?.agentTranscript).toEqual([
+      expect.objectContaining({
+        id: "agent-transcript-message-1-assistant-round-1",
+        sessionId: "agent-session-1",
+        role: "assistant",
+        metadata: expect.objectContaining({ promptMessageId: "message-1" })
       })
     ]);
   });
@@ -118,6 +273,30 @@ function codegenRun(overrides: Partial<RunSummary> = {}): RunSummary {
     bottleneck: null,
     links: {},
     metadata: {},
+    ...overrides
+  };
+}
+
+function processRunRecord(overrides: Partial<ProcessRunRecord> = {}): ProcessRunRecord {
+  const now = new Date("2026-06-30T12:00:00Z");
+  return {
+    runId: "message-1",
+    traceId: "trace-1",
+    kind: "discord",
+    status: "running",
+    title: "Discord prompt",
+    summary: null,
+    guildId: "guild-1",
+    channelId: "channel-1",
+    userId: "user-1",
+    messageId: "message-1",
+    requester: "kartik",
+    source: "discord",
+    metadata: {},
+    links: {},
+    startedAt: now,
+    completedAt: null,
+    updatedAt: now,
     ...overrides
   };
 }

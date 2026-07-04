@@ -407,6 +407,30 @@ export type TaskEvent = {
   createdAt: Date;
 };
 
+export type AgentRuntimeEvent = {
+  id: number;
+  sessionId: string;
+  executionId: string | null;
+  traceId: string | null;
+  kind: string;
+  level: TraceEventLevel;
+  eventName: string;
+  summary: string | null;
+  metadata: Record<string, unknown>;
+  durationMs: number | null;
+  createdAt: Date;
+};
+
+export type AgentRuntimeMessage = {
+  messageId: string;
+  sessionId: string;
+  clientMessageId: string | null;
+  role: "system" | "user" | "assistant" | "tool";
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 export type SandboxRunRecord = {
   sandboxRunId: string;
   taskId: string;
@@ -2381,6 +2405,9 @@ export class DiscordAiAgentRepository {
     request: string;
     requestedBy: string;
     backend?: string | null;
+    parentAgentSessionId?: string | null;
+    parentAgentExecutionId?: string | null;
+    parentAgentThreadKey?: string | null;
   }) {
     const statusMessage = queuedAgentTaskStatusMessage(input.backend);
     await this.pool.query(
@@ -2448,13 +2475,39 @@ export class DiscordAiAgentRepository {
         request: input.request,
         threadKey: input.threadKey,
         retriedFromTaskId: input.retriedFromTaskId,
+        parentAgentSessionId: input.parentAgentSessionId,
+        parentAgentExecutionId: input.parentAgentExecutionId,
+        parentAgentThreadKey: input.parentAgentThreadKey,
         discordResponseChannelId: input.discordResponseChannelId,
         discordResponseMessageId: input.discordResponseMessageId
       }
     }).catch(() => undefined);
   }
 
-  async markAgentTaskRunning(input: { taskId: string; backend?: string | null; step?: string | null; statusMessage?: string | null }) {
+  async attachAgentTasksToDiscordResponse(input: { traceId: string; channelId: string; messageId: string }): Promise<number> {
+    const result = await this.pool.query(
+      `
+        UPDATE agent_tasks
+        SET discord_response_channel_id = coalesce(discord_response_channel_id, $2),
+            discord_response_message_id = coalesce(discord_response_message_id, $3),
+            updated_at = now()
+        WHERE trace_id = $1
+          AND discord_response_message_id IS NULL
+      `,
+      [input.traceId, input.channelId, input.messageId]
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async markAgentTaskRunning(input: {
+    taskId: string;
+    backend?: string | null;
+    step?: string | null;
+    statusMessage?: string | null;
+    pgBossJobId?: string | null;
+    workerStartedAt?: Date | null;
+    metadata?: Record<string, unknown>;
+  }) {
     const result = await this.pool.query(
       `
         UPDATE agent_tasks
@@ -2472,11 +2525,70 @@ export class DiscordAiAgentRepository {
       [input.taskId, input.backend ?? null, input.step ?? null, input.statusMessage ?? null]
     );
     if ((result.rowCount ?? 0) === 0) return;
+    const executionMetadata = {
+      backend: input.backend ?? undefined,
+      currentStep: input.step ?? undefined,
+      pgbossJobId: input.pgBossJobId ?? undefined,
+      workerStartedAt: input.workerStartedAt?.toISOString(),
+      ...(input.metadata ?? {})
+    };
+    await this.pool
+      .query(
+        `
+          WITH updated_execution AS (
+            UPDATE codegen_executions
+            SET status = 'running',
+                metadata = metadata || $2::jsonb,
+                started_at = coalesce(started_at, now()),
+                updated_at = now()
+            WHERE task_id = $1
+              AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
+          ),
+          session_update AS (
+            UPDATE codegen_sessions
+            SET status = 'running',
+                started_at = coalesce(started_at, now()),
+                updated_at = now()
+            WHERE session_id IN (SELECT session_id FROM updated_execution)
+          ),
+          next_sequence AS (
+            SELECT
+              updated_execution.session_id,
+              updated_execution.execution_id,
+              updated_execution.trace_id,
+              updated_execution.is_agent_runtime,
+              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+            FROM updated_execution
+            LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
+          )
+          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          SELECT
+            session_id,
+            execution_id,
+            trace_id,
+            sequence,
+            'status',
+            'info',
+            CASE WHEN is_agent_runtime THEN 'agent.task.started' ELSE 'codegen.execution.started' END,
+            $3,
+            jsonb_build_object('taskId', $1, 'step', $4::text) || $2::jsonb
+          FROM next_sequence
+        `,
+        [
+          input.taskId,
+          JSON.stringify(removeUndefinedValues(executionMetadata)),
+          input.statusMessage ?? "Running agent task.",
+          input.step ?? "running"
+        ]
+      )
+      .catch(() => undefined);
     await this.updateProcessRun({
       runId: input.taskId,
       status: "running",
       summary: input.statusMessage ?? "Running agent task.",
-      metadata: { backend: input.backend ?? undefined, currentStep: input.step ?? undefined }
+      metadata: removeUndefinedValues(executionMetadata)
     }).catch(() => undefined);
   }
 
@@ -2516,21 +2628,24 @@ export class DiscordAiAgentRepository {
       .query(
         `
           WITH target AS (
-            SELECT session_id, execution_id, trace_id
+            SELECT
+              session_id,
+              execution_id,
+              trace_id,
+              metadata->>'runtime' = 'agent' AS is_agent_runtime
             FROM codegen_executions
             WHERE task_id = $1
-            ORDER BY created_at DESC
-            LIMIT 1
           ),
           next_sequence AS (
             SELECT
               target.session_id,
               target.execution_id,
               target.trace_id,
+              target.is_agent_runtime,
               coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
             FROM target
             LEFT JOIN codegen_events ON codegen_events.execution_id = target.execution_id
-            GROUP BY target.session_id, target.execution_id, target.trace_id
+            GROUP BY target.session_id, target.execution_id, target.trace_id, target.is_agent_runtime
           )
           INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
@@ -2547,9 +2662,9 @@ export class DiscordAiAgentRepository {
               ELSE 'status'
             END,
             CASE WHEN $2 ~* 'failed|error' THEN 'error' ELSE 'info' END,
-            'codegen.progress',
+            CASE WHEN is_agent_runtime THEN 'agent.task.progress' ELSE 'codegen.progress' END,
             $3,
-            jsonb_build_object('step', $2) || $4::jsonb
+            jsonb_build_object('taskId', $1, 'step', $2) || $4::jsonb
           FROM next_sequence
         `,
         [input.taskId, input.step, input.statusMessage, JSON.stringify(input.metadata ?? {})]
@@ -2569,6 +2684,44 @@ export class DiscordAiAgentRepository {
     }).catch(() => undefined);
   }
 
+  async recordAgentTaskSandboxLease(input: {
+    taskId: string;
+    backend?: string | null;
+    sandboxId: string;
+    leaseOwner?: string | null;
+    metadata?: Record<string, unknown>;
+  }) {
+    const executionMetadata = removeUndefinedValues({
+      ...(input.metadata ?? {}),
+      backend: input.backend ?? undefined,
+      sandboxId: input.sandboxId,
+      leaseOwner: input.leaseOwner ?? undefined
+    });
+    await this.pool
+      .query(
+        `
+          WITH updated_executions AS (
+            UPDATE codegen_executions
+            SET sandbox_id = coalesce($2::text, sandbox_id),
+                metadata = metadata || $3::jsonb,
+                updated_at = now()
+            WHERE task_id = $1
+            RETURNING session_id
+          )
+          UPDATE codegen_sessions
+          SET updated_at = now()
+          WHERE session_id IN (SELECT session_id FROM updated_executions)
+        `,
+        [input.taskId, input.sandboxId, JSON.stringify(executionMetadata)]
+      )
+      .catch(() => undefined);
+    await this.updateProcessRun({
+      runId: input.taskId,
+      status: "running",
+      metadata: executionMetadata
+    }).catch(() => undefined);
+  }
+
   async recordSandboxRun(input: {
     taskId: string;
     sandboxRunId: string;
@@ -2576,8 +2729,20 @@ export class DiscordAiAgentRepository {
     namespace?: string | null;
     backendJobName?: string | null;
     image?: string | null;
+    sandboxId?: string | null;
+    leaseOwner?: string | null;
     metadata?: Record<string, unknown>;
   }) {
+    const executionMetadata = removeUndefinedValues({
+      ...(input.metadata ?? {}),
+      backend: input.backend,
+      backendJobName: input.backendJobName ?? undefined,
+      namespace: input.namespace ?? undefined,
+      image: input.image ?? undefined,
+      sandboxRunId: input.sandboxRunId,
+      sandboxId: input.sandboxId ?? undefined,
+      leaseOwner: input.leaseOwner ?? undefined
+    });
     await this.pool.query(
       `
         INSERT INTO sandbox_runs(
@@ -2619,9 +2784,28 @@ export class DiscordAiAgentRepository {
         input.namespace ?? null,
         input.backendJobName ?? null,
         input.image ?? null,
-        JSON.stringify(input.metadata ?? {})
+        JSON.stringify(executionMetadata)
       ]
     );
+    await this.pool
+      .query(
+        `
+          WITH updated_executions AS (
+            UPDATE codegen_executions
+            SET sandbox_run_id = coalesce($2::text, sandbox_run_id),
+                sandbox_id = coalesce($3::text, sandbox_id),
+                metadata = metadata || $4::jsonb,
+                updated_at = now()
+            WHERE task_id = $1
+            RETURNING session_id
+          )
+          UPDATE codegen_sessions
+          SET updated_at = now()
+          WHERE session_id IN (SELECT session_id FROM updated_executions)
+        `,
+        [input.taskId, input.sandboxRunId, input.sandboxId ?? null, JSON.stringify(executionMetadata)]
+      )
+      .catch(() => undefined);
   }
 
   async markAgentTaskSucceeded(input: {
@@ -2688,7 +2872,7 @@ export class DiscordAiAgentRepository {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE task_id = $1
-            RETURNING session_id, execution_id, trace_id
+            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
           ),
           session_update AS (
             UPDATE codegen_sessions
@@ -2713,13 +2897,23 @@ export class DiscordAiAgentRepository {
               updated_execution.session_id,
               updated_execution.execution_id,
               updated_execution.trace_id,
+              updated_execution.is_agent_runtime,
               coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
             FROM updated_execution
             LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
-            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
           INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
-          SELECT session_id, execution_id, trace_id, sequence, 'git', 'info', 'codegen.completed', 'Opened pull request.', $6::jsonb
+          SELECT
+            session_id,
+            execution_id,
+            trace_id,
+            sequence,
+            'git',
+            'info',
+            CASE WHEN is_agent_runtime THEN 'agent.task.completed' ELSE 'codegen.completed' END,
+            'Opened pull request.',
+            jsonb_build_object('taskId', $1, 'status', 'succeeded') || $6::jsonb
           FROM next_sequence
         `,
         [input.taskId, input.branchName, input.prUrl, input.draft, input.verifyPassed, JSON.stringify(input.metadata ?? {})]
@@ -2781,7 +2975,7 @@ export class DiscordAiAgentRepository {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE task_id = $1
-            RETURNING session_id, execution_id, trace_id
+            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
           ),
           session_update AS (
             UPDATE codegen_sessions
@@ -2806,10 +3000,11 @@ export class DiscordAiAgentRepository {
               updated_execution.session_id,
               updated_execution.execution_id,
               updated_execution.trace_id,
+              updated_execution.is_agent_runtime,
               coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
             FROM updated_execution
             LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
-            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
           INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
@@ -2819,9 +3014,9 @@ export class DiscordAiAgentRepository {
             sequence,
             CASE WHEN $2 = 'cancelled' THEN 'status' ELSE 'error' END,
             CASE WHEN $2 = 'cancelled' THEN 'info' ELSE 'error' END,
-            'codegen.completed',
+            CASE WHEN is_agent_runtime THEN 'agent.task.completed' ELSE 'codegen.completed' END,
             $3,
-            jsonb_build_object('status', $2, 'error', $3) || $4::jsonb
+            jsonb_build_object('taskId', $1, 'status', $2, 'error', $3) || $4::jsonb
           FROM next_sequence
         `,
         [input.taskId, input.status ?? "failed", input.error, JSON.stringify(input.metadata ?? {})]
@@ -3098,7 +3293,7 @@ export class DiscordAiAgentRepository {
                   completed_at = coalesce(completed_at, now()),
                   updated_at = now()
               WHERE task_id = $1
-              RETURNING session_id, execution_id, trace_id
+              RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
             ),
             session_update AS (
               UPDATE codegen_sessions
@@ -3123,10 +3318,11 @@ export class DiscordAiAgentRepository {
                 updated_execution.session_id,
                 updated_execution.execution_id,
                 updated_execution.trace_id,
+                updated_execution.is_agent_runtime,
                 coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
               FROM updated_execution
               LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
-              GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+              GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
             )
             INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
             SELECT
@@ -3136,9 +3332,9 @@ export class DiscordAiAgentRepository {
               sequence,
               'status',
               'info',
-              'codegen.completed',
+              CASE WHEN is_agent_runtime THEN 'agent.task.completed' ELSE 'codegen.completed' END,
               $2,
-              jsonb_build_object('status', 'cancelled', 'error', $2)
+              jsonb_build_object('taskId', $1, 'status', 'cancelled', 'error', $2)
             FROM next_sequence
           `,
           [input.taskId, message]
@@ -3851,6 +4047,42 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToProcessRun);
   }
 
+  async listProcessRunsByParentAgentExecutionId(input: { parentAgentExecutionId: string; limit?: number }): Promise<ProcessRunRecord[]> {
+    const limit = Math.max(1, Math.min(50, Math.trunc(input.limit ?? 20)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+        FROM process_runs
+        WHERE metadata->>'parentAgentExecutionId' = $1
+        ORDER BY started_at ASC, updated_at ASC
+        LIMIT $2
+      `,
+      [input.parentAgentExecutionId, limit]
+    );
+    return result.rows.map(rowToProcessRun);
+  }
+
+  async findProcessRunByAgentExecutionId(agentExecutionId: string): Promise<ProcessRunRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+        FROM process_runs
+        WHERE metadata->>'agentExecutionId' = $1
+           OR metadata->>'agentRuntimeExecutionId' = $1
+        ORDER BY updated_at DESC, started_at DESC
+        LIMIT 1
+      `,
+      [agentExecutionId]
+    );
+    return result.rows[0] ? rowToProcessRun(result.rows[0]) : undefined;
+  }
+
   async findProcessRunByDiscordMessageId(messageId: string): Promise<ProcessRunRecord | undefined> {
     const result = await this.pool.query(
       `
@@ -4202,6 +4434,131 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToTaskEvent);
   }
 
+  async getAgentRuntimeTaskEvents(input: {
+    guildId: string;
+    visibleChannelIds: string[];
+    traceId?: string;
+    limit: number;
+  }): Promise<TaskEvent[]> {
+    const limit = Math.max(1, Math.min(100, Math.trunc(input.limit)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          ce.id,
+          coalesce(ce.metadata->>'taskId', cex.task_id, at.task_id) AS task_id,
+          coalesce(ce.trace_id, cex.trace_id, at.trace_id) AS trace_id,
+          ce.event_name,
+          ce.level,
+          ce.summary,
+          ce.metadata,
+          ce.created_at
+        FROM codegen_events ce
+        JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+        JOIN agent_tasks at ON at.task_id = cex.task_id
+        WHERE at.guild_id = $1
+          AND ($2::text IS NULL OR ce.trace_id = $2 OR cex.trace_id = $2 OR at.trace_id = $2 OR cex.task_id = $2 OR at.task_id = $2)
+          AND (at.channel_id IS NULL OR at.channel_id = ANY($3::text[]))
+          AND cex.metadata->>'runtime' = 'agent'
+          AND ce.event_name LIKE 'agent.task.%'
+        ORDER BY ce.created_at DESC, ce.id DESC
+        LIMIT $4
+      `,
+      [input.guildId, input.traceId ?? null, input.visibleChannelIds, limit]
+    );
+    return result.rows.map(rowToTaskEvent);
+  }
+
+  async getTaskProgressEvents(input: {
+    guildId: string;
+    visibleChannelIds: string[];
+    traceId?: string;
+    limit: number;
+  }): Promise<TaskEvent[]> {
+    const [runtimeEvents, legacyEvents] = await Promise.all([this.getAgentRuntimeTaskEvents(input), this.getTaskEvents(input)]);
+    if (runtimeEvents.length === 0) return legacyEvents;
+    const runtimeTaskIds = new Set(runtimeEvents.map((event) => event.taskId));
+    return [...runtimeEvents, ...legacyEvents.filter((event) => !runtimeTaskIds.has(event.taskId))]
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id - left.id)
+      .slice(0, Math.max(1, Math.min(100, Math.trunc(input.limit))));
+  }
+
+  async getAgentRuntimeEventsForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeEvent[]> {
+    const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 200)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          ce.id,
+          ce.session_id,
+          ce.execution_id,
+          coalesce(ce.trace_id, cex.trace_id, cs.trace_id) AS trace_id,
+          ce.kind,
+          ce.level,
+          ce.event_name,
+          ce.summary,
+          ce.metadata,
+          ce.duration_ms,
+          ce.created_at
+        FROM codegen_events ce
+        JOIN codegen_sessions cs ON cs.session_id = ce.session_id
+        LEFT JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+        WHERE (ce.trace_id = $1 OR cex.trace_id = $1 OR cs.trace_id = $1)
+          AND (
+            ce.metadata->>'runtime' = 'agent'
+            OR cex.metadata->>'runtime' = 'agent'
+            OR cs.metadata->>'runtime' = 'agent'
+          )
+          AND ce.event_name NOT LIKE 'agent.task.%'
+        ORDER BY ce.created_at ASC, ce.id ASC
+        LIMIT $2
+      `,
+      [input.traceId, limit]
+    );
+    return result.rows.map(rowToAgentRuntimeEvent);
+  }
+
+  async getAgentRuntimeMessagesForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeMessage[]> {
+    const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 100)));
+    const clientMessagePrefix = `${input.traceId}:transcript:%`;
+    const result = await this.pool.query(
+      `
+        SELECT
+          cm.message_id,
+          cm.session_id,
+          cm.client_message_id,
+          cm.role,
+          cm.parts,
+          cm.metadata,
+          cm.created_at
+        FROM codegen_messages cm
+        JOIN codegen_sessions cs ON cs.session_id = cm.session_id
+        WHERE cs.metadata->>'runtime' = 'agent'
+          AND (
+            cs.trace_id = $1
+            OR cm.client_message_id = $1
+            OR cm.client_message_id LIKE $2
+            OR cm.metadata->>'traceId' = $1
+            OR cm.metadata->>'promptMessageId' = $1
+            OR cm.metadata->>'executionId' IN (
+              SELECT execution_id
+              FROM codegen_executions
+              WHERE trace_id = $1
+                 OR metadata->>'parentAgentExecutionId' = (
+                   SELECT metadata->>'agentExecutionId'
+                   FROM process_runs
+                   WHERE trace_id = $1 OR run_id = $1
+                   ORDER BY updated_at DESC
+                   LIMIT 1
+                 )
+            )
+          )
+        ORDER BY cm.created_at ASC, cm.message_id ASC
+        LIMIT $3
+      `,
+      [input.traceId, clientMessagePrefix, limit]
+    );
+    return result.rows.map(rowToAgentRuntimeMessage);
+  }
+
   async getTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
     const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
     const result = await this.pool.query(
@@ -4221,6 +4578,42 @@ export class DiscordAiAgentRepository {
       [input.taskId, limit]
     );
     return result.rows.map(rowToTaskEvent);
+  }
+
+  async getAgentRuntimeTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
+    const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM (
+          SELECT
+            ce.id,
+            coalesce(ce.metadata->>'taskId', cex.task_id, $1) AS task_id,
+            ce.trace_id,
+            ce.event_name,
+            ce.level,
+            ce.summary,
+            ce.metadata,
+            ce.created_at
+          FROM codegen_events ce
+          JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+          WHERE cex.task_id = $1
+            AND cex.metadata->>'runtime' = 'agent'
+            AND ce.event_name LIKE 'agent.task.%'
+          ORDER BY ce.created_at DESC, ce.id DESC
+          LIMIT $2
+        ) recent
+        ORDER BY created_at ASC, id ASC
+      `,
+      [input.taskId, limit]
+    );
+    return result.rows.map(rowToTaskEvent);
+  }
+
+  async getTaskProgressEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
+    const runtimeEvents = await this.getAgentRuntimeTaskEventsForTask(input);
+    if (runtimeEvents.length > 0) return runtimeEvents;
+    return this.getTaskEventsForTask(input);
   }
 
   async ensureConversationSession(input: {
@@ -4702,6 +5095,34 @@ function rowToToolAuditLog(row: any): ToolAuditLog {
     error: row.error == null ? null : String(row.error),
     model: row.model == null ? null : String(row.model),
     estimatedCostUsd: row.estimated_cost_usd == null ? null : Number(row.estimated_cost_usd),
+    createdAt: new Date(row.created_at)
+  };
+}
+
+function rowToAgentRuntimeEvent(row: any): AgentRuntimeEvent {
+  return {
+    id: Number(row.id),
+    sessionId: String(row.session_id),
+    executionId: row.execution_id == null ? null : String(row.execution_id),
+    traceId: row.trace_id == null ? null : String(row.trace_id),
+    kind: String(row.kind ?? "status"),
+    level: String(row.level ?? "info") as TraceEventLevel,
+    eventName: String(row.event_name),
+    summary: row.summary == null ? null : String(row.summary),
+    metadata: typeof row.metadata === "object" && row.metadata != null ? row.metadata : {},
+    durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+    createdAt: new Date(row.created_at)
+  };
+}
+
+function rowToAgentRuntimeMessage(row: any): AgentRuntimeMessage {
+  return {
+    messageId: String(row.message_id),
+    sessionId: String(row.session_id),
+    clientMessageId: row.client_message_id == null ? null : String(row.client_message_id),
+    role: String(row.role) as AgentRuntimeMessage["role"],
+    parts: Array.isArray(row.parts) ? row.parts : [],
+    metadata: jsonObject(row.metadata),
     createdAt: new Date(row.created_at)
   };
 }
@@ -5374,6 +5795,10 @@ function chunkString(value: string, size: number) {
 function defaultArtifactExpiresAt(sizeBytes: number) {
   if (sizeBytes <= LARGE_ARTIFACT_BYTES) return null;
   return new Date(Date.now() + LARGE_ARTIFACT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+}
+
+function removeUndefinedValues(input: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
 
 function rowToServerOverlay(row: any): ServerOverlay {

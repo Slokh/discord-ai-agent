@@ -1,4 +1,5 @@
 import type { AppConfig } from "../config/env.js";
+import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { ConversationMessage, DiscordAiAgentRepository } from "../db/repositories.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { JobRuntime } from "../jobs/queue.js";
@@ -6,6 +7,9 @@ import type { JobRuntime } from "../jobs/queue.js";
 export type ToolContext = {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
+  agentRuntime?: AgentRuntimeRepository;
+  agentRuntimeSession?: AgentRuntimeSessionRecord | null;
+  agentRuntimeExecutionId?: string | null;
   openRouter: OpenRouterClient;
   jobs?: JobRuntime;
   guildId: string;

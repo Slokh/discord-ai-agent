@@ -29,6 +29,7 @@ spec:
             - name: DISCORD_AI_AGENT_PROCESS_ROLE
               value: worker
             {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.agentRuntimeWarmSandboxClientEnv" . | nindent 12 }}
             - name: WORKER_CRAWL_ENABLED
               value: {{ .Values.worker.queues.crawl | quote }}
             - name: WORKER_EMBEDDING_ENABLED

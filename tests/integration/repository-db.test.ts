@@ -255,6 +255,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const taskId = `task-${randomUUID()}`;
     const sessionId = `codegen-session-${taskId}`;
     const executionId = `codegen-execution-${taskId}`;
+    const agentSessionId = `agent-session-${taskId}`;
+    const agentExecutionId = `agent-task-execution-${taskId}`;
     const traceId = `trace-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;
@@ -284,8 +286,69 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       request: "change a file",
       requestedBy: "tester"
     });
-    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running" });
+    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "queued" });
+    await codegenRepo.upsertSession({
+      sessionId: agentSessionId,
+      traceId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "Bridge test",
+      request: "change a file",
+      requestedBy: "tester",
+      metadata: { runtime: "agent" }
+    });
+    await codegenRepo.createExecution({
+      executionId: agentExecutionId,
+      sessionId: agentSessionId,
+      taskId,
+      traceId,
+      status: "queued",
+      harness: "runCodingAgent",
+      metadata: { runtime: "agent" }
+    });
 
+    await repo.markAgentTaskRunning({
+      taskId,
+      backend: "kubernetes-sandbox",
+      step: "sandbox_start",
+      statusMessage: "Starting Kubernetes sandbox.",
+      pgBossJobId: "pgboss-job-1",
+      workerStartedAt: new Date("2026-07-01T12:00:00.000Z")
+    });
+    await repo.recordAgentTaskSandboxLease({
+      taskId,
+      backend: "kubernetes-sandbox",
+      sandboxId: "warm-sandbox-1",
+      leaseOwner: "lease-owner-1"
+    });
+    const leasedExecutions = await pool.query(
+      "SELECT execution_id, sandbox_id, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      [[executionId, agentExecutionId]]
+    );
+    expect(leasedExecutions.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: executionId,
+          sandbox_id: "warm-sandbox-1",
+          metadata: expect.objectContaining({
+            backend: "kubernetes-sandbox",
+            sandboxId: "warm-sandbox-1",
+            leaseOwner: "lease-owner-1"
+          })
+        }),
+        expect.objectContaining({
+          execution_id: agentExecutionId,
+          sandbox_id: "warm-sandbox-1",
+          metadata: expect.objectContaining({
+            backend: "kubernetes-sandbox",
+            sandboxId: "warm-sandbox-1",
+            leaseOwner: "lease-owner-1"
+          })
+        })
+      ])
+    );
     await repo.markAgentTaskProgress({
       taskId,
       backend: "kubernetes-sandbox",
@@ -300,12 +363,148 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
     expect(progress.rows).toEqual([
       expect.objectContaining({
+        kind: "status",
+        event_name: "codegen.execution.started",
+        summary: "Starting Kubernetes sandbox."
+      }),
+      expect.objectContaining({
         kind: "command",
         event_name: "codegen.progress",
         summary: "Running tests."
       })
     ]);
-    expect(progress.rows[0].metadata).toEqual(expect.objectContaining({ step: "verify", command: "npm test" }));
+    expect(progress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" }));
+    expect(progress.rows[1].metadata).toEqual(expect.objectContaining({ step: "verify", command: "npm test" }));
+    const agentProgress = await pool.query(
+      "SELECT kind, event_name, summary, metadata FROM codegen_events WHERE execution_id = $1 ORDER BY sequence",
+      [agentExecutionId]
+    );
+    expect(agentProgress.rows).toEqual([
+      expect.objectContaining({
+        kind: "status",
+        event_name: "agent.task.started",
+        summary: "Starting Kubernetes sandbox."
+      }),
+      expect.objectContaining({
+        kind: "command",
+        event_name: "agent.task.progress",
+        summary: "Running tests."
+      })
+    ]);
+    expect(agentProgress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" }));
+    expect(agentProgress.rows[1].metadata).toEqual(expect.objectContaining({ taskId, step: "verify", command: "npm test" }));
+    await repo.recordSandboxRun({
+      taskId,
+      sandboxRunId: "sandbox-run-1",
+      backend: "kubernetes-sandbox",
+      namespace: "discord-ai-agent",
+      backendJobName: "agent-task-test",
+      image: "sandbox:test",
+      sandboxId: "warm-sandbox-1",
+      leaseOwner: "lease-owner-1"
+    });
+    const attachedExecutions = await pool.query(
+      "SELECT execution_id, sandbox_run_id, sandbox_id, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      [[executionId, agentExecutionId]]
+    );
+    expect(attachedExecutions.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: executionId,
+          sandbox_run_id: "sandbox-run-1",
+          sandbox_id: "warm-sandbox-1",
+          metadata: expect.objectContaining({
+            backend: "kubernetes-sandbox",
+            backendJobName: "agent-task-test",
+            sandboxRunId: "sandbox-run-1",
+            sandboxId: "warm-sandbox-1",
+            leaseOwner: "lease-owner-1"
+          })
+        }),
+        expect.objectContaining({
+          execution_id: agentExecutionId,
+          sandbox_run_id: "sandbox-run-1",
+          sandbox_id: "warm-sandbox-1",
+          metadata: expect.objectContaining({
+            backend: "kubernetes-sandbox",
+            backendJobName: "agent-task-test",
+            sandboxRunId: "sandbox-run-1",
+            sandboxId: "warm-sandbox-1",
+            leaseOwner: "lease-owner-1"
+          })
+        })
+      ])
+    );
+    await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        taskId,
+        traceId,
+        eventName: "agent.task.started",
+        summary: "Starting Kubernetes sandbox.",
+        metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+      }),
+      expect.objectContaining({
+        taskId,
+        traceId,
+        eventName: "agent.task.progress",
+        summary: "Running tests.",
+        metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+      })
+    ]);
+    await expect(
+      repo.getAgentRuntimeTaskEvents({ guildId, visibleChannelIds: [channelId], traceId, limit: 10 })
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.started",
+          summary: "Starting Kubernetes sandbox.",
+          metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+        }),
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.progress",
+          summary: "Running tests.",
+          metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+        })
+      ])
+    );
+    await expect(repo.getTaskProgressEvents({ guildId, visibleChannelIds: [channelId], traceId, limit: 10 })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.started",
+          summary: "Starting Kubernetes sandbox.",
+          metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+        }),
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.progress",
+          summary: "Running tests.",
+          metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+        })
+      ])
+    );
+    await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        taskId,
+        traceId,
+        eventName: "agent.task.started",
+        summary: "Starting Kubernetes sandbox.",
+        metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+      }),
+      expect.objectContaining({
+        taskId,
+        traceId,
+        eventName: "agent.task.progress",
+        summary: "Running tests.",
+        metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+      })
+    ]);
 
     await repo.markAgentTaskSucceeded({
       taskId,
@@ -326,6 +525,155 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         pr_url: "https://github.com/Slokh/discord-ai-agent/pull/999",
         verify_passed: true
       })
+    );
+    const terminalAgent = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM codegen_executions WHERE execution_id = $1", [
+      agentExecutionId
+    ]);
+    expect(terminalAgent.rows[0]).toEqual(
+      expect.objectContaining({
+        status: "succeeded",
+        branch_name: "kartik/bridge-test",
+        pr_url: "https://github.com/Slokh/discord-ai-agent/pull/999",
+        verify_passed: true
+      })
+    );
+    const terminalEvents = await pool.query(
+      "SELECT execution_id, event_name, summary, metadata FROM codegen_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
+      [[executionId, agentExecutionId]]
+    );
+    expect(terminalEvents.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ execution_id: executionId, event_name: "codegen.completed", summary: "Opened pull request." }),
+        expect.objectContaining({ execution_id: agentExecutionId, event_name: "agent.task.completed", summary: "Opened pull request." })
+      ])
+    );
+  });
+
+  it("fans terminal task failures into executions and releases warm leases", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const sessionId = `codegen-session-${taskId}`;
+    const executionId = `codegen-execution-${taskId}`;
+    const agentSessionId = `agent-session-${taskId}`;
+    const agentExecutionId = `agent-task-execution-${taskId}`;
+    const traceId = `trace-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const sandboxId = `codegen-sandbox-${randomUUID()}`;
+
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId,
+      guildId,
+      channelId,
+      userId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      taskType: "code_update",
+      title: "Failure fanout test",
+      request: "fail before sandbox callback",
+      requestedBy: "tester",
+      backend: "local-process-sandbox"
+    });
+    await codegenRepo.upsertSession({
+      sessionId,
+      traceId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "Failure fanout test",
+      request: "fail before sandbox callback",
+      requestedBy: "tester",
+      status: "running"
+    });
+    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running", sandboxId });
+    await codegenRepo.upsertSession({
+      sessionId: agentSessionId,
+      traceId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "Failure fanout test",
+      request: "fail before sandbox callback",
+      requestedBy: "tester",
+      status: "running",
+      metadata: { runtime: "agent" }
+    });
+    await codegenRepo.createExecution({
+      executionId: agentExecutionId,
+      sessionId: agentSessionId,
+      taskId,
+      traceId,
+      status: "running",
+      harness: "runCodingAgent",
+      sandboxId,
+      metadata: { runtime: "agent" }
+    });
+    await codegenRepo.upsertSandboxLease({ sandboxId, repo: "Slokh/discord-ai-agent" });
+    await codegenRepo.acquireSandboxLease({
+      repo: "Slokh/discord-ai-agent",
+      sandboxId,
+      executionId,
+      leaseOwner: "worker-test"
+    });
+
+    await repo.markAgentTaskFailed({
+      taskId,
+      error: "Sandbox failed to start.",
+      metadata: { failedStep: "sandbox_start" }
+    });
+
+    const terminalExecutions = await pool.query(
+      "SELECT execution_id, status, error, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      [[executionId, agentExecutionId]]
+    );
+    expect(terminalExecutions.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: executionId,
+          status: "failed",
+          error: "Sandbox failed to start.",
+          metadata: expect.objectContaining({ failedStep: "sandbox_start" })
+        }),
+        expect.objectContaining({
+          execution_id: agentExecutionId,
+          status: "failed",
+          error: "Sandbox failed to start.",
+          metadata: expect.objectContaining({ failedStep: "sandbox_start", runtime: "agent" })
+        })
+      ])
+    );
+    const lease = await pool.query("SELECT status, lease_owner, execution_id, metadata FROM codegen_sandbox_leases WHERE sandbox_id = $1", [
+      sandboxId
+    ]);
+    expect(lease.rows[0]).toEqual(
+      expect.objectContaining({
+        status: "idle",
+        lease_owner: null,
+        execution_id: null,
+        metadata: expect.objectContaining({ releasedBy: "task.completed", releasedTaskId: taskId, releasedStatus: "failed" })
+      })
+    );
+    const terminalEvents = await pool.query(
+      "SELECT execution_id, event_name, summary, metadata FROM codegen_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
+      [[executionId, agentExecutionId]]
+    );
+    expect(terminalEvents.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: executionId,
+          event_name: "codegen.completed",
+          summary: "Sandbox failed to start.",
+          metadata: expect.objectContaining({ status: "failed", failedStep: "sandbox_start" })
+        }),
+        expect.objectContaining({
+          execution_id: agentExecutionId,
+          event_name: "agent.task.completed",
+          summary: "Sandbox failed to start.",
+          metadata: expect.objectContaining({ status: "failed", failedStep: "sandbox_start" })
+        })
+      ])
     );
   });
 
@@ -991,6 +1339,35 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       notifiedAt: expect.any(Date),
       notificationError: null
     });
+  });
+
+  it("attaches queued agent tasks to the final Discord prompt reply", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const traceId = `trace-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const replyMessageId = `reply-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "Warm Runtime Task Guild" });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId,
+      guildId,
+      channelId,
+      userId: `user-${randomUUID()}`,
+      taskType: "code_update",
+      title: "warm runtime task",
+      request: "make warm runtime task updates reliable",
+      requestedBy: "test",
+      backend: "kubernetes-sandbox"
+    });
+
+    await expect(repo.listRenderableAgentTasks(5)).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
+    await expect(repo.attachAgentTasksToDiscordResponse({ traceId, channelId, messageId: replyMessageId })).resolves.toBe(1);
+    await expect(repo.getAgentTask(taskId)).resolves.toMatchObject({
+      discordResponseChannelId: channelId,
+      discordResponseMessageId: replyMessageId
+    });
+    await expect(repo.listRenderableAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
   });
 
   it("aggregates agent task phase durations and sandbox cache events", async () => {
@@ -2044,12 +2421,20 @@ async function cleanupTestRows(pool: DbPool) {
     `
   );
   await pool.query("DELETE FROM codegen_sandbox_leases WHERE sandbox_id LIKE 'codegen-sandbox-%' OR execution_id LIKE 'codegen-execution-%'");
-  await pool.query("DELETE FROM codegen_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%')");
-  await pool.query("DELETE FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%'");
-  await pool.query("DELETE FROM codegen_events WHERE session_id LIKE 'codegen-session-%' OR execution_id LIKE 'codegen-execution-%'");
-  await pool.query("DELETE FROM codegen_executions WHERE execution_id LIKE 'codegen-execution-%' OR session_id LIKE 'codegen-session-%'");
-  await pool.query("DELETE FROM codegen_messages WHERE session_id LIKE 'codegen-session-%'");
-  await pool.query("DELETE FROM codegen_sessions WHERE session_id LIKE 'codegen-session-%' OR trace_id LIKE 'trace-%'");
+  await pool.query(
+    "DELETE FROM codegen_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%')"
+  );
+  await pool.query(
+    "DELETE FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
+  );
+  await pool.query(
+    "DELETE FROM codegen_events WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
+  );
+  await pool.query(
+    "DELETE FROM codegen_executions WHERE execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%' OR session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'"
+  );
+  await pool.query("DELETE FROM codegen_messages WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'");
+  await pool.query("DELETE FROM codegen_sessions WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR trace_id LIKE 'trace-%'");
   await pool.query("DELETE FROM process_runs WHERE run_id LIKE 'run-%' OR trace_id LIKE 'trace-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM skill_changes WHERE skill_name LIKE 'skill-%' OR requester_id LIKE 'user-%'");
   await pool.query("DELETE FROM skills WHERE name LIKE 'skill-%'");

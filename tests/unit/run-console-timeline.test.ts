@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentTranscriptFlowItems,
   codegenTimelineTrace,
   compactTimelineSteps,
   enrichModelRoundToolRequests,
@@ -171,6 +172,77 @@ describe("run console timeline", () => {
         status: "running",
         durationMs: 5_000,
         summary: expect.stringContaining("Current step: codex_app_server_attempt_1.")
+      })
+    ]);
+  });
+
+  it("converts durable agent transcript messages into timeline flow rows", () => {
+    const rows = agentTranscriptFlowItems({
+      agentTranscript: [
+        {
+          id: "agent-transcript-message-1-assistant-round-1",
+          sessionId: "agent-session-1",
+          clientMessageId: "message-1:transcript:assistant-round-1",
+          role: "assistant",
+          parts: [
+            {
+              type: "assistant_tool_calls",
+              toolCalls: [
+                {
+                  id: "call-1",
+                  name: "getDiscordStats",
+                  arguments: { groupBy: "channel" }
+                }
+              ]
+            }
+          ],
+          metadata: { source: "agent.router", round: 1 },
+          createdAt: atMs(100)
+        },
+        {
+          id: "agent-transcript-message-1-tool-call-1",
+          sessionId: "agent-session-1",
+          clientMessageId: "message-1:transcript:tool-call-1",
+          role: "tool",
+          parts: [
+            {
+              type: "tool_result",
+              toolCallId: "call-1",
+              toolName: "getDiscordStats",
+              content: "top channel: alpha"
+            }
+          ],
+          metadata: { source: "agent.router", round: 1, durationMs: 42 },
+          createdAt: atMs(142)
+        }
+      ]
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        id: "agent-transcript-agent-transcript-message-1-assistant-round-1",
+        kind: "model",
+        title: "Assistant requested tools",
+        source: "agent session",
+        summary: "Requested tools: getDiscordStats",
+        metadata: expect.objectContaining({
+          agentTranscript: true,
+          timelineToolRequests: [
+            {
+              id: "call-1",
+              name: "getDiscordStats",
+              argumentsText: "{\"groupBy\":\"channel\"}"
+            }
+          ]
+        })
+      }),
+      expect.objectContaining({
+        id: "agent-transcript-agent-transcript-message-1-tool-call-1",
+        kind: "tool",
+        title: "Tool result: getDiscordStats",
+        source: "agent session",
+        summary: "getDiscordStats: top channel: alpha",
+        durationMs: 42
       })
     ]);
   });

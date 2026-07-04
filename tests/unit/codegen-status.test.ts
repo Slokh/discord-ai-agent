@@ -26,7 +26,9 @@ describe("codegen status formatter", () => {
     const report = formatCodegenStatusSnapshot(snapshot);
 
     expect(report).toContain("Codegen status");
-    expect(report).toContain("active tasks: 2 | stale active: 1");
+    expect(report).toContain("active agent sessions: 1 | active tasks: 2 | stale active: 1");
+    expect(report).toContain("Agent runtime session counts: running=1");
+    expect(report).toContain("agent-session-active running | execution=running | harness=opencode");
     expect(report).toContain("pg-boss agent.task queue: active=1, created=2");
     expect(report).toContain("task-stale running stale");
     expect(report).toContain("sandbox-stale leased stale");
@@ -39,6 +41,8 @@ describe("codegen status formatter", () => {
       ...snapshotFixture(),
       taskCounts: [],
       queueCounts: [],
+      agentSessionCounts: [],
+      activeAgentSessions: [],
       activeTasks: [],
       recentTerminalTasks: [],
       activeSandboxRuns: [],
@@ -56,6 +60,26 @@ function snapshotFixture(): CodegenStatusSnapshot {
   return {
     generatedAt,
     staleAfterMs: 15 * 60 * 1000,
+    agentSessionCounts: [{ name: "running", count: 1 }],
+    activeAgentSessions: [
+      {
+        sessionId: "agent-session-active",
+        traceId: "trace-agent",
+        threadKey: "discord:guild:channel",
+        title: "Discord prompt",
+        requestedBy: "kartik",
+        status: "running",
+        harness: "opencode",
+        model: "z-ai/glm-5.2",
+        executionId: "agent-execution-active",
+        executionStatus: "running",
+        createdAt: new Date("2026-07-01T12:20:00.000Z"),
+        startedAt: new Date("2026-07-01T12:20:01.000Z"),
+        completedAt: null,
+        updatedAt: new Date("2026-07-01T12:25:00.000Z"),
+        executionUpdatedAt: new Date("2026-07-01T12:25:00.000Z")
+      }
+    ],
     taskCounts: [
       { name: "failed", count: 1 },
       { name: "queued", count: 1 },

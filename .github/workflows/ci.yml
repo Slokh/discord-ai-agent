@@ -25,6 +25,7 @@ jobs:
       - run: helm lint deploy/helm/discord-ai-agent
       - run: helm template discord-ai-agent deploy/helm/discord-ai-agent >/tmp/discord-ai-agent.yaml
       - run: helm template discord-ai-agent deploy/helm/discord-ai-agent --set codegenWorker.enabled=true --set sandbox.cache.enabled=true --set codegenWorker.lease.acquireTimeoutSeconds=120 --set codegenWorker.lease.acquirePollSeconds=2 >/tmp/discord-ai-agent-codegen-worker.yaml
+      - run: helm template discord-ai-agent deploy/helm/discord-ai-agent --set agentRuntime.executionBackend=warm-sandbox --set agentRuntime.warmSandbox.enabled=true >/tmp/discord-ai-agent-warm-runtime.yaml
       - uses: hashicorp/setup-terraform@v3
       - run: terraform -chdir=deploy/terraform/aws fmt -check
       - run: terraform -chdir=deploy/terraform/aws init -backend=false

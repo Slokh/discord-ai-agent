@@ -7,6 +7,7 @@ import {
   findDiscordUsers,
   formatAgentTaskResult,
   generateImage,
+  getAgentTaskStatus,
   getDeploymentStatus,
   getDiscordChannelTopics,
   getDiscordStats,
@@ -1197,6 +1198,82 @@ describe("getDeploymentStatus", () => {
   });
 });
 
+describe("getAgentTaskStatus", () => {
+  it("renders task progress events from the shared runtime-first event source", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const task = {
+      taskId: "task-1",
+      traceId: "trace-1",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      threadKey: "discord:guild:channel",
+      discordResponseChannelId: "channel",
+      discordResponseMessageId: "message-1",
+      retriedFromTaskId: null,
+      taskType: "code_update",
+      title: "Improve runtime status",
+      request: "make task status use runtime events",
+      requestedBy: "kartik",
+      status: "running",
+      backend: "local-process-sandbox",
+      currentStep: "opencode_round_finished",
+      statusMessage: "OpenCode round 1 finished.",
+      branchName: null,
+      prUrl: null,
+      draft: null,
+      verifyPassed: null,
+      error: null,
+      createdAt: new Date("2026-07-01T12:00:00.000Z"),
+      startedAt: new Date("2026-07-01T12:00:01.000Z"),
+      cancelledAt: null,
+      completedAt: null,
+      notifiedAt: null,
+      notificationError: null,
+      progressUpdatedAt: new Date("2026-07-01T12:01:00.000Z"),
+      lastRenderedSignature: null,
+      lastRenderedAt: null,
+      terminalRenderedAt: null,
+      updatedAt: new Date("2026-07-01T12:01:00.000Z")
+    };
+    const getTaskProgressEventsForTask = vi.fn(async () => [
+      {
+        id: 2,
+        taskId: "task-1",
+        traceId: "trace-1",
+        eventName: "agent.task.progress",
+        level: "info",
+        summary: "Runtime event won.",
+        metadata: { taskId: "task-1", step: "opencode_round_finished" },
+        createdAt: new Date("2026-07-01T12:01:00.000Z")
+      }
+    ]);
+    const ctx = {
+      repo: {
+        getAgentTask: vi.fn(async () => task),
+        getTaskProgressEventsForTask,
+        getSandboxCommandEvents: vi.fn(async () => []),
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getAgentTaskStatus(ctx, { taskId: "task-1", limit: 3 });
+
+    expect(response).toContain("agent.task.progress task=task-1 - Runtime event won.");
+    expect(getTaskProgressEventsForTask).toHaveBeenCalledWith({ taskId: "task-1", limit: 3 });
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "getAgentTaskStatus",
+        resultSummary: expect.stringContaining("\"events\":1")
+      })
+    );
+  });
+});
+
 describe("inspectAgentLogs", () => {
   it("formats trace events and tool audit logs", async () => {
     const auditTool = vi.fn(async () => undefined);
@@ -1250,12 +1327,12 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:00:02Z")
           }
         ]),
-        getTaskEvents: vi.fn(async () => [
+        getTaskProgressEvents: vi.fn(async () => [
           {
             id: 1,
             taskId: "task-1",
             traceId: "trace-1",
-            eventName: "task.progress",
+            eventName: "agent.task.progress",
             level: "info",
             summary: "Kubernetes sandbox is running the task.",
             metadata: { step: "sandbox_running" },
@@ -1290,7 +1367,7 @@ describe("inspectAgentLogs", () => {
 
     expect(response).toContain("Discord AI Agent logs for trace trace-1");
     expect(response).toContain("agent.request.complete 1234ms");
-    expect(response).toContain("task.progress task=task-1");
+    expect(response).toContain("agent.task.progress task=task-1");
     expect(response).toContain("Sandbox commands:");
     expect(response).toContain("npm run scan:release");
     expect(response).toContain("searchDiscordHistory");
@@ -1300,7 +1377,7 @@ describe("inspectAgentLogs", () => {
       traceId: "trace-1",
       limit: 10
     });
-    expect(ctx.repo.getTaskEvents).toHaveBeenCalledWith({
+    expect(ctx.repo.getTaskProgressEvents).toHaveBeenCalledWith({
       guildId: "guild",
       visibleChannelIds: ["channel"],
       traceId: "trace-1",
@@ -1406,6 +1483,7 @@ describe("inspectAgentLogs", () => {
         ]),
         getProcessRunArtifacts: vi.fn(async () => []),
         getProcessRunArtifact: vi.fn(async () => undefined),
+        getTaskProgressEventsForTask: vi.fn(async () => []),
         getTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => [
           {
@@ -1423,10 +1501,13 @@ describe("inspectAgentLogs", () => {
         ]),
         getSandboxRunsForTask: vi.fn(async () => []),
         getTraceEventsForTrace: vi.fn(async () => []),
+        getAgentRuntimeEventsForTrace: vi.fn(async () => []),
+        getAgentRuntimeMessagesForTrace: vi.fn(async () => []),
         getToolAuditLogsForTrace: vi.fn(async () => []),
         listProcessRunsForTrace: vi.fn(async () => [run]),
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
+        getTaskProgressEvents: vi.fn(async () => []),
         getTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
@@ -1486,14 +1567,18 @@ describe("inspectAgentLogs", () => {
         getProcessRunSpans: vi.fn(async () => []),
         getProcessRunEvents: vi.fn(async () => []),
         getProcessRunArtifacts: vi.fn(async () => []),
+        getTaskProgressEventsForTask: vi.fn(async () => []),
         getTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => []),
         getSandboxRunsForTask: vi.fn(async () => []),
         getTraceEventsForTrace: vi.fn(async () => []),
+        getAgentRuntimeEventsForTrace: vi.fn(async () => []),
+        getAgentRuntimeMessagesForTrace: vi.fn(async () => []),
         getToolAuditLogsForTrace: vi.fn(async () => []),
         listProcessRunsForTrace: vi.fn(async () => []),
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
+        getTaskProgressEvents: vi.fn(async () => []),
         getTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),

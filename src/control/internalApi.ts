@@ -2,18 +2,28 @@ import http from "node:http";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import { assertTaskCallbackConfig } from "../config/env.js";
+import { AgentRuntimeRepository, type AgentRuntimeMessageRole } from "../db/agentRuntimeRepository.js";
 import type { CodegenMessageRole, CodegenRepository } from "../db/codegenRepository.js";
 import type { DbPool } from "../db/pool.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import {
+  enqueueAgentRuntimeSessionExecution,
+  missingAgentRuntimeExecutionJobContext,
+  storeAgentRuntimeExecutionInputLines,
+  type AgentRuntimeExecutionQueueInput
+} from "../agent/runtimeControlPlane.js";
 import { logger } from "../util/logger.js";
 import { verifyTaskBearerToken } from "../execution/token.js";
 import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execution/types.js";
 import { collectCodegenStatusSnapshot } from "../observability/codegenStatus.js";
 import { buildRunListAggregate } from "../observability/runAggregates.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../observability/runs.js";
+import type { JobRuntime } from "../jobs/queue.js";
 import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
+const MAX_AGENT_RUNTIME_INPUT_LINES = 1000;
+const MAX_AGENT_RUNTIME_INPUT_LINE_BYTES = 1024 * 1024;
 const UI_AUTH_COOKIE_NAME = "discord_ai_agent_ui_auth";
 const UI_AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 type CodegenApiStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
@@ -28,6 +38,7 @@ export async function startInternalApi(input: {
   repo: DiscordAiAgentRepository;
   codegenRepo?: CodegenRepository;
   db?: DbPool;
+  jobs?: Pick<JobRuntime, "enqueueAgentRuntimeExecution">;
 }): Promise<InternalApiRuntime> {
   assertTaskCallbackConfig(input.config);
   const server = http.createServer(async (request, response) => {
@@ -60,6 +71,7 @@ async function handleRequest(input: {
   repo: DiscordAiAgentRepository;
   codegenRepo?: CodegenRepository;
   db?: DbPool;
+  jobs?: Pick<JobRuntime, "enqueueAgentRuntimeExecution">;
   request: http.IncomingMessage;
   response: http.ServerResponse;
 }) {
@@ -143,6 +155,250 @@ async function handleRequest(input: {
       limit: parseLimit(url.searchParams.get("limit"), 10, 100),
       staleAfterMs: parseStaleAfterMs(url.searchParams.get("staleMinutes"))
     })) as unknown as Record<string, unknown>);
+    return;
+  }
+
+  const agentMessagesMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/messages$/);
+  if ((method === "GET" || method === "POST") && agentMessagesMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentMessagesMatch[1] ?? "");
+    const session = await agentRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "agent_session_not_found" });
+      return;
+    }
+    if (method === "GET") {
+      sendJson(input.response, 200, {
+        messages: await agentRepo.listMessages({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("limit"), 100, 500) }),
+        generatedAt: new Date().toISOString()
+      });
+      return;
+    }
+
+    const body = parseAgentMessageBody(await readJsonBody(input.request));
+    const message = await agentRepo.appendMessage({
+      sessionId: session.sessionId,
+      messageId: body.messageId ?? deterministicCodegenId("agent-message", `${session.sessionId}:${body.clientMessageId ?? randomUUID()}`),
+      clientMessageId: body.clientMessageId,
+      role: body.role,
+      parts: body.parts,
+      metadata: body.metadata
+    });
+    await agentRepo.recordEvent({
+      sessionId: session.sessionId,
+      kind: "status",
+      eventName: "agent.message.appended",
+      summary: `Appended ${body.role} message.`,
+      metadata: { messageId: message.messageId, clientMessageId: message.clientMessageId, role: message.role }
+    });
+    sendJson(input.response, 200, { ok: true, message });
+    return;
+  }
+
+  const agentExecuteMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/execute$/);
+  if (method === "POST" && agentExecuteMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentExecuteMatch[1] ?? "");
+    const session = await agentRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "agent_session_not_found" });
+      return;
+    }
+    const body = parseAgentExecuteBody(await readJsonBody(input.request));
+    if (body.enqueue && !input.jobs) {
+      sendJson(input.response, 503, { error: "agent_runtime_queue_unavailable" });
+      return;
+    }
+    const missingEnqueueContext = body.enqueue ? missingAgentRuntimeExecutionJobContext({ session, queue: body }) : null;
+    if (missingEnqueueContext) {
+      sendJson(input.response, 400, { error: "agent_runtime_enqueue_context_missing", detail: missingEnqueueContext });
+      return;
+    }
+    const execution = await agentRepo.createExecution({
+      executionId: body.executionId ?? deterministicCodegenId("agent-execution", `${session.sessionId}:${Date.now()}:${randomUUID()}`),
+      sessionId: session.sessionId,
+      taskId: body.taskId,
+      traceId: body.traceId ?? session.traceId,
+      attempt: body.attempt,
+      status: "queued",
+      harness: body.harness,
+      model: body.model ?? session.model,
+      provider: body.provider ?? session.provider,
+      reasoningEffort: body.reasoningEffort,
+      sandboxId: body.sandboxId,
+      sandboxRunId: body.sandboxRunId,
+      metadata: body.metadata
+    });
+    await agentRepo.recordEvent({
+      sessionId: session.sessionId,
+      executionId: execution.executionId,
+      traceId: execution.traceId,
+      kind: "status",
+      eventName: "agent.execution.queued",
+      summary: "Queued agent execution.",
+      metadata: { executionId: execution.executionId, harness: execution.harness, model: execution.model }
+    });
+    const inputLinesArtifactId = await storeAgentRuntimeExecutionInputLines({
+      agentRuntime: agentRepo,
+      session,
+      execution,
+      inputLines: body.inputLines
+    });
+    let jobId: string | null = null;
+    if (body.enqueue) {
+      try {
+        const result = await enqueueAgentRuntimeSessionExecution({
+          agentRuntime: agentRepo,
+          jobs: input.jobs!,
+          session,
+          execution,
+          threadKey,
+          queue: {
+            ...body,
+            inputLinesArtifactId
+          }
+        });
+        jobId = result.jobId;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        sendJson(input.response, 502, { error: "agent_runtime_enqueue_failed", detail: message, session, execution });
+        return;
+      }
+    }
+    sendJson(input.response, 202, { ok: true, session, execution, jobId, inputLinesArtifactId });
+    return;
+  }
+
+  const agentEventsMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/events$/);
+  if (method === "GET" && agentEventsMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentEventsMatch[1] ?? "");
+    const session = await agentRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "agent_session_not_found" });
+      return;
+    }
+    sendJson(input.response, 200, {
+      events: await agentRepo.listEvents({
+        sessionId: session.sessionId,
+        executionId: url.searchParams.get("executionId"),
+        afterEventId: parseNullableInteger(url.searchParams.get("afterEventId")),
+        limit: parseLimit(url.searchParams.get("limit"), 200, 1000)
+      }),
+      generatedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  const agentArtifactMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/artifacts\/([^/]+)$/);
+  if (method === "GET" && agentArtifactMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentArtifactMatch[1] ?? "");
+    const artifactId = decodeURIComponent(agentArtifactMatch[2] ?? "");
+    const session = await agentRepo.getSession({ threadKey });
+    if (!session) {
+      sendJson(input.response, 404, { error: "agent_session_not_found" });
+      return;
+    }
+    const artifact = await agentRepo.getArtifact({ artifactId });
+    if (!artifact || artifact.sessionId !== session.sessionId) {
+      sendJson(input.response, 404, { error: "artifact_not_found" });
+      return;
+    }
+    sendText(input.response, 200, artifact.content, artifact.contentType);
+    return;
+  }
+
+  const agentStreamMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)\/stream$/);
+  if (method === "GET" && agentStreamMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    await streamAgentEvents({
+      agentRepo,
+      request: input.request,
+      response: input.response,
+      threadKey: decodeURIComponent(agentStreamMatch[1] ?? ""),
+      executionId: url.searchParams.get("executionId"),
+      afterEventId: parseNullableInteger(url.searchParams.get("afterEventId"))
+    });
+    return;
+  }
+
+  const agentSessionMatch = url.pathname.match(/^\/api\/agent\/sessions\/([^/]+)$/);
+  if ((method === "GET" || method === "POST") && agentSessionMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const agentRepo = agentRuntimeRepo(input.codegenRepo);
+    if (!agentRepo) {
+      sendJson(input.response, 503, { error: "agent_runtime_repository_unavailable" });
+      return;
+    }
+    const threadKey = decodeURIComponent(agentSessionMatch[1] ?? "");
+    if (method === "GET") {
+      const session = await agentRepo.getSession({ threadKey });
+      if (!session) {
+        sendJson(input.response, 404, { error: "agent_session_not_found" });
+        return;
+      }
+      const [messages, executions, events] = await Promise.all([
+        agentRepo.listMessages({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("messages"), 100, 500) }),
+        agentRepo.listExecutions({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("executions"), 20, 100) }),
+        agentRepo.listEvents({ sessionId: session.sessionId, limit: parseLimit(url.searchParams.get("events"), 200, 1000) })
+      ]);
+      sendJson(input.response, 200, { session, messages, executions, events, generatedAt: new Date().toISOString() });
+      return;
+    }
+
+    const body = parseAgentSessionBody(await readJsonBody(input.request));
+    const session = await agentRepo.upsertSession({
+      sessionId: body.sessionId,
+      traceId: body.traceId,
+      threadKey,
+      guildId: body.guildId,
+      channelId: body.channelId,
+      userId: body.userId,
+      title: body.title,
+      request: body.request,
+      requestedBy: body.requestedBy,
+      status: body.status,
+      harness: body.harness,
+      model: body.model,
+      provider: body.provider,
+      harnessThreadId: body.harnessThreadId,
+      metadata: body.metadata
+    });
+    await agentRepo.recordEvent({
+      sessionId: session.sessionId,
+      traceId: session.traceId,
+      kind: "status",
+      eventName: "agent.session.upserted",
+      summary: "Agent session is ready.",
+      metadata: { threadKey: session.threadKey, harness: session.harness, model: session.model }
+    });
+    sendJson(input.response, 200, { ok: true, session });
     return;
   }
 
@@ -415,7 +671,7 @@ async function handleRequest(input: {
       return;
     }
     const [events, commands, runs] = await Promise.all([
-      input.repo.getTaskEventsForTask({ taskId, limit: parseLimit(url.searchParams.get("events"), 200, 300) }),
+      input.repo.getTaskProgressEventsForTask({ taskId, limit: parseLimit(url.searchParams.get("events"), 200, 300) }),
       input.repo.getSandboxCommandEventsForTask({ taskId, limit: parseLimit(url.searchParams.get("commands"), 50, 100) }),
       input.repo.getSandboxRunsForTask(taskId)
     ]);
@@ -762,6 +1018,46 @@ function parseCodegenSessionBody(value: unknown): {
   };
 }
 
+function parseAgentSessionBody(value: unknown): {
+  sessionId: string | null;
+  traceId: string | null;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+  title: string | null;
+  request: string | null;
+  requestedBy: string | null;
+  status: CodegenApiStatus | undefined;
+  harness: string | null;
+  model: string | null;
+  provider: string | null;
+  harnessThreadId: string | null;
+  metadata: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object") throw new Error("Agent session body must be an object.");
+  const body = value as Record<string, unknown>;
+  const status = body.status;
+  if (status != null && !["queued", "running", "succeeded", "failed", "no_changes", "cancelled"].includes(String(status))) {
+    throw new Error("Invalid agent session status.");
+  }
+  return {
+    sessionId: stringOrNull(body.sessionId),
+    traceId: stringOrNull(body.traceId),
+    guildId: stringOrNull(body.guildId),
+    channelId: stringOrNull(body.channelId),
+    userId: stringOrNull(body.userId),
+    title: stringOrNull(body.title),
+    request: stringOrNull(body.request),
+    requestedBy: stringOrNull(body.requestedBy),
+    status: status == null ? undefined : (String(status) as CodegenApiStatus),
+    harness: stringOrNull(body.harness),
+    model: stringOrNull(body.model),
+    provider: stringOrNull(body.provider),
+    harnessThreadId: stringOrNull(body.harnessThreadId) ?? stringOrNull(body.codexThreadId),
+    metadata: objectOrEmpty(body.metadata)
+  };
+}
+
 function parseCodegenMessageBody(value: unknown): {
   messageId: string | null;
   clientMessageId: string | null;
@@ -781,6 +1077,34 @@ function parseCodegenMessageBody(value: unknown): {
       ? [{ type: "text", text: body.text }]
       : [];
   if (parts.length === 0) throw new Error("Codegen message body requires parts or text.");
+  return {
+    messageId: stringOrNull(body.messageId),
+    clientMessageId: stringOrNull(body.clientMessageId),
+    role,
+    parts,
+    metadata: objectOrEmpty(body.metadata)
+  };
+}
+
+function parseAgentMessageBody(value: unknown): {
+  messageId: string | null;
+  clientMessageId: string | null;
+  role: AgentRuntimeMessageRole;
+  parts: unknown[];
+  metadata: Record<string, unknown>;
+} {
+  if (!value || typeof value !== "object") throw new Error("Agent message body must be an object.");
+  const body = value as Record<string, unknown>;
+  const role = String(body.role ?? "user");
+  if (role !== "system" && role !== "user" && role !== "assistant" && role !== "tool") {
+    throw new Error("Agent message role must be system, user, assistant, or tool.");
+  }
+  const parts = Array.isArray(body.parts)
+    ? body.parts
+    : typeof body.text === "string"
+      ? [{ type: "text", text: body.text }]
+      : [];
+  if (parts.length === 0) throw new Error("Agent message body requires parts or text.");
   return {
     messageId: stringOrNull(body.messageId),
     clientMessageId: stringOrNull(body.clientMessageId),
@@ -818,6 +1142,64 @@ function parseCodegenExecuteBody(value: unknown): {
     sandboxRunId: stringOrNull(body.sandboxRunId),
     metadata: objectOrEmpty(body.metadata)
   };
+}
+
+type AgentExecuteBody = {
+  executionId: string | null;
+  taskId: string | null;
+  traceId: string | null;
+  attempt: number | undefined;
+  harness: string | null;
+  model: string | null;
+  provider: string | null;
+  reasoningEffort: string | null;
+  sandboxId: string | null;
+  sandboxRunId: string | null;
+  metadata: Record<string, unknown>;
+  enqueue: boolean;
+  inputLines: string[];
+} & AgentRuntimeExecutionQueueInput;
+
+function parseAgentExecuteBody(value: unknown): AgentExecuteBody {
+  const base = parseCodegenExecuteBody(value);
+  const body = value as Record<string, unknown>;
+  return {
+    ...base,
+    enqueue: parseBooleanLike(body.enqueue) || parseBooleanLike(body.enqueueJob),
+    inputLines: parseAgentInputLines(body.inputLines ?? body.input_lines),
+    runId: stringOrNull(body.runId),
+    guildId: stringOrNull(body.guildId),
+    channelId: stringOrNull(body.channelId),
+    messageId: stringOrNull(body.messageId),
+    userId: stringOrNull(body.userId),
+    responseChannelId: stringOrNull(body.responseChannelId),
+    responseMessageId: stringOrNull(body.responseMessageId),
+    turnEnvelopeArtifactId: stringOrNull(body.turnEnvelopeArtifactId),
+    text: stringOrNull(body.text),
+    rawContent: stringOrNull(body.rawContent),
+    mentionKind: stringOrNull(body.mentionKind),
+    botRoleIds: stringArray(body.botRoleIds),
+    requesterDisplayName: stringOrNull(body.requesterDisplayName),
+    enqueuedAt: stringOrNull(body.enqueuedAt)
+  };
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function parseAgentInputLines(value: unknown) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("Agent execute input_lines must be an array of strings.");
+  if (value.length > MAX_AGENT_RUNTIME_INPUT_LINES) throw new Error(`Agent execute input_lines cannot exceed ${MAX_AGENT_RUNTIME_INPUT_LINES} lines.`);
+  return value.map((line, index) => {
+    if (typeof line !== "string") throw new Error(`Agent execute input_lines[${index}] must be a string.`);
+    if (line.includes("\n") || line.includes("\r")) throw new Error(`Agent execute input_lines[${index}] must be one newline-free line.`);
+    if (Buffer.byteLength(line, "utf8") > MAX_AGENT_RUNTIME_INPUT_LINE_BYTES) {
+      throw new Error(`Agent execute input_lines[${index}] exceeds ${MAX_AGENT_RUNTIME_INPUT_LINE_BYTES} bytes.`);
+    }
+    return line;
+  });
 }
 
 function objectOrEmpty(value: unknown): Record<string, unknown> {
@@ -858,8 +1240,19 @@ function titleFromRequest(request: string) {
   return clean.length <= 80 ? clean : `${clean.slice(0, 77)}...`;
 }
 
+function agentRuntimeRepo(codegenRepo?: CodegenRepository) {
+  return codegenRepo ? new AgentRuntimeRepository(codegenRepo) : null;
+}
+
 function parseBoolean(value: string | null) {
   return /^(1|true|yes)$/i.test(value ?? "");
+}
+
+function parseBooleanLike(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1;
+  if (typeof value === "string") return /^(1|true|yes)$/i.test(value);
+  return false;
 }
 
 function sendJson(response: http.ServerResponse, status: number, body: Record<string, unknown>) {
@@ -1028,6 +1421,63 @@ function sendUiUnauthorized(response: http.ServerResponse) {
     "www-authenticate": 'Basic realm="Discord AI Agent task viewer"'
   });
   response.end("Authentication required.");
+}
+
+async function streamAgentEvents(input: {
+  agentRepo: AgentRuntimeRepository;
+  request: http.IncomingMessage;
+  response: http.ServerResponse;
+  threadKey: string;
+  executionId: string | null;
+  afterEventId: number | null;
+}) {
+  input.response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive"
+  });
+
+  const session = await input.agentRepo.getSession({ threadKey: input.threadKey });
+  if (!session) {
+    input.response.write(`event: error\ndata: ${JSON.stringify({ error: "agent_session_not_found" })}\n\n`);
+    input.response.end();
+    return;
+  }
+
+  let closed = false;
+  let afterEventId = input.afterEventId ?? 0;
+  input.request.on("close", () => {
+    closed = true;
+  });
+
+  const sendEvents = async () => {
+    if (closed || input.response.destroyed) return;
+    const events = await input.agentRepo.listEvents({
+      sessionId: session.sessionId,
+      executionId: input.executionId,
+      afterEventId,
+      limit: 200
+    });
+    for (const event of events) {
+      afterEventId = Math.max(afterEventId, event.id);
+      input.response.write(`event: agent.event\ndata: ${JSON.stringify(event)}\n\n`);
+    }
+    input.response.write(`event: heartbeat\ndata: ${JSON.stringify({ afterEventId, generatedAt: new Date().toISOString() })}\n\n`);
+  };
+
+  await sendEvents();
+  const interval = setInterval(() => {
+    void sendEvents().catch((error) => {
+      logger.warn({ err: error, threadKey: input.threadKey, executionId: input.executionId }, "Failed to stream agent runtime events");
+    });
+  }, 2000);
+  interval.unref?.();
+
+  await new Promise<void>((resolve) => {
+    input.request.on("close", resolve);
+    input.response.on("close", resolve);
+  });
+  clearInterval(interval);
 }
 
 export async function renderMetrics(repo: DiscordAiAgentRepository) {

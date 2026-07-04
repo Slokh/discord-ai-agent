@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
 import { startInternalApi } from "./control/internalApi.js";
+import { AgentRuntimeRepository } from "./db/agentRuntimeRepository.js";
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
 import { CodegenRepository } from "./db/codegenRepository.js";
@@ -10,11 +11,12 @@ import { startSandboxReconciler } from "./execution/reconciler.js";
 import { OpenRouterClient } from "./models/openrouter.js";
 import { embedStoredMessage, embedStoredMessages } from "./memory/embedding.js";
 import { DiscordCrawler } from "./discord/crawler.js";
-import { createDiscordAiAgentBot, runQueuedDiscordAgentRequest } from "./discord/client.js";
+import { createDiscordAiAgentBot } from "./discord/client.js";
 import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
 import { startJobs } from "./jobs/queue.js";
 import { startStaleRunReconciler } from "./observability/staleRuns.js";
 import { logger } from "./util/logger.js";
+import { createAgentRuntimeRunner } from "./agent/runtimeRunner.js";
 
 async function main() {
   const config = loadConfig();
@@ -55,6 +57,9 @@ async function main() {
         embeddingEnabled: startsEmbeddingWorker,
         taskEnabled: startsTaskWorker,
         discordAgentEnabled: startsDiscordAgentWorker
+      },
+      agentRuntime: {
+        executionBackend: config.agentRuntime.executionBackend
       }
     },
     "Starting Discord AI Agent"
@@ -72,6 +77,7 @@ async function main() {
   logger.debug("Postgres pool created");
   const repo = new DiscordAiAgentRepository(pool);
   const codegenRepo = new CodegenRepository(pool);
+  const agentRuntimeRepo = new AgentRuntimeRepository(codegenRepo);
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
 
@@ -114,6 +120,7 @@ async function main() {
     config,
     repo,
     codegenRepo,
+    agentRuntimeRepo,
     crawler,
     agentTask: executionBackend
       ? {
@@ -129,14 +136,7 @@ async function main() {
         await embedStoredMessage({ repo, openRouter, config, messageId });
       }
     },
-    discordAgent:
-      client && startsWorker
-        ? {
-            run: async (job, context) => {
-              await runQueuedDiscordAgentRequest({ config, repo, openRouter, jobs: context.jobs, client }, job);
-            }
-          }
-        : undefined,
+    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, agentRuntimeRepo, openRouter, client }) : undefined,
     crawlWorker: startsCrawlWorker,
     embeddingWorker: startsEmbeddingWorker,
     taskWorker: startsTaskWorker,
@@ -147,7 +147,7 @@ async function main() {
     { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsDiscordAgentWorker },
     "Job runtime ready"
   );
-  const internalApi = startsApi ? await startInternalApi({ config, repo, codegenRepo, db: pool }) : null;
+  const internalApi = startsApi ? await startInternalApi({ config, repo, codegenRepo, db: pool, jobs }) : null;
   const staleRunReconciler = startsApi
     ? startStaleRunReconciler({
         repo,
@@ -155,7 +155,10 @@ async function main() {
       })
     : null;
   const sandboxReconciler = startsTaskWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
-  const runtime = startsBot && client && crawler instanceof DiscordCrawler ? createDiscordAiAgentBot({ config, repo, openRouter, crawler, jobs, client }) : null;
+  const runtime =
+    startsBot && client && crawler instanceof DiscordCrawler
+      ? createDiscordAiAgentBot({ config, repo, agentRuntime: agentRuntimeRepo, openRouter, crawler, jobs, client })
+      : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
 
   let shuttingDown = false;

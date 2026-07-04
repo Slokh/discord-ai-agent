@@ -1272,7 +1272,136 @@ describe("getAgentTaskStatus", () => {
       })
     );
   });
+
+  it("includes GitHub PR and CI check status when a task has a pull request", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const task = {
+      taskId: "task-1",
+      traceId: "trace-1",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      threadKey: "discord:guild:channel",
+      discordResponseChannelId: "channel",
+      discordResponseMessageId: "message-1",
+      retriedFromTaskId: null,
+      taskType: "code_update",
+      title: "Improve runtime status",
+      request: "make task status include CI",
+      requestedBy: "kartik",
+      status: "succeeded",
+      backend: "kubernetes",
+      currentStep: "done",
+      statusMessage: "Opened pull request.",
+      branchName: "ai/runtime-status",
+      prUrl: "https://github.com/Slokh/discord-ai-agent/pull/42",
+      draft: false,
+      verifyPassed: null,
+      error: null,
+      createdAt: new Date("2026-07-01T12:00:00.000Z"),
+      startedAt: new Date("2026-07-01T12:00:01.000Z"),
+      cancelledAt: null,
+      completedAt: new Date("2026-07-01T12:04:00.000Z"),
+      notifiedAt: null,
+      notificationError: null,
+      progressUpdatedAt: new Date("2026-07-01T12:04:00.000Z"),
+      lastRenderedSignature: null,
+      lastRenderedAt: null,
+      terminalRenderedAt: null,
+      updatedAt: new Date("2026-07-01T12:04:00.000Z")
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/repos/Slokh/discord-ai-agent/pulls/42")) {
+        return jsonResponse({
+          number: 42,
+          title: "Improve runtime status",
+          state: "open",
+          draft: false,
+          head: { ref: "ai/runtime-status", sha: "abcdef1234567890" }
+        });
+      }
+      if (url.endsWith("/repos/Slokh/discord-ai-agent/commits/abcdef1234567890/check-runs?per_page=50")) {
+        return jsonResponse({
+          total_count: 2,
+          check_runs: [
+            {
+              name: "test",
+              status: "completed",
+              conclusion: "failure",
+              html_url: "https://github.com/Slokh/discord-ai-agent/actions/runs/1",
+              output: { title: "Tests failed" }
+            },
+            {
+              name: "lint",
+              status: "completed",
+              conclusion: "success",
+              html_url: "https://github.com/Slokh/discord-ai-agent/actions/runs/2"
+            }
+          ]
+        });
+      }
+      if (url.endsWith("/repos/Slokh/discord-ai-agent/commits/abcdef1234567890/status")) {
+        return jsonResponse({
+          state: "failure",
+          statuses: [{ context: "ci/legacy", state: "failure", target_url: "https://ci.example/failure" }]
+        });
+      }
+      throw new Error(`Unexpected GitHub URL ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const ctx = {
+      repo: {
+        getAgentTask: vi.fn(async () => task),
+        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getSandboxCommandEvents: vi.fn(async () => []),
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      config: {
+        github: {
+          token: "github-token",
+          repository: "Slokh/discord-ai-agent",
+          baseBranch: "main"
+        }
+      }
+    } as unknown as ToolContext;
+
+    const response = await getAgentTaskStatus(ctx, { taskId: "task-1", limit: 3 });
+
+    expect(response).toContain("GitHub PR status:");
+    expect(response).toContain("PR #42: open head=abcdef1 branch=ai/runtime-status");
+    expect(response).toContain("Checks: failure=1, success=1");
+    expect(response).toContain("test (failure) https://github.com/Slokh/discord-ai-agent/actions/runs/1 - Tests failed");
+    expect(response).toContain("Commit status: failure");
+    expect(response).toContain("ci/legacy (failure) https://ci.example/failure");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/Slokh/discord-ai-agent/pulls/42",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer github-token"
+        })
+      })
+    );
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "getAgentTaskStatus",
+        resultSummary: expect.stringContaining("\"pullRequestStatus\":true")
+      })
+    );
+  });
 });
+
+function jsonResponse(value: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    json: vi.fn(async () => value),
+    text: vi.fn(async () => JSON.stringify(value))
+  };
+}
 
 describe("inspectAgentLogs", () => {
   it("formats trace events and tool audit logs", async () => {

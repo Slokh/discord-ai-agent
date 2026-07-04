@@ -1,4 +1,6 @@
 import { enqueueAgentRuntimeCodeUpdateTask } from "../agent/runtimeControlPlane.js";
+import { resolveGitHubTaskToken } from "../github/appToken.js";
+import { parseGitHubRepository } from "../github/repository.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentTaskRecord, AgentTaskStatus, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
 import type { ToolContext } from "./types.js";
@@ -14,6 +16,7 @@ import {
 } from "./agentTaskFormatting.js";
 
 const ACTIVE_AGENT_TASK_STATUSES: AgentTaskStatus[] = ["queued", "running"];
+const GITHUB_API_BASE_URL = "https://api.github.com";
 
 export async function createAgentUpdateFromRequest(ctx: ToolContext, request: string, title?: string | null): Promise<string> {
   const updateName = agentUpdateTitleFromRequest(request, title);
@@ -89,14 +92,15 @@ export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: str
   if (!task) return input.taskId ? `No visible agent task matched \`${input.taskId}\`.` : "No recent agent task matched this channel.";
 
   const limit = clampInteger(input.limit, 1, 20, 8);
-  const [events, commandEvents] = await Promise.all([
+  const [events, commandEvents, pullRequestStatus] = await Promise.all([
     getTaskStatusEvents(ctx, task, limit),
     ctx.repo.getSandboxCommandEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
       taskId: task.taskId,
       limit
-    })
+    }),
+    getTaskPullRequestStatus(ctx, task)
   ]);
 
   await ctx.repo.auditTool({
@@ -105,7 +109,13 @@ export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: str
     userId: ctx.userId,
     toolName: "getAgentTaskStatus",
     argumentsSummary: summarizeForAudit({ taskId: input.taskId, limit }),
-    resultSummary: summarizeForAudit({ taskId: task.taskId, status: task.status, events: events.length, commandEvents: commandEvents.length })
+    resultSummary: summarizeForAudit({
+      taskId: task.taskId,
+      status: task.status,
+      events: events.length,
+      commandEvents: commandEvents.length,
+      pullRequestStatus: Boolean(pullRequestStatus)
+    })
   });
 
   return [
@@ -114,6 +124,7 @@ export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: str
     task.request ? `Request: ${truncateForDiscord(task.request, 800)}` : "",
     task.error ? `Error: ${truncateForDiscord(task.error, 800)}` : "",
     task.prUrl ? `PR: ${task.prUrl}` : "",
+    pullRequestStatus,
     "",
     formatTaskEvents(events),
     "",
@@ -125,6 +136,214 @@ export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: str
 
 async function getTaskStatusEvents(ctx: ToolContext, task: AgentTaskRecord, limit: number): Promise<TaskEvent[]> {
   return ctx.repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit });
+}
+
+async function getTaskPullRequestStatus(ctx: ToolContext, task: AgentTaskRecord): Promise<string> {
+  if (!task.prUrl) return "";
+  const githubConfig = ctx.config.github;
+  if (!githubConfig?.repository) return "GitHub PR status: unavailable; GITHUB_REPOSITORY is not configured.";
+
+  const parsedPullRequest = parsePullRequestUrl(task.prUrl);
+  if (!parsedPullRequest) return "GitHub PR status: unavailable; could not parse the PR URL.";
+
+  try {
+    const configuredRepo = parseGitHubRepository(githubConfig.repository);
+    const owner = parsedPullRequest.owner || configuredRepo.owner;
+    const repo = parsedPullRequest.repo || configuredRepo.repo;
+    const token = await resolveGitHubTaskToken(ctx.config);
+    const pullRequest = await githubJson<GitHubPullRequestResponse>(`/repos/${owner}/${repo}/pulls/${parsedPullRequest.pullNumber}`, token);
+    const headSha = pullRequest.head?.sha;
+    const [checks, status] = headSha
+      ? await Promise.all([
+          githubJson<GitHubCheckRunsResponse>(`/repos/${owner}/${repo}/commits/${headSha}/check-runs?per_page=50`, token).catch((error) => ({
+            error
+          })),
+          githubJson<GitHubCombinedStatusResponse>(`/repos/${owner}/${repo}/commits/${headSha}/status`, token).catch((error) => ({ error }))
+        ])
+      : [undefined, undefined];
+    return formatGitHubPullRequestStatus({
+      pullRequest,
+      checks: isGitHubCheckRunsResponse(checks) ? checks : undefined,
+      checksError: errorMessageFromMaybeError(checks),
+      status: isGitHubCombinedStatusResponse(status) ? status : undefined,
+      statusError: errorMessageFromMaybeError(status)
+    });
+  } catch (error) {
+    return `GitHub PR status: unavailable; ${truncateForDiscord(error instanceof Error ? error.message : String(error), 240)}`;
+  }
+}
+
+type GitHubPullRequestResponse = {
+  number?: number;
+  title?: string;
+  state?: string;
+  draft?: boolean;
+  html_url?: string;
+  head?: {
+    ref?: string;
+    sha?: string;
+  };
+};
+
+type GitHubCheckRun = {
+  name?: string;
+  status?: string;
+  conclusion?: string | null;
+  html_url?: string;
+  output?: {
+    title?: string | null;
+    summary?: string | null;
+  } | null;
+};
+
+type GitHubCheckRunsResponse = {
+  total_count?: number;
+  check_runs?: GitHubCheckRun[];
+};
+
+type GitHubCommitStatus = {
+  context?: string;
+  state?: string;
+  target_url?: string | null;
+  description?: string | null;
+};
+
+type GitHubCombinedStatusResponse = {
+  state?: string;
+  statuses?: GitHubCommitStatus[];
+};
+
+function parsePullRequestUrl(prUrl: string) {
+  try {
+    const url = new URL(prUrl);
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/);
+    if (!match) return undefined;
+    return {
+      owner: match[1],
+      repo: match[2],
+      pullNumber: Number(match[3])
+    };
+  } catch {
+    const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/i);
+    if (!match) return undefined;
+    return {
+      owner: match[1],
+      repo: match[2],
+      pullNumber: Number(match[3])
+    };
+  }
+}
+
+async function githubJson<T>(path: string, token: string): Promise<T> {
+  const response = await fetch(`${GITHUB_API_BASE_URL}${path}`, {
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${token}`,
+      "x-github-api-version": "2022-11-28"
+    }
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`GitHub API ${response.status}${body ? `: ${truncateForDiscord(body, 180)}` : ""}`);
+  }
+  return (await response.json()) as T;
+}
+
+function formatGitHubPullRequestStatus(input: {
+  pullRequest: GitHubPullRequestResponse;
+  checks?: GitHubCheckRunsResponse;
+  checksError?: string;
+  status?: GitHubCombinedStatusResponse;
+  statusError?: string;
+}) {
+  const pr = input.pullRequest;
+  const head = pr.head?.sha ? ` head=${pr.head.sha.slice(0, 7)}` : "";
+  const branch = pr.head?.ref ? ` branch=${pr.head.ref}` : "";
+  const lines = [
+    "GitHub PR status:",
+    `- PR #${pr.number ?? "?"}: ${pr.state ?? "unknown"}${pr.draft ? ", draft" : ""}${head}${branch}${pr.title ? ` - ${truncateForDiscord(pr.title, 120)}` : ""}`
+  ];
+
+  if (input.checks) {
+    lines.push(formatCheckRuns(input.checks));
+  } else if (input.checksError) {
+    lines.push(`- Checks: unavailable; ${truncateForDiscord(input.checksError, 180)}`);
+  }
+
+  if (input.status) {
+    lines.push(formatCombinedStatus(input.status));
+  } else if (input.statusError) {
+    lines.push(`- Commit status: unavailable; ${truncateForDiscord(input.statusError, 180)}`);
+  }
+
+  return lines.filter(Boolean).join("\n");
+}
+
+function formatCheckRuns(checks: GitHubCheckRunsResponse) {
+  const checkRuns = checks.check_runs ?? [];
+  if (checkRuns.length === 0) return "- Checks: none reported yet.";
+  const counts = countBy(checkRuns.map(checkRunState));
+  const failing = checkRuns.filter((check) => ["failure", "timed_out", "cancelled", "action_required"].includes(checkRunState(check)));
+  const pending = checkRuns.filter((check) => ["queued", "in_progress", "waiting", "requested", "pending"].includes(checkRunState(check)));
+  const lines = [`- Checks: ${formatCounts(counts)}`];
+  if (failing.length > 0) {
+    lines.push("- Failing checks:");
+    lines.push(...failing.slice(0, 8).map((check) => `  - ${formatCheckRunLine(check)}`));
+  }
+  if (pending.length > 0) {
+    lines.push("- Pending checks:");
+    lines.push(...pending.slice(0, 5).map((check) => `  - ${formatCheckRunLine(check)}`));
+  }
+  return lines.join("\n");
+}
+
+function formatCombinedStatus(status: GitHubCombinedStatusResponse) {
+  const statuses = status.statuses ?? [];
+  if (statuses.length === 0) return `- Commit status: ${status.state ?? "none reported"}.`;
+  const failing = statuses.filter((entry) => entry.state && entry.state !== "success");
+  const lines = [`- Commit status: ${status.state ?? "unknown"} (${formatCounts(countBy(statuses.map((entry) => entry.state ?? "unknown")))})`];
+  if (failing.length > 0) {
+    lines.push("- Non-success commit statuses:");
+    lines.push(...failing.slice(0, 8).map((entry) => `  - ${entry.context ?? "status"} (${entry.state ?? "unknown"})${entry.target_url ? ` ${entry.target_url}` : ""}`));
+  }
+  return lines.join("\n");
+}
+
+function formatCheckRunLine(check: GitHubCheckRun) {
+  const state = checkRunState(check);
+  const summary = check.output?.title || check.output?.summary || "";
+  return truncateForDiscord(`${check.name ?? "check"} (${state})${check.html_url ? ` ${check.html_url}` : ""}${summary ? ` - ${summary}` : ""}`, 300);
+}
+
+function checkRunState(check: GitHubCheckRun) {
+  return check.conclusion || check.status || "unknown";
+}
+
+function countBy(values: string[]) {
+  const counts = new Map<string, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return counts;
+}
+
+function formatCounts(counts: Map<string, number>) {
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, count]) => `${name}=${count}`)
+    .join(", ");
+}
+
+function isGitHubCheckRunsResponse(value: unknown): value is GitHubCheckRunsResponse {
+  return Boolean(value && typeof value === "object" && "check_runs" in value);
+}
+
+function isGitHubCombinedStatusResponse(value: unknown): value is GitHubCombinedStatusResponse {
+  return Boolean(value && typeof value === "object" && "statuses" in value);
+}
+
+function errorMessageFromMaybeError(value: unknown) {
+  if (!value || typeof value !== "object" || !("error" in value)) return undefined;
+  const error = (value as { error?: unknown }).error;
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function listAgentTasks(ctx: ToolContext, input: { statuses?: string[]; limit?: number } = {}): Promise<string> {

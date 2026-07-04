@@ -81,6 +81,17 @@ async function main() {
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
 
+  if (config.discord.guildId && config.discord.excludedChannelIds.length > 0) {
+    for (const channelId of config.discord.excludedChannelIds) {
+      await repo.enforceChannelExclusion({ channelId, guildId: config.discord.guildId });
+      await repo.purgeChannelData(channelId);
+    }
+    logger.info(
+      { excludedChannelIds: config.discord.excludedChannelIds },
+      "Enforced excluded channel blocklist (marked excluded and purged indexed data)"
+    );
+  }
+
   const client =
     startsDiscordClient
       ? new Client({

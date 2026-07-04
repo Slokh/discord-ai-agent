@@ -1107,6 +1107,59 @@ export class DiscordAiAgentRepository {
     ]);
   }
 
+  async enforceChannelExclusion(input: { channelId: string; guildId: string }) {
+    await this.pool.query(
+      `
+        INSERT INTO guilds(id, name, raw, updated_at)
+        VALUES ($1, $1, '{}', now())
+        ON CONFLICT(id) DO NOTHING
+      `,
+      [input.guildId]
+    );
+    await this.pool.query(
+      `
+        INSERT INTO channels(id, guild_id, parent_id, name, type, is_thread, is_excluded, raw, updated_at)
+        VALUES ($1, $2, NULL, NULL, 0, false, true, '{}', now())
+        ON CONFLICT(id) DO UPDATE SET
+          is_excluded = true,
+          updated_at = now()
+      `,
+      [input.channelId, input.guildId]
+    );
+  }
+
+  async purgeChannelData(channelId: string) {
+    await this.pool.query(
+      `
+        DELETE FROM attachments
+        WHERE message_id IN (SELECT id FROM messages WHERE channel_id = $1)
+      `,
+      [channelId]
+    );
+    await this.pool.query(
+      `
+        DELETE FROM message_embeddings
+        WHERE message_id IN (SELECT id FROM messages WHERE channel_id = $1)
+      `,
+      [channelId]
+    );
+    await this.pool.query("DELETE FROM messages WHERE channel_id = $1", [channelId]);
+    await this.pool.query("DELETE FROM crawl_cursors WHERE channel_id = $1", [channelId]);
+  }
+
+  async isChannelExcluded(channelId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `
+        SELECT (c.is_excluded OR coalesce(parent.is_excluded, false)) AS excluded
+        FROM channels c
+        LEFT JOIN channels parent ON parent.id = c.parent_id
+        WHERE c.id = $1
+      `,
+      [channelId]
+    );
+    return Boolean(result.rows[0]?.excluded);
+  }
+
   async updateCrawlCursor(input: {
     guildId: string;
     channelId: string;

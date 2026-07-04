@@ -10,6 +10,8 @@ export async function persistDiscordMessage(repo: DiscordAiAgentRepository, mess
   const guild = message.guild;
   if (!guild) return;
 
+  if (await repo.isChannelExcluded(message.channel.id)) return;
+
   await repo.upsertGuild({
     id: guild.id,
     name: guild.name,

@@ -43,6 +43,7 @@ const defaults = {
   discordGuildId: "",
   discordBotName: "ai",
   discordLoadingReaction: "<a:loading:1521299407214084337>",
+  discordExcludedChannelIds: ["1172353113471074314"],
   databaseUrl: defaultDatabaseUrl(),
   embeddingDimensions: 1536,
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
@@ -109,6 +110,7 @@ const envSchema = z.object({
   DISCORD_GUILD_ID: z.string().default(defaults.discordGuildId),
   BOT_NAME: z.string().default(defaults.discordBotName),
   DISCORD_LOADING_REACTION: z.string().trim().min(1).default(defaults.discordLoadingReaction),
+  DISCORD_EXCLUDED_CHANNEL_IDS: z.string().optional(),
 
   DATABASE_URL: z.string().default(defaults.databaseUrl),
   EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(defaults.embeddingDimensions),
@@ -199,7 +201,8 @@ export function loadConfig() {
       clientId: parsed.data.DISCORD_CLIENT_ID,
       guildId: parsed.data.DISCORD_GUILD_ID,
       botName: parsed.data.BOT_NAME,
-      loadingReaction: parsed.data.DISCORD_LOADING_REACTION
+      loadingReaction: parsed.data.DISCORD_LOADING_REACTION,
+      excludedChannelIds: resolveExcludedChannelIds(parsed.data.DISCORD_EXCLUDED_CHANNEL_IDS)
     },
     databaseUrl: parsed.data.DATABASE_URL,
     embeddingDimensions: parsed.data.EMBEDDING_DIMENSIONS,
@@ -333,4 +336,15 @@ function hasGitHubTaskCredential(config: AppConfig) {
     config.github.token ||
       (config.github.appId.trim() && config.github.appPrivateKey.trim() && config.github.appInstallationId.trim())
   );
+}
+
+function resolveExcludedChannelIds(envValue: string | undefined): string[] {
+  const ids = new Set<string>(defaults.discordExcludedChannelIds);
+  if (envValue) {
+    for (const part of envValue.split(",")) {
+      const trimmed = part.trim();
+      if (trimmed) ids.add(trimmed);
+    }
+  }
+  return [...ids];
 }

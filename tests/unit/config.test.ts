@@ -110,6 +110,18 @@ describe("config", () => {
     });
   });
 
+  it("always includes the default excluded channel blocklist and merges env additions", () => {
+    withEnvUnset(["DISCORD_EXCLUDED_CHANNEL_IDS"], () => {
+      const base = loadConfig().discord.excludedChannelIds;
+      expect(base).toContain("1172353113471074314");
+    });
+    withEnv({ DISCORD_EXCLUDED_CHANNEL_IDS: "111, 222 ,,333" }, () => {
+      const ids = loadConfig().discord.excludedChannelIds;
+      expect(ids).toEqual(expect.arrayContaining(["1172353113471074314", "111", "222", "333"]));
+      expect(new Set(ids).size).toBe(ids.length);
+    });
+  });
+
   it("allows selecting the warm-sandbox agent runtime backend", () => {
     withEnv(
       {

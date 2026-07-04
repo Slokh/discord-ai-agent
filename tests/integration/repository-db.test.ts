@@ -814,6 +814,54 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(embeddings.rows[0]?.count).toBe(0);
   });
 
+  it("purges and excludes a channel from indexing, search, and stats", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const messageId = `message-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "trivia-sucks", type: 0 });
+    await repo.upsertUser({ id: userId, username: "user" });
+    await repo.upsertMessage({
+      id: messageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "trivia content",
+      normalizedContent: "trivia content",
+      createdAt: new Date(),
+      attachments: [{ id: `attachment-${randomUUID()}`, url: "https://cdn.discordapp.com/trivia.png", filename: "trivia.png" }]
+    });
+    await repo.storeMessageEmbedding({
+      messageId,
+      embedding: Array.from({ length: 1536 }, () => 0.001),
+      model: "test"
+    });
+    await repo.ensureCrawlCursor({ guildId, channelId, status: "complete" });
+
+    await repo.enforceChannelExclusion({ channelId, guildId });
+    await repo.purgeChannelData(channelId);
+
+    const channelRow = await pool.query("SELECT is_excluded FROM channels WHERE id = $1", [channelId]);
+    expect(channelRow.rows[0]?.is_excluded).toBe(true);
+    expect(await repo.isChannelExcluded(channelId)).toBe(true);
+
+    const [messages, embeddings, attachments, cursors] = await Promise.all([
+      pool.query("SELECT count(*)::int AS count FROM messages WHERE channel_id = $1", [channelId]),
+      pool.query("SELECT count(*)::int AS count FROM message_embeddings WHERE message_id = $1", [messageId]),
+      pool.query("SELECT count(*)::int AS count FROM attachments WHERE message_id = $1", [messageId]),
+      pool.query("SELECT count(*)::int AS count FROM crawl_cursors WHERE channel_id = $1", [channelId])
+    ]);
+    expect(messages.rows[0]?.count).toBe(0);
+    expect(embeddings.rows[0]?.count).toBe(0);
+    expect(attachments.rows[0]?.count).toBe(0);
+    expect(cursors.rows[0]?.count).toBe(0);
+
+    await expect(repo.getVisibleIndexedChannelIds(guildId, [channelId])).resolves.not.toContain(channelId);
+    await expect(repo.keywordSearch({ guildId, visibleChannelIds: [channelId], query: "trivia", limit: 10 })).resolves.toEqual([]);
+  });
+
   it("scrubs tool audit and skill change user content for privacy-deleted users", async () => {
     const userId = `user-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;

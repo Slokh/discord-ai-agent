@@ -156,11 +156,13 @@ export class DiscordCrawler {
       if (!channel) continue;
       await this.persistChannel(guild.id, channel);
 
+      if (await this.isChannelExcluded(channel.id)) continue;
       if (!this.canBotCrawl(botMember, channel)) continue;
       if (hasMessageFetch(channel)) pushUniqueCrawlChannel(channels, seenChannelIds, channel);
 
       for (const thread of await this.fetchThreads(channel as CrawlableChannel)) {
         await this.persistThread(guild.id, thread);
+        if (await this.isChannelExcluded(thread.id)) continue;
         if (this.canBotCrawl(botMember, thread) && hasMessageFetch(thread)) {
           pushUniqueCrawlChannel(channels, seenChannelIds, thread);
         }
@@ -168,6 +170,15 @@ export class DiscordCrawler {
     }
 
     return channels;
+  }
+
+  private async isChannelExcluded(channelId: string): Promise<boolean> {
+    try {
+      return await this.input.repo.isChannelExcluded(channelId);
+    } catch (error) {
+      logger.warn({ err: error, channelId }, "Failed to check channel exclusion; treating as not excluded");
+      return false;
+    }
   }
 
   async crawlChannel(channel: CrawlableChannel) {

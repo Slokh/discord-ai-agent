@@ -181,6 +181,46 @@ describe("discoverCrawlableChannels", () => {
     expect(repo.upsertChannel).toHaveBeenCalledWith(expect.objectContaining({ id: "thread-1", parentId: "forum-1", isThread: true }));
     expect(repo.upsertChannel).toHaveBeenCalledWith(expect.objectContaining({ id: "hidden-1", isThread: false }));
   });
+
+  it("skips excluded channels and their threads", async () => {
+    const repo = fakeCrawlerRepo();
+    repo.isChannelExcluded.mockImplementation(async (channelId: string) => channelId === "excluded-1" || channelId === "excluded-thread");
+    const crawler = new DiscordCrawler({
+      client: { user: { id: "bot" } } as any,
+      repo: repo as any,
+      config: retryConfig() as any
+    });
+    const excludedThread = fakeChannel({
+      id: "excluded-thread",
+      parentId: "forum-1",
+      type: ChannelType.PublicThread,
+      readable: true,
+      hasMessages: true
+    });
+    const excluded = fakeChannel({
+      id: "excluded-1",
+      type: ChannelType.GuildText,
+      readable: true,
+      hasMessages: true,
+      activeThreads: [fakeChannel({ id: "excluded-child", parentId: "excluded-1", type: ChannelType.PublicThread, readable: true, hasMessages: true })]
+    });
+    const forum = fakeChannel({
+      id: "forum-1",
+      type: ChannelType.GuildForum,
+      readable: true,
+      hasMessages: false,
+      activeThreads: [excludedThread]
+    });
+    const text = fakeChannel({ id: "text-1", type: ChannelType.GuildText, readable: true, hasMessages: true });
+
+    const guild = fakeGuild([excluded, forum, text]);
+    const channels = await crawler.discoverCrawlableChannels(guild as any);
+
+    expect(channels.map((channel) => channel.id)).toEqual(["text-1"]);
+    expect(repo.isChannelExcluded).toHaveBeenCalledWith("excluded-1");
+    expect(repo.isChannelExcluded).toHaveBeenCalledWith("excluded-thread");
+    expect(repo.isChannelExcluded).toHaveBeenCalledWith("text-1");
+  });
 });
 
 describe("crawlChannel", () => {
@@ -191,7 +231,8 @@ describe("crawlChannel", () => {
       upsertGuild: vi.fn(async () => undefined),
       upsertChannel: vi.fn(async () => undefined),
       upsertMessage: vi.fn(async () => undefined),
-      isUserPrivacyDeleted: vi.fn(async () => false)
+      isUserPrivacyDeleted: vi.fn(async () => false),
+      isChannelExcluded: vi.fn(async (_channelId: string) => false)
     };
     const enqueueMessageEmbedding = vi.fn(async () => "job-1");
     const message = fakeMessage({ id: "message-1", content: "hello from history", createdTimestamp: 2_000 });
@@ -225,7 +266,8 @@ describe("crawlChannel", () => {
 
 function fakeCrawlerRepo() {
   return {
-    upsertChannel: vi.fn(async () => undefined)
+    upsertChannel: vi.fn(async () => undefined),
+    isChannelExcluded: vi.fn(async (_channelId: string) => false)
   };
 }
 

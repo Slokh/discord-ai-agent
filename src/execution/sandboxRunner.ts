@@ -365,7 +365,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       await progress(env, "commit_skipped", "Generated changes were already committed by the coding harness; pushing existing commits.", gitChangeStateMetadata(preCommitChangeState));
     }
     await timedPhase(env, timings, "push", "Pushing the generated branch to GitHub.", async () => {
-      await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
+      await runCommand("git", ["push", "origin", `HEAD:${branchPushRef(branchName)}`], { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
     }, { branchName });
 
     const draft = false;
@@ -891,6 +891,10 @@ async function pathExists(filePath: string) {
   } catch {
     return false;
   }
+}
+
+export function branchPushRef(branchName: string): string {
+  return `refs/heads/${branchName}`;
 }
 
 async function gitStatusPorcelain(checkoutDir: string) {

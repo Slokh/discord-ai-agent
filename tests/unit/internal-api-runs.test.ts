@@ -452,6 +452,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     getProcessRunArtifacts: async () => [artifact],
     getProcessRunArtifact: async (input: { artifactId: string }) => (input.artifactId === "artifact-1" ? artifactContent : undefined),
     getTraceEventsForTrace: async () => [],
+    getAgentRuntimeEventsForTrace: async () => [],
     getToolAuditLogsForTrace: async () => []
   } as unknown as DiscordAiAgentRepository;
 }

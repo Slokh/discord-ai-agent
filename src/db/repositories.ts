@@ -407,6 +407,20 @@ export type TaskEvent = {
   createdAt: Date;
 };
 
+export type AgentRuntimeEvent = {
+  id: number;
+  sessionId: string;
+  executionId: string | null;
+  traceId: string | null;
+  kind: string;
+  level: TraceEventLevel;
+  eventName: string;
+  summary: string | null;
+  metadata: Record<string, unknown>;
+  durationMs: number | null;
+  createdAt: Date;
+};
+
 export type SandboxRunRecord = {
   sandboxRunId: string;
   taskId: string;
@@ -4458,6 +4472,40 @@ export class DiscordAiAgentRepository {
       .slice(0, Math.max(1, Math.min(100, Math.trunc(input.limit))));
   }
 
+  async getAgentRuntimeEventsForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeEvent[]> {
+    const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 200)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          ce.id,
+          ce.session_id,
+          ce.execution_id,
+          coalesce(ce.trace_id, cex.trace_id, cs.trace_id) AS trace_id,
+          ce.kind,
+          ce.level,
+          ce.event_name,
+          ce.summary,
+          ce.metadata,
+          ce.duration_ms,
+          ce.created_at
+        FROM codegen_events ce
+        JOIN codegen_sessions cs ON cs.session_id = ce.session_id
+        LEFT JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+        WHERE (ce.trace_id = $1 OR cex.trace_id = $1 OR cs.trace_id = $1)
+          AND (
+            ce.metadata->>'runtime' = 'agent'
+            OR cex.metadata->>'runtime' = 'agent'
+            OR cs.metadata->>'runtime' = 'agent'
+          )
+          AND ce.event_name NOT LIKE 'agent.task.%'
+        ORDER BY ce.created_at ASC, ce.id ASC
+        LIMIT $2
+      `,
+      [input.traceId, limit]
+    );
+    return result.rows.map(rowToAgentRuntimeEvent);
+  }
+
   async getTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
     const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
     const result = await this.pool.query(
@@ -4994,6 +5042,22 @@ function rowToToolAuditLog(row: any): ToolAuditLog {
     error: row.error == null ? null : String(row.error),
     model: row.model == null ? null : String(row.model),
     estimatedCostUsd: row.estimated_cost_usd == null ? null : Number(row.estimated_cost_usd),
+    createdAt: new Date(row.created_at)
+  };
+}
+
+function rowToAgentRuntimeEvent(row: any): AgentRuntimeEvent {
+  return {
+    id: Number(row.id),
+    sessionId: String(row.session_id),
+    executionId: row.execution_id == null ? null : String(row.execution_id),
+    traceId: row.trace_id == null ? null : String(row.trace_id),
+    kind: String(row.kind ?? "status"),
+    level: String(row.level ?? "info") as TraceEventLevel,
+    eventName: String(row.event_name),
+    summary: row.summary == null ? null : String(row.summary),
+    metadata: typeof row.metadata === "object" && row.metadata != null ? row.metadata : {},
+    durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
     createdAt: new Date(row.created_at)
   };
 }

@@ -53,7 +53,7 @@ export type RunSpan = {
 
 export type RunEvent = {
   id: string;
-  source: "process" | "trace" | "task" | "tool" | "command";
+  source: "process" | "trace" | "runtime" | "task" | "tool" | "command";
   level: EventLevel;
   name: string;
   summary: string | null;

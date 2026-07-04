@@ -1,4 +1,5 @@
 import type {
+  AgentRuntimeEvent,
   AgentTaskRecord,
   DiscordAiAgentRepository,
   ProcessRunArtifactRecord,
@@ -50,7 +51,7 @@ export type RunSpan = {
 
 export type RunEvent = {
   id: string;
-  source: "process" | "trace" | "task" | "tool" | "command";
+  source: "process" | "trace" | "runtime" | "task" | "tool" | "command";
   level: "debug" | "info" | "warn" | "error";
   name: string;
   summary: string | null;
@@ -156,6 +157,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     commands,
     sandboxRuns,
     traceEvents,
+    runtimeEvents,
     toolLogs,
     relatedProcessRuns,
     parentProcessRun,
@@ -169,6 +171,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     task ? repo.getSandboxCommandEventsForTask({ taskId: task.taskId, limit: 100 }) : Promise.resolve([]),
     task ? repo.getSandboxRunsForTask(task.taskId) : Promise.resolve([]),
     traceId ? repo.getTraceEventsForTrace({ traceId, limit: 500 }) : Promise.resolve([]),
+    traceId ? repo.getAgentRuntimeEventsForTrace({ traceId, limit: 500 }) : Promise.resolve([]),
     traceId ? repo.getToolAuditLogsForTrace({ traceId, limit: 200 }) : Promise.resolve([]),
     traceId ? repo.listProcessRunsForTrace({ traceId, limit: 20 }) : Promise.resolve([]),
     originAgentExecutionId ? repo.findProcessRunByAgentExecutionId(originAgentExecutionId) : Promise.resolve(undefined),
@@ -186,6 +189,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
   const events = sortEvents([
     ...processEvents.map(eventFromProcess),
     ...traceEvents.map(eventFromTrace),
+    ...runtimeEvents.map(eventFromRuntime),
     ...taskEvents.map(eventFromTask),
     ...toolLogs.map(eventFromTool),
     ...commands.map(eventFromCommand)
@@ -390,6 +394,24 @@ function eventFromTrace(event: TraceEvent): RunEvent {
     createdAt: event.createdAt,
     durationMs: event.durationMs,
     metadata: { requestId: event.requestId, messageId: event.messageId, ...event.metadata }
+  };
+}
+
+function eventFromRuntime(event: AgentRuntimeEvent): RunEvent {
+  return {
+    id: `runtime-${event.id}`,
+    source: "runtime",
+    level: event.level,
+    name: event.eventName,
+    summary: event.summary,
+    createdAt: event.createdAt,
+    durationMs: event.durationMs,
+    metadata: {
+      sessionId: event.sessionId,
+      executionId: event.executionId,
+      runtimeKind: event.kind,
+      ...event.metadata
+    }
   };
 }
 

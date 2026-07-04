@@ -9,13 +9,13 @@ import {
 } from "../../src/discord/regenerateReaction.js";
 
 describe("isRegenerateReplyReaction", () => {
-  it("matches the unicode magnifying glass emoji", () => {
-    expect(isRegenerateReplyReaction({ id: null, name: "🔎" })).toBe(true);
+  it("matches the unicode counterclockwise arrows emoji", () => {
+    expect(isRegenerateReplyReaction({ id: null, name: "🔄" })).toBe(true);
     expect(isRegenerateReplyReaction({ id: null, name: REGENERATE_REPLY_REACTION_EMOJI })).toBe(true);
   });
 
-  it("rejects custom guild emojis that look like a magnifying glass", () => {
-    expect(isRegenerateReplyReaction({ id: "123456789", name: "magnifying_glass" })).toBe(false);
+  it("rejects custom guild emojis that look like counterclockwise arrows", () => {
+    expect(isRegenerateReplyReaction({ id: "123456789", name: "counterclockwise_arrows" })).toBe(false);
   });
 
   it("rejects other unicode emojis", () => {

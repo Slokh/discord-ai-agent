@@ -1,15 +1,15 @@
 import { PermissionsBitField } from "discord.js";
 
 /**
- * Unicode "magnifying glass" emoji used to request regeneration of a bot reply.
- * Discord delivers this as the emoji name "🔎" with no custom emoji id.
+ * Unicode "counterclockwise arrows" emoji used to request regeneration of a bot reply.
+ * Discord delivers this as the emoji name "🔄" with no custom emoji id.
  */
-export const REGENERATE_REPLY_REACTION_EMOJI = "\uD83D\uDD0E";
+export const REGENERATE_REPLY_REACTION_EMOJI = "\uD83D\uDD04";
 
 /**
  * Tool names that indicate a bot reply was produced by a coding-agent task
  * rather than a normal conversational response. Replies that used any of these
- * tools must not be regenerated via the 🔎 reaction.
+ * tools must not be regenerated via the 🔄 reaction.
  */
 export const CODING_AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   "runCodingAgent",
@@ -27,9 +27,9 @@ type ReactionEmojiLike = {
 };
 
 /**
- * Returns true when the reaction emoji is the 🔎 magnifying glass used to
+ * Returns true when the reaction emoji is the 🔄 counterclockwise arrows used to
  * request reply regeneration. Custom guild emojis are ignored so a custom
- * "magnifying glass" lookalike cannot accidentally trigger regeneration.
+ * "counterclockwise arrows" lookalike cannot accidentally trigger regeneration.
  */
 export function isRegenerateReplyReaction(emoji: ReactionEmojiLike | null | undefined): boolean {
   if (!emoji) return false;

@@ -73,6 +73,8 @@ The same enqueue path still calls `src/jobs/agentTaskRuntimeMirror.ts` as a fall
 
 Discord task progress rendering, codegen run snapshots, trace log inspection, and the model-facing task-status tool now read those mirrored `agent.task.*` runtime events first and fall back to legacy `task_events` only when a runtime mirror is not available. That makes the user-facing delivery and debugging paths follow the replayable session event stream without requiring the sandbox runner callback protocol to be removed in the same migration slice.
 
+The sandbox worker now records task start through the shared repository lifecycle method. That method updates the legacy task/process rows, marks every task-linked codegen execution running, and emits either `codegen.execution.started` or `agent.task.started` depending on whether the execution belongs to the generic runtime. Queue code still attaches lease and sandbox-run metadata, but it no longer hand-writes a separate runtime-start event.
+
 ## Harness Profile
 
 Code-update tasks use their own coding harness model via `OPENROUTER_CODEGEN_MODEL`, falling back to `OPENROUTER_CHAT_MODEL` when unset. This lets normal Discord chat stay on a cheap conversational model while code updates can move independently to a model better suited to repository edits.

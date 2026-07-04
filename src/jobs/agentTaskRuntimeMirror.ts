@@ -1,5 +1,5 @@
 import type { AppConfig } from "../config/env.js";
-import { agentRuntimeSessionId, type AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { AgentTaskJob } from "../execution/types.js";
 
 export function agentRuntimeThreadKeyForTask(job: Pick<AgentTaskJob, "taskId" | "threadKey">) {
@@ -107,46 +107,6 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       backend: input.backendName,
       codegenSessionId: input.codegenSessionId ?? null,
       codegenExecutionId: input.codegenExecutionId ?? null
-    }
-  });
-}
-
-export async function markAgentTaskRuntimeStarted(input: {
-  agentRuntimeRepo?: AgentRuntimeRepository;
-  job: AgentTaskJob;
-  backendName: string;
-  pgBossJobId: string;
-  sandboxId?: string | null;
-  leaseOwner?: string | null;
-  workerStartedAt: Date;
-}) {
-  if (!input.agentRuntimeRepo) return;
-  const sessionId = agentRuntimeSessionId(agentRuntimeThreadKeyForTask(input.job));
-  const executionId = agentRuntimeExecutionIdForTask(input.job);
-  await input.agentRuntimeRepo.updateExecution({
-    executionId,
-    status: "running",
-    sandboxId: input.sandboxId ?? null,
-    metadata: {
-      backend: input.backendName,
-      workerStartedAt: input.workerStartedAt.toISOString(),
-      pgbossJobId: input.pgBossJobId,
-      leaseOwner: input.leaseOwner ?? null
-    }
-  });
-  await input.agentRuntimeRepo.recordEvent({
-    sessionId,
-    executionId,
-    traceId: input.job.traceId,
-    kind: "status",
-    eventName: "agent.task.started",
-    summary: "Starting code-update task execution.",
-    metadata: {
-      taskId: input.job.taskId,
-      backend: input.backendName,
-      pgbossJobId: input.pgBossJobId,
-      sandboxId: input.sandboxId ?? null,
-      leaseOwner: input.leaseOwner ?? null
     }
   });
 }

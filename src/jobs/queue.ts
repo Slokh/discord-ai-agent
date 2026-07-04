@@ -17,7 +17,6 @@ import {
   type CodegenLeaseScheduler
 } from "./codegenLeaseScheduler.js";
 import {
-  markAgentTaskRuntimeStarted,
   mirrorAgentTaskQueuedToAgentRuntime,
   updateAgentTaskRuntimeSandboxRun
 } from "./agentTaskRuntimeMirror.js";
@@ -541,7 +540,9 @@ export async function startJobs(input: {
               taskId: job.data.taskId,
               backend: backendName,
               step: "sandbox_start",
-              statusMessage: startingAgentTaskStatusMessage(backendName)
+              statusMessage: startingAgentTaskStatusMessage(backendName),
+              pgBossJobId: job.id,
+              workerStartedAt: new Date(startedAt)
             });
             const acquiredLease = await acquireLeaseForAgentTask({
               scheduler: codegenLeaseScheduler,
@@ -556,36 +557,10 @@ export async function startJobs(input: {
             await input.codegenRepo
               ?.updateExecution({
                 executionId,
-                status: "running",
                 sandboxId: acquiredLease?.sandboxId ?? null,
-                metadata: {
-                  backend: backendName,
-                  workerStartedAt: new Date(startedAt).toISOString(),
-                  pgbossJobId: job.id,
-                  leaseOwner: acquiredLease?.leaseOwner ?? null
-                }
+                metadata: { leaseOwner: acquiredLease?.leaseOwner ?? null }
               })
-              .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to mark codegen execution running"));
-            await input.codegenRepo
-              ?.recordEvent({
-                sessionId,
-                executionId,
-                traceId: job.data.traceId,
-                kind: "status",
-                eventName: "codegen.execution.started",
-                summary: "Starting codegen execution.",
-                metadata: { backend: backendName, pgbossJobId: job.id, sandboxId: acquiredLease?.sandboxId ?? null }
-              })
-              .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to record codegen execution start"));
-            await markAgentTaskRuntimeStarted({
-              agentRuntimeRepo,
-              job: job.data,
-              backendName,
-              pgBossJobId: job.id,
-              sandboxId: acquiredLease?.sandboxId ?? null,
-              leaseOwner: acquiredLease?.leaseOwner ?? null,
-              workerStartedAt: new Date(startedAt)
-            }).catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to mark agent runtime task execution running"));
+              .catch((error) => logger.warn({ err: error, taskId: job.data.taskId }, "Failed to attach codegen execution lease"));
             try {
               const result = await input.agentTask!.start(job.data, {
                 sandboxId: acquiredLease?.sandboxId ?? null,

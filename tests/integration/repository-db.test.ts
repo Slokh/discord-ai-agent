@@ -286,7 +286,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       request: "change a file",
       requestedBy: "tester"
     });
-    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running" });
+    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "queued" });
     await codegenRepo.upsertSession({
       sessionId: agentSessionId,
       traceId,
@@ -304,11 +304,19 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       sessionId: agentSessionId,
       taskId,
       traceId,
-      status: "running",
+      status: "queued",
       harness: "runCodingAgent",
       metadata: { runtime: "agent" }
     });
 
+    await repo.markAgentTaskRunning({
+      taskId,
+      backend: "kubernetes-sandbox",
+      step: "sandbox_start",
+      statusMessage: "Starting Kubernetes sandbox.",
+      pgBossJobId: "pgboss-job-1",
+      workerStartedAt: new Date("2026-07-01T12:00:00.000Z")
+    });
     await repo.markAgentTaskProgress({
       taskId,
       backend: "kubernetes-sandbox",
@@ -323,25 +331,44 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
     expect(progress.rows).toEqual([
       expect.objectContaining({
+        kind: "status",
+        event_name: "codegen.execution.started",
+        summary: "Starting Kubernetes sandbox."
+      }),
+      expect.objectContaining({
         kind: "command",
         event_name: "codegen.progress",
         summary: "Running tests."
       })
     ]);
-    expect(progress.rows[0].metadata).toEqual(expect.objectContaining({ step: "verify", command: "npm test" }));
+    expect(progress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" }));
+    expect(progress.rows[1].metadata).toEqual(expect.objectContaining({ step: "verify", command: "npm test" }));
     const agentProgress = await pool.query(
       "SELECT kind, event_name, summary, metadata FROM codegen_events WHERE execution_id = $1 ORDER BY sequence",
       [agentExecutionId]
     );
     expect(agentProgress.rows).toEqual([
       expect.objectContaining({
+        kind: "status",
+        event_name: "agent.task.started",
+        summary: "Starting Kubernetes sandbox."
+      }),
+      expect.objectContaining({
         kind: "command",
         event_name: "agent.task.progress",
         summary: "Running tests."
       })
     ]);
-    expect(agentProgress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "verify", command: "npm test" }));
+    expect(agentProgress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" }));
+    expect(agentProgress.rows[1].metadata).toEqual(expect.objectContaining({ taskId, step: "verify", command: "npm test" }));
     await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        taskId,
+        traceId,
+        eventName: "agent.task.started",
+        summary: "Starting Kubernetes sandbox.",
+        metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+      }),
       expect.objectContaining({
         taskId,
         traceId,
@@ -352,25 +379,50 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ]);
     await expect(
       repo.getAgentRuntimeTaskEvents({ guildId, visibleChannelIds: [channelId], traceId, limit: 10 })
-    ).resolves.toEqual([
-      expect.objectContaining({
-        taskId,
-        traceId,
-        eventName: "agent.task.progress",
-        summary: "Running tests.",
-        metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
-      })
-    ]);
-    await expect(repo.getTaskProgressEvents({ guildId, visibleChannelIds: [channelId], traceId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({
-        taskId,
-        traceId,
-        eventName: "agent.task.progress",
-        summary: "Running tests.",
-        metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
-      })
-    ]);
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.started",
+          summary: "Starting Kubernetes sandbox.",
+          metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+        }),
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.progress",
+          summary: "Running tests.",
+          metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+        })
+      ])
+    );
+    await expect(repo.getTaskProgressEvents({ guildId, visibleChannelIds: [channelId], traceId, limit: 10 })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.started",
+          summary: "Starting Kubernetes sandbox.",
+          metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+        }),
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.progress",
+          summary: "Running tests.",
+          metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+        })
+      ])
+    );
     await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        taskId,
+        traceId,
+        eventName: "agent.task.started",
+        summary: "Starting Kubernetes sandbox.",
+        metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+      }),
       expect.objectContaining({
         taskId,
         traceId,

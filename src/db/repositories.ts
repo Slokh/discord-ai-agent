@@ -2469,7 +2469,15 @@ export class DiscordAiAgentRepository {
     return result.rowCount ?? 0;
   }
 
-  async markAgentTaskRunning(input: { taskId: string; backend?: string | null; step?: string | null; statusMessage?: string | null }) {
+  async markAgentTaskRunning(input: {
+    taskId: string;
+    backend?: string | null;
+    step?: string | null;
+    statusMessage?: string | null;
+    pgBossJobId?: string | null;
+    workerStartedAt?: Date | null;
+    metadata?: Record<string, unknown>;
+  }) {
     const result = await this.pool.query(
       `
         UPDATE agent_tasks
@@ -2487,11 +2495,70 @@ export class DiscordAiAgentRepository {
       [input.taskId, input.backend ?? null, input.step ?? null, input.statusMessage ?? null]
     );
     if ((result.rowCount ?? 0) === 0) return;
+    const executionMetadata = {
+      backend: input.backend ?? undefined,
+      currentStep: input.step ?? undefined,
+      pgbossJobId: input.pgBossJobId ?? undefined,
+      workerStartedAt: input.workerStartedAt?.toISOString(),
+      ...(input.metadata ?? {})
+    };
+    await this.pool
+      .query(
+        `
+          WITH updated_execution AS (
+            UPDATE codegen_executions
+            SET status = 'running',
+                metadata = metadata || $2::jsonb,
+                started_at = coalesce(started_at, now()),
+                updated_at = now()
+            WHERE task_id = $1
+              AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+            RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
+          ),
+          session_update AS (
+            UPDATE codegen_sessions
+            SET status = 'running',
+                started_at = coalesce(started_at, now()),
+                updated_at = now()
+            WHERE session_id IN (SELECT session_id FROM updated_execution)
+          ),
+          next_sequence AS (
+            SELECT
+              updated_execution.session_id,
+              updated_execution.execution_id,
+              updated_execution.trace_id,
+              updated_execution.is_agent_runtime,
+              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+            FROM updated_execution
+            LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+            GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
+          )
+          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          SELECT
+            session_id,
+            execution_id,
+            trace_id,
+            sequence,
+            'status',
+            'info',
+            CASE WHEN is_agent_runtime THEN 'agent.task.started' ELSE 'codegen.execution.started' END,
+            $3,
+            jsonb_build_object('taskId', $1, 'step', $4::text) || $2::jsonb
+          FROM next_sequence
+        `,
+        [
+          input.taskId,
+          JSON.stringify(removeUndefinedValues(executionMetadata)),
+          input.statusMessage ?? "Running agent task.",
+          input.step ?? "running"
+        ]
+      )
+      .catch(() => undefined);
     await this.updateProcessRun({
       runId: input.taskId,
       status: "running",
       summary: input.statusMessage ?? "Running agent task.",
-      metadata: { backend: input.backend ?? undefined, currentStep: input.step ?? undefined }
+      metadata: removeUndefinedValues(executionMetadata)
     }).catch(() => undefined);
   }
 
@@ -5488,6 +5555,10 @@ function chunkString(value: string, size: number) {
 function defaultArtifactExpiresAt(sizeBytes: number) {
   if (sizeBytes <= LARGE_ARTIFACT_BYTES) return null;
   return new Date(Date.now() + LARGE_ARTIFACT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+}
+
+function removeUndefinedValues(input: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
 
 function rowToServerOverlay(row: any): ServerOverlay {

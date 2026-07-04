@@ -1656,25 +1656,43 @@ function botRoleMentionPattern(roleId: string): RegExp {
   return new RegExp(`<@&${roleId}>`, "g");
 }
 
-async function resolveBotMentionContext(
+export async function resolveBotMentionContext(
   message: Message,
   botUserId: string
-): Promise<{ addressed: boolean; kind: "user" | "role" | null; botRoleIds: string[] }> {
+): Promise<{ addressed: boolean; kind: "user" | "role" | "reply" | null; botRoleIds: string[] }> {
   if (hasExplicitBotMention(message.content, botUserId)) {
     return { addressed: true, kind: "user", botRoleIds: [] };
   }
 
   const mentionedRoleIds = explicitRoleMentionIds(message.content);
-  if (mentionedRoleIds.length === 0) {
-    return { addressed: false, kind: null, botRoleIds: [] };
+  if (mentionedRoleIds.length > 0) {
+    const botRoleIds = await botManagedRoleIds(message.guild, botUserId);
+    if (mentionedRoleIds.some((roleId) => botRoleIds.includes(roleId))) {
+      return { addressed: true, kind: "role", botRoleIds };
+    }
+    return { addressed: false, kind: null, botRoleIds };
   }
 
-  const botRoleIds = await botManagedRoleIds(message.guild, botUserId);
-  return {
-    addressed: mentionedRoleIds.some((roleId) => botRoleIds.includes(roleId)),
-    kind: "role",
-    botRoleIds
-  };
+  if (await isReplyToBotMessage(message, botUserId)) {
+    return { addressed: true, kind: "reply", botRoleIds: [] };
+  }
+
+  return { addressed: false, kind: null, botRoleIds: [] };
+}
+
+async function isReplyToBotMessage(message: Message, botUserId: string): Promise<boolean> {
+  const reference = message.reference;
+  if (!reference?.messageId) return false;
+  try {
+    const parent = await message.fetchReference();
+    return parent.author?.id === botUserId;
+  } catch (error) {
+    logger.warn(
+      { err: error, referencedMessageId: reference.messageId, referencedChannelId: reference.channelId },
+      "Failed to fetch Discord reply reference for bot mention resolution"
+    );
+    return false;
+  }
 }
 
 async function botManagedRoleIds(guild: Guild | null, botUserId: string): Promise<string[]> {

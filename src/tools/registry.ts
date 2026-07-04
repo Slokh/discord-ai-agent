@@ -594,6 +594,21 @@ export const toolRegistry: ToolRegistryEntry[] = [
           type: "string",
           description:
             "Optional concise human PR title in plain English, 3-8 words, without prefixes like Agent Codegen. Example: Use loading reaction for pending replies."
+        },
+        targetBranch: {
+          type: "string",
+          description:
+            "Optional existing Git branch to update instead of creating a new branch. Set this when the user asks to fix, continue, or update an existing PR and the branch is known from context."
+        },
+        targetPullRequestNumber: {
+          type: "number",
+          description:
+            "Optional existing GitHub pull request number to update. Set this when the user references an existing PR, such as PR #120 or a GitHub pull request URL."
+        },
+        targetPullRequestUrl: {
+          type: "string",
+          description:
+            "Optional existing GitHub pull request URL to update. Set this when the user provides or replies to a PR link."
         }
       },
       required: ["request"],

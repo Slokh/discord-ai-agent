@@ -58,6 +58,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
   discordResponseChannelId?: string | null;
   discordResponseMessageId?: string | null;
   retriedFromTaskId?: string | null;
+  targetBranch?: string | null;
+  targetPullRequestNumber?: number | null;
+  targetPullRequestUrl?: string | null;
   parentExecutionId?: string | null;
   taskId?: string | null;
 }): Promise<AgentRuntimeCodeUpdateEnqueueResult> {
@@ -80,6 +83,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     discordResponseChannelId: input.discordResponseChannelId ?? undefined,
     discordResponseMessageId: input.discordResponseMessageId ?? undefined,
     retriedFromTaskId: input.retriedFromTaskId ?? undefined,
+    targetBranch: input.targetBranch ?? undefined,
+    targetPullRequestNumber: input.targetPullRequestNumber ?? undefined,
+    targetPullRequestUrl: input.targetPullRequestUrl ?? undefined,
     parentAgentSessionId: input.session.sessionId,
     parentAgentExecutionId: input.parentExecutionId ?? undefined,
     parentAgentThreadKey
@@ -115,7 +121,10 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
         taskId,
         title: input.title,
         request: input.request,
-        status: "queued"
+        status: "queued",
+        targetBranch: input.targetBranch ?? null,
+        targetPullRequestNumber: input.targetPullRequestNumber ?? null,
+        targetPullRequestUrl: input.targetPullRequestUrl ?? null
       }
     ],
     metadata: {
@@ -129,6 +138,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       parentAgentThreadKey,
       parentExecutionId: input.parentExecutionId ?? null,
       retriedFromTaskId: input.retriedFromTaskId ?? null,
+      targetBranch: input.targetBranch ?? null,
+      targetPullRequestNumber: input.targetPullRequestNumber ?? null,
+      targetPullRequestUrl: input.targetPullRequestUrl ?? null,
       ...selection
     }
   });
@@ -152,6 +164,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       parentExecutionId: input.parentExecutionId ?? null,
       requestedBy: input.requestedBy,
       retriedFromTaskId: input.retriedFromTaskId ?? null,
+      targetBranch: input.targetBranch ?? null,
+      targetPullRequestNumber: input.targetPullRequestNumber ?? null,
+      targetPullRequestUrl: input.targetPullRequestUrl ?? null,
       ...selection
     }
   });
@@ -171,6 +186,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       parentAgentExecutionId: input.parentExecutionId ?? null,
       parentAgentThreadKey,
       retriedFromTaskId: input.retriedFromTaskId ?? null,
+      targetBranch: input.targetBranch ?? null,
+      targetPullRequestNumber: input.targetPullRequestNumber ?? null,
+      targetPullRequestUrl: input.targetPullRequestUrl ?? null,
       ...selection
     }
   });
@@ -215,7 +233,10 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       codegenBackend: queueResult?.codegenBackend ?? selection.codegenBackend,
       codegenHarness: queueResult?.codegenHarness ?? selection.codegenHarness,
       codegenModel: queueResult?.codegenModel ?? selection.codegenModel,
-      codegenProvider: queueResult?.codegenProvider ?? selection.codegenProvider
+      codegenProvider: queueResult?.codegenProvider ?? selection.codegenProvider,
+      targetBranch: input.targetBranch ?? null,
+      targetPullRequestNumber: input.targetPullRequestNumber ?? null,
+      targetPullRequestUrl: input.targetPullRequestUrl ?? null
     }
   });
   await input.agentRuntime.recordEvent({
@@ -237,7 +258,10 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       codegenBackend: queueResult?.codegenBackend ?? selection.codegenBackend,
       codegenHarness: queueResult?.codegenHarness ?? selection.codegenHarness,
       codegenModel: queueResult?.codegenModel ?? selection.codegenModel,
-      codegenProvider: queueResult?.codegenProvider ?? selection.codegenProvider
+      codegenProvider: queueResult?.codegenProvider ?? selection.codegenProvider,
+      targetBranch: input.targetBranch ?? null,
+      targetPullRequestNumber: input.targetPullRequestNumber ?? null,
+      targetPullRequestUrl: input.targetPullRequestUrl ?? null
     }
   });
   return { taskId, jobId };

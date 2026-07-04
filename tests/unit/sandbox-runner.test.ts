@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   branchPushRef,
   buildCodegenContextPack,
+  codeUpdateTargetFromInputs,
   codegenNpmInstallEnv,
   codegenNpmScriptEnv,
   codexConfigToml,
@@ -712,6 +713,38 @@ describe("sandboxRunner", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("uses structured target PR details instead of generating a new branch", () => {
+    expect(
+      codeUpdateTargetFromInputs({
+        generatedBranchName: "ai/generated-fix-1234",
+        targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+        targetPullRequestNumber: 120,
+        targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+      })
+    ).toEqual({
+      generatedBranchName: "ai/generated-fix-1234",
+      branchName: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+      pullRequestNumber: 120,
+      pullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120",
+      updateExistingBranch: true
+    });
+  });
+
+  it("extracts a PR number from a structured target pull request URL", () => {
+    expect(
+      codeUpdateTargetFromInputs({
+        generatedBranchName: "ai/generated-fix-1234",
+        targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+      })
+    ).toEqual({
+      generatedBranchName: "ai/generated-fix-1234",
+      branchName: "ai/generated-fix-1234",
+      pullRequestNumber: 120,
+      pullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120",
+      updateExistingBranch: true
+    });
   });
 
   it("treats harness-created commits as generated code changes even when the working tree is clean", async () => {

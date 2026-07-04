@@ -651,7 +651,12 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
         await createAgentUpdateFromRequest(
           ctx,
           stringArgument(route.arguments, "request") ?? originalText,
-          stringArgument(route.arguments, "title")
+          stringArgument(route.arguments, "title"),
+          {
+            targetBranch: stringArgument(route.arguments, "targetBranch"),
+            targetPullRequestNumber: numberArgument(route.arguments, "targetPullRequestNumber"),
+            targetPullRequestUrl: stringArgument(route.arguments, "targetPullRequestUrl")
+          }
         ),
         ctx.config.maxReplyChars
       )

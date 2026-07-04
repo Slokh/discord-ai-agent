@@ -1906,6 +1906,65 @@ describe("agent router", () => {
     );
   });
 
+  it("passes model-selected existing PR targets into code-update jobs", async () => {
+    const enqueueAgentTask = vi.fn(async () => ({
+      jobId: "job-1",
+      taskId: "task-existing-pr"
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, github: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        chat: vi.fn().mockResolvedValueOnce({
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "runCodingAgent",
+              argumentsText: JSON.stringify({
+                request: "Fix the failing CI check on PR #120 and push to the existing branch.",
+                title: "Fix CI on PR #120",
+                targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+                targetPullRequestNumber: 120,
+                targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+              })
+            }
+          ]
+        })
+      },
+      github: {},
+      jobs: {
+        enqueueAgentTask
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      requestId: "prompt-message-1",
+      statusChannelId: "c",
+      statusMessageId: "reply-1",
+      updateStatus: vi.fn(async () => undefined)
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "fix CI in that PR");
+
+    expect(enqueueAgentTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: "Fix the failing CI check on PR #120 and push to the existing branch.",
+        title: "Fix CI on PR #120",
+        targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+        targetPullRequestNumber: 120,
+        targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+      })
+    );
+  });
+
   it("continues after linked Discord evidence when a code-update request still needs a PR tool", async () => {
     const enqueueAgentTask = vi.fn(async () => ({
       jobId: "job-1",

@@ -1583,6 +1583,7 @@ describe("agent router", () => {
       recordEvent: vi.fn(async () => undefined),
       updateExecution: vi.fn(async () => undefined)
     };
+    const upsertAgentTaskQueued = vi.fn(async () => undefined);
     const ctx = {
       config: {
         maxReplyChars: 1800,
@@ -1591,6 +1592,7 @@ describe("agent router", () => {
         execution: { codegenBackend: "local-process", codegenHarness: "opencode" }
       },
       repo: {
+        upsertAgentTaskQueued,
         auditTool: vi.fn(async () => undefined)
       },
       agentRuntime,
@@ -1664,6 +1666,20 @@ describe("agent router", () => {
         taskId,
         harness: "runCodingAgent"
       })
+    );
+    expect(upsertAgentTaskQueued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId,
+        taskType: "code_update",
+        title: "Add calendar support",
+        request: "add a calendar integration",
+        parentAgentSessionId: "agent-session-channel",
+        parentAgentExecutionId: "agent-execution-prompt",
+        parentAgentThreadKey: "discord:g:c"
+      })
+    );
+    expect(upsertAgentTaskQueued.mock.invocationCallOrder[0]).toBeLessThan(
+      agentRuntime.createExecution.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
     );
     expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({

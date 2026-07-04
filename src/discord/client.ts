@@ -1702,7 +1702,7 @@ async function handleRegenerateReplyReaction(
 
   await recordTraceEvent(input.repo, {
     eventName: "discord.reply.regenerate.requested",
-    summary: "Regenerate reply requested via magnifying-glass reaction",
+    summary: "Regenerate reply requested via counterclockwise-arrows reaction",
     metadata: {
       replyMessageId: message.id,
       runId: run.runId,

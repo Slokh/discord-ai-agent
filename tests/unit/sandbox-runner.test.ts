@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
+  branchPushRef,
   buildCodegenContextPack,
   codegenNpmInstallEnv,
   codegenNpmScriptEnv,
@@ -694,7 +695,7 @@ describe("sandboxRunner", () => {
 
       await git(tempDir, ["clone", "--mirror", remoteDir, mirrorDir]);
       await git(tempDir, ["--git-dir", mirrorDir, "worktree", "add", "--detach", checkoutDir, "refs/heads/main"]);
-      await git(checkoutDir, ["checkout", "-b", "generated-update"]);
+      await git(checkoutDir, ["checkout", "-b", "ai/generated-update"]);
 
       const mirrorConfig = await git(checkoutDir, ["config", "--get", "remote.origin.mirror"]);
       expect(mirrorConfig.stdout.trim()).toBe("true");
@@ -705,9 +706,9 @@ describe("sandboxRunner", () => {
       await repairWorktreeRemoteForBranchPush({ checkoutDir, repoUrl: remoteDir });
 
       await expect(git(checkoutDir, ["config", "--get", "remote.origin.mirror"])).rejects.toBeTruthy();
-      await git(checkoutDir, ["push", "origin", "HEAD:test-after-repair"]);
-      const pushedRef = await git(tempDir, ["--git-dir", remoteDir, "show-ref", "--verify", "refs/heads/test-after-repair"]);
-      expect(pushedRef.stdout).toContain("refs/heads/test-after-repair");
+      await git(checkoutDir, ["push", "origin", `HEAD:${branchPushRef("ai/test-after-repair")}`]);
+      const pushedRef = await git(tempDir, ["--git-dir", remoteDir, "show-ref", "--verify", "refs/heads/ai/test-after-repair"]);
+      expect(pushedRef.stdout).toContain("refs/heads/ai/test-after-repair");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

@@ -25,6 +25,7 @@ import {
   openCodeModelId,
   openCodeRunArgs,
   openCodeServeArgs,
+  readGitChangeState,
   renderCodegenFailureDiagnosis,
   renderCodegenContextPack,
   repairWorktreeRemoteForBranchPush
@@ -117,6 +118,13 @@ describe("sandboxRunner", () => {
       $schema: "https://opencode.ai/config.json",
       model: "openrouter/z-ai/glm-5.2"
     });
+  });
+
+  it("installs GitHub CLI in the sandbox runtime image", async () => {
+    const dockerfile = await fs.readFile(path.join(process.cwd(), "Dockerfile"), "utf8");
+
+    expect(dockerfile).toContain("https://cli.github.com/packages");
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends gh");
   });
 
   it("times out a hung OpenCode health probe", async () => {
@@ -700,6 +708,51 @@ describe("sandboxRunner", () => {
       await git(checkoutDir, ["push", "origin", "HEAD:test-after-repair"]);
       const pushedRef = await git(tempDir, ["--git-dir", remoteDir, "show-ref", "--verify", "refs/heads/test-after-repair"]);
       expect(pushedRef.stdout).toContain("refs/heads/test-after-repair");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats harness-created commits as generated code changes even when the working tree is clean", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-committed-change-"));
+    try {
+      await git(tempDir, ["init", "--initial-branch=main"]);
+      await fs.writeFile(path.join(tempDir, "README.md"), "seed\n", "utf8");
+      await git(tempDir, ["add", "README.md"]);
+      await git(tempDir, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "seed"
+      ]);
+      const baseRevision = (await git(tempDir, ["rev-parse", "HEAD"])).stdout.trim();
+      await git(tempDir, ["checkout", "-b", "agent-task"]);
+      await fs.writeFile(path.join(tempDir, "README.md"), "seed\nagent edit\n", "utf8");
+      await git(tempDir, ["add", "README.md"]);
+      await git(tempDir, [
+        "-c",
+        "user.name=Harness",
+        "-c",
+        "user.email=harness@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "harness edit"
+      ]);
+
+      const changeState = await readGitChangeState(tempDir, baseRevision);
+
+      expect(changeState.status.trim()).toBe("");
+      expect(changeState.hasWorkingTreeChanges).toBe(false);
+      expect(changeState.hasCommittedChanges).toBe(true);
+      expect(changeState.hasChanges).toBe(true);
+      expect(changeState.commitsAhead).toBe(1);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

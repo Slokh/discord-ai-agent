@@ -92,6 +92,10 @@ The sandbox writes an ephemeral harness profile with the same posture used by Ce
 - structured streaming enabled where available so turn notifications, item updates, token usage, and errors are captured as events
 - OpenCode is the default harness; Codex app-server/exec remains available when `CODEGEN_HARNESS=codex`
 
+The runtime image includes `git`, `rg`, and GitHub CLI (`gh`). Harnesses should use `gh` read-only commands such as `gh pr checks` and `gh run view --log-failed` for CI diagnosis, while the sandbox runner remains responsible for pushing branches and opening PRs.
+
+Harness prompts still tell agents not to commit, but the runner treats either working-tree edits or commits ahead of the task branch starting revision as generated changes. If a harness commits anyway, the runner skips its own commit step and pushes the existing commits instead of incorrectly reporting `no_changes`.
+
 The next runtime migration should preserve this harness posture while moving from per-task harness processes to a long-lived harness server/session inside each warm worker.
 
 ## Prompt And Context Policy

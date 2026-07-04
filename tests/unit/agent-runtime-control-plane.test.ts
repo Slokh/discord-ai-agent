@@ -172,7 +172,10 @@ describe("agent runtime control plane", () => {
       threadKey: "discord:guild:channel",
       discordResponseChannelId: "channel",
       discordResponseMessageId: "thinking-1",
-      parentExecutionId: "agent-execution-parent"
+      parentExecutionId: "agent-execution-parent",
+      targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+      targetPullRequestNumber: 120,
+      targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
     });
 
     expect(result).toEqual({ taskId: "task-runtime-first", jobId: "job-task-1" });
@@ -201,14 +204,20 @@ describe("agent runtime control plane", () => {
         metadata: expect.objectContaining({
           parentAgentSessionId: "agent-session-1",
           parentAgentExecutionId: "agent-execution-parent",
-          parentAgentThreadKey: "discord:guild:channel"
+          parentAgentThreadKey: "discord:guild:channel",
+          targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+          targetPullRequestNumber: 120,
+          targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
         }),
         parts: [
           expect.objectContaining({
             type: "tool_result",
             toolName: "runCodingAgent",
             taskId: "task-runtime-first",
-            status: "queued"
+            status: "queued",
+            targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+            targetPullRequestNumber: 120,
+            targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
           })
         ]
       })
@@ -229,7 +238,10 @@ describe("agent runtime control plane", () => {
           codegenBackend: "local-process",
           codegenHarness: "opencode",
           codegenModel: "z-ai/glm-5.2",
-          codegenProvider: "openrouter"
+          codegenProvider: "openrouter",
+          targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+          targetPullRequestNumber: 120,
+          targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
         })
       })
     );
@@ -242,7 +254,10 @@ describe("agent runtime control plane", () => {
         discordResponseMessageId: "thinking-1",
         parentAgentSessionId: "agent-session-1",
         parentAgentExecutionId: "agent-execution-parent",
-        parentAgentThreadKey: "discord:guild:channel"
+        parentAgentThreadKey: "discord:guild:channel",
+        targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+        targetPullRequestNumber: 120,
+        targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
       })
     );
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "agent.task.queued" }));
@@ -255,7 +270,10 @@ describe("agent runtime control plane", () => {
           backend: "local-process-sandbox",
           parentAgentSessionId: "agent-session-1",
           parentAgentExecutionId: "agent-execution-parent",
-          codegenHarness: "opencode"
+          codegenHarness: "opencode",
+          targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
+          targetPullRequestNumber: 120,
+          targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
         })
       })
     );

@@ -7,6 +7,9 @@ export type AgentTaskJob = {
   request: string;
   title: string;
   requestedBy: string;
+  targetBranch?: string;
+  targetPullRequestNumber?: number;
+  targetPullRequestUrl?: string;
   guildId?: string;
   channelId?: string;
   userId?: string;

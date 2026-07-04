@@ -244,8 +244,6 @@ describe("internal API run endpoints", () => {
         messageId: "discord-message-2",
         responseChannelId: "channel-1",
         responseMessageId: "thinking-message-1",
-        text: "hello from Discord",
-        rawContent: "<@ai> hello from Discord",
         mentionKind: "user",
         botRoleIds: ["bot-role-1"],
         requesterDisplayName: "kartik"
@@ -279,7 +277,7 @@ describe("internal API run endpoints", () => {
         responseMessageId: "thinking-message-1",
         inputLinesArtifactId: "artifact-1",
         text: "hello from Discord",
-        rawContent: "<@ai> hello from Discord",
+        rawContent: "hello from Discord",
         mentionKind: "user",
         botRoleIds: ["bot-role-1"],
         requesterDisplayName: "kartik"

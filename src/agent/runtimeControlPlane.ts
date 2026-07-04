@@ -3,6 +3,7 @@ import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeExecutionRecord, AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import type { AgentRuntimeExecutionJob, JobRuntime } from "../jobs/queue.js";
+import { promptTextFromAgentRuntimeInputLines } from "./sandboxPromptProtocol.js";
 
 export type AgentRuntimeExecutionQueueInput = {
   runId?: string | null;
@@ -15,6 +16,7 @@ export type AgentRuntimeExecutionQueueInput = {
   responseMessageId?: string | null;
   turnEnvelopeArtifactId?: string | null;
   inputLinesArtifactId?: string | null;
+  inputLines?: string[];
   text?: string | null;
   rawContent?: string | null;
   mentionKind?: string | null;
@@ -297,7 +299,7 @@ export function agentRuntimeExecutionJobFromSession(input: {
   const guildId = input.queue.guildId ?? input.session.guildId;
   const channelId = input.queue.channelId ?? input.session.channelId;
   const userId = input.queue.userId ?? input.session.userId;
-  const text = input.queue.text ?? input.session.request;
+  const text = agentRuntimeExecutionText(input);
   const missingContext = missingAgentRuntimeExecutionJobContext({ session: input.session, queue: input.queue });
   if (missingContext) throw new Error(missingContext);
   if (!messageId || !guildId || !channelId || !userId || !text.trim()) throw new Error("Agent execution enqueue context is incomplete.");
@@ -332,12 +334,20 @@ export function missingAgentRuntimeExecutionJobContext(input: { session: AgentRu
   if (!(input.queue.channelId ?? input.session.channelId)) missing.push("channelId");
   if (!(input.queue.messageId ?? metadataString(metadata, "currentMessageId"))) missing.push("messageId");
   if (!(input.queue.userId ?? input.session.userId)) missing.push("userId");
-  if (!(input.queue.text ?? input.session.request).trim()) missing.push("text");
+  if (!agentRuntimeExecutionText(input).trim()) missing.push("text");
   return missing.length ? `Missing ${missing.join(", ")} on the execute body or session.` : null;
+}
+
+function agentRuntimeExecutionText(input: { session: AgentRuntimeSessionRecord; queue: AgentRuntimeExecutionQueueInput }) {
+  return nonBlankString(input.queue.text) ?? promptTextFromAgentRuntimeInputLines(input.queue.inputLines) ?? input.session.request;
 }
 
 function metadataString(metadata: Record<string, unknown>, key: string) {
   const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function nonBlankString(value: string | null | undefined) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 

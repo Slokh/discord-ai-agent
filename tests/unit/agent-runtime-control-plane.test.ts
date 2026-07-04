@@ -110,6 +110,37 @@ describe("agent runtime control plane", () => {
     );
   });
 
+  it("derives queued execution text from input lines when explicit text is omitted", async () => {
+    const agentRuntime = fakeAgentRuntime();
+    const jobs = {
+      enqueueAgentRuntimeExecution: vi.fn(async () => "job-1")
+    };
+
+    await enqueueAgentRuntimeSessionExecution({
+      agentRuntime: agentRuntime as never,
+      jobs,
+      session: { ...fakeSession(), request: "stale session request" },
+      execution: fakeExecution(),
+      threadKey: "discord:guild:channel",
+      queue: {
+        runId: "message-1",
+        traceId: "message-1",
+        messageId: "message-1",
+        inputLinesArtifactId: "input-lines-1",
+        inputLines: [
+          JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "fresh input-line request" }] } })
+        ]
+      }
+    });
+
+    expect(jobs.enqueueAgentRuntimeExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "fresh input-line request",
+        rawContent: "fresh input-line request"
+      })
+    );
+  });
+
   it("creates code-update task executions before handing work to the legacy task queue", async () => {
     const agentRuntime = fakeAgentRuntime();
     const jobs = {
@@ -219,6 +250,15 @@ describe("agent runtime control plane", () => {
         queue: {}
       })
     ).toBe("Missing guildId, channelId, messageId, userId, text on the execute body or session.");
+    expect(
+      missingAgentRuntimeExecutionJobContext({
+        session: { ...fakeSession(), request: "" },
+        queue: {
+          messageId: "message-1",
+          inputLines: [JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "hello from input lines" }] } })]
+        }
+      })
+    ).toBeNull();
   });
 });
 

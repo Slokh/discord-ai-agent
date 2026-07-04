@@ -19,6 +19,12 @@ import {
 import {
   mirrorAgentTaskQueuedToAgentRuntime
 } from "./agentTaskRuntimeMirror.js";
+import {
+  attachCodegenQueueHandoff,
+  codegenExecutionIdForTask,
+  codegenSessionIdForTask,
+  mirrorAgentTaskQueuedToCodegen
+} from "./agentTaskCodegenMirror.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
@@ -270,64 +276,14 @@ export async function startJobs(input: {
         requestedBy: data.requestedBy,
         backend: backendName
       });
-      await input.codegenRepo
-        ?.upsertSession({
-          sessionId: codegenSessionIdForTask(data),
-          traceId: data.traceId,
-          threadKey: data.threadKey,
-          guildId: data.guildId,
-          channelId: data.channelId,
-          userId: data.userId,
-          title: data.title,
-          request: data.request,
-          requestedBy: data.requestedBy,
-          status: "queued",
-          harness: "codex",
-          model: input.config.openRouter.codegenModel,
-          provider: providerForCodegenModel(input.config.openRouter.codegenModel),
-          metadata: { taskId, retriedFromTaskId: data.retriedFromTaskId }
-        })
-        .catch((error) => logger.warn({ err: error, taskId }, "Failed to create codegen session mirror"));
-      await input.codegenRepo
-        ?.appendMessage({
-          messageId: codegenMessageIdForTask(data),
-          sessionId: codegenSessionIdForTask(data),
-          clientMessageId: taskId,
-          role: "user",
-          parts: [{ type: "text", text: data.request }],
-          metadata: {
-            taskId,
-            traceId: data.traceId,
-            requestedBy: data.requestedBy,
-            retriedFromTaskId: data.retriedFromTaskId ?? null,
-            source: "agent.task.enqueue"
-          }
-        })
-        .catch((error) => logger.warn({ err: error, taskId }, "Failed to append codegen session user message"));
-      await input.codegenRepo
-        ?.recordEvent({
-          sessionId: codegenSessionIdForTask(data),
-          traceId: data.traceId,
-          kind: "status",
-          eventName: "codegen.message.appended",
-          summary: "Persisted code-update request as a durable codegen message.",
-          metadata: { taskId, messageId: codegenMessageIdForTask(data), role: "user" }
-        })
-        .catch((error) => logger.warn({ err: error, taskId }, "Failed to record codegen message event"));
-      await input.codegenRepo
-        ?.createExecution({
-          executionId: codegenExecutionIdForTask(data),
-          sessionId: codegenSessionIdForTask(data),
-          taskId,
-          traceId: data.traceId,
-          status: "queued",
-          harness: "codex-app-server",
-          model: input.config.openRouter.codegenModel,
-          provider: providerForCodegenModel(input.config.openRouter.codegenModel),
-          reasoningEffort: "low",
-          metadata: { backend: backendName, pgbossJobId: null }
-        })
-        .catch((error) => logger.warn({ err: error, taskId }, "Failed to create codegen execution mirror"));
+      await mirrorAgentTaskQueuedToCodegen({
+        codegenRepo: input.codegenRepo,
+        config: input.config,
+        job: data,
+        backendName,
+        pgBossJobId: null,
+        onError: (phase, error) => logger.warn({ err: error, taskId, phase }, "Failed to create codegen task mirror")
+      });
       if (shouldMirrorAgentRuntime) {
         await mirrorAgentTaskQueuedToAgentRuntime({
           agentRuntimeRepo,
@@ -720,46 +676,6 @@ export async function startJobs(input: {
   return runtime;
 }
 
-function codegenSessionIdForTask(job: Pick<AgentTaskJob, "taskId" | "retriedFromTaskId">) {
-  return `codegen-session-${job.retriedFromTaskId ?? job.taskId}`;
-}
-
-function codegenExecutionIdForTask(job: Pick<AgentTaskJob, "taskId">) {
-  return `codegen-execution-${job.taskId}`;
-}
-
-function codegenMessageIdForTask(job: Pick<AgentTaskJob, "taskId">) {
-  return `codegen-message-${job.taskId}`;
-}
-
-async function attachCodegenQueueHandoff(input: {
-  codegenRepo?: CodegenRepository;
-  config: AppConfig;
-  job: AgentTaskJob;
-  backendName: string;
-  pgBossJobId: string | null;
-}) {
-  if (!input.codegenRepo) return;
-  const executionId = codegenExecutionIdForTask(input.job);
-  const updated = await input.codegenRepo.updateExecution({
-    executionId,
-    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId }
-  });
-  if (updated) return;
-  await input.codegenRepo.createExecution({
-    executionId,
-    sessionId: codegenSessionIdForTask(input.job),
-    taskId: input.job.taskId,
-    traceId: input.job.traceId,
-    status: "queued",
-    harness: "codex-app-server",
-    model: input.config.openRouter.codegenModel,
-    provider: providerForCodegenModel(input.config.openRouter.codegenModel),
-    reasoningEffort: "low",
-    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId }
-  });
-}
-
 async function acquireLeaseForAgentTask(input: {
   scheduler: CodegenLeaseScheduler | null;
   codegenRepo?: CodegenRepository;
@@ -794,10 +710,6 @@ async function acquireLeaseForAgentTask(input: {
       });
     }
   });
-}
-
-function providerForCodegenModel(model: string) {
-  return model.includes("/") ? "openrouter" : "openai";
 }
 
 function startingAgentTaskStatusMessage(backendName: string) {

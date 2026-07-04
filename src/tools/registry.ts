@@ -603,7 +603,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getAgentTaskStatus",
     description:
-      "Look up the current or recent code-update task status, progress events, and sandbox command output. Use when a user asks what happened to an update, whether it is done, why it failed, or for a task ID.",
+      "Look up the current or recent code-update task status, progress events, sandbox command output, PR link, and GitHub PR/CI check status when available. Use when a user asks what happened to an update, whether it is done, why it failed, whether CI/checks failed, or for a task ID.",
     userVisible: true,
     mutates: false,
     category: "coding",

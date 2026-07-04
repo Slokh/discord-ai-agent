@@ -1640,6 +1640,60 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ).resolves.toEqual([]);
   });
 
+  it("purgeChannel removes messages, embeddings, and crawl cursors and marks the channel excluded", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const messageId = `message-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "trivia-sucks", type: 0 });
+    await repo.upsertMessage({
+      id: messageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "purge pizza memory",
+      normalizedContent: "purge pizza memory",
+      createdAt: new Date()
+    });
+    await repo.storeMessageEmbedding({
+      messageId,
+      embedding: Array.from({ length: 1536 }, () => 0.001),
+      model: "test"
+    });
+    await repo.updateCrawlCursor({
+      guildId,
+      channelId,
+      beforeMessageId: "old",
+      lastMessageId: "new",
+      status: "complete",
+      crawledCountIncrement: 1
+    });
+
+    await expect(repo.keywordSearch({ guildId, visibleChannelIds: [channelId], query: "pizza", limit: 10 })).resolves.toHaveLength(1);
+    await expect(repo.isChannelExcluded(channelId)).resolves.toBe(false);
+
+    await repo.purgeChannel({ channelId });
+
+    await expect(repo.isChannelExcluded(channelId)).resolves.toBe(true);
+    await expect(repo.recentMessages({ guildId, channelId, limit: 10 })).resolves.toEqual([]);
+    await expect(repo.keywordSearch({ guildId, visibleChannelIds: [channelId], query: "pizza", limit: 10 })).resolves.toEqual([]);
+    await expect(
+      repo.vectorSearch({
+        guildId,
+        visibleChannelIds: [channelId],
+        embedding: Array.from({ length: 1536 }, () => 0.001),
+        limit: 10
+      })
+    ).resolves.toEqual([]);
+    await expect(repo.getCrawlCursor(channelId)).resolves.toBeUndefined();
+    const embeddings = await pool.query("SELECT count(*)::int AS count FROM message_embeddings WHERE message_id = $1", [messageId]);
+    expect(embeddings.rows[0]?.count).toBe(0);
+    const attachments = await pool.query("SELECT count(*)::int AS count FROM attachments WHERE message_id = $1", [messageId]);
+    expect(attachments.rows[0]?.count).toBe(0);
+  }, 10_000);
+
   it("resets crawl cursors for a true reindex", async () => {
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;

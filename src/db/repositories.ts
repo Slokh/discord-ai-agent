@@ -1107,6 +1107,22 @@ export class DiscordAiAgentRepository {
     ]);
   }
 
+  async isChannelExcluded(channelId: string) {
+    const result = await this.pool.query("SELECT is_excluded FROM channels WHERE id = $1", [channelId]);
+    return Boolean(result.rows[0]?.is_excluded);
+  }
+
+  async purgeChannel(input: { channelId: string; excluded?: boolean }) {
+    const channelId = input.channelId;
+    // Attachments and message_embeddings both reference messages(id) ON DELETE CASCADE,
+    // so deleting the messages removes their derived rows as well.
+    await this.pool.query("DELETE FROM messages WHERE channel_id = $1", [channelId]);
+    await this.pool.query("DELETE FROM crawl_cursors WHERE channel_id = $1", [channelId]);
+    if (input.excluded !== false) {
+      await this.pool.query("UPDATE channels SET is_excluded = true, updated_at = now() WHERE id = $1", [channelId]);
+    }
+  }
+
   async updateCrawlCursor(input: {
     guildId: string;
     channelId: string;

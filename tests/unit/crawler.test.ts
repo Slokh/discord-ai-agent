@@ -181,6 +181,54 @@ describe("discoverCrawlableChannels", () => {
     expect(repo.upsertChannel).toHaveBeenCalledWith(expect.objectContaining({ id: "thread-1", parentId: "forum-1", isThread: true }));
     expect(repo.upsertChannel).toHaveBeenCalledWith(expect.objectContaining({ id: "hidden-1", isThread: false }));
   });
+
+  it("skips excluded channels and their threads when discovering crawlable channels", async () => {
+    const repo = fakeCrawlerRepo();
+    repo.isChannelExcluded = vi.fn(async (channelId: string) => channelId === "excluded-1" || channelId === "thread-excluded");
+    const crawler = new DiscordCrawler({
+      client: { user: { id: "bot" } } as any,
+      repo: repo as any,
+      config: retryConfig() as any
+    });
+    const excludedThread = fakeChannel({
+      id: "thread-excluded",
+      parentId: "excluded-1",
+      type: ChannelType.PublicThread,
+      readable: true,
+      hasMessages: true
+    });
+    const includedThread = fakeChannel({
+      id: "thread-included",
+      parentId: "parent-1",
+      type: ChannelType.PublicThread,
+      readable: true,
+      hasMessages: true
+    });
+    const excluded = fakeChannel({
+      id: "excluded-1",
+      type: ChannelType.GuildText,
+      readable: true,
+      hasMessages: true,
+      activeThreads: [excludedThread],
+      archivedThreads: [[]]
+    });
+    const included = fakeChannel({
+      id: "parent-1",
+      type: ChannelType.GuildText,
+      readable: true,
+      hasMessages: true,
+      activeThreads: [includedThread],
+      archivedThreads: [[]]
+    });
+
+    const guild = fakeGuild([excluded, included]);
+    const channels = await crawler.discoverCrawlableChannels(guild as any);
+
+    expect(channels.map((channel) => channel.id)).toEqual(["parent-1", "thread-included"]);
+    expect(repo.isChannelExcluded).toHaveBeenCalledWith("excluded-1");
+    expect(repo.isChannelExcluded).toHaveBeenCalledWith("parent-1");
+    expect(repo.isChannelExcluded).toHaveBeenCalledWith("thread-included");
+  });
 });
 
 describe("crawlChannel", () => {
@@ -191,7 +239,8 @@ describe("crawlChannel", () => {
       upsertGuild: vi.fn(async () => undefined),
       upsertChannel: vi.fn(async () => undefined),
       upsertMessage: vi.fn(async () => undefined),
-      isUserPrivacyDeleted: vi.fn(async () => false)
+      isUserPrivacyDeleted: vi.fn(async () => false),
+      isChannelExcluded: vi.fn(async () => false)
     };
     const enqueueMessageEmbedding = vi.fn(async () => "job-1");
     const message = fakeMessage({ id: "message-1", content: "hello from history", createdTimestamp: 2_000 });
@@ -221,11 +270,42 @@ describe("crawlChannel", () => {
       })
     );
   });
+
+  it("skips crawling excluded channels without fetching messages", async () => {
+    const repo = {
+      getCrawlCursor: vi.fn(async () => undefined),
+      updateCrawlCursor: vi.fn(async () => undefined),
+      upsertGuild: vi.fn(async () => undefined),
+      upsertChannel: vi.fn(async () => undefined),
+      upsertMessage: vi.fn(async () => undefined),
+      isUserPrivacyDeleted: vi.fn(async () => false),
+      isChannelExcluded: vi.fn(async () => true)
+    };
+    const enqueueMessageEmbedding = vi.fn(async () => "job-1");
+    const message = fakeMessage({ id: "message-1", content: "hello", createdTimestamp: 2_000 });
+    const channel = fakeMessageChannel({ id: "channel-1", guildId: "guild-1", pages: [[message]] });
+    message.channel = channel;
+
+    const crawler = new DiscordCrawler({
+      client: { user: { id: "bot" } } as any,
+      repo: repo as any,
+      config: retryConfig() as any,
+      embeddingQueue: { enqueueMessageEmbedding }
+    });
+
+    await crawler.crawlChannel(channel as any);
+
+    expect(repo.isChannelExcluded).toHaveBeenCalledWith("channel-1");
+    expect(repo.upsertMessage).not.toHaveBeenCalled();
+    expect(enqueueMessageEmbedding).not.toHaveBeenCalled();
+    expect(repo.updateCrawlCursor).not.toHaveBeenCalled();
+  });
 });
 
 function fakeCrawlerRepo() {
   return {
-    upsertChannel: vi.fn(async () => undefined)
+    upsertChannel: vi.fn(async () => undefined),
+    isChannelExcluded: vi.fn(async () => false)
   };
 }
 

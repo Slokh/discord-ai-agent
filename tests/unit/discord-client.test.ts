@@ -131,7 +131,8 @@ function fakeRepo() {
     upsertChannel: vi.fn(async () => undefined),
     upsertUser: vi.fn(async () => undefined),
     upsertMessage: vi.fn(async () => undefined),
-    isUserPrivacyDeleted: vi.fn(async () => false)
+    isUserPrivacyDeleted: vi.fn(async () => false),
+    isChannelExcluded: vi.fn(async () => false)
   };
 }
 

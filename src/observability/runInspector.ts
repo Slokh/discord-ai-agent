@@ -81,6 +81,16 @@ export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectio
   if (run.bottleneck) lines.push(`Bottleneck: ${run.bottleneck.name} (${formatSeconds(run.bottleneck.durationMs)})`);
   if (Object.keys(run.links).length > 0) lines.push(wrapLine("Links", compactJson(run.links, 600)));
 
+  if (snapshot.relatedRuns.length > 0) {
+    lines.push("");
+    lines.push("Related runs:");
+    for (const relatedRun of snapshot.relatedRuns.slice(0, 8)) {
+      lines.push(formatRelatedRunLine(relatedRun));
+      const detail = formatRelatedRunDetail(relatedRun);
+      if (detail) lines.push(`  ${detail}`);
+    }
+  }
+
   if (snapshot.diagnostics.length > 0) {
     lines.push("");
     lines.push("Diagnostics:");
@@ -177,6 +187,21 @@ function formatCounts(counts: Map<string, number>) {
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .map(([key, count]) => `${key}=${count}`)
     .join(", ");
+}
+
+function formatRelatedRunLine(run: RunSummary) {
+  return `- ${run.runId} | ${run.kind} | ${run.status} | ${formatSeconds(run.durationMs)} | ${truncateSingleLine(run.title, 120)}`;
+}
+
+function formatRelatedRunDetail(run: RunSummary) {
+  return [
+    run.currentStep ? `step=${run.currentStep}` : null,
+    run.traceId ? `trace=${run.traceId}` : null,
+    run.messageId ? `message=${run.messageId}` : null,
+    run.links.pullRequest ? `pr=${String(run.links.pullRequest)}` : null
+  ]
+    .filter(Boolean)
+    .join(" | ");
 }
 
 function formatModelUsage(snapshot: RunSnapshot) {

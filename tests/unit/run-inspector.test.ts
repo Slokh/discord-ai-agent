@@ -15,6 +15,11 @@ describe("run inspector formatting", () => {
     expect(report).toContain("Model usage:");
     expect(report).toContain("- Token usage: input=100 output=25 total=125 cached_input=40 across 1 LLM call (z-ai/glm-5.2)");
     expect(report).toContain("- Estimated audited cost: $0.004200 across 1 model/tool audit");
+    expect(report).toContain("Related runs:");
+    expect(report).toContain("- 1520000000000000000 | discord | succeeded | 1.234s | User asked for a code update");
+    expect(report).toContain("trace=1520000000000000000 | message=1520000000000000000");
+    expect(report).toContain("- task-retry | codegen | running | unknown | Retry code update");
+    expect(report).toContain("step=opencode_attempt_1");
     expect(report).toContain("Slowest spans:");
     expect(report).toContain("- 16m 1s codex (task, failed)");
     expect(report).toContain("Timeline");
@@ -319,7 +324,26 @@ function snapshotFixture(): RunSnapshot {
     },
     diagnostics: ["codex was the bottleneck"],
     raw: { sandboxRuns: [] },
-    relatedRuns: [],
+    relatedRuns: [
+      runSummary({
+        runId: "1520000000000000000",
+        traceId: "1520000000000000000",
+        kind: "discord",
+        status: "succeeded",
+        title: "User asked for a code update",
+        messageId: "1520000000000000000",
+        durationMs: 1234
+      }),
+      runSummary({
+        runId: "task-retry",
+        traceId: "trace-retry",
+        kind: "codegen",
+        status: "running",
+        title: "Retry code update",
+        durationMs: null,
+        currentStep: "opencode_attempt_1"
+      })
+    ],
     generatedAt: new Date("2026-07-01T17:57:29.000Z")
   };
 }

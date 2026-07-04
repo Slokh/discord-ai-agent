@@ -51,7 +51,7 @@ describe("toolRegistry", () => {
           outputContract: expect.arrayContaining(["PR link or failure reason"]),
           permissionRequirements: expect.arrayContaining(["explicit_user_request"]),
           auditEvents: expect.arrayContaining(["tool_audit_logs", "trace_events"]),
-          examples: expect.arrayContaining(["@ai update yourself to handle Bluesky links better"])
+          examples: expect.arrayContaining(["@ai debug the failing CI on that PR"])
         }),
         expect.objectContaining({
           name: "searchDiscordHistory",
@@ -149,6 +149,13 @@ describe("toolRegistry", () => {
                 sampleLimit: expect.objectContaining({ type: "number" })
               })
             })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "runCodingAgent",
+            description: expect.stringContaining("debug or fix failing CI/checks/tests")
           })
         })
       ])

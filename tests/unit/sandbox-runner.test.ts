@@ -423,6 +423,21 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-progress first_edit");
   });
 
+  it("includes a built-in GitHub CI debugging skill for sandboxed code updates", () => {
+    const prompt = codeUpdatePrompt({
+      taskId: "task-ci",
+      requestedBy: "kartik",
+      taskRequest: "Debug the failing CI on PR #111 and fix it."
+    });
+
+    expect(prompt).toContain("Built-in skill: GitHub CI debugging");
+    expect(prompt).toContain("gh pr checks <pr>");
+    expect(prompt).toContain("gh run view <run-id> --log-failed");
+    expect(prompt).toContain("Prefer failed job log excerpts and local reproduction over guessing from the PR diff alone.");
+    expect(prompt).toContain("The sandbox runner handles pushing and opening/updating the PR.");
+    expect(prompt).toContain("Do not commit, push, open a PR, or edit GitHub state yourself.");
+  });
+
   it("forces codegen dependency installs to include dev dependencies even under production service env", () => {
     const env = codegenNpmInstallEnv({
       ...process.env,

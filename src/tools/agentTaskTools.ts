@@ -289,6 +289,7 @@ function formatCheckRuns(checks: GitHubCheckRunsResponse) {
   if (failing.length > 0) {
     lines.push("- Failing checks:");
     lines.push(...failing.slice(0, 8).map((check) => `  - ${formatCheckRunLine(check)}`));
+    lines.push("- Next action: for debugging or fixing, call runCodingAgent so the sandbox can inspect logs with gh CLI and run focused local checks.");
   }
   if (pending.length > 0) {
     lines.push("- Pending checks:");

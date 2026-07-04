@@ -1375,6 +1375,7 @@ describe("getAgentTaskStatus", () => {
     expect(response).toContain("PR #42: open head=abcdef1 branch=ai/runtime-status");
     expect(response).toContain("Checks: failure=1, success=1");
     expect(response).toContain("test (failure) https://github.com/Slokh/discord-ai-agent/actions/runs/1 - Tests failed");
+    expect(response).toContain("Next action: for debugging or fixing, call runCodingAgent so the sandbox can inspect logs with gh CLI");
     expect(response).toContain("Commit status: failure");
     expect(response).toContain("ci/legacy (failure) https://ci.example/failure");
     expect(fetchMock).toHaveBeenCalledWith(

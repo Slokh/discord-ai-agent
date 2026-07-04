@@ -38,7 +38,7 @@ For durable knowledge changes such as excluding a channel, deleting indexed hist
 
 ### Code Update Request To PR
 
-1. The model calls `runCodingAgent` when the user explicitly asks the bot to update itself.
+1. The model calls `runCodingAgent` when the user explicitly asks the bot to update itself or to debug/fix GitHub, CI, PR, deployment, repository, or previous code-update task failures.
 2. `src/tools/agentTaskTools.ts` edits the Discord status message with progress and, when a durable agent session is available, creates the `runCodingAgent` tool message plus task-linked execution in that session before enqueueing the sandbox worker.
    The legacy queue-side mirror remains as compatibility fallback for callers that do not yet carry agent-runtime context.
 3. `src/jobs/agentTaskEnqueue.ts` owns the queue handoff transaction, then `src/jobs/queue.ts` claims the task and launches the configured execution backend.

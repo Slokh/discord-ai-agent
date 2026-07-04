@@ -101,6 +101,71 @@ describe("agent router", () => {
     );
   });
 
+  it("presents sandbox-first GitHub CI debugging guidance to the model", async () => {
+    const chat = vi.fn(async () => ({
+      content: "I should hand this to the sandbox.",
+      model: "router-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      replyContext: {
+        rootMessageId: "root",
+        messageId: "bot-reply",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "Discord AI Agent",
+        authorIsBot: true,
+        content: "Done: https://github.com/Slokh/discord-ai-agent/pull/111\nRun console: https://tasks.example/runs/task-1",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: "2026-07-04T00:10:00.000Z",
+        url: "https://discord.com/channels/g/c/bot-reply",
+        chain: []
+      }
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "there's a CI error");
+
+    const firstCall = (chat as any).mock.calls[0]?.[0];
+    expect(firstCall).toBeTruthy();
+    expect(firstCall.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("For GitHub, PR, CI, check, test, deployment, repository, or self-update debugging/fixing, call runCodingAgent")
+        }),
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("Done: https://github.com/Slokh/discord-ai-agent/pull/111")
+        })
+      ])
+    );
+    expect(firstCall.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "runCodingAgent",
+            description: expect.stringContaining("gh CLI access")
+          })
+        })
+      ])
+    );
+  });
+
   it("mirrors model-selected tool turns into the durable agent runtime session", async () => {
     const appendMessage = vi.fn(async () => undefined);
     const ctx = {

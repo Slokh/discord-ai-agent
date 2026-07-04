@@ -64,6 +64,15 @@ describe("internal API run endpoints", () => {
       })
     );
 
+    const childDetail = await fetch(`${runtime.url}/api/runs/task-1`, { headers: auth });
+    expect(childDetail.status).toBe(200);
+    await expect(childDetail.json()).resolves.toEqual(
+      expect.objectContaining({
+        run: expect.objectContaining({ runId: "task-1" }),
+        relatedRuns: [expect.objectContaining({ runId: "run-1", kind: "prompt" })]
+      })
+    );
+
     const events = await fetch(`${runtime.url}/api/runs/run-1/events`, { headers: auth });
     expect(events.status).toBe(200);
     await expect(events.json()).resolves.toEqual(expect.objectContaining({ events: [expect.objectContaining({ name: "model.complete" })] }));
@@ -430,8 +439,13 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     listProcessRunsForTrace: async () => [run],
     listProcessRunsByParentAgentExecutionId: async (input: { parentAgentExecutionId: string }) =>
       input.parentAgentExecutionId === "agent-execution-1" ? [childRun] : [],
+    findProcessRunByAgentExecutionId: async (agentExecutionId: string) => (agentExecutionId === "agent-execution-1" ? run : undefined),
     listAgentTasksForTrace: async () => [],
-    getProcessRun: async (runId: string) => (runId === "run-1" ? run : undefined),
+    getProcessRun: async (runId: string) => {
+      if (runId === "run-1") return run;
+      if (runId === "task-1") return childRun;
+      return undefined;
+    },
     getAgentTask: async () => undefined,
     getProcessRunSpans: async () => [],
     getProcessRunEvents: async () => [event],

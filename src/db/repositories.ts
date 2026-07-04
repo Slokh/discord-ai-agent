@@ -4041,6 +4041,24 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToProcessRun);
   }
 
+  async findProcessRunByAgentExecutionId(agentExecutionId: string): Promise<ProcessRunRecord | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+        FROM process_runs
+        WHERE metadata->>'agentExecutionId' = $1
+           OR metadata->>'agentRuntimeExecutionId' = $1
+        ORDER BY updated_at DESC, started_at DESC
+        LIMIT 1
+      `,
+      [agentExecutionId]
+    );
+    return result.rows[0] ? rowToProcessRun(result.rows[0]) : undefined;
+  }
+
   async findProcessRunByDiscordMessageId(messageId: string): Promise<ProcessRunRecord | undefined> {
     const result = await this.pool.query(
       `

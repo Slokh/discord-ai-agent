@@ -147,6 +147,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
 
   const traceId = processRun?.traceId ?? task?.traceId ?? runId;
   const parentAgentExecutionId = processRun ? agentExecutionIdFromProcessRun(processRun) : null;
+  const originAgentExecutionId = processRun ? parentAgentExecutionIdFromProcessRun(processRun) : null;
   const [
     processSpans,
     processEvents,
@@ -157,6 +158,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     traceEvents,
     toolLogs,
     relatedProcessRuns,
+    parentProcessRun,
     childProcessRuns,
     relatedTasks
   ] = await Promise.all([
@@ -169,6 +171,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     traceId ? repo.getTraceEventsForTrace({ traceId, limit: 500 }) : Promise.resolve([]),
     traceId ? repo.getToolAuditLogsForTrace({ traceId, limit: 200 }) : Promise.resolve([]),
     traceId ? repo.listProcessRunsForTrace({ traceId, limit: 20 }) : Promise.resolve([]),
+    originAgentExecutionId ? repo.findProcessRunByAgentExecutionId(originAgentExecutionId) : Promise.resolve(undefined),
     parentAgentExecutionId ? repo.listProcessRunsByParentAgentExecutionId({ parentAgentExecutionId, limit: 20 }) : Promise.resolve([]),
     traceId ? repo.listAgentTasksForTrace({ traceId, limit: 20 }) : Promise.resolve([])
   ]);
@@ -196,7 +199,12 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     terminal,
     diagnostics: diagnosticsForRun(run, spans, events),
     raw: { processRun, task, sandboxRuns },
-    relatedRuns: relatedRunSummaries({ processRun, task, relatedProcessRuns: [...relatedProcessRuns, ...childProcessRuns], relatedTasks }),
+    relatedRuns: relatedRunSummaries({
+      processRun,
+      task,
+      relatedProcessRuns: [...relatedProcessRuns, ...(parentProcessRun ? [parentProcessRun] : []), ...childProcessRuns],
+      relatedTasks
+    }),
     generatedAt: new Date()
   };
 }
@@ -205,6 +213,12 @@ function agentExecutionIdFromProcessRun(run: ProcessRunRecord) {
   const direct = stringMetadata(run.metadata.agentExecutionId);
   if (direct) return direct;
   return stringMetadata(run.metadata.agentRuntimeExecutionId);
+}
+
+function parentAgentExecutionIdFromProcessRun(run: ProcessRunRecord) {
+  const direct = stringMetadata(run.metadata.parentAgentExecutionId);
+  if (direct) return direct;
+  return stringMetadata(run.metadata.parentExecutionId);
 }
 
 export function relatedRunSummaries(input: {

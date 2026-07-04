@@ -580,7 +580,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "runCodingAgent",
     description:
-      "Start an isolated Kubernetes sandbox task for a requested Discord AI Agent update. The bot will update the same Discord reply with progress and the PR link when the task finishes. Use when the user explicitly asks the agent to update itself, add, build, implement, or change behavior.",
+      "Start an isolated sandbox task for Discord AI Agent code, repository, GitHub PR, CI, deployment, or self-update work. The bot will update the same Discord reply with progress and the PR link when the task finishes. Use when the user asks the agent to update itself, add, build, implement, change behavior, debug or fix failing CI/checks/tests, inspect a PR/repo failure, or continue work from a previous code-update task. Prefer this over hosted web tools for GitHub, CI, PR, or repository debugging because the sandbox has repo checkout, shell, tests, and gh CLI access.",
     userVisible: true,
     mutates: true,
     parameters: {
@@ -603,7 +603,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getAgentTaskStatus",
     description:
-      "Look up the current or recent code-update task status, progress events, sandbox command output, PR link, and GitHub PR/CI check status when available. Use when a user asks what happened to an update, whether it is done, why it failed, whether CI/checks failed, or for a task ID.",
+      "Look up quick status for the current or recent code-update task: progress events, sandbox command output snippets, PR link, and GitHub PR/CI check status when available. Use for read-only status questions like whether an update is done, what PR was opened, or what the latest task ID is. If the user asks to debug, investigate, explain, or fix a GitHub/CI/check/test/repo failure, call runCodingAgent so the sandbox can use gh CLI, logs, repo files, and tests.",
     userVisible: true,
     mutates: false,
     category: "coding",
@@ -934,7 +934,7 @@ function defaultToolExamples(name: ToolName): string[] {
     summarizeDiscordThread: "@ai summarize this thread",
     generateImage: "@ai make an image of a wizard eating nachos",
     createSkillDraft: "@ai learn this for next time: movie night is on Fridays",
-    runCodingAgent: "@ai update yourself to handle Bluesky links better",
+    runCodingAgent: "@ai debug the failing CI on that PR",
     getAgentTaskStatus: "@ai what happened to the last update?",
     listAgentTasks: "@ai show recent update tasks",
     retryAgentTask: "@ai retry that update",

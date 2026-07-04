@@ -38,7 +38,10 @@ describe("sandbox prompt server", () => {
     const executeResponse = await fetch(`${runtime.url}/execute`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ envelope: minimalEnvelope() })
+      body: JSON.stringify({
+        envelope: { ...minimalEnvelope(), text: "legacy envelope text" },
+        inputLines: [JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "hello from input lines" }] } })]
+      })
     });
 
     expect(executeResponse.status).toBe(200);
@@ -55,7 +58,7 @@ describe("sandbox prompt server", () => {
         userId: "user",
         sessionMessages: []
       }),
-      "hello"
+      "hello from input lines"
     );
   });
 });

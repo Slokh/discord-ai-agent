@@ -5,7 +5,13 @@ import type { JobRuntime } from "../jobs/queue.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { ToolContext } from "../tools/types.js";
 import { handleAgentRequest } from "./router.js";
-import { conversationMessagesFromEnvelope, serializeAgentResponse, type SandboxPromptRequest, type SandboxPromptResponse } from "./sandboxPromptProtocol.js";
+import {
+  conversationMessagesFromEnvelope,
+  promptTextFromAgentRuntimeInputLines,
+  serializeAgentResponse,
+  type SandboxPromptRequest,
+  type SandboxPromptResponse
+} from "./sandboxPromptProtocol.js";
 
 export async function executeSandboxPromptRequest(input: {
   request: SandboxPromptRequest;
@@ -41,5 +47,5 @@ export async function executeSandboxPromptRequest(input: {
     statusMessageId: envelope.delivery.statusMessageId ?? undefined
   };
 
-  return serializeAgentResponse(await handleAgentRequest(toolContext, envelope.text));
+  return serializeAgentResponse(await handleAgentRequest(toolContext, promptTextFromAgentRuntimeInputLines(input.request.inputLines) ?? envelope.text));
 }

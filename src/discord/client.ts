@@ -28,8 +28,8 @@ import {
   type AgentRuntimeTurnEnvelope
 } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution, type AgentPromptExecutionRef } from "../agent/runtimeLedger.js";
-import { enqueueAgentRuntimeSessionExecution } from "../agent/runtimeControlPlane.js";
-import { conversationMessagesFromEnvelope } from "../agent/sandboxPromptProtocol.js";
+import { enqueueAgentRuntimeSessionExecution, storeAgentRuntimeExecutionInputLines } from "../agent/runtimeControlPlane.js";
+import { agentRuntimeInputLinesFromEnvelope, conversationMessagesFromEnvelope } from "../agent/sandboxPromptProtocol.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, ToolContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
@@ -63,6 +63,7 @@ type DiscordAgentExecutionRequest = {
 type PreparedDiscordAgentTurn = {
   turnEnvelope: AgentRuntimeTurnEnvelope;
   turnEnvelopeArtifactId: string | null;
+  inputLinesArtifactId: string | null;
   priorSessionMessages: ConversationMessage[];
 };
 
@@ -426,6 +427,7 @@ async function handleMessageCreate(
         responseChannelId: responseSink.statusChannelId,
         responseMessageId: responseSink.statusMessageId,
         turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId,
+        inputLinesArtifactId: preparedTurn.inputLinesArtifactId,
         text,
         rawContent: message.content,
         mentionKind: mentionContext.kind ?? "unknown",
@@ -463,14 +465,15 @@ async function handleMessageCreate(
             acknowledgement: "loading_reaction",
             agentSessionId: agentRuntimeExecution?.session.sessionId ?? null,
             agentExecutionId: agentRuntimeExecution?.executionId ?? null,
-            turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId
+            turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId,
+            inputLinesArtifactId: preparedTurn.inputLinesArtifactId
           }
         })
         .catch((error) => requestLogger.warn({ err: error }, "Failed to mark Discord run queued"));
       await recordTraceEvent(input.repo, {
         eventName: "discord.agent_request.enqueued",
         summary: "Queued Discord mention for worker processing",
-        metadata: { jobId, turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId }
+        metadata: { jobId, turnEnvelopeArtifactId: preparedTurn.turnEnvelopeArtifactId, inputLinesArtifactId: preparedTurn.inputLinesArtifactId }
       });
       return;
     } catch (error) {
@@ -1110,9 +1113,23 @@ async function prepareDiscordAgentTurn(input: {
     input.requestLogger.warn({ err: error }, "Failed to store agent runtime turn envelope");
     return null;
   });
+  let inputLinesArtifactId: string | null = null;
+  if (input.context.agentRuntime && input.agentRuntimeExecution) {
+    const inputLines = agentRuntimeInputLinesFromEnvelope(turnEnvelope);
+    inputLinesArtifactId = await storeAgentRuntimeExecutionInputLines({
+      agentRuntime: input.context.agentRuntime,
+      session: input.agentRuntimeExecution.session,
+      execution: { executionId: input.agentRuntimeExecution.executionId, traceId: input.request.requestId },
+      inputLines
+    }).catch((error) => {
+      input.requestLogger.warn({ err: error }, "Failed to store agent runtime input lines");
+      return null;
+    });
+  }
   return {
     turnEnvelope,
     turnEnvelopeArtifactId,
+    inputLinesArtifactId,
     priorSessionMessages
   };
 }
@@ -1163,6 +1180,7 @@ async function replayPreparedDiscordAgentTurn(input: {
   return {
     turnEnvelope: input.turnEnvelope,
     turnEnvelopeArtifactId: null,
+    inputLinesArtifactId: input.request.inputLinesArtifactId ?? null,
     priorSessionMessages
   };
 }

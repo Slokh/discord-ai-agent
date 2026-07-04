@@ -146,7 +146,20 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
   if (!processRun && !task) return undefined;
 
   const traceId = processRun?.traceId ?? task?.traceId ?? runId;
-  const [processSpans, processEvents, artifacts, taskEvents, commands, sandboxRuns, traceEvents, toolLogs, relatedProcessRuns, relatedTasks] = await Promise.all([
+  const parentAgentExecutionId = processRun ? agentExecutionIdFromProcessRun(processRun) : null;
+  const [
+    processSpans,
+    processEvents,
+    artifacts,
+    taskEvents,
+    commands,
+    sandboxRuns,
+    traceEvents,
+    toolLogs,
+    relatedProcessRuns,
+    childProcessRuns,
+    relatedTasks
+  ] = await Promise.all([
     processRun ? repo.getProcessRunSpans(processRun.runId) : Promise.resolve([]),
     processRun ? repo.getProcessRunEvents({ runId: processRun.runId, limit: 500 }) : Promise.resolve([]),
     processRun ? repo.getProcessRunArtifacts(processRun.runId) : Promise.resolve([]),
@@ -156,6 +169,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     traceId ? repo.getTraceEventsForTrace({ traceId, limit: 500 }) : Promise.resolve([]),
     traceId ? repo.getToolAuditLogsForTrace({ traceId, limit: 200 }) : Promise.resolve([]),
     traceId ? repo.listProcessRunsForTrace({ traceId, limit: 20 }) : Promise.resolve([]),
+    parentAgentExecutionId ? repo.listProcessRunsByParentAgentExecutionId({ parentAgentExecutionId, limit: 20 }) : Promise.resolve([]),
     traceId ? repo.listAgentTasksForTrace({ traceId, limit: 20 }) : Promise.resolve([])
   ]);
 
@@ -182,9 +196,15 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     terminal,
     diagnostics: diagnosticsForRun(run, spans, events),
     raw: { processRun, task, sandboxRuns },
-    relatedRuns: relatedRunSummaries({ processRun, task, relatedProcessRuns, relatedTasks }),
+    relatedRuns: relatedRunSummaries({ processRun, task, relatedProcessRuns: [...relatedProcessRuns, ...childProcessRuns], relatedTasks }),
     generatedAt: new Date()
   };
+}
+
+function agentExecutionIdFromProcessRun(run: ProcessRunRecord) {
+  const direct = stringMetadata(run.metadata.agentExecutionId);
+  if (direct) return direct;
+  return stringMetadata(run.metadata.agentRuntimeExecutionId);
 }
 
 export function relatedRunSummaries(input: {
@@ -516,6 +536,10 @@ function eventMetadataStep(event: RunEvent) {
 
 function numberFromUnknown(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringMetadata(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function bottleneckSpan(spans: RunSpan[]) {

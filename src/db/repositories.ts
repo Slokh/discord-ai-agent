@@ -4023,6 +4023,24 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToProcessRun);
   }
 
+  async listProcessRunsByParentAgentExecutionId(input: { parentAgentExecutionId: string; limit?: number }): Promise<ProcessRunRecord[]> {
+    const limit = Math.max(1, Math.min(50, Math.trunc(input.limit ?? 20)));
+    const result = await this.pool.query(
+      `
+        SELECT
+          run_id, trace_id, kind, status, title, summary, guild_id, channel_id,
+          user_id, message_id, requester, source, metadata, links, started_at,
+          completed_at, updated_at
+        FROM process_runs
+        WHERE metadata->>'parentAgentExecutionId' = $1
+        ORDER BY started_at ASC, updated_at ASC
+        LIMIT $2
+      `,
+      [input.parentAgentExecutionId, limit]
+    );
+    return result.rows.map(rowToProcessRun);
+  }
+
   async findProcessRunByDiscordMessageId(messageId: string): Promise<ProcessRunRecord | undefined> {
     const result = await this.pool.query(
       `

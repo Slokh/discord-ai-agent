@@ -57,7 +57,12 @@ describe("internal API run endpoints", () => {
 
     const detail = await fetch(`${runtime.url}/api/runs/run-1`, { headers: auth });
     expect(detail.status).toBe(200);
-    await expect(detail.json()).resolves.toEqual(expect.objectContaining({ run: expect.objectContaining({ runId: "run-1" }) }));
+    await expect(detail.json()).resolves.toEqual(
+      expect.objectContaining({
+        run: expect.objectContaining({ runId: "run-1" }),
+        relatedRuns: [expect.objectContaining({ runId: "task-1", kind: "codegen", currentStep: "opencode_attempt_1" })]
+      })
+    );
 
     const events = await fetch(`${runtime.url}/api/runs/run-1/events`, { headers: auth });
     expect(events.status).toBe(200);
@@ -360,11 +365,30 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     messageId: "1521541635580756031",
     requester: "test",
     source: "test",
-    metadata: {},
+    metadata: { agentExecutionId: "agent-execution-1" },
     links: {},
     startedAt: new Date("2026-06-30T12:00:00Z"),
     completedAt: new Date("2026-06-30T12:00:01Z"),
     updatedAt: new Date("2026-06-30T12:00:01Z")
+  };
+  const childRun: ProcessRunRecord = {
+    runId: "task-1",
+    traceId: "trace-child",
+    kind: "codegen",
+    status: "running",
+    title: "Update console visibility",
+    summary: "Running code update.",
+    guildId: null,
+    channelId: null,
+    userId: null,
+    messageId: null,
+    requester: "test",
+    source: "agent_task",
+    metadata: { parentAgentExecutionId: "agent-execution-1", currentStep: "opencode_attempt_1" },
+    links: {},
+    startedAt: new Date("2026-06-30T12:00:02Z"),
+    completedAt: null,
+    updatedAt: new Date("2026-06-30T12:00:03Z")
   };
   const event: ProcessRunEventRecord = {
     id: 1,
@@ -404,6 +428,8 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     findAgentTaskByDiscordMessageId: async () => undefined,
     listRecentAgentTasks: async () => [],
     listProcessRunsForTrace: async () => [run],
+    listProcessRunsByParentAgentExecutionId: async (input: { parentAgentExecutionId: string }) =>
+      input.parentAgentExecutionId === "agent-execution-1" ? [childRun] : [],
     listAgentTasksForTrace: async () => [],
     getProcessRun: async (runId: string) => (runId === "run-1" ? run : undefined),
     getAgentTask: async () => undefined,

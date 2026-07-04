@@ -15,11 +15,18 @@ import { CodexAppServerClient, providerForModel, type CodexAppServerNotification
 import { diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
 import { codeUpdatePrompt, codeUpdateRecoveryPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
 import { codeUpdateBranchName, codeUpdatePullRequestBody, codeUpdatePullRequestTitle } from "./prFormatting.js";
+import {
+  detectExistingPrReference,
+  hasMergeConflictKeyword,
+  hasPrFollowupKeyword,
+  type ExistingPrReference
+} from "./prBranchReuse.js";
 import { slugify } from "../util/text.js";
 
 export { codeUpdatePrompt, codeUpdateRecoveryPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
 export { diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
 export { codeUpdateBranchName, codeUpdatePullRequestBody, codeUpdatePullRequestTitle } from "./prFormatting.js";
+export { detectExistingPrReference, hasMergeConflictKeyword, hasPrFollowupKeyword, type ExistingPrReference } from "./prBranchReuse.js";
 
 const MAX_CAPTURED_COMMAND_OUTPUT = 40_000;
 const MAX_ACTIVITY_COMMAND_OUTPUT = 12_000;
@@ -164,9 +171,10 @@ async function main() {
       status: "succeeded",
       branchName: result.branchName,
       prUrl: result.prUrl,
+      prNumber: result.prNumber,
       draft: result.draft,
       verifyPassed: result.verifyPassed,
-      metadata: { timingsMs: result.timings, cache: result.cacheSummary }
+      metadata: { timingsMs: result.timings, cache: result.cacheSummary, existingPr: result.existingPr }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -211,7 +219,6 @@ async function recordCodegenFailureDiagnosis(env: SandboxEnv, diagnosis: Codegen
 async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStartedAt: number) {
   const { owner, repo } = parseGitHubRepository(env.githubRepository);
   const prTitle = codeUpdatePullRequestTitle(env.taskTitle);
-  const branchName = codeUpdateBranchName(prTitle, env.taskId);
   const cache = sandboxCachePaths(env, owner, repo);
   const cacheSummary: CacheSummary = {};
   await fs.mkdir(cache.workspacesDir, { recursive: true });
@@ -243,8 +250,64 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       cacheSummary.repo = repoCache.cacheStatus;
     });
 
-    await progress(env, "branch", `Creating implementation branch ${branchName}.`, { branchName });
-    await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir, taskEnv: env, step: "branch" });
+    const octokit = new Octokit({ auth: env.githubToken });
+    const existingPr = await resolveExistingPrBranch({ env, octokit, owner, repo });
+    let branchName: string;
+    let existingPrNumber: number | null = null;
+    let mergeConflictResolution = false;
+    if (existingPr) {
+      branchName = existingPr.branchName;
+      existingPrNumber = existingPr.prNumber;
+      mergeConflictResolution = hasMergeConflictKeyword(env.taskRequest);
+      await progress(env, "branch", `Checking out existing PR #${existingPrNumber} branch ${branchName}.`, {
+        branchName,
+        existingPrNumber,
+        reusingPr: true,
+        mergeConflictResolution
+      });
+      await runCommand("git", ["fetch", "origin", `refs/heads/${branchName}:refs/remotes/origin/${branchName}`], {
+        cwd: checkoutDir,
+        env: gitEnv,
+        taskEnv: env,
+        step: "branch"
+      });
+      await runCommand("git", ["checkout", "-B", branchName, `refs/remotes/origin/${branchName}`], {
+        cwd: checkoutDir,
+        env: gitEnv,
+        taskEnv: env,
+        step: "branch"
+      });
+      await runCommand("git", ["pull", "--ff-only", "origin", branchName], {
+        cwd: checkoutDir,
+        env: gitEnv,
+        taskEnv: env,
+        step: "branch",
+        allowFailure: true
+      });
+      if (mergeConflictResolution) {
+        await progress(env, "merge_conflict_setup", `Merging base branch ${env.githubBaseBranch} into ${branchName} to surface conflicts for resolution.`, {
+          branchName,
+          baseBranch: env.githubBaseBranch
+        });
+        await runCommand("git", ["fetch", "origin", env.githubBaseBranch], {
+          cwd: checkoutDir,
+          env: gitEnv,
+          taskEnv: env,
+          step: "merge_conflict_setup"
+        });
+        await runCommand("git", ["merge", "FETCH_HEAD", "--no-edit"], {
+          cwd: checkoutDir,
+          env: gitEnv,
+          taskEnv: env,
+          step: "merge_conflict_setup",
+          allowFailure: true
+        });
+      }
+    } else {
+      branchName = codeUpdateBranchName(prTitle, env.taskId);
+      await progress(env, "branch", `Creating implementation branch ${branchName}.`, { branchName });
+      await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir, taskEnv: env, step: "branch" });
+    }
     const baseRevision = await gitRevision(checkoutDir, "HEAD");
 
     const dependencyStateBeforeCodex = await readDependencyManifestState(checkoutDir);
@@ -346,7 +409,8 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     if (!preCommitChangeState.hasChanges) {
       throw new Error("Agent task changes disappeared before commit; no PR will be opened.");
     }
-    if (preCommitChangeState.hasWorkingTreeChanges) {
+    const mergeInProgress = await gitMergeInProgress(checkoutDir);
+    if (preCommitChangeState.hasWorkingTreeChanges || mergeInProgress) {
       await progress(env, "commit", "Committing generated working-tree changes.", gitChangeStateMetadata(preCommitChangeState));
       await runCommand("git", ["config", "user.name", "discord-ai-agent"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
       await runCommand("git", ["config", "user.email", "discord-ai-agent-bot@users.noreply.github.com"], {
@@ -356,7 +420,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       });
       await runCommand("git", ["config", "commit.gpgsign", "false"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
       await runCommand("git", ["add", "-A"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
-      await runCommand("git", ["commit", "-m", prTitle], {
+      await runCommand("git", ["commit", mergeInProgress ? "--no-edit" : "-m", ...(mergeInProgress ? [] : [prTitle])], {
         cwd: checkoutDir,
         taskEnv: env,
         step: "commit"
@@ -364,55 +428,69 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
     } else {
       await progress(env, "commit_skipped", "Generated changes were already committed by the coding harness; pushing existing commits.", gitChangeStateMetadata(preCommitChangeState));
     }
-    await timedPhase(env, timings, "push", "Pushing the generated branch to GitHub.", async () => {
-      await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
-    }, { branchName });
+    await timedPhase(env, timings, "push", `Pushing the generated branch to GitHub${existingPrNumber ? ` (updating PR #${existingPrNumber})` : ""}.`, async () => {
+      const pushArgs = ["push", "origin", `HEAD:${branchName}`];
+      if (mergeConflictResolution) pushArgs.push("--force-with-lease");
+      await runCommand("git", pushArgs, { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
+    }, { branchName, existingPrNumber, mergeConflictResolution });
 
     const draft = false;
-    const octokit = new Octokit({ auth: env.githubToken });
-    const initialPrBody = codeUpdatePullRequestBody({ env });
-    const pr = await timedPhase(env, timings, "pr", "Opening the GitHub pull request.", async () =>
-      octokit.pulls.create({
-        owner,
-        repo,
-        title: prTitle,
-        head: branchName,
-        base: env.githubBaseBranch,
-        draft,
-        body: initialPrBody
-      }), { draft }
-    );
+    const finalPrBody = codeUpdatePullRequestBody({ env });
+    let prUrl: string;
+    let prNumber: number;
+    if (existingPrNumber) {
+      prNumber = existingPrNumber;
+      prUrl = await timedPhase(env, timings, "pr_update", `Updating existing pull request #${existingPrNumber}.`, async () => {
+        await octokit.pulls.update({ owner, repo, pull_number: existingPrNumber, title: prTitle, body: finalPrBody });
+        const existing = await octokit.pulls.get({ owner, repo, pull_number: existingPrNumber });
+        return existing.data.html_url;
+      }, { existingPrNumber, branchName });
+    } else {
+      const initialPrBody = codeUpdatePullRequestBody({ env });
+      const pr = await timedPhase(env, timings, "pr", "Opening the GitHub pull request.", async () =>
+        octokit.pulls.create({
+          owner,
+          repo,
+          title: prTitle,
+          head: branchName,
+          base: env.githubBaseBranch,
+          draft,
+          body: initialPrBody
+        }), { draft }
+      );
+      prNumber = pr.data.number;
+      prUrl = pr.data.html_url;
+      await octokit.pulls
+        .update({ owner, repo, pull_number: prNumber, body: finalPrBody })
+        .catch((error) => {
+          console.error("Failed to update PR body with final timings", error);
+        });
+    }
 
     timings.total = Date.now() - totalStartedAt;
-    const finalPrBody = codeUpdatePullRequestBody({ env });
-    await octokit.pulls
-      .update({
-        owner,
-        repo,
-        pull_number: pr.data.number,
-        body: finalPrBody
-      })
-      .catch((error) => {
-        console.error("Failed to update PR body with final timings", error);
-      });
     await recordArtifact(env, {
       kind: "pr_body",
       name: "Pull request body",
       content: finalPrBody,
       contentType: "text/markdown",
-      metadata: { prUrl: pr.data.html_url, draft, verifyPassed: null }
+      metadata: { prUrl, prNumber, draft, verifyPassed: null, existingPr: Boolean(existingPrNumber) }
     });
     await progress(env, "task_complete", "Code update task finished.", {
       durationMs: timings.total,
       timingsMs: timings,
-      cache: cacheSummary
+      cache: cacheSummary,
+      prUrl,
+      prNumber,
+      existingPr: Boolean(existingPrNumber)
     });
 
     return {
       branchName,
-      prUrl: pr.data.html_url,
+      prUrl,
+      prNumber,
       draft,
       verifyPassed: null,
+      existingPr: Boolean(existingPrNumber),
       timings,
       cacheSummary
     };
@@ -901,6 +979,77 @@ async function gitStatusPorcelain(checkoutDir: string) {
 async function gitRevision(checkoutDir: string, revision: string) {
   const result = await execFileText("git", ["rev-parse", revision], { cwd: checkoutDir });
   return result.stdout.trim();
+}
+
+async function gitMergeInProgress(checkoutDir: string): Promise<boolean> {
+  try {
+    await execFileText("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], { cwd: checkoutDir });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveExistingPrBranch(input: {
+  env: SandboxEnv;
+  octokit: Octokit;
+  owner: string;
+  repo: string;
+}): Promise<{ prNumber: number; branchName: string } | null> {
+  const reference = detectExistingPrReference(input.env.taskRequest);
+  if (reference) {
+    const prNumber = reference.prNumber;
+    try {
+      const pr = await input.octokit.pulls.get({ owner: input.owner, repo: input.repo, pull_number: prNumber });
+      const branchName = pr.data.head?.ref;
+      if (branchName) {
+        await progress(input.env, "existing_pr_detected", `Detected referenced PR #${prNumber} on branch ${branchName}.`, {
+          prNumber,
+          branchName,
+          source: reference.kind
+        });
+        return { prNumber, branchName };
+      }
+    } catch (error) {
+      await progress(input.env, "existing_pr_lookup_failed", `Could not load referenced PR #${prNumber}; falling back to a new branch.`, {
+        prNumber,
+        source: reference.kind,
+        error: conciseError(error)
+      }).catch(() => undefined);
+    }
+    return null;
+  }
+
+  if (hasPrFollowupKeyword(input.env.taskRequest)) {
+    try {
+      const prs = await input.octokit.pulls.list({
+        owner: input.owner,
+        repo: input.repo,
+        state: "open",
+        sort: "updated",
+        direction: "desc",
+        per_page: 20
+      });
+      const recent = prs.data
+        .map((pr) => ({ prNumber: pr.number, branchName: pr.head?.ref ?? "", updatedAt: pr.updated_at ?? "" }))
+        .filter((pr) => Boolean(pr.branchName) && pr.branchName.startsWith("ai/"))
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0];
+      if (recent) {
+        await progress(input.env, "existing_pr_detected", `Detected recent follow-up PR #${recent.prNumber} on branch ${recent.branchName}.`, {
+          prNumber: recent.prNumber,
+          branchName: recent.branchName,
+          source: "keyword"
+        });
+        return recent;
+      }
+    } catch (error) {
+      await progress(input.env, "existing_pr_lookup_failed", "Could not list recent PRs for follow-up reuse; falling back to a new branch.", {
+        error: conciseError(error)
+      }).catch(() => undefined);
+    }
+  }
+
+  return null;
 }
 
 export async function readGitChangeState(checkoutDir: string, baseRevision: string): Promise<GitChangeState> {

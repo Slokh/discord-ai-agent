@@ -18,9 +18,12 @@ import {
   codeUpdatePullRequestTitle,
   codeUpdatePrompt,
   codeUpdateRecoveryPrompt,
+  detectExistingPrReference,
   diagnoseCodegenFailure,
   dependencyCacheKey,
   fetchOpenCodeHealth,
+  hasMergeConflictKeyword,
+  hasPrFollowupKeyword,
   openCodeConfigJson,
   openCodeModelId,
   openCodeRunArgs,
@@ -167,6 +170,42 @@ describe("sandboxRunner", () => {
     expect(codeUpdateBranchName("Use loading reaction instead of Thinking reply", "task-demo-1234-abcd5678")).toBe(
       "ai/use-loading-reaction-thinking-reply-5678"
     );
+  });
+
+  it("detects an explicit PR number reference in the task request", () => {
+    expect(detectExistingPrReference("Fix the merge conflict on PR #1234 and push.")).toEqual({
+      kind: "number",
+      prNumber: 1234
+    });
+  });
+
+  it("detects a full pull request URL in the task request", () => {
+    expect(detectExistingPrReference("Resolve the conflicts at https://github.com/example/repo/pull/42 please.")).toEqual({
+      kind: "url",
+      prNumber: 42,
+      owner: "example",
+      repo: "repo"
+    });
+  });
+
+  it("ignores bare issue-style numbers that are not PR references", () => {
+    expect(detectExistingPrReference("Update channel #1172353113471074314 to be excluded.")).toBeNull();
+  });
+
+  it("returns null when no PR is referenced", () => {
+    expect(detectExistingPrReference("Add a loading reaction while the bot is working.")).toBeNull();
+  });
+
+  it("flags follow-up PR keywords without an explicit PR number", () => {
+    expect(hasPrFollowupKeyword("Fix the merge conflict on the last PR.")).toBe(true);
+    expect(hasPrFollowupKeyword("Push a follow-up change to the existing PR.")).toBe(true);
+    expect(hasPrFollowupKeyword("Add a new feature for the bot.")).toBe(false);
+  });
+
+  it("flags merge-conflict keyword requests separately from generic follow-ups", () => {
+    expect(hasMergeConflictKeyword("Fix the merge conflict on PR #99.")).toBe(true);
+    expect(hasMergeConflictKeyword("Resolve the conflict markers left in the branch.")).toBe(true);
+    expect(hasMergeConflictKeyword("Add a follow-up change to the existing PR.")).toBe(false);
   });
 
   it("humanizes legacy kebab task titles before opening PRs", () => {

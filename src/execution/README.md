@@ -7,17 +7,17 @@ Owns sandboxed code-update execution from queued task to PR.
 - Backend selection and sandbox launch.
 - Repository checkout, branch names, dependency cache, git operations, scan/test commands, push, and PR body/title.
 - Codex and OpenCode harness configuration, prompts, transcripts, recovery, and failure diagnosis.
-- Codegen context packs and preflight guidance.
+- Codegen repository navigation context and exact request anchors.
 - Task progress callbacks, command artifacts, and terminal output capture.
 
 ## Change Routing
 
-- Codegen latency usually starts in context-pack quality, first-edit latency, harness round count, cache hit/miss state, and repeated reads.
+- Codegen latency usually starts in repository navigation quality, first-edit latency, harness round count, cache hit/miss state, and repeated reads.
 - PR title/body/branch formatting belongs here, not in Discord or tool registry.
 - Request anchor extraction and exact-match target-file ranking live in `codegenAnchors.ts`.
 - Failure classification and diagnostic text live in `codegenFailureDiagnosis.ts`; runner code only records the diagnosis as progress/artifacts.
-- Lifecycle/context classification lives in `codegenContextRules.ts`; keep it generic and ownership-oriented.
 - Initial and recovery coding-agent prompt text lives in `codegenPrompts.ts`; keep it short, generic, and architecture-driven.
+- Avoid production request classifiers that choose a lifecycle for the agent. Prefer exact anchors plus clear repo/folder ownership docs so the coding agent can decide the implementation path.
 - PR branch/title/body formatting lives in `prFormatting.ts`.
 - Kubernetes/local-process launch behavior belongs in `backend.ts` and the queue/reconciler callers.
 - Prompt changes should stay generic and architecture-driven; prefer clearer repo ownership over adding task-specific prompt instructions.

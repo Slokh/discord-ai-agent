@@ -218,7 +218,7 @@ describe("sandboxRunner", () => {
       })
     );
     expect(noDiff.summary).toContain("OpenCode finished but left the repository with no code diff");
-    expect(noDiff.nextAction).toContain("request context");
+    expect(noDiff.nextAction).toContain("repository navigation context");
 
     const scan = diagnoseCodegenFailure({
       error: new Error("Release scan failed after agent task; refusing to push generated changes."),
@@ -318,25 +318,23 @@ describe("sandboxRunner", () => {
     }
   });
 
-  it("includes repo guide excerpts and exact focused check commands in the context pack", async () => {
+  it("includes repo guide excerpts and exact-anchor check commands in the context pack", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-context-checks-"));
     try {
-      await fs.mkdir(path.join(tempDir, "src", "tools"), { recursive: true });
+      await fs.mkdir(path.join(tempDir, "src", "discord"), { recursive: true });
       await fs.mkdir(path.join(tempDir, "tests", "unit"), { recursive: true });
       await fs.writeFile(path.join(tempDir, "AGENTS.md"), "Use rg first.\nAdd focused regression tests.\n", "utf8");
       await fs.writeFile(path.join(tempDir, "tsconfig.json"), '{"compilerOptions":{}}\n', "utf8");
-      await fs.writeFile(path.join(tempDir, "src", "tools", "registry.ts"), "export {}\n", "utf8");
-      await fs.writeFile(path.join(tempDir, "src", "tools", "coreTools.ts"), "export {}\n", "utf8");
-      await fs.writeFile(path.join(tempDir, "tests", "unit", "tool-registry.test.ts"), "export {}\n", "utf8");
-      await fs.writeFile(path.join(tempDir, "tests", "unit", "core-tools.test.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "discord", "client.ts"), 'export const placeholder = "Thinking...";\n', "utf8");
+      await fs.writeFile(path.join(tempDir, "tests", "unit", "discord-client.test.ts"), 'expect("Thinking...").toBeTruthy();\n', "utf8");
 
-      const context = await buildCodegenContextPack(tempDir, "Improve the tool schema for Discord history search.");
+      const context = await buildCodegenContextPack(tempDir, 'Replace the "Thinking..." placeholder reply behavior.');
       const rendered = renderCodegenContextPack(context);
       const prompt = codeUpdatePrompt(
         {
           taskId: "task-1",
           requestedBy: "kartik",
-          taskRequest: "Improve the tool schema for Discord history search."
+          taskRequest: 'Replace the "Thinking..." placeholder reply behavior.'
         },
         context
       );
@@ -344,8 +342,8 @@ describe("sandboxRunner", () => {
       expect(context.repoGuideExcerpt).toContain("Use rg first.");
       expect(context.suggestedCheckCommands).toEqual([
         {
-          command: "npm test -- tests/unit/tool-registry.test.ts tests/unit/core-tools.test.ts",
-          reason: "Run the closest focused tests for the suggested source/test area; avoid broad suites unless their output is directly needed."
+          command: "npm test -- tests/unit/discord-client.test.ts",
+          reason: "Run the closest focused tests for exact request anchors; avoid broad suites unless their output is directly needed."
         },
         {
           command: "npm run typecheck",
@@ -354,9 +352,9 @@ describe("sandboxRunner", () => {
       ]);
       expect(rendered).toContain("Repository guide excerpt:");
       expect(rendered).toContain("> Add focused regression tests.");
-      expect(rendered).toContain("Suggested focused checks:");
-      expect(rendered).toContain("npm test -- tests/unit/tool-registry.test.ts tests/unit/core-tools.test.ts");
-      expect(prompt).toContain("Run the suggested focused checks from the preflight context");
+      expect(rendered).toContain("Suggested anchor checks:");
+      expect(rendered).toContain("npm test -- tests/unit/discord-client.test.ts");
+      expect(prompt).toContain("Run suggested anchor checks");
       expect(prompt).toContain("Validation ladder");
       expect(prompt).toContain("Do not run `npm run verify` or broad test suites");
     } finally {
@@ -386,7 +384,7 @@ describe("sandboxRunner", () => {
 
     const initial = codeUpdatePrompt(env as any, context);
     expect(initial).toContain("If AGENTS.md exists, read it before editing");
-    expect(initial).toContain("Use the preflight context as a starting map");
+    expect(initial).toContain("Use repository guides, exact anchors, and the project map as navigation aids");
     expect(initial).toContain("Batch initial reconnaissance");
     expect(initial).toContain("Make a focused regression test early");
     expect(initial).toContain("src/discord/taskNotifications.ts");
@@ -412,16 +410,14 @@ describe("sandboxRunner", () => {
     expect(recovery).toContain("looked at task notifications");
   });
 
-  it("guides the coding agent toward lifecycle-first implementation before broad exploration", () => {
+  it("guides the coding agent toward repo-owned implementation before broad exploration", () => {
     const prompt = codeUpdatePrompt({
       taskId: "task-1",
       requestedBy: "kartik",
       taskRequest: "Change the user-visible loading state."
     });
 
-    expect(prompt).toContain("map it to the lifecycle");
-    expect(prompt).toContain("trigger -> acknowledgement/status -> work -> success response -> error path -> cleanup");
-    expect(prompt).toContain("Prefer a small shared lifecycle owner");
+    expect(prompt).toContain("Let repo docs, folder READMEs, source ownership, and tests determine the implementation path");
     expect(prompt).toContain("Batch initial reconnaissance");
     expect(prompt).toContain("Do not keep alternating search/read/search/read");
     expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-progress first_edit");
@@ -486,28 +482,20 @@ describe("sandboxRunner", () => {
     }
   });
 
-  it("builds a code update status lifecycle context pack from product-language requests", async () => {
+  it("does not inject lifecycle classifier focus for product-language codegen requests", async () => {
     const contextPack = await buildCodegenContextPack(
       process.cwd(),
       "Fix the bug where the bot's loading indicator for code update requests can stick around after the coding agent finishes."
     );
+    const renderedContext = renderCodegenContextPack(contextPack);
 
-    expect(contextPack.focus).toBe("agent_task_status_lifecycle");
-      expect(contextPack.likelyMechanisms).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining("response sink"),
-          expect.stringContaining("task notifier"),
-          expect.stringContaining("Terminal task rendering")
-        ])
-    );
-    expect(contextPack.suggestedFiles?.map((file) => file.path)).toEqual(
-      expect.arrayContaining(["src/discord/taskNotifications.ts", "src/tools/agentTaskTools.ts"])
-    );
-    expect(contextPack.firstInvariant).toContain("without leaving stale loading/progress text after completion");
-    expect(contextPack.suggestedFirstEdit).toContain("focused task notification or repository test");
+    expect("focus" in contextPack).toBe(false);
+    expect(renderedContext).not.toContain("Focus:");
+    expect(renderedContext).toContain("Code-update task lifecycle");
+    expect(renderedContext).toContain("Discord mention and reply lifecycle");
   });
 
-  it("routes Discord knowledge/indexing changes to storage owners instead of generated tool-name anchors", async () => {
+  it("exposes durable knowledge owners through the stable project map without lifecycle classification", async () => {
     const taskRequest = [
       "Fully exclude channel ID 1172353113471074314 (#trivia-sucks) from all current and future knowledge.",
       "Remove indexed messages, embeddings, message index, search index, stats, everything.",
@@ -517,23 +505,25 @@ describe("sandboxRunner", () => {
     const contextPack = await buildCodegenContextPack(process.cwd(), taskRequest);
     const renderedContext = renderCodegenContextPack(contextPack);
 
-    expect(contextPack.focus).toBe("discord_knowledge_lifecycle");
+    expect("focus" in contextPack).toBe(false);
     expect(contextPack.requestAnchors).not.toEqual(expect.arrayContaining(["searchDiscordHistory", "getDiscordStats", "searchDiscordAttachments"]));
-    expect(contextPack.suggestedFiles?.map((file) => file.path)).toEqual(
-      expect.arrayContaining(["src/db/repositories.ts", "src/discord/crawler.ts", "src/discord/messagePersistence.ts"])
-    );
-    expect(contextPack.suggestedFiles?.map((file) => file.path).slice(0, 3)).not.toContain("src/tools/registry.ts");
-    expect(renderedContext).toContain("Focus: discord_knowledge_lifecycle");
-    expect(renderedContext).toContain("Do not start in the tool registry");
+    expect(renderedContext).not.toContain("Focus:");
+    expect(renderedContext).toContain("Discord knowledge, indexing, and retrieval");
+    expect(renderedContext).toContain("src/db/repositories.ts");
+    expect(renderedContext).toContain("src/discord/crawler.ts");
+    expect(renderedContext).toContain("src/discord/messagePersistence.ts");
   });
 
   it("keeps tool names as anchors when the request is actually about tool schemas", async () => {
     const taskRequest = "Improve the tool schema and tool description for searchDiscordHistory so the model chooses the right tool arguments.";
 
     const contextPack = await buildCodegenContextPack(process.cwd(), taskRequest);
+    const renderedContext = renderCodegenContextPack(contextPack);
 
-    expect(contextPack.focus).toBe("model_tool_routing");
+    expect("focus" in contextPack).toBe(false);
+    expect(renderedContext).not.toContain("Focus:");
     expect(contextPack.requestAnchors).toEqual(expect.arrayContaining(["searchDiscordHistory"]));
+    expect(renderedContext).toContain("Model-led tools");
   });
 
   it("prioritizes exact request anchors before broad lifecycle guesses", async () => {
@@ -582,14 +572,14 @@ describe("sandboxRunner", () => {
       );
       expect(contextPack.anchorTargetFiles?.[0]?.path).toBe("src/discord/client.ts");
       expect(contextPack.suggestedFiles?.[0]?.path).toBe("src/discord/client.ts");
-      expect(contextPack.focus).toBe("discord_response_lifecycle");
+      expect("focus" in contextPack).toBe(false);
       expect(renderedContext).toContain("Concrete request anchors:");
       expect(renderedContext).toContain("Target files from exact request evidence:");
-      expect(renderedContext).toContain("Concrete request anchors outrank broad lifecycle guesses");
+      expect(renderedContext).toContain("Concrete request anchors are narrow evidence");
       expect(renderedContext).toContain("Do not spend more than three targeted file reads before the first code diff");
       expect(prompt).toContain("If exact request anchors or target files are present");
       expect(prompt).toContain("patch the owning source file");
-      expect(prompt).toContain("Prefer a small shared lifecycle owner");
+      expect(prompt).toContain("Let repo docs, folder READMEs, source ownership, and tests determine the implementation path");
       expect(recovery).toContain("Patch-first targets from the original request anchors:");
       expect(recovery).toContain("Do not run more than one read/search command before the first patch");
       expect(recovery).toContain("Use apply_patch for the recovery edit when available");
@@ -632,7 +622,7 @@ describe("sandboxRunner", () => {
     }
   });
 
-  it("includes the focused context pack in the Codex prompt", async () => {
+  it("includes repository navigation context in the coding prompt without lifecycle focus", async () => {
     const contextPack = await buildCodegenContextPack(process.cwd(), "Fix code update loading status after completion.");
     const renderedContext = renderCodegenContextPack(contextPack);
     const prompt = codeUpdatePrompt(
@@ -644,12 +634,13 @@ describe("sandboxRunner", () => {
       contextPack
     );
 
-    expect(renderedContext).toContain("Focus: agent_task_status_lifecycle");
-    expect(prompt).toContain("Codegen preflight context:");
-    expect(prompt).toContain("Focus: agent_task_status_lifecycle");
-    expect(prompt).toContain("Concrete anchors from the request outrank broad lifecycle guesses");
-    expect(prompt).toContain("First implementable invariant:");
-    expect(prompt).toContain("Suggested first edit:");
+    expect(renderedContext).not.toContain("Focus:");
+    expect(renderedContext).toContain("Project map:");
+    expect(renderedContext).toContain("Code-update task lifecycle");
+    expect(prompt).toContain("Repository navigation context:");
+    expect(prompt).not.toContain("Focus:");
+    expect(prompt).not.toContain("First implementable invariant:");
+    expect(prompt).not.toContain("Suggested first edit:");
   });
 
   it("repairs mirror-backed worktree remotes so branch refspec pushes work", async () => {

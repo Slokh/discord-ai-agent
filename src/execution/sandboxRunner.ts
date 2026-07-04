@@ -13,7 +13,6 @@ import {
 } from "./codegenAnchors.js";
 import { CodexAppServerClient, providerForModel, type CodexAppServerNotification } from "./codexAppServer.js";
 import { diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
-import { selectCodegenContextRule, type CodegenContextRule } from "./codegenContextRules.js";
 import { codeUpdatePrompt, codeUpdateRecoveryPrompt, renderCodegenContextPack } from "./codegenPrompts.js";
 import { codeUpdateBranchName, codeUpdatePullRequestBody, codeUpdatePullRequestTitle } from "./prFormatting.js";
 import { slugify } from "../util/text.js";
@@ -71,14 +70,8 @@ export type CodegenContextPack = {
   requestAnchors?: string[];
   anchorMatches?: CodegenAnchorMatch[];
   anchorTargetFiles?: Array<{ path: string; reason: string }>;
-  focus?: string;
-  rationale?: string;
-  likelyMechanisms?: string[];
   suggestedFiles?: Array<{ path: string; reason: string }>;
   suggestedCheckCommands?: Array<{ command: string; reason: string }>;
-  firstInvariant?: string;
-  suggestedFirstEdit?: string;
-  avoid?: string[];
   sandboxContract: string[];
   firstMoveRules: string[];
   projectMap: Array<{
@@ -271,7 +264,6 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       content: renderedContextPack,
       contentType: "text/plain",
       metadata: {
-        focus: contextPack.focus,
         files: uniqueStrings([
           ...(contextPack.suggestedFiles?.map((file) => file.path) ?? []),
           ...contextPack.projectMap.flatMap((entry) => entry.files)
@@ -1805,7 +1797,6 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
   const requestAnchors = extractCodegenRequestAnchors(taskRequest);
   const anchorMatches = await findCodegenAnchorMatches(checkoutDir, requestAnchors);
   const anchorTargetFiles = anchorTargetFilesFromMatches(anchorMatches);
-  const focusedRule = selectCodegenContextRule(taskRequest, anchorMatches);
   const projectMap = await existingProjectMap(checkoutDir, [
     {
       area: "Code-update task lifecycle",
@@ -1826,6 +1817,29 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       purpose: "Incoming Discord messages are persisted, routed through the model/tool loop, and answered or updated in Discord.",
       files: ["src/discord/client.ts", "src/discord/responseSink.ts", "src/agent/router.ts", "src/discord/messagePersistence.ts", "src/db/repositories.ts"],
       checks: ["tests/unit/discord-response-sink.test.ts", "tests/unit/discord-client.test.ts", "tests/integration/agent.test.ts", "tests/unit/message-persistence.test.ts"]
+    },
+    {
+      area: "Discord knowledge, indexing, and retrieval",
+      purpose:
+        "Discord history is stored, indexed, embedded, searched, summarized, and filtered through durable data owners before tools expose it to the model.",
+      files: [
+        "src/db/repositories.ts",
+        "src/discord/crawler.ts",
+        "src/discord/messagePersistence.ts",
+        "src/memory/search.ts",
+        "src/memory/embedding.ts",
+        "src/tools/discordHistoryFormatting.ts",
+        "src/tools/discordStatsFormatting.ts",
+        "src/tools/discordChannelTopics.ts",
+        "src/tools/discordAttachments.ts"
+      ],
+      checks: [
+        "tests/integration/repository-db.test.ts",
+        "tests/unit/crawler.test.ts",
+        "tests/unit/message-persistence.test.ts",
+        "tests/unit/search.test.ts",
+        "tests/unit/core-tools.test.ts"
+      ]
     },
     {
       area: "Model-led tools",
@@ -1854,8 +1868,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       checks: []
     }
   ]);
-  const focusedSuggestedFiles = await existingSuggestedFiles(checkoutDir, focusedRule.suggestedFiles);
-  const suggestedCheckCommands = await buildSuggestedCheckCommands(checkoutDir, focusedSuggestedFiles);
+  const suggestedCheckCommands = await buildSuggestedCheckCommands(checkoutDir, anchorTargetFiles);
   const firstMoveRules = [
     "Read AGENTS.md first when present.",
     ...(anchorTargetFiles.length
@@ -1866,6 +1879,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       : []),
     "Batch the first reconnaissance pass: read the closest owner, nearest helper/caller, closest README, and closest test together when possible.",
     "Avoid repeated search/read cycles once the owner is clear; make the first patch, then let focused checks guide follow-up reads.",
+    "Choose the owner from repository docs, folder READMEs, source names, and exact anchors; do not rely on generated lifecycle classification.",
     "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
     "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
     "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",
@@ -1876,11 +1890,10 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
   return {
     repoGuidePath,
     repoGuideExcerpt,
-    ...focusedRule,
     requestAnchors,
     anchorMatches,
     anchorTargetFiles,
-    suggestedFiles: mergeSuggestedFiles(anchorTargetFiles, focusedSuggestedFiles),
+    suggestedFiles: anchorTargetFiles,
     suggestedCheckCommands,
     sandboxContract: [
       "You are already inside an isolated Kubernetes sandbox with full filesystem/network access for this task.",
@@ -1894,24 +1907,6 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     firstMoveRules,
     projectMap
   };
-}
-
-function mergeSuggestedFiles(
-  anchorTargetFiles: Array<{ path: string; reason: string }>,
-  suggestedFiles: Array<{ path: string; reason: string }>
-) {
-  const seen = new Set<string>();
-  return [...anchorTargetFiles, ...suggestedFiles].filter((file) => {
-    if (seen.has(file.path)) return false;
-    seen.add(file.path);
-    return true;
-  });
-}
-
-async function existingSuggestedFiles(checkoutDir: string, files: CodegenContextRule["suggestedFiles"]) {
-  const existing = await Promise.all(files.map(async (file) => ((await pathExists(path.join(checkoutDir, file.path))) ? file : null)));
-  const filtered = existing.filter((file): file is CodegenContextRule["suggestedFiles"][number] => Boolean(file));
-  return filtered.length ? filtered : files;
 }
 
 async function existingProjectMap(checkoutDir: string, entries: CodegenContextPack["projectMap"]) {
@@ -1944,7 +1939,7 @@ async function buildSuggestedCheckCommands(checkoutDir: string, files: Array<{ p
   if (existingTests.length > 0) {
     commands.push({
       command: `npm test -- ${existingTests.map(shellQuoteArg).join(" ")}`,
-      reason: "Run the closest focused tests for the suggested source/test area; avoid broad suites unless their output is directly needed."
+      reason: "Run the closest focused tests for exact request anchors; avoid broad suites unless their output is directly needed."
     });
   }
   if (files.some((file) => isTypeScriptPath(file.path)) && (await pathExists(path.join(checkoutDir, "tsconfig.json")))) {

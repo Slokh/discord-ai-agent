@@ -549,6 +549,134 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
   });
 
+  it("fans terminal task failures into executions and releases warm leases", async () => {
+    const taskId = `task-${randomUUID()}`;
+    const sessionId = `codegen-session-${taskId}`;
+    const executionId = `codegen-execution-${taskId}`;
+    const agentSessionId = `agent-session-${taskId}`;
+    const agentExecutionId = `agent-task-execution-${taskId}`;
+    const traceId = `trace-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const sandboxId = `codegen-sandbox-${randomUUID()}`;
+
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId,
+      guildId,
+      channelId,
+      userId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      taskType: "code_update",
+      title: "Failure fanout test",
+      request: "fail before sandbox callback",
+      requestedBy: "tester",
+      backend: "local-process-sandbox"
+    });
+    await codegenRepo.upsertSession({
+      sessionId,
+      traceId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "Failure fanout test",
+      request: "fail before sandbox callback",
+      requestedBy: "tester",
+      status: "running"
+    });
+    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running", sandboxId });
+    await codegenRepo.upsertSession({
+      sessionId: agentSessionId,
+      traceId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "Failure fanout test",
+      request: "fail before sandbox callback",
+      requestedBy: "tester",
+      status: "running",
+      metadata: { runtime: "agent" }
+    });
+    await codegenRepo.createExecution({
+      executionId: agentExecutionId,
+      sessionId: agentSessionId,
+      taskId,
+      traceId,
+      status: "running",
+      harness: "runCodingAgent",
+      sandboxId,
+      metadata: { runtime: "agent" }
+    });
+    await codegenRepo.upsertSandboxLease({ sandboxId, repo: "Slokh/discord-ai-agent" });
+    await codegenRepo.acquireSandboxLease({
+      repo: "Slokh/discord-ai-agent",
+      sandboxId,
+      executionId,
+      leaseOwner: "worker-test"
+    });
+
+    await repo.markAgentTaskFailed({
+      taskId,
+      error: "Sandbox failed to start.",
+      metadata: { failedStep: "sandbox_start" }
+    });
+
+    const terminalExecutions = await pool.query(
+      "SELECT execution_id, status, error, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      [[executionId, agentExecutionId]]
+    );
+    expect(terminalExecutions.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: executionId,
+          status: "failed",
+          error: "Sandbox failed to start.",
+          metadata: expect.objectContaining({ failedStep: "sandbox_start" })
+        }),
+        expect.objectContaining({
+          execution_id: agentExecutionId,
+          status: "failed",
+          error: "Sandbox failed to start.",
+          metadata: expect.objectContaining({ failedStep: "sandbox_start", runtime: "agent" })
+        })
+      ])
+    );
+    const lease = await pool.query("SELECT status, lease_owner, execution_id, metadata FROM codegen_sandbox_leases WHERE sandbox_id = $1", [
+      sandboxId
+    ]);
+    expect(lease.rows[0]).toEqual(
+      expect.objectContaining({
+        status: "idle",
+        lease_owner: null,
+        execution_id: null,
+        metadata: expect.objectContaining({ releasedBy: "task.completed", releasedTaskId: taskId, releasedStatus: "failed" })
+      })
+    );
+    const terminalEvents = await pool.query(
+      "SELECT execution_id, event_name, summary, metadata FROM codegen_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
+      [[executionId, agentExecutionId]]
+    );
+    expect(terminalEvents.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execution_id: executionId,
+          event_name: "codegen.completed",
+          summary: "Sandbox failed to start.",
+          metadata: expect.objectContaining({ status: "failed", failedStep: "sandbox_start" })
+        }),
+        expect.objectContaining({
+          execution_id: agentExecutionId,
+          event_name: "agent.task.completed",
+          summary: "Sandbox failed to start.",
+          metadata: expect.objectContaining({ status: "failed", failedStep: "sandbox_start" })
+        })
+      ])
+    );
+  });
+
   it("marks stale Discord process runs failed and closes running spans", async () => {
     const runId = `run-${randomUUID()}`;
     const traceId = `trace-${randomUUID()}`;

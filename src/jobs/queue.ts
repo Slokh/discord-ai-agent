@@ -607,24 +607,9 @@ export async function startJobs(input: {
               await input.repo?.markAgentTaskFailed({
                 taskId: job.data.taskId,
                 status: isNoChangesTaskError(message) ? "no_changes" : "failed",
-                error: message
+                error: message,
+                metadata: { backend: backendName, failedStep: "sandbox_start" }
               });
-              await input.codegenRepo
-                ?.updateExecution({
-                  executionId,
-                  status: isNoChangesTaskError(message) ? "no_changes" : "failed",
-                  error: message
-                })
-                .catch((codegenError) => logger.warn({ err: codegenError, taskId: job.data.taskId }, "Failed to mark codegen execution failed"));
-              if (acquiredLease && input.codegenRepo) {
-                await input.codegenRepo
-                  .releaseSandboxLease({
-                    sandboxId: acquiredLease.sandboxId,
-                    executionId,
-                    metadata: { releasedBy: "agent.task.start_failed", taskId: job.data.taskId }
-                  })
-                  .catch((releaseError) => logger.warn({ err: releaseError, taskId: job.data.taskId }, "Failed to release codegen lease after start failure"));
-              }
               logger.error(
                 {
                   err: error,

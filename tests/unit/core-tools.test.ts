@@ -7,6 +7,7 @@ import {
   findDiscordUsers,
   formatAgentTaskResult,
   generateImage,
+  getAgentTaskStatus,
   getDeploymentStatus,
   getDiscordChannelTopics,
   getDiscordStats,
@@ -1192,6 +1193,97 @@ describe("getDeploymentStatus", () => {
     expect(auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
         resultSummary: expect.stringContaining("\"activeTasks\":1")
+      })
+    );
+  });
+});
+
+describe("getAgentTaskStatus", () => {
+  it("prefers runtime task events over legacy task events", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const task = {
+      taskId: "task-1",
+      traceId: "trace-1",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      threadKey: "discord:guild:channel",
+      discordResponseChannelId: "channel",
+      discordResponseMessageId: "message-1",
+      retriedFromTaskId: null,
+      taskType: "code_update",
+      title: "Improve runtime status",
+      request: "make task status use runtime events",
+      requestedBy: "kartik",
+      status: "running",
+      backend: "local-process-sandbox",
+      currentStep: "opencode_round_finished",
+      statusMessage: "OpenCode round 1 finished.",
+      branchName: null,
+      prUrl: null,
+      draft: null,
+      verifyPassed: null,
+      error: null,
+      createdAt: new Date("2026-07-01T12:00:00.000Z"),
+      startedAt: new Date("2026-07-01T12:00:01.000Z"),
+      cancelledAt: null,
+      completedAt: null,
+      notifiedAt: null,
+      notificationError: null,
+      progressUpdatedAt: new Date("2026-07-01T12:01:00.000Z"),
+      lastRenderedSignature: null,
+      lastRenderedAt: null,
+      terminalRenderedAt: null,
+      updatedAt: new Date("2026-07-01T12:01:00.000Z")
+    };
+    const getAgentRuntimeTaskEventsForTask = vi.fn(async () => [
+      {
+        id: 2,
+        taskId: "task-1",
+        traceId: "trace-1",
+        eventName: "agent.task.progress",
+        level: "info",
+        summary: "Runtime event won.",
+        metadata: { taskId: "task-1", step: "opencode_round_finished" },
+        createdAt: new Date("2026-07-01T12:01:00.000Z")
+      }
+    ]);
+    const getTaskEventsForTask = vi.fn(async () => [
+      {
+        id: 1,
+        taskId: "task-1",
+        traceId: "trace-1",
+        eventName: "task.progress",
+        level: "info",
+        summary: "Legacy event should not be shown.",
+        metadata: { step: "repo" },
+        createdAt: new Date("2026-07-01T12:00:30.000Z")
+      }
+    ]);
+    const ctx = {
+      repo: {
+        getAgentTask: vi.fn(async () => task),
+        getAgentRuntimeTaskEventsForTask,
+        getTaskEventsForTask,
+        getSandboxCommandEvents: vi.fn(async () => []),
+        auditTool
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getAgentTaskStatus(ctx, { taskId: "task-1", limit: 3 });
+
+    expect(response).toContain("agent.task.progress task=task-1 - Runtime event won.");
+    expect(response).not.toContain("Legacy event should not be shown.");
+    expect(getAgentRuntimeTaskEventsForTask).toHaveBeenCalledWith({ taskId: "task-1", limit: 3 });
+    expect(getTaskEventsForTask).not.toHaveBeenCalled();
+    expect(auditTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "getAgentTaskStatus",
+        resultSummary: expect.stringContaining("\"events\":1")
       })
     );
   });

@@ -68,12 +68,7 @@ export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: str
 
   const limit = clampInteger(input.limit, 1, 20, 8);
   const [events, commandEvents] = await Promise.all([
-    ctx.repo.getTaskEvents({
-      guildId: ctx.guildId,
-      visibleChannelIds: ctx.visibleChannelIds,
-      traceId: task.taskId,
-      limit
-    }),
+    getTaskStatusEvents(ctx, task, limit),
     ctx.repo.getSandboxCommandEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
@@ -104,6 +99,12 @@ export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: str
   ]
     .filter((line) => line !== "")
     .join("\n");
+}
+
+async function getTaskStatusEvents(ctx: ToolContext, task: AgentTaskRecord, limit: number): Promise<TaskEvent[]> {
+  const runtimeEvents = await ctx.repo.getAgentRuntimeTaskEventsForTask({ taskId: task.taskId, limit });
+  if (runtimeEvents.length > 0) return runtimeEvents;
+  return ctx.repo.getTaskEventsForTask({ taskId: task.taskId, limit });
 }
 
 export async function listAgentTasks(ctx: ToolContext, input: { statuses?: string[]; limit?: number } = {}): Promise<string> {

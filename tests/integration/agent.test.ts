@@ -101,6 +101,100 @@ describe("agent router", () => {
     );
   });
 
+  it("mirrors model-selected tool turns into the durable agent runtime session", async () => {
+    const appendMessage = vi.fn(async () => undefined);
+    const ctx = {
+      config: { maxReplyChars: 1800, openRouter: { embeddingModel: "test/embed" }, discord: { clientId: "bot" } },
+      repo: {
+        health: vi.fn(async () => ({ messages: 1, embeddings: 1, toolCalls: 0 })),
+        getCrawlStatus: vi.fn(async () => [{ status: "complete", channels: 1, messages: 1 }]),
+        embeddingBacklog: vi.fn(async () => 0),
+        interactionBlockCount: vi.fn(async () => 0),
+        auditTool: vi.fn(async () => undefined)
+      },
+      agentRuntime: { appendMessage },
+      agentRuntimeSession: { sessionId: "agent-session-1" },
+      agentRuntimeExecutionId: "agent-execution-1",
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            estimatedCostUsd: 0.001,
+            toolCalls: [{ id: "call-1", name: "reportStatus", argumentsText: "{}" }]
+          })
+          .mockResolvedValueOnce({
+            content: "Messages indexed: 1",
+            model: "chat-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      requestId: "prompt-message-1"
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "status");
+
+    expect(appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        messageId: "agent-transcript-prompt-message-1-assistant-round-1",
+        clientMessageId: "prompt-message-1:transcript:assistant-round-1",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            type: "assistant_tool_calls",
+            toolCalls: [
+              expect.objectContaining({
+                id: "call-1",
+                name: "reportStatus",
+                arguments: {},
+                argumentsText: "{}"
+              })
+            ]
+          })
+        ],
+        metadata: expect.objectContaining({
+          source: "agent.router",
+          promptMessageId: "prompt-message-1",
+          executionId: "agent-execution-1",
+          round: 1,
+          model: "router-model"
+        })
+      })
+    );
+    expect(appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        messageId: "agent-transcript-prompt-message-1-tool-call-1",
+        clientMessageId: "prompt-message-1:transcript:tool-call-1",
+        role: "tool",
+        parts: [
+          expect.objectContaining({
+            type: "tool_result",
+            toolCallId: "call-1",
+            toolName: "reportStatus",
+            content: expect.stringContaining("Messages indexed: 1")
+          })
+        ],
+        metadata: expect.objectContaining({
+          source: "agent.router",
+          promptMessageId: "prompt-message-1",
+          executionId: "agent-execution-1",
+          round: 1,
+          toolName: "reportStatus"
+        })
+      })
+    );
+  });
+
   it.each(["what can you do", "what can you do?", "tools?", "help"])(
     "lets the model route natural-language tool-list request %j",
     async (request) => {

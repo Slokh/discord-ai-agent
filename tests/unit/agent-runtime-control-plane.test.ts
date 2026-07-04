@@ -1,11 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   enqueueAgentRuntimeSessionExecution,
-  missingAgentRuntimeExecutionJobContext
+  missingAgentRuntimeExecutionJobContext,
+  storeAgentRuntimeExecutionInputLines
 } from "../../src/agent/runtimeControlPlane.js";
 import type { AgentRuntimeExecutionRecord, AgentRuntimeSessionRecord } from "../../src/db/agentRuntimeRepository.js";
 
 describe("agent runtime control plane", () => {
+  it("stores execution input lines as durable replay artifacts", async () => {
+    const agentRuntime = fakeAgentRuntime();
+
+    await expect(
+      storeAgentRuntimeExecutionInputLines({
+        agentRuntime: agentRuntime as never,
+        session: fakeSession(),
+        execution: fakeExecution(),
+        inputLines: ['{"type":"user"}', '{"type":"turn.completed"}']
+      })
+    ).resolves.toBe("artifact-1");
+
+    expect(agentRuntime.storeArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        executionId: "agent-execution-1",
+        kind: "input_lines",
+        content: '{"type":"user"}\n{"type":"turn.completed"}\n',
+        contentType: "text/plain",
+        metadata: expect.objectContaining({ lineCount: 2 })
+      })
+    );
+    expect(agentRuntime.updateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionId: "agent-execution-1",
+        metadata: expect.objectContaining({ inputLinesArtifactId: "artifact-1", inputLineCount: 2 })
+      })
+    );
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: "agent.execution.input_lines_stored",
+        metadata: expect.objectContaining({ artifactId: "artifact-1", lineCount: 2 })
+      })
+    );
+  });
+
   it("enqueues session executions and records the durable queue handoff", async () => {
     const agentRuntime = fakeAgentRuntime();
     const jobs = {
@@ -115,7 +152,12 @@ describe("agent runtime control plane", () => {
 function fakeAgentRuntime() {
   return {
     updateExecution: vi.fn(async () => undefined),
-    recordEvent: vi.fn(async () => undefined)
+    recordEvent: vi.fn(async () => undefined),
+    storeArtifact: vi.fn(async (input: { content: string }) => ({
+      artifactId: "artifact-1",
+      kind: "input_lines",
+      sizeBytes: Buffer.byteLength(input.content, "utf8")
+    }))
   };
 }
 

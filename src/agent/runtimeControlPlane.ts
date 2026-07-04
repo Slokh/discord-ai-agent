@@ -28,6 +28,49 @@ export type AgentRuntimeSessionExecutionEnqueueResult = {
   jobId: string | null;
 };
 
+export async function storeAgentRuntimeExecutionInputLines(input: {
+  agentRuntime: AgentRuntimeRepository;
+  session: AgentRuntimeSessionRecord;
+  execution: AgentRuntimeExecutionRef;
+  inputLines: string[];
+}): Promise<string | null> {
+  if (input.inputLines.length === 0) return null;
+  const content = `${input.inputLines.join("\n")}\n`;
+  const artifact = await input.agentRuntime.storeArtifact({
+    sessionId: input.session.sessionId,
+    executionId: input.execution.executionId,
+    kind: "input_lines",
+    name: "Agent runtime execution input lines",
+    content,
+    contentType: "text/plain",
+    metadata: {
+      lineCount: input.inputLines.length,
+      byteCount: Buffer.byteLength(content, "utf8")
+    }
+  });
+  await input.agentRuntime.updateExecution({
+    executionId: input.execution.executionId,
+    metadata: {
+      inputLinesArtifactId: artifact.artifactId,
+      inputLineCount: input.inputLines.length
+    }
+  });
+  await input.agentRuntime.recordEvent({
+    sessionId: input.session.sessionId,
+    executionId: input.execution.executionId,
+    traceId: input.execution.traceId,
+    kind: "artifact",
+    eventName: "agent.execution.input_lines_stored",
+    summary: `Stored ${input.inputLines.length} execution input line${input.inputLines.length === 1 ? "" : "s"}.`,
+    metadata: {
+      artifactId: artifact.artifactId,
+      lineCount: input.inputLines.length,
+      byteCount: artifact.sizeBytes
+    }
+  });
+  return artifact.artifactId;
+}
+
 export async function enqueueAgentRuntimeSessionExecution(input: {
   agentRuntime: AgentRuntimeRepository;
   jobs: Pick<JobRuntime, "enqueueAgentRuntimeExecution">;

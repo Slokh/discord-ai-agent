@@ -239,6 +239,7 @@ describe("internal API run endpoints", () => {
         reasoningEffort: "low",
         metadata: { source: "test" },
         enqueue: true,
+        input_lines: ['{"type":"user","message":{"content":[{"type":"text","text":"hello from Discord"}]}}'],
         runId: "discord-run-2",
         messageId: "discord-message-2",
         responseChannelId: "channel-1",
@@ -255,6 +256,7 @@ describe("internal API run endpoints", () => {
     expect(executeBody).toEqual(
       expect.objectContaining({
         jobId: "agent-runtime-job-1",
+        inputLinesArtifactId: "artifact-1",
         execution: expect.objectContaining({
           status: "queued",
           reasoningEffort: "low",
@@ -282,6 +284,13 @@ describe("internal API run endpoints", () => {
         requesterDisplayName: "kartik"
       })
     ]);
+    const inputLinesArtifact = await fetch(`${runtime.url}/api/agent/sessions/${encodedThreadKey}/artifacts/${executeBody.inputLinesArtifactId}`, {
+      headers: auth
+    });
+    expect(inputLinesArtifact.status).toBe(200);
+    await expect(inputLinesArtifact.text()).resolves.toBe(
+      '{"type":"user","message":{"content":[{"type":"text","text":"hello from Discord"}]}}\n'
+    );
     const envelopeArtifact = await codegenRepo.storeArtifact({
       sessionId: createBody.session.sessionId,
       executionId: executeBody.execution.executionId,
@@ -300,6 +309,7 @@ describe("internal API run endpoints", () => {
         executions: [expect.objectContaining({ status: "queued" })],
         events: expect.arrayContaining([
           expect.objectContaining({ eventName: "agent.execution.queued" }),
+          expect.objectContaining({ eventName: "agent.execution.input_lines_stored" }),
           expect.objectContaining({ eventName: "agent.execution.job_enqueued" })
         ])
       })

@@ -9,6 +9,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import {
   enqueueAgentRuntimeSessionExecution,
   missingAgentRuntimeExecutionJobContext,
+  storeAgentRuntimeExecutionInputLines,
   type AgentRuntimeExecutionQueueInput
 } from "../agent/runtimeControlPlane.js";
 import { logger } from "../util/logger.js";
@@ -21,6 +22,8 @@ import type { JobRuntime } from "../jobs/queue.js";
 import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
+const MAX_AGENT_RUNTIME_INPUT_LINES = 1000;
+const MAX_AGENT_RUNTIME_INPUT_LINE_BYTES = 1024 * 1024;
 const UI_AUTH_COOKIE_NAME = "discord_ai_agent_ui_auth";
 const UI_AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 type CodegenApiStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
@@ -245,6 +248,12 @@ async function handleRequest(input: {
       summary: "Queued agent execution.",
       metadata: { executionId: execution.executionId, harness: execution.harness, model: execution.model }
     });
+    const inputLinesArtifactId = await storeAgentRuntimeExecutionInputLines({
+      agentRuntime: agentRepo,
+      session,
+      execution,
+      inputLines: body.inputLines
+    });
     let jobId: string | null = null;
     if (body.enqueue) {
       try {
@@ -263,7 +272,7 @@ async function handleRequest(input: {
         return;
       }
     }
-    sendJson(input.response, 202, { ok: true, session, execution, jobId });
+    sendJson(input.response, 202, { ok: true, session, execution, jobId, inputLinesArtifactId });
     return;
   }
 
@@ -1145,6 +1154,7 @@ type AgentExecuteBody = {
   sandboxRunId: string | null;
   metadata: Record<string, unknown>;
   enqueue: boolean;
+  inputLines: string[];
 } & AgentRuntimeExecutionQueueInput;
 
 function parseAgentExecuteBody(value: unknown): AgentExecuteBody {
@@ -1153,6 +1163,7 @@ function parseAgentExecuteBody(value: unknown): AgentExecuteBody {
   return {
     ...base,
     enqueue: parseBooleanLike(body.enqueue) || parseBooleanLike(body.enqueueJob),
+    inputLines: parseAgentInputLines(body.inputLines ?? body.input_lines),
     runId: stringOrNull(body.runId),
     guildId: stringOrNull(body.guildId),
     channelId: stringOrNull(body.channelId),
@@ -1172,6 +1183,20 @@ function parseAgentExecuteBody(value: unknown): AgentExecuteBody {
 
 function stringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function parseAgentInputLines(value: unknown) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("Agent execute input_lines must be an array of strings.");
+  if (value.length > MAX_AGENT_RUNTIME_INPUT_LINES) throw new Error(`Agent execute input_lines cannot exceed ${MAX_AGENT_RUNTIME_INPUT_LINES} lines.`);
+  return value.map((line, index) => {
+    if (typeof line !== "string") throw new Error(`Agent execute input_lines[${index}] must be a string.`);
+    if (line.includes("\n") || line.includes("\r")) throw new Error(`Agent execute input_lines[${index}] must be one newline-free line.`);
+    if (Buffer.byteLength(line, "utf8") > MAX_AGENT_RUNTIME_INPUT_LINE_BYTES) {
+      throw new Error(`Agent execute input_lines[${index}] exceeds ${MAX_AGENT_RUNTIME_INPUT_LINE_BYTES} bytes.`);
+    }
+    return line;
+  });
 }
 
 function objectOrEmpty(value: unknown): Record<string, unknown> {

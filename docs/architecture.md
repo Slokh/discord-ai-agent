@@ -18,7 +18,7 @@ Postgres is the durable source of truth for Discord messages, embeddings, skills
 
 1. `src/discord/client.ts` receives a Discord message and checks whether the bot should respond.
 2. The client persists message/edit/delete state, creates a run/trace, records the prompt in the durable agent-runtime session ledger, and stores a replayable turn envelope.
-3. Queued execution loads that turn envelope when available, builds a `ToolContext`, and calls the selected prompt executor. The generic `/api/agent/sessions/:threadKey/execute` endpoint can also enqueue this runtime job when called with Discord delivery context, which lets future chat adapters stay thin and route through the durable session API.
+3. Queued execution loads that turn envelope when available, builds a `ToolContext`, and calls the selected prompt executor. The generic `/api/agent/sessions/:threadKey/execute` endpoint can also enqueue this runtime job when called with Discord delivery context, which lets future chat adapters stay thin and route through the durable session API. Discord ingress and the API share the same `src/agent/runtimeControlPlane.ts` queue-handoff helper so the durable session event stream records `agent.execution.job_enqueued` consistently.
 4. `src/agent/router.ts` sends the user request, channel memory, reply context, image context, skills, and tool schemas to the model.
 5. The model selects local tools from `src/tools/registry.ts` or OpenRouter-hosted tools.
 6. Local tools execute through the `src/tools/coreTools.ts` facade; use `src/tools/README.md` to find the owning tool-family module before editing.

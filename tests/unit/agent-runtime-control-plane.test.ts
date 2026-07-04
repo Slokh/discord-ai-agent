@@ -1,0 +1,151 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  enqueueAgentRuntimeSessionExecution,
+  missingAgentRuntimeExecutionJobContext
+} from "../../src/agent/runtimeControlPlane.js";
+import type { AgentRuntimeExecutionRecord, AgentRuntimeSessionRecord } from "../../src/db/agentRuntimeRepository.js";
+
+describe("agent runtime control plane", () => {
+  it("enqueues session executions and records the durable queue handoff", async () => {
+    const agentRuntime = fakeAgentRuntime();
+    const jobs = {
+      enqueueAgentRuntimeExecution: vi.fn(async () => "job-1")
+    };
+
+    const result = await enqueueAgentRuntimeSessionExecution({
+      agentRuntime: agentRuntime as never,
+      jobs,
+      session: fakeSession(),
+      execution: fakeExecution(),
+      threadKey: "discord:guild:channel",
+      queue: {
+        runId: "message-1",
+        traceId: "message-1",
+        messageId: "message-1",
+        responseChannelId: "channel",
+        responseMessageId: "thinking-1",
+        turnEnvelopeArtifactId: "artifact-1",
+        text: "hello",
+        rawContent: "<@ai> hello",
+        mentionKind: "user",
+        botRoleIds: ["role-1"],
+        requesterDisplayName: "Kartik",
+        enqueuedAt: "2026-07-03T12:00:00.000Z"
+      }
+    });
+
+    expect(result.jobId).toBe("job-1");
+    expect(jobs.enqueueAgentRuntimeExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "message-1",
+        traceId: "message-1",
+        agentSessionId: "agent-session-1",
+        agentExecutionId: "agent-execution-1",
+        agentThreadKey: "discord:guild:channel",
+        guildId: "guild",
+        channelId: "channel",
+        messageId: "message-1",
+        userId: "user",
+        responseMessageId: "thinking-1",
+        turnEnvelopeArtifactId: "artifact-1",
+        text: "hello"
+      })
+    );
+    expect(agentRuntime.updateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionId: "agent-execution-1",
+        metadata: expect.objectContaining({ pgbossJobId: "job-1", queue: "agent.runtime.execution" })
+      })
+    );
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: "agent.execution.job_enqueued",
+        metadata: expect.objectContaining({ jobId: "job-1", runId: "message-1", messageId: "message-1" })
+      })
+    );
+  });
+
+  it("marks executions failed when the queue handoff fails", async () => {
+    const agentRuntime = fakeAgentRuntime();
+    const jobs = {
+      enqueueAgentRuntimeExecution: vi.fn(async () => {
+        throw new Error("queue unavailable");
+      })
+    };
+
+    await expect(
+      enqueueAgentRuntimeSessionExecution({
+        agentRuntime: agentRuntime as never,
+        jobs,
+        session: fakeSession(),
+        execution: fakeExecution(),
+        threadKey: "discord:guild:channel",
+        queue: { messageId: "message-1", text: "hello" }
+      })
+    ).rejects.toThrow("queue unavailable");
+
+    expect(agentRuntime.updateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionId: "agent-execution-1",
+        status: "failed",
+        error: "queue unavailable",
+        metadata: expect.objectContaining({ enqueueFailed: true })
+      })
+    );
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "error",
+        level: "error",
+        eventName: "agent.execution.enqueue_failed",
+        summary: "queue unavailable"
+      })
+    );
+  });
+
+  it("reports missing queue context before enqueue", () => {
+    expect(
+      missingAgentRuntimeExecutionJobContext({
+        session: { ...fakeSession(), guildId: null, channelId: null, userId: null, request: "" },
+        queue: {}
+      })
+    ).toBe("Missing guildId, channelId, messageId, userId, text on the execute body or session.");
+  });
+});
+
+function fakeAgentRuntime() {
+  return {
+    updateExecution: vi.fn(async () => undefined),
+    recordEvent: vi.fn(async () => undefined)
+  };
+}
+
+function fakeSession(): AgentRuntimeSessionRecord {
+  return {
+    sessionId: "agent-session-1",
+    traceId: "message-1",
+    threadKey: "discord:guild:channel",
+    guildId: "guild",
+    channelId: "channel",
+    userId: "user",
+    title: "hello",
+    request: "hello",
+    requestedBy: "Kartik",
+    status: "queued",
+    harness: "in-process",
+    model: null,
+    provider: null,
+    codexThreadId: null,
+    metadata: {},
+    createdAt: new Date("2026-07-03T12:00:00.000Z"),
+    startedAt: null,
+    completedAt: null,
+    updatedAt: new Date("2026-07-03T12:00:00.000Z")
+  };
+}
+
+function fakeExecution(): Pick<AgentRuntimeExecutionRecord, "executionId" | "traceId"> {
+  return {
+    executionId: "agent-execution-1",
+    traceId: "message-1"
+  };
+}

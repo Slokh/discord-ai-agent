@@ -28,6 +28,7 @@ import {
   type AgentRuntimeTurnEnvelope
 } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution, type AgentPromptExecutionRef } from "../agent/runtimeLedger.js";
+import { enqueueAgentRuntimeSessionExecution } from "../agent/runtimeControlPlane.js";
 import { conversationMessagesFromEnvelope } from "../agent/sandboxPromptProtocol.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, ToolContext } from "../tools/types.js";
@@ -414,12 +415,9 @@ async function handleMessageCreate(
         requestLogger,
         source: "discord.ingress"
       });
-      const jobId = await input.jobs.enqueueAgentRuntimeExecution({
+      const queueInput = {
         runId: message.id,
         traceId: message.id,
-        agentSessionId: agentRuntimeExecution?.session.sessionId,
-        agentExecutionId: agentRuntimeExecution?.executionId,
-        agentThreadKey: agentRuntimeExecution?.session.threadKey ?? discordChannelThreadKey(message.guildId, message.channelId),
         guildId: message.guildId,
         channelId: message.channelId,
         messageId: message.id,
@@ -433,7 +431,25 @@ async function handleMessageCreate(
         botRoleIds: mentionContext.botRoleIds,
         requesterDisplayName: message.member?.displayName ?? message.author.username,
         enqueuedAt: enqueuedAt.toISOString()
-      });
+      };
+      const jobId =
+        input.agentRuntime && agentRuntimeExecution
+          ? (
+              await enqueueAgentRuntimeSessionExecution({
+                agentRuntime: input.agentRuntime,
+                jobs: input.jobs,
+                session: agentRuntimeExecution.session,
+                execution: { executionId: agentRuntimeExecution.executionId, traceId: message.id },
+                threadKey: agentRuntimeExecution.session.threadKey ?? discordChannelThreadKey(message.guildId, message.channelId),
+                queue: queueInput
+              })
+            ).jobId
+          : await input.jobs.enqueueAgentRuntimeExecution({
+              ...queueInput,
+              agentSessionId: agentRuntimeExecution?.session.sessionId,
+              agentExecutionId: agentRuntimeExecution?.executionId,
+              agentThreadKey: agentRuntimeExecution?.session.threadKey ?? discordChannelThreadKey(message.guildId, message.channelId)
+            });
       await input.repo
         .updateProcessRun({
           runId: message.id,

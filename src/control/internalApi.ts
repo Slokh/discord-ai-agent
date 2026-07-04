@@ -6,13 +6,18 @@ import { AgentRuntimeRepository, type AgentRuntimeMessageRole } from "../db/agen
 import type { CodegenMessageRole, CodegenRepository } from "../db/codegenRepository.js";
 import type { DbPool } from "../db/pool.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import {
+  enqueueAgentRuntimeSessionExecution,
+  missingAgentRuntimeExecutionJobContext,
+  type AgentRuntimeExecutionQueueInput
+} from "../agent/runtimeControlPlane.js";
 import { logger } from "../util/logger.js";
 import { verifyTaskBearerToken } from "../execution/token.js";
 import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execution/types.js";
 import { collectCodegenStatusSnapshot } from "../observability/codegenStatus.js";
 import { buildRunListAggregate } from "../observability/runAggregates.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../observability/runs.js";
-import type { AgentRuntimeExecutionJob, JobRuntime } from "../jobs/queue.js";
+import type { JobRuntime } from "../jobs/queue.js";
 import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
@@ -211,7 +216,7 @@ async function handleRequest(input: {
       sendJson(input.response, 503, { error: "agent_runtime_queue_unavailable" });
       return;
     }
-    const missingEnqueueContext = body.enqueue ? missingAgentRuntimeExecutionJobContext({ session, body }) : null;
+    const missingEnqueueContext = body.enqueue ? missingAgentRuntimeExecutionJobContext({ session, queue: body }) : null;
     if (missingEnqueueContext) {
       sendJson(input.response, 400, { error: "agent_runtime_enqueue_context_missing", detail: missingEnqueueContext });
       return;
@@ -242,61 +247,21 @@ async function handleRequest(input: {
     });
     let jobId: string | null = null;
     if (body.enqueue) {
-      const job = agentRuntimeExecutionJobFromSession({
-        session,
-        execution,
-        threadKey,
-        body
-      });
       try {
-        jobId = await input.jobs!.enqueueAgentRuntimeExecution(job);
+        const result = await enqueueAgentRuntimeSessionExecution({
+          agentRuntime: agentRepo,
+          jobs: input.jobs!,
+          session,
+          execution,
+          threadKey,
+          queue: body
+        });
+        jobId = result.jobId;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await agentRepo.updateExecution({
-          executionId: execution.executionId,
-          status: "failed",
-          error: message,
-          metadata: {
-            queue: "agent.runtime.execution",
-            enqueueFailed: true
-          }
-        });
-        await agentRepo.recordEvent({
-          sessionId: session.sessionId,
-          executionId: execution.executionId,
-          traceId: execution.traceId,
-          kind: "error",
-          level: "error",
-          eventName: "agent.execution.enqueue_failed",
-          summary: message,
-          metadata: { runId: job.runId, messageId: job.messageId }
-        });
         sendJson(input.response, 502, { error: "agent_runtime_enqueue_failed", detail: message, session, execution });
         return;
       }
-      await agentRepo.updateExecution({
-        executionId: execution.executionId,
-        metadata: {
-          pgbossJobId: jobId,
-          queuedAt: job.enqueuedAt,
-          queue: "agent.runtime.execution"
-        }
-      });
-      await agentRepo.recordEvent({
-        sessionId: session.sessionId,
-        executionId: execution.executionId,
-        traceId: execution.traceId,
-        kind: "status",
-        eventName: "agent.execution.job_enqueued",
-        summary: "Enqueued agent runtime execution job.",
-        metadata: {
-          jobId,
-          runId: job.runId,
-          messageId: job.messageId,
-          responseMessageId: job.responseMessageId ?? null,
-          turnEnvelopeArtifactId: job.turnEnvelopeArtifactId ?? null
-        }
-      });
     }
     sendJson(input.response, 202, { ok: true, session, execution, jobId });
     return;
@@ -1180,21 +1145,7 @@ type AgentExecuteBody = {
   sandboxRunId: string | null;
   metadata: Record<string, unknown>;
   enqueue: boolean;
-  runId: string | null;
-  guildId: string | null;
-  channelId: string | null;
-  messageId: string | null;
-  userId: string | null;
-  responseChannelId: string | null;
-  responseMessageId: string | null;
-  turnEnvelopeArtifactId: string | null;
-  text: string | null;
-  rawContent: string | null;
-  mentionKind: string | null;
-  botRoleIds: string[];
-  requesterDisplayName: string | null;
-  enqueuedAt: string | null;
-};
+} & AgentRuntimeExecutionQueueInput;
 
 function parseAgentExecuteBody(value: unknown): AgentExecuteBody {
   const base = parseCodegenExecuteBody(value);
@@ -1217,60 +1168,6 @@ function parseAgentExecuteBody(value: unknown): AgentExecuteBody {
     requesterDisplayName: stringOrNull(body.requesterDisplayName),
     enqueuedAt: stringOrNull(body.enqueuedAt)
   };
-}
-
-function agentRuntimeExecutionJobFromSession(input: {
-  session: Awaited<ReturnType<AgentRuntimeRepository["upsertSession"]>>;
-  execution: Awaited<ReturnType<AgentRuntimeRepository["createExecution"]>>;
-  threadKey: string;
-  body: AgentExecuteBody;
-}): AgentRuntimeExecutionJob {
-  const metadata = input.session.metadata;
-  const messageId = input.body.messageId ?? metadataString(metadata, "currentMessageId");
-  const guildId = input.body.guildId ?? input.session.guildId;
-  const channelId = input.body.channelId ?? input.session.channelId;
-  const userId = input.body.userId ?? input.session.userId;
-  const text = input.body.text ?? input.session.request;
-  const missingContext = missingAgentRuntimeExecutionJobContext({ session: input.session, body: input.body });
-  if (missingContext) throw new Error(missingContext);
-  if (!messageId || !guildId || !channelId || !userId || !text.trim()) throw new Error("Agent execution enqueue context is incomplete.");
-  const runId = input.body.runId ?? messageId;
-  return {
-    runId,
-    traceId: input.body.traceId ?? input.execution.traceId ?? runId,
-    agentSessionId: input.session.sessionId,
-    agentExecutionId: input.execution.executionId,
-    agentThreadKey: input.session.threadKey ?? input.threadKey,
-    guildId,
-    channelId,
-    messageId,
-    userId,
-    responseChannelId: input.body.responseChannelId ?? metadataString(metadata, "responseChannelId") ?? undefined,
-    responseMessageId: input.body.responseMessageId ?? metadataString(metadata, "responseMessageId") ?? undefined,
-    turnEnvelopeArtifactId: input.body.turnEnvelopeArtifactId ?? metadataString(metadata, "turnEnvelopeArtifactId"),
-    text,
-    rawContent: input.body.rawContent ?? text,
-    mentionKind: input.body.mentionKind ?? metadataString(metadata, "mentionKind") ?? "user",
-    botRoleIds: input.body.botRoleIds,
-    requesterDisplayName: input.body.requesterDisplayName ?? input.session.requestedBy,
-    enqueuedAt: input.body.enqueuedAt ?? new Date().toISOString()
-  };
-}
-
-function missingAgentRuntimeExecutionJobContext(input: { session: Awaited<ReturnType<AgentRuntimeRepository["upsertSession"]>>; body: AgentExecuteBody }) {
-  const metadata = input.session.metadata;
-  const missing: string[] = [];
-  if (!(input.body.guildId ?? input.session.guildId)) missing.push("guildId");
-  if (!(input.body.channelId ?? input.session.channelId)) missing.push("channelId");
-  if (!(input.body.messageId ?? metadataString(metadata, "currentMessageId"))) missing.push("messageId");
-  if (!(input.body.userId ?? input.session.userId)) missing.push("userId");
-  if (!(input.body.text ?? input.session.request).trim()) missing.push("text");
-  return missing.length ? `Missing ${missing.join(", ")} on the execute body or session.` : null;
-}
-
-function metadataString(metadata: Record<string, unknown>, key: string) {
-  const value = metadata[key];
-  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function stringArray(value: unknown) {

@@ -17,6 +17,7 @@ Owns the model loop for one user prompt.
 - Tool choice problems usually start in `src/tools/registry.ts`; tool behavior problems route through `src/tools/README.md` to the focused implementation module behind the `coreTools.ts` facade.
 - Prompt composition and memory/reply/image context problems start here.
 - Agent session/execution state transitions start in `runtimeLedger.ts`; execution input payloads start in `runtimeEnvelope.ts`; both are called by Discord ingress/delivery or the sandbox executor caller.
+- Agent session execution queue handoffs start in `runtimeControlPlane.ts`; Discord ingress and `/api/agent/sessions/:threadKey/execute` should share this path so durable execution metadata and events stay consistent.
 - Runtime backend selection changes start in `runtimeRunner.ts`; prompt executor behavior starts in `runtimeExecutor.ts`; remote warm-server behavior starts in `sandboxPromptServer.ts`; child-runner fallback behavior starts in `sandboxPromptRunner.ts`; compatibility model-loop changes start at `inProcessRuntimeExecutor.ts` before touching `router.ts`.
 - Discord rendering problems belong in `src/discord/responseSink.ts`, not the model loop.
 

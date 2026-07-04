@@ -41,6 +41,11 @@ type AgentToolRoute = {
 };
 
 const MAX_TOOL_ROUNDS = 4;
+const DISCORD_RESPONSE_STYLE_GUIDANCE =
+  "Format for Discord readability without overdesigning the message. Use a bold first-sentence verdict when helpful, short bullets or numbered lists for scan-heavy answers, " +
+  "brief ### headings only for longer structured answers, masked markdown links like [trace](url) or [message](url) instead of raw URLs, code blocks for commands/logs/JSON, " +
+  "and blockquotes only for short quoted evidence. Use Discord subtext (-# ...) only for small metadata when useful. Avoid markdown tables. " +
+  "Do not add your own trace/runtime footer; the Discord renderer appends that automatically when available. ";
 
 export async function handleAgentRequest(ctx: ToolContext, userText: string): Promise<AgentResponse> {
   try {
@@ -1250,6 +1255,7 @@ function finalSynthesisMessages(userText: string, memoryEvents: NonNullable<Agen
       role: "system",
       content:
         "Write one natural Discord reply. Lead with the verdict. Be blunt, casual, and decisive; do not pad the answer with neutral caveats or a roll call of weak matches. " +
+        DISCORD_RESPONSE_STYLE_GUIDANCE +
         "For Discord history claims, use only the provided Discord tool evidence. If that evidence does not answer the user's question and the question is about public/current/external/how-to information, use hosted web tools instead of stopping at Discord evidence. " +
         "Do not print XML-like tool-call markup, raw tool names, or skipped redundant tool calls in the final answer. Use dates sparingly: show dates only when the user asks about timing, links, sources, proof, or exact messages, " +
         "or when a date is needed to avoid making old evidence sound current. Do not add a Sources section unless asked. " +
@@ -1622,6 +1628,7 @@ function chatMessages(
       role: "system" as const,
       content:
         "You are Discord AI Agent, a private Discord server assistant. Be useful, concise, blunt, and casual. Lead with the answer or verdict. Do not be neutral for neutrality's sake. " +
+        DISCORD_RESPONSE_STYLE_GUIDANCE +
         "You can call local Discord AI Agent function tools and OpenRouter-hosted server tools. Let tool calls do the work when they match the user's request. " +
         "For private server memory, call searchDiscordHistory. Never invent Discord history. " +
         "Do not use Discord history search for ordinary public how-to questions, public apps/sites/games/products/services, or unfamiliar external nouns unless the user asks what this Discord server said about them. Prefer web_search for those. " +

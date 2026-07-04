@@ -20,6 +20,7 @@ Owns the model loop for one user prompt.
 - Agent session execution queue handoffs start in `runtimeControlPlane.ts`; Discord ingress and `/api/agent/sessions/:threadKey/execute` should share this path so durable execution metadata and events stay consistent.
 - Runtime backend selection changes start in `runtimeRunner.ts`; prompt executor behavior starts in `runtimeExecutor.ts`; remote warm-server behavior starts in `sandboxPromptServer.ts`; child-runner fallback behavior starts in `sandboxPromptRunner.ts`; compatibility model-loop changes start at `inProcessRuntimeExecutor.ts` before touching `router.ts`.
 - Discord rendering problems belong in `src/discord/responseSink.ts`, not the model loop.
+- Discord answer style belongs in prompt guidance, not response-specific branches. Prefer compact Discord markdown: bold verdicts, bullets or numbered lists for scan-heavy answers, masked links, code blocks for commands/logs, short quoted evidence, and subtext only for small metadata. Avoid tables. The renderer owns automatic trace footers.
 
 ## Tests
 

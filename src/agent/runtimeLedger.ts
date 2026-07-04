@@ -52,6 +52,9 @@ export async function ensureAgentRuntimePromptExecution(input: {
     role: "user",
     parts: [{ type: "text", text: input.text }],
     metadata: {
+      traceId: input.requestId,
+      promptMessageId: input.requestId,
+      executionId,
       source: input.source,
       discordUrl: input.discordUrl,
       rawContent: input.rawContent
@@ -90,6 +93,7 @@ export async function finishAgentRuntimePromptExecution(input: {
   agentRuntime?: AgentRuntimeRepository;
   session?: AgentRuntimeSessionRecord | null;
   executionId?: string | null;
+  traceId?: string | null;
   status: Extract<AgentRuntimeStatus, "succeeded" | "failed">;
   replyMessageId: string;
   replyUrl: string;
@@ -107,6 +111,9 @@ export async function finishAgentRuntimePromptExecution(input: {
     role: "assistant",
     parts: [{ type: "text", text: input.responseContent }],
     metadata: {
+      traceId: input.traceId ?? null,
+      promptMessageId: input.traceId ?? null,
+      executionId: input.executionId ?? null,
       discordUrl: input.replyUrl,
       error: input.status === "failed"
     }
@@ -126,7 +133,7 @@ export async function finishAgentRuntimePromptExecution(input: {
   await input.agentRuntime.recordEvent({
     sessionId: input.session.sessionId,
     executionId: input.executionId,
-    traceId: input.session.traceId,
+    traceId: input.traceId ?? input.session.traceId,
     kind: input.status === "failed" ? "error" : "status",
     level: input.status === "failed" ? "error" : "info",
     eventName: input.status === "failed" ? "agent.execution.failed" : "agent.execution.succeeded",

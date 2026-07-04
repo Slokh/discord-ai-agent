@@ -4490,7 +4490,7 @@ export class DiscordAiAgentRepository {
           ce.id,
           ce.session_id,
           ce.execution_id,
-          coalesce(ce.trace_id, cex.trace_id, cs.trace_id) AS trace_id,
+          coalesce(ce.trace_id, cex.trace_id) AS trace_id,
           ce.kind,
           ce.level,
           ce.event_name,
@@ -4501,7 +4501,27 @@ export class DiscordAiAgentRepository {
         FROM codegen_events ce
         JOIN codegen_sessions cs ON cs.session_id = ce.session_id
         LEFT JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
-        WHERE (ce.trace_id = $1 OR cex.trace_id = $1 OR cs.trace_id = $1)
+        WHERE (
+            ce.trace_id = $1
+            OR cex.trace_id = $1
+            OR ce.metadata->>'traceId' = $1
+            OR ce.metadata->>'promptMessageId' = $1
+            OR ce.metadata->>'discordMessageId' = $1
+            OR ce.metadata->>'messageId' = $1
+            OR ce.metadata->>'runId' = $1
+            OR ce.metadata->>'executionId' IN (
+              SELECT execution_id
+              FROM codegen_executions
+              WHERE trace_id = $1
+                 OR metadata->>'parentAgentExecutionId' = (
+                   SELECT metadata->>'agentExecutionId'
+                   FROM process_runs
+                   WHERE trace_id = $1 OR run_id = $1
+                   ORDER BY updated_at DESC
+                   LIMIT 1
+                 )
+            )
+          )
           AND (
             ce.metadata->>'runtime' = 'agent'
             OR cex.metadata->>'runtime' = 'agent'
@@ -4533,8 +4553,7 @@ export class DiscordAiAgentRepository {
         JOIN codegen_sessions cs ON cs.session_id = cm.session_id
         WHERE cs.metadata->>'runtime' = 'agent'
           AND (
-            cs.trace_id = $1
-            OR cm.client_message_id = $1
+            cm.client_message_id = $1
             OR cm.client_message_id LIKE $2
             OR cm.metadata->>'traceId' = $1
             OR cm.metadata->>'promptMessageId' = $1
@@ -4549,6 +4568,17 @@ export class DiscordAiAgentRepository {
                    ORDER BY updated_at DESC
                    LIMIT 1
                  )
+            )
+            OR cm.metadata->>'taskId' IN (
+              SELECT task_id
+              FROM agent_tasks
+              WHERE trace_id = $1 OR task_id = $1
+            )
+            OR cm.client_message_id IN (
+              SELECT metadata->>'replyMessageId'
+              FROM codegen_executions
+              WHERE trace_id = $1
+                AND metadata->>'replyMessageId' IS NOT NULL
             )
           )
         ORDER BY cm.created_at ASC, cm.message_id ASC

@@ -193,6 +193,10 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     traceId ? repo.listAgentTasksForTrace({ traceId, limit: 20 }) : Promise.resolve([])
   ]);
 
+  const runtimeScope = runtimeSnapshotScope({ traceId, runId, processRun, task });
+  const scopedRuntimeEvents = runtimeEvents.filter((event) => runtimeEventMatchesScope(event, runtimeScope));
+  const scopedRuntimeMessages = runtimeMessages.filter((message) => runtimeMessageMatchesScope(message, runtimeScope));
+
   const spans = sortSpans([
     ...processSpans.map(spanFromProcess),
     ...taskEvents.flatMap(spansFromTaskEvent),
@@ -203,7 +207,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
   const events = sortEvents([
     ...processEvents.map(eventFromProcess),
     ...traceEvents.map(eventFromTrace),
-    ...runtimeEvents.map(eventFromRuntime),
+    ...scopedRuntimeEvents.map(eventFromRuntime),
     ...taskEvents.map(eventFromTask),
     ...toolLogs.map(eventFromTool),
     ...commands.map(eventFromCommand)
@@ -217,7 +221,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     terminal,
     diagnostics: diagnosticsForRun(run, spans, events),
     raw: { processRun, task, sandboxRuns },
-    agentTranscript: runtimeMessages.map(agentTranscriptMessageFromRuntime),
+    agentTranscript: scopedRuntimeMessages.map(agentTranscriptMessageFromRuntime),
     relatedRuns: relatedRunSummaries({
       processRun,
       task,
@@ -226,6 +230,95 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     }),
     generatedAt: new Date()
   };
+}
+
+type RuntimeSnapshotScope = {
+  traceId: string;
+  messageIds: Set<string>;
+  taskIds: Set<string>;
+  executionIds: Set<string>;
+};
+
+function runtimeSnapshotScope(input: {
+  traceId: string;
+  runId: string;
+  processRun?: ProcessRunRecord;
+  task?: AgentTaskRecord;
+}): RuntimeSnapshotScope {
+  const messageIds = new Set<string>();
+  const taskIds = new Set<string>();
+  const executionIds = new Set<string>();
+
+  addSetValue(messageIds, input.traceId);
+  addSetValue(messageIds, input.runId);
+  addSetValue(messageIds, input.processRun?.messageId);
+  addSetValue(messageIds, input.task?.traceId);
+  addSetValue(messageIds, input.task?.discordResponseMessageId);
+  addSetValue(messageIds, stringMetadata(input.processRun?.metadata.currentMessageId));
+  addSetValue(messageIds, stringMetadata(input.processRun?.metadata.discordMessageId));
+  addSetValue(messageIds, stringMetadata(input.processRun?.metadata.discordResponseMessageId));
+  addSetValue(messageIds, stringMetadata(input.processRun?.metadata.replyMessageId));
+
+  for (const value of Object.values(input.processRun?.links ?? {})) {
+    if (typeof value === "string") addSetValue(messageIds, extractDiscordMessageId(value));
+  }
+
+  addSetValue(taskIds, input.task?.taskId);
+  addSetValue(taskIds, input.processRun?.runId?.startsWith("task-") ? input.processRun.runId : null);
+  addSetValue(taskIds, stringMetadata(input.processRun?.metadata.taskId));
+
+  addSetValue(executionIds, agentExecutionIdFromProcessRun(input.processRun));
+  addSetValue(executionIds, parentAgentExecutionIdFromProcessRun(input.processRun));
+  addSetValue(executionIds, stringMetadata(input.processRun?.metadata.executionId));
+  addSetValue(executionIds, stringMetadata(input.processRun?.metadata.agentRuntimeExecutionId));
+  addSetValue(executionIds, `agent-execution-${input.traceId}`);
+  for (const taskId of taskIds) addSetValue(executionIds, `agent-task-execution-${taskId}`);
+
+  return { traceId: input.traceId, messageIds, taskIds, executionIds };
+}
+
+function runtimeEventMatchesScope(event: AgentRuntimeEvent, scope: RuntimeSnapshotScope) {
+  if (event.traceId === scope.traceId) return true;
+  if (event.executionId && scope.executionIds.has(event.executionId)) return true;
+  if (metadataMatchesScope(event.metadata, scope)) return true;
+  return false;
+}
+
+function runtimeMessageMatchesScope(message: AgentRuntimeMessage, scope: RuntimeSnapshotScope) {
+  const clientMessageId = message.clientMessageId;
+  if (clientMessageId && scope.messageIds.has(clientMessageId)) return true;
+  if (clientMessageId?.startsWith(`${scope.traceId}:transcript:`)) return true;
+  if (clientMessageId && scope.taskIds.has(clientMessageId)) return true;
+  if (metadataMatchesScope(message.metadata, scope)) return true;
+  return false;
+}
+
+function metadataMatchesScope(metadata: Record<string, unknown>, scope: RuntimeSnapshotScope) {
+  const metadataMessageIds = [
+    stringMetadata(metadata.traceId),
+    stringMetadata(metadata.promptMessageId),
+    stringMetadata(metadata.discordMessageId),
+    stringMetadata(metadata.messageId),
+    stringMetadata(metadata.runId),
+    stringMetadata(metadata.replyMessageId)
+  ];
+  if (metadataMessageIds.some((value) => value === scope.traceId || (value != null && scope.messageIds.has(value)))) return true;
+
+  const metadataTaskId = stringMetadata(metadata.taskId);
+  if (metadataTaskId && scope.taskIds.has(metadataTaskId)) return true;
+
+  const metadataExecutionIds = [
+    stringMetadata(metadata.executionId),
+    stringMetadata(metadata.agentExecutionId),
+    stringMetadata(metadata.agentRuntimeExecutionId),
+    stringMetadata(metadata.parentAgentExecutionId),
+    stringMetadata(metadata.parentExecutionId)
+  ];
+  return metadataExecutionIds.some((value) => value != null && scope.executionIds.has(value));
+}
+
+function addSetValue(set: Set<string>, value: string | null | undefined) {
+  if (value) set.add(value);
 }
 
 function agentTranscriptMessageFromRuntime(message: AgentRuntimeMessage): RunAgentTranscriptMessage {
@@ -240,13 +333,15 @@ function agentTranscriptMessageFromRuntime(message: AgentRuntimeMessage): RunAge
   };
 }
 
-function agentExecutionIdFromProcessRun(run: ProcessRunRecord) {
+function agentExecutionIdFromProcessRun(run: ProcessRunRecord | undefined) {
+  if (!run) return null;
   const direct = stringMetadata(run.metadata.agentExecutionId);
   if (direct) return direct;
   return stringMetadata(run.metadata.agentRuntimeExecutionId);
 }
 
-function parentAgentExecutionIdFromProcessRun(run: ProcessRunRecord) {
+function parentAgentExecutionIdFromProcessRun(run: ProcessRunRecord | undefined) {
+  if (!run) return null;
   const direct = stringMetadata(run.metadata.parentAgentExecutionId);
   if (direct) return direct;
   return stringMetadata(run.metadata.parentExecutionId);

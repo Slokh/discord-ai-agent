@@ -211,6 +211,111 @@ describe("run summaries", () => {
     ]);
   });
 
+  it("scopes durable agent runtime events and transcript to the selected run", async () => {
+    const run = processRunRecord({
+      runId: "task-current",
+      traceId: "message-current",
+      kind: "codegen",
+      status: "succeeded",
+      title: "Current codegen task",
+      messageId: "message-current",
+      metadata: {
+        parentAgentExecutionId: "agent-execution-message-current",
+        discordResponseMessageId: "reply-current"
+      }
+    });
+    const snapshot = await getRunSnapshot(
+      {
+        getProcessRun: async (runId: string) => (runId === run.runId ? run : undefined),
+        getAgentTask: async () => undefined,
+        getProcessRunSpans: async () => [],
+        getProcessRunEvents: async () => [],
+        getProcessRunArtifacts: async () => [],
+        getTraceEventsForTrace: async () => [],
+        getAgentRuntimeEventsForTrace: async () => [
+          {
+            id: 1,
+            sessionId: "agent-session-channel",
+            executionId: "agent-execution-message-old",
+            traceId: "message-old",
+            kind: "error",
+            level: "error",
+            eventName: "agent.execution.failed",
+            summary: "Old failure from the same channel session.",
+            metadata: { runtime: "agent", discordMessageId: "message-old" },
+            durationMs: null,
+            createdAt: new Date("2026-06-30T12:00:01Z")
+          },
+          {
+            id: 2,
+            sessionId: "agent-session-channel",
+            executionId: "agent-execution-message-current",
+            traceId: "message-current",
+            kind: "status",
+            level: "info",
+            eventName: "agent.execution.succeeded",
+            summary: "Current prompt succeeded.",
+            metadata: { runtime: "agent", replyMessageId: "reply-current" },
+            durationMs: 1200,
+            createdAt: new Date("2026-06-30T12:00:02Z")
+          }
+        ],
+        getAgentRuntimeMessagesForTrace: async () => [
+          {
+            messageId: "agent-user-message-old",
+            sessionId: "agent-session-channel",
+            clientMessageId: "message-old",
+            role: "user",
+            parts: [{ type: "text", text: "old request" }],
+            metadata: { source: "discord.worker" },
+            createdAt: new Date("2026-06-30T12:00:00Z")
+          },
+          {
+            messageId: "agent-user-message-current",
+            sessionId: "agent-session-channel",
+            clientMessageId: "message-current",
+            role: "user",
+            parts: [{ type: "text", text: "current request" }],
+            metadata: { source: "discord.worker" },
+            createdAt: new Date("2026-06-30T12:00:01Z")
+          },
+          {
+            messageId: "agent-transcript-current-assistant-round-1",
+            sessionId: "agent-session-channel",
+            clientMessageId: "message-current:transcript:assistant-round-1",
+            role: "assistant",
+            parts: [{ type: "assistant_tool_calls", toolCalls: [{ name: "runCodingAgent", arguments: {} }] }],
+            metadata: { executionId: "agent-execution-message-current", traceId: "message-current" },
+            createdAt: new Date("2026-06-30T12:00:02Z")
+          },
+          {
+            messageId: "agent-assistant-message-current",
+            sessionId: "agent-session-channel",
+            clientMessageId: "reply-current",
+            role: "assistant",
+            parts: [{ type: "text", text: "opened a PR" }],
+            metadata: { discordUrl: "https://discord.com/channels/guild/channel/reply-current" },
+            createdAt: new Date("2026-06-30T12:00:03Z")
+          }
+        ],
+        getToolAuditLogsForTrace: async () => [],
+        listProcessRunsForTrace: async () => [run],
+        findProcessRunByAgentExecutionId: async () => undefined,
+        listProcessRunsByParentAgentExecutionId: async () => [],
+        listAgentTasksForTrace: async () => []
+      } as unknown as DiscordAiAgentRepository,
+      "task-current"
+    );
+
+    expect(snapshot?.diagnostics).not.toContain("Latest failure signal: Old failure from the same channel session.");
+    expect(snapshot?.events.map((event) => event.name)).toEqual(["agent.execution.succeeded"]);
+    expect(snapshot?.agentTranscript.map((message) => message.id)).toEqual([
+      "agent-user-message-current",
+      "agent-transcript-current-assistant-round-1",
+      "agent-assistant-message-current"
+    ]);
+  });
+
   it("diagnoses active codegen runs as inspectable live progress", () => {
     const run = codegenRun({ status: "running", currentStep: "codex_app_server_attempt_1" });
 

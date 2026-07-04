@@ -9,6 +9,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { startArtifactRetentionMaintenance } from "../observability/artifactRetention.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
+import { enqueueAgentTaskJob, type AgentTaskEnqueueInput } from "./agentTaskEnqueue.js";
 import {
   createCodegenLeaseScheduler,
   registerCodegenWorkerLease,
@@ -16,15 +17,7 @@ import {
   waitForCodegenSandboxLease,
   type CodegenLeaseScheduler
 } from "./codegenLeaseScheduler.js";
-import {
-  mirrorAgentTaskQueuedToAgentRuntime
-} from "./agentTaskRuntimeMirror.js";
-import {
-  attachCodegenQueueHandoff,
-  codegenExecutionIdForTask,
-  codegenSessionIdForTask,
-  mirrorAgentTaskQueuedToCodegen
-} from "./agentTaskCodegenMirror.js";
+import { codegenExecutionIdForTask, codegenSessionIdForTask } from "./agentTaskCodegenMirror.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
@@ -86,12 +79,6 @@ export type AgentRuntimeExecutionRunner = {
 };
 
 export type DiscordAgentRequestRunner = AgentRuntimeExecutionRunner;
-
-export type AgentTaskEnqueueInput = Omit<AgentTaskJob, "taskId" | "taskType"> & {
-  taskId?: string;
-  taskType?: AgentTaskJob["taskType"];
-  runtimeMirror?: "external";
-};
 
 export type JobRuntime = {
   boss: PgBoss;
@@ -244,109 +231,17 @@ export async function startJobs(input: {
     enqueueDiscordAgentRequest: async (job: AgentRuntimeExecutionJob) => {
       return runtime.enqueueAgentRuntimeExecution(job);
     },
-    enqueueAgentTask: async (job) => {
-      const { runtimeMirror, ...jobInput } = job;
-      const shouldMirrorAgentRuntime = runtimeMirror !== "external";
-      const trace = currentTraceContext();
-      const taskId = jobInput.taskId ?? `task-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-      const data: AgentTaskJob = {
-        ...jobInput,
-        taskId,
-        taskType: jobInput.taskType ?? "code_update",
-        traceId: trace?.traceId ?? jobInput.traceId ?? taskId,
-        guildId: trace?.guildId ?? jobInput.guildId,
-        channelId: trace?.channelId ?? jobInput.channelId,
-        userId: trace?.userId ?? jobInput.userId
-      };
-      logger.info({ queue: AGENT_TASK_JOB, taskId, title: jobInput.title, runtimeMirror }, "Enqueueing agent task");
-      const backendName = input.agentTask?.name ?? "kubernetes-sandbox";
-      await input.repo?.upsertAgentTaskQueued({
-        taskId,
-        traceId: data.traceId,
-        guildId: data.guildId,
-        channelId: data.channelId,
-        userId: data.userId,
-        threadKey: data.threadKey,
-        discordResponseChannelId: data.discordResponseChannelId,
-        discordResponseMessageId: data.discordResponseMessageId,
-        retriedFromTaskId: data.retriedFromTaskId,
-        taskType: data.taskType,
-        title: data.title,
-        request: data.request,
-        requestedBy: data.requestedBy,
-        backend: backendName
-      });
-      await mirrorAgentTaskQueuedToCodegen({
-        codegenRepo: input.codegenRepo,
+    enqueueAgentTask: async (job) =>
+      enqueueAgentTaskJob({
+        boss,
+        queueName: AGENT_TASK_JOB,
         config: input.config,
-        job: data,
-        backendName,
-        pgBossJobId: null,
-        onError: (phase, error) => logger.warn({ err: error, taskId, phase }, "Failed to create codegen task mirror")
-      });
-      if (shouldMirrorAgentRuntime) {
-        await mirrorAgentTaskQueuedToAgentRuntime({
-          agentRuntimeRepo,
-          config: input.config,
-          job: data,
-          backendName,
-          pgBossJobId: null,
-          codegenSessionId: codegenSessionIdForTask(data),
-          codegenExecutionId: codegenExecutionIdForTask(data)
-        }).catch((error) => logger.warn({ err: error, taskId }, "Failed to create agent runtime task mirror"));
-      }
-      let id: string | null;
-      try {
-        id =
-          (await boss.send(AGENT_TASK_JOB, data, {
-            singletonKey: taskId,
-            retryLimit: 0
-          })) ?? null;
-      } catch (error) {
-        await input.repo?.markAgentTaskFailed({
-          taskId,
-          error: error instanceof Error ? error.message : String(error)
-        });
-        throw error;
-      }
-      await input.repo?.upsertAgentTaskQueued({
-        taskId,
-        pgBossJobId: id,
-        traceId: data.traceId,
-        guildId: data.guildId,
-        channelId: data.channelId,
-        userId: data.userId,
-        threadKey: data.threadKey,
-        discordResponseChannelId: data.discordResponseChannelId,
-        discordResponseMessageId: data.discordResponseMessageId,
-        retriedFromTaskId: data.retriedFromTaskId,
-        taskType: data.taskType,
-        title: data.title,
-        request: data.request,
-        requestedBy: data.requestedBy,
-        backend: backendName
-      });
-      await attachCodegenQueueHandoff({
+        repo: input.repo,
         codegenRepo: input.codegenRepo,
-        config: input.config,
-        job: data,
-        backendName,
-        pgBossJobId: id
-      }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update codegen execution enqueue metadata"));
-      if (shouldMirrorAgentRuntime) {
-        await mirrorAgentTaskQueuedToAgentRuntime({
-          agentRuntimeRepo,
-          config: input.config,
-          job: data,
-          backendName,
-          pgBossJobId: id,
-          codegenSessionId: codegenSessionIdForTask(data),
-          codegenExecutionId: codegenExecutionIdForTask(data)
-        }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update agent runtime task mirror"));
-      }
-      logger.info({ queue: AGENT_TASK_JOB, taskId, jobId: id }, "Agent task enqueue complete");
-      return { jobId: id, taskId };
-    },
+        agentRuntimeRepo,
+        backendName: agentTaskBackendName,
+        job
+      }),
     stop: async () => {
       artifactRetentionMaintenance?.stop();
       await stopCodegenLeaseHeartbeat?.();

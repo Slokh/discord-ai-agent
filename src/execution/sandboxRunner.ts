@@ -96,6 +96,16 @@ type CodexRunSummary = {
   attempts: CodexAttemptSummary[];
 };
 
+type GitChangeState = {
+  baseRevision: string;
+  headRevision: string;
+  status: string;
+  commitsAhead: number;
+  hasWorkingTreeChanges: boolean;
+  hasCommittedChanges: boolean;
+  hasChanges: boolean;
+};
+
 type CodexAppServerAttemptResult = {
   exitCode: number;
   threadId?: string;
@@ -235,6 +245,7 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
 
     await progress(env, "branch", `Creating implementation branch ${branchName}.`, { branchName });
     await runCommand("git", ["checkout", "-b", branchName], { cwd: checkoutDir, taskEnv: env, step: "branch" });
+    const baseRevision = await gitRevision(checkoutDir, "HEAD");
 
     const dependencyStateBeforeCodex = await readDependencyManifestState(checkoutDir);
     await timedPhase(env, timings, "dependencies", "Preparing dependencies from the shared sandbox cache.", async () => {
@@ -271,28 +282,32 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       }
     });
 
-    await runSelectedCodegenHarness({ env, timings, checkoutDir, gitEnv, workRoot, codexHome, opencodeHome, toolShimDir, contextPack });
+    await runSelectedCodegenHarness({ env, timings, checkoutDir, gitEnv, workRoot, codexHome, opencodeHome, toolShimDir, contextPack, baseRevision });
 
-    await progress(env, "diff", `Checking whether ${codegenHarnessDisplayName(env.codegenHarness)} produced a real code diff.`, { harness: env.codegenHarness });
-    const status = await runCommand("git", ["status", "--porcelain"], { cwd: checkoutDir, taskEnv: env, step: "diff" });
-    if (!status.stdout.trim()) {
+    await progress(env, "diff", `Checking whether ${codegenHarnessDisplayName(env.codegenHarness)} produced real code changes.`, {
+      harness: env.codegenHarness,
+      baseRevision
+    });
+    const changeState = await readGitChangeState(checkoutDir, baseRevision);
+    if (!changeState.hasChanges) {
       throw new Error("Agent task produced no diff; no PR will be opened.");
     }
-    const diffStat = await runCommand("git", ["diff", "--stat"], { cwd: checkoutDir, taskEnv: env, step: "diff_stat" });
+    await progress(env, "diff_detected", "Detected generated code changes.", gitChangeStateMetadata(changeState));
+    const diffStat = await runCommand("git", ["diff", "--stat", baseRevision, "--"], { cwd: checkoutDir, taskEnv: env, step: "diff_stat" });
     await recordArtifact(env, {
       kind: "diff",
       name: "Git diff stat",
       content: diffStat.stdout,
       contentType: "text/plain",
-      metadata: { command: "git diff --stat" }
+      metadata: { command: `git diff --stat ${baseRevision} --`, ...gitChangeStateMetadata(changeState) }
     });
-    const diffPatch = await runCommand("git", ["diff", "--no-ext-diff"], { cwd: checkoutDir, taskEnv: env, step: "diff_patch" });
+    const diffPatch = await runCommand("git", ["diff", "--no-ext-diff", baseRevision, "--"], { cwd: checkoutDir, taskEnv: env, step: "diff_patch" });
     await recordArtifact(env, {
       kind: "diff",
       name: "Git patch",
       content: diffPatch.stdout,
       contentType: "text/x-diff",
-      metadata: { command: "git diff --no-ext-diff" }
+      metadata: { command: `git diff --no-ext-diff ${baseRevision} --`, ...gitChangeStateMetadata(changeState) }
     });
 
     const dependencyStateAfterCodex = await readDependencyManifestState(checkoutDir);
@@ -327,20 +342,28 @@ async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStarted
       throw new Error("Release scan failed after agent task; refusing to push generated changes.");
     }
 
-    await progress(env, "commit", "Committing generated changes.");
-    await runCommand("git", ["config", "user.name", "discord-ai-agent"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
-    await runCommand("git", ["config", "user.email", "discord-ai-agent-bot@users.noreply.github.com"], {
-      cwd: checkoutDir,
-      taskEnv: env,
-      step: "commit"
-    });
-    await runCommand("git", ["config", "commit.gpgsign", "false"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
-    await runCommand("git", ["add", "-A"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
-    await runCommand("git", ["commit", "-m", prTitle], {
-      cwd: checkoutDir,
-      taskEnv: env,
-      step: "commit"
-    });
+    const preCommitChangeState = await readGitChangeState(checkoutDir, baseRevision);
+    if (!preCommitChangeState.hasChanges) {
+      throw new Error("Agent task changes disappeared before commit; no PR will be opened.");
+    }
+    if (preCommitChangeState.hasWorkingTreeChanges) {
+      await progress(env, "commit", "Committing generated working-tree changes.", gitChangeStateMetadata(preCommitChangeState));
+      await runCommand("git", ["config", "user.name", "discord-ai-agent"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
+      await runCommand("git", ["config", "user.email", "discord-ai-agent-bot@users.noreply.github.com"], {
+        cwd: checkoutDir,
+        taskEnv: env,
+        step: "commit"
+      });
+      await runCommand("git", ["config", "commit.gpgsign", "false"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
+      await runCommand("git", ["add", "-A"], { cwd: checkoutDir, taskEnv: env, step: "commit" });
+      await runCommand("git", ["commit", "-m", prTitle], {
+        cwd: checkoutDir,
+        taskEnv: env,
+        step: "commit"
+      });
+    } else {
+      await progress(env, "commit_skipped", "Generated changes were already committed by the coding harness; pushing existing commits.", gitChangeStateMetadata(preCommitChangeState));
+    }
     await timedPhase(env, timings, "push", "Pushing the generated branch to GitHub.", async () => {
       await runCommand("git", ["push", "origin", `HEAD:${branchName}`], { cwd: checkoutDir, env: gitEnv, taskEnv: env, step: "push" });
     }, { branchName });
@@ -875,6 +898,42 @@ async function gitStatusPorcelain(checkoutDir: string) {
   return result.stdout;
 }
 
+async function gitRevision(checkoutDir: string, revision: string) {
+  const result = await execFileText("git", ["rev-parse", revision], { cwd: checkoutDir });
+  return result.stdout.trim();
+}
+
+export async function readGitChangeState(checkoutDir: string, baseRevision: string): Promise<GitChangeState> {
+  const [status, headRevision, commitsAheadText] = await Promise.all([
+    gitStatusPorcelain(checkoutDir),
+    gitRevision(checkoutDir, "HEAD"),
+    execFileText("git", ["rev-list", "--count", `${baseRevision}..HEAD`], { cwd: checkoutDir }).then((result) => result.stdout.trim())
+  ]);
+  const commitsAhead = Number.parseInt(commitsAheadText, 10) || 0;
+  const hasWorkingTreeChanges = Boolean(status.trim());
+  const hasCommittedChanges = commitsAhead > 0;
+  return {
+    baseRevision,
+    headRevision,
+    status,
+    commitsAhead,
+    hasWorkingTreeChanges,
+    hasCommittedChanges,
+    hasChanges: hasWorkingTreeChanges || hasCommittedChanges
+  };
+}
+
+function gitChangeStateMetadata(changeState: GitChangeState) {
+  return {
+    baseRevision: changeState.baseRevision,
+    headRevision: changeState.headRevision,
+    commitsAhead: changeState.commitsAhead,
+    hasWorkingTreeChanges: changeState.hasWorkingTreeChanges,
+    hasCommittedChanges: changeState.hasCommittedChanges,
+    gitStatus: tail(changeState.status, MAX_ACTIVITY_COMMAND_OUTPUT)
+  };
+}
+
 function execFileText(command: string, args: string[], options: { cwd: string; env?: NodeJS.ProcessEnv }) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     execFile(command, args, { cwd: options.cwd, env: options.env ?? process.env, maxBuffer: 1_000_000 }, (error, stdout, stderr) => {
@@ -1033,6 +1092,7 @@ async function runSelectedCodegenHarness(input: {
   opencodeHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
+  baseRevision: string;
 }) {
   if (input.env.codegenHarness === "opencode") {
     await timedPhase(
@@ -1183,6 +1243,7 @@ async function runOpenCodeWithRecovery(input: {
   opencodeHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
+  baseRevision: string;
 }): Promise<CodexRunSummary> {
   const attempts: CodexAttemptSummary[] = [];
   const totalAttempts = 1;
@@ -1204,8 +1265,9 @@ async function runOpenCodeWithRecovery(input: {
   });
 
   const result = await runOpenCodeServerAttempt({ ...input, attempt, totalAttempts, prompt });
-  const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
-  const producedDiff = Boolean(gitStatus.trim());
+  const changeState = await readGitChangeState(input.checkoutDir, input.baseRevision).catch(() => undefined);
+  const gitStatus = changeState?.status ?? "";
+  const producedDiff = Boolean(changeState?.hasChanges);
   const summary: CodexAttemptSummary = {
     attempt,
     command: "opencode-run",
@@ -1226,7 +1288,7 @@ async function runOpenCodeWithRecovery(input: {
       command: "opencode-run",
       exitCode: result.exitCode,
       durationMs: result.durationMs,
-      gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+      ...(changeState ? gitChangeStateMetadata(changeState) : { gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT) })
     }
   );
 
@@ -1438,6 +1500,7 @@ async function runCodexWithRecovery(input: {
   codexHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
+  baseRevision: string;
 }): Promise<CodexRunSummary> {
   try {
     return await runCodexAppServerWithRecovery(input);
@@ -1445,11 +1508,12 @@ async function runCodexWithRecovery(input: {
     if (error instanceof CodegenNoDiffError) {
       throw error;
     }
-    const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
-    if (gitStatus.trim()) {
-      await progress(input.env, "codex_app_server_salvaged_diff", "Codex app-server failed after producing a code diff; continuing to PR creation.", {
+    const changeState = await readGitChangeState(input.checkoutDir, input.baseRevision).catch(() => undefined);
+    const gitStatus = changeState?.status ?? "";
+    if (changeState?.hasChanges) {
+      await progress(input.env, "codex_app_server_salvaged_diff", "Codex app-server failed after producing code changes; continuing to PR creation.", {
         error: conciseError(error),
-        gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+        ...gitChangeStateMetadata(changeState)
       });
       return {
         attempts: [
@@ -1480,6 +1544,7 @@ async function runCodexAppServerWithRecovery(input: {
   codexHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
+  baseRevision: string;
 }): Promise<CodexRunSummary> {
   const attempts: CodexAttemptSummary[] = [];
   const totalAttempts = CODEX_APP_SERVER_MAX_ATTEMPTS;
@@ -1518,8 +1583,9 @@ async function runCodexAppServerWithRecovery(input: {
       threadId
     });
     threadId = result.threadId ?? threadId;
-    const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
-    const producedDiff = Boolean(gitStatus.trim());
+    const changeState = await readGitChangeState(input.checkoutDir, input.baseRevision).catch(() => undefined);
+    const gitStatus = changeState?.status ?? "";
+    const producedDiff = Boolean(changeState?.hasChanges);
     const summary: CodexAttemptSummary = {
       attempt,
       command: "app-server",
@@ -1544,7 +1610,7 @@ async function runCodexAppServerWithRecovery(input: {
         durationMs: result.durationMs,
         notificationCount: result.notifications.length,
         threadId,
-        gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+        ...(changeState ? gitChangeStateMetadata(changeState) : { gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT) })
       }
     );
 
@@ -1708,6 +1774,7 @@ async function runCodexExecWithRecovery(input: {
   codexHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
+  baseRevision: string;
 }): Promise<CodexRunSummary> {
   const attempts: CodexAttemptSummary[] = [];
   const codexBinary = process.env.CODEX_BIN || "codex";
@@ -1747,8 +1814,9 @@ async function runCodexExecWithRecovery(input: {
       taskEnv: input.env,
       step: `codex_attempt_${attempt}`
     });
-    const gitStatus = await gitStatusPorcelain(input.checkoutDir).catch(() => "");
-    const producedDiff = Boolean(gitStatus.trim());
+    const changeState = await readGitChangeState(input.checkoutDir, input.baseRevision).catch(() => undefined);
+    const gitStatus = changeState?.status ?? "";
+    const producedDiff = Boolean(changeState?.hasChanges);
     const summary: CodexAttemptSummary = {
       attempt,
       command,
@@ -1771,7 +1839,7 @@ async function runCodexExecWithRecovery(input: {
         command,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
-        gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT)
+        ...(changeState ? gitChangeStateMetadata(changeState) : { gitStatus: tail(gitStatus, MAX_ACTIVITY_COMMAND_OUTPUT) })
       }
     );
 

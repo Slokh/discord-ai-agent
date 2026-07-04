@@ -55,7 +55,7 @@ docker build -t "$REGISTRY/discord-ai-agent:$GIT_SHA" .
 docker push "$REGISTRY/discord-ai-agent:$GIT_SHA"
 ```
 
-The same runtime image can be used as the sandbox image because it includes the compiled sandbox runner and Codex CLI. You may publish a separate sandbox tag if you want different hardening or tooling:
+The same runtime image can be used as the sandbox image because it includes the compiled sandbox runner, coding harness CLIs, GitHub CLI, git, and ripgrep. You may publish a separate sandbox tag if you want different hardening or tooling:
 
 ```bash
 docker tag "$REGISTRY/discord-ai-agent:$GIT_SHA" "$REGISTRY/discord-ai-agent-sandbox:$GIT_SHA"

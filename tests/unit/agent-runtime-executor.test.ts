@@ -46,12 +46,16 @@ describe("agent runtime prompt executors", () => {
       storeProcessRunArtifact: vi.fn(async () => undefined),
       recordProcessRunSpan: vi.fn(async () => undefined)
     };
+    const agentRuntime = {
+      recordEvent: vi.fn(async () => undefined)
+    };
 
     await expect(
       executor.execute({
         toolContext: {
           requestId: "request-1",
           repo,
+          agentRuntime,
           agentRuntimeSession: { sessionId: "agent-session-1" },
           agentRuntimeExecutionId: "agent-execution-1"
         } as never,
@@ -118,6 +122,38 @@ describe("agent runtime prompt executors", () => {
         metadata: expect.objectContaining({ responseChars: "hello from sandbox".length, fileCount: 1 })
       })
     );
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        executionId: "agent-execution-1",
+        traceId: "request-1",
+        eventName: "agent.execution.executor_started",
+        summary: "Warm sandbox prompt executor started.",
+        metadata: expect.objectContaining({
+          executor: "warm-sandbox",
+          transport: "child_process",
+          command: "node",
+          inputLinesArtifactId: "input-lines-1",
+          inputLineCount: 2
+        })
+      })
+    );
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-1",
+        executionId: "agent-execution-1",
+        traceId: "request-1",
+        eventName: "agent.execution.executor_succeeded",
+        summary: "Warm sandbox prompt executor completed.",
+        metadata: expect.objectContaining({
+          executor: "warm-sandbox",
+          transport: "child_process",
+          responseChars: "hello from sandbox".length,
+          fileCount: 1,
+          memoryEventCount: 1
+        })
+      })
+    );
   });
 
   it("runs warm-sandbox executions through the HTTP protocol when a warm server URL is configured", async () => {
@@ -135,12 +171,16 @@ describe("agent runtime prompt executors", () => {
       storeProcessRunArtifact: vi.fn(async () => undefined),
       recordProcessRunSpan: vi.fn(async () => undefined)
     };
+    const agentRuntime = {
+      recordEvent: vi.fn(async () => undefined)
+    };
 
     await expect(
       executor.execute({
         toolContext: {
           requestId: "request-http",
           repo,
+          agentRuntime,
           agentRuntimeSession: { sessionId: "agent-session-http" },
           agentRuntimeExecutionId: "agent-execution-http"
         } as never,
@@ -195,6 +235,70 @@ describe("agent runtime prompt executors", () => {
           url: "http://warm-sandbox:8090",
           httpStatus: 200,
           responseChars: "hello from warm server".length
+        })
+      })
+    );
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-http",
+        executionId: "agent-execution-http",
+        eventName: "agent.execution.executor_succeeded",
+        metadata: expect.objectContaining({
+          executor: "warm-sandbox",
+          transport: "http",
+          url: "http://warm-sandbox:8090",
+          httpStatus: 200,
+          responseChars: "hello from warm server".length
+        })
+      })
+    );
+  });
+
+  it("records durable runtime failure events for warm-sandbox transport errors", async () => {
+    const fetchImpl = vi.fn(async () => new Response("boom", { status: 500 }));
+    const executor = new WarmSandboxAgentRuntimePromptExecutor({
+      warmSandboxUrl: "http://warm-sandbox:8090",
+      fetchImpl
+    });
+    const repo = {
+      storeProcessRunArtifact: vi.fn(async () => undefined),
+      recordProcessRunSpan: vi.fn(async () => undefined)
+    };
+    const agentRuntime = {
+      recordEvent: vi.fn(async () => undefined)
+    };
+
+    await expect(
+      executor.execute({
+        toolContext: {
+          requestId: "request-fail",
+          repo,
+          agentRuntime,
+          agentRuntimeSession: { sessionId: "agent-session-fail" },
+          agentRuntimeExecutionId: "agent-execution-fail"
+        } as never,
+        text: "hello",
+        timeoutMs: 1000,
+        turnEnvelope: { requestId: "request-fail", text: "hello" } as never,
+        inputLinesArtifactId: "input-lines-fail",
+        inputLines: ['{"type":"user","text":"hello"}']
+      })
+    ).rejects.toThrow("Warm sandbox HTTP request failed (500): boom");
+
+    expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-fail",
+        executionId: "agent-execution-fail",
+        traceId: "request-fail",
+        eventName: "agent.execution.executor_failed",
+        kind: "error",
+        level: "error",
+        summary: "Warm sandbox HTTP request failed (500): boom",
+        metadata: expect.objectContaining({
+          executor: "warm-sandbox",
+          transport: "http",
+          url: "http://warm-sandbox:8090",
+          error: "Warm sandbox HTTP request failed (500): boom"
         })
       })
     );

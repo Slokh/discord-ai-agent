@@ -91,6 +91,19 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
         inputLineCount
       }
     });
+    await recordWarmSandboxRuntimeEvent(input, {
+      eventName: "agent.execution.executor_started",
+      summary: "Warm sandbox prompt executor started.",
+      startedAt,
+      metadata: {
+        transport,
+        command: command?.command ?? null,
+        args: command?.args ?? null,
+        url: transport === "http" ? this.options.warmSandboxUrl : null,
+        inputLinesArtifactId: input.inputLinesArtifactId ?? null,
+        inputLineCount
+      }
+    });
     if (this.options.warmSandboxUrl) {
       return await this.executeRemote(input, request, startedAt);
     }
@@ -131,6 +144,18 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
           error: error instanceof Error ? error.message : String(error)
         }
       }).catch(() => undefined);
+      await recordWarmSandboxRuntimeEvent(input, {
+        eventName: "agent.execution.executor_failed",
+        summary: error instanceof Error ? error.message : String(error),
+        level: "error",
+        kind: "error",
+        startedAt,
+        metadata: {
+          transport: "http",
+          url: this.options.warmSandboxUrl,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      }).catch(() => undefined);
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -163,6 +188,14 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
           startedAt,
           metadata: { executor: this.name, transport: "child_process", error: `Timed out after ${input.timeoutMs}ms.`, stderrTail: stderr || null }
         }).catch(() => undefined);
+        recordWarmSandboxRuntimeEvent(input, {
+          eventName: "agent.execution.executor_failed",
+          summary: `Warm sandbox agent runtime execution timed out after ${input.timeoutMs}ms.`,
+          level: "error",
+          kind: "error",
+          startedAt,
+          metadata: { transport: "child_process", error: `Timed out after ${input.timeoutMs}ms.`, stderrTail: stderr || null }
+        }).catch(() => undefined);
         reject(new Error(`Warm sandbox agent runtime execution timed out after ${input.timeoutMs}ms.`));
       }, input.timeoutMs);
 
@@ -181,6 +214,14 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
           startedAt,
           metadata: { executor: this.name, transport: "child_process", error: error.message, stderrTail: stderr || null }
         }).catch(() => undefined);
+        recordWarmSandboxRuntimeEvent(input, {
+          eventName: "agent.execution.executor_failed",
+          summary: error.message,
+          level: "error",
+          kind: "error",
+          startedAt,
+          metadata: { transport: "child_process", error: error.message, stderrTail: stderr || null }
+        }).catch(() => undefined);
         reject(error);
       });
       child.on("close", (code, signal) => {
@@ -193,6 +234,20 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
             startedAt,
             metadata: {
               executor: this.name,
+              transport: "child_process",
+              exitCode: code,
+              signal,
+              stdoutTail: stdout || null,
+              stderrTail: stderr || null
+            }
+          }).catch(() => undefined);
+          recordWarmSandboxRuntimeEvent(input, {
+            eventName: "agent.execution.executor_failed",
+            summary: `Warm sandbox agent runtime exited with ${signal ? `signal ${signal}` : `code ${code}`}.`,
+            level: "error",
+            kind: "error",
+            startedAt,
+            metadata: {
               transport: "child_process",
               exitCode: code,
               signal,
@@ -222,6 +277,19 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
             startedAt,
             metadata: {
               executor: this.name,
+              transport: "child_process",
+              error: error instanceof Error ? error.message : String(error),
+              stdoutTail: stdout || null,
+              stderrTail: stderr || null
+            }
+          }).catch(() => undefined);
+          recordWarmSandboxRuntimeEvent(input, {
+            eventName: "agent.execution.executor_failed",
+            summary: error instanceof Error ? error.message : String(error),
+            level: "error",
+            kind: "error",
+            startedAt,
+            metadata: {
               transport: "child_process",
               error: error instanceof Error ? error.message : String(error),
               stdoutTail: stdout || null,
@@ -271,6 +339,17 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
           fileCount: response.files?.length ?? 0,
           memoryEventCount: response.memoryEvents?.length ?? 0
         }
+      }),
+      recordWarmSandboxRuntimeEvent(input, {
+        eventName: "agent.execution.executor_succeeded",
+        summary: "Warm sandbox prompt executor completed.",
+        startedAt,
+        metadata: {
+          ...metadata,
+          responseChars: response.content.length,
+          fileCount: response.files?.length ?? 0,
+          memoryEventCount: response.memoryEvents?.length ?? 0
+        }
       })
     ]);
     return response;
@@ -314,6 +393,37 @@ async function recordWarmSandboxSpan(
     completedAt: span.status === "running" ? undefined : new Date(),
     durationMs: span.status === "running" ? undefined : Math.max(0, Date.now() - span.startedAt),
     metadata: span.metadata
+  });
+}
+
+async function recordWarmSandboxRuntimeEvent(
+  input: AgentRuntimePromptExecutionInput,
+  event: {
+    eventName: string;
+    summary: string;
+    kind?: "status" | "error";
+    level?: "info" | "error";
+    startedAt: number;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  const agentRuntime = input.toolContext.agentRuntime;
+  const session = input.toolContext.agentRuntimeSession;
+  const executionId = input.toolContext.agentRuntimeExecutionId;
+  if (!agentRuntime || !session || !executionId) return;
+  await agentRuntime.recordEvent({
+    sessionId: session.sessionId,
+    executionId,
+    traceId: input.toolContext.requestId ?? input.turnEnvelope.requestId,
+    kind: event.kind ?? "status",
+    level: event.level ?? "info",
+    eventName: event.eventName,
+    summary: event.summary,
+    durationMs: Math.max(0, Date.now() - event.startedAt),
+    metadata: {
+      executor: "warm-sandbox",
+      ...(event.metadata ?? {})
+    }
   });
 }
 

@@ -36,7 +36,7 @@ The first migration slices record Discord prompts and their compatibility execut
 
 Durable prompt session/execution rows and `agent.execution.*` events record the selected executor name. This keeps the run console aligned with the actual runtime path, especially when the worker is using `warm-sandbox` instead of the compatibility in-process model loop.
 
-Warm prompt executions write a `Warm sandbox prompt runner` span and `raw_json` artifacts for the serialized prompt request and response. Span/artifact metadata includes the selected transport (`http` or `child_process`) plus HTTP status or process byte counts, so latency and protocol bugs are visible in the run console.
+Warm prompt executions write durable `agent.execution.executor_*` events, a `Warm sandbox prompt runner` span, and `raw_json` artifacts for the serialized prompt request and response. Event/span/artifact metadata includes the selected transport (`http` or `child_process`) plus HTTP status or process byte counts, so latency and protocol bugs are visible in the run console and replayable session stream.
 
 Run a local warm prompt server with:
 

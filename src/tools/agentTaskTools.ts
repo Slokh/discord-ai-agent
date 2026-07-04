@@ -47,6 +47,7 @@ async function enqueueAgentCodeUpdateTask(
   if (ctx.agentRuntime && ctx.agentRuntimeSession) {
     return enqueueAgentRuntimeCodeUpdateTask({
       config: ctx.config,
+      repo: ctx.repo,
       agentRuntime: ctx.agentRuntime,
       jobs: ctx.jobs,
       session: ctx.agentRuntimeSession,

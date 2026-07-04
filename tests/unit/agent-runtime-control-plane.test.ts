@@ -142,7 +142,8 @@ describe("agent runtime control plane", () => {
     );
   });
 
-  it("creates code-update task executions before handing work to the legacy task queue", async () => {
+  it("persists code-update task rows before creating task-linked runtime executions", async () => {
+    const repo = fakeTaskRepo();
     const agentRuntime = fakeAgentRuntime();
     const jobs = {
       enqueueAgentTask: vi.fn(async () => ({
@@ -159,6 +160,7 @@ describe("agent runtime control plane", () => {
 
     const result = await enqueueAgentRuntimeCodeUpdateTask({
       config: fakeConfig(),
+      repo: repo as never,
       agentRuntime: agentRuntime as never,
       jobs,
       session: fakeSession(),
@@ -174,6 +176,23 @@ describe("agent runtime control plane", () => {
     });
 
     expect(result).toEqual({ taskId: "task-runtime-first", jobId: "job-task-1" });
+    expect(repo.upsertAgentTaskQueued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "task-runtime-first",
+        traceId: "message-1",
+        taskType: "code_update",
+        title: "Runtime-first code updates",
+        request: "make code updates runtime-first",
+        requestedBy: "Kartik",
+        backend: "local-process-sandbox",
+        parentAgentSessionId: "agent-session-1",
+        parentAgentExecutionId: "agent-execution-parent",
+        parentAgentThreadKey: "discord:guild:channel"
+      })
+    );
+    expect(repo.upsertAgentTaskQueued.mock.invocationCallOrder[0]).toBeLessThan(
+      agentRuntime.createExecution.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
+    );
     expect(agentRuntime.appendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "agent-session-1",
@@ -297,6 +316,12 @@ describe("agent runtime control plane", () => {
     ).toBeNull();
   });
 });
+
+function fakeTaskRepo() {
+  return {
+    upsertAgentTaskQueued: vi.fn(async () => undefined)
+  };
+}
 
 function fakeAgentRuntime() {
   return {

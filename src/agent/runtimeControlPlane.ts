@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeExecutionRecord, AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
+import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { codegenExecutionSelection } from "../execution/codegenSelection.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import type { AgentRuntimeExecutionJob, JobRuntime } from "../jobs/queue.js";
@@ -42,6 +43,7 @@ export type AgentRuntimeCodeUpdateEnqueueResult = {
 
 export async function enqueueAgentRuntimeCodeUpdateTask(input: {
   config: AppConfig;
+  repo: Pick<DiscordAiAgentRepository, "upsertAgentTaskQueued">;
   agentRuntime: AgentRuntimeRepository;
   jobs: Pick<JobRuntime, "enqueueAgentTask">;
   session: AgentRuntimeSessionRecord;
@@ -82,6 +84,25 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     parentAgentExecutionId: input.parentExecutionId ?? undefined,
     parentAgentThreadKey
   };
+  await input.repo.upsertAgentTaskQueued({
+    taskId,
+    traceId,
+    guildId: job.guildId,
+    channelId: job.channelId,
+    userId: job.userId,
+    threadKey,
+    discordResponseChannelId: job.discordResponseChannelId,
+    discordResponseMessageId: job.discordResponseMessageId,
+    retriedFromTaskId: job.retriedFromTaskId,
+    taskType: "code_update",
+    title: input.title,
+    request: input.request,
+    requestedBy: input.requestedBy,
+    backend: initialAgentTaskBackendName(selection.codegenBackend),
+    parentAgentSessionId: input.session.sessionId,
+    parentAgentExecutionId: input.parentExecutionId ?? null,
+    parentAgentThreadKey
+  });
   await input.agentRuntime.appendMessage({
     messageId: agentRuntimeCodeUpdateMessageId(taskId),
     sessionId: input.session.sessionId,
@@ -392,6 +413,10 @@ function nonBlankString(value: string | null | undefined) {
 
 function agentRuntimeCodeUpdateExecutionId(taskId: string) {
   return `agent-task-execution-${taskId}`;
+}
+
+function initialAgentTaskBackendName(codegenBackend: AppConfig["execution"]["codegenBackend"]) {
+  return codegenBackend === "local-process" ? "local-process-sandbox" : "kubernetes-sandbox";
 }
 
 function agentRuntimeCodeUpdateMessageId(taskId: string) {

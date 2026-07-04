@@ -1260,6 +1260,9 @@ describe("agent router", () => {
 
   it("preserves reply context and fresh tool evidence when recovering leaked hosted tool markup", async () => {
     const auditTool = vi.fn(async () => undefined);
+    const storeProcessRunArtifact = vi.fn(async () => ({ artifactId: "artifact-leaked-hosted-tool" }));
+    const leakedHostedToolMarkup =
+      "<tool_call>openrouter_web_fetch<arg_key>url</arg_key><arg_value>https://github.com/Slokh/discord-ai-agent/pull/111</arg_value></tool_call>";
     const task = {
       taskId: "task-1",
       traceId: "trace-1",
@@ -1304,8 +1307,7 @@ describe("agent router", () => {
         toolCalls: [{ id: "call-1", name: "getAgentTaskStatus", argumentsText: JSON.stringify({ taskId: "task-1" }) }]
       })
       .mockResolvedValueOnce({
-        content:
-          "<tool_call>openrouter_web_fetch<arg_key>url</arg_key><arg_value>https://github.com/Slokh/discord-ai-agent/pull/111</arg_value></tool_call>",
+        content: leakedHostedToolMarkup,
         model: "tool-leak-model",
         raw: {},
         toolCalls: []
@@ -1316,6 +1318,9 @@ describe("agent router", () => {
         expect(recoveryContext).toContain("Fresh local tool result from getAgentTaskStatus");
         expect(recoveryContext).toContain("PR: https://github.com/Slokh/discord-ai-agent/pull/111");
         expect(recoveryContext).toContain("Using the conversation, reply context, and fresh local tool results above");
+        expect(recoveryContext).toContain("openrouter:web_fetch");
+        expect(recoveryContext).toContain("https://github.com/Slokh/discord-ai-agent/pull/111");
+        expect(recoveryContext).toContain("call the matching hosted tool through the provided tool channel now");
         return {
           content: "PR #111 is the relevant PR; check its CI details there.",
           model: "recovery-model",
@@ -1329,6 +1334,7 @@ describe("agent router", () => {
         getAgentTask: vi.fn(async () => task),
         getTaskProgressEventsForTask: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
+        storeProcessRunArtifact,
         auditTool
       },
       openRouter: { chat },
@@ -1337,6 +1343,7 @@ describe("agent router", () => {
       channelId: "c",
       userId: "u",
       userDisplayName: "User",
+      requestId: "prompt-message-1",
       visibleChannelIds: ["c"],
       replyContext: {
         rootMessageId: "root",
@@ -1373,6 +1380,25 @@ describe("agent router", () => {
 
     expect(response.content).toBe("PR #111 is the relevant PR; check its CI details there.");
     expect(chat).toHaveBeenCalledTimes(3);
+    expect(storeProcessRunArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "prompt-message-1",
+        kind: "model_transcript",
+        name: "Malformed hosted tool output round 2",
+        content: leakedHostedToolMarkup,
+        metadata: expect.objectContaining({
+          model: "tool-leak-model",
+          round: 2,
+          reason: "hosted_tool_markup_leaked",
+          intendedHostedTools: [
+            {
+              type: "openrouter:web_fetch",
+              arguments: { url: "https://github.com/Slokh/discord-ai-agent/pull/111" }
+            }
+          ]
+        })
+      })
+    );
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
   });
 

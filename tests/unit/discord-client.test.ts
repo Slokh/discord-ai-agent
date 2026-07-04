@@ -5,6 +5,7 @@ import {
   explicitChannelMentionIds,
   explicitRoleMentionIds,
   explicitUserMentionIds,
+  handleUndoCrossReaction,
   hasExplicitBotAddress,
   hasExplicitBotMention,
   isSelfMessage,
@@ -132,6 +133,175 @@ function fakeRepo() {
     upsertUser: vi.fn(async () => undefined),
     upsertMessage: vi.fn(async () => undefined),
     isUserPrivacyDeleted: vi.fn(async () => false)
+  };
+}
+
+describe("handleUndoCrossReaction", () => {
+  it("removes a bot reply from memory and deletes the message on ❌", async () => {
+    const repo = {
+      deleteConversationMessagesByDiscordMessageIds: vi.fn(async () => 2),
+      recordTraceEvent: vi.fn(async () => undefined)
+    };
+    const channel = {
+      id: "channel-1",
+      messages: {
+        delete: vi.fn(async () => undefined)
+      }
+    };
+    const message = fakeGuildBotReplyMessage("guild-a", "bot-1", "reply-1", channel);
+    const reaction = fakeReaction({ emoji: "❌", message });
+    const client = { user: { id: "bot-1" } } as any;
+
+    const handled = await handleUndoCrossReaction(
+      { config: { discord: { guildId: "guild-a" } } as any, repo: repo as any, client } as any,
+      client,
+      reaction as any,
+      { id: "user-1", bot: false } as any
+    );
+
+    expect(handled).toBe(true);
+    expect(repo.deleteConversationMessagesByDiscordMessageIds).toHaveBeenCalledWith({
+      threadKey: "discord:guild-a:channel-1",
+      discordMessageIds: ["reply-1"]
+    });
+    expect(channel.messages.delete).toHaveBeenCalledWith("reply-1");
+    expect(repo.recordTraceEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: "discord.reply.undone_by_reaction",
+        metadata: expect.objectContaining({ replyMessageId: "reply-1", deletedMemoryRows: 2, reactorUserId: "user-1" })
+      })
+    );
+  });
+
+  it("ignores ❌ reactions that the bot itself added", async () => {
+    const repo = {
+      deleteConversationMessagesByDiscordMessageIds: vi.fn(async () => 1),
+      recordTraceEvent: vi.fn(async () => undefined)
+    };
+    const message = fakeGuildBotReplyMessage("guild-a", "bot-1", "reply-1");
+    const reaction = fakeReaction({ emoji: "❌", message });
+    const client = { user: { id: "bot-1" } } as any;
+
+    const handled = await handleUndoCrossReaction(
+      { config: { discord: { guildId: "guild-a" } } as any, repo: repo as any, client } as any,
+      client,
+      reaction as any,
+      { id: "bot-1", bot: true } as any
+    );
+
+    expect(handled).toBe(false);
+    expect(repo.deleteConversationMessagesByDiscordMessageIds).not.toHaveBeenCalled();
+  });
+
+  it("ignores ❌ reactions on non-bot messages", async () => {
+    const repo = {
+      deleteConversationMessagesByDiscordMessageIds: vi.fn(async () => 1),
+      recordTraceEvent: vi.fn(async () => undefined)
+    };
+    const message = fakeGuildMessage("guild-a");
+    const reaction = fakeReaction({ emoji: "❌", message });
+    const client = { user: { id: "bot-1" } } as any;
+
+    const handled = await handleUndoCrossReaction(
+      { config: { discord: { guildId: "guild-a" } } as any, repo: repo as any, client } as any,
+      client,
+      reaction as any,
+      { id: "user-1", bot: false } as any
+    );
+
+    expect(handled).toBe(false);
+    expect(repo.deleteConversationMessagesByDiscordMessageIds).not.toHaveBeenCalled();
+  });
+
+  it("ignores reactions that are not ❌", async () => {
+    const repo = {
+      deleteConversationMessagesByDiscordMessageIds: vi.fn(async () => 1),
+      recordTraceEvent: vi.fn(async () => undefined)
+    };
+    const message = fakeGuildBotReplyMessage("guild-a", "bot-1", "reply-1");
+    const reaction = fakeReaction({ emoji: "✅", message });
+    const client = { user: { id: "bot-1" } } as any;
+
+    const handled = await handleUndoCrossReaction(
+      { config: { discord: { guildId: "guild-a" } } as any, repo: repo as any, client } as any,
+      client,
+      reaction as any,
+      { id: "user-1", bot: false } as any
+    );
+
+    expect(handled).toBe(false);
+    expect(repo.deleteConversationMessagesByDiscordMessageIds).not.toHaveBeenCalled();
+  });
+
+  it("ignores ❌ reactions from other guilds", async () => {
+    const repo = {
+      deleteConversationMessagesByDiscordMessageIds: vi.fn(async () => 1),
+      recordTraceEvent: vi.fn(async () => undefined)
+    };
+    const message = fakeGuildBotReplyMessage("guild-b", "bot-1", "reply-1");
+    const reaction = fakeReaction({ emoji: "❌", message });
+    const client = { user: { id: "bot-1" } } as any;
+
+    const handled = await handleUndoCrossReaction(
+      { config: { discord: { guildId: "guild-a" } } as any, repo: repo as any, client } as any,
+      client,
+      reaction as any,
+      { id: "user-1", bot: false } as any
+    );
+
+    expect(handled).toBe(false);
+    expect(repo.deleteConversationMessagesByDiscordMessageIds).not.toHaveBeenCalled();
+  });
+});
+
+function fakeReaction(overrides: { emoji?: string; message?: any; partial?: boolean } = {}) {
+  const message = overrides.message ?? fakeGuildMessage("guild-a");
+  return {
+    partial: overrides.partial ?? false,
+    emoji: { id: null, name: overrides.emoji ?? "❌", animated: false },
+    message,
+    fetch: async function (this: any) {
+      return this;
+    }
+  };
+}
+
+function fakeGuildBotReplyMessage(
+  guildId: string,
+  botUserId: string,
+  messageId: string,
+  channel?: { id: string; messages: { delete: (id: string) => Promise<void> } }
+) {
+  return {
+    id: messageId,
+    partial: false,
+    inGuild: () => true,
+    guildId,
+    channelId: "channel-1",
+    guild: { id: guildId, name: "Test Guild" },
+    channel: channel ?? {
+      id: "channel-1",
+      name: "general",
+      type: 0,
+      parentId: null,
+      isThread: () => false,
+      messages: { delete: vi.fn(async () => undefined) }
+    },
+    author: {
+      id: botUserId,
+      username: "ai-bot",
+      globalName: "AI",
+      bot: true
+    },
+    content: "bot reply",
+    createdAt: new Date("2024-01-01T00:00:00.000Z"),
+    editedAt: null,
+    type: 0,
+    system: false,
+    pinned: false,
+    url: `https://discord.com/channels/${guildId}/channel-1/${messageId}`,
+    reactions: { cache: new Map() },
+    attachments: new Map()
   };
 }
 

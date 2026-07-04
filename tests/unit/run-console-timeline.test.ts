@@ -209,7 +209,7 @@ describe("run console timeline", () => {
               type: "tool_result",
               toolCallId: "call-1",
               toolName: "getDiscordStats",
-              content: "top channel: mindcool"
+              content: "top channel: alpha"
             }
           ],
           metadata: { source: "agent.router", round: 1, durationMs: 42 },
@@ -241,7 +241,7 @@ describe("run console timeline", () => {
         kind: "tool",
         title: "Tool result: getDiscordStats",
         source: "agent session",
-        summary: "getDiscordStats: top channel: mindcool",
+        summary: "getDiscordStats: top channel: alpha",
         durationMs: 42
       })
     ]);

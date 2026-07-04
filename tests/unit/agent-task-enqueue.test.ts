@@ -28,7 +28,10 @@ describe("agent task enqueue", () => {
         discordResponseMessageId: "reply-1",
         title: "Improve runtime task visibility",
         request: "make code-update tasks visible in the codegen ledger",
-        requestedBy: "Kartik (user)"
+        requestedBy: "Kartik (user)",
+        parentAgentSessionId: "agent-session-parent",
+        parentAgentExecutionId: "agent-execution-parent",
+        parentAgentThreadKey: "discord:guild:channel"
       }
     });
 
@@ -50,7 +53,10 @@ describe("agent task enqueue", () => {
         taskId: "task-1",
         taskType: "code_update",
         traceId: "prompt-message-1",
-        title: "Improve runtime task visibility"
+        title: "Improve runtime task visibility",
+        parentAgentSessionId: "agent-session-parent",
+        parentAgentExecutionId: "agent-execution-parent",
+        parentAgentThreadKey: "discord:guild:channel"
       }),
       { singletonKey: "task-1", retryLimit: 0 }
     );
@@ -59,7 +65,10 @@ describe("agent task enqueue", () => {
       1,
       expect.objectContaining({
         taskId: "task-1",
-        backend: "local-process-sandbox"
+        backend: "local-process-sandbox",
+        parentAgentSessionId: "agent-session-parent",
+        parentAgentExecutionId: "agent-execution-parent",
+        parentAgentThreadKey: "discord:guild:channel"
       })
     );
     expect(repo.upsertAgentTaskQueued).toHaveBeenNthCalledWith(
@@ -67,14 +76,22 @@ describe("agent task enqueue", () => {
       expect.objectContaining({
         taskId: "task-1",
         pgBossJobId: "pgboss-job-1",
-        backend: "local-process-sandbox"
+        backend: "local-process-sandbox",
+        parentAgentSessionId: "agent-session-parent",
+        parentAgentExecutionId: "agent-execution-parent",
+        parentAgentThreadKey: "discord:guild:channel"
       })
     );
     expect(codegenRepo.createExecution).toHaveBeenCalledWith(
       expect.objectContaining({
         executionId: "codegen-execution-task-1",
         status: "queued",
-        metadata: expect.objectContaining({ backend: "local-process-sandbox", pgbossJobId: null })
+        metadata: expect.objectContaining({
+          backend: "local-process-sandbox",
+          pgbossJobId: null,
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent"
+        })
       })
     );
     expect(codegenRepo.updateExecution).toHaveBeenCalledWith({
@@ -82,6 +99,8 @@ describe("agent task enqueue", () => {
       metadata: expect.objectContaining({
         backend: "local-process-sandbox",
         pgbossJobId: "pgboss-job-1",
+        parentAgentSessionId: "agent-session-parent",
+        parentAgentExecutionId: "agent-execution-parent",
         codegenHarness: "opencode",
         codegenModel: "z-ai/glm-5.2"
       })
@@ -89,13 +108,23 @@ describe("agent task enqueue", () => {
     expect(agentRuntimeRepo.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         eventName: "agent.task.queued",
-        metadata: expect.objectContaining({ taskId: "task-1", jobId: null })
+        metadata: expect.objectContaining({
+          taskId: "task-1",
+          jobId: null,
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent"
+        })
       })
     );
     expect(agentRuntimeRepo.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         eventName: "agent.task.enqueued",
-        metadata: expect.objectContaining({ taskId: "task-1", jobId: "pgboss-job-1" })
+        metadata: expect.objectContaining({
+          taskId: "task-1",
+          jobId: "pgboss-job-1",
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent"
+        })
       })
     );
   });

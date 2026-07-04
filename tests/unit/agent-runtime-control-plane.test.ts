@@ -169,7 +169,8 @@ describe("agent runtime control plane", () => {
       requestedBy: "Kartik",
       threadKey: "discord:guild:channel",
       discordResponseChannelId: "channel",
-      discordResponseMessageId: "thinking-1"
+      discordResponseMessageId: "thinking-1",
+      parentExecutionId: "agent-execution-parent"
     });
 
     expect(result).toEqual({ taskId: "task-runtime-first", jobId: "job-task-1" });
@@ -178,6 +179,11 @@ describe("agent runtime control plane", () => {
         sessionId: "agent-session-1",
         messageId: "agent-task-message-task-runtime-first",
         role: "tool",
+        metadata: expect.objectContaining({
+          parentAgentSessionId: "agent-session-1",
+          parentAgentExecutionId: "agent-execution-parent",
+          parentAgentThreadKey: "discord:guild:channel"
+        }),
         parts: [
           expect.objectContaining({
             type: "tool_result",
@@ -198,6 +204,9 @@ describe("agent runtime control plane", () => {
         model: "z-ai/glm-5.2",
         metadata: expect.objectContaining({
           queue: "agent.task",
+          parentAgentSessionId: "agent-session-1",
+          parentAgentExecutionId: "agent-execution-parent",
+          parentAgentThreadKey: "discord:guild:channel",
           codegenBackend: "local-process",
           codegenHarness: "opencode",
           codegenModel: "z-ai/glm-5.2",
@@ -211,7 +220,10 @@ describe("agent runtime control plane", () => {
         runtimeMirror: "external",
         request: "make code updates runtime-first",
         title: "Runtime-first code updates",
-        discordResponseMessageId: "thinking-1"
+        discordResponseMessageId: "thinking-1",
+        parentAgentSessionId: "agent-session-1",
+        parentAgentExecutionId: "agent-execution-parent",
+        parentAgentThreadKey: "discord:guild:channel"
       })
     );
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "agent.task.queued" }));
@@ -222,6 +234,8 @@ describe("agent runtime control plane", () => {
           taskId: "task-runtime-first",
           jobId: "job-task-1",
           backend: "local-process-sandbox",
+          parentAgentSessionId: "agent-session-1",
+          parentAgentExecutionId: "agent-execution-parent",
           codegenHarness: "opencode"
         })
       })

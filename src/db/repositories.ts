@@ -2381,6 +2381,9 @@ export class DiscordAiAgentRepository {
     request: string;
     requestedBy: string;
     backend?: string | null;
+    parentAgentSessionId?: string | null;
+    parentAgentExecutionId?: string | null;
+    parentAgentThreadKey?: string | null;
   }) {
     const statusMessage = queuedAgentTaskStatusMessage(input.backend);
     await this.pool.query(
@@ -2448,6 +2451,9 @@ export class DiscordAiAgentRepository {
         request: input.request,
         threadKey: input.threadKey,
         retriedFromTaskId: input.retriedFromTaskId,
+        parentAgentSessionId: input.parentAgentSessionId,
+        parentAgentExecutionId: input.parentAgentExecutionId,
+        parentAgentThreadKey: input.parentAgentThreadKey,
         discordResponseChannelId: input.discordResponseChannelId,
         discordResponseMessageId: input.discordResponseMessageId
       }

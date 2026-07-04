@@ -2,6 +2,7 @@ import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import { codegenExecutionSelection } from "../execution/codegenSelection.js";
 import type { AgentTaskJob } from "../execution/types.js";
+import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 
 export function agentRuntimeThreadKeyForTask(job: Pick<AgentTaskJob, "taskId" | "threadKey">) {
   return job.threadKey ?? `agent-task:${job.taskId}`;
@@ -28,6 +29,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
   const threadKey = agentRuntimeThreadKeyForTask(input.job);
   const existingSession = input.pgBossJobId ? await input.agentRuntimeRepo.getSession({ threadKey }).catch(() => undefined) : undefined;
   const selection = codegenExecutionSelection(input.config);
+  const parentMetadata = agentTaskRuntimeParentMetadata(input.job);
   const session =
     existingSession ??
     (await input.agentRuntimeRepo.upsertSession({
@@ -53,6 +55,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
         codegenExecutionId: input.codegenExecutionId ?? null,
         retriedFromTaskId: input.job.retriedFromTaskId ?? null,
         source: "agent.task.enqueue",
+        ...parentMetadata,
         ...selection
       }
     }));
@@ -81,6 +84,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       codegenSessionId: input.codegenSessionId ?? null,
       codegenExecutionId: input.codegenExecutionId ?? null,
       source: "agent.task.enqueue",
+      ...parentMetadata,
       ...selection
     }
   });
@@ -92,6 +96,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
     codegenSessionId: input.codegenSessionId ?? null,
     codegenExecutionId: input.codegenExecutionId ?? null,
     retriedFromTaskId: input.job.retriedFromTaskId ?? null,
+    ...parentMetadata,
     ...selection
   };
   if (input.pgBossJobId) {
@@ -141,6 +146,7 @@ export async function mirrorAgentTaskQueuedToAgentRuntime(input: {
       queue: "agent.task",
       codegenSessionId: input.codegenSessionId ?? null,
       codegenExecutionId: input.codegenExecutionId ?? null,
+      ...parentMetadata,
       ...selection
     }
   });

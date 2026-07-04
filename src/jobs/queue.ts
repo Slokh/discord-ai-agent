@@ -18,6 +18,7 @@ import {
   type CodegenLeaseScheduler
 } from "./codegenLeaseScheduler.js";
 import { codegenExecutionIdForTask, codegenSessionIdForTask } from "./agentTaskCodegenMirror.js";
+import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
@@ -377,6 +378,7 @@ export async function startJobs(input: {
               "Starting agent.task sandbox"
             );
             const backendName = input.agentTask?.name ?? "kubernetes-sandbox";
+            const runtimeParentMetadata = agentTaskRuntimeParentMetadata(job.data);
             const sessionId = codegenSessionIdForTask(job.data);
             const executionId = codegenExecutionIdForTask(job.data);
             await input.repo?.markAgentTaskRunning({
@@ -385,7 +387,8 @@ export async function startJobs(input: {
               step: "sandbox_start",
               statusMessage: startingAgentTaskStatusMessage(backendName),
               pgBossJobId: job.id,
-              workerStartedAt: new Date(startedAt)
+              workerStartedAt: new Date(startedAt),
+              metadata: runtimeParentMetadata
             });
             const acquiredLease = await acquireLeaseForAgentTask({
               scheduler: codegenLeaseScheduler,
@@ -414,7 +417,7 @@ export async function startJobs(input: {
                     backend: backendName,
                     step: event.step,
                     statusMessage: event.message,
-                    metadata: { backend: backendName, ...event.metadata }
+                    metadata: { backend: backendName, ...runtimeParentMetadata, ...event.metadata }
                   });
                 }
               });
@@ -433,7 +436,7 @@ export async function startJobs(input: {
                 backend: backendName,
                 step: "sandbox_running",
                 statusMessage: runningAgentTaskStatusMessage(backendName),
-                metadata: result
+                metadata: { ...runtimeParentMetadata, ...result }
               });
               logger.info(
                 {
@@ -452,7 +455,7 @@ export async function startJobs(input: {
                 taskId: job.data.taskId,
                 status: isNoChangesTaskError(message) ? "no_changes" : "failed",
                 error: message,
-                metadata: { backend: backendName, failedStep: "sandbox_start" }
+                metadata: { backend: backendName, failedStep: "sandbox_start", ...runtimeParentMetadata }
               });
               logger.error(
                 {

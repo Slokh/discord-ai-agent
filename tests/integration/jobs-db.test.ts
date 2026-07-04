@@ -172,6 +172,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     const repo = new DiscordAiAgentRepository(pool);
     const codegenRepo = new CodegenRepository(pool);
     const processedRequests: string[] = [];
+    const processedJobs: unknown[] = [];
     const runtime = await startJobs({
       config,
       repo,
@@ -187,6 +188,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         name: "test-sandbox-backend",
         start: async (job, context) => {
           processedRequests.push(job.request);
+          processedJobs.push(job);
           await context?.progress?.({ step: "test-step", message: "Starting test sandbox." });
           return {
             sandboxRunId: "sandbox-run-1",
@@ -201,12 +203,22 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       const { jobId, taskId } = await runtime.enqueueAgentTask({
         request: "add a calendar integration",
         title: "calendar integration",
-        requestedBy: "test"
+        requestedBy: "test",
+        parentAgentSessionId: "agent-session-parent",
+        parentAgentExecutionId: "agent-execution-parent",
+        parentAgentThreadKey: "discord:guild:channel"
       });
       expect(jobId).toEqual(expect.any(String));
       expect(taskId).toEqual(expect.any(String));
 
       await waitFor(() => processedRequests.includes("add a calendar integration"), 10_000);
+      expect(processedJobs).toEqual([
+        expect.objectContaining({
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent",
+          parentAgentThreadKey: "discord:guild:channel"
+        })
+      ]);
       await waitFor(async () => {
         const job = await repo.getAgentTask(taskId);
         return job?.status === "running" && job.currentStep === "sandbox_running";
@@ -227,7 +239,9 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           harness: "opencode",
           metadata: expect.objectContaining({
             codegenHarness: "opencode",
-            codegenModel: "z-ai/glm-5.2"
+            codegenModel: "z-ai/glm-5.2",
+            parentAgentSessionId: "agent-session-parent",
+            parentAgentExecutionId: "agent-execution-parent"
           })
         })
       );
@@ -246,10 +260,21 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           sandboxRunId: "sandbox-run-1",
           metadata: expect.objectContaining({
             codegenHarness: "opencode",
-            codegenModel: "z-ai/glm-5.2"
+            codegenModel: "z-ai/glm-5.2",
+            parentAgentSessionId: "agent-session-parent",
+            parentAgentExecutionId: "agent-execution-parent"
           })
         })
       ]);
+      await expect(repo.getProcessRun(taskId)).resolves.toEqual(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            parentAgentSessionId: "agent-session-parent",
+            parentAgentExecutionId: "agent-execution-parent",
+            parentAgentThreadKey: "discord:guild:channel"
+          })
+        })
+      );
     } finally {
       await runtime.stop();
       await pool.end();

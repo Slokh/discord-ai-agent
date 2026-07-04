@@ -43,6 +43,8 @@ describe("agent runtime task mirror", () => {
           codegenExecutionId: "codegen-execution-task-1",
           source: "agent.task.enqueue",
           queue: "agent.task",
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent",
           codegenBackend: "kubernetes-job",
           codegenHarness: "opencode",
           codegenModel: "z-ai/glm-5.2",
@@ -56,6 +58,10 @@ describe("agent runtime task mirror", () => {
         sessionId: "agent-session-1",
         clientMessageId: "task-1",
         role: "tool",
+        metadata: expect.objectContaining({
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent"
+        }),
         parts: [
           expect.objectContaining({
             type: "tool_result",
@@ -82,6 +88,8 @@ describe("agent runtime task mirror", () => {
           codegenSessionId: "codegen-session-task-1",
           codegenExecutionId: "codegen-execution-task-1",
           queue: "agent.task",
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent",
           codegenHarness: "opencode",
           codegenModel: "z-ai/glm-5.2"
         })
@@ -99,6 +107,8 @@ describe("agent runtime task mirror", () => {
           jobId: "pgboss-job-1",
           backend: "local-process-sandbox",
           queue: "agent.task",
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent",
           codegenHarness: "opencode",
           codegenModel: "z-ai/glm-5.2"
         })
@@ -134,6 +144,8 @@ describe("agent runtime task mirror", () => {
         metadata: expect.objectContaining({
           backend: "local-process-sandbox",
           pgbossJobId: "pgboss-job-1",
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent",
           codegenHarness: "opencode"
         })
       })
@@ -144,7 +156,12 @@ describe("agent runtime task mirror", () => {
         sessionId: "agent-session-1",
         executionId: "agent-task-execution-task-1",
         eventName: "agent.task.enqueued",
-        metadata: expect.objectContaining({ taskId: "task-1", jobId: "pgboss-job-1" })
+        metadata: expect.objectContaining({
+          taskId: "task-1",
+          jobId: "pgboss-job-1",
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent"
+        })
       })
     );
   });
@@ -163,6 +180,9 @@ function agentTaskJob(): AgentTaskJob {
     taskType: "code_update",
     title: "Improve runtime task visibility",
     request: "make code-update tasks visible in the agent runtime session",
-    requestedBy: "Kartik (user)"
+    requestedBy: "Kartik (user)",
+    parentAgentSessionId: "agent-session-parent",
+    parentAgentExecutionId: "agent-execution-parent",
+    parentAgentThreadKey: "discord:guild:channel"
   };
 }

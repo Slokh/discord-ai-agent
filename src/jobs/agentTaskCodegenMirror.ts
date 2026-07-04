@@ -2,6 +2,7 @@ import type { AppConfig } from "../config/env.js";
 import type { CodegenRepository } from "../db/codegenRepository.js";
 import { codegenExecutionSelection } from "../execution/codegenSelection.js";
 import type { AgentTaskJob } from "../execution/types.js";
+import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 
 export type CodegenMirrorPhase = "session" | "message" | "message_event" | "execution";
 
@@ -39,6 +40,7 @@ export async function mirrorAgentTaskQueuedToCodegen(input: {
     }
   };
   const selection = codegenExecutionSelection(input.config);
+  const parentMetadata = agentTaskRuntimeParentMetadata(input.job);
 
   await capture(
     "session",
@@ -56,7 +58,7 @@ export async function mirrorAgentTaskQueuedToCodegen(input: {
       harness: selection.codegenHarness,
       model: selection.codegenModel,
       provider: selection.codegenProvider,
-      metadata: { taskId: input.job.taskId, retriedFromTaskId: input.job.retriedFromTaskId, ...selection }
+      metadata: { taskId: input.job.taskId, retriedFromTaskId: input.job.retriedFromTaskId, ...parentMetadata, ...selection }
     })
   );
   await capture(
@@ -72,7 +74,8 @@ export async function mirrorAgentTaskQueuedToCodegen(input: {
         traceId: input.job.traceId,
         requestedBy: input.job.requestedBy,
         retriedFromTaskId: input.job.retriedFromTaskId ?? null,
-        source: "agent.task.enqueue"
+        source: "agent.task.enqueue",
+        ...parentMetadata
       }
     })
   );
@@ -84,7 +87,7 @@ export async function mirrorAgentTaskQueuedToCodegen(input: {
       kind: "status",
       eventName: "codegen.message.appended",
       summary: "Persisted code-update request as a durable codegen message.",
-      metadata: { taskId: input.job.taskId, messageId, role: "user" }
+      metadata: { taskId: input.job.taskId, messageId, role: "user", ...parentMetadata }
     })
   );
   await capture(
@@ -99,7 +102,7 @@ export async function mirrorAgentTaskQueuedToCodegen(input: {
       model: selection.codegenModel,
       provider: selection.codegenProvider,
       reasoningEffort: "low",
-      metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...selection }
+      metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...parentMetadata, ...selection }
     })
   );
 }
@@ -114,9 +117,10 @@ export async function attachCodegenQueueHandoff(input: {
   if (!input.codegenRepo) return;
   const executionId = codegenExecutionIdForTask(input.job);
   const selection = codegenExecutionSelection(input.config);
+  const parentMetadata = agentTaskRuntimeParentMetadata(input.job);
   const updated = await input.codegenRepo.updateExecution({
     executionId,
-    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...selection }
+    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...parentMetadata, ...selection }
   });
   if (updated) return;
   await input.codegenRepo.createExecution({
@@ -129,6 +133,6 @@ export async function attachCodegenQueueHandoff(input: {
     model: selection.codegenModel,
     provider: selection.codegenProvider,
     reasoningEffort: "low",
-    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...selection }
+    metadata: { backend: input.backendName, pgbossJobId: input.pgBossJobId, ...parentMetadata, ...selection }
   });
 }

@@ -63,6 +63,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
   const executionId = agentRuntimeCodeUpdateExecutionId(taskId);
   const threadKey = input.threadKey ?? input.session.threadKey ?? `agent-task:${taskId}`;
   const traceId = input.traceId ?? input.session.traceId ?? taskId;
+  const parentAgentThreadKey = input.session.threadKey ?? threadKey;
   const selection = codegenExecutionSelection(input.config);
   const job: Omit<AgentTaskJob, "taskType"> = {
     taskId,
@@ -76,7 +77,10 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     threadKey,
     discordResponseChannelId: input.discordResponseChannelId ?? undefined,
     discordResponseMessageId: input.discordResponseMessageId ?? undefined,
-    retriedFromTaskId: input.retriedFromTaskId ?? undefined
+    retriedFromTaskId: input.retriedFromTaskId ?? undefined,
+    parentAgentSessionId: input.session.sessionId,
+    parentAgentExecutionId: input.parentExecutionId ?? undefined,
+    parentAgentThreadKey
   };
   await input.agentRuntime.appendMessage({
     messageId: agentRuntimeCodeUpdateMessageId(taskId),
@@ -99,6 +103,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       source: "agent.runtime.tool",
       toolName: "runCodingAgent",
       queue: "agent.task",
+      parentAgentSessionId: input.session.sessionId,
+      parentAgentExecutionId: input.parentExecutionId ?? null,
+      parentAgentThreadKey,
       parentExecutionId: input.parentExecutionId ?? null,
       retriedFromTaskId: input.retriedFromTaskId ?? null,
       ...selection
@@ -118,6 +125,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       taskType: "code_update",
       source: "agent.runtime.tool",
       queue: "agent.task",
+      parentAgentSessionId: input.session.sessionId,
+      parentAgentExecutionId: input.parentExecutionId ?? null,
+      parentAgentThreadKey,
       parentExecutionId: input.parentExecutionId ?? null,
       requestedBy: input.requestedBy,
       retriedFromTaskId: input.retriedFromTaskId ?? null,
@@ -136,6 +146,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       toolName: "runCodingAgent",
       title: input.title,
       queue: "agent.task",
+      parentAgentSessionId: input.session.sessionId,
+      parentAgentExecutionId: input.parentExecutionId ?? null,
+      parentAgentThreadKey,
       retriedFromTaskId: input.retriedFromTaskId ?? null,
       ...selection
     }
@@ -175,6 +188,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       pgbossJobId: jobId,
       queue: queueResult?.queueName ?? "agent.task",
       backend: queueResult?.backendName ?? null,
+      parentAgentSessionId: input.session.sessionId,
+      parentAgentExecutionId: input.parentExecutionId ?? null,
+      parentAgentThreadKey,
       codegenBackend: queueResult?.codegenBackend ?? selection.codegenBackend,
       codegenHarness: queueResult?.codegenHarness ?? selection.codegenHarness,
       codegenModel: queueResult?.codegenModel ?? selection.codegenModel,
@@ -194,6 +210,9 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       toolName: "runCodingAgent",
       queue: queueResult?.queueName ?? "agent.task",
       backend: queueResult?.backendName ?? null,
+      parentAgentSessionId: input.session.sessionId,
+      parentAgentExecutionId: input.parentExecutionId ?? null,
+      parentAgentThreadKey,
       codegenBackend: queueResult?.codegenBackend ?? selection.codegenBackend,
       codegenHarness: queueResult?.codegenHarness ?? selection.codegenHarness,
       codegenModel: queueResult?.codegenModel ?? selection.codegenModel,

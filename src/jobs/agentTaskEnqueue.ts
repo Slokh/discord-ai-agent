@@ -9,6 +9,7 @@ import { currentTraceContext } from "../util/trace.js";
 import { codegenExecutionSelection, type CodegenExecutionSelection } from "../execution/codegenSelection.js";
 import { attachCodegenQueueHandoff, codegenExecutionIdForTask, codegenSessionIdForTask, mirrorAgentTaskQueuedToCodegen } from "./agentTaskCodegenMirror.js";
 import { mirrorAgentTaskQueuedToAgentRuntime } from "./agentTaskRuntimeMirror.js";
+import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 
 export type AgentTaskEnqueueInput = Omit<AgentTaskJob, "taskId" | "taskType"> & {
   taskId?: string;
@@ -38,6 +39,7 @@ export async function enqueueAgentTaskJob(input: {
   const trace = currentTraceContext();
   const taskId = jobInput.taskId ?? `task-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
   const selection = codegenExecutionSelection(input.config);
+  const parentMetadata = agentTaskRuntimeParentMetadata(jobInput);
   const data: AgentTaskJob = {
     ...jobInput,
     taskId,
@@ -62,7 +64,8 @@ export async function enqueueAgentTaskJob(input: {
     title: data.title,
     request: data.request,
     requestedBy: data.requestedBy,
-    backend: input.backendName
+    backend: input.backendName,
+    ...parentMetadata
   });
   await mirrorAgentTaskQueuedToCodegen({
     codegenRepo: input.codegenRepo,
@@ -112,7 +115,8 @@ export async function enqueueAgentTaskJob(input: {
     title: data.title,
     request: data.request,
     requestedBy: data.requestedBy,
-    backend: input.backendName
+    backend: input.backendName,
+    ...parentMetadata
   });
   await attachCodegenQueueHandoff({
     codegenRepo: input.codegenRepo,

@@ -33,6 +33,8 @@ describe("agent task codegen mirror", () => {
         harness: "opencode",
         metadata: expect.objectContaining({
           taskId: "task-1",
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent",
           codegenBackend: "kubernetes-job",
           codegenHarness: "opencode",
           codegenModel: "z-ai/glm-5.2",
@@ -46,14 +48,23 @@ describe("agent task codegen mirror", () => {
         sessionId: "codegen-session-task-1",
         clientMessageId: "task-1",
         role: "user",
-        parts: [{ type: "text", text: "make code-update tasks visible in the codegen ledger" }]
+        parts: [{ type: "text", text: "make code-update tasks visible in the codegen ledger" }],
+        metadata: expect.objectContaining({
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent"
+        })
       })
     );
     expect(codegenRepo.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "codegen-session-task-1",
         eventName: "codegen.message.appended",
-        metadata: expect.objectContaining({ taskId: "task-1", messageId: "codegen-message-task-1" })
+        metadata: expect.objectContaining({
+          taskId: "task-1",
+          messageId: "codegen-message-task-1",
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent"
+        })
       })
     );
     expect(codegenRepo.createExecution).toHaveBeenCalledWith(
@@ -66,6 +77,8 @@ describe("agent task codegen mirror", () => {
         metadata: expect.objectContaining({
           backend: "local-process-sandbox",
           pgbossJobId: null,
+          parentAgentSessionId: "agent-session-parent",
+          parentAgentExecutionId: "agent-execution-parent",
           codegenHarness: "opencode",
           codegenModel: "z-ai/glm-5.2"
         })
@@ -91,6 +104,8 @@ describe("agent task codegen mirror", () => {
       metadata: expect.objectContaining({
         backend: "local-process-sandbox",
         pgbossJobId: "pgboss-job-1",
+        parentAgentSessionId: "agent-session-parent",
+        parentAgentExecutionId: "agent-execution-parent",
         codegenBackend: "kubernetes-job",
         codegenHarness: "opencode",
         codegenModel: "z-ai/glm-5.2",
@@ -133,6 +148,9 @@ function agentTaskJob(): AgentTaskJob {
     taskType: "code_update",
     title: "Improve runtime task visibility",
     request: "make code-update tasks visible in the codegen ledger",
-    requestedBy: "Kartik (user)"
+    requestedBy: "Kartik (user)",
+    parentAgentSessionId: "agent-session-parent",
+    parentAgentExecutionId: "agent-execution-parent",
+    parentAgentThreadKey: "discord:guild:channel"
   };
 }

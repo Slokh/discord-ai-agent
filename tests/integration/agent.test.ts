@@ -1546,6 +1546,7 @@ describe("agent router", () => {
       visibleChannelIds: ["c"],
       threadKey: "discord:g:c",
       requestId: "prompt-message-1",
+      agentRuntimeExecutionId: "agent-execution-prompt",
       statusChannelId: "c",
       statusMessageId: "reply-1",
       updateStatus: vi.fn(async () => undefined)
@@ -1575,6 +1576,9 @@ describe("agent router", () => {
         taskId,
         runtimeMirror: "external",
         traceId: "prompt-message-1",
+        parentAgentSessionId: "agent-session-channel",
+        parentAgentExecutionId: "agent-execution-prompt",
+        parentAgentThreadKey: "discord:g:c",
         title: "Add calendar support",
         request: "add a calendar integration",
         discordResponseChannelId: "c",

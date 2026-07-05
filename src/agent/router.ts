@@ -22,7 +22,12 @@ import {
   searchDiscordAttachments,
   summarizeDiscordHistory,
   summarizeCurrentThread,
-  undoConversationTurns
+  undoConversationTurns,
+  getSpotifyPlaylistTracks,
+  getSpotifyPlaylist,
+  searchSpotify,
+  getSpotifyArtist,
+  getSpotifyAudioFeatures
 } from "../tools/coreTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ChatMessage } from "../models/openrouter.js";
@@ -741,6 +746,64 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
       content: cleanResponse(
         await summarizeCurrentThread(ctx, {
           question: stringArgument(route.arguments, "question")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getSpotifyPlaylistTracks") {
+    return {
+      content: cleanResponse(
+        await getSpotifyPlaylistTracks(ctx, {
+          playlistIdOrUrl: stringArgument(route.arguments, "playlistIdOrUrl") ?? originalText,
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getSpotifyPlaylist") {
+    return {
+      content: cleanResponse(
+        await getSpotifyPlaylist(ctx, {
+          playlistIdOrUrl: stringArgument(route.arguments, "playlistIdOrUrl") ?? originalText
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "searchSpotify") {
+    return {
+      content: cleanResponse(
+        await searchSpotify(ctx, {
+          query: stringArgument(route.arguments, "query") ?? originalText,
+          type: stringArgument(route.arguments, "type"),
+          limit: numberArgument(route.arguments, "limit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getSpotifyArtist") {
+    return {
+      content: cleanResponse(
+        await getSpotifyArtist(ctx, {
+          artistIdOrUrl: stringArgument(route.arguments, "artistIdOrUrl") ?? originalText
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getSpotifyAudioFeatures") {
+    return {
+      content: cleanResponse(
+        await getSpotifyAudioFeatures(ctx, {
+          trackIds: stringArrayArgument(route.arguments, "trackIds") ?? []
         }),
         ctx.config.maxReplyChars
       )
@@ -1643,6 +1706,7 @@ function chatMessages(
         "For favorite/best/most popular message questions, use getDiscordStats with metric=reactions and groupBy=message as evidence, then make a clear pick when the evidence supports one. " +
         "For current public information, news, schedules, prices, releases, or external facts, use web_search and datetime when useful. " +
         "For URLs, use web_fetch when reading the page would improve the answer. " +
+        "For Spotify playlists, artists, tracks, audio features, or music-taste questions, call getSpotifyPlaylistTracks (with pagination through the full playlist), getSpotifyPlaylist, searchSpotify, getSpotifyArtist, or getSpotifyAudioFeatures. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com so you get every track, not just the first page. " +
         "When the current message or reply context includes images and the user asks what is shown, asks about a screenshot/meme/photo/chart, or asks for visual details, call inspectDiscordImages. " +
         "For Discord image generation requests, call generateImage so the result can be attached. If the user asks to edit, modify, transform, copy the style of, or use an attached/replied image as a reference, call generateImage with useContextImages=true or explicit referenceImageUrls. " +
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +

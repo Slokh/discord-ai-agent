@@ -13,6 +13,7 @@ Owns model-facing local tool contracts and implementations.
 - `imageTools.ts`: Discord image inspection, reference image collection, image generation, and generated-file conversion.
 - `responseFormatting.ts`: shared final-response cleanup and Discord length trimming used by the agent router and Discord renderers.
 - `skillTools.ts`: private skill draft/update generation, policy validation, database persistence, and skill audit logging.
+- `spotifyTools.ts`: Spotify Web API client-credentials integration for public playlist tracks (paginated), playlist details, search, artist info, and audio features.
 - `toolContext.ts`: shared tool-context helpers such as requester-visible indexed channels and Discord message-id parsing.
 - Discord resolvers, history/retrieval, stats/topics, images/vision, skills, code-update tasks, task status, logs, deployment status, and response cleanup.
 

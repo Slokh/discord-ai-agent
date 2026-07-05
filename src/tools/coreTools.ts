@@ -67,6 +67,14 @@ export { extractHistorySearchSyntax } from "./discordHistoryFormatting.js";
 export { generateImage, inspectDiscordImages, type GenerateImageInput, type InspectDiscordImagesInput } from "./imageTools.js";
 export { cleanResponse } from "./responseFormatting.js";
 export { createSkillFromRequest, type SkillDraftInput } from "./skillTools.js";
+export {
+  getSpotifyPlaylistTracks,
+  getSpotifyPlaylist,
+  searchSpotify,
+  getSpotifyArtist,
+  getSpotifyAudioFeatures,
+  extractSpotifyId
+} from "./spotifyTools.js";
 
 type DiscordSummaryEvidence = {
   samples: SearchResult[];

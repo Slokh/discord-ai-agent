@@ -27,7 +27,12 @@ describe("toolRegistry", () => {
       "getDeploymentStatus",
       "undoConversationTurns",
       "inspectAgentLogs",
-      "reportStatus"
+      "reportStatus",
+      "getSpotifyPlaylistTracks",
+      "getSpotifyPlaylist",
+      "searchSpotify",
+      "getSpotifyArtist",
+      "getSpotifyAudioFeatures"
     ]);
   });
 
@@ -74,12 +79,14 @@ describe("toolRegistry", () => {
   it("classifies local tools into the model-facing taxonomy", () => {
     const contracts = toolContracts();
     expect(new Set(contracts.map((tool) => tool.toolClass))).toEqual(
-      new Set(["resolver", "retrieval", "memory", "stats", "summary", "image", "generation", "coding", "ops"])
+      new Set(["resolver", "retrieval", "memory", "stats", "summary", "image", "generation", "coding", "ops", "external"])
     );
     expect(contracts.find((tool) => tool.name === "findDiscordUsers")?.toolClass).toBe("resolver");
     expect(contracts.find((tool) => tool.name === "getDiscordStats")?.toolClass).toBe("stats");
     expect(contracts.find((tool) => tool.name === "summarizeDiscordHistory")?.toolClass).toBe("summary");
     expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.toolClass).toBe("image");
+    expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.toolClass).toBe("external");
+    expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.category).toBe("external");
   });
 
   it("exports OpenRouter-compatible local function and server tool definitions", () => {

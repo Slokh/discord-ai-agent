@@ -759,12 +759,13 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         request: {
           type: "string",
-          description: "The requested agent update, integration, or repository change to implement."
+          description:
+            "The full requested agent update, integration, or repository change to implement. Preserve the user's desired outcome, especially when the wording combines investigation with an action like 'where is X defined, can we change/increase/fix it?'. Do not reduce that to a read-only find/debug request."
         },
         title: {
           type: "string",
           description:
-            "Optional concise human PR title in plain English, 3-8 words, without prefixes like Agent Codegen. Example: Use loading reaction for pending replies."
+            "Optional concise human PR title in plain English, 3-8 words, without prefixes like Agent Codegen. Name the intended change, not just the investigation. Example: Increase model output token limit."
         },
         targetBranch: {
           type: "string",

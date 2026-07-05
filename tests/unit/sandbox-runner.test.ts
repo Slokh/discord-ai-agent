@@ -23,6 +23,7 @@ import {
   diagnoseCodegenFailure,
   dependencyCacheKey,
   fetchOpenCodeHealth,
+  extractOpenCodeFinalText,
   openCodeConfigJson,
   openCodeModelId,
   openCodeRunArgs,
@@ -120,6 +121,28 @@ describe("sandboxRunner", () => {
       $schema: "https://opencode.ai/config.json",
       model: "openrouter/z-ai/glm-5.2"
     });
+  });
+
+  it("extracts the final assistant text from OpenCode JSON output", () => {
+    const output = [
+      '{"type":"tool_use","timestamp":1,"part":{"tool":"grep","state":{"status":"completed"}}}',
+      '{"type":"text","timestamp":2,"part":{"text":"First answer."}}',
+      '{"type":"text","timestamp":3,"part":{"text":"Final useful answer."}}'
+    ].join("\n");
+
+    expect(extractOpenCodeFinalText(output)).toBe("Final useful answer.");
+  });
+
+  it("treats question-plus-change codegen prompts as implementation requests", () => {
+    const prompt = codeUpdatePrompt({
+      taskId: "task-1",
+      requestedBy: "User (u)",
+      taskRequest: "where is this defined and can we increase it?"
+    });
+
+    expect(prompt).toContain("answer the question by implementing the reasonable change");
+    expect(prompt).toContain("Do not stop at investigation unless the user explicitly asks for read-only diagnosis.");
+    expect(prompt).toContain("where is this defined");
   });
 
   it("installs GitHub CLI in the sandbox runtime image", async () => {
@@ -257,6 +280,7 @@ describe("sandboxRunner", () => {
           exitCode: 0,
           durationMs: 12_000,
           producedDiff: false,
+          finalResponse: "I found the config but did not edit it.",
           stdoutTail: "OpenCode read files and described a plan.",
           stderrTail: ""
         }
@@ -278,7 +302,10 @@ describe("sandboxRunner", () => {
     );
     expect(diagnosis.summary).toContain("OpenCode finished without making a code edit");
     expect(diagnosis.nextAction).toContain("early focused edit");
+    expect(diagnosis.finalResponse).toBe("I found the config but did not edit it.");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Attempts");
+    expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Harness Final Answer");
+    expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("I found the config but did not edit it.");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("attempt 1: command=opencode-run");
   });
 

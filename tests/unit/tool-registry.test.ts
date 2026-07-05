@@ -89,6 +89,15 @@ describe("toolRegistry", () => {
     ).toBe(true);
   });
 
+  it("tells the model to preserve code-update action intent", () => {
+    const definition = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "runCodingAgent");
+    if (!definition || !("function" in definition)) throw new Error("runCodingAgent definition not found");
+    const properties = definition.function.parameters.properties as Record<string, { description?: string }>;
+
+    expect(properties.request.description).toContain("Preserve the user's desired outcome");
+    expect(properties.title.description).toContain("Name the intended change");
+  });
+
   it("classifies local tools into the model-facing taxonomy", () => {
     const contracts = toolContracts();
     expect(new Set(contracts.map((tool) => tool.toolClass))).toEqual(

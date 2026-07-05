@@ -5,6 +5,7 @@ export type CodegenAttemptSummaryForDiagnosis = {
   exitCode: number;
   durationMs: number;
   producedDiff: boolean;
+  finalResponse?: string;
   stdoutTail: string;
   stderrTail: string;
 };
@@ -28,10 +29,11 @@ export type CodegenFailureDiagnosis = {
   summary: string;
   nextAction: string;
   error: string;
+  finalResponse?: string;
   failedPhase: string | null;
   slowestPhase: { name: string; durationMs: number } | null;
   timingsMs: TaskTimingsForDiagnosis;
-  attempts?: Array<Pick<CodegenAttemptSummaryForDiagnosis, "attempt" | "command" | "exitCode" | "durationMs" | "producedDiff">>;
+  attempts?: Array<Pick<CodegenAttemptSummaryForDiagnosis, "attempt" | "command" | "exitCode" | "durationMs" | "producedDiff" | "finalResponse">>;
 };
 
 export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTimingsForDiagnosis; harness?: CodegenHarness }): CodegenFailureDiagnosis {
@@ -43,12 +45,14 @@ export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTim
   const category = classifyCodegenFailure(message, error.name, failedPhase, input.harness, attempts);
   const status = category === "no_diff" || category === "no_first_edit" ? "no_changes" : "failed";
   const summary = codegenFailureSummary(category, input.harness);
+  const finalResponse = finalResponseFromAttempts(attempts);
   return {
     category,
     status,
     summary,
     nextAction: codegenFailureNextAction(category, failedPhase),
     error: message,
+    ...(finalResponse ? { finalResponse } : {}),
     failedPhase,
     slowestPhase,
     timingsMs: { ...input.timings },
@@ -58,7 +62,8 @@ export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTim
           command: attempt.command,
           exitCode: attempt.exitCode,
           durationMs: attempt.durationMs,
-          producedDiff: attempt.producedDiff
+          producedDiff: attempt.producedDiff,
+          ...(attempt.finalResponse ? { finalResponse: attempt.finalResponse } : {})
         }))
       : undefined
   };
@@ -79,6 +84,9 @@ export function renderCodegenFailureDiagnosis(diagnosis: CodegenFailureDiagnosis
     "",
     diagnosis.error,
     "",
+    ...(diagnosis.finalResponse
+      ? ["## Harness Final Answer", "", diagnosis.finalResponse, ""]
+      : []),
     ...(diagnosis.attempts?.length
       ? [
           "## Attempts",
@@ -117,9 +125,18 @@ function isCodegenAttemptSummary(value: unknown): value is CodegenAttemptSummary
     typeof attempt.exitCode === "number" &&
     typeof attempt.durationMs === "number" &&
     typeof attempt.producedDiff === "boolean" &&
+    (attempt.finalResponse == null || typeof attempt.finalResponse === "string") &&
     typeof attempt.stdoutTail === "string" &&
     typeof attempt.stderrTail === "string"
   );
+}
+
+function finalResponseFromAttempts(attempts: CodegenAttemptSummaryForDiagnosis[]) {
+  for (const attempt of attempts.slice().reverse()) {
+    const finalResponse = attempt.finalResponse?.trim();
+    if (finalResponse) return finalResponse;
+  }
+  return "";
 }
 
 function classifyCodegenFailure(

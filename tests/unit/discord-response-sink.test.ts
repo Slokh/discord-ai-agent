@@ -40,8 +40,9 @@ describe("DiscordResponseSink", () => {
     });
   });
 
-  it("keeps the trace footer when final content is truncated", async () => {
-    const sourceMessage = fakeMessage();
+  it("splits long final content into multiple messages and keeps the trace footer on the last chunk", async () => {
+    const channel = { send: vi.fn(async (_options: { content: string }) => fakeMessage({ id: "followup-1" })) };
+    const sourceMessage = fakeMessage({ channel });
     const sink = new DiscordResponseSink({
       client: fakeClient(),
       sourceMessage: sourceMessage as any,
@@ -49,15 +50,48 @@ describe("DiscordResponseSink", () => {
       logger: fakeLogger() as any
     });
 
+    const content = "x".repeat(200);
     await sink.sendFinal({
-      content: "x".repeat(200),
+      content,
       footer: { traceUrl: "https://tasks.example/runs/run-1", durationMs: 42 }
     });
 
-    const payload = (sourceMessage.reply as any).mock.calls[0]?.[0] as { content: string };
-    expect(payload.content).toContain("...[truncated]");
-    expect(payload.content).toContain("-# [trace](https://tasks.example/runs/run-1) · 0.042s");
-    expect(payload.content.length).toBeLessThanOrEqual(96);
+    const replyPayload = (sourceMessage.reply as any).mock.calls[0]?.[0] as { content: string };
+    expect(replyPayload.content.length).toBeLessThanOrEqual(96);
+    expect(replyPayload.content).not.toContain("-# [trace]");
+    expect(channel.send.mock.calls.length).toBeGreaterThanOrEqual(1);
+    const lastFollowup = (channel.send.mock.calls.at(-1)?.[0] as unknown as { content: string }).content;
+    expect(lastFollowup).toContain("-# [trace](https://tasks.example/runs/run-1) · 0.042s");
+    expect(lastFollowup.length).toBeLessThanOrEqual(96);
+    const allContents = [replyPayload.content, ...channel.send.mock.calls.map((call) => (call[0] as unknown as { content: string }).content)];
+    for (const chunk of allContents) {
+      expect(chunk.length).toBeLessThanOrEqual(96);
+    }
+    const rejoined = allContents.join("").replace(/\n+/g, "");
+    expect(rejoined.replace(/-# \[trace\]\([^)]+\) · 0\.042s/, "").length).toBe(200);
+  });
+
+  it("splits long final content without a footer across multiple messages", async () => {
+    const channel = { send: vi.fn(async (_options: { content: string }) => fakeMessage({ id: "followup-1" })) };
+    const sourceMessage = fakeMessage({ channel });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 50,
+      logger: fakeLogger() as any
+    });
+
+    const content = "alpha bravo charlie delta echo foxtrot golf hotel india juliet";
+    await sink.sendFinal({ content });
+
+    const replyPayload = (sourceMessage.reply as any).mock.calls[0]?.[0] as { content: string };
+    expect(replyPayload.content.length).toBeLessThanOrEqual(50);
+    expect(channel.send.mock.calls.length).toBeGreaterThanOrEqual(1);
+    const rejoined = [replyPayload.content, ...channel.send.mock.calls.map((call) => (call[0] as unknown as { content: string }).content)]
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    expect(rejoined).toBe(content);
   });
 
   it("creates a status message lazily, edits it for updates, and edits it for final content", async () => {

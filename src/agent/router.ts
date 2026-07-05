@@ -42,9 +42,9 @@ type AgentToolRoute = {
 
 const MAX_TOOL_ROUNDS = 4;
 const DISCORD_RESPONSE_STYLE_GUIDANCE =
-  "Format for Discord readability without overdesigning the message. Use a bold first-sentence verdict when helpful, short bullets or numbered lists for scan-heavy answers, " +
-  "brief ### headings only for longer structured answers, masked markdown links like [trace](url) or [message](url) instead of raw URLs, code blocks for commands/logs/JSON, " +
-  "and blockquotes only for short quoted evidence. Use Discord subtext (-# ...) only for small metadata when useful. Avoid markdown tables. " +
+  "Discord supports markdown formatting such as bold/italics, short headings, bullets, numbered lists, masked links like [text](url), code blocks, inline code, blockquotes, spoilers, and subtext (-# ...). " +
+  "Choose formatting only when it makes the answer clearer in chat; plain text is fine when that is clearest. " +
+  "Discord does not reliably render markdown tables, so use compact lists for tabular/ranking information. " +
   "Do not add your own trace/runtime footer; the Discord renderer appends that automatically when available. ";
 
 export async function handleAgentRequest(ctx: ToolContext, userText: string): Promise<AgentResponse> {

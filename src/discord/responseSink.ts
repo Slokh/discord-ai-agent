@@ -1,6 +1,7 @@
 import { AttachmentBuilder, type Client, type Message } from "discord.js";
 import type { Logger } from "pino";
 import { cleanResponse } from "../tools/responseFormatting.js";
+import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
 
 export const DEFAULT_DISCORD_LOADING_REACTION = "<a:loading:1521299407214084337>";
@@ -84,13 +85,45 @@ export class DiscordResponseSink {
 
   async sendFinal(input: { content: string; files?: AgentFile[]; footer?: DiscordResponseFooter | null }): Promise<DiscordResponseResult> {
     const files = input.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }));
-    const content = appendDiscordResponseFooter(input.content, this.maxReplyChars, input.footer);
-    const payload = files?.length ? { content, files } : { content };
+    const footerLine = formatDiscordResponseFooter(input.footer);
+    const body = (input.content.trim() || "Done.");
+    const separator = "\n\n";
+    const singleMessageContent = footerLine ? `${body}${separator}${footerLine}` : body;
+
+    if (singleMessageContent.length <= this.maxReplyChars) {
+      const payload = files?.length ? { content: singleMessageContent, files } : { content: singleMessageContent };
+      const usedStatusMessage = Boolean(this.statusMessage);
+      const message = this.statusMessage ? await this.statusMessage.edit(payload) : await this.sourceMessage.reply(payload);
+      this.statusMessage = message;
+      await this.clearAcknowledgement();
+      return { message, usedStatusMessage };
+    }
+
+    const reservedForFooter = footerLine ? separator.length + footerLine.length : 0;
+    const chunkLimit = Math.max(1, this.maxReplyChars - reservedForFooter);
+    const chunks = splitForDiscord(body, chunkLimit);
     const usedStatusMessage = Boolean(this.statusMessage);
-    const message = this.statusMessage ? await this.statusMessage.edit(payload) : await this.sourceMessage.reply(payload);
-    this.statusMessage = message;
+    const firstPayload = files?.length ? { content: chunks[0], files } : { content: chunks[0] };
+    const firstMessage = this.statusMessage ? await this.statusMessage.edit(firstPayload) : await this.sourceMessage.reply(firstPayload);
+    this.statusMessage = firstMessage;
+
+    const channel = this.sourceMessage.channel;
+    const sendable = isSendableChannel(channel) ? channel : null;
+    for (let i = 1; i < chunks.length; i++) {
+      const isLast = i === chunks.length - 1;
+      const content = isLast && footerLine ? `${chunks[i]}${separator}${footerLine}` : chunks[i];
+      if (!sendable) continue;
+      if (content.length <= this.maxReplyChars) {
+        await sendable.send({ content });
+      } else {
+        for (const overflow of splitForDiscord(content, this.maxReplyChars)) {
+          await sendable.send({ content: overflow });
+        }
+      }
+    }
+
     await this.clearAcknowledgement();
-    return { message, usedStatusMessage };
+    return { message: firstMessage, usedStatusMessage };
   }
 
   async sendError(content: string, footer?: DiscordResponseFooter | null): Promise<DiscordResponseResult> {
@@ -113,17 +146,6 @@ export class DiscordResponseSink {
       this.logger.warn({ err: error, emoji: this.loadingReactionEmoji }, "Failed to remove Discord loading reaction");
     }
   }
-}
-
-export function appendDiscordResponseFooter(content: string, maxChars: number, footer?: DiscordResponseFooter | null) {
-  const footerLine = formatDiscordResponseFooter(footer);
-  if (!footerLine) return cleanResponse(content, maxChars);
-
-  const separator = "\n\n";
-  const bodyMaxChars = Math.max(0, maxChars - separator.length - footerLine.length);
-  const body = cleanResponse(content, bodyMaxChars).trimEnd();
-  if (!body) return cleanResponse(footerLine, maxChars);
-  return cleanResponse(`${body}${separator}${footerLine}`, maxChars);
 }
 
 export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | null) {
@@ -165,4 +187,8 @@ function parseDiscordReactionMatch(value: string): DiscordReactionMatch {
 function reactionMatches(reaction: Awaited<ReturnType<Message["react"]>>, expected: DiscordReactionMatch) {
   if (expected.id && reaction.emoji.id === expected.id) return true;
   return reaction.emoji.name === expected.name;
+}
+
+function isSendableChannel(channel: Message["channel"]): channel is Extract<Message["channel"], { send: (options: { content: string }) => Promise<unknown> }> {
+  return typeof (channel as { send?: unknown }).send === "function";
 }

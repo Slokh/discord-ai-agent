@@ -222,8 +222,105 @@ describe("DiscordResponseSink", () => {
     expect(sourceMessage.reply).toHaveBeenCalledWith("Working on it...");
   });
 
-  it("does not throw if acknowledgement fallback or cleanup fails", async () => {
-    const sourceMessage = fakeMessage({
+  it("adds reactions to a final reply message", async () => {
+    const finalMessage = fakeMessage({ id: "reply-1" });
+    const sourceMessage = fakeMessage({ reply: vi.fn(async () => finalMessage) });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    const result = await sink.sendFinal({ content: "Poll: vote below" });
+    const outcome = await sink.addReactions({ message: result.message, emojis: ["👍", "👎", "🤷"] });
+
+    expect(finalMessage.react).toHaveBeenCalledWith("👍");
+    expect(finalMessage.react).toHaveBeenCalledWith("👎");
+    expect(finalMessage.react).toHaveBeenCalledWith("🤷");
+    expect(outcome.added).toEqual(["👍", "👎", "🤷"]);
+    expect(outcome.failed).toEqual([]);
+  });
+
+  it("defaults the addReactions target to the current status message", async () => {
+    const statusMessage = fakeMessage({ id: "status-1", channelId: "channel-1", url: "https://discord/status-1" });
+    const editedStatusMessage = fakeMessage({ id: "status-1", channelId: "channel-1", url: "https://discord/status-1" });
+    statusMessage.edit = vi.fn(async () => editedStatusMessage);
+    editedStatusMessage.edit = vi.fn(async () => editedStatusMessage);
+    const sourceMessage = fakeMessage({ reply: vi.fn(async () => statusMessage) });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    await sink.updateStatus("Poll: vote below");
+    await sink.updateStatus("Poll: vote below — updated");
+    await sink.addReactions({ emojis: ["👍", "👎"] });
+
+    expect(editedStatusMessage.react).toHaveBeenCalledWith("👍");
+    expect(editedStatusMessage.react).toHaveBeenCalledWith("👎");
+  });
+
+  it("continues adding remaining reactions when one fails and records the failure", async () => {
+    const finalMessage = fakeMessage({ id: "reply-1" });
+    finalMessage.react = vi.fn(async (emoji: string) => {
+      if (emoji === "💥") throw new Error("unknown emoji");
+      return fakeReaction();
+    });
+    const sourceMessage = fakeMessage({ reply: vi.fn(async () => finalMessage) });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    const result = await sink.sendFinal({ content: "Poll" });
+    const outcome = await sink.addReactions({ message: result.message, emojis: ["👍", "💥", "👎"] });
+
+    expect(outcome.added).toEqual(["👍", "👎"]);
+    expect(outcome.failed).toHaveLength(1);
+    expect(outcome.failed[0]).toMatchObject({ emoji: "💥" });
+  });
+
+  it("records all emojis as failed when no target message is available", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    const outcome = await sink.addReactions({ emojis: ["👍", "👎"] });
+
+    expect(sourceMessage.reply).not.toHaveBeenCalled();
+    expect(outcome.added).toEqual([]);
+    expect(outcome.failed).toHaveLength(2);
+  });
+
+  it("ignores blank and duplicate-ish whitespace emoji entries", async () => {
+    const finalMessage = fakeMessage({ id: "reply-1" });
+    const sourceMessage = fakeMessage({ reply: vi.fn(async () => finalMessage) });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    const result = await sink.sendFinal({ content: "Poll" });
+    const outcome = await sink.addReactions({ message: result.message, emojis: ["👍", "  ", "", "👎"] });
+
+    expect(finalMessage.react).toHaveBeenCalledTimes(2);
+    expect(finalMessage.react).toHaveBeenCalledWith("👍");
+    expect(finalMessage.react).toHaveBeenCalledWith("👎");
+    expect(outcome.added).toEqual(["👍", "👎"]);
+  });
+
+  it("does not throw if acknowledgement fallback or cleanup fails", async () => {    const sourceMessage = fakeMessage({
       react: vi.fn(async () => {
         throw new Error("missing reaction permission");
       }),

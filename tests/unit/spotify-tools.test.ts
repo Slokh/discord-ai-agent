@@ -123,6 +123,45 @@ describe("getSpotifyPlaylistTracks", () => {
     expect(result.files?.[0].data.toString("utf8")).toContain('"position","track","artists","album","duration","explicit","local","added_at","spotify_url"');
   });
 
+  it("defaults large playlist exports to the 10000 track cap", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+    const offsets: number[] = [];
+    stubFetchWith((url) => {
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok", expires_in: 3600 });
+      if (url.startsWith("https://api.spotify.com/v1/playlists/pl123?")) {
+        return jsonResponse({
+          id: "pl123",
+          name: "Huge Playlist",
+          owner: { display_name: "Owner One" },
+          tracks: { total: 10050 },
+          external_urls: { spotify: "https://open.spotify.com/playlist/pl123" }
+        });
+      }
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe("/v1/playlists/pl123/items");
+      expect(parsed.searchParams.get("limit")).toBe("50");
+      const offset = Number(parsed.searchParams.get("offset"));
+      offsets.push(offset);
+      return jsonResponse({
+        total: 10050,
+        limit: 50,
+        offset,
+        next: offset + 50 < 10050 ? "next" : null,
+        items: Array.from({ length: 50 }, (_, i) => playlistEntry(offset + i))
+      });
+    });
+
+    const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "pl123" });
+
+    expect(offsets).toHaveLength(200);
+    expect(offsets[0]).toBe(0);
+    expect(offsets[offsets.length - 1]).toBe(9950);
+    expect(result.content).toContain("Tracks fetched: 10000 of 10050 (capped at 10000)");
+    const attachment = result.files?.[0].data.toString("utf8") ?? "";
+    expect(attachment).toContain("10000. Track 9999 - Artist 9999");
+    expect(attachment).not.toContain("10001. Track 10000");
+  });
+
   it("returns a clear limitation on current playlist item 403s", async () => {
     const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
     stubFetchWith((url) => {

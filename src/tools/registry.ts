@@ -790,7 +790,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         limit: {
           type: "number",
-          description: "Maximum tracks to include in the attached list. Defaults to 2000 and is capped at 2000."
+          description: "Maximum tracks to include in the attached list. Defaults to 10000 and is capped at 10000."
         },
         format: {
           type: "string",
@@ -885,7 +885,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         limit: {
           type: "number",
-          description: "Maximum tracks to analyze. Defaults to 2000 and is capped at 2000."
+          description: "Maximum tracks to analyze. Defaults to 10000 and is capped at 10000."
         }
       },
       required: ["playlistIdOrUrl"],
@@ -914,7 +914,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         limit: {
           type: "number",
-          description: "Maximum tracks per playlist to compare. Defaults to 2000 and is capped at 2000."
+          description: "Maximum tracks per playlist to compare. Defaults to 10000 and is capped at 10000."
         }
       },
       required: ["playlistAIdOrUrl", "playlistBIdOrUrl"],

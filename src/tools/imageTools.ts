@@ -68,7 +68,7 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
       }
     ],
     temperature: 0.2,
-    maxTokens: 900
+    maxTokens: 4096
   });
 
   await ctx.repo.auditTool({

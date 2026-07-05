@@ -41,7 +41,7 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
         }
       ],
       temperature: 0.2,
-      maxTokens: 1000
+      maxTokens: 4096
     });
     markdown = response.content.trim();
   } else {

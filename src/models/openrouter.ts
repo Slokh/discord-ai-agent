@@ -114,7 +114,7 @@ export class OpenRouterClient {
         imageInputCount: countChatImageInputs(input.messages),
         localToolCount,
         hostedToolCount,
-        maxTokens: input.maxTokens ?? 1200,
+        maxTokens: input.maxTokens ?? 4096,
         temperature: input.temperature ?? 0.3
       },
       "OpenRouter chat request"
@@ -127,7 +127,7 @@ export class OpenRouterClient {
         messages: input.messages,
         tools: input.tools,
         temperature: input.temperature ?? 0.3,
-        max_tokens: input.maxTokens ?? 1200
+        max_tokens: input.maxTokens ?? 4096
       },
       OPENROUTER_CHAT_TIMEOUT_MS
     );

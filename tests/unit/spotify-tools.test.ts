@@ -106,10 +106,18 @@ describe("getSpotifyPlaylistTracks", () => {
     expect(result.content).toContain("My Cool Playlist by Owner One");
     expect(result.content).toContain("Tracks fetched: 75 of 75");
     expect(result.content).toContain("Full track list attached");
+    expect(result.content).toContain("Queryable table: spotify-playlist-my-cool-playlist (75 rows)");
     expect(result.storedContent).toContain("Spotify response omitted");
-    expect(result.files).toHaveLength(1);
-    expect(result.files?.[0].name).toBe("spotify-playlist-my-cool-playlist.txt");
-    expect(result.files?.[0].data.toString("utf8")).toContain("75. Track 74 - Artist 74");
+    expect(result.files?.map((file) => file.name)).toEqual(["spotify-playlist-my-cool-playlist.csv", "spotify-playlist-my-cool-playlist.txt"]);
+    expect(result.files?.[0].contentType).toBe("text/csv");
+    expect(result.files?.[0].data.toString("utf8")).toContain('"75","Track 74","Artist 74"');
+    expect(result.files?.[1].data.toString("utf8")).toContain("75. Track 74 - Artist 74");
+    expect(result.tables?.[0]).toMatchObject({
+      name: "spotify-playlist-my-cool-playlist",
+      sourceFileName: "spotify-playlist-my-cool-playlist.csv",
+      columns: expect.arrayContaining(["track", "artists", "duration_ms"]),
+      rows: expect.arrayContaining([expect.objectContaining({ position: 75, track: "Track 74", artists: "Artist 74" })])
+    });
   });
 
   it("can return the full playlist as csv", async () => {
@@ -120,7 +128,8 @@ describe("getSpotifyPlaylistTracks", () => {
 
     expect(result.files?.[0].name).toBe("spotify-playlist-my-cool-playlist.csv");
     expect(result.files?.[0].contentType).toBe("text/csv");
-    expect(result.files?.[0].data.toString("utf8")).toContain('"position","track","artists","album","duration","explicit","local","added_at","spotify_url"');
+    expect(result.files?.[0].data.toString("utf8")).toContain('"position","track","artists","album","duration","duration_ms","explicit","local","added_at","spotify_url"');
+    expect(result.tables?.[0].name).toBe("spotify-playlist-my-cool-playlist");
   });
 
   it("defaults large playlist exports to the 10000 track cap", async () => {
@@ -158,8 +167,9 @@ describe("getSpotifyPlaylistTracks", () => {
     expect(offsets[offsets.length - 1]).toBe(9950);
     expect(result.content).toContain("Tracks fetched: 10000 of 10050 (capped at 10000)");
     const attachment = result.files?.[0].data.toString("utf8") ?? "";
-    expect(attachment).toContain("10000. Track 9999 - Artist 9999");
-    expect(attachment).not.toContain("10001. Track 10000");
+    expect(attachment).toContain('"10000","Track 9999","Artist 9999"');
+    expect(attachment).not.toContain('"10001","Track 10000"');
+    expect(result.tables?.[0].rows).toHaveLength(10000);
   });
 
   it("returns a clear limitation on current playlist item 403s", async () => {
@@ -385,8 +395,15 @@ describe("getSpotifyAlbumTracks", () => {
     expect(calls.some((url) => url.includes("/albums/album1/tracks?"))).toBe(true);
     expect(result.content).toContain("Spotify album: Kid A - Radiohead");
     expect(result.content).toContain("Tracks fetched: 2 of 2");
-    expect(result.files?.[0].name).toBe("spotify-album-kid-a.txt");
-    expect(result.files?.[0].data.toString("utf8")).toContain("1. Everything In Its Right Place - Radiohead");
+    expect(result.content).toContain("Queryable table: spotify-album-kid-a (2 rows)");
+    expect(result.files?.map((file) => file.name)).toEqual(["spotify-album-kid-a.csv", "spotify-album-kid-a.txt"]);
+    expect(result.files?.[0].data.toString("utf8")).toContain('"position","track","artists","duration","duration_ms","explicit","spotify_url"');
+    expect(result.files?.[1].data.toString("utf8")).toContain("1. Everything In Its Right Place - Radiohead");
+    expect(result.tables?.[0]).toMatchObject({
+      name: "spotify-album-kid-a",
+      sourceFileName: "spotify-album-kid-a.csv",
+      rows: expect.arrayContaining([expect.objectContaining({ position: 1, track: "Everything In Its Right Place", duration_ms: 251000 })])
+    });
     expect(result.storedContent).toContain("Spotify response omitted");
   });
 });
@@ -422,6 +439,11 @@ describe("getSpotifyArtistDiscography", () => {
     expect(result.content).toContain("By type: album (1), single (1)");
     expect(result.files?.[0].name).toBe("spotify-artist-radiohead-discography.csv");
     expect(result.files?.[0].data.toString("utf8")).toContain('"Kid A","album"');
+    expect(result.tables?.[0]).toMatchObject({
+      name: "spotify-artist-radiohead-discography",
+      sourceFileName: "spotify-artist-radiohead-discography.csv",
+      rows: expect.arrayContaining([expect.objectContaining({ album: "Kid A", type: "album", tracks: 10 })])
+    });
   });
 });
 

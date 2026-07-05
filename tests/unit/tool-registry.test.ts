@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { openRouterServerToolRegistry, renderToolList, toolContracts, toolDefinitionsForModel, toolRegistry } from "../../src/tools/registry.js";
+import {
+  openRouterServerToolRegistry,
+  renderToolList,
+  toolContracts,
+  toolDefinitionsForModel,
+  toolRegistry,
+  toolSupportsCsvFormat
+} from "../../src/tools/registry.js";
 
 describe("toolRegistry", () => {
   it("contains the local milestone tools", () => {
@@ -20,6 +27,7 @@ describe("toolRegistry", () => {
       "generateImage",
       "readGeneratedFile",
       "queryGeneratedCsv",
+      "queryGeneratedTable",
       "createSkillDraft",
       "runCodingAgent",
       "getAgentTaskStatus",
@@ -89,6 +97,7 @@ describe("toolRegistry", () => {
     expect(contracts.find((tool) => tool.name === "getDiscordStats")?.toolClass).toBe("stats");
     expect(contracts.find((tool) => tool.name === "readGeneratedFile")?.toolClass).toBe("retrieval");
     expect(contracts.find((tool) => tool.name === "queryGeneratedCsv")?.toolClass).toBe("stats");
+    expect(contracts.find((tool) => tool.name === "queryGeneratedTable")?.toolClass).toBe("stats");
     expect(contracts.find((tool) => tool.name === "summarizeDiscordHistory")?.toolClass).toBe("summary");
     expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.toolClass).toBe("image");
     expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.toolClass).toBe("external");
@@ -186,8 +195,8 @@ describe("toolRegistry", () => {
               required: ["playlistIdOrUrl"],
               properties: expect.objectContaining({
                 format: expect.objectContaining({
-                  enum: ["text", "csv"],
-                  description: expect.stringContaining("queryGeneratedCsv")
+                  enum: ["text", "csv", "both"],
+                  description: expect.stringContaining("Defaults to both")
                 })
               })
             })
@@ -212,7 +221,7 @@ describe("toolRegistry", () => {
             parameters: expect.objectContaining({
               required: ["albumIdOrUrl"],
               properties: expect.objectContaining({
-                format: expect.objectContaining({ enum: ["text", "csv"] })
+                format: expect.objectContaining({ enum: ["text", "csv", "both"] })
               })
             })
           })
@@ -258,6 +267,20 @@ describe("toolRegistry", () => {
         expect.objectContaining({
           type: "function",
           function: expect.objectContaining({
+            name: "queryGeneratedTable",
+            description: expect.stringContaining("generated table"),
+            parameters: expect.objectContaining({
+              properties: expect.objectContaining({
+                operation: expect.objectContaining({ enum: ["profile", "topValues", "filterRows"] }),
+                tableName: expect.objectContaining({ type: "string" }),
+                filters: expect.objectContaining({ type: "array" })
+              })
+            })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
             name: "compareSpotifyPlaylists",
             parameters: expect.objectContaining({
               required: ["playlistAIdOrUrl", "playlistBIdOrUrl"]
@@ -275,5 +298,13 @@ describe("toolRegistry", () => {
       "openrouter:datetime"
     ]);
     expect(openRouterServerToolRegistry.every((tool) => tool.toolClass === "external" && tool.outputContract.length > 0)).toBe(true);
+  });
+
+  it("detects local tools that expose a CSV attachment format", () => {
+    expect(toolSupportsCsvFormat("getSpotifyPlaylistTracks")).toBe(true);
+    expect(toolSupportsCsvFormat("getSpotifyAlbumTracks")).toBe(true);
+    expect(toolSupportsCsvFormat("getSpotifyArtistDiscography")).toBe(true);
+    expect(toolSupportsCsvFormat("searchSpotify")).toBe(false);
+    expect(toolSupportsCsvFormat("queryGeneratedCsv")).toBe(false);
   });
 });

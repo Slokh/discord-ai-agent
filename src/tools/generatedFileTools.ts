@@ -1,5 +1,5 @@
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
-import type { AgentFile, AgentResponse, ToolContext } from "./types.js";
+import type { AgentFile, AgentResponse, AgentTable, ToolContext } from "./types.js";
 
 type CsvFilter = {
   column: string;
@@ -17,6 +17,17 @@ export type QueryGeneratedCsvInput = {
   limit?: number;
   splitValues?: boolean;
   valueDelimiter?: string;
+};
+
+export type QueryGeneratedTableInput = Omit<QueryGeneratedCsvInput, "fileName" | "fileIndex"> & {
+  tableName?: string;
+  tableIndex?: number;
+};
+
+type GeneratedQuerySource = {
+  label: "Generated CSV" | "Generated table";
+  name: string;
+  missingColumnNoun: "CSV" | "table";
 };
 
 const DEFAULT_READ_BYTES = 4_000;
@@ -104,12 +115,13 @@ export async function queryGeneratedCsv(ctx: ToolContext, input: QueryGeneratedC
 
   const filteredRows = parsed.rows.filter((row) => filters.filters.every((filter) => rowMatchesFilter(row, filter)));
   const limit = boundedInteger(input.limit, 1, MAX_CSV_LIMIT, DEFAULT_CSV_LIMIT);
+  const source: GeneratedQuerySource = { label: "Generated CSV", name: resolved.file.name, missingColumnNoun: "CSV" };
   const content =
     operation === "topValues"
-      ? formatTopValuesCsvQuery(resolved.file, parsed.headers, filteredRows, input, filters.filters, limit)
+      ? formatTopValuesGeneratedQuery(source, parsed.headers, filteredRows, input, filters.filters, limit)
       : operation === "filterRows"
-        ? formatFilteredRowsCsvQuery(resolved.file, parsed.headers, filteredRows, input.selectColumns, filters.filters, limit)
-        : formatCsvProfile(resolved.file, parsed.headers, parsed.rows.length, filteredRows.length, filters.filters, limit);
+        ? formatFilteredRowsGeneratedQuery(source, parsed.headers, filteredRows, input.selectColumns, filters.filters, limit)
+        : formatGeneratedProfile(source, parsed.headers, parsed.rows.length, filteredRows.length, filters.filters, limit);
 
   await audit(ctx, "queryGeneratedCsv", {
     ...auditInput(input),
@@ -121,9 +133,57 @@ export async function queryGeneratedCsv(ctx: ToolContext, input: QueryGeneratedC
   return { content };
 }
 
-function formatCsvProfile(file: AgentFile, headers: string[], rowCount: number, filteredRowCount: number, filters: CsvFilter[], limit: number) {
+export async function queryGeneratedTable(ctx: ToolContext, input: QueryGeneratedTableInput = {}): Promise<AgentResponse> {
+  const resolved = resolveGeneratedTable(ctx, input);
+  if (!resolved.table) {
+    const content = generatedTableNotFoundMessage(ctx, resolved.reason);
+    await audit(ctx, "queryGeneratedTable", { ...auditInput(input), error: resolved.reason });
+    return { content };
+  }
+
+  const headers = resolved.table.columns;
+  if (headers.length === 0) {
+    const content = `Generated table ${resolved.table.name} did not contain any columns.`;
+    await audit(ctx, "queryGeneratedTable", { ...auditInput(input), tableName: resolved.table.name, error: "missing_columns" });
+    return { content };
+  }
+  if (resolved.table.rows.length > MAX_CSV_ROWS) {
+    const content = `Generated table ${resolved.table.name} has too many rows to query in-process (${resolved.table.rows.length}; max ${MAX_CSV_ROWS}).`;
+    await audit(ctx, "queryGeneratedTable", { ...auditInput(input), tableName: resolved.table.name, error: "too_many_rows" });
+    return { content };
+  }
+
+  const rows = tableRows(resolved.table);
+  const operation = csvOperation(input.operation);
+  const filters = parseCsvFilters(input.filters, headers);
+  if (filters.error) {
+    await audit(ctx, "queryGeneratedTable", { ...auditInput(input), tableName: resolved.table.name, error: filters.error });
+    return { content: filters.error };
+  }
+
+  const filteredRows = rows.filter((row) => filters.filters.every((filter) => rowMatchesFilter(row, filter)));
+  const limit = boundedInteger(input.limit, 1, MAX_CSV_LIMIT, DEFAULT_CSV_LIMIT);
+  const source: GeneratedQuerySource = { label: "Generated table", name: resolved.table.name, missingColumnNoun: "table" };
+  const content =
+    operation === "topValues"
+      ? formatTopValuesGeneratedQuery(source, headers, filteredRows, input, filters.filters, limit)
+      : operation === "filterRows"
+        ? formatFilteredRowsGeneratedQuery(source, headers, filteredRows, input.selectColumns, filters.filters, limit)
+        : formatGeneratedProfile(source, headers, rows.length, filteredRows.length, filters.filters, limit);
+
+  await audit(ctx, "queryGeneratedTable", {
+    ...auditInput(input),
+    tableName: resolved.table.name,
+    operation,
+    rowCount: rows.length,
+    filteredRows: filteredRows.length
+  });
+  return { content };
+}
+
+function formatGeneratedProfile(source: GeneratedQuerySource, headers: string[], rowCount: number, filteredRowCount: number, filters: CsvFilter[], limit: number) {
   return [
-    `Generated CSV profile: ${file.name}`,
+    `${source.label} profile: ${source.name}`,
     `- Rows: ${rowCount}`,
     `- Columns: ${headers.length}`,
     filters.length ? `- Rows after filters: ${filteredRowCount}` : null,
@@ -134,17 +194,17 @@ function formatCsvProfile(file: AgentFile, headers: string[], rowCount: number, 
     .join("\n");
 }
 
-function formatTopValuesCsvQuery(
-  file: AgentFile,
+function formatTopValuesGeneratedQuery(
+  source: GeneratedQuerySource,
   headers: string[],
-  rows: CsvRow[],
+  rows: TableRow[],
   input: QueryGeneratedCsvInput,
   filters: CsvFilter[],
   limit: number
 ) {
   const column = resolveColumn(headers, input.column);
   if (!column) {
-    return `Choose a CSV column to rank. Available columns: ${headers.join(", ")}`;
+    return `Choose a ${source.missingColumnNoun} column to rank. Available columns: ${headers.join(", ")}`;
   }
 
   const counts = new Map<string, number>();
@@ -158,7 +218,7 @@ function formatTopValuesCsvQuery(
   }
   const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit);
   return [
-    `Generated CSV top values: ${file.name}`,
+    `${source.label} top values: ${source.name}`,
     `- Column: ${column}${input.splitValues ? ` (split by ${JSON.stringify(delimiter)})` : ""}`,
     filters.length ? `- Filters: ${formatFilters(filters)}` : null,
     `- Rows matched: ${rows.length}`,
@@ -168,10 +228,10 @@ function formatTopValuesCsvQuery(
     .join("\n");
 }
 
-function formatFilteredRowsCsvQuery(
-  file: AgentFile,
+function formatFilteredRowsGeneratedQuery(
+  source: GeneratedQuerySource,
   headers: string[],
-  rows: CsvRow[],
+  rows: TableRow[],
   selectColumns: string[] | undefined,
   filters: CsvFilter[],
   limit: number
@@ -179,7 +239,7 @@ function formatFilteredRowsCsvQuery(
   const columns = (selectColumns?.map((column) => resolveColumn(headers, column)).filter((column): column is string => Boolean(column)) ?? []).slice(0, 12);
   const visibleColumns = columns.length > 0 ? columns : headers.slice(0, 8);
   return [
-    `Generated CSV rows: ${file.name}`,
+    `${source.label} rows: ${source.name}`,
     filters.length ? `- Filters: ${formatFilters(filters)}` : null,
     `- Rows matched: ${rows.length}`,
     formatRowsAsTable(rows.slice(0, limit), visibleColumns)
@@ -188,9 +248,9 @@ function formatFilteredRowsCsvQuery(
     .join("\n");
 }
 
-type CsvRow = Record<string, string>;
+type TableRow = Record<string, string>;
 
-function parseCsv(content: string): { headers: string[]; rows: CsvRow[] } {
+function parseCsv(content: string): { headers: string[]; rows: TableRow[] } {
   const records = csvRecords(content);
   const headers = (records.shift() ?? []).map((header) => header.trim());
   const rows = records
@@ -239,10 +299,10 @@ function csvRecords(content: string): string[][] {
 
 function parseCsvFilters(value: unknown, headers: string[]): { filters: CsvFilter[]; error?: string } {
   if (value == null) return { filters: [] };
-  if (!Array.isArray(value)) return { filters: [], error: "CSV filters must be an array." };
+  if (!Array.isArray(value)) return { filters: [], error: "Filters must be an array." };
   const filters: CsvFilter[] = [];
   for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return { filters: [], error: "Each CSV filter must be an object." };
+    if (!item || typeof item !== "object" || Array.isArray(item)) return { filters: [], error: "Each filter must be an object." };
     const raw = item as Record<string, unknown>;
     const column = resolveColumn(headers, typeof raw.column === "string" ? raw.column : undefined);
     const op = csvFilterOp(typeof raw.op === "string" ? raw.op : undefined);
@@ -255,7 +315,7 @@ function parseCsvFilters(value: unknown, headers: string[]): { filters: CsvFilte
   return { filters };
 }
 
-function rowMatchesFilter(row: CsvRow, filter: CsvFilter): boolean {
+function rowMatchesFilter(row: TableRow, filter: CsvFilter): boolean {
   const cell = row[filter.column] ?? "";
   if (filter.op === "contains") return cell.toLowerCase().includes(filter.value.toLowerCase());
   if (filter.op === "eq") return cell === filter.value;
@@ -272,6 +332,17 @@ function compareCsvValues(left: string, right: string): number {
   const rightNumber = Number(right);
   if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber - rightNumber;
   return left.localeCompare(right);
+}
+
+function tableRows(table: AgentTable): TableRow[] {
+  return table.rows.map((row) =>
+    Object.fromEntries(table.columns.map((column) => [column, tableCellToString(row[column])]))
+  );
+}
+
+function tableCellToString(value: unknown): string {
+  if (value == null) return "";
+  return String(value);
 }
 
 function resolveGeneratedFile(ctx: ToolContext, input: { fileName?: string; fileIndex?: number }): { file?: AgentFile; index: number; reason?: string } {
@@ -305,16 +376,55 @@ function resolveGeneratedCsvFile(ctx: ToolContext, input: { fileName?: string; f
   return { index: -1, reason: "ambiguous_file" };
 }
 
+function resolveGeneratedTable(ctx: ToolContext, input: { tableName?: string; tableIndex?: number }): { table?: AgentTable; index: number; reason?: string } {
+  const tables = ctx.generatedTables ?? [];
+  if (tables.length === 0) return { index: -1, reason: "no_generated_tables" };
+  if (input.tableName) {
+    const requested = input.tableName.trim().toLowerCase();
+    const index = tables.findIndex((table) => table.name.toLowerCase() === requested);
+    if (index >= 0) return { table: tables[index], index };
+    return { index: -1, reason: "table_not_found" };
+  }
+  if (input.tableIndex != null) {
+    const index = Math.floor(input.tableIndex) - 1;
+    if (index >= 0 && index < tables.length) return { table: tables[index], index };
+    return { index: -1, reason: "table_index_out_of_range" };
+  }
+  if (tables.length === 1) return { table: tables[0], index: 0 };
+  return { index: -1, reason: "ambiguous_table" };
+}
+
 function generatedFileNotFoundMessage(ctx: ToolContext, reason: string | undefined): string {
   const files = ctx.generatedFiles ?? [];
   if (reason === "no_generated_files") return "No generated files are available yet. Call a tool that produces a file first.";
   if (reason === "no_csv_files") {
     const available = files.map((file, index) => `${index + 1}. ${file.name} (${file.contentType || "unknown"}, ${file.data.length} bytes)`).join("\n");
-    return [`No generated CSV files are available yet.`, available ? `Available generated files:\n${available}` : null].filter(Boolean).join("\n");
+    const availableTables = generatedTableList(ctx);
+    return [
+      `No generated CSV files are available yet.`,
+      available ? `Available generated files:\n${available}` : null,
+      availableTables ? `Available generated tables for queryGeneratedTable:\n${availableTables}` : null
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
   const available = files.map((file, index) => `${index + 1}. ${file.name} (${file.contentType || "unknown"}, ${file.data.length} bytes)`).join("\n");
   return [`I could not resolve that generated file (${reason || "unknown"}).`, available ? `Available generated files:\n${available}` : null]
     .filter(Boolean)
+    .join("\n");
+}
+
+function generatedTableNotFoundMessage(ctx: ToolContext, reason: string | undefined): string {
+  const available = generatedTableList(ctx);
+  if (reason === "no_generated_tables") return "No generated tables are available yet. Call a tool that produces a structured table first.";
+  return [`I could not resolve that generated table (${reason || "unknown"}).`, available ? `Available generated tables:\n${available}` : null]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function generatedTableList(ctx: ToolContext): string {
+  return (ctx.generatedTables ?? [])
+    .map((table, index) => `${index + 1}. ${table.name} (${table.rows.length} rows, columns: ${table.columns.join(", ")})`)
     .join("\n");
 }
 
@@ -348,7 +458,7 @@ function formatFilters(filters: CsvFilter[]): string {
   return filters.map((filter) => `${filter.column} ${filter.op} ${JSON.stringify(filter.value)}`).join("; ");
 }
 
-function formatRowsAsTable(rows: CsvRow[], columns: string[]): string {
+function formatRowsAsTable(rows: TableRow[], columns: string[]): string {
   if (rows.length === 0) return "No rows matched.";
   const lines = [columns.join(" | "), columns.map(() => "---").join(" | ")];
   for (const row of rows) {
@@ -357,10 +467,12 @@ function formatRowsAsTable(rows: CsvRow[], columns: string[]): string {
   return lines.join("\n");
 }
 
-function auditInput(input: QueryGeneratedCsvInput): Record<string, unknown> {
+function auditInput(input: QueryGeneratedCsvInput | QueryGeneratedTableInput): Record<string, unknown> {
   return {
-    fileName: input.fileName,
-    fileIndex: input.fileIndex,
+    fileName: "fileName" in input ? input.fileName : undefined,
+    fileIndex: "fileIndex" in input ? input.fileIndex : undefined,
+    tableName: "tableName" in input ? input.tableName : undefined,
+    tableIndex: "tableIndex" in input ? input.tableIndex : undefined,
     operation: input.operation,
     column: input.column,
     limit: input.limit,

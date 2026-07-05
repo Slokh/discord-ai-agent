@@ -1,4 +1,4 @@
-import { AttachmentBuilder, type Client, type Message } from "discord.js";
+import { AttachmentBuilder, type Client, type Message, type MessageCreateOptions } from "discord.js";
 import type { Logger } from "pino";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
@@ -124,10 +124,10 @@ export class DiscordResponseSink {
       const content = isLast && footerLine ? `${chunks[i]}${separator}${footerLine}` : chunks[i];
       if (!sendable) continue;
       if (content.length <= this.maxReplyChars) {
-        await sendable.send({ content });
+        await sendable.send(this.continuationPayload(content));
       } else {
         for (const overflow of splitForDiscord(content, this.maxReplyChars)) {
-          await sendable.send({ content: overflow });
+          await sendable.send(this.continuationPayload(overflow));
         }
       }
     }
@@ -182,6 +182,14 @@ export class DiscordResponseSink {
       this.logger.warn({ err: error, emoji: this.loadingReactionEmoji }, "Failed to remove Discord loading reaction");
     }
   }
+
+  private continuationPayload(content: string): MessageCreateOptions {
+    return {
+      content,
+      reply: { messageReference: this.sourceMessage.id, failIfNotExists: false },
+      allowedMentions: { parse: [], repliedUser: false }
+    };
+  }
 }
 
 export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | null) {
@@ -225,6 +233,6 @@ function reactionMatches(reaction: Awaited<ReturnType<Message["react"]>>, expect
   return reaction.emoji.name === expected.name;
 }
 
-function isSendableChannel(channel: Message["channel"]): channel is Extract<Message["channel"], { send: (options: { content: string }) => Promise<unknown> }> {
+function isSendableChannel(channel: Message["channel"]): channel is Extract<Message["channel"], { send: (options: MessageCreateOptions) => Promise<unknown> }> {
   return typeof (channel as { send?: unknown }).send === "function";
 }

@@ -51,6 +51,35 @@ describe("agent router", () => {
     );
   });
 
+  it("preserves long final model answers so Discord delivery can split them", async () => {
+    const longAnswer = "alpha ".repeat(120).trim();
+    const chat = vi.fn(async () => ({
+      content: longAnswer,
+      model: "chat-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 80 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: []
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "write a long response");
+
+    expect(response.content).toBe(longAnswer);
+    expect(response.content.length).toBeGreaterThan(80);
+    expect(response.content).not.toContain("[truncated]");
+  });
+
   it("injects a prominent self-referential identity instruction for the current requester", async () => {
     const chat = vi.fn(async () => ({
       content: "ok",

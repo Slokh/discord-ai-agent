@@ -363,7 +363,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           durationMs: durationMs(startedAt)
         });
         return {
-          content: cleanResponse(content, ctx.config.maxReplyChars),
+          content: cleanFinalModelResponse(content),
           files: files.length > 0 ? files : undefined,
           tables: tables.length > 0 ? tables : undefined,
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
@@ -404,7 +404,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         durationMs: durationMs(startedAt)
       });
       return {
-        content: cleanResponse(content, ctx.config.maxReplyChars),
+        content: cleanFinalModelResponse(content),
         files: files.length > 0 ? files : undefined,
         tables: tables.length > 0 ? tables : undefined,
         memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
@@ -1042,6 +1042,10 @@ function cleanAgentResponse(response: AgentResponse, maxChars: number): AgentRes
   };
 }
 
+function cleanFinalModelResponse(content: string) {
+  return content.trim() || "Done.";
+}
+
 async function completeDirectToolResponse(
   ctx: ToolContext,
   input: {
@@ -1176,7 +1180,7 @@ async function synthesizeFinalAnswerWithoutTools(
     durationMs: durationMs(input.startedAt)
   });
   return {
-    content: cleanResponse(content, ctx.config.maxReplyChars),
+    content: cleanFinalModelResponse(content),
     files: input.files.length > 0 ? input.files : undefined,
     memoryEvents: input.memoryEvents.length > 0 ? input.memoryEvents : undefined
   };
@@ -1263,7 +1267,7 @@ async function recoverFromLeakedHostedToolMarkup(
     durationMs: durationMs(input.startedAt)
   });
   return {
-    content: cleanResponse(recovery.content, ctx.config.maxReplyChars),
+    content: cleanFinalModelResponse(recovery.content),
     files: input.files.length > 0 ? input.files : undefined,
     memoryEvents: input.memoryEvents.length > 0 ? input.memoryEvents : undefined
   };

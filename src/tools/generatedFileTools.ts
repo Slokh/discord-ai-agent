@@ -70,7 +70,10 @@ export async function queryGeneratedCsv(ctx: ToolContext, input: QueryGeneratedC
   }
 
   if (!isCsvFile(resolved.file)) {
-    const content = `Generated file ${resolved.file.name} is not a CSV file. Use readGeneratedFile for text previews.`;
+    const content =
+      `Generated file ${resolved.file.name} is not a CSV file. ` +
+      "For exact CSV queries, call the tool that produced it again with a CSV output format when that tool supports one, then call queryGeneratedCsv on the CSV. " +
+      "Use readGeneratedFile only for bounded text previews.";
     await audit(ctx, "queryGeneratedCsv", { ...auditInput(input), fileName: resolved.file.name, error: "not_csv" });
     return { content };
   }

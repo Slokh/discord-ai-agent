@@ -59,6 +59,14 @@ describe("generated file tools", () => {
     expect(result.content).toContain("Rows: 4");
   });
 
+  it("tells the model how to recover when a generated file is not CSV", async () => {
+    const result = await queryGeneratedCsv(fakeContext(), { fileName: "notes.txt", operation: "profile" });
+
+    expect(result.content).toContain("is not a CSV file");
+    expect(result.content).toContain("call the tool that produced it again with a CSV output format");
+    expect(result.content).toContain("then call queryGeneratedCsv");
+  });
+
   it("filters and ranks split CSV values", async () => {
     const result = await queryGeneratedCsv(fakeContext(), {
       fileName: "playlist.csv",

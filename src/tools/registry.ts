@@ -873,7 +873,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getSpotifyPlaylistTracks",
     description:
-      "Fetch a Spotify playlist's track list with Spotify's Web API, using current playlist item pagination and attaching the full list as text or CSV when available. Use this for Spotify playlist URLs/URIs or playlist IDs, especially when the user asks for every track. Do not use web_fetch on open.spotify.com for playlist track lists. If Spotify denies playlist item access, return the limitation clearly instead of guessing.",
+      "Fetch a Spotify playlist's track list with Spotify's Web API, using current playlist item pagination and attaching the full list as text or CSV when available. Use this for Spotify playlist URLs/URIs or playlist IDs, especially when the user asks for every track. Set format=csv when the user asks for a custom filter, date window, ranking, count, or any follow-up query that should use queryGeneratedCsv. Do not use web_fetch on open.spotify.com for playlist track lists. If Spotify denies playlist item access, return the limitation clearly instead of guessing.",
     userVisible: true,
     mutates: false,
     category: "external",
@@ -893,7 +893,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         format: {
           type: "string",
           enum: ["text", "csv"],
-          description: "Attachment format for the full track list. Defaults to text."
+          description: "Attachment format for the full track list. Defaults to text. Use csv when the output will be filtered, ranked, counted, or queried with queryGeneratedCsv."
         }
       },
       required: ["playlistIdOrUrl"],

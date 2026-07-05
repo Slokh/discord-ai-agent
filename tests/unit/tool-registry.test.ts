@@ -185,7 +185,10 @@ describe("toolRegistry", () => {
             parameters: expect.objectContaining({
               required: ["playlistIdOrUrl"],
               properties: expect.objectContaining({
-                format: expect.objectContaining({ enum: ["text", "csv"] })
+                format: expect.objectContaining({
+                  enum: ["text", "csv"],
+                  description: expect.stringContaining("queryGeneratedCsv")
+                })
               })
             })
           })

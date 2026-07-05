@@ -51,7 +51,7 @@ Postgres with `pgvector` is the source of truth for Discord history, embeddings,
 - Thread/channel summaries
 - Image generation
 - OpenRouter-hosted web search, web fetch, and datetime tools
-- Public Spotify catalog search, item lookup, and playlist track-list tools when Spotify client credentials are configured
+- Public Spotify catalog search, item lookup, playlist/album track-list, artist discography, playlist stats, and playlist comparison tools when Spotify client credentials are configured
 - Private DB-backed skills
 - Code-update PRs through isolated Kubernetes sandbox tasks
 - Structured logs and trace/task event inspection
@@ -206,7 +206,7 @@ Common optional settings:
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
-| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | unset | Optional Spotify client-credentials integration for public catalog and playlist tools |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | unset | Optional Spotify client-credentials integration for public catalog and high-level playlist/album/artist tools |
 | `SPOTIFY_MARKET` | `US` | Spotify market code used for public catalog lookups |
 | `SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS` | `false` | Opt-in fallback for legacy Spotify apps that may still use the deprecated playlist tracks endpoint |
 | `GITHUB_REPOSITORY` | `owner/repo` | Repo for code-update PRs |

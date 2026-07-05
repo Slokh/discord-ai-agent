@@ -122,6 +122,20 @@
       "notes": "Spotify playlist URLs should route to the Spotify API tool rather than web_fetch; without credentials it should return the tool's explicit configuration limitation."
     },
     {
+      "id": "spotify-album-tool-choice",
+      "category": "spotify",
+      "prompt": "what tracks are on this Spotify album? https://open.spotify.com/album/abc123",
+      "expectedTools": ["getSpotifyAlbumTracks"],
+      "notes": "Spotify album track-list requests should use the album track tool."
+    },
+    {
+      "id": "spotify-playlist-stats-tool-choice",
+      "category": "spotify",
+      "prompt": "give me fun stats for this Spotify playlist: https://open.spotify.com/playlist/abc123",
+      "expectedTools": ["getSpotifyPlaylistStats"],
+      "notes": "Fun playlist summaries should use deterministic playlist stats instead of deprecated audio features."
+    },
+    {
       "id": "vision-attached-image",
       "category": "image",
       "prompt": "what is in this screenshot?",

@@ -26,6 +26,10 @@ export type ToolName =
   | "undoConversationTurns"
   | "reportStatus"
   | "getSpotifyPlaylistTracks"
+  | "getSpotifyAlbumTracks"
+  | "getSpotifyArtistDiscography"
+  | "getSpotifyPlaylistStats"
+  | "compareSpotifyPlaylists"
   | "searchSpotify"
   | "getSpotifyItem";
 
@@ -799,9 +803,128 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "getSpotifyAlbumTracks",
+    description:
+      "Fetch a Spotify album's ordered track list with Spotify's Web API and attach the full list as text or CSV when available. Use this for Spotify album URLs/URIs or album IDs when the user asks what tracks are on an album, wants album duration, or wants an album tracklist.",
+    userVisible: true,
+    mutates: false,
+    category: "external",
+    toolClass: "external",
+    outputContract: ["album metadata", "track count returned", "attached full track list when available", "Spotify URLs"],
+    parameters: {
+      type: "object",
+      properties: {
+        albumIdOrUrl: {
+          type: "string",
+          description: "Spotify album ID, spotify:album URI, or open.spotify.com/album/<id> URL."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum tracks to include in the attached list. Defaults to 200 and is capped at 500."
+        },
+        format: {
+          type: "string",
+          enum: ["text", "csv"],
+          description: "Attachment format for the full album track list. Defaults to text."
+        }
+      },
+      required: ["albumIdOrUrl"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "getSpotifyArtistDiscography",
+    description:
+      "Fetch a Spotify artist's public discography: albums, singles, compilations, and appearances. Use this for artist URLs/URIs or artist IDs when the user asks for releases, discography, albums, singles, or where to start with an artist.",
+    userVisible: true,
+    mutates: false,
+    category: "external",
+    toolClass: "external",
+    outputContract: ["artist metadata", "discography groups requested", "ranked release list", "attached release list when available", "Spotify URLs"],
+    parameters: {
+      type: "object",
+      properties: {
+        artistIdOrUrl: {
+          type: "string",
+          description: "Spotify artist ID, spotify:artist URI, or open.spotify.com/artist/<id> URL."
+        },
+        includeGroups: {
+          type: "array",
+          items: { type: "string", enum: ["album", "single", "appears_on", "compilation"] },
+          description: "Release groups to include. Defaults to all four public discography groups."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum releases to include. Defaults to 50 and is capped at 200."
+        },
+        format: {
+          type: "string",
+          enum: ["text", "csv"],
+          description: "Attachment format for the discography list. Defaults to text."
+        }
+      },
+      required: ["artistIdOrUrl"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "getSpotifyPlaylistStats",
+    description:
+      "Compute deterministic, fun stats from a Spotify playlist track list: total duration, explicit count, local/unavailable count, top artists, top albums, unique artists, and repeated artists. Use this for rating or summarizing a playlist without using deprecated audio features or recommendations.",
+    userVisible: true,
+    mutates: false,
+    category: "external",
+    toolClass: "external",
+    outputContract: ["playlist metadata", "track count analyzed", "duration", "top artists", "top albums", "explicit/local counts", "Spotify URL"],
+    parameters: {
+      type: "object",
+      properties: {
+        playlistIdOrUrl: {
+          type: "string",
+          description: "Spotify playlist ID, spotify:playlist URI, or open.spotify.com/playlist/<id> URL."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum tracks to analyze. Defaults to 2000 and is capped at 2000."
+        }
+      },
+      required: ["playlistIdOrUrl"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "compareSpotifyPlaylists",
+    description:
+      "Compare two Spotify playlists using public playlist item metadata: shared tracks, shared artists, unique tracks, and a track-overlap score. Use this when the user asks how similar two playlists are, what overlaps, or what one playlist has that the other does not.",
+    userVisible: true,
+    mutates: false,
+    category: "external",
+    toolClass: "external",
+    outputContract: ["both playlist names", "track counts analyzed", "shared tracks", "shared artists", "unique counts", "overlap score"],
+    parameters: {
+      type: "object",
+      properties: {
+        playlistAIdOrUrl: {
+          type: "string",
+          description: "First Spotify playlist ID, spotify:playlist URI, or open.spotify.com/playlist/<id> URL."
+        },
+        playlistBIdOrUrl: {
+          type: "string",
+          description: "Second Spotify playlist ID, spotify:playlist URI, or open.spotify.com/playlist/<id> URL."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum tracks per playlist to compare. Defaults to 2000 and is capped at 2000."
+        }
+      },
+      required: ["playlistAIdOrUrl", "playlistBIdOrUrl"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "searchSpotify",
     description:
-      "Search Spotify's public catalog for tracks, artists, albums, or playlists using the Spotify Web API. Use this when the user asks to find music on Spotify by name. Results are deterministic Spotify metadata and should be returned directly with Spotify links.",
+      "Search Spotify's public catalog for tracks, artists, albums, playlists, shows, episodes, or audiobooks using the Spotify Web API. Use this when the user asks to find music or podcasts/audiobooks on Spotify by name. Results are deterministic Spotify metadata and should be returned directly with Spotify links.",
     userVisible: true,
     mutates: false,
     category: "external",
@@ -816,7 +939,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         type: {
           type: "string",
-          enum: ["track", "artist", "album", "playlist"],
+          enum: ["track", "artist", "album", "playlist", "show", "episode", "audiobook"],
           description: "What to search for. Defaults to track."
         },
         limit: {
@@ -831,7 +954,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getSpotifyItem",
     description:
-      "Fetch deterministic public Spotify details for one track, artist, album, or playlist. Use this for Spotify item URLs/URIs, or for a bare Spotify ID when the type is known. For full playlist track lists, use getSpotifyPlaylistTracks instead.",
+      "Fetch deterministic public Spotify details for one track, artist, album, playlist, show, episode, audiobook, or chapter. Use this for Spotify item URLs/URIs, or for a bare Spotify ID when the type is known. For full playlist track lists, use getSpotifyPlaylistTracks; for album track lists, use getSpotifyAlbumTracks; for artist release lists, use getSpotifyArtistDiscography.",
     userVisible: true,
     mutates: false,
     category: "external",
@@ -846,7 +969,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         type: {
           type: "string",
-          enum: ["track", "artist", "album", "playlist"],
+          enum: ["track", "artist", "album", "playlist", "show", "episode", "audiobook", "chapter"],
           description: "Required only when itemIdOrUrl is a bare ID rather than a URL or URI."
         }
       },
@@ -972,6 +1095,10 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   if (name === "inspectAgentLogs" || name === "reportStatus" || name === "getDeploymentStatus" || name === "listTools") return "ops";
   if (
     name === "getSpotifyPlaylistTracks" ||
+    name === "getSpotifyAlbumTracks" ||
+    name === "getSpotifyArtistDiscography" ||
+    name === "getSpotifyPlaylistStats" ||
+    name === "compareSpotifyPlaylists" ||
     name === "searchSpotify" ||
     name === "getSpotifyItem"
   ) {
@@ -1006,6 +1133,10 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   undoConversationTurns: "memory",
   reportStatus: "ops",
   getSpotifyPlaylistTracks: "external",
+  getSpotifyAlbumTracks: "external",
+  getSpotifyArtistDiscography: "external",
+  getSpotifyPlaylistStats: "external",
+  compareSpotifyPlaylists: "external",
   searchSpotify: "external",
   getSpotifyItem: "external"
 };
@@ -1058,6 +1189,10 @@ function defaultToolExamples(name: ToolName): string[] {
     undoConversationTurns: "@ai undo that",
     reportStatus: "@ai status",
     getSpotifyPlaylistTracks: "@ai list all the tracks in this Spotify playlist: https://open.spotify.com/playlist/abc123",
+    getSpotifyAlbumTracks: "@ai list the tracks on this Spotify album: https://open.spotify.com/album/abc123",
+    getSpotifyArtistDiscography: "@ai show me this artist's Spotify discography: https://open.spotify.com/artist/abc123",
+    getSpotifyPlaylistStats: "@ai give me fun stats for this Spotify playlist: https://open.spotify.com/playlist/abc123",
+    compareSpotifyPlaylists: "@ai compare these two Spotify playlists: https://open.spotify.com/playlist/abc123 and https://open.spotify.com/playlist/def456",
     searchSpotify: "@ai search Spotify for Running Up That Hill",
     getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123"
   };

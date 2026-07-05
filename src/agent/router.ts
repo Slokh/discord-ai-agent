@@ -23,7 +23,11 @@ import {
   summarizeDiscordHistory,
   summarizeCurrentThread,
   undoConversationTurns,
+  compareSpotifyPlaylists,
+  getSpotifyAlbumTracks,
+  getSpotifyArtistDiscography,
   getSpotifyPlaylistTracks,
+  getSpotifyPlaylistStats,
   getSpotifyItem,
   searchSpotify
 } from "../tools/coreTools.js";
@@ -755,6 +759,50 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     );
   }
 
+  if (route.name === "getSpotifyAlbumTracks") {
+    return cleanAgentResponse(
+      await getSpotifyAlbumTracks(ctx, {
+        albumIdOrUrl: stringArgument(route.arguments, "albumIdOrUrl") ?? originalText,
+        limit: numberArgument(route.arguments, "limit"),
+        format: stringArgument(route.arguments, "format")
+      }),
+      ctx.config.maxReplyChars
+    );
+  }
+
+  if (route.name === "getSpotifyArtistDiscography") {
+    return cleanAgentResponse(
+      await getSpotifyArtistDiscography(ctx, {
+        artistIdOrUrl: stringArgument(route.arguments, "artistIdOrUrl") ?? originalText,
+        includeGroups: stringArrayArgument(route.arguments, "includeGroups"),
+        limit: numberArgument(route.arguments, "limit"),
+        format: stringArgument(route.arguments, "format")
+      }),
+      ctx.config.maxReplyChars
+    );
+  }
+
+  if (route.name === "getSpotifyPlaylistStats") {
+    return cleanAgentResponse(
+      await getSpotifyPlaylistStats(ctx, {
+        playlistIdOrUrl: stringArgument(route.arguments, "playlistIdOrUrl") ?? originalText,
+        limit: numberArgument(route.arguments, "limit")
+      }),
+      ctx.config.maxReplyChars
+    );
+  }
+
+  if (route.name === "compareSpotifyPlaylists") {
+    return cleanAgentResponse(
+      await compareSpotifyPlaylists(ctx, {
+        playlistAIdOrUrl: stringArgument(route.arguments, "playlistAIdOrUrl") ?? originalText,
+        playlistBIdOrUrl: stringArgument(route.arguments, "playlistBIdOrUrl") ?? originalText,
+        limit: numberArgument(route.arguments, "limit")
+      }),
+      ctx.config.maxReplyChars
+    );
+  }
+
   if (route.name === "searchSpotify") {
     return cleanAgentResponse(
       await searchSpotify(ctx, {
@@ -919,7 +967,15 @@ function cleanAgentResponse(response: AgentResponse, maxChars: number): AgentRes
 }
 
 function isSpotifyToolName(name: ToolName): boolean {
-  return name === "getSpotifyPlaylistTracks" || name === "searchSpotify" || name === "getSpotifyItem";
+  return (
+    name === "getSpotifyPlaylistTracks" ||
+    name === "getSpotifyAlbumTracks" ||
+    name === "getSpotifyArtistDiscography" ||
+    name === "getSpotifyPlaylistStats" ||
+    name === "compareSpotifyPlaylists" ||
+    name === "searchSpotify" ||
+    name === "getSpotifyItem"
+  );
 }
 
 async function completeDirectToolResponse(
@@ -1728,7 +1784,7 @@ function chatMessages(
         "For favorite/best/most popular message questions, use getDiscordStats with metric=reactions and groupBy=message as evidence, then make a clear pick when the evidence supports one. " +
         "For current public information, news, schedules, prices, releases, or external facts, use web_search and datetime when useful. " +
         "For URLs, use web_fetch when reading the page would improve the answer. " +
-        "For Spotify catalog searches, item details, or playlist track lists, call searchSpotify, getSpotifyItem, or getSpotifyPlaylistTracks. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com when the user asks for playlist tracks. Do not claim Spotify user-library, recently played, top-items, audio-feature, recommendation, or audio-analysis access. " +
+        "For Spotify catalog searches, item details, playlist track lists, album track lists, artist discographies, playlist stats, or playlist comparisons, call the matching Spotify tool. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com when the user asks for playlist tracks. Use getSpotifyPlaylistStats for fun playlist summaries instead of claiming audio-feature or recommendation access. Do not claim Spotify user-library, recently played, top-items, audio-feature, recommendation, or audio-analysis access. " +
         "When the current message or reply context includes images and the user asks what is shown, asks about a screenshot/meme/photo/chart, or asks for visual details, call inspectDiscordImages. " +
         "For Discord image generation requests, call generateImage so the result can be attached. If the user asks to edit, modify, transform, copy the style of, or use an attached/replied image as a reference, call generateImage with useContextImages=true or explicit referenceImageUrls. " +
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +

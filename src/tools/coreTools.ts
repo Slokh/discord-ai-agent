@@ -68,7 +68,11 @@ export { generateImage, inspectDiscordImages, type GenerateImageInput, type Insp
 export { cleanResponse } from "./responseFormatting.js";
 export { createSkillFromRequest, type SkillDraftInput } from "./skillTools.js";
 export {
+  compareSpotifyPlaylists,
+  getSpotifyAlbumTracks,
+  getSpotifyArtistDiscography,
   getSpotifyPlaylistTracks,
+  getSpotifyPlaylistStats,
   getSpotifyItem,
   searchSpotify,
   extractSpotifyId,

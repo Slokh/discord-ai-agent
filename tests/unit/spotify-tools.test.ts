@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  compareSpotifyPlaylists,
   extractSpotifyId,
+  getSpotifyAlbumTracks,
+  getSpotifyArtistDiscography,
   getSpotifyItem,
   getSpotifyPlaylistTracks,
+  getSpotifyPlaylistStats,
   parseSpotifyReference,
   resetSpotifyTokenCache,
   searchSpotify
@@ -45,6 +49,8 @@ describe("Spotify ID parsing", () => {
     expect(extractSpotifyId("https://open.spotify.com/intl-gb/artist/xyz456?si=1", "artist")).toBe("xyz456");
     expect(extractSpotifyId("spotify:track:trackid", "track")).toBe("trackid");
     expect(extractSpotifyId("albumid", "album")).toBe("albumid");
+    expect(extractSpotifyId("https://open.spotify.com/show/show123", "show")).toBe("show123");
+    expect(extractSpotifyId("spotify:chapter:chapter123", "chapter")).toBe("chapter123");
   });
 
   it("does not accept a mismatched kind or untyped freeform text", () => {
@@ -114,7 +120,7 @@ describe("getSpotifyPlaylistTracks", () => {
 
     expect(result.files?.[0].name).toBe("spotify-playlist-my-cool-playlist.csv");
     expect(result.files?.[0].contentType).toBe("text/csv");
-    expect(result.files?.[0].data.toString("utf8")).toContain('"position","track","artists","album","duration","added_at","spotify_url"');
+    expect(result.files?.[0].data.toString("utf8")).toContain('"position","track","artists","album","duration","explicit","local","added_at","spotify_url"');
   });
 
   it("returns a clear limitation on current playlist item 403s", async () => {
@@ -232,6 +238,26 @@ describe("searchSpotify", () => {
     expect(result.content).toContain("Radiohead");
     expect(searchCalls).toBe(2);
   });
+
+  it("searches public podcast and audiobook catalog types", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+    stubFetchWith((url) => {
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe("/v1/search");
+      expect(parsed.searchParams.get("type")).toBe("show");
+      return jsonResponse({
+        shows: {
+          items: [{ id: "show1", name: "Song Exploder", publisher: "Pushkin", external_urls: { spotify: "https://open.spotify.com/show/show1" } }]
+        }
+      });
+    });
+
+    const result = await searchSpotify(ctx, { query: "Song Exploder", type: "show" });
+
+    expect(result.content).toContain('Spotify show search for "Song Exploder"');
+    expect(result.content).toContain("Song Exploder");
+  });
 });
 
 describe("getSpotifyItem", () => {
@@ -262,6 +288,169 @@ describe("getSpotifyItem", () => {
     const result = await getSpotifyItem(fakeContext({ clientId: "id", clientSecret: "secret" }), { itemIdOrUrl: "abc123" });
     expect(result.content).toContain("bare ID with type");
   });
+
+  it("formats public audiobook details", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+    stubFetchWith((url) => {
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
+      expect(url).toContain("/audiobooks/book1?");
+      return jsonResponse({
+        id: "book1",
+        name: "Dune",
+        authors: [{ name: "Frank Herbert" }],
+        narrators: [{ name: "Scott Brick" }],
+        total_chapters: 48,
+        external_urls: { spotify: "https://open.spotify.com/audiobook/book1" }
+      });
+    });
+
+    const result = await getSpotifyItem(ctx, { itemIdOrUrl: "spotify:audiobook:book1" });
+
+    expect(result.content).toContain("Spotify audiobook: Dune");
+    expect(result.content).toContain("Authors: Frank Herbert");
+    expect(result.content).toContain("Chapters: 48");
+  });
+});
+
+describe("getSpotifyAlbumTracks", () => {
+  it("paginates album tracks and attaches the full list", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret", market: "US" });
+    const calls: string[] = [];
+    stubFetchWith((url) => {
+      calls.push(url);
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
+      if (url.startsWith("https://api.spotify.com/v1/albums/album1?")) {
+        return jsonResponse({
+          id: "album1",
+          name: "Kid A",
+          release_date: "2000-10-02",
+          total_tracks: 2,
+          artists: [{ name: "Radiohead" }],
+          external_urls: { spotify: "https://open.spotify.com/album/album1" }
+        });
+      }
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe("/v1/albums/album1/tracks");
+      expect(parsed.searchParams.get("limit")).toBe("50");
+      return jsonResponse({
+        total: 2,
+        next: null,
+        items: [
+          { id: "track1", name: "Everything In Its Right Place", track_number: 1, duration_ms: 251000, artists: [{ name: "Radiohead" }] },
+          { id: "track2", name: "Kid A", track_number: 2, duration_ms: 284000, artists: [{ name: "Radiohead" }], explicit: false }
+        ]
+      });
+    });
+
+    const result = await getSpotifyAlbumTracks(ctx, { albumIdOrUrl: "spotify:album:album1" });
+
+    expect(calls.some((url) => url.includes("/albums/album1/tracks?"))).toBe(true);
+    expect(result.content).toContain("Spotify album: Kid A - Radiohead");
+    expect(result.content).toContain("Tracks fetched: 2 of 2");
+    expect(result.files?.[0].name).toBe("spotify-album-kid-a.txt");
+    expect(result.files?.[0].data.toString("utf8")).toContain("1. Everything In Its Right Place - Radiohead");
+    expect(result.storedContent).toContain("Spotify response omitted");
+  });
+});
+
+describe("getSpotifyArtistDiscography", () => {
+  it("fetches artist albums, singles, compilations, and appearances", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+    stubFetchWith((url) => {
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
+      if (url === "https://api.spotify.com/v1/artists/artist1") {
+        return jsonResponse({ id: "artist1", name: "Radiohead", external_urls: { spotify: "https://open.spotify.com/artist/artist1" } });
+      }
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe("/v1/artists/artist1/albums");
+      expect(parsed.searchParams.get("include_groups")).toBe("album,single");
+      return jsonResponse({
+        total: 2,
+        next: null,
+        items: [
+          { id: "album1", name: "Kid A", album_type: "album", release_date: "2000-10-02", total_tracks: 10, external_urls: { spotify: "https://open.spotify.com/album/album1" } },
+          { id: "single1", name: "No Surprises", album_type: "single", release_date: "1998-01-12", total_tracks: 3, external_urls: { spotify: "https://open.spotify.com/album/single1" } }
+        ]
+      });
+    });
+
+    const result = await getSpotifyArtistDiscography(ctx, {
+      artistIdOrUrl: "artist1",
+      includeGroups: ["album", "single"],
+      format: "csv"
+    });
+
+    expect(result.content).toContain("Spotify artist discography: Radiohead");
+    expect(result.content).toContain("By type: album (1), single (1)");
+    expect(result.files?.[0].name).toBe("spotify-artist-radiohead-discography.csv");
+    expect(result.files?.[0].data.toString("utf8")).toContain('"Kid A","album"');
+  });
+});
+
+describe("getSpotifyPlaylistStats", () => {
+  it("computes deterministic playlist stats from playlist items", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+    stubPlaylistFetch({
+      total: 4,
+      entries: [
+        playlistEntry(0, { id: "same1", name: "Shared", artist: "Radiohead", album: "Kid A", explicit: true }),
+        playlistEntry(1, { id: "same2", name: "Again", artist: "Radiohead", album: "Kid A" }),
+        playlistEntry(2, { id: "other", name: "Other", artist: "Kate Bush", album: "Hounds of Love" }),
+        playlistEntry(3, { id: "", name: "Local", artist: "Local Artist", album: "Files", isLocal: true })
+      ]
+    });
+
+    const result = await getSpotifyPlaylistStats(ctx, { playlistIdOrUrl: "pl123" });
+
+    expect(result.content).toContain("Spotify playlist stats: My Cool Playlist by Owner One");
+    expect(result.content).toContain("Tracks analyzed: 4 of 4");
+    expect(result.content).toContain("Explicit tracks: 1");
+    expect(result.content).toContain("Local/unavailable tracks: 1");
+    expect(result.content).toContain("Top artists: Radiohead (2)");
+  });
+});
+
+describe("compareSpotifyPlaylists", () => {
+  it("compares shared tracks and artists across two playlists", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+    stubFetchWith((url) => {
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
+      if (url.startsWith("https://api.spotify.com/v1/playlists/plA?")) {
+        return jsonResponse({ id: "plA", name: "First Mix", tracks: { total: 2 } });
+      }
+      if (url.startsWith("https://api.spotify.com/v1/playlists/plB?")) {
+        return jsonResponse({ id: "plB", name: "Second Mix", tracks: { total: 2 } });
+      }
+      if (url.includes("/playlists/plA/items?")) {
+        return jsonResponse({
+          total: 2,
+          next: null,
+          items: [
+            playlistEntry(0, { id: "shared", name: "Shared Song", artist: "Radiohead" }),
+            playlistEntry(1, { id: "a-only", name: "A Only", artist: "Kate Bush" })
+          ]
+        });
+      }
+      if (url.includes("/playlists/plB/items?")) {
+        return jsonResponse({
+          total: 2,
+          next: null,
+          items: [
+            playlistEntry(0, { id: "shared", name: "Shared Song", artist: "Radiohead" }),
+            playlistEntry(1, { id: "b-only", name: "B Only", artist: "Björk" })
+          ]
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    });
+
+    const result = await compareSpotifyPlaylists(ctx, { playlistAIdOrUrl: "plA", playlistBIdOrUrl: "plB" });
+
+    expect(result.content).toContain("Spotify playlist comparison: First Mix vs Second Mix");
+    expect(result.content).toContain("Shared tracks: 1");
+    expect(result.content).toContain("Track overlap score: 33%");
+    expect(result.content).toContain("Shared artist examples: Radiohead");
+  });
 });
 
 function stubPlaylistFetch(input: { total: number; entries: ReturnType<typeof playlistEntry>[] }) {
@@ -280,18 +469,22 @@ function stubPlaylistFetch(input: { total: number; entries: ReturnType<typeof pl
   });
 }
 
-function playlistEntry(index: number) {
+function playlistEntry(
+  index: number,
+  overrides: { id?: string; name?: string; artist?: string; album?: string; explicit?: boolean; isLocal?: boolean } = {}
+) {
   return {
     added_at: `2024-01-${String((index % 28) + 1).padStart(2, "0")}T00:00:00Z`,
-    is_local: false,
+    is_local: overrides.isLocal ?? false,
     item: {
-      id: `t${index}`,
-      name: `Track ${index}`,
+      id: overrides.id ?? `t${index}`,
+      name: overrides.name ?? `Track ${index}`,
       type: "track",
       duration_ms: 180000 + index * 1000,
-      artists: [{ name: `Artist ${index}` }],
-      album: { name: `Album ${index}` },
-      external_urls: { spotify: `https://open.spotify.com/track/t${index}` }
+      explicit: overrides.explicit ?? false,
+      artists: [{ name: overrides.artist ?? `Artist ${index}` }],
+      album: { name: overrides.album ?? `Album ${index}` },
+      external_urls: { spotify: `https://open.spotify.com/track/${overrides.id ?? `t${index}`}` }
     }
   };
 }

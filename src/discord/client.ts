@@ -20,7 +20,7 @@ import { embeddingPriorityForMessageTimestamp, type DiscordAgentRequestJob, type
 import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
-import { DiscordResponseSink } from "./responseSink.js";
+import { DiscordResponseSink, type DiscordResponseFooter } from "./responseSink.js";
 import {
   canTriggerReplyRegeneration,
   isRegenerateReplyReaction,
@@ -506,7 +506,7 @@ async function handleMessageCreate(
         })
         .catch((deleteError) => requestLogger.warn({ err: deleteError }, "Failed to remove failed queued user turn from channel memory"));
       const errorContent = `I hit an error: ${error instanceof Error ? error.message : String(error)}`;
-      const finalReply = (await responseSink.sendError(errorContent)).message;
+      const finalReply = (await responseSink.sendError(errorContent, discordTraceFooter(input.config, requestId, messageStartedAt))).message;
       await input.repo
         .updateProcessRun({
           runId: message.id,
@@ -748,7 +748,13 @@ async function executeDiscordAgentRequest(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
-    const finalReply = (await responseSink.sendFinal({ content: response.content, files: response.files })).message;
+    const finalReply = (
+      await responseSink.sendFinal({
+        content: response.content,
+        files: response.files,
+        footer: discordTraceFooter(input.config, request.requestId, request.messageStartedAt)
+      })
+    ).message;
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord final response");
     await finishAgentRuntimePromptExecution({
@@ -844,7 +850,7 @@ async function executeDiscordAgentRequest(
         "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
         input.config.maxReplyChars
       );
-      const finalReply = (await responseSink.sendError(filteredContent)).message;
+      const finalReply = (await responseSink.sendError(filteredContent, discordTraceFooter(input.config, request.requestId, request.messageStartedAt))).message;
       await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
       const deletedMemoryRows = await input.repo
         .deleteConversationMessagesByDiscordMessageIds({
@@ -908,7 +914,7 @@ async function executeDiscordAgentRequest(
         .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
     }
     const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
-    const finalReply = (await responseSink.sendError(errorContent)).message;
+    const finalReply = (await responseSink.sendError(errorContent, discordTraceFooter(input.config, request.requestId, request.messageStartedAt))).message;
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord error response");
     await recordTraceEvent(input.repo, {
@@ -1833,6 +1839,20 @@ export function hasExplicitBotMention(content: string, botUserId: string): boole
 export function hasExplicitBotAddress(content: string, botUserId: string, botRoleIds: string[] = []): boolean {
   if (hasExplicitBotMention(content, botUserId)) return true;
   return explicitRoleMentionIds(content).some((roleId) => botRoleIds.includes(roleId));
+}
+
+function discordTraceFooter(config: AppConfig, runId: string, startedAt: number): DiscordResponseFooter | null {
+  const traceUrl = discordRunConsoleUrl(config, runId);
+  if (!traceUrl) return null;
+  return {
+    traceUrl,
+    durationMs: durationMs(startedAt)
+  };
+}
+
+function discordRunConsoleUrl(config: AppConfig, runId: string) {
+  if (!config.controlUi.publicUrl) return null;
+  return `${config.controlUi.publicUrl}/runs/${encodeURIComponent(runId)}`;
 }
 
 export function explicitUserMentionIds(content: string, excludedUserId?: string): string[] {

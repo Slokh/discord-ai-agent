@@ -21,6 +21,45 @@ describe("DiscordResponseSink", () => {
     expect(result.usedStatusMessage).toBe(false);
   });
 
+  it("appends a Discord subtext trace footer to final replies", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    await sink.sendFinal({
+      content: "done",
+      footer: { traceUrl: "https://tasks.example/runs/run-1", durationMs: 42_183 }
+    });
+
+    expect(sourceMessage.reply).toHaveBeenCalledWith({
+      content: "done\n\n-# [trace](https://tasks.example/runs/run-1) · 42.183s"
+    });
+  });
+
+  it("keeps the trace footer when final content is truncated", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 96,
+      logger: fakeLogger() as any
+    });
+
+    await sink.sendFinal({
+      content: "x".repeat(200),
+      footer: { traceUrl: "https://tasks.example/runs/run-1", durationMs: 42 }
+    });
+
+    const payload = (sourceMessage.reply as any).mock.calls[0]?.[0] as { content: string };
+    expect(payload.content).toContain("...[truncated]");
+    expect(payload.content).toContain("-# [trace](https://tasks.example/runs/run-1) · 0.042s");
+    expect(payload.content.length).toBeLessThanOrEqual(96);
+  });
+
   it("creates a status message lazily, edits it for updates, and edits it for final content", async () => {
     const statusMessage = fakeMessage({ id: "status-1", channelId: "channel-1", url: "https://discord/status-1" });
     const editedStatusMessage = fakeMessage({ id: "status-1", channelId: "channel-1", url: "https://discord/status-1" });

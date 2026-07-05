@@ -187,7 +187,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         messages,
         tools: toolDefinitionsForModel(),
         temperature: 0.2,
-        maxTokens: 900
+        maxTokens: 4096
       });
     } catch (error) {
       await recordProcessRunSpan(ctx, {
@@ -1121,7 +1121,7 @@ async function synthesizeFinalAnswerWithoutTools(
     messages: finalSynthesisMessages(input.text, input.memoryEvents),
     tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
-    maxTokens: 2000
+    maxTokens: 4096
   });
 
   if (response.finishReason === "length") {
@@ -1282,7 +1282,7 @@ async function hostedToolMarkupRecoveryResponse(
     ],
     tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
-    maxTokens: 2000
+    maxTokens: 4096
   });
   const content = stripLeakedHostedToolMarkup(response.content).trim();
   return {

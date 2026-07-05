@@ -442,7 +442,7 @@ export async function getDiscordChannelTopics(
       }
     ],
     temperature: 0.2,
-    maxTokens: 1200
+    maxTokens: 4096
   });
 
   await ctx.repo.auditTool({
@@ -551,7 +551,7 @@ export async function summarizeDiscordHistory(
       }
     ],
     temperature: 0.2,
-    maxTokens: 900
+    maxTokens: 4096
   });
 
   const summary = response.content.trim() || fallbackDiscordHistorySummary({ question, samples, dateFrom, dateTo: explicitDateTo });
@@ -798,7 +798,7 @@ export async function summarizeCurrentThread(ctx: ToolContext, input: { question
       { role: "user", content: transcript }
     ],
     temperature: 0.2,
-    maxTokens: 900
+    maxTokens: 4096
   });
 
   await ctx.repo.auditTool({

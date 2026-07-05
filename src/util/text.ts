@@ -10,7 +10,7 @@ export function splitForDiscord(text: string, maxChars: number): string[] {
   let remaining = text;
   while (remaining.length > limit) {
     let cut = findSplitPoint(remaining, limit);
-    if (cut <= 0) cut = limit;
+    if (cut <= 0 || cut > limit) cut = limit;
     chunks.push(remaining.slice(0, cut).trimEnd());
     remaining = remaining.slice(cut).trimStart();
   }
@@ -19,11 +19,11 @@ export function splitForDiscord(text: string, maxChars: number): string[] {
 }
 
 function findSplitPoint(text: string, maxChars: number): number {
-  const paragraph = text.lastIndexOf("\n\n", maxChars);
+  const paragraph = text.lastIndexOf("\n\n", maxChars - 2);
   if (paragraph >= Math.floor(maxChars * 0.25)) return paragraph + 2;
-  const line = text.lastIndexOf("\n", maxChars);
+  const line = text.lastIndexOf("\n", maxChars - 1);
   if (line >= Math.floor(maxChars * 0.25)) return line + 1;
-  const word = text.lastIndexOf(" ", maxChars);
+  const word = text.lastIndexOf(" ", maxChars - 1);
   if (word >= Math.floor(maxChars * 0.25)) return word + 1;
   return 0;
 }

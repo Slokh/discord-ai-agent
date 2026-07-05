@@ -107,18 +107,13 @@ export class DiscordResponseSink {
     const firstMessage = this.statusMessage ? await this.statusMessage.edit(firstPayload) : await this.sourceMessage.reply(firstPayload);
     this.statusMessage = firstMessage;
 
-    const channel = this.sourceMessage.channel;
-    const sendable = isSendableChannel(channel) ? channel : null;
+    let previousMessage: Message = firstMessage;
     for (let i = 1; i < chunks.length; i++) {
       const isLast = i === chunks.length - 1;
       const content = isLast && footerLine ? `${chunks[i]}${separator}${footerLine}` : chunks[i];
-      if (!sendable) continue;
-      if (content.length <= this.maxReplyChars) {
-        await sendable.send({ content });
-      } else {
-        for (const overflow of splitForDiscord(content, this.maxReplyChars)) {
-          await sendable.send({ content: overflow });
-        }
+      const overflowChunks = content.length <= this.maxReplyChars ? [content] : splitForDiscord(content, this.maxReplyChars);
+      for (const chunk of overflowChunks) {
+        previousMessage = await previousMessage.reply({ content: chunk });
       }
     }
 
@@ -187,8 +182,4 @@ function parseDiscordReactionMatch(value: string): DiscordReactionMatch {
 function reactionMatches(reaction: Awaited<ReturnType<Message["react"]>>, expected: DiscordReactionMatch) {
   if (expected.id && reaction.emoji.id === expected.id) return true;
   return reaction.emoji.name === expected.name;
-}
-
-function isSendableChannel(channel: Message["channel"]): channel is Extract<Message["channel"], { send: (options: { content: string }) => Promise<unknown> }> {
-  return typeof (channel as { send?: unknown }).send === "function";
 }

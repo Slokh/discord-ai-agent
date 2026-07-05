@@ -40,9 +40,28 @@ describe("DiscordResponseSink", () => {
     });
   });
 
-  it("splits long final content into multiple messages and keeps the trace footer on the last chunk", async () => {
-    const channel = { send: vi.fn(async (_options: { content: string }) => fakeMessage({ id: "followup-1" })) };
-    const sourceMessage = fakeMessage({ channel });
+  it("splits long final content into chained replies and keeps the trace footer on the last chunk", async () => {
+    const replyContents: string[] = [];
+    const makeMessage = (id: string): any => ({
+      id,
+      channelId: "channel-1",
+      url: `https://discord/${id}`,
+      react: vi.fn(async () => fakeReaction()),
+      reply: vi.fn(async (options: { content: string }) => {
+        replyContents.push(options.content);
+        return makeMessage(`${id}-r`);
+      }),
+      edit: vi.fn(async function (this: any) {
+        return this;
+      }),
+      reactions: {
+        cache: {
+          get: vi.fn(() => null),
+          find: vi.fn(() => null)
+        }
+      }
+    });
+    const sourceMessage = makeMessage("source-1");
     const sink = new DiscordResponseSink({
       client: fakeClient(),
       sourceMessage: sourceMessage as any,
@@ -56,24 +75,47 @@ describe("DiscordResponseSink", () => {
       footer: { traceUrl: "https://tasks.example/runs/run-1", durationMs: 42 }
     });
 
-    const replyPayload = (sourceMessage.reply as any).mock.calls[0]?.[0] as { content: string };
-    expect(replyPayload.content.length).toBeLessThanOrEqual(96);
-    expect(replyPayload.content).not.toContain("-# [trace]");
-    expect(channel.send.mock.calls.length).toBeGreaterThanOrEqual(1);
-    const lastFollowup = (channel.send.mock.calls.at(-1)?.[0] as unknown as { content: string }).content;
-    expect(lastFollowup).toContain("-# [trace](https://tasks.example/runs/run-1) · 0.042s");
-    expect(lastFollowup.length).toBeLessThanOrEqual(96);
-    const allContents = [replyPayload.content, ...channel.send.mock.calls.map((call) => (call[0] as unknown as { content: string }).content)];
-    for (const chunk of allContents) {
+    expect(replyContents.length).toBeGreaterThanOrEqual(2);
+    for (const chunk of replyContents) {
       expect(chunk.length).toBeLessThanOrEqual(96);
     }
-    const rejoined = allContents.join("").replace(/\n+/g, "");
+    expect(replyContents[0]).not.toContain("-# [trace]");
+    expect(replyContents.at(-1)).toContain("-# [trace](https://tasks.example/runs/run-1) · 0.042s");
+    const rejoined = replyContents.join("").replace(/\n+/g, "");
     expect(rejoined.replace(/-# \[trace\]\([^)]+\) · 0\.042s/, "").length).toBe(200);
+
+    // Continuation messages must reply to the previous message, not call channel.send.
+    expect((sourceMessage.channel as any)?.send).toBeUndefined();
+    const firstFollowup = (sourceMessage.reply as any).mock.results[0].value;
+    await firstFollowup;
+    const firstFollowupMessage = await firstFollowup;
+    expect(firstFollowupMessage.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining("x")
+    });
   });
 
-  it("splits long final content without a footer across multiple messages", async () => {
-    const channel = { send: vi.fn(async (_options: { content: string }) => fakeMessage({ id: "followup-1" })) };
-    const sourceMessage = fakeMessage({ channel });
+  it("splits long final content without a footer across chained replies", async () => {
+    const replyContents: string[] = [];
+    const makeMessage = (id: string): any => ({
+      id,
+      channelId: "channel-1",
+      url: `https://discord/${id}`,
+      react: vi.fn(async () => fakeReaction()),
+      reply: vi.fn(async (options: { content: string }) => {
+        replyContents.push(options.content);
+        return makeMessage(`${id}-r`);
+      }),
+      edit: vi.fn(async function (this: any) {
+        return this;
+      }),
+      reactions: {
+        cache: {
+          get: vi.fn(() => null),
+          find: vi.fn(() => null)
+        }
+      }
+    });
+    const sourceMessage = makeMessage("source-1");
     const sink = new DiscordResponseSink({
       client: fakeClient(),
       sourceMessage: sourceMessage as any,
@@ -84,13 +126,11 @@ describe("DiscordResponseSink", () => {
     const content = "alpha bravo charlie delta echo foxtrot golf hotel india juliet";
     await sink.sendFinal({ content });
 
-    const replyPayload = (sourceMessage.reply as any).mock.calls[0]?.[0] as { content: string };
-    expect(replyPayload.content.length).toBeLessThanOrEqual(50);
-    expect(channel.send.mock.calls.length).toBeGreaterThanOrEqual(1);
-    const rejoined = [replyPayload.content, ...channel.send.mock.calls.map((call) => (call[0] as unknown as { content: string }).content)]
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
+    for (const chunk of replyContents) {
+      expect(chunk.length).toBeLessThanOrEqual(50);
+    }
+    expect(replyContents.length).toBeGreaterThanOrEqual(2);
+    const rejoined = replyContents.join(" ").replace(/\s+/g, " ").trim();
     expect(rejoined).toBe(content);
   });
 

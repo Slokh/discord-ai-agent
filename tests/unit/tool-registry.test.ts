@@ -44,7 +44,8 @@ describe("toolRegistry", () => {
       "getSpotifyPlaylistStats",
       "compareSpotifyPlaylists",
       "searchSpotify",
-      "getSpotifyItem"
+      "getSpotifyItem",
+      "createDiscordPoll"
     ]);
   });
 

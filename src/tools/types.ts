@@ -31,6 +31,12 @@ export type ToolContext = {
   visibleIndexedChannelIds?: string[];
   deleteDiscordMessageIds?: (messageIds: string[]) => Promise<number>;
   updateStatus?: (content: string) => Promise<void>;
+  sendDiscordPoll?: (input: {
+    question: string;
+    answers: string[];
+    durationHours: number;
+    allowMultiselect: boolean;
+  }) => Promise<{ messageId: string; channelId: string; url: string }>;
 };
 
 export type DiscordAttachmentContext = {

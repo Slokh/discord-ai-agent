@@ -34,7 +34,8 @@ export type ToolName =
   | "getSpotifyPlaylistStats"
   | "compareSpotifyPlaylists"
   | "searchSpotify"
-  | "getSpotifyItem";
+  | "getSpotifyItem"
+  | "createDiscordPoll";
 
 export type ToolClass =
   | "resolver"
@@ -1139,6 +1140,41 @@ export const toolRegistry: ToolRegistryEntry[] = [
       required: ["itemIdOrUrl"],
       additionalProperties: false
     }
+  },
+  {
+    name: "createDiscordPoll",
+    description:
+      "Create a native Discord poll in the current channel using Discord's poll message API (v10). Use this when the user asks to schedule, vote, pick a time, choose between options, run a straw poll, or create any poll-like question with multiple answers. Discord native polls render in the channel and let members click an answer. The bot must have Send Messages permission in the channel. Supports up to 10 answer options; duration defaults to 24 hours and is capped at 168 hours per Discord limits; allow_multiselect defaults to true since scheduling polls usually allow multiple answers.",
+    userVisible: true,
+    mutates: true,
+    category: "discord",
+    toolClass: "ops",
+    outputContract: ["poll question", "answer options posted", "duration hours", "allow multiselect", "Discord message link", "failure reason when the bot lacks permission or input is invalid"],
+    permissionRequirements: ["explicit_user_request", "tool_audit_log"],
+    parameters: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "The poll question text shown above the answer options. Discord caps poll question text at 300 characters."
+        },
+        answers: {
+          type: "array",
+          items: { type: "string" },
+          description: "Poll answer options. Provide between 1 and 10 options. Each answer is capped at 55 characters by Discord. Order is preserved."
+        },
+        durationHours: {
+          type: "number",
+          description: "How long the poll stays open, in hours. Defaults to 24 and is capped at 168 (7 days) per Discord limits."
+        },
+        allowMultiselect: {
+          type: "boolean",
+          description: "Whether members can select multiple answers. Defaults to true for scheduling use cases; set false for single-choice polls."
+        }
+      },
+      required: ["question", "answers"],
+      additionalProperties: false
+    }
   }
 ];
 
@@ -1305,7 +1341,8 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   getSpotifyPlaylistStats: "external",
   compareSpotifyPlaylists: "external",
   searchSpotify: "external",
-  getSpotifyItem: "external"
+  getSpotifyItem: "external",
+  createDiscordPoll: "ops"
 };
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
@@ -1364,7 +1401,8 @@ function defaultToolExamples(name: ToolName): string[] {
     getSpotifyPlaylistStats: "@ai give me fun stats for this Spotify playlist: https://open.spotify.com/playlist/abc123",
     compareSpotifyPlaylists: "@ai compare these two Spotify playlists: https://open.spotify.com/playlist/abc123 and https://open.spotify.com/playlist/def456",
     searchSpotify: "@ai search Spotify for Running Up That Hill",
-    getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123"
+    getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123",
+    createDiscordPoll: "@ai make a poll: what day should we play, Friday or Saturday?"
   };
   return [examples[name]];
 }

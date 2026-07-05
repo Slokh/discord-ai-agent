@@ -31,6 +31,7 @@ import {
   getSpotifyItem,
   searchSpotify
 } from "../tools/coreTools.js";
+import { queryGeneratedCsv, readGeneratedFile } from "../tools/generatedFileTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ChatMessage } from "../models/openrouter.js";
 import type { ConversationMessage, ServerOverlay } from "../db/repositories.js";
@@ -97,6 +98,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
     }
   );
   const files: AgentFile[] = [];
+  ctx.generatedFiles = files;
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
   const successfulToolCallKeys = new Set<string>();
@@ -491,16 +493,6 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         successfulToolCallKeys.add(routeKey);
       }
       if (result.files?.length) files.push(...result.files);
-      if (isSpotifyToolName(route.name)) {
-        return await completeDirectToolResponse(ctx, {
-          routeName: route.name,
-          result,
-          files,
-          requestLogger,
-          startedAt,
-          completionKind: "direct Spotify tool result"
-        });
-      }
       if (!isRedundantToolCall) {
         memoryEvents.push({
           role: "tool",
@@ -753,6 +745,35 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
     };
   }
 
+  if (route.name === "readGeneratedFile") {
+    return cleanAgentResponse(
+      await readGeneratedFile(ctx, {
+        fileName: stringArgument(route.arguments, "fileName"),
+        fileIndex: numberArgument(route.arguments, "fileIndex"),
+        offsetBytes: numberArgument(route.arguments, "offsetBytes"),
+        maxBytes: numberArgument(route.arguments, "maxBytes")
+      }),
+      ctx.config.maxReplyChars
+    );
+  }
+
+  if (route.name === "queryGeneratedCsv") {
+    return cleanAgentResponse(
+      await queryGeneratedCsv(ctx, {
+        fileName: stringArgument(route.arguments, "fileName"),
+        fileIndex: numberArgument(route.arguments, "fileIndex"),
+        operation: stringArgument(route.arguments, "operation"),
+        column: stringArgument(route.arguments, "column"),
+        filters: route.arguments?.filters,
+        selectColumns: stringArrayArgument(route.arguments, "selectColumns"),
+        limit: numberArgument(route.arguments, "limit"),
+        splitValues: booleanArgument(route.arguments, "splitValues"),
+        valueDelimiter: stringArgument(route.arguments, "valueDelimiter")
+      }),
+      ctx.config.maxReplyChars
+    );
+  }
+
   if (route.name === "getSpotifyPlaylistTracks") {
     return cleanAgentResponse(
       await getSpotifyPlaylistTracks(ctx, {
@@ -969,18 +990,6 @@ function cleanAgentResponse(response: AgentResponse, maxChars: number): AgentRes
     ...response,
     content: cleanResponse(response.content, maxChars)
   };
-}
-
-function isSpotifyToolName(name: ToolName): boolean {
-  return (
-    name === "getSpotifyPlaylistTracks" ||
-    name === "getSpotifyAlbumTracks" ||
-    name === "getSpotifyArtistDiscography" ||
-    name === "getSpotifyPlaylistStats" ||
-    name === "compareSpotifyPlaylists" ||
-    name === "searchSpotify" ||
-    name === "getSpotifyItem"
-  );
 }
 
 async function completeDirectToolResponse(
@@ -1791,7 +1800,8 @@ function chatMessages(
         "For favorite/best/most popular message questions, use getDiscordStats with metric=reactions and groupBy=message as evidence, then make a clear pick when the evidence supports one. " +
         "For current public information, news, schedules, prices, releases, or external facts, use web_search and datetime when useful. " +
         "For URLs, use web_fetch when reading the page would improve the answer. " +
-        "For Spotify catalog searches, item details, playlist track lists, album track lists, artist discographies, playlist stats, or playlist comparisons, call the matching Spotify tool. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com when the user asks for playlist tracks. Use getSpotifyPlaylistStats for fun playlist summaries instead of claiming audio-feature or recommendation access. Do not claim Spotify user-library, recently played, top-items, audio-feature, recommendation, or audio-analysis access. " +
+        "When an earlier tool call in the same turn produced a text or CSV file, use readGeneratedFile or queryGeneratedCsv to inspect, count, filter, or rank that generated file instead of guessing from the attachment name or asking the model to count raw rows. " +
+        "For Spotify catalog searches, item details, playlist track lists, album track lists, artist discographies, playlist stats, or playlist comparisons, call the matching Spotify tool. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com when the user asks for playlist tracks or when a later generated-file query needs a playlist CSV. Use getSpotifyPlaylistStats for quick playlist summaries instead of claiming audio-feature or recommendation access. Do not claim Spotify user-library, recently played, top-items, audio-feature, recommendation, or audio-analysis access. " +
         "When the current message or reply context includes images and the user asks what is shown, asks about a screenshot/meme/photo/chart, or asks for visual details, call inspectDiscordImages. " +
         "For Discord image generation requests, call generateImage so the result can be attached. If the user asks to edit, modify, transform, copy the style of, or use an attached/replied image as a reference, call generateImage with useContextImages=true or explicit referenceImageUrls. " +
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +

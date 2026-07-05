@@ -18,6 +18,8 @@ describe("toolRegistry", () => {
       "summarizeDiscordHistory",
       "summarizeDiscordThread",
       "generateImage",
+      "readGeneratedFile",
+      "queryGeneratedCsv",
       "createSkillDraft",
       "runCodingAgent",
       "getAgentTaskStatus",
@@ -85,6 +87,8 @@ describe("toolRegistry", () => {
     );
     expect(contracts.find((tool) => tool.name === "findDiscordUsers")?.toolClass).toBe("resolver");
     expect(contracts.find((tool) => tool.name === "getDiscordStats")?.toolClass).toBe("stats");
+    expect(contracts.find((tool) => tool.name === "readGeneratedFile")?.toolClass).toBe("retrieval");
+    expect(contracts.find((tool) => tool.name === "queryGeneratedCsv")?.toolClass).toBe("stats");
     expect(contracts.find((tool) => tool.name === "summarizeDiscordHistory")?.toolClass).toBe("summary");
     expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.toolClass).toBe("image");
     expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.toolClass).toBe("external");
@@ -218,6 +222,32 @@ describe("toolRegistry", () => {
               required: ["artistIdOrUrl"],
               properties: expect.objectContaining({
                 includeGroups: expect.objectContaining({ type: "array" })
+              })
+            })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "readGeneratedFile",
+            parameters: expect.objectContaining({
+              properties: expect.objectContaining({
+                fileName: expect.objectContaining({ type: "string" }),
+                maxBytes: expect.objectContaining({ type: "number" })
+              })
+            })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "queryGeneratedCsv",
+            description: expect.stringContaining("generated CSV"),
+            parameters: expect.objectContaining({
+              properties: expect.objectContaining({
+                operation: expect.objectContaining({ enum: ["profile", "topValues", "filterRows"] }),
+                filters: expect.objectContaining({ type: "array" }),
+                splitValues: expect.objectContaining({ type: "boolean" })
               })
             })
           })

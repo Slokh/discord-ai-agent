@@ -30,7 +30,6 @@ const SPOTIFY_API_BASE = "https://api.spotify.com/v1";
 const SPOTIFY_AUTH_URL = "https://accounts.spotify.com/api/token";
 const SPOTIFY_REQUEST_TIMEOUT_MS = 15_000;
 const PLAYLIST_ITEMS_PAGE_SIZE = 50;
-const DEPRECATED_PLAYLIST_TRACKS_PAGE_SIZE = 100;
 const DEFAULT_PLAYLIST_TRACK_LIMIT = 2_000;
 const MAX_PLAYLIST_TRACKS = 2_000;
 const DEFAULT_ALBUM_TRACK_LIMIT = 200;
@@ -40,13 +39,12 @@ const MAX_ARTIST_DISCOGRAPHY_ITEMS = 200;
 const DEFAULT_PLAYLIST_COMPARE_LIMIT = 2_000;
 const DEFAULT_SEARCH_LIMIT = 5;
 const MAX_SEARCH_LIMIT = 10;
+const SPOTIFY_MARKET = "US";
 const SPOTIFY_STORED_CONTENT = "Spotify response omitted from conversation memory and artifacts.";
 
 export type SpotifyConfig = {
   clientId?: string;
   clientSecret?: string;
-  market?: string;
-  allowDeprecatedPlaylistTracks?: boolean;
 };
 
 export type SpotifyItemType = "track" | "artist" | "album" | "playlist" | "show" | "episode" | "audiobook" | "chapter";
@@ -231,7 +229,7 @@ export async function searchSpotify(
       q: query,
       type,
       limit: String(limit),
-      market: spotifyMarket(ctx.config.spotify)
+      market: SPOTIFY_MARKET
     });
     const result = await spotifyFetch<{
       tracks?: SpotifyPagedResponse<SpotifyTrack>;
@@ -300,13 +298,11 @@ export async function getSpotifyPlaylistTracks(
 
   try {
     const playlist = await fetchSpotifyPlaylist(ctx.config.spotify, playlistRef.id);
-    let trackPage: { tracks: SpotifyPlaylistTrack[]; total: number; usedDeprecatedEndpoint: boolean };
+    let trackPage: { tracks: SpotifyPlaylistTrack[]; total: number };
     try {
-      trackPage = await fetchPlaylistTrackPages(ctx.config.spotify, playlistRef.id, maxTracks, false);
+      trackPage = await fetchPlaylistTrackPages(ctx.config.spotify, playlistRef.id, maxTracks);
     } catch (error) {
-      if (error instanceof SpotifyApiError && error.status === 403 && ctx.config.spotify.allowDeprecatedPlaylistTracks) {
-        trackPage = await fetchPlaylistTrackPages(ctx.config.spotify, playlistRef.id, maxTracks, true);
-      } else if (error instanceof SpotifyApiError && error.status === 403) {
+      if (error instanceof SpotifyApiError && error.status === 403) {
         await audit(ctx, "getSpotifyPlaylistTracks", { playlistId: playlistRef.id, error: "playlist_items_forbidden" });
         return spotifyResponse(formatPlaylistItemsForbidden(playlist));
       } else {
@@ -316,13 +312,12 @@ export async function getSpotifyPlaylistTracks(
 
     const normalized = normalizePlaylistTracks(trackPage.tracks);
     const files = normalized.length > 0 ? [playlistTracksFile(playlist, normalized, format)] : [];
-    const content = formatPlaylistTrackSummary(playlist, normalized, trackPage.total, maxTracks, files[0], trackPage.usedDeprecatedEndpoint);
+    const content = formatPlaylistTrackSummary(playlist, normalized, trackPage.total, maxTracks, files[0]);
     await audit(ctx, "getSpotifyPlaylistTracks", {
       playlistId: playlistRef.id,
       total: trackPage.total,
       returned: normalized.length,
-      attachment: files[0]?.name,
-      usedDeprecatedEndpoint: trackPage.usedDeprecatedEndpoint || undefined
+      attachment: files[0]?.name
     });
     return spotifyResponse(content, files);
   } catch (error) {
@@ -424,7 +419,7 @@ export async function getSpotifyPlaylistStats(
     const tracks = await fetchPlaylistTracksWith403Handling(ctx, playlist, playlistRef.id, maxTracks, "getSpotifyPlaylistStats");
     if (!tracks) return spotifyResponse(formatPlaylistItemsForbidden(playlist));
     const normalized = normalizePlaylistTracks(tracks.tracks);
-    const content = formatPlaylistStats(playlist, normalized, tracks.total, maxTracks, tracks.usedDeprecatedEndpoint);
+    const content = formatPlaylistStats(playlist, normalized, tracks.total, maxTracks);
     await audit(ctx, "getSpotifyPlaylistStats", { playlistId: playlistRef.id, total: tracks.total, returned: normalized.length });
     return spotifyResponse(content);
   } catch (error) {
@@ -461,7 +456,7 @@ export async function compareSpotifyPlaylists(
     }
     const normalizedA = normalizePlaylistTracks(tracksA.tracks);
     const normalizedB = normalizePlaylistTracks(tracksB.tracks);
-    const content = formatPlaylistComparison(playlistA, normalizedA, playlistB, normalizedB, maxTracks, tracksA.usedDeprecatedEndpoint || tracksB.usedDeprecatedEndpoint);
+    const content = formatPlaylistComparison(playlistA, normalizedA, playlistB, normalizedB, maxTracks);
     await audit(ctx, "compareSpotifyPlaylists", {
       playlistAId: playlistARef.id,
       playlistBId: playlistBRef.id,
@@ -478,7 +473,7 @@ export async function compareSpotifyPlaylists(
 
 async function fetchAndFormatSpotifyItem(ctx: ToolContext, reference: { type: SpotifyItemType; id: string }): Promise<string> {
   if (reference.type === "track") {
-    const params = new URLSearchParams({ market: spotifyMarket(ctx.config.spotify) });
+    const params = new URLSearchParams({ market: SPOTIFY_MARKET });
     const track = await spotifyFetch<SpotifyTrack>(`/tracks/${reference.id}?${params.toString()}`, ctx.config.spotify);
     return formatTrack(track);
   }
@@ -495,33 +490,33 @@ async function fetchAndFormatSpotifyItem(ctx: ToolContext, reference: { type: Sp
     return formatPlaylist(playlist);
   }
   if (reference.type === "show") {
-    const params = new URLSearchParams({ market: spotifyMarket(ctx.config.spotify) });
+    const params = new URLSearchParams({ market: SPOTIFY_MARKET });
     const show = await spotifyFetch<SpotifyShow>(`/shows/${reference.id}?${params.toString()}`, ctx.config.spotify);
     return formatShow(show);
   }
   if (reference.type === "episode") {
-    const params = new URLSearchParams({ market: spotifyMarket(ctx.config.spotify) });
+    const params = new URLSearchParams({ market: SPOTIFY_MARKET });
     const episode = await spotifyFetch<SpotifyEpisode>(`/episodes/${reference.id}?${params.toString()}`, ctx.config.spotify);
     return formatEpisode(episode);
   }
   if (reference.type === "audiobook") {
-    const params = new URLSearchParams({ market: spotifyMarket(ctx.config.spotify) });
+    const params = new URLSearchParams({ market: SPOTIFY_MARKET });
     const audiobook = await spotifyFetch<SpotifyAudiobook>(`/audiobooks/${reference.id}?${params.toString()}`, ctx.config.spotify);
     return formatAudiobook(audiobook);
   }
-  const params = new URLSearchParams({ market: spotifyMarket(ctx.config.spotify) });
+  const params = new URLSearchParams({ market: SPOTIFY_MARKET });
   const chapter = await spotifyFetch<SpotifyChapter>(`/chapters/${reference.id}?${params.toString()}`, ctx.config.spotify);
   return formatChapter(chapter);
 }
 
 async function fetchSpotifyAlbum(config: SpotifyConfig, albumId: string): Promise<SpotifyAlbum> {
-  const params = new URLSearchParams({ market: spotifyMarket(config) });
+  const params = new URLSearchParams({ market: SPOTIFY_MARKET });
   return await spotifyFetch<SpotifyAlbum>(`/albums/${albumId}?${params.toString()}`, config);
 }
 
 async function fetchSpotifyPlaylist(config: SpotifyConfig, playlistId: string): Promise<SpotifyPlaylist> {
   const params = new URLSearchParams({
-    market: spotifyMarket(config),
+    market: SPOTIFY_MARKET,
     fields: "id,name,description,owner(id,display_name,external_urls.spotify),tracks(total),external_urls.spotify"
   });
   return await spotifyFetch<SpotifyPlaylist>(`/playlists/${playlistId}?${params.toString()}`, config);
@@ -533,13 +528,10 @@ async function fetchPlaylistTracksWith403Handling(
   playlistId: string,
   maxTracks: number,
   toolName: string
-): Promise<{ tracks: SpotifyPlaylistTrack[]; total: number; usedDeprecatedEndpoint: boolean } | null> {
+): Promise<{ tracks: SpotifyPlaylistTrack[]; total: number } | null> {
   try {
-    return await fetchPlaylistTrackPages(ctx.config.spotify, playlistId, maxTracks, false);
+    return await fetchPlaylistTrackPages(ctx.config.spotify, playlistId, maxTracks);
   } catch (error) {
-    if (error instanceof SpotifyApiError && error.status === 403 && ctx.config.spotify.allowDeprecatedPlaylistTracks) {
-      return await fetchPlaylistTrackPages(ctx.config.spotify, playlistId, maxTracks, true);
-    }
     if (error instanceof SpotifyApiError && error.status === 403) {
       await audit(ctx, toolName, { playlistId: playlist.id, error: "playlist_items_forbidden" });
       return null;
@@ -551,25 +543,22 @@ async function fetchPlaylistTracksWith403Handling(
 async function fetchPlaylistTrackPages(
   config: SpotifyConfig,
   playlistId: string,
-  maxTracks: number,
-  useDeprecatedEndpoint: boolean
-): Promise<{ tracks: SpotifyPlaylistTrack[]; total: number; usedDeprecatedEndpoint: boolean }> {
+  maxTracks: number
+): Promise<{ tracks: SpotifyPlaylistTrack[]; total: number }> {
   const tracks: SpotifyPlaylistTrack[] = [];
-  const pageSize = useDeprecatedEndpoint ? DEPRECATED_PLAYLIST_TRACKS_PAGE_SIZE : PLAYLIST_ITEMS_PAGE_SIZE;
-  const endpoint = useDeprecatedEndpoint ? "tracks" : "items";
   let offset = 0;
   let total = 0;
 
   do {
     const params = new URLSearchParams({
-      limit: String(pageSize),
+      limit: String(PLAYLIST_ITEMS_PAGE_SIZE),
       offset: String(offset),
-      market: spotifyMarket(config),
+      market: SPOTIFY_MARKET,
       fields:
         "total,limit,offset,next,items(added_at,is_local,item(id,name,type,duration_ms,explicit,external_urls.spotify,uri,artists(id,name,external_urls.spotify),album(id,name,external_urls.spotify,release_date)),track(id,name,type,duration_ms,explicit,external_urls.spotify,uri,artists(id,name,external_urls.spotify),album(id,name,external_urls.spotify,release_date)))"
     });
     const page = await spotifyFetch<SpotifyPagedResponse<SpotifyPlaylistTrack>>(
-      `/playlists/${playlistId}/${endpoint}?${params.toString()}`,
+      `/playlists/${playlistId}/items?${params.toString()}`,
       config
     );
     const items = page.items ?? [];
@@ -579,7 +568,7 @@ async function fetchPlaylistTrackPages(
     if (!page.next || items.length === 0) break;
   } while (tracks.length < maxTracks && offset < total);
 
-  return { tracks: tracks.slice(0, maxTracks), total, usedDeprecatedEndpoint: useDeprecatedEndpoint };
+  return { tracks: tracks.slice(0, maxTracks), total };
 }
 
 async function fetchAlbumTrackPages(
@@ -595,7 +584,7 @@ async function fetchAlbumTrackPages(
     const params = new URLSearchParams({
       limit: "50",
       offset: String(offset),
-      market: spotifyMarket(config)
+      market: SPOTIFY_MARKET
     });
     const page = await spotifyFetch<SpotifyPagedResponse<SpotifyAlbumTrack>>(`/albums/${albumId}/tracks?${params.toString()}`, config);
     const items = page.items ?? [];
@@ -623,7 +612,7 @@ async function fetchArtistAlbumPages(
       include_groups: includeGroups.join(","),
       limit: "50",
       offset: String(offset),
-      market: spotifyMarket(config)
+      market: SPOTIFY_MARKET
     });
     const page = await spotifyFetch<SpotifyPagedResponse<SpotifyAlbum>>(`/artists/${artistId}/albums?${params.toString()}`, config);
     const items = page.items ?? [];
@@ -743,10 +732,6 @@ function spotifyItemType(value: string | undefined, fallback?: SpotifyItemType):
 function spotifySearchType(value: string | undefined, fallback: SpotifySearchType): SpotifySearchType {
   const type = spotifyItemType(value, fallback);
   return type === "chapter" ? fallback : type;
-}
-
-function spotifyMarket(config: SpotifyConfig | undefined): string {
-  return config?.market?.trim().toUpperCase() || "US";
 }
 
 function spotifyErrorMessage(error: unknown, prefix: string): string {

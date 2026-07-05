@@ -174,8 +174,7 @@ export function formatPlaylistTrackSummary(
   tracks: NormalizedPlaylistTrack[],
   total: number,
   maxTracks: number,
-  file: AgentFile | undefined,
-  usedDeprecatedEndpoint: boolean
+  file: AgentFile | undefined
 ): string {
   if (tracks.length === 0) {
     return [
@@ -189,7 +188,6 @@ export function formatPlaylistTrackSummary(
     `Spotify playlist: ${playlistLabel(playlist)}`,
     `- Tracks fetched: ${tracks.length} of ${total || playlist.tracks?.total || tracks.length}${maxTracks < total ? ` (capped at ${maxTracks})` : ""}`,
     file ? `- Full track list attached: ${file.name}` : null,
-    usedDeprecatedEndpoint ? "- Used Spotify's deprecated playlist tracks endpoint because SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS=true." : null,
     "Supplied by Spotify; track links open Spotify."
   ]
     .filter(Boolean)
@@ -200,7 +198,7 @@ export function formatPlaylistItemsForbidden(playlist: SpotifyPlaylist): string 
   return [
     formatPlaylist(playlist),
     "",
-    "I can read the playlist metadata, but Spotify returned 403 for the full item list. Current playlist item access can be limited to playlist owners/collaborators for this app. Set SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS=true only for a legacy Spotify app that is allowed to use the deprecated playlist tracks endpoint."
+    "I can read the playlist metadata, but Spotify returned 403 for the full item list. Current playlist item access can be limited to playlist owners/collaborators for this app."
   ].join("\n");
 }
 
@@ -365,8 +363,7 @@ export function formatPlaylistStats(
   playlist: SpotifyPlaylist,
   tracks: NormalizedPlaylistTrack[],
   total: number,
-  maxTracks: number,
-  usedDeprecatedEndpoint: boolean
+  maxTracks: number
 ): string {
   const artistCounts = countBy(tracks.flatMap((track) => track.artistNames.length ? track.artistNames : ["(unknown artist)"]));
   const albumCounts = countBy(tracks.map((track) => track.album || "(unknown album)"));
@@ -381,7 +378,6 @@ export function formatPlaylistStats(
     `- Repeated artists: ${repeatedArtists}`,
     `- Top artists: ${formatCounts(artistCounts, 8) || "none"}`,
     `- Top albums: ${formatCounts(albumCounts, 5) || "none"}`,
-    usedDeprecatedEndpoint ? "- Used Spotify's deprecated playlist tracks endpoint because SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS=true." : null,
     playlist.external_urls?.spotify ? `- URL: ${playlist.external_urls.spotify}` : null,
     "Supplied by Spotify."
   ]
@@ -394,8 +390,7 @@ export function formatPlaylistComparison(
   tracksA: NormalizedPlaylistTrack[],
   playlistB: SpotifyPlaylist,
   tracksB: NormalizedPlaylistTrack[],
-  maxTracks: number,
-  usedDeprecatedEndpoint: boolean
+  maxTracks: number
 ): string {
   const mapA = trackMap(tracksA);
   const mapB = trackMap(tracksB);
@@ -419,7 +414,6 @@ export function formatPlaylistComparison(
     sharedTrackLabels.length ? `- Shared track examples: ${sharedTrackLabels.join("; ")}` : null,
     `- Unique tracks in first playlist: ${[...mapA.keys()].filter((key) => !mapB.has(key)).length}`,
     `- Unique tracks in second playlist: ${[...mapB.keys()].filter((key) => !mapA.has(key)).length}`,
-    usedDeprecatedEndpoint ? "- Used Spotify's deprecated playlist tracks endpoint because SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS=true." : null,
     "Supplied by Spotify."
   ]
     .filter(Boolean)

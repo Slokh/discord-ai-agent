@@ -19,7 +19,7 @@ afterEach(() => {
   resetSpotifyTokenCache();
 });
 
-function fakeContext(spotify: { clientId?: string; clientSecret?: string; market?: string; allowDeprecatedPlaylistTracks?: boolean } = {}): ToolContext {
+function fakeContext(spotify: { clientId?: string; clientSecret?: string } = {}): ToolContext {
   return {
     config: { spotify, maxReplyChars: 1800 } as unknown as ToolContext["config"],
     repo: { auditTool: vi.fn(async () => undefined) } as unknown as ToolContext["repo"],
@@ -61,7 +61,7 @@ describe("Spotify ID parsing", () => {
 
 describe("getSpotifyPlaylistTracks", () => {
   it("paginates current playlist items at 50 per page and attaches the full list", async () => {
-    const ctx = fakeContext({ clientId: "id", clientSecret: "secret", market: "GB" });
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
     const calls: string[] = [];
     stubFetchWith((url) => {
       calls.push(url);
@@ -80,7 +80,7 @@ describe("getSpotifyPlaylistTracks", () => {
       const parsed = new URL(url);
       expect(parsed.pathname).toBe("/v1/playlists/pl123/items");
       expect(parsed.searchParams.get("limit")).toBe("50");
-      expect(parsed.searchParams.get("market")).toBe("GB");
+      expect(parsed.searchParams.get("market")).toBe("US");
       const offset = Number(parsed.searchParams.get("offset"));
       if (offset === 0) {
         return jsonResponse({
@@ -145,8 +145,8 @@ describe("getSpotifyPlaylistTracks", () => {
     expect(result.files).toBeUndefined();
   });
 
-  it("falls back to the deprecated playlist tracks endpoint only when explicitly allowed", async () => {
-    const ctx = fakeContext({ clientId: "id", clientSecret: "secret", allowDeprecatedPlaylistTracks: true });
+  it("does not fall back to the deprecated playlist tracks endpoint", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
     const calls: string[] = [];
     stubFetchWith((url) => {
       calls.push(url);
@@ -155,14 +155,13 @@ describe("getSpotifyPlaylistTracks", () => {
         return jsonResponse({ id: "pl123", name: "Legacy Mix", tracks: { total: 1 } });
       }
       if (url.includes("/items?")) return textResponse("forbidden", 403);
-      expect(url).toContain("/playlists/pl123/tracks?");
-      return jsonResponse({ total: 1, limit: 100, offset: 0, next: null, items: [{ added_at: "2024-01-01T00:00:00Z", track: playlistEntry(0).item }] });
+      throw new Error(`unexpected deprecated endpoint call: ${url}`);
     });
 
     const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "pl123" });
 
-    expect(calls.some((url) => url.includes("/playlists/pl123/tracks?"))).toBe(true);
-    expect(result.content).toContain("deprecated playlist tracks endpoint");
+    expect(calls.some((url) => url.includes("/playlists/pl123/tracks?"))).toBe(false);
+    expect(result.content).toContain("Spotify returned 403");
   });
 
   it("returns friendly messages for missing config and invalid playlist ids", async () => {
@@ -314,7 +313,7 @@ describe("getSpotifyItem", () => {
 
 describe("getSpotifyAlbumTracks", () => {
   it("paginates album tracks and attaches the full list", async () => {
-    const ctx = fakeContext({ clientId: "id", clientSecret: "secret", market: "US" });
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
     const calls: string[] = [];
     stubFetchWith((url) => {
       calls.push(url);

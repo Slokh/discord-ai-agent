@@ -38,9 +38,7 @@ describe("config", () => {
         "WORKER_TASK_ENABLED",
         "WORKER_DISCORD_AGENT_ENABLED",
         "SPOTIFY_CLIENT_ID",
-        "SPOTIFY_CLIENT_SECRET",
-        "SPOTIFY_MARKET",
-        "SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS"
+        "SPOTIFY_CLIENT_SECRET"
       ],
       () => {
         const config = loadConfig();
@@ -84,9 +82,7 @@ describe("config", () => {
         });
         expect(config.spotify).toEqual({
           clientId: "",
-          clientSecret: "",
-          market: "US",
-          allowDeprecatedPlaylistTracks: false
+          clientSecret: ""
         });
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.crawlFetchRetries).toBe(3);
@@ -207,25 +203,15 @@ describe("config", () => {
     withEnv(
       {
         SPOTIFY_CLIENT_ID: "spotify-client",
-        SPOTIFY_CLIENT_SECRET: "spotify-secret",
-        SPOTIFY_MARKET: "gb",
-        SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS: "true"
+        SPOTIFY_CLIENT_SECRET: "spotify-secret"
       },
       () => {
         expect(loadConfig().spotify).toEqual({
           clientId: "spotify-client",
-          clientSecret: "spotify-secret",
-          market: "GB",
-          allowDeprecatedPlaylistTracks: true
+          clientSecret: "spotify-secret"
         });
       }
     );
-  });
-
-  it("validates Spotify market codes", () => {
-    withEnv({ SPOTIFY_MARKET: "usa" }, () => {
-      expect(() => loadConfig()).toThrow(/SPOTIFY_MARKET/);
-    });
   });
 
   it("rejects placeholder GitHub repositories for sandbox execution", () => {

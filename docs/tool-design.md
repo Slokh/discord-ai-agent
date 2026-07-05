@@ -17,7 +17,7 @@ Every model-facing tool has a class in `src/tools/registry.ts`. The class and ou
 | `generation` | Create new model-generated artifacts such as images. |
 | `coding` | Start, inspect, retry, or cancel durable code-update tasks. |
 | `ops` | Diagnose bot/runtime/deployment status. |
-| `external` | Use hosted OpenRouter tools for web, URL fetch, or current datetime data. |
+| `external` | Use hosted OpenRouter tools or explicit local integrations for external provider data such as web, URL fetch, current datetime, or public catalog APIs. |
 
 Use classes to audit whether a new user problem is missing a real primitive or whether an existing tool contract is unclear.
 

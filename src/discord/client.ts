@@ -760,6 +760,9 @@ async function executeDiscordAgentRequest(
     ).message;
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord final response");
+    const storedResponseContent = response.storedContent ?? response.content;
+    const responseRedacted = Boolean(response.storedContent);
+
     await finishAgentRuntimePromptExecution({
       agentRuntime: input.agentRuntime,
       session: agentRuntimeExecution?.session,
@@ -768,7 +771,7 @@ async function executeDiscordAgentRequest(
       status: "succeeded",
       replyMessageId: finalReply.id,
       replyUrl: finalReply.url,
-      responseContent: response.content,
+      responseContent: storedResponseContent,
       durationMs: durationMs(request.messageStartedAt),
       executorName: agentExecutor.name
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to mark agent runtime execution succeeded"));
@@ -796,9 +799,10 @@ async function executeDiscordAgentRequest(
         discordMessageId: finalReply.id,
         authorId: client.user?.id ?? null,
         authorDisplayName: client.user?.username ?? null,
-        content: response.content,
+        content: storedResponseContent,
         metadata: {
           discordUrl: finalReply.url,
+          responseRedacted,
           files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
         }
       }
@@ -815,11 +819,12 @@ async function executeDiscordAgentRequest(
         runId: request.requestId,
         kind: "response",
         name: "Discord final response",
-        content: response.content,
+        content: storedResponseContent,
         contentType: "text/plain",
         metadata: {
           replyMessageId: finalReply.id,
           discordUrl: finalReply.url,
+          responseRedacted,
           files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
         }
       })

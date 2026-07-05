@@ -51,6 +51,7 @@ Postgres with `pgvector` is the source of truth for Discord history, embeddings,
 - Thread/channel summaries
 - Image generation
 - OpenRouter-hosted web search, web fetch, and datetime tools
+- Public Spotify catalog search, item lookup, playlist/album track-list, artist discography, playlist stats, and playlist comparison tools when Spotify client credentials are configured
 - Private DB-backed skills
 - Code-update PRs through isolated Kubernetes sandbox tasks
 - Structured logs and trace/task event inspection
@@ -205,6 +206,7 @@ Common optional settings:
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | unset | Optional Spotify client-credentials integration for public catalog and high-level playlist/album/artist tools |
 | `GITHUB_REPOSITORY` | `owner/repo` | Repo for code-update PRs |
 | `GITHUB_BASE_BRANCH` | `main` | PR base branch |
 | `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |

@@ -95,7 +95,9 @@ const defaults = {
   maxHistoryResults: 10,
   maxThreadSummaryMessages: 80,
   maxReplyChars: 1800,
-  discordAgentResponseTimeoutMs: 30 * 60 * 1000
+  discordAgentResponseTimeoutMs: 30 * 60 * 1000,
+  spotifyClientId: "",
+  spotifyClientSecret: ""
 } as const;
 
 const envSchema = z.object({
@@ -175,7 +177,10 @@ const envSchema = z.object({
     .int()
     .min(30_000)
     .max(60 * 60 * 1000)
-    .default(defaults.discordAgentResponseTimeoutMs)
+    .default(defaults.discordAgentResponseTimeoutMs),
+
+  SPOTIFY_CLIENT_ID: z.string().default(defaults.spotifyClientId),
+  SPOTIFY_CLIENT_SECRET: z.string().default(defaults.spotifyClientSecret)
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -274,7 +279,11 @@ export function loadConfig() {
     maxHistoryResults: parsed.data.MAX_HISTORY_RESULTS,
     maxThreadSummaryMessages: parsed.data.MAX_THREAD_SUMMARY_MESSAGES,
     maxReplyChars: parsed.data.MAX_REPLY_CHARS,
-    discordAgentResponseTimeoutMs: parsed.data.DISCORD_AGENT_RESPONSE_TIMEOUT_MS
+    discordAgentResponseTimeoutMs: parsed.data.DISCORD_AGENT_RESPONSE_TIMEOUT_MS,
+    spotify: {
+      clientId: parsed.data.SPOTIFY_CLIENT_ID,
+      clientSecret: parsed.data.SPOTIFY_CLIENT_SECRET
+    }
   };
 }
 

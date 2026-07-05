@@ -27,7 +27,14 @@ describe("toolRegistry", () => {
       "getDeploymentStatus",
       "undoConversationTurns",
       "inspectAgentLogs",
-      "reportStatus"
+      "reportStatus",
+      "getSpotifyPlaylistTracks",
+      "getSpotifyAlbumTracks",
+      "getSpotifyArtistDiscography",
+      "getSpotifyPlaylistStats",
+      "compareSpotifyPlaylists",
+      "searchSpotify",
+      "getSpotifyItem"
     ]);
   });
 
@@ -74,12 +81,20 @@ describe("toolRegistry", () => {
   it("classifies local tools into the model-facing taxonomy", () => {
     const contracts = toolContracts();
     expect(new Set(contracts.map((tool) => tool.toolClass))).toEqual(
-      new Set(["resolver", "retrieval", "memory", "stats", "summary", "image", "generation", "coding", "ops"])
+      new Set(["resolver", "retrieval", "memory", "stats", "summary", "image", "generation", "coding", "ops", "external"])
     );
     expect(contracts.find((tool) => tool.name === "findDiscordUsers")?.toolClass).toBe("resolver");
     expect(contracts.find((tool) => tool.name === "getDiscordStats")?.toolClass).toBe("stats");
     expect(contracts.find((tool) => tool.name === "summarizeDiscordHistory")?.toolClass).toBe("summary");
     expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.toolClass).toBe("image");
+    expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.toolClass).toBe("external");
+    expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.category).toBe("external");
+    expect(contracts.find((tool) => tool.name === "getSpotifyAlbumTracks")?.toolClass).toBe("external");
+    expect(contracts.find((tool) => tool.name === "getSpotifyArtistDiscography")?.toolClass).toBe("external");
+    expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistStats")?.toolClass).toBe("external");
+    expect(contracts.find((tool) => tool.name === "compareSpotifyPlaylists")?.toolClass).toBe("external");
+    expect(contracts.find((tool) => tool.name === "searchSpotify")?.toolClass).toBe("external");
+    expect(contracts.find((tool) => tool.name === "getSpotifyItem")?.toolClass).toBe("external");
   });
 
   it("exports OpenRouter-compatible local function and server tool definitions", () => {
@@ -156,6 +171,64 @@ describe("toolRegistry", () => {
           function: expect.objectContaining({
             name: "runCodingAgent",
             description: expect.stringContaining("debug or fix failing CI/checks/tests")
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "getSpotifyPlaylistTracks",
+            description: expect.stringContaining("Do not use web_fetch on open.spotify.com"),
+            parameters: expect.objectContaining({
+              required: ["playlistIdOrUrl"],
+              properties: expect.objectContaining({
+                format: expect.objectContaining({ enum: ["text", "csv"] })
+              })
+            })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "getSpotifyItem",
+            parameters: expect.objectContaining({
+              required: ["itemIdOrUrl"],
+              properties: expect.objectContaining({
+                type: expect.objectContaining({ enum: ["track", "artist", "album", "playlist", "show", "episode", "audiobook", "chapter"] })
+              })
+            })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "getSpotifyAlbumTracks",
+            parameters: expect.objectContaining({
+              required: ["albumIdOrUrl"],
+              properties: expect.objectContaining({
+                format: expect.objectContaining({ enum: ["text", "csv"] })
+              })
+            })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "getSpotifyArtistDiscography",
+            parameters: expect.objectContaining({
+              required: ["artistIdOrUrl"],
+              properties: expect.objectContaining({
+                includeGroups: expect.objectContaining({ type: "array" })
+              })
+            })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "compareSpotifyPlaylists",
+            parameters: expect.objectContaining({
+              required: ["playlistAIdOrUrl", "playlistBIdOrUrl"]
+            })
           })
         })
       ])

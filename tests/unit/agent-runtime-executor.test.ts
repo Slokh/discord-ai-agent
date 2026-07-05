@@ -33,6 +33,7 @@ describe("agent runtime prompt executors", () => {
     const fakeChild = fakeSandboxChild(
       JSON.stringify({
         content: "hello from sandbox",
+        storedContent: "stored redacted response",
         files: [{ name: "image.png", contentType: "image/png", dataBase64: Buffer.from("png").toString("base64") }],
         memoryEvents: [{ role: "tool", content: "tool result" }]
       })
@@ -67,6 +68,7 @@ describe("agent runtime prompt executors", () => {
       })
     ).resolves.toEqual({
       content: "hello from sandbox",
+      storedContent: "stored redacted response",
       files: [{ name: "image.png", contentType: "image/png", data: Buffer.from("png") }],
       memoryEvents: [{ role: "tool", content: "tool result" }]
     });
@@ -103,9 +105,22 @@ describe("agent runtime prompt executors", () => {
         runId: "request-1",
         kind: "raw_json",
         name: "Warm sandbox prompt response",
-        metadata: expect.objectContaining({ protocolKind: "sandbox_prompt_response", fileCount: 1, memoryEventCount: 1 })
+        metadata: expect.objectContaining({ protocolKind: "sandbox_prompt_response", fileCount: 1, memoryEventCount: 1, responseRedacted: true })
       })
     );
+    const artifactCalls = repo.storeProcessRunArtifact.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    const responseArtifact = artifactCalls.map(([artifact]) => artifact).find((artifact) => artifact.name === "Warm sandbox prompt response");
+    expect(responseArtifact).toBeTruthy();
+    const responseArtifactContent = String(responseArtifact?.content ?? "{}");
+    expect(JSON.parse(responseArtifactContent)).toEqual(
+      expect.objectContaining({
+        content: "stored redacted response",
+        storedContent: "stored redacted response",
+        redacted: true,
+        files: [{ name: "image.png", contentType: "image/png", bytes: 3 }]
+      })
+    );
+    expect(responseArtifactContent).not.toContain("hello from sandbox");
     expect(repo.recordProcessRunSpan).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "request-1",

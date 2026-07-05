@@ -63,6 +63,8 @@ config:
   discordClientIdSecretKey: DISCORD_CLIENT_ID
   discordGuildIdSecretKey: DISCORD_GUILD_ID
   openRouterApiKeySecretKey: OPENROUTER_API_KEY
+  spotifyClientIdSecretKey: SPOTIFY_CLIENT_ID
+  spotifyClientSecretKey: SPOTIFY_CLIENT_SECRET
   githubTokenSecretKey: GITHUB_TOKEN
   githubAppIdSecretKey: GITHUB_APP_ID
   githubAppPrivateKeySecretKey: GITHUB_APP_PRIVATE_KEY

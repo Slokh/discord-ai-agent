@@ -316,14 +316,24 @@ export class WarmSandboxAgentRuntimePromptExecutor implements AgentRuntimePrompt
     metadata: Record<string, unknown>
   ): Promise<AgentResponse> {
     const response = deserializeAgentResponse(serializedResponse);
+    const artifactResponse = response.storedContent
+      ? {
+          content: response.storedContent,
+          storedContent: response.storedContent,
+          files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })),
+          memoryEvents: response.memoryEvents,
+          redacted: true
+        }
+      : serializedResponse;
     await Promise.all([
       storeWarmSandboxArtifact(input, {
         protocolKind: "sandbox_prompt_response",
         name: "Warm sandbox prompt response",
-        content: JSON.stringify(serializedResponse, null, 2),
+        content: JSON.stringify(artifactResponse, null, 2),
         metadata: {
           executor: this.name,
           ...metadata,
+          responseRedacted: Boolean(response.storedContent),
           responseChars: response.content.length,
           fileCount: response.files?.length ?? 0,
           memoryEventCount: response.memoryEvents?.length ?? 0

@@ -3,6 +3,7 @@ import {
   createSkillFromRequest,
   createAgentUpdateFromRequest,
   cancelAgentTask,
+  createDiscordPoll,
   findDiscordChannels,
   findDiscordUsers,
   generateImage,
@@ -995,6 +996,20 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
           dateFrom: stringArgument(route.arguments, "dateFrom"),
           dateTo: stringArgument(route.arguments, "dateTo"),
           sampleLimit: numberArgument(route.arguments, "sampleLimit")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "createDiscordPoll") {
+    return {
+      content: cleanResponse(
+        await createDiscordPoll(ctx, {
+          question: stringArgument(route.arguments, "question") ?? originalText,
+          answers: stringArrayArgument(route.arguments, "answers") ?? [],
+          durationHours: numberArgument(route.arguments, "durationHours"),
+          allowMultiselect: booleanArgument(route.arguments, "allowMultiselect")
         }),
         ctx.config.maxReplyChars
       )

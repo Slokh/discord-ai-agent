@@ -703,7 +703,8 @@ async function executeDiscordAgentRequest(
           if (await deleteDiscordMessageById(message, messageId)) deleted += 1;
         }
         return deleted;
-      }
+      },
+      sendDiscordPoll: async (pollInput) => sendDiscordPollMessage(message, pollInput)
     };
     const response = await agentExecutor.execute({
       toolContext,
@@ -1600,6 +1601,35 @@ async function deleteDiscordMessageById(sourceMessage: Message, messageId: strin
   } catch (error) {
     logger.warn({ err: error, messageId }, "Failed to delete undone Discord reply");
     return false;
+  }
+}
+
+async function sendDiscordPollMessage(
+  sourceMessage: Message,
+  input: { question: string; answers: string[]; durationHours: number; allowMultiselect: boolean }
+): Promise<{ messageId: string; channelId: string; url: string }> {
+  const channel = sourceMessage.channel;
+  const send = (channel as { send?: (...args: unknown[]) => Promise<Message> }).send;
+  if (typeof send !== "function") {
+    throw new Error("This channel does not support sending poll messages.");
+  }
+  try {
+    const posted = await send.call(channel, {
+      poll: {
+        question: { text: input.question },
+        answers: input.answers.map((text) => ({ text })),
+        duration: input.durationHours,
+        allowMultiselect: input.allowMultiselect
+      }
+    });
+    return {
+      messageId: posted.id,
+      channelId: posted.channelId,
+      url: posted.url
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Discord rejected the poll message: ${message}`);
   }
 }
 

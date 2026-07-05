@@ -17,6 +17,16 @@ export type DiscordResponseFooter = {
   durationMs?: number | null;
 };
 
+export type DiscordReactionOutcome = {
+  added: string[];
+  failed: { emoji: string; err: unknown }[];
+};
+
+export type DiscordAddReactionsInput = {
+  emojis: string[];
+  message?: Message;
+};
+
 export class DiscordResponseSink {
   private readonly client: Client;
   private readonly sourceMessage: Message;
@@ -129,6 +139,32 @@ export class DiscordResponseSink {
   async sendError(content: string, footer?: DiscordResponseFooter | null): Promise<DiscordResponseResult> {
     const result = await this.sendFinal({ content, footer });
     return result;
+  }
+
+  async addReactions(input: DiscordAddReactionsInput): Promise<DiscordReactionOutcome> {
+    const emojis = (input.emojis ?? [])
+      .map((emoji) => emoji?.trim())
+      .filter((emoji): emoji is string => Boolean(emoji));
+    const target = input.message ?? this.statusMessage;
+    const outcome: DiscordReactionOutcome = { added: [], failed: [] };
+    if (!target) {
+      this.logger.warn({ emojis }, "Cannot add Discord reactions: no target message available");
+      for (const emoji of emojis) {
+        outcome.failed.push({ emoji, err: new Error("no target message available") });
+      }
+      return outcome;
+    }
+    for (const emoji of emojis) {
+      try {
+        await target.react(emoji);
+        outcome.added.push(emoji);
+        this.logger.debug({ emoji }, "Added Discord reaction");
+      } catch (error) {
+        outcome.failed.push({ emoji, err: error });
+        this.logger.warn({ err: error, emoji }, "Failed to add Discord reaction");
+      }
+    }
+    return outcome;
   }
 
   async clearAcknowledgement() {

@@ -36,6 +36,8 @@ kubectl -n discord-ai-agent create secret generic discord-ai-agent-env \
   --from-literal=DISCORD_CLIENT_ID='...' \
   --from-literal=DISCORD_GUILD_ID='...' \
   --from-literal=OPENROUTER_API_KEY='...' \
+  --from-literal=SPOTIFY_CLIENT_ID='...' \
+  --from-literal=SPOTIFY_CLIENT_SECRET='...' \
   --from-literal=GITHUB_APP_ID='...' \
   --from-literal=GITHUB_APP_PRIVATE_KEY='...' \
   --from-literal=GITHUB_APP_INSTALLATION_ID='...' \

@@ -167,6 +167,21 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
       key: {{ .Values.config.openRouterApiKeySecretKey }}
 {{- end -}}
 
+{{- define "discord-ai-agent.spotifyEnv" -}}
+- name: SPOTIFY_CLIENT_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.spotifyClientIdSecretKey }}
+      optional: true
+- name: SPOTIFY_CLIENT_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.spotifyClientSecretKey }}
+      optional: true
+{{- end -}}
+
 {{- define "discord-ai-agent.githubEnv" -}}
 - name: GITHUB_TOKEN
   valueFrom:

@@ -40,7 +40,7 @@ describe("DiscordResponseSink", () => {
     });
   });
 
-  it("splits long final content into multiple messages and keeps the trace footer on the last chunk", async () => {
+  it("splits long final content into replied messages and keeps the trace footer on the last chunk", async () => {
     const channel = { send: vi.fn(async (_options: { content: string }) => fakeMessage({ id: "followup-1" })) };
     const sourceMessage = fakeMessage({ channel });
     const sink = new DiscordResponseSink({
@@ -60,10 +60,12 @@ describe("DiscordResponseSink", () => {
     expect(replyPayload.content.length).toBeLessThanOrEqual(96);
     expect(replyPayload.content).not.toContain("-# [trace]");
     expect(channel.send.mock.calls.length).toBeGreaterThanOrEqual(1);
-    const lastFollowup = (channel.send.mock.calls.at(-1)?.[0] as unknown as { content: string }).content;
+    const followups = channel.send.mock.calls.map((call) => call[0] as unknown as { content: string; reply?: { messageReference?: string } });
+    expect(followups.every((followup) => followup.reply?.messageReference === "source-1")).toBe(true);
+    const lastFollowup = followups.at(-1)?.content ?? "";
     expect(lastFollowup).toContain("-# [trace](https://tasks.example/runs/run-1) · 0.042s");
     expect(lastFollowup.length).toBeLessThanOrEqual(96);
-    const allContents = [replyPayload.content, ...channel.send.mock.calls.map((call) => (call[0] as unknown as { content: string }).content)];
+    const allContents = [replyPayload.content, ...followups.map((followup) => followup.content)];
     for (const chunk of allContents) {
       expect(chunk.length).toBeLessThanOrEqual(96);
     }
@@ -87,7 +89,9 @@ describe("DiscordResponseSink", () => {
     const replyPayload = (sourceMessage.reply as any).mock.calls[0]?.[0] as { content: string };
     expect(replyPayload.content.length).toBeLessThanOrEqual(50);
     expect(channel.send.mock.calls.length).toBeGreaterThanOrEqual(1);
-    const rejoined = [replyPayload.content, ...channel.send.mock.calls.map((call) => (call[0] as unknown as { content: string }).content)]
+    const followups = channel.send.mock.calls.map((call) => call[0] as unknown as { content: string; reply?: { messageReference?: string } });
+    expect(followups.every((followup) => followup.reply?.messageReference === "source-1")).toBe(true);
+    const rejoined = [replyPayload.content, ...followups.map((followup) => followup.content)]
       .join(" ")
       .replace(/\s+/g, " ")
       .trim();

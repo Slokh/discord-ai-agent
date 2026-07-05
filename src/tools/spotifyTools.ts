@@ -1,9 +1,11 @@
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
-import type { AgentFile, AgentResponse, ToolContext } from "./types.js";
+import type { AgentFile, AgentResponse, AgentTable, ToolContext } from "./types.js";
 import {
-  albumTracksFile,
-  artistDiscographyFile,
+  albumTrackFiles,
+  albumTracksTable,
+  artistDiscographyFiles,
   artistDiscographyGroups,
+  artistDiscographyTable,
   dedupeAlbums,
   formatAlbum,
   formatAlbumTrackSummary,
@@ -22,7 +24,8 @@ import {
   formatTrack,
   normalizeAlbumTrack,
   normalizePlaylistTracks,
-  playlistTracksFile,
+  playlistTrackFiles,
+  playlistTracksTable,
   spotifySearchResultCount
 } from "./spotifyFormatting.js";
 
@@ -49,8 +52,8 @@ export type SpotifyConfig = {
 
 export type SpotifyItemType = "track" | "artist" | "album" | "playlist" | "show" | "episode" | "audiobook" | "chapter";
 export type SpotifySearchType = Exclude<SpotifyItemType, "chapter">;
-export type PlaylistTrackFormat = "text" | "csv";
-export type AlbumTrackFormat = "text" | "csv";
+export type PlaylistTrackFormat = "text" | "csv" | "both";
+export type AlbumTrackFormat = "text" | "csv" | "both";
 export type ArtistDiscographyGroup = "album" | "single" | "appears_on" | "compilation";
 
 type SpotifyToken = {
@@ -285,7 +288,7 @@ export async function getSpotifyPlaylistTracks(
 ): Promise<AgentResponse> {
   const playlistRef = parseSpotifyReference(input.playlistIdOrUrl, "playlist");
   const maxTracks = boundedLimit(input.limit, DEFAULT_PLAYLIST_TRACK_LIMIT, 1, MAX_PLAYLIST_TRACKS);
-  const format: PlaylistTrackFormat = input.format === "csv" ? "csv" : "text";
+  const format: PlaylistTrackFormat = spotifyStructuredFormat(input.format);
 
   if (!playlistRef) {
     await audit(ctx, "getSpotifyPlaylistTracks", { input: input.playlistIdOrUrl, error: "invalid_playlist_id" });
@@ -311,15 +314,17 @@ export async function getSpotifyPlaylistTracks(
     }
 
     const normalized = normalizePlaylistTracks(trackPage.tracks);
-    const files = normalized.length > 0 ? [playlistTracksFile(playlist, normalized, format)] : [];
-    const content = formatPlaylistTrackSummary(playlist, normalized, trackPage.total, maxTracks, files[0]);
+    const files = normalized.length > 0 ? playlistTrackFiles(playlist, normalized, format) : [];
+    const table = normalized.length > 0 ? playlistTracksTable(playlist, normalized) : undefined;
+    const content = formatPlaylistTrackSummary(playlist, normalized, trackPage.total, maxTracks, files, table);
     await audit(ctx, "getSpotifyPlaylistTracks", {
       playlistId: playlistRef.id,
       total: trackPage.total,
       returned: normalized.length,
-      attachment: files[0]?.name
+      attachments: files.map((file) => file.name),
+      table: table?.name
     });
-    return spotifyResponse(content, files);
+    return spotifyResponse(content, files, table ? [table] : undefined);
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not read that Spotify playlist");
     await audit(ctx, "getSpotifyPlaylistTracks", { playlistId: playlistRef.id, error: message });
@@ -333,7 +338,7 @@ export async function getSpotifyAlbumTracks(
 ): Promise<AgentResponse> {
   const albumRef = parseSpotifyReference(input.albumIdOrUrl, "album");
   const maxTracks = boundedLimit(input.limit, DEFAULT_ALBUM_TRACK_LIMIT, 1, MAX_ALBUM_TRACKS);
-  const format: AlbumTrackFormat = input.format === "csv" ? "csv" : "text";
+  const format: AlbumTrackFormat = spotifyStructuredFormat(input.format);
 
   if (!albumRef) {
     await audit(ctx, "getSpotifyAlbumTracks", { input: input.albumIdOrUrl, error: "invalid_album_id" });
@@ -348,10 +353,17 @@ export async function getSpotifyAlbumTracks(
     const album = await fetchSpotifyAlbum(ctx.config.spotify, albumRef.id);
     const trackPage = await fetchAlbumTrackPages(ctx.config.spotify, albumRef.id, maxTracks);
     const normalized = trackPage.tracks.map((track, index) => normalizeAlbumTrack(track, index, album));
-    const file = normalized.length > 0 ? albumTracksFile(album, normalized, format) : undefined;
-    const content = formatAlbumTrackSummary(album, normalized, trackPage.total, maxTracks, file);
-    await audit(ctx, "getSpotifyAlbumTracks", { albumId: albumRef.id, total: trackPage.total, returned: normalized.length, attachment: file?.name });
-    return spotifyResponse(content, file ? [file] : undefined);
+    const files = normalized.length > 0 ? albumTrackFiles(album, normalized, format) : [];
+    const table = normalized.length > 0 ? albumTracksTable(album, normalized) : undefined;
+    const content = formatAlbumTrackSummary(album, normalized, trackPage.total, maxTracks, files, table);
+    await audit(ctx, "getSpotifyAlbumTracks", {
+      albumId: albumRef.id,
+      total: trackPage.total,
+      returned: normalized.length,
+      attachments: files.map((file) => file.name),
+      table: table?.name
+    });
+    return spotifyResponse(content, files, table ? [table] : undefined);
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not read that Spotify album");
     await audit(ctx, "getSpotifyAlbumTracks", { albumId: albumRef.id, error: message });
@@ -366,7 +378,7 @@ export async function getSpotifyArtistDiscography(
   const artistRef = parseSpotifyReference(input.artistIdOrUrl, "artist");
   const maxItems = boundedLimit(input.limit, DEFAULT_ARTIST_DISCOGRAPHY_LIMIT, 1, MAX_ARTIST_DISCOGRAPHY_ITEMS);
   const includeGroups = artistDiscographyGroups(input.includeGroups);
-  const format: AlbumTrackFormat = input.format === "csv" ? "csv" : "text";
+  const format: AlbumTrackFormat = spotifyStructuredFormat(input.format);
 
   if (!artistRef) {
     await audit(ctx, "getSpotifyArtistDiscography", { input: input.artistIdOrUrl, error: "invalid_artist_id" });
@@ -381,16 +393,18 @@ export async function getSpotifyArtistDiscography(
     const artist = await spotifyFetch<SpotifyArtist>(`/artists/${artistRef.id}`, ctx.config.spotify);
     const page = await fetchArtistAlbumPages(ctx.config.spotify, artistRef.id, includeGroups, maxItems);
     const albums = dedupeAlbums(page.albums);
-    const file = albums.length > 0 ? artistDiscographyFile(artist, albums, format) : undefined;
-    const content = formatArtistDiscography(artist, albums, page.total, maxItems, includeGroups, file);
+    const files = albums.length > 0 ? artistDiscographyFiles(artist, albums, format) : [];
+    const table = albums.length > 0 ? artistDiscographyTable(artist, albums) : undefined;
+    const content = formatArtistDiscography(artist, albums, page.total, maxItems, includeGroups, files, table);
     await audit(ctx, "getSpotifyArtistDiscography", {
       artistId: artistRef.id,
       includeGroups,
       total: page.total,
       returned: albums.length,
-      attachment: file?.name
+      attachments: files.map((file) => file.name),
+      table: table?.name
     });
-    return spotifyResponse(content, file ? [file] : undefined);
+    return spotifyResponse(content, files, table ? [table] : undefined);
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not read that Spotify artist discography");
     await audit(ctx, "getSpotifyArtistDiscography", { artistId: artistRef.id, error: message });
@@ -701,10 +715,11 @@ async function spotifyApiError(response: Response, prefix: string): Promise<Spot
   return new SpotifyApiError(`${prefix} (${response.status}): ${truncateForDiscord(text, 200)}`, response.status, retryAfter);
 }
 
-function spotifyResponse(content: string, files?: AgentFile[]): AgentResponse {
+function spotifyResponse(content: string, files?: AgentFile[], tables?: AgentTable[]): AgentResponse {
   return {
     content,
     files: files?.length ? files : undefined,
+    tables: tables?.length ? tables : undefined,
     storedContent: SPOTIFY_STORED_CONTENT
   };
 }
@@ -732,6 +747,12 @@ function spotifyItemType(value: string | undefined, fallback?: SpotifyItemType):
 function spotifySearchType(value: string | undefined, fallback: SpotifySearchType): SpotifySearchType {
   const type = spotifyItemType(value, fallback);
   return type === "chapter" ? fallback : type;
+}
+
+function spotifyStructuredFormat(value: string | undefined): PlaylistTrackFormat {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "text" || normalized === "csv" || normalized === "both") return normalized;
+  return "both";
 }
 
 function spotifyErrorMessage(error: unknown, prefix: string): string {

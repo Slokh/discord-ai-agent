@@ -1,5 +1,5 @@
 import type { ConversationMessage } from "../db/repositories.js";
-import type { AgentFile, AgentResponse } from "../tools/types.js";
+import type { AgentFile, AgentResponse, AgentTable } from "../tools/types.js";
 import type { AgentRuntimeTurnEnvelope } from "./runtimeEnvelope.js";
 
 export type SandboxPromptRequest = {
@@ -19,6 +19,7 @@ export type SerializedAgentFile = {
 export type SandboxPromptResponse = {
   content: string;
   files?: SerializedAgentFile[];
+  tables?: AgentTable[];
   storedContent?: string;
   memoryEvents?: AgentResponse["memoryEvents"];
 };
@@ -49,6 +50,7 @@ export function serializeAgentResponse(response: AgentResponse): SandboxPromptRe
   return {
     content: response.content,
     files: response.files?.map(serializeAgentFile),
+    tables: response.tables,
     storedContent: response.storedContent,
     memoryEvents: response.memoryEvents
   };
@@ -58,6 +60,7 @@ export function deserializeAgentResponse(response: SandboxPromptResponse): Agent
   return {
     content: response.content,
     files: response.files?.map(deserializeAgentFile),
+    tables: response.tables,
     storedContent: response.storedContent,
     memoryEvents: response.memoryEvents
   };

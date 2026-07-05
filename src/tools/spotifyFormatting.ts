@@ -1,5 +1,5 @@
 import { truncateForDiscord } from "../util/text.js";
-import type { AgentFile } from "./types.js";
+import type { AgentFile, AgentTable } from "./types.js";
 import type {
   AlbumTrackFormat,
   ArtistDiscographyGroup,
@@ -174,7 +174,8 @@ export function formatPlaylistTrackSummary(
   tracks: NormalizedPlaylistTrack[],
   total: number,
   maxTracks: number,
-  file: AgentFile | undefined
+  files: AgentFile[] | undefined,
+  table: AgentTable | undefined
 ): string {
   if (tracks.length === 0) {
     return [
@@ -187,7 +188,8 @@ export function formatPlaylistTrackSummary(
   return [
     `Spotify playlist: ${playlistLabel(playlist)}`,
     `- Tracks fetched: ${tracks.length} of ${total || playlist.tracks?.total || tracks.length}${maxTracks < total ? ` (capped at ${maxTracks})` : ""}`,
-    file ? `- Full track list attached: ${file.name}` : null,
+    files?.length ? `- Full track list attached: ${files.map((file) => file.name).join(", ")}` : null,
+    table ? `- Queryable table: ${table.name} (${table.rows.length} rows)` : null,
     "Supplied by Spotify; track links open Spotify."
   ]
     .filter(Boolean)
@@ -265,7 +267,9 @@ export function normalizeAlbumTrack(track: SpotifyAlbumTrack, index: number, alb
   };
 }
 
-export function playlistTracksFile(playlist: SpotifyPlaylist, tracks: NormalizedPlaylistTrack[], format: PlaylistTrackFormat): AgentFile {
+type SingleStructuredFormat = Exclude<PlaylistTrackFormat, "both">;
+
+export function playlistTracksFile(playlist: SpotifyPlaylist, tracks: NormalizedPlaylistTrack[], format: SingleStructuredFormat): AgentFile {
   const safeName = safeFilename(playlist.name || playlist.id);
   if (format === "csv") {
     return {
@@ -281,7 +285,35 @@ export function playlistTracksFile(playlist: SpotifyPlaylist, tracks: Normalized
   };
 }
 
-export function albumTracksFile(album: SpotifyAlbum, tracks: NormalizedAlbumTrack[], format: AlbumTrackFormat): AgentFile {
+export function playlistTrackFiles(playlist: SpotifyPlaylist, tracks: NormalizedPlaylistTrack[], format: PlaylistTrackFormat): AgentFile[] {
+  if (format === "both") return [playlistTracksFile(playlist, tracks, "csv"), playlistTracksFile(playlist, tracks, "text")];
+  return [playlistTracksFile(playlist, tracks, format)];
+}
+
+export function playlistTracksTable(playlist: SpotifyPlaylist, tracks: NormalizedPlaylistTrack[]): AgentTable {
+  const safeName = safeFilename(playlist.name || playlist.id);
+  const columns = ["position", "track", "artists", "album", "duration", "duration_ms", "explicit", "local", "added_at", "spotify_url"];
+  return {
+    name: `spotify-playlist-${safeName}`,
+    description: `Spotify playlist tracks for ${playlistLabel(playlist)}`,
+    sourceFileName: `spotify-playlist-${safeName}.csv`,
+    columns,
+    rows: tracks.map((track) => ({
+      position: track.position,
+      track: track.name,
+      artists: track.artists,
+      album: track.album,
+      duration: track.duration,
+      duration_ms: track.durationMs,
+      explicit: track.explicit,
+      local: track.isLocal,
+      added_at: track.addedAt,
+      spotify_url: track.url
+    }))
+  };
+}
+
+export function albumTracksFile(album: SpotifyAlbum, tracks: NormalizedAlbumTrack[], format: SingleStructuredFormat): AgentFile {
   const safeName = safeFilename(album.name || album.id);
   if (format === "csv") {
     return {
@@ -297,7 +329,32 @@ export function albumTracksFile(album: SpotifyAlbum, tracks: NormalizedAlbumTrac
   };
 }
 
-export function artistDiscographyFile(artist: SpotifyArtist, albums: SpotifyAlbum[], format: AlbumTrackFormat): AgentFile {
+export function albumTrackFiles(album: SpotifyAlbum, tracks: NormalizedAlbumTrack[], format: AlbumTrackFormat): AgentFile[] {
+  if (format === "both") return [albumTracksFile(album, tracks, "csv"), albumTracksFile(album, tracks, "text")];
+  return [albumTracksFile(album, tracks, format)];
+}
+
+export function albumTracksTable(album: SpotifyAlbum, tracks: NormalizedAlbumTrack[]): AgentTable {
+  const safeName = safeFilename(album.name || album.id);
+  const columns = ["position", "track", "artists", "duration", "duration_ms", "explicit", "spotify_url"];
+  return {
+    name: `spotify-album-${safeName}`,
+    description: `Spotify album tracks for ${albumLabel(album)}`,
+    sourceFileName: `spotify-album-${safeName}.csv`,
+    columns,
+    rows: tracks.map((track) => ({
+      position: track.position,
+      track: track.name,
+      artists: track.artists,
+      duration: track.duration,
+      duration_ms: track.durationMs,
+      explicit: track.explicit,
+      spotify_url: track.url
+    }))
+  };
+}
+
+export function artistDiscographyFile(artist: SpotifyArtist, albums: SpotifyAlbum[], format: SingleStructuredFormat): AgentFile {
   const safeName = safeFilename(artist.name || artist.id);
   if (format === "csv") {
     return {
@@ -313,12 +370,37 @@ export function artistDiscographyFile(artist: SpotifyArtist, albums: SpotifyAlbu
   };
 }
 
+export function artistDiscographyFiles(artist: SpotifyArtist, albums: SpotifyAlbum[], format: AlbumTrackFormat): AgentFile[] {
+  if (format === "both") return [artistDiscographyFile(artist, albums, "csv"), artistDiscographyFile(artist, albums, "text")];
+  return [artistDiscographyFile(artist, albums, format)];
+}
+
+export function artistDiscographyTable(artist: SpotifyArtist, albums: SpotifyAlbum[]): AgentTable {
+  const safeName = safeFilename(artist.name || artist.id);
+  const columns = ["position", "album", "type", "release_date", "tracks", "spotify_url"];
+  return {
+    name: `spotify-artist-${safeName}-discography`,
+    description: `Spotify artist discography for ${artistLabel(artist)}`,
+    sourceFileName: `spotify-artist-${safeName}-discography.csv`,
+    columns,
+    rows: albums.map((album, index) => ({
+      position: index + 1,
+      album: album.name ?? album.id,
+      type: album.album_type ?? "",
+      release_date: album.release_date ?? "",
+      tracks: album.total_tracks ?? null,
+      spotify_url: album.external_urls?.spotify ?? ""
+    }))
+  };
+}
+
 export function formatAlbumTrackSummary(
   album: SpotifyAlbum,
   tracks: NormalizedAlbumTrack[],
   total: number,
   maxTracks: number,
-  file: AgentFile | undefined
+  files: AgentFile[] | undefined,
+  table: AgentTable | undefined
 ): string {
   return [
     `Spotify album: ${albumLabel(album)}`,
@@ -326,7 +408,8 @@ export function formatAlbumTrackSummary(
     `- Tracks fetched: ${tracks.length} of ${total || album.total_tracks || tracks.length}${maxTracks < total ? ` (capped at ${maxTracks})` : ""}`,
     `- Total duration fetched: ${formatDuration(sum(tracks.map((track) => track.durationMs)))}`,
     tracks.some((track) => track.explicit) ? `- Explicit tracks: ${tracks.filter((track) => track.explicit).length}` : null,
-    file ? `- Full album track list attached: ${file.name}` : null,
+    files?.length ? `- Full album track list attached: ${files.map((file) => file.name).join(", ")}` : null,
+    table ? `- Queryable table: ${table.name} (${table.rows.length} rows)` : null,
     album.external_urls?.spotify ? `- URL: ${album.external_urls.spotify}` : null,
     "Supplied by Spotify; track links open Spotify."
   ]
@@ -340,7 +423,8 @@ export function formatArtistDiscography(
   total: number,
   maxItems: number,
   includeGroups: ArtistDiscographyGroup[],
-  file: AgentFile | undefined
+  files: AgentFile[] | undefined,
+  table: AgentTable | undefined
 ): string {
   const byType = countBy(albums.map((album) => album.album_type || "unknown"));
   const oldestFetched = albums.length > 0 ? albums[albums.length - 1] : undefined;
@@ -351,7 +435,8 @@ export function formatArtistDiscography(
     `- By type: ${formatCounts(byType, 6) || "none"}`,
     albums[0]?.release_date ? `- Newest listed: ${albums[0].name || albums[0].id} (${albums[0].release_date})` : null,
     oldestFetched?.release_date ? `- Oldest listed in fetched set: ${oldestFetched.name || oldestFetched.id} (${oldestFetched.release_date})` : null,
-    file ? `- Full discography list attached: ${file.name}` : null,
+    files?.length ? `- Full discography list attached: ${files.map((file) => file.name).join(", ")}` : null,
+    table ? `- Queryable table: ${table.name} (${table.rows.length} rows)` : null,
     artist.external_urls?.spotify ? `- URL: ${artist.external_urls.spotify}` : null,
     "Supplied by Spotify; album links open Spotify."
   ]
@@ -527,12 +612,13 @@ function formatArtistDiscographyText(artist: SpotifyArtist, albums: SpotifyAlbum
 }
 
 function formatPlaylistTracksCsv(tracks: NormalizedPlaylistTrack[]): string {
-  const rows = [["position", "track", "artists", "album", "duration", "explicit", "local", "added_at", "spotify_url"], ...tracks.map((track) => [
+  const rows = [["position", "track", "artists", "album", "duration", "duration_ms", "explicit", "local", "added_at", "spotify_url"], ...tracks.map((track) => [
     String(track.position),
     track.name,
     track.artists,
     track.album,
     track.duration,
+    String(track.durationMs),
     track.explicit ? "true" : "false",
     track.isLocal ? "true" : "false",
     track.addedAt,
@@ -542,11 +628,12 @@ function formatPlaylistTracksCsv(tracks: NormalizedPlaylistTrack[]): string {
 }
 
 function formatAlbumTracksCsv(tracks: NormalizedAlbumTrack[]): string {
-  const rows = [["position", "track", "artists", "duration", "explicit", "spotify_url"], ...tracks.map((track) => [
+  const rows = [["position", "track", "artists", "duration", "duration_ms", "explicit", "spotify_url"], ...tracks.map((track) => [
     String(track.position),
     track.name,
     track.artists,
     track.duration,
+    String(track.durationMs),
     track.explicit ? "true" : "false",
     track.url
   ])];

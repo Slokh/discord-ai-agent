@@ -17,6 +17,7 @@ export type ToolName =
   | "generateImage"
   | "readGeneratedFile"
   | "queryGeneratedCsv"
+  | "queryGeneratedTable"
   | "createSkillDraft"
   | "runCodingAgent"
   | "getAgentTaskStatus"
@@ -661,6 +662,70 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "queryGeneratedTable",
+    description:
+      "Run deterministic tabular queries over a structured table artifact produced by an earlier tool call in the same agent turn. Use this for exact row counts, top values, filters, rankings, and sample rows from generated tables without reading raw attachment text. This is generic generated-artifact infrastructure and is not specific to any provider.",
+    userVisible: true,
+    mutates: false,
+    category: "memory",
+    toolClass: "stats",
+    outputContract: ["generated table metadata", "filters applied", "row count", "ranked rows or values", "sample rows when requested"],
+    parameters: {
+      type: "object",
+      properties: {
+        tableName: {
+          type: "string",
+          description: "Name of the generated table to query. If omitted and exactly one generated table exists, that table is used."
+        },
+        tableIndex: {
+          type: "number",
+          description: "1-based index of the generated table to query."
+        },
+        operation: {
+          type: "string",
+          enum: ["profile", "topValues", "filterRows"],
+          description: "Query operation. profile returns row/column metadata, topValues ranks values in one column, and filterRows returns matching rows."
+        },
+        column: {
+          type: "string",
+          description: "Column to rank for topValues."
+        },
+        filters: {
+          type: "array",
+          description: "Optional column filters applied before the operation. Comparisons are exact/string/numeric as appropriate; YYYY-MM-DD dates compare correctly as strings.",
+          items: {
+            type: "object",
+            properties: {
+              column: { type: "string" },
+              op: { type: "string", enum: ["eq", "notEq", "contains", "gt", "gte", "lt", "lte"] },
+              value: { type: "string" }
+            },
+            required: ["column", "op", "value"],
+            additionalProperties: false
+          }
+        },
+        selectColumns: {
+          type: "array",
+          items: { type: "string" },
+          description: "Columns to include for filterRows. Defaults to the first columns in the table."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum rows or ranked values to return. Defaults to 10 and is capped at 100."
+        },
+        splitValues: {
+          type: "boolean",
+          description: "For topValues, split each cell before counting. Useful for comma-separated columns like artist lists."
+        },
+        valueDelimiter: {
+          type: "string",
+          description: "Delimiter used when splitValues is true. Defaults to comma."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
     name: "createSkillDraft",
     description:
       "Create or update a private database-backed Markdown skill. Use only when the user explicitly asks the agent to learn, remember, save, or update durable behavior/knowledge for next time.",
@@ -873,12 +938,12 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getSpotifyPlaylistTracks",
     description:
-      "Fetch a Spotify playlist's track list with Spotify's Web API, using current playlist item pagination and attaching the full list as text or CSV when available. Use this for Spotify playlist URLs/URIs or playlist IDs, especially when the user asks for every track. Set format=csv when the user asks for a custom filter, date window, ranking, count, or any follow-up query that should use queryGeneratedCsv. Do not use web_fetch on open.spotify.com for playlist track lists. If Spotify denies playlist item access, return the limitation clearly instead of guessing.",
+      "Fetch a Spotify playlist's track list with Spotify's Web API, using current playlist item pagination and attaching the full list as CSV and text by default when available. Use this for Spotify playlist URLs/URIs or playlist IDs, especially when the user asks for every track. The result also exposes a queryable generated table for exact follow-up counts, filters, and rankings. Do not use web_fetch on open.spotify.com for playlist track lists. If Spotify denies playlist item access, return the limitation clearly instead of guessing.",
     userVisible: true,
     mutates: false,
     category: "external",
     toolClass: "external",
-    outputContract: ["playlist metadata", "track count returned", "attached full track list when available", "Spotify URLs", "explicit limitation on 403"],
+    outputContract: ["playlist metadata", "track count returned", "attached full track list when available", "queryable table when available", "Spotify URLs", "explicit limitation on 403"],
     parameters: {
       type: "object",
       properties: {
@@ -892,8 +957,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         format: {
           type: "string",
-          enum: ["text", "csv"],
-          description: "Attachment format for the full track list. Defaults to text. Use csv when the output will be filtered, ranked, counted, or queried with queryGeneratedCsv."
+          enum: ["text", "csv", "both"],
+          description: "Attachment format for the full track list. Defaults to both (CSV + text). Use csv to attach only CSV and text to attach only text."
         }
       },
       required: ["playlistIdOrUrl"],
@@ -903,12 +968,12 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getSpotifyAlbumTracks",
     description:
-      "Fetch a Spotify album's ordered track list with Spotify's Web API and attach the full list as text or CSV when available. Use this for Spotify album URLs/URIs or album IDs when the user asks what tracks are on an album, wants album duration, or wants an album tracklist.",
+      "Fetch a Spotify album's ordered track list with Spotify's Web API and attach the full list as CSV and text by default when available. Use this for Spotify album URLs/URIs or album IDs when the user asks what tracks are on an album, wants album duration, or wants an album tracklist. The result also exposes a queryable generated table for exact follow-up counts, filters, and rankings.",
     userVisible: true,
     mutates: false,
     category: "external",
     toolClass: "external",
-    outputContract: ["album metadata", "track count returned", "attached full track list when available", "Spotify URLs"],
+    outputContract: ["album metadata", "track count returned", "attached full track list when available", "queryable table when available", "Spotify URLs"],
     parameters: {
       type: "object",
       properties: {
@@ -922,8 +987,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         format: {
           type: "string",
-          enum: ["text", "csv"],
-          description: "Attachment format for the full album track list. Defaults to text."
+          enum: ["text", "csv", "both"],
+          description: "Attachment format for the full album track list. Defaults to both (CSV + text). Use csv to attach only CSV and text to attach only text."
         }
       },
       required: ["albumIdOrUrl"],
@@ -933,12 +998,12 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getSpotifyArtistDiscography",
     description:
-      "Fetch a Spotify artist's public discography: albums, singles, compilations, and appearances. Use this for artist URLs/URIs or artist IDs when the user asks for releases, discography, albums, singles, or where to start with an artist.",
+      "Fetch a Spotify artist's public discography: albums, singles, compilations, and appearances. Use this for artist URLs/URIs or artist IDs when the user asks for releases, discography, albums, singles, or where to start with an artist. The result attaches the release list as CSV and text by default and exposes a queryable generated table.",
     userVisible: true,
     mutates: false,
     category: "external",
     toolClass: "external",
-    outputContract: ["artist metadata", "discography groups requested", "ranked release list", "attached release list when available", "Spotify URLs"],
+    outputContract: ["artist metadata", "discography groups requested", "ranked release list", "attached release list when available", "queryable table when available", "Spotify URLs"],
     parameters: {
       type: "object",
       properties: {
@@ -957,8 +1022,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         format: {
           type: "string",
-          enum: ["text", "csv"],
-          description: "Attachment format for the discography list. Defaults to text."
+          enum: ["text", "csv", "both"],
+          description: "Attachment format for the discography list. Defaults to both (CSV + text). Use csv to attach only CSV and text to attach only text."
         }
       },
       required: ["artistIdOrUrl"],
@@ -1180,7 +1245,7 @@ function defaultPermissionRequirements(tool: ToolRegistryEntry): string[] {
 
 function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["category"]> {
   if (name === "generateImage") return "generation";
-  if (name === "readGeneratedFile" || name === "queryGeneratedCsv") return "memory";
+  if (name === "readGeneratedFile" || name === "queryGeneratedCsv" || name === "queryGeneratedTable") return "memory";
   if (name === "createSkillDraft") return "memory";
   if (
     name === "runCodingAgent" ||
@@ -1223,6 +1288,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   generateImage: "generation",
   readGeneratedFile: "retrieval",
   queryGeneratedCsv: "stats",
+  queryGeneratedTable: "stats",
   createSkillDraft: "memory",
   runCodingAgent: "coding",
   getAgentTaskStatus: "coding",
@@ -1281,6 +1347,7 @@ function defaultToolExamples(name: ToolName): string[] {
     generateImage: "@ai make an image of a wizard eating nachos",
     readGeneratedFile: "@ai show me the first rows of the file you just generated",
     queryGeneratedCsv: "@ai rank the artists in the CSV you just generated",
+    queryGeneratedTable: "@ai rank the artists in the table you just generated",
     createSkillDraft: "@ai learn this for next time: movie night is on Fridays",
     runCodingAgent: "@ai debug the failing CI on that PR",
     getAgentTaskStatus: "@ai what happened to the last update?",
@@ -1300,4 +1367,11 @@ function defaultToolExamples(name: ToolName): string[] {
     getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123"
   };
   return [examples[name]];
+}
+
+export function toolSupportsCsvFormat(name: ToolName): boolean {
+  const tool = toolByName(name);
+  const properties = tool?.parameters.properties as Record<string, unknown> | undefined;
+  const format = properties?.format as { enum?: unknown[] } | undefined;
+  return Array.isArray(format?.enum) && format.enum.includes("csv");
 }

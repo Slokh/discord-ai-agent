@@ -31,13 +31,13 @@ import {
   getSpotifyItem,
   searchSpotify
 } from "../tools/coreTools.js";
-import { queryGeneratedCsv, readGeneratedFile } from "../tools/generatedFileTools.js";
+import { queryGeneratedCsv, queryGeneratedTable, readGeneratedFile } from "../tools/generatedFileTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ChatMessage } from "../models/openrouter.js";
 import type { ConversationMessage, ServerOverlay } from "../db/repositories.js";
-import type { AgentFile, AgentResponse, DiscordAttachmentContext, DiscordReplyContext, ToolContext } from "../tools/types.js";
+import type { AgentFile, AgentResponse, AgentTable, DiscordAttachmentContext, DiscordReplyContext, ToolContext } from "../tools/types.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
-import { openRouterServerToolDefinitionsForModel, toolByName, toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
+import { openRouterServerToolDefinitionsForModel, toolByName, toolDefinitionsForModel, toolSupportsCsvFormat, type ToolName } from "../tools/registry.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import type { Logger } from "pino";
 
@@ -98,7 +98,9 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
     }
   );
   const files: AgentFile[] = [];
+  const tables: AgentTable[] = [];
   ctx.generatedFiles = files;
+  ctx.generatedTables = tables;
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
   const successfulToolCallKeys = new Set<string>();
@@ -148,6 +150,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         round: round + 1,
         messageCount: messages.length,
         fileCount: files.length,
+        tableCount: tables.length,
         memoryEventCount: memoryEvents.length
       },
       "Agent model round starting"
@@ -160,6 +163,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         round: round + 1,
         messageCount: messages.length,
         fileCount: files.length,
+        tableCount: tables.length,
         memoryEventCount: memoryEvents.length
       }
     });
@@ -172,6 +176,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         round: round + 1,
         messageCount: messages.length,
         fileCount: files.length,
+        tableCount: tables.length,
         memoryEventCount: memoryEvents.length
       }
     });
@@ -196,7 +201,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       throw error;
     }
 
-    const modelRoutes = selectModelToolRoutes(response.toolCalls);
+    const modelRoutes = coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls));
     const requestedToolRequests = response.toolCalls.map(traceToolRequestMetadata);
     const selectedLocalToolRequests = modelRoutes.map(traceToolRequestMetadata);
     requestLogger.info(
@@ -337,6 +342,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
             finishReason: response.finishReason,
             finalChars: content.length,
             fileCount: files.length,
+            tableCount: tables.length,
             memoryEventCount: memoryEvents.length
           },
           "Agent request completed with empty-response fallback"
@@ -350,6 +356,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
             finishReason: response.finishReason,
             finalChars: content.length,
             fileCount: files.length,
+            tableCount: tables.length,
             memoryEventCount: memoryEvents.length
           },
           durationMs: durationMs(startedAt)
@@ -357,6 +364,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         return {
           content: cleanResponse(content, ctx.config.maxReplyChars),
           files: files.length > 0 ? files : undefined,
+          tables: tables.length > 0 ? tables : undefined,
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
         };
       }
@@ -378,6 +386,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           durationMs: durationMs(startedAt),
           finalChars: content.length,
           fileCount: files.length,
+          tableCount: tables.length,
           memoryEventCount: memoryEvents.length
         },
         "Agent request complete"
@@ -388,6 +397,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         metadata: {
           finalChars: content.length,
           fileCount: files.length,
+          tableCount: tables.length,
           memoryEventCount: memoryEvents.length
         },
         durationMs: durationMs(startedAt)
@@ -395,6 +405,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       return {
         content: cleanResponse(content, ctx.config.maxReplyChars),
         files: files.length > 0 ? files : undefined,
+        tables: tables.length > 0 ? tables : undefined,
         memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
       };
     }
@@ -463,6 +474,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           durationMs: durationMs(toolStartedAt),
           outputChars: result.content.length,
           fileCount: result.files?.length ?? 0,
+          tableCount: result.tables?.length ?? 0,
           skippedRedundantToolCall: isRedundantToolCall || undefined
         },
         "Local tool execution complete"
@@ -474,6 +486,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           toolName: route.name,
           outputChars: result.content.length,
           fileCount: result.files?.length ?? 0,
+          tableCount: result.tables?.length ?? 0,
           skippedRedundantToolCall: isRedundantToolCall || undefined
         },
         durationMs: durationMs(toolStartedAt)
@@ -493,6 +506,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         successfulToolCallKeys.add(routeKey);
       }
       if (result.files?.length) files.push(...result.files);
+      if (result.tables?.length) tables.push(...result.tables);
       if (!isRedundantToolCall) {
         memoryEvents.push({
           role: "tool",
@@ -500,7 +514,8 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
           metadata: {
             toolName: route.name,
             arguments: route.arguments ?? {},
-            files: result.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+            files: result.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? [],
+            tables: result.tables?.map((table) => ({ name: table.name, rows: table.rows.length, columns: table.columns })) ?? []
           }
         });
       }
@@ -551,6 +566,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
     {
       durationMs: durationMs(startedAt),
       fileCount: files.length,
+      tableCount: tables.length,
       memoryEventCount: memoryEvents.length
     },
     "Agent stopped after tool round limit"
@@ -561,6 +577,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
     summary: "Agent stopped after tool round limit",
     metadata: {
       fileCount: files.length,
+      tableCount: tables.length,
       memoryEventCount: memoryEvents.length
     },
     durationMs: durationMs(startedAt)
@@ -582,6 +599,7 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       ctx.config.maxReplyChars
     ),
     files: files.length > 0 ? files : undefined,
+    tables: tables.length > 0 ? tables : undefined,
     memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
   };
 }
@@ -762,6 +780,23 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
       await queryGeneratedCsv(ctx, {
         fileName: stringArgument(route.arguments, "fileName"),
         fileIndex: numberArgument(route.arguments, "fileIndex"),
+        operation: stringArgument(route.arguments, "operation"),
+        column: stringArgument(route.arguments, "column"),
+        filters: route.arguments?.filters,
+        selectColumns: stringArrayArgument(route.arguments, "selectColumns"),
+        limit: numberArgument(route.arguments, "limit"),
+        splitValues: booleanArgument(route.arguments, "splitValues"),
+        valueDelimiter: stringArgument(route.arguments, "valueDelimiter")
+      }),
+      ctx.config.maxReplyChars
+    );
+  }
+
+  if (route.name === "queryGeneratedTable") {
+    return cleanAgentResponse(
+      await queryGeneratedTable(ctx, {
+        tableName: stringArgument(route.arguments, "tableName"),
+        tableIndex: numberArgument(route.arguments, "tableIndex"),
         operation: stringArgument(route.arguments, "operation"),
         column: stringArgument(route.arguments, "column"),
         filters: route.arguments?.filters,
@@ -1498,6 +1533,21 @@ function selectModelToolRoutes(toolCalls: Array<{ id: string; name: string; argu
   return routes;
 }
 
+function coerceGeneratedCsvProducerRoutes(routes: AgentToolRoute[]): AgentToolRoute[] {
+  if (!routes.some((route) => route.name === "queryGeneratedCsv")) return routes;
+  return routes.map((route) => {
+    if (!toolSupportsCsvFormat(route.name)) return route;
+    const existingFormat = typeof route.arguments?.format === "string" ? route.arguments.format.trim() : "";
+    if (existingFormat) return route;
+    const args = { ...(route.arguments ?? {}), format: "csv" };
+    return {
+      ...route,
+      arguments: args,
+      argumentsText: JSON.stringify(args)
+    };
+  });
+}
+
 function unsupportedToolCallNames(toolCalls: Array<{ name: string }>) {
   return toolCalls.map((call) => call.name).filter((name) => !toolByName(name));
 }
@@ -1597,7 +1647,8 @@ async function appendAgentRuntimeToolResult(
           toolCallId: input.route.id,
           toolName: input.route.name,
           content,
-          files: input.result.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+          files: input.result.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? [],
+          tables: input.result.tables?.map((table) => ({ name: table.name, rows: table.rows.length, columns: table.columns })) ?? []
         }
       ],
       metadata: {
@@ -1612,6 +1663,7 @@ async function appendAgentRuntimeToolResult(
         outputChars: input.result.content.length,
         responseRedacted: Boolean(input.result.storedContent),
         fileCount: input.result.files?.length ?? 0,
+        tableCount: input.result.tables?.length ?? 0,
         skippedRedundantToolCall: input.skippedRedundantToolCall || undefined,
         durationMs: input.durationMs
       }
@@ -1800,8 +1852,8 @@ function chatMessages(
         "For favorite/best/most popular message questions, use getDiscordStats with metric=reactions and groupBy=message as evidence, then make a clear pick when the evidence supports one. " +
         "For current public information, news, schedules, prices, releases, or external facts, use web_search and datetime when useful. " +
         "For URLs, use web_fetch when reading the page would improve the answer. " +
-        "When an earlier tool call in the same turn produced a text or CSV file, use readGeneratedFile or queryGeneratedCsv to inspect, count, filter, or rank that generated file instead of guessing from the attachment name or asking the model to count raw rows. If a generated-file query needs CSV rows, request CSV output from the producer tool before calling queryGeneratedCsv. " +
-        "For Spotify catalog searches, item details, playlist track lists, album track lists, artist discographies, playlist stats, or playlist comparisons, call the matching Spotify tool. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com when the user asks for playlist tracks or when a later generated-file query needs a playlist CSV; set format=csv for custom playlist filtering, counting, or rankings. Use getSpotifyPlaylistStats for quick playlist summaries instead of claiming audio-feature or recommendation access. Do not claim Spotify user-library, recently played, top-items, audio-feature, recommendation, or audio-analysis access. " +
+        "When an earlier tool call in the same turn produced a text or CSV file, use readGeneratedFile or queryGeneratedCsv to inspect, count, filter, or rank that generated file instead of guessing from the attachment name or asking the model to count raw rows. When a tool result says it produced a queryable table, prefer queryGeneratedTable for exact counts, filters, rows, and rankings over that generated table. If a generated-file query needs CSV rows, request CSV output from the producer tool before calling queryGeneratedCsv. " +
+        "For Spotify catalog searches, item details, playlist track lists, album track lists, artist discographies, playlist stats, or playlist comparisons, call the matching Spotify tool. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com when the user asks for playlist tracks or when a later generated-file/table query needs full playlist rows. Use getSpotifyPlaylistStats for quick playlist summaries instead of claiming audio-feature or recommendation access. Do not claim Spotify user-library, recently played, top-items, audio-feature, recommendation, or audio-analysis access. " +
         "When the current message or reply context includes images and the user asks what is shown, asks about a screenshot/meme/photo/chart, or asks for visual details, call inspectDiscordImages. " +
         "For Discord image generation requests, call generateImage so the result can be attached. If the user asks to edit, modify, transform, copy the style of, or use an attached/replied image as a reference, call generateImage with useContextImages=true or explicit referenceImageUrls. " +
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +

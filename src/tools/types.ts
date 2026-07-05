@@ -24,6 +24,7 @@ export type ToolContext = {
   replyContext?: DiscordReplyContext;
   requestAttachments?: DiscordAttachmentContext[];
   generatedFiles?: AgentFile[];
+  generatedTables?: AgentTable[];
   requestId?: string;
   statusChannelId?: string;
   statusMessageId?: string;
@@ -69,9 +70,20 @@ export type AgentFile = {
   contentType?: string;
 };
 
+export type AgentTableCell = string | number | boolean | null;
+
+export type AgentTable = {
+  name: string;
+  columns: string[];
+  rows: Array<Record<string, AgentTableCell>>;
+  description?: string;
+  sourceFileName?: string;
+};
+
 export type AgentResponse = {
   content: string;
   files?: AgentFile[];
+  tables?: AgentTable[];
   storedContent?: string;
   memoryEvents?: Array<{
     role: "tool";

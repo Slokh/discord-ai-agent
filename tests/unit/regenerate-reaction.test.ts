@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { PermissionsBitField } from "discord.js";
 import {
+  canTriggerImageRegeneration,
   canTriggerReplyRegeneration,
   CODING_AGENT_TOOL_NAMES,
+  IMAGE_GENERATION_TOOL_NAMES,
+  IMAGE_REGENERATION_REACTION_EMOJIS,
   involvesCodingAgentTools,
+  involvesImageGenerationTools,
+  isImageRegenerationReaction,
   isRegenerateReplyReaction,
   REGENERATE_REPLY_REACTION_EMOJI
 } from "../../src/discord/regenerateReaction.js";
@@ -125,6 +130,98 @@ describe("canTriggerReplyRegeneration", () => {
         reactorId: "user-2",
         originalRequesterId: null,
         memberPermissions: permissionsWith()
+      })
+    ).toBe(false);
+  });
+});
+
+describe("isImageRegenerationReaction", () => {
+  it("matches each image regeneration emoji", () => {
+    for (const emoji of IMAGE_REGENERATION_REACTION_EMOJIS) {
+      expect(isImageRegenerationReaction({ id: null, name: emoji })).toBe(true);
+    }
+    expect(isImageRegenerationReaction({ id: null, name: "🔄" })).toBe(true);
+    expect(isImageRegenerationReaction({ id: null, name: "🔁" })).toBe(true);
+    expect(isImageRegenerationReaction({ id: null, name: "🎲" })).toBe(true);
+  });
+
+  it("rejects custom guild emojis that look like regeneration emojis", () => {
+    expect(isImageRegenerationReaction({ id: "123456789", name: "game_die" })).toBe(false);
+    expect(isImageRegenerationReaction({ id: "123456789", name: "🔄" })).toBe(false);
+  });
+
+  it("rejects other unicode emojis", () => {
+    expect(isImageRegenerationReaction({ id: null, name: "❌" })).toBe(false);
+    expect(isImageRegenerationReaction({ id: null, name: "👍" })).toBe(false);
+    expect(isImageRegenerationReaction({ id: null, name: "♻️" })).toBe(false);
+  });
+
+  it("handles nullish emoji input", () => {
+    expect(isImageRegenerationReaction(null)).toBe(false);
+    expect(isImageRegenerationReaction(undefined)).toBe(false);
+  });
+});
+
+describe("involvesImageGenerationTools", () => {
+  it("flags the generateImage tool", () => {
+    expect(involvesImageGenerationTools(["generateImage"])).toBe(true);
+    expect(involvesImageGenerationTools(["searchDiscordHistory", "generateImage"])).toBe(true);
+  });
+
+  it("does not flag non-image tools", () => {
+    expect(involvesImageGenerationTools(["searchDiscordHistory", "getDiscordStats"])).toBe(false);
+    expect(involvesImageGenerationTools([])).toBe(false);
+  });
+
+  it("IMAGE_GENERATION_TOOL_NAMES covers generateImage", () => {
+    expect(IMAGE_GENERATION_TOOL_NAMES.has("generateImage")).toBe(true);
+  });
+});
+
+describe("canTriggerImageRegeneration", () => {
+  it("allows the original prompter", () => {
+    expect(
+      canTriggerImageRegeneration({
+        reactorId: "user-1",
+        originalPrompterId: "user-1"
+      })
+    ).toBe(true);
+  });
+
+  it("rejects other users", () => {
+    expect(
+      canTriggerImageRegeneration({
+        reactorId: "user-2",
+        originalPrompterId: "user-1"
+      })
+    ).toBe(false);
+  });
+
+  it("does not grant an admin override for image regeneration", () => {
+    // Image regeneration is prompter-only by design; admins cannot regenerate
+    // another user's image via reaction.
+    expect(
+      canTriggerImageRegeneration({
+        reactorId: "admin-1",
+        originalPrompterId: "user-1"
+      })
+    ).toBe(false);
+  });
+
+  it("rejects when the original prompter is unknown", () => {
+    expect(
+      canTriggerImageRegeneration({
+        reactorId: "user-1",
+        originalPrompterId: null
+      })
+    ).toBe(false);
+  });
+
+  it("rejects when the reactor id is missing", () => {
+    expect(
+      canTriggerImageRegeneration({
+        reactorId: null,
+        originalPrompterId: "user-1"
       })
     ).toBe(false);
   });

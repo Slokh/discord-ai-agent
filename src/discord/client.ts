@@ -22,9 +22,12 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { DiscordResponseSink, type DiscordResponseFooter } from "./responseSink.js";
 import {
+  canTriggerImageRegeneration,
   canTriggerReplyRegeneration,
+  isImageRegenerationReaction,
   isRegenerateReplyReaction,
-  involvesCodingAgentTools
+  involvesCodingAgentTools,
+  involvesImageGenerationTools
 } from "./regenerateReaction.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor, type AgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
@@ -1662,7 +1665,9 @@ async function handleRegenerateReplyReaction(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser | null
 ) {
-  if (!isRegenerateReplyReaction(reaction?.emoji)) return;
+  const isReplyRegen = isRegenerateReplyReaction(reaction?.emoji);
+  const isImageRegen = isImageRegenerationReaction(reaction?.emoji);
+  if (!isReplyRegen && !isImageRegen) return;
   if (!user || user.bot) return;
   const reactorId = user.id;
   if (!reactorId) return;
@@ -1694,6 +1699,61 @@ async function handleRegenerateReplyReaction(
     return;
   }
 
+  const traceId = run.traceId ?? run.runId;
+  const toolLogs = await input.repo.getToolAuditLogsForTrace({ traceId, limit: 200 }).catch((error) => {
+    reactionLogger.warn({ err: error, traceId }, "Failed to load tool audit logs for regenerate reaction");
+    return [];
+  });
+  const toolNames = toolLogs.map((log) => log.toolName);
+  const isImageReply = involvesImageGenerationTools(toolNames);
+
+  // Image regeneration path: 🔄/🔁/🎲 on a bot-generated image message is
+  // restricted to the original prompter only (no admin override).
+  if (isImageRegen && isImageReply) {
+    if (
+      !canTriggerImageRegeneration({
+        reactorId,
+        originalPrompterId: run.userId
+      })
+    ) {
+      reactionLogger.info("Skipping image regenerate reaction because the reactor is not the original prompter");
+      await removeRegenerationReactionFor(message as Message, reactorId, fetchedReaction.emoji, reactionLogger);
+      await postImageRegenerationNotAllowedReply(message, reactionLogger).catch((error) => {
+        reactionLogger.warn({ err: error }, "Failed to post image regeneration not-allowed reply");
+      });
+      return;
+    }
+
+    await recordTraceEvent(input.repo, {
+      eventName: "discord.image.regenerate.requested",
+      summary: "Regenerate image requested via regeneration reaction",
+      metadata: {
+        replyMessageId: message.id,
+        runId: run.runId,
+        traceId,
+        reactorId,
+        originalPrompterId: run.userId ?? null,
+        emoji: fetchedReaction.emoji?.name ?? null
+      }
+    }).catch(() => undefined);
+    await removeRegenerationReactionFor(message as Message, reactorId, fetchedReaction.emoji, reactionLogger);
+
+    await regenerateDiscordAgentReply({
+      input,
+      client,
+      run,
+      replyMessage: message as Message,
+      reactionLogger
+    }).catch((error) => {
+      reactionLogger.error({ err: error }, "Regenerate image failed");
+    });
+    return;
+  }
+
+  // Reply regeneration path only applies to the 🔄 reply-regeneration reaction.
+  // 🔁/🎲 on a non-image reply are silently ignored.
+  if (!isReplyRegen) return;
+
   let memberPermissions: { has: (permission: bigint) => boolean } | null | undefined;
   try {
     const member = await message.guild.members.fetch(reactorId);
@@ -1713,17 +1773,12 @@ async function handleRegenerateReplyReaction(
     return;
   }
 
-  const traceId = run.traceId ?? run.runId;
-  const toolLogs = await input.repo.getToolAuditLogsForTrace({ traceId, limit: 200 }).catch((error) => {
-    reactionLogger.warn({ err: error, traceId }, "Failed to load tool audit logs for regenerate reaction");
-    return [];
-  });
-  if (involvesCodingAgentTools(toolLogs.map((log) => log.toolName))) {
+  if (involvesCodingAgentTools(toolNames)) {
     reactionLogger.info(
       { toolCount: toolLogs.length, toolNames: toolLogs.map((log) => log.toolName) },
       "Skipping regenerate reaction because the reply involved a coding-agent tool"
     );
-    await removeRegenerateReaction(message as Message, reactorId, reactionLogger);
+    await removeRegenerationReactionFor(message as Message, reactorId, fetchedReaction.emoji, reactionLogger);
     return;
   }
 
@@ -1738,7 +1793,7 @@ async function handleRegenerateReplyReaction(
       originalRequesterId: run.userId ?? null
     }
   }).catch(() => undefined);
-  await removeRegenerateReaction(message as Message, reactorId, reactionLogger);
+  await removeRegenerationReactionFor(message as Message, reactorId, fetchedReaction.emoji, reactionLogger);
 
   await regenerateDiscordAgentReply({
     input,
@@ -1751,14 +1806,36 @@ async function handleRegenerateReplyReaction(
   });
 }
 
-async function removeRegenerateReaction(message: Message, reactorId: string, requestLogger: Logger) {
-  const reaction = message.reactions.cache.find((candidate) => isRegenerateReplyReaction(candidate.emoji));
-  if (!reaction) return;
+async function removeRegenerationReactionFor(
+  message: Message,
+  reactorId: string,
+  emoji: ReactionEmojiLike | null | undefined,
+  requestLogger: Logger
+) {
+  const target = message.reactions.cache.find((candidate) =>
+    candidate.emoji.id === (emoji?.id ?? null) && candidate.emoji.name === (emoji?.name ?? null)
+  );
+  if (!target) return;
   try {
-    await reaction.users.remove(reactorId);
-    requestLogger.debug({ emoji: reaction.emoji.name }, "Removed regenerate reaction");
+    await target.users.remove(reactorId);
+    requestLogger.debug({ emoji: target.emoji.name }, "Removed regeneration reaction");
   } catch (error) {
-    requestLogger.warn({ err: error, emoji: reaction.emoji.name }, "Failed to remove regenerate reaction");
+    requestLogger.warn({ err: error, emoji: target.emoji.name }, "Failed to remove regeneration reaction");
+  }
+}
+
+type ReactionEmojiLike = { id?: string | null; name?: string | null };
+
+const IMAGE_REGENERATION_NOT_ALLOWED_REPLY =
+  "Only the person who originally requested this image can regenerate it.";
+
+async function postImageRegenerationNotAllowedReply(message: Message<true>, requestLogger: Logger) {
+  try {
+    if (!message.channel.isSendable?.()) return;
+    await message.channel.send({ content: IMAGE_REGENERATION_NOT_ALLOWED_REPLY, allowedMentions: { parse: [] } });
+    requestLogger.debug("Posted image regeneration not-allowed reply");
+  } catch (error) {
+    requestLogger.warn({ err: error }, "Failed to post image regeneration not-allowed reply");
   }
 }
 

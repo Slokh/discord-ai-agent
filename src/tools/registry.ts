@@ -15,6 +15,8 @@ export type ToolName =
   | "summarizeDiscordHistory"
   | "summarizeDiscordThread"
   | "generateImage"
+  | "readGeneratedFile"
+  | "queryGeneratedCsv"
   | "createSkillDraft"
   | "runCodingAgent"
   | "getAgentTaskStatus"
@@ -563,6 +565,102 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "readGeneratedFile",
+    description:
+      "Read a bounded text chunk from a file produced by an earlier tool call in the same agent turn. Use this for generated text or CSV files when the user asks to inspect file contents, see examples, or when a small preview is enough. For exact counts, filters, or rankings over CSV files, use queryGeneratedCsv instead of reading the whole file.",
+    userVisible: true,
+    mutates: false,
+    category: "memory",
+    toolClass: "retrieval",
+    outputContract: ["generated file metadata", "byte range", "bounded content excerpt", "truncation status"],
+    parameters: {
+      type: "object",
+      properties: {
+        fileName: {
+          type: "string",
+          description: "Name of the generated file to read. If omitted and exactly one generated file exists, that file is used."
+        },
+        fileIndex: {
+          type: "number",
+          description: "1-based index of the generated file to read, useful when multiple generated files exist."
+        },
+        offsetBytes: {
+          type: "number",
+          description: "Byte offset to start reading from. Defaults to 0."
+        },
+        maxBytes: {
+          type: "number",
+          description: "Maximum bytes to return. Defaults to 4000 and is capped at 20000."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "queryGeneratedCsv",
+    description:
+      "Run deterministic tabular queries over a CSV file produced by an earlier tool call in the same agent turn. Use this for exact row counts, top values, filters, rankings, and sample rows from generated CSVs instead of asking the model to count or parse raw CSV text. This is generic generated-file infrastructure and is not specific to any provider.",
+    userVisible: true,
+    mutates: false,
+    category: "memory",
+    toolClass: "stats",
+    outputContract: ["generated CSV metadata", "filters applied", "row count", "ranked rows or values", "sample rows when requested"],
+    parameters: {
+      type: "object",
+      properties: {
+        fileName: {
+          type: "string",
+          description: "Name of the generated CSV file to query. If omitted and exactly one generated CSV exists, that file is used."
+        },
+        fileIndex: {
+          type: "number",
+          description: "1-based index of the generated file to query."
+        },
+        operation: {
+          type: "string",
+          enum: ["profile", "topValues", "filterRows"],
+          description: "Query operation. profile returns row/column metadata, topValues ranks values in one column, and filterRows returns matching rows."
+        },
+        column: {
+          type: "string",
+          description: "Column to rank for topValues."
+        },
+        filters: {
+          type: "array",
+          description: "Optional column filters applied before the operation. Comparisons are exact/string/numeric as appropriate; YYYY-MM-DD dates compare correctly as strings.",
+          items: {
+            type: "object",
+            properties: {
+              column: { type: "string" },
+              op: { type: "string", enum: ["eq", "notEq", "contains", "gt", "gte", "lt", "lte"] },
+              value: { type: "string" }
+            },
+            required: ["column", "op", "value"],
+            additionalProperties: false
+          }
+        },
+        selectColumns: {
+          type: "array",
+          items: { type: "string" },
+          description: "Columns to include for filterRows. Defaults to the first columns in the CSV."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum rows or ranked values to return. Defaults to 10 and is capped at 100."
+        },
+        splitValues: {
+          type: "boolean",
+          description: "For topValues, split each cell before counting. Useful for comma-separated columns like artist lists."
+        },
+        valueDelimiter: {
+          type: "string",
+          description: "Delimiter used when splitValues is true. Defaults to comma."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
     name: "createSkillDraft",
     description:
       "Create or update a private database-backed Markdown skill. Use only when the user explicitly asks the agent to learn, remember, save, or update durable behavior/knowledge for next time.",
@@ -870,7 +968,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getSpotifyPlaylistStats",
     description:
-      "Compute deterministic, fun stats from a Spotify playlist track list: total duration, explicit count, local/unavailable count, top artists, top albums, unique artists, and repeated artists. Use this for rating or summarizing a playlist without using deprecated audio features or recommendations.",
+      "Compute deterministic, fun stats from a Spotify playlist track list: total duration, explicit count, local/unavailable count, top artists, top albums, unique artists, and repeated artists. Use this for quick rating or summarizing a playlist without using deprecated audio features or recommendations. For custom filters/rankings over the full playlist rows, export a CSV with getSpotifyPlaylistTracks and query it with queryGeneratedCsv.",
     userVisible: true,
     mutates: false,
     category: "external",
@@ -1082,6 +1180,7 @@ function defaultPermissionRequirements(tool: ToolRegistryEntry): string[] {
 
 function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["category"]> {
   if (name === "generateImage") return "generation";
+  if (name === "readGeneratedFile" || name === "queryGeneratedCsv") return "memory";
   if (name === "createSkillDraft") return "memory";
   if (
     name === "runCodingAgent" ||
@@ -1122,6 +1221,8 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   summarizeDiscordHistory: "summary",
   summarizeDiscordThread: "summary",
   generateImage: "generation",
+  readGeneratedFile: "retrieval",
+  queryGeneratedCsv: "stats",
   createSkillDraft: "memory",
   runCodingAgent: "coding",
   getAgentTaskStatus: "coding",
@@ -1178,6 +1279,8 @@ function defaultToolExamples(name: ToolName): string[] {
     summarizeDiscordHistory: "@ai what has tyler been up to recently?",
     summarizeDiscordThread: "@ai summarize this thread",
     generateImage: "@ai make an image of a wizard eating nachos",
+    readGeneratedFile: "@ai show me the first rows of the file you just generated",
+    queryGeneratedCsv: "@ai rank the artists in the CSV you just generated",
     createSkillDraft: "@ai learn this for next time: movie night is on Fridays",
     runCodingAgent: "@ai debug the failing CI on that PR",
     getAgentTaskStatus: "@ai what happened to the last update?",

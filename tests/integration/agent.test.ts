@@ -302,24 +302,33 @@ describe("agent router", () => {
     );
   });
 
-  it("returns Spotify tool results directly and redacts stored transcript content", async () => {
+  it("continues to synthesis after Spotify tools while redacting stored transcript content", async () => {
     const appendMessage = vi.fn(async () => undefined);
-    const chat = vi.fn().mockResolvedValueOnce({
-      content: "",
-      model: "router-model",
-      raw: {},
-      estimatedCostUsd: 0.001,
-      toolCalls: [
-        {
-          id: "call-spotify",
-          name: "getSpotifyPlaylistTracks",
-          argumentsText: JSON.stringify({
-            playlistIdOrUrl: "https://open.spotify.com/playlist/pl123",
-            limit: 5
-          })
-        }
-      ]
-    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        estimatedCostUsd: 0.001,
+        toolCalls: [
+          {
+            id: "call-spotify",
+            name: "getSpotifyPlaylistTracks",
+            argumentsText: JSON.stringify({
+              playlistIdOrUrl: "https://open.spotify.com/playlist/pl123",
+              limit: 5
+            })
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        content: "I could not read that Spotify playlist because Spotify is not configured.",
+        model: "router-model",
+        raw: {},
+        estimatedCostUsd: 0.001,
+        toolCalls: []
+      });
     const ctx = {
       config: { maxReplyChars: 1800, spotify: {} },
       repo: {
@@ -341,8 +350,8 @@ describe("agent router", () => {
     const response = await handleAgentRequest(ctx, "list tracks in https://open.spotify.com/playlist/pl123");
 
     expect(response.content).toContain("Spotify is not configured");
-    expect(response.storedContent).toContain("Spotify response omitted");
-    expect(chat).toHaveBeenCalledTimes(1);
+    expect(response.storedContent).toBeUndefined();
+    expect(chat).toHaveBeenCalledTimes(2);
     expect(appendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "agent-session-spotify",
@@ -362,6 +371,124 @@ describe("agent router", () => {
       })
     );
     expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Spotify is not configured");
+    expect(chat.mock.calls[1]?.[0].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call-spotify",
+          name: "getSpotifyPlaylistTracks",
+          content: expect.stringContaining("Spotify is not configured")
+        })
+      ])
+    );
+  });
+
+  it("lets the model query CSV files produced by earlier tool calls", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [
+          {
+            id: "call-export",
+            name: "getSpotifyPlaylistTracks",
+            argumentsText: JSON.stringify({
+              playlistIdOrUrl: "https://open.spotify.com/playlist/pl123",
+              format: "csv",
+              limit: 4
+            })
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [
+          {
+            id: "call-query",
+            name: "queryGeneratedCsv",
+            argumentsText: JSON.stringify({
+              fileName: "spotify-playlist-my-cool-playlist.csv",
+              operation: "topValues",
+              column: "artists",
+              filters: [{ column: "added_at", op: "gte", value: "2025-07-05" }],
+              splitValues: true,
+              limit: 2
+            })
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        content: "Radiohead wins the recent-adds list with 2 tracks.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: []
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, spotify: { clientId: "id", clientSecret: "secret" } },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const href = String(url);
+        if (href === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok", expires_in: 3600 });
+        if (href.startsWith("https://api.spotify.com/v1/playlists/pl123?")) {
+          return jsonResponse({
+            id: "pl123",
+            name: "My Cool Playlist",
+            owner: { display_name: "Owner One" },
+            tracks: { total: 4 },
+            external_urls: { spotify: "https://open.spotify.com/playlist/pl123" }
+          });
+        }
+        if (href.includes("/playlists/pl123/items?")) {
+          return jsonResponse({
+            total: 4,
+            next: null,
+            items: [
+              playlistEntry(0, "Old Song", "Old Artist", "2024-01-01"),
+              playlistEntry(1, "New A", "Radiohead, Thom Yorke", "2025-08-01"),
+              playlistEntry(2, "New B", "Radiohead", "2025-09-01"),
+              playlistEntry(3, "New C", "Kate Bush", "2025-10-01")
+            ]
+          });
+        }
+        throw new Error(`unexpected URL ${href}`);
+      })
+    );
+
+    try {
+      const response = await handleAgentRequest(ctx, "top artists added in the last year for this Spotify playlist");
+
+      expect(response.content).toContain("Radiohead wins");
+      expect(response.files?.[0].name).toBe("spotify-playlist-my-cool-playlist.csv");
+      expect(chat).toHaveBeenCalledTimes(3);
+      expect(chat.mock.calls[2]?.[0].messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            tool_call_id: "call-query",
+            name: "queryGeneratedCsv",
+            content: expect.stringContaining("1. Radiohead (2)")
+          })
+        ])
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each(["what can you do", "what can you do?", "tools?", "help"])(
@@ -2323,5 +2450,26 @@ function agentSearchResult(overrides: Record<string, unknown> = {}) {
     score: 1,
     link: "https://discord.com/channels/g/c/m1",
     ...overrides
+  };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+function playlistEntry(index: number, name: string, artists: string, addedAt: string) {
+  return {
+    added_at: `${addedAt}T00:00:00Z`,
+    is_local: false,
+    item: {
+      id: `track-${index}`,
+      name,
+      type: "track",
+      duration_ms: 180000,
+      explicit: false,
+      artists: artists.split(",").map((artist) => ({ name: artist.trim() })),
+      album: { name: `Album ${index}` },
+      external_urls: { spotify: `https://open.spotify.com/track/track-${index}` }
+    }
   };
 }

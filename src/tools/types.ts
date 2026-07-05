@@ -23,6 +23,7 @@ export type ToolContext = {
   sessionMessages?: ConversationMessage[];
   replyContext?: DiscordReplyContext;
   requestAttachments?: DiscordAttachmentContext[];
+  generatedFiles?: AgentFile[];
   requestId?: string;
   statusChannelId?: string;
   statusMessageId?: string;

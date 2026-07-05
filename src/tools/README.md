@@ -10,6 +10,7 @@ Owns model-facing local tool contracts and implementations.
 - `agentTaskFormatting.ts`: code-update task titles, task result messages, compact timing/cache lines, and shared duration formatting.
 - `discordHistoryFormatting.ts`: Discord history search syntax, date coercion, no-results text, and history evidence/summary formatting.
 - `discordStatsFormatting.ts`: Discord stats and channel-topic output formatting, metric parsing, and topic clustering helpers.
+- `generatedFileTools.ts`: current-turn generated file access and CSV querying for files produced by earlier tool calls.
 - `imageTools.ts`: Discord image inspection, reference image collection, image generation, and generated-file conversion.
 - `responseFormatting.ts`: shared final-response cleanup and Discord length trimming used by the agent router and Discord renderers.
 - `skillTools.ts`: private skill draft/update generation, policy validation, database persistence, and skill audit logging.

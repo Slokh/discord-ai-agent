@@ -136,6 +136,13 @@
       "notes": "Fun playlist summaries should use deterministic playlist stats instead of deprecated audio features."
     },
     {
+      "id": "spotify-playlist-generated-csv-ranking",
+      "category": "spotify",
+      "prompt": "top 10 artists added to this Spotify playlist in the last year: https://open.spotify.com/playlist/abc123",
+      "expectedTools": ["getSpotifyPlaylistTracks", "queryGeneratedCsv"],
+      "notes": "Custom playlist rankings should compose a Spotify CSV export with the generic generated-CSV query tool rather than adding prompt-specific Spotify branches."
+    },
+    {
       "id": "vision-attached-image",
       "category": "image",
       "prompt": "what is in this screenshot?",

@@ -108,6 +108,8 @@ export function codeUpdatePrompt(env: CodegenPromptEnv, contextPack?: CodegenPro
     "- Make the first focused code diff after that targeted pass. Do not keep alternating search/read/search/read once the owner is clear.",
     "- If exact request anchors or target files are present, inspect those first and patch the owning source file unless it is clearly unrelated.",
     "- Let repo docs, folder READMEs, source ownership, and tests determine the implementation path.",
+    "- If the request asks a question and also names a desired code, config, behavior, UX, or infrastructure change, answer the question by implementing the reasonable change. Do not stop at investigation unless the user explicitly asks for read-only diagnosis.",
+    "- Phrases like \"can we\", \"should we\", \"could we\", \"where is this defined\", or \"how can we\" are often implementation requests when paired with a desired change. Preserve that intent and produce a real diff when a safe change is appropriate.",
     "- Add or update focused tests for the changed behavior.",
     "- Validation ladder: run the closest focused tests once, fix failures from their direct output, then run `npm run typecheck` only when TypeScript contracts changed.",
     "- Run suggested anchor checks or the closest checks from repo docs when they match your edit. Do not run `npm run verify` or broad test suites; CI runs full verification after the PR opens.",

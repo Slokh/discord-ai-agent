@@ -199,7 +199,8 @@ describe("formatAgentTaskResult", () => {
             failureDiagnosis: {
               category: "no_first_edit",
               summary: "OpenCode finished without making a code edit, so no PR was opened.",
-              nextAction: "Improve context packaging so the agent makes an early focused edit."
+              nextAction: "Improve context packaging so the agent makes an early focused edit.",
+              finalResponse: "The limit is defined in src/agent/router.ts and should be raised there."
             }
           }
         }
@@ -207,6 +208,7 @@ describe("formatAgentTaskResult", () => {
     });
 
     expect(response).toContain("No PR opened: OpenCode finished without making a code edit, so no PR was opened. Task ID: `task-1`.");
+    expect(response).toContain("Agent answer:\nThe limit is defined in src/agent/router.ts and should be raised there.");
     expect(response).toContain("Next: Improve context packaging so the agent makes an early focused edit.");
     expect(response).not.toContain("the coding agent did not produce a code diff");
   });

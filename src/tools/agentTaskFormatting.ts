@@ -101,8 +101,9 @@ export function formatAgentTaskResult(input: {
       diagnosis
         ? `No PR opened: ${diagnosis.summary} Task ID: \`${input.taskId}\`.`
         : `No PR opened: the coding agent did not produce a code diff. Task ID: \`${input.taskId}\`.`,
+      diagnosis?.finalResponse ? `Agent answer:\n${diagnosis.finalResponse}` : "",
       diagnosis?.nextAction ? `Next: ${diagnosis.nextAction}` : "",
-      formatLastCommandFailure(input.commandEvents)
+      diagnosis?.finalResponse ? "" : formatLastCommandFailure(input.commandEvents)
     ]
       .filter(Boolean)
       .join("\n"));
@@ -182,9 +183,11 @@ function agentTaskFailureDiagnosis(taskEvents: TaskEvent[] | undefined) {
     const summary = typeof diagnosis?.summary === "string" ? diagnosis.summary.trim() : "";
     if (!summary) continue;
     const nextAction = typeof diagnosis?.nextAction === "string" ? diagnosis.nextAction.trim() : "";
+    const finalResponse = typeof diagnosis?.finalResponse === "string" ? diagnosis.finalResponse.trim() : "";
     return {
       summary: truncateForDiscord(summary, 700),
-      nextAction: nextAction ? truncateForDiscord(nextAction, 700) : ""
+      nextAction: nextAction ? truncateForDiscord(nextAction, 700) : "",
+      finalResponse: finalResponse ? truncateForDiscord(finalResponse, 900) : ""
     };
   }
   return null;

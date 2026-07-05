@@ -91,6 +91,7 @@ type CodexAttemptSummary = {
   exitCode: number;
   durationMs: number;
   producedDiff: boolean;
+  finalResponse?: string;
   stdoutTail: string;
   stderrTail: string;
 };
@@ -1456,12 +1457,14 @@ async function runOpenCodeWithRecovery(input: {
   const changeState = await readGitChangeState(input.checkoutDir, input.baseRevision).catch(() => undefined);
   const gitStatus = changeState?.status ?? "";
   const producedDiff = Boolean(changeState?.hasChanges);
+  const finalResponse = extractOpenCodeFinalText(result.stdout);
   const summary: CodexAttemptSummary = {
     attempt,
     command: "opencode-run",
     exitCode: result.exitCode,
     durationMs: result.durationMs,
     producedDiff,
+    ...(finalResponse ? { finalResponse } : {}),
     stdoutTail: tail(result.stdout, MAX_RECOVERY_TAIL),
     stderrTail: tail(result.stderr, MAX_RECOVERY_TAIL)
   };
@@ -2465,6 +2468,18 @@ function parseOpenCodeOutputLine(line: string): OpenCodeOutputRecord[] {
   } catch {
     return [];
   }
+}
+
+export function extractOpenCodeFinalText(output: string) {
+  let finalText = "";
+  for (const line of output.split(/\r?\n/)) {
+    for (const record of parseOpenCodeOutputLine(line)) {
+      if (record.type !== "text") continue;
+      const text = stringValue(record.part.text)?.trim();
+      if (text) finalText = text;
+    }
+  }
+  return finalText;
 }
 
 function openCodeToolProgressSummary(part: Record<string, unknown>) {

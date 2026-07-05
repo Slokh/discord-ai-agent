@@ -11,17 +11,20 @@ describe("sandbox prompt protocol", () => {
   it("serializes files and restores conversation messages", () => {
     const serialized = serializeAgentResponse({
       content: "hello",
+      storedContent: "stored hello",
       files: [{ name: "image.png", contentType: "image/png", data: Buffer.from("png") }],
       memoryEvents: [{ role: "tool", content: "tool result", metadata: { tool: "example" } }]
     });
 
     expect(serialized).toEqual({
       content: "hello",
+      storedContent: "stored hello",
       files: [{ name: "image.png", contentType: "image/png", dataBase64: Buffer.from("png").toString("base64") }],
       memoryEvents: [{ role: "tool", content: "tool result", metadata: { tool: "example" } }]
     });
     expect(deserializeAgentResponse(serialized)).toEqual({
       content: "hello",
+      storedContent: "stored hello",
       files: [{ name: "image.png", contentType: "image/png", data: Buffer.from("png") }],
       memoryEvents: [{ role: "tool", content: "tool result", metadata: { tool: "example" } }]
     });

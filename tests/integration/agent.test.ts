@@ -302,6 +302,68 @@ describe("agent router", () => {
     );
   });
 
+  it("returns Spotify tool results directly and redacts stored transcript content", async () => {
+    const appendMessage = vi.fn(async () => undefined);
+    const chat = vi.fn().mockResolvedValueOnce({
+      content: "",
+      model: "router-model",
+      raw: {},
+      estimatedCostUsd: 0.001,
+      toolCalls: [
+        {
+          id: "call-spotify",
+          name: "getSpotifyPlaylistTracks",
+          argumentsText: JSON.stringify({
+            playlistIdOrUrl: "https://open.spotify.com/playlist/pl123",
+            limit: 5
+          })
+        }
+      ]
+    });
+    const ctx = {
+      config: { maxReplyChars: 1800, spotify: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      agentRuntime: { appendMessage },
+      agentRuntimeSession: { sessionId: "agent-session-spotify" },
+      agentRuntimeExecutionId: "agent-execution-spotify",
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      requestId: "prompt-message-spotify"
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "list tracks in https://open.spotify.com/playlist/pl123");
+
+    expect(response.content).toContain("Spotify is not configured");
+    expect(response.storedContent).toContain("Spotify response omitted");
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "agent-session-spotify",
+        role: "tool",
+        parts: [
+          expect.objectContaining({
+            type: "tool_result",
+            toolCallId: "call-spotify",
+            toolName: "getSpotifyPlaylistTracks",
+            content: expect.stringContaining("Spotify response omitted")
+          })
+        ],
+        metadata: expect.objectContaining({
+          toolName: "getSpotifyPlaylistTracks",
+          responseRedacted: true
+        })
+      })
+    );
+    expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Spotify is not configured");
+  });
+
   it.each(["what can you do", "what can you do?", "tools?", "help"])(
     "lets the model route natural-language tool-list request %j",
     async (request) => {

@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractSpotifyId,
-  getSpotifyArtist,
-  getSpotifyAudioFeatures,
-  getSpotifyPlaylist,
+  getSpotifyItem,
   getSpotifyPlaylistTracks,
+  parseSpotifyReference,
   resetSpotifyTokenCache,
   searchSpotify
 } from "../../src/tools/spotifyTools.js";
@@ -16,210 +15,283 @@ afterEach(() => {
   resetSpotifyTokenCache();
 });
 
-function fakeContext(spotify: { clientId?: string; clientSecret?: string } = {}): ToolContext {
+function fakeContext(spotify: { clientId?: string; clientSecret?: string; market?: string; allowDeprecatedPlaylistTracks?: boolean } = {}): ToolContext {
   return {
     config: { spotify, maxReplyChars: 1800 } as unknown as ToolContext["config"],
     repo: { auditTool: vi.fn(async () => undefined) } as unknown as ToolContext["repo"],
     guildId: "guild",
     channelId: "channel",
     userId: "user",
+    userDisplayName: "User",
     visibleChannelIds: []
   } as unknown as ToolContext;
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+}
+
+function textResponse(body: string, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(body, { status, headers });
 }
 
 function stubFetchWith(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
-  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => handler(url, init)));
+  vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => handler(String(url), init)));
 }
 
-describe("extractSpotifyId", () => {
-  it("extracts ids from open.spotify.com URLs by kind", () => {
-    expect(extractSpotifyId("https://open.spotify.com/playlist/abc123", "playlist")).toBe("abc123");
-    expect(extractSpotifyId("https://open.spotify.com/artist/xyz456?si=1", "artist")).toBe("xyz456");
-    expect(extractSpotifyId("https://open.spotify.com/track/trackid", "track")).toBe("trackid");
+describe("Spotify ID parsing", () => {
+  it("extracts ids from URLs, localized URLs, URIs, and bare ids by kind", () => {
+    expect(extractSpotifyId("https://open.spotify.com/playlist/abc123?si=1", "playlist")).toBe("abc123");
+    expect(extractSpotifyId("https://open.spotify.com/intl-gb/artist/xyz456?si=1", "artist")).toBe("xyz456");
+    expect(extractSpotifyId("spotify:track:trackid", "track")).toBe("trackid");
+    expect(extractSpotifyId("albumid", "album")).toBe("albumid");
   });
 
-  it("returns a bare id when kind matches", () => {
-    expect(extractSpotifyId("abc123", "playlist")).toBe("abc123");
-  });
-
-  it("returns undefined when the URL is a different kind", () => {
+  it("does not accept a mismatched kind or untyped freeform text", () => {
     expect(extractSpotifyId("https://open.spotify.com/artist/xyz456", "playlist")).toBeUndefined();
-  });
-
-  it("returns undefined for freeform text", () => {
-    expect(extractSpotifyId("my favorite playlist", "playlist")).toBeUndefined();
+    expect(parseSpotifyReference("my favorite playlist")).toBeUndefined();
   });
 });
 
 describe("getSpotifyPlaylistTracks", () => {
-  it("paginates through all tracks using the Spotify Web API", async () => {
-    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+  it("paginates current playlist items at 50 per page and attaches the full list", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret", market: "GB" });
     const calls: string[] = [];
     stubFetchWith((url) => {
       calls.push(url);
       if (url === "https://accounts.spotify.com/api/token") {
         return jsonResponse({ access_token: "tok", expires_in: 3600 });
       }
-      const offset = Number(new URL(url).searchParams.get("offset"));
-      if (offset === 0) {
+      if (url.startsWith("https://api.spotify.com/v1/playlists/pl123?")) {
         return jsonResponse({
-          total: 250,
-          limit: 100,
-          offset: 0,
-          next: `${url}&offset=100`,
-          items: Array.from({ length: 100 }, (_, i) => ({
-            added_at: "2024-01-01T00:00:00Z",
-            track: { id: `t${i}`, name: `Track ${i}`, duration_ms: 180000, artists: [{ name: "Artist" }], album: { name: "Album" }, external_urls: { spotify: `https://open.spotify.com/track/t${i}` } }
-          }))
+          id: "pl123",
+          name: "My Cool Playlist",
+          owner: { display_name: "Owner One" },
+          tracks: { total: 75 },
+          external_urls: { spotify: "https://open.spotify.com/playlist/pl123" }
         });
       }
-      if (offset === 100) {
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe("/v1/playlists/pl123/items");
+      expect(parsed.searchParams.get("limit")).toBe("50");
+      expect(parsed.searchParams.get("market")).toBe("GB");
+      const offset = Number(parsed.searchParams.get("offset"));
+      if (offset === 0) {
         return jsonResponse({
-          total: 250,
-          limit: 100,
-          offset: 100,
-          next: `${url}&offset=200`,
-          items: Array.from({ length: 100 }, (_, i) => ({
-            added_at: "2024-01-02T00:00:00Z",
-            track: { id: `t${100 + i}`, name: `Track ${100 + i}`, duration_ms: 200000, artists: [{ name: "Artist" }] }
-          }))
+          total: 75,
+          limit: 50,
+          offset: 0,
+          next: "next",
+          items: Array.from({ length: 50 }, (_, i) => playlistEntry(i))
         });
       }
       return jsonResponse({
-        total: 250,
-        limit: 100,
-        offset: 200,
+        total: 75,
+        limit: 50,
+        offset: 50,
         next: null,
-        items: Array.from({ length: 50 }, (_, i) => ({
-          added_at: "2024-01-03T00:00:00Z",
-          track: { id: `t${200 + i}`, name: `Track ${200 + i}`, duration_ms: 210000, artists: [{ name: "Artist" }] }
-        }))
+        items: Array.from({ length: 25 }, (_, i) => playlistEntry(50 + i))
       });
     });
 
-    const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "pl123", limit: 250 });
+    const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "spotify:playlist:pl123", limit: 75 });
 
-    const playlistCalls = calls.filter((c) => c.startsWith("https://api.spotify.com/v1/playlists/pl123/tracks"));
-    expect(playlistCalls).toHaveLength(3);
-    expect(playlistCalls[0]).toContain("offset=0");
-    expect(playlistCalls[1]).toContain("offset=100");
-    expect(playlistCalls[2]).toContain("offset=200");
-    expect(result).toContain("250 of 250 tracks");
-    expect(result).toContain("Track 0");
-    expect(result).toContain("Track 249");
+    expect(calls.filter((c) => c.includes("/playlists/pl123/items?"))).toHaveLength(2);
+    expect(result.content).toContain("My Cool Playlist by Owner One");
+    expect(result.content).toContain("Tracks fetched: 75 of 75");
+    expect(result.content).toContain("Full track list attached");
+    expect(result.storedContent).toContain("Spotify response omitted");
+    expect(result.files).toHaveLength(1);
+    expect(result.files?.[0].name).toBe("spotify-playlist-my-cool-playlist.txt");
+    expect(result.files?.[0].data.toString("utf8")).toContain("75. Track 74 - Artist 74");
   });
 
-  it("returns a friendly message when Spotify is not configured", async () => {
-    const ctx = fakeContext({});
-    const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "pl123" });
-    expect(result).toContain("Spotify is not configured");
-  });
-
-  it("rejects an invalid playlist id", async () => {
+  it("can return the full playlist as csv", async () => {
     const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
-    const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "not a playlist id" });
-    expect(result).toContain("could not find a Spotify playlist ID");
-  });
-});
+    stubPlaylistFetch({ total: 1, entries: [playlistEntry(0)] });
 
-describe("getSpotifyPlaylist", () => {
-  it("formats playlist metadata", async () => {
+    const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "pl123", format: "csv" });
+
+    expect(result.files?.[0].name).toBe("spotify-playlist-my-cool-playlist.csv");
+    expect(result.files?.[0].contentType).toBe("text/csv");
+    expect(result.files?.[0].data.toString("utf8")).toContain('"position","track","artists","album","duration","added_at","spotify_url"');
+  });
+
+  it("returns a clear limitation on current playlist item 403s", async () => {
     const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
     stubFetchWith((url) => {
       if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
-      return jsonResponse({
-        id: "pl123",
-        name: "My Cool Playlist",
-        description: "A great mix",
-        owner: { id: "owner1", display_name: "Owner One" },
-        followers: { total: 42 },
-        tracks: { total: 250 },
-        external_urls: { spotify: "https://open.spotify.com/playlist/pl123" }
-      });
+      if (url.startsWith("https://api.spotify.com/v1/playlists/pl123?")) {
+        return jsonResponse({
+          id: "pl123",
+          name: "Forbidden Mix",
+          tracks: { total: 20 },
+          external_urls: { spotify: "https://open.spotify.com/playlist/pl123" }
+        });
+      }
+      return textResponse("forbidden", 403);
     });
-    const result = await getSpotifyPlaylist(ctx, { playlistIdOrUrl: "https://open.spotify.com/playlist/pl123" });
-    expect(result).toContain("My Cool Playlist");
-    expect(result).toContain("Owner One");
-    expect(result).toContain("Tracks: 250");
-    expect(result).toContain("Followers: 42");
+
+    const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "pl123" });
+
+    expect(result.content).toContain("Forbidden Mix");
+    expect(result.content).toContain("Spotify returned 403");
+    expect(result.files).toBeUndefined();
+  });
+
+  it("falls back to the deprecated playlist tracks endpoint only when explicitly allowed", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret", allowDeprecatedPlaylistTracks: true });
+    const calls: string[] = [];
+    stubFetchWith((url) => {
+      calls.push(url);
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
+      if (url.startsWith("https://api.spotify.com/v1/playlists/pl123?")) {
+        return jsonResponse({ id: "pl123", name: "Legacy Mix", tracks: { total: 1 } });
+      }
+      if (url.includes("/items?")) return textResponse("forbidden", 403);
+      expect(url).toContain("/playlists/pl123/tracks?");
+      return jsonResponse({ total: 1, limit: 100, offset: 0, next: null, items: [{ added_at: "2024-01-01T00:00:00Z", track: playlistEntry(0).item }] });
+    });
+
+    const result = await getSpotifyPlaylistTracks(ctx, { playlistIdOrUrl: "pl123" });
+
+    expect(calls.some((url) => url.includes("/playlists/pl123/tracks?"))).toBe(true);
+    expect(result.content).toContain("deprecated playlist tracks endpoint");
+  });
+
+  it("returns friendly messages for missing config and invalid playlist ids", async () => {
+    await expect(getSpotifyPlaylistTracks(fakeContext({}), { playlistIdOrUrl: "pl123" })).resolves.toEqual(
+      expect.objectContaining({ content: expect.stringContaining("Spotify is not configured") })
+    );
+    await expect(getSpotifyPlaylistTracks(fakeContext({ clientId: "id", clientSecret: "secret" }), { playlistIdOrUrl: "not a playlist id" })).resolves.toEqual(
+      expect.objectContaining({ content: expect.stringContaining("could not find a Spotify playlist ID") })
+    );
   });
 });
 
 describe("searchSpotify", () => {
-  it("searches tracks and returns ranked results", async () => {
+  it("searches tracks, clamps limit to Spotify's current maximum, and caches the token", async () => {
     const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+    const calls: string[] = [];
+    let searchCalls = 0;
     stubFetchWith((url) => {
-      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
-      expect(url).toContain("/search?");
-      expect(url).toContain("type=track");
-      expect(url).toContain("q=Running%20Up%20That%20Hill");
+      calls.push(url);
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok", expires_in: 3600 });
+      searchCalls += 1;
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe("/v1/search");
+      expect(parsed.searchParams.get("type")).toBe("track");
+      expect(parsed.searchParams.get("limit")).toBe(searchCalls === 1 ? "10" : "5");
       return jsonResponse({
         tracks: {
           items: [
-            { id: "a", name: "Running Up That Hill", artists: [{ name: "Kate Bush" }], external_urls: { spotify: "https://open.spotify.com/track/a" } }
+            {
+              id: "a",
+              name: "Running Up That Hill",
+              artists: [{ name: "Kate Bush" }],
+              external_urls: { spotify: "https://open.spotify.com/track/a" }
+            }
           ]
         }
       });
     });
-    const result = await searchSpotify(ctx, { query: "Running Up That Hill", type: "track" });
-    expect(result).toContain("Running Up That Hill");
-    expect(result).toContain("Kate Bush");
-  });
-});
 
-describe("getSpotifyArtist", () => {
-  it("returns artist genres, popularity, and related artists", async () => {
+    const first = await searchSpotify(ctx, { query: "Running Up That Hill", type: "track", limit: 50 });
+    const second = await searchSpotify(ctx, { query: "Running Up That Hill", type: "track" });
+
+    expect(first.content).toContain("Running Up That Hill - Kate Bush");
+    expect(second.content).toContain("Running Up That Hill - Kate Bush");
+    expect(calls.filter((url) => url === "https://accounts.spotify.com/api/token")).toHaveLength(1);
+  });
+
+  it("returns Retry-After details for Spotify rate limits", async () => {
     const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
     stubFetchWith((url) => {
       if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
-      if (url.startsWith("https://api.spotify.com/v1/artists/artist1/related-artists")) {
-        return jsonResponse({ artists: [{ id: "r1", name: "Related Artist" }] });
-      }
-      return jsonResponse({
-        id: "artist1",
-        name: "Radiohead",
-        genres: ["alternative rock", "art rock"],
-        popularity: 82,
-        followers: { total: 5_000_000 },
-        external_urls: { spotify: "https://open.spotify.com/artist/artist1" }
-      });
+      return textResponse("slow down", 429, { "retry-after": "12" });
     });
-    const result = await getSpotifyArtist(ctx, { artistIdOrUrl: "artist1" });
-    expect(result).toContain("Radiohead");
-    expect(result).toContain("alternative rock");
-    expect(result).toContain("Popularity: 82");
-    expect(result).toContain("Related Artist");
+
+    const result = await searchSpotify(ctx, { query: "Kate Bush" });
+
+    expect(result.content).toContain("rate-limited");
+    expect(result.content).toContain("12s");
+  });
+
+  it("refreshes the token and retries once on 401", async () => {
+    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
+    let searchCalls = 0;
+    stubFetchWith((url) => {
+      if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: searchCalls === 0 ? "bad" : "good" });
+      searchCalls += 1;
+      if (searchCalls === 1) return textResponse("expired", 401);
+      return jsonResponse({ artists: { items: [{ id: "artist1", name: "Radiohead", external_urls: { spotify: "https://open.spotify.com/artist/artist1" } }] } });
+    });
+
+    const result = await searchSpotify(ctx, { query: "Radiohead", type: "artist" });
+
+    expect(result.content).toContain("Radiohead");
+    expect(searchCalls).toBe(2);
   });
 });
 
-describe("getSpotifyAudioFeatures", () => {
-  it("fetches audio features for track ids and describes mood", async () => {
+describe("getSpotifyItem", () => {
+  it("formats track details from a Spotify URL", async () => {
     const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
     stubFetchWith((url) => {
       if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
-      expect(url).toContain("/audio-features?ids=t1,t2");
+      expect(url).toContain("/tracks/track1?");
       return jsonResponse({
-        audio_features: [
-          { id: "t1", danceability: 0.8, energy: 0.7, valence: 0.9, tempo: 120, loudness: -5, acousticness: 0.1, instrumentalness: 0, liveness: 0.1, speechiness: 0.05, duration_ms: 180000 },
-          { id: "t2", danceability: 0.2, energy: 0.2, valence: 0.1, tempo: 90, loudness: -14, acousticness: 0.8, instrumentalness: 0.5, liveness: 0.1, speechiness: 0.05, duration_ms: 240000 }
-        ]
+        id: "track1",
+        name: "Idioteque",
+        duration_ms: 309000,
+        explicit: false,
+        artists: [{ name: "Radiohead" }],
+        album: { name: "Kid A" },
+        external_urls: { spotify: "https://open.spotify.com/track/track1" }
       });
     });
-    const result = await getSpotifyAudioFeatures(ctx, { trackIds: ["t1", "https://open.spotify.com/track/t2"] });
-    expect(result).toContain("Track t1:");
-    expect(result).toContain("danceability=0.800");
-    expect(result).toContain("Track t2:");
-    expect(result).toContain("upbeat / feel-good party");
-    expect(result).toContain("moody / melancholic");
+
+    const result = await getSpotifyItem(ctx, { itemIdOrUrl: "https://open.spotify.com/track/track1" });
+
+    expect(result.content).toContain("Spotify track: Idioteque - Radiohead");
+    expect(result.content).toContain("Album: Kid A");
+    expect(result.content).toContain("Duration: 5:09");
   });
 
-  it("requires at least one track id", async () => {
-    const ctx = fakeContext({ clientId: "id", clientSecret: "secret" });
-    const result = await getSpotifyAudioFeatures(ctx, { trackIds: [] });
-    expect(result).toContain("need at least one Spotify track ID");
+  it("requires a type when given a bare ID", async () => {
+    const result = await getSpotifyItem(fakeContext({ clientId: "id", clientSecret: "secret" }), { itemIdOrUrl: "abc123" });
+    expect(result.content).toContain("bare ID with type");
   });
 });
+
+function stubPlaylistFetch(input: { total: number; entries: ReturnType<typeof playlistEntry>[] }) {
+  stubFetchWith((url) => {
+    if (url === "https://accounts.spotify.com/api/token") return jsonResponse({ access_token: "tok" });
+    if (url.startsWith("https://api.spotify.com/v1/playlists/pl123?")) {
+      return jsonResponse({
+        id: "pl123",
+        name: "My Cool Playlist",
+        owner: { display_name: "Owner One" },
+        tracks: { total: input.total },
+        external_urls: { spotify: "https://open.spotify.com/playlist/pl123" }
+      });
+    }
+    return jsonResponse({ total: input.total, limit: 50, offset: 0, next: null, items: input.entries });
+  });
+}
+
+function playlistEntry(index: number) {
+  return {
+    added_at: `2024-01-${String((index % 28) + 1).padStart(2, "0")}T00:00:00Z`,
+    is_local: false,
+    item: {
+      id: `t${index}`,
+      name: `Track ${index}`,
+      type: "track",
+      duration_ms: 180000 + index * 1000,
+      artists: [{ name: `Artist ${index}` }],
+      album: { name: `Album ${index}` },
+      external_urls: { spotify: `https://open.spotify.com/track/t${index}` }
+    }
+  };
+}

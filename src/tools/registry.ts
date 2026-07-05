@@ -26,10 +26,8 @@ export type ToolName =
   | "undoConversationTurns"
   | "reportStatus"
   | "getSpotifyPlaylistTracks"
-  | "getSpotifyPlaylist"
   | "searchSpotify"
-  | "getSpotifyArtist"
-  | "getSpotifyAudioFeatures";
+  | "getSpotifyItem";
 
 export type ToolClass =
   | "resolver"
@@ -773,41 +771,27 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getSpotifyPlaylistTracks",
     description:
-      "Fetch the full track list of a public Spotify playlist using the Spotify Web API, paginating through every track (Spotify returns at most 100 tracks per request). Use this for rating music taste, summarizing a playlist, or getting the complete track list beyond what the open.spotify.com HTML page shows. Pass a playlist ID or an open.spotify.com/playlist/<id> URL. Returns track name, artists, album, duration, added date, and Spotify URL for each track.",
+      "Fetch a Spotify playlist's track list with Spotify's Web API, using current playlist item pagination and attaching the full list as text or CSV when available. Use this for Spotify playlist URLs/URIs or playlist IDs, especially when the user asks for every track. Do not use web_fetch on open.spotify.com for playlist track lists. If Spotify denies playlist item access, return the limitation clearly instead of guessing.",
     userVisible: true,
     mutates: false,
     category: "external",
     toolClass: "external",
+    outputContract: ["playlist metadata", "track count returned", "attached full track list when available", "Spotify URLs", "explicit limitation on 403"],
     parameters: {
       type: "object",
       properties: {
         playlistIdOrUrl: {
           type: "string",
-          description: "Spotify playlist ID or open.spotify.com/playlist/<id> URL."
+          description: "Spotify playlist ID, spotify:playlist URI, or open.spotify.com/playlist/<id> URL."
         },
         limit: {
           type: "number",
-          description: "Maximum tracks to return. Defaults to 2000. Spotify caps at 100 per page; this tool paginates automatically."
-        }
-      },
-      required: ["playlistIdOrUrl"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "getSpotifyPlaylist",
-    description:
-      "Fetch details for a public Spotify playlist: name, owner, description, track count, follower count, and Spotify URL. Use this for playlist metadata before or alongside getSpotifyPlaylistTracks. Pass a playlist ID or an open.spotify.com/playlist/<id> URL.",
-    userVisible: true,
-    mutates: false,
-    category: "external",
-    toolClass: "external",
-    parameters: {
-      type: "object",
-      properties: {
-        playlistIdOrUrl: {
+          description: "Maximum tracks to include in the attached list. Defaults to 2000 and is capped at 2000."
+        },
+        format: {
           type: "string",
-          description: "Spotify playlist ID or open.spotify.com/playlist/<id> URL."
+          enum: ["text", "csv"],
+          description: "Attachment format for the full track list. Defaults to text."
         }
       },
       required: ["playlistIdOrUrl"],
@@ -817,26 +801,27 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "searchSpotify",
     description:
-      "Search Spotify's catalog for tracks, artists, or albums using the Spotify Web API. Use this when a user asks to find songs, artists, or albums by name. Returns names, artists/genres, and Spotify URLs. Requires SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET (client credentials flow).",
+      "Search Spotify's public catalog for tracks, artists, albums, or playlists using the Spotify Web API. Use this when the user asks to find music on Spotify by name. Results are deterministic Spotify metadata and should be returned directly with Spotify links.",
     userVisible: true,
     mutates: false,
     category: "external",
     toolClass: "external",
+    outputContract: ["search query", "result type", "ranked Spotify metadata", "Spotify URLs"],
     parameters: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "Search query (track title, artist name, album name, etc.)."
+          description: "Search query, such as track title, artist name, album name, or playlist name."
         },
         type: {
           type: "string",
-          enum: ["track", "artist", "album"],
+          enum: ["track", "artist", "album", "playlist"],
           description: "What to search for. Defaults to track."
         },
         limit: {
           type: "number",
-          description: "Maximum results. Defaults to 10, max 50."
+          description: "Maximum results. Defaults to 5 and Spotify's current search limit caps at 10."
         }
       },
       required: ["query"],
@@ -844,43 +829,28 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
-    name: "getSpotifyArtist",
+    name: "getSpotifyItem",
     description:
-      "Fetch details for a Spotify artist: genres, popularity score, follower count, related artists, and Spotify URL. Use this when a user asks about an artist's style, popularity, or similar artists. Pass an artist ID or an open.spotify.com/artist/<id> URL.",
+      "Fetch deterministic public Spotify details for one track, artist, album, or playlist. Use this for Spotify item URLs/URIs, or for a bare Spotify ID when the type is known. For full playlist track lists, use getSpotifyPlaylistTracks instead.",
     userVisible: true,
     mutates: false,
     category: "external",
     toolClass: "external",
+    outputContract: ["item type", "Spotify metadata", "Spotify URL", "explicit limitation if unavailable"],
     parameters: {
       type: "object",
       properties: {
-        artistIdOrUrl: {
+        itemIdOrUrl: {
           type: "string",
-          description: "Spotify artist ID or open.spotify.com/artist/<id> URL."
+          description: "Spotify open URL, spotify: URI, or bare Spotify ID."
+        },
+        type: {
+          type: "string",
+          enum: ["track", "artist", "album", "playlist"],
+          description: "Required only when itemIdOrUrl is a bare ID rather than a URL or URI."
         }
       },
-      required: ["artistIdOrUrl"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "getSpotifyAudioFeatures",
-    description:
-      "Fetch Spotify audio features for up to 100 tracks: danceability, energy, valence (positivity), tempo, loudness, acousticness, instrumentalness, liveness, speechiness, key, mode, and duration. Use this to rate music taste, compare vibes, or characterize a playlist/track. Pass track IDs or open.spotify.com/track/<id> URLs.",
-    userVisible: true,
-    mutates: false,
-    category: "external",
-    toolClass: "external",
-    parameters: {
-      type: "object",
-      properties: {
-        trackIds: {
-          type: "array",
-          items: { type: "string" },
-          description: "Spotify track IDs or open.spotify.com/track/<id> URLs. Up to 100 per call."
-        }
-      },
-      required: ["trackIds"],
+      required: ["itemIdOrUrl"],
       additionalProperties: false
     }
   }
@@ -1002,10 +972,8 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   if (name === "inspectAgentLogs" || name === "reportStatus" || name === "getDeploymentStatus" || name === "listTools") return "ops";
   if (
     name === "getSpotifyPlaylistTracks" ||
-    name === "getSpotifyPlaylist" ||
     name === "searchSpotify" ||
-    name === "getSpotifyArtist" ||
-    name === "getSpotifyAudioFeatures"
+    name === "getSpotifyItem"
   ) {
     return "external";
   }
@@ -1038,10 +1006,8 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   undoConversationTurns: "memory",
   reportStatus: "ops",
   getSpotifyPlaylistTracks: "external",
-  getSpotifyPlaylist: "external",
   searchSpotify: "external",
-  getSpotifyArtist: "external",
-  getSpotifyAudioFeatures: "external"
+  getSpotifyItem: "external"
 };
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
@@ -1092,10 +1058,8 @@ function defaultToolExamples(name: ToolName): string[] {
     undoConversationTurns: "@ai undo that",
     reportStatus: "@ai status",
     getSpotifyPlaylistTracks: "@ai list all the tracks in this Spotify playlist: https://open.spotify.com/playlist/abc123",
-    getSpotifyPlaylist: "@ai what is in this playlist? https://open.spotify.com/playlist/abc123",
     searchSpotify: "@ai search Spotify for Running Up That Hill",
-    getSpotifyArtist: "@ai what genres is Radiohead on Spotify?",
-    getSpotifyAudioFeatures: "@ai how danceable are these tracks?"
+    getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123"
   };
   return [examples[name]];
 }

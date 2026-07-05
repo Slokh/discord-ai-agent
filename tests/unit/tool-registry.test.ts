@@ -29,10 +29,8 @@ describe("toolRegistry", () => {
       "inspectAgentLogs",
       "reportStatus",
       "getSpotifyPlaylistTracks",
-      "getSpotifyPlaylist",
       "searchSpotify",
-      "getSpotifyArtist",
-      "getSpotifyAudioFeatures"
+      "getSpotifyItem"
     ]);
   });
 
@@ -87,6 +85,8 @@ describe("toolRegistry", () => {
     expect(contracts.find((tool) => tool.name === "inspectDiscordImages")?.toolClass).toBe("image");
     expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.toolClass).toBe("external");
     expect(contracts.find((tool) => tool.name === "getSpotifyPlaylistTracks")?.category).toBe("external");
+    expect(contracts.find((tool) => tool.name === "searchSpotify")?.toolClass).toBe("external");
+    expect(contracts.find((tool) => tool.name === "getSpotifyItem")?.toolClass).toBe("external");
   });
 
   it("exports OpenRouter-compatible local function and server tool definitions", () => {
@@ -163,6 +163,31 @@ describe("toolRegistry", () => {
           function: expect.objectContaining({
             name: "runCodingAgent",
             description: expect.stringContaining("debug or fix failing CI/checks/tests")
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "getSpotifyPlaylistTracks",
+            description: expect.stringContaining("Do not use web_fetch on open.spotify.com"),
+            parameters: expect.objectContaining({
+              required: ["playlistIdOrUrl"],
+              properties: expect.objectContaining({
+                format: expect.objectContaining({ enum: ["text", "csv"] })
+              })
+            })
+          })
+        }),
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({
+            name: "getSpotifyItem",
+            parameters: expect.objectContaining({
+              required: ["itemIdOrUrl"],
+              properties: expect.objectContaining({
+                type: expect.objectContaining({ enum: ["track", "artist", "album", "playlist"] })
+              })
+            })
           })
         })
       ])

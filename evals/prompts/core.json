@@ -115,6 +115,13 @@
       "notes": "Niche external product questions should use web tools when Discord evidence is insufficient."
     },
     {
+      "id": "spotify-playlist-tool-choice",
+      "category": "spotify",
+      "prompt": "list all the tracks in this Spotify playlist: https://open.spotify.com/playlist/abc123",
+      "expectedTools": ["getSpotifyPlaylistTracks"],
+      "notes": "Spotify playlist URLs should route to the Spotify API tool rather than web_fetch; without credentials it should return the tool's explicit configuration limitation."
+    },
+    {
       "id": "vision-attached-image",
       "category": "image",
       "prompt": "what is in this screenshot?",

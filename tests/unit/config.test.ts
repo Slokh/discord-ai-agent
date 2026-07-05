@@ -36,7 +36,11 @@ describe("config", () => {
         "WORKER_CRAWL_ENABLED",
         "WORKER_EMBEDDING_ENABLED",
         "WORKER_TASK_ENABLED",
-        "WORKER_DISCORD_AGENT_ENABLED"
+        "WORKER_DISCORD_AGENT_ENABLED",
+        "SPOTIFY_CLIENT_ID",
+        "SPOTIFY_CLIENT_SECRET",
+        "SPOTIFY_MARKET",
+        "SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS"
       ],
       () => {
         const config = loadConfig();
@@ -77,6 +81,12 @@ describe("config", () => {
           embeddingEnabled: true,
           taskEnabled: true,
           discordAgentEnabled: true
+        });
+        expect(config.spotify).toEqual({
+          clientId: "",
+          clientSecret: "",
+          market: "US",
+          allowDeprecatedPlaylistTracks: false
         });
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.crawlFetchRetries).toBe(3);
@@ -190,6 +200,31 @@ describe("config", () => {
   it("normalizes the public control UI URL", () => {
     withEnv({ CONTROL_UI_PUBLIC_URL: "https://agent.example/" }, () => {
       expect(loadConfig().controlUi.publicUrl).toBe("https://agent.example");
+    });
+  });
+
+  it("loads optional Spotify client-credentials settings", () => {
+    withEnv(
+      {
+        SPOTIFY_CLIENT_ID: "spotify-client",
+        SPOTIFY_CLIENT_SECRET: "spotify-secret",
+        SPOTIFY_MARKET: "gb",
+        SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS: "true"
+      },
+      () => {
+        expect(loadConfig().spotify).toEqual({
+          clientId: "spotify-client",
+          clientSecret: "spotify-secret",
+          market: "GB",
+          allowDeprecatedPlaylistTracks: true
+        });
+      }
+    );
+  });
+
+  it("validates Spotify market codes", () => {
+    withEnv({ SPOTIFY_MARKET: "usa" }, () => {
+      expect(() => loadConfig()).toThrow(/SPOTIFY_MARKET/);
     });
   });
 

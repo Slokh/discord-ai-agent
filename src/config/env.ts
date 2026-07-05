@@ -97,7 +97,9 @@ const defaults = {
   maxReplyChars: 1800,
   discordAgentResponseTimeoutMs: 30 * 60 * 1000,
   spotifyClientId: "",
-  spotifyClientSecret: ""
+  spotifyClientSecret: "",
+  spotifyMarket: "US",
+  spotifyAllowDeprecatedPlaylistTracks: false
 } as const;
 
 const envSchema = z.object({
@@ -180,7 +182,14 @@ const envSchema = z.object({
     .default(defaults.discordAgentResponseTimeoutMs),
 
   SPOTIFY_CLIENT_ID: z.string().default(defaults.spotifyClientId),
-  SPOTIFY_CLIENT_SECRET: z.string().default(defaults.spotifyClientSecret)
+  SPOTIFY_CLIENT_SECRET: z.string().default(defaults.spotifyClientSecret),
+  SPOTIFY_MARKET: z
+    .string()
+    .trim()
+    .transform((value) => value.toUpperCase() || defaults.spotifyMarket)
+    .refine((value) => /^[A-Z]{2}$/.test(value), "Must be an ISO 3166-1 alpha-2 market code")
+    .default(defaults.spotifyMarket),
+  SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS: booleanFromEnv.default(defaults.spotifyAllowDeprecatedPlaylistTracks)
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -282,7 +291,9 @@ export function loadConfig() {
     discordAgentResponseTimeoutMs: parsed.data.DISCORD_AGENT_RESPONSE_TIMEOUT_MS,
     spotify: {
       clientId: parsed.data.SPOTIFY_CLIENT_ID,
-      clientSecret: parsed.data.SPOTIFY_CLIENT_SECRET
+      clientSecret: parsed.data.SPOTIFY_CLIENT_SECRET,
+      market: parsed.data.SPOTIFY_MARKET,
+      allowDeprecatedPlaylistTracks: parsed.data.SPOTIFY_ALLOW_DEPRECATED_PLAYLIST_TRACKS ?? defaults.spotifyAllowDeprecatedPlaylistTracks
     }
   };
 }

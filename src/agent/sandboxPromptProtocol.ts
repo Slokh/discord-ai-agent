@@ -19,6 +19,7 @@ export type SerializedAgentFile = {
 export type SandboxPromptResponse = {
   content: string;
   files?: SerializedAgentFile[];
+  storedContent?: string;
   memoryEvents?: AgentResponse["memoryEvents"];
 };
 
@@ -48,6 +49,7 @@ export function serializeAgentResponse(response: AgentResponse): SandboxPromptRe
   return {
     content: response.content,
     files: response.files?.map(serializeAgentFile),
+    storedContent: response.storedContent,
     memoryEvents: response.memoryEvents
   };
 }
@@ -56,6 +58,7 @@ export function deserializeAgentResponse(response: SandboxPromptResponse): Agent
   return {
     content: response.content,
     files: response.files?.map(deserializeAgentFile),
+    storedContent: response.storedContent,
     memoryEvents: response.memoryEvents
   };
 }

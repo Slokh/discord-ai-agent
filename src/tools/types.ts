@@ -71,6 +71,7 @@ export type AgentFile = {
 export type AgentResponse = {
   content: string;
   files?: AgentFile[];
+  storedContent?: string;
   memoryEvents?: Array<{
     role: "tool";
     content: string;

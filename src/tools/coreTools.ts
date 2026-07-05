@@ -69,11 +69,10 @@ export { cleanResponse } from "./responseFormatting.js";
 export { createSkillFromRequest, type SkillDraftInput } from "./skillTools.js";
 export {
   getSpotifyPlaylistTracks,
-  getSpotifyPlaylist,
+  getSpotifyItem,
   searchSpotify,
-  getSpotifyArtist,
-  getSpotifyAudioFeatures,
-  extractSpotifyId
+  extractSpotifyId,
+  parseSpotifyReference
 } from "./spotifyTools.js";
 
 type DiscordSummaryEvidence = {

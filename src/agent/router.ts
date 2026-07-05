@@ -24,10 +24,8 @@ import {
   summarizeCurrentThread,
   undoConversationTurns,
   getSpotifyPlaylistTracks,
-  getSpotifyPlaylist,
-  searchSpotify,
-  getSpotifyArtist,
-  getSpotifyAudioFeatures
+  getSpotifyItem,
+  searchSpotify
 } from "../tools/coreTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ChatMessage } from "../models/openrouter.js";
@@ -484,6 +482,16 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
         successfulToolCallKeys.add(routeKey);
       }
       if (result.files?.length) files.push(...result.files);
+      if (isSpotifyToolName(route.name)) {
+        return await completeDirectToolResponse(ctx, {
+          routeName: route.name,
+          result,
+          files,
+          requestLogger,
+          startedAt,
+          completionKind: "direct Spotify tool result"
+        });
+      }
       if (!isRedundantToolCall) {
         memoryEvents.push({
           role: "tool",
@@ -503,31 +511,15 @@ async function handleAgentRequestInner(ctx: ToolContext, userText: string): Prom
       });
 
       if (route.name === "runCodingAgent") {
-        const content = cleanResponse(result.content, ctx.config.maxReplyChars);
-        requestLogger.info(
-          {
-            durationMs: durationMs(startedAt),
-            finalChars: content.length,
-            fileCount: files.length,
-            memoryEventCount: memoryEvents.length
-          },
-          "Agent request complete after direct codegen tool result"
-        );
-        await recordTraceEvent(ctx, {
-          eventName: "agent.request.complete",
-          summary: "Completed with direct codegen tool result",
-          metadata: {
-            finalChars: content.length,
-            fileCount: files.length,
-            memoryEventCount: memoryEvents.length
-          },
-          durationMs: durationMs(startedAt)
+        return await completeDirectToolResponse(ctx, {
+          routeName: route.name,
+          result,
+          files,
+          memoryEvents,
+          requestLogger,
+          startedAt,
+          completionKind: "direct codegen tool result"
         });
-        return {
-          content,
-          files: files.length > 0 ? files : undefined,
-          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
-        };
       }
     }
 
@@ -753,61 +745,35 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
   }
 
   if (route.name === "getSpotifyPlaylistTracks") {
-    return {
-      content: cleanResponse(
-        await getSpotifyPlaylistTracks(ctx, {
-          playlistIdOrUrl: stringArgument(route.arguments, "playlistIdOrUrl") ?? originalText,
-          limit: numberArgument(route.arguments, "limit")
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
-  }
-
-  if (route.name === "getSpotifyPlaylist") {
-    return {
-      content: cleanResponse(
-        await getSpotifyPlaylist(ctx, {
-          playlistIdOrUrl: stringArgument(route.arguments, "playlistIdOrUrl") ?? originalText
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
+    return cleanAgentResponse(
+      await getSpotifyPlaylistTracks(ctx, {
+        playlistIdOrUrl: stringArgument(route.arguments, "playlistIdOrUrl") ?? originalText,
+        limit: numberArgument(route.arguments, "limit"),
+        format: stringArgument(route.arguments, "format")
+      }),
+      ctx.config.maxReplyChars
+    );
   }
 
   if (route.name === "searchSpotify") {
-    return {
-      content: cleanResponse(
-        await searchSpotify(ctx, {
-          query: stringArgument(route.arguments, "query") ?? originalText,
-          type: stringArgument(route.arguments, "type"),
-          limit: numberArgument(route.arguments, "limit")
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
+    return cleanAgentResponse(
+      await searchSpotify(ctx, {
+        query: stringArgument(route.arguments, "query") ?? originalText,
+        type: stringArgument(route.arguments, "type"),
+        limit: numberArgument(route.arguments, "limit")
+      }),
+      ctx.config.maxReplyChars
+    );
   }
 
-  if (route.name === "getSpotifyArtist") {
-    return {
-      content: cleanResponse(
-        await getSpotifyArtist(ctx, {
-          artistIdOrUrl: stringArgument(route.arguments, "artistIdOrUrl") ?? originalText
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
-  }
-
-  if (route.name === "getSpotifyAudioFeatures") {
-    return {
-      content: cleanResponse(
-        await getSpotifyAudioFeatures(ctx, {
-          trackIds: stringArrayArgument(route.arguments, "trackIds") ?? []
-        }),
-        ctx.config.maxReplyChars
-      )
-    };
+  if (route.name === "getSpotifyItem") {
+    return cleanAgentResponse(
+      await getSpotifyItem(ctx, {
+        itemIdOrUrl: stringArgument(route.arguments, "itemIdOrUrl") ?? originalText,
+        type: stringArgument(route.arguments, "type")
+      }),
+      ctx.config.maxReplyChars
+    );
   }
 
   if (route.name === "getRecentDiscordMessages") {
@@ -942,6 +908,60 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
       }),
       ctx.config.maxReplyChars
     )
+  };
+}
+
+function cleanAgentResponse(response: AgentResponse, maxChars: number): AgentResponse {
+  return {
+    ...response,
+    content: cleanResponse(response.content, maxChars)
+  };
+}
+
+function isSpotifyToolName(name: ToolName): boolean {
+  return name === "getSpotifyPlaylistTracks" || name === "searchSpotify" || name === "getSpotifyItem";
+}
+
+async function completeDirectToolResponse(
+  ctx: ToolContext,
+  input: {
+    routeName: ToolName;
+    result: AgentResponse;
+    files: AgentFile[];
+    memoryEvents?: NonNullable<AgentResponse["memoryEvents"]>;
+    requestLogger: Logger;
+    startedAt: number;
+    completionKind: string;
+  }
+): Promise<AgentResponse> {
+  const content = cleanResponse(input.result.content, ctx.config.maxReplyChars);
+  const memoryEvents = input.memoryEvents ?? [];
+  input.requestLogger.info(
+    {
+      durationMs: durationMs(input.startedAt),
+      finalChars: content.length,
+      fileCount: input.files.length,
+      memoryEventCount: memoryEvents.length
+    },
+    `Agent request complete after ${input.completionKind}`
+  );
+  await recordTraceEvent(ctx, {
+    eventName: "agent.request.complete",
+    summary: `Completed with ${input.completionKind}`,
+    metadata: {
+      toolName: input.routeName,
+      finalChars: content.length,
+      fileCount: input.files.length,
+      memoryEventCount: memoryEvents.length,
+      responseRedacted: Boolean(input.result.storedContent)
+    },
+    durationMs: durationMs(input.startedAt)
+  });
+  return {
+    content,
+    storedContent: input.result.storedContent,
+    files: input.files.length > 0 ? input.files : undefined,
+    memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined
   };
 }
 
@@ -1493,6 +1513,7 @@ async function appendAgentRuntimeToolResult(
   }
 ) {
   if (!ctx.agentRuntime || !ctx.agentRuntimeSession || !ctx.agentRuntimeExecutionId || !ctx.requestId) return;
+  const content = input.result.storedContent ?? input.result.content;
   await ctx.agentRuntime
     .appendMessage({
       sessionId: ctx.agentRuntimeSession.sessionId,
@@ -1504,7 +1525,7 @@ async function appendAgentRuntimeToolResult(
           type: "tool_result",
           toolCallId: input.route.id,
           toolName: input.route.name,
-          content: input.result.content,
+          content,
           files: input.result.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
         }
       ],
@@ -1518,6 +1539,7 @@ async function appendAgentRuntimeToolResult(
         toolName: input.route.name,
         arguments: input.route.arguments ?? {},
         outputChars: input.result.content.length,
+        responseRedacted: Boolean(input.result.storedContent),
         fileCount: input.result.files?.length ?? 0,
         skippedRedundantToolCall: input.skippedRedundantToolCall || undefined,
         durationMs: input.durationMs
@@ -1706,7 +1728,7 @@ function chatMessages(
         "For favorite/best/most popular message questions, use getDiscordStats with metric=reactions and groupBy=message as evidence, then make a clear pick when the evidence supports one. " +
         "For current public information, news, schedules, prices, releases, or external facts, use web_search and datetime when useful. " +
         "For URLs, use web_fetch when reading the page would improve the answer. " +
-        "For Spotify playlists, artists, tracks, audio features, or music-taste questions, call getSpotifyPlaylistTracks (with pagination through the full playlist), getSpotifyPlaylist, searchSpotify, getSpotifyArtist, or getSpotifyAudioFeatures. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com so you get every track, not just the first page. " +
+        "For Spotify catalog searches, item details, or playlist track lists, call searchSpotify, getSpotifyItem, or getSpotifyPlaylistTracks. Use getSpotifyPlaylistTracks rather than web_fetch on open.spotify.com when the user asks for playlist tracks. Do not claim Spotify user-library, recently played, top-items, audio-feature, recommendation, or audio-analysis access. " +
         "When the current message or reply context includes images and the user asks what is shown, asks about a screenshot/meme/photo/chart, or asks for visual details, call inspectDiscordImages. " +
         "For Discord image generation requests, call generateImage so the result can be attached. If the user asks to edit, modify, transform, copy the style of, or use an attached/replied image as a reference, call generateImage with useContextImages=true or explicit referenceImageUrls. " +
         "For @ai status, call reportStatus. For @ai tools/help, call listTools. " +

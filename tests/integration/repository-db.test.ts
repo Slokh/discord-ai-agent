@@ -1640,6 +1640,97 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ).resolves.toEqual([]);
   });
 
+  it("never surfaces messages from the hard-excluded #trivia-sucks channel even when passed as visible", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const triviaChannelId = "1172353113471074314";
+    const otherChannelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const triviaMessageId = `message-${randomUUID()}`;
+    const otherMessageId = `message-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: triviaChannelId, guildId, name: "trivia-sucks", type: 0 });
+    await repo.upsertChannel({ id: otherChannelId, guildId, name: "general", type: 0 });
+
+    await repo.upsertMessage({
+      id: triviaMessageId,
+      guildId,
+      channelId: triviaChannelId,
+      authorId: userId,
+      content: "trivia pizza memory",
+      normalizedContent: "trivia pizza memory",
+      createdAt: new Date()
+    });
+    await repo.storeMessageEmbedding({
+      messageId: triviaMessageId,
+      embedding: Array.from({ length: 1536 }, () => 0.001),
+      model: "test"
+    });
+    await repo.upsertMessage({
+      id: otherMessageId,
+      guildId,
+      channelId: otherChannelId,
+      authorId: userId,
+      content: "general pizza memory",
+      normalizedContent: "general pizza memory",
+      createdAt: new Date()
+    });
+
+    await expect(
+      repo.getVisibleIndexedChannelIds(guildId, [triviaChannelId, otherChannelId])
+    ).resolves.not.toContain(triviaChannelId);
+
+    await expect(
+      repo.recentMessages({ guildId, channelId: triviaChannelId, limit: 10 })
+    ).resolves.toEqual([]);
+
+    await expect(
+      repo.recentMessagesFromChannels({
+        guildId,
+        visibleChannelIds: [triviaChannelId, otherChannelId],
+        limit: 10
+      })
+    ).resolves.toHaveLength(1);
+
+    await expect(
+      repo.keywordSearch({ guildId, visibleChannelIds: [triviaChannelId, otherChannelId], query: "pizza", limit: 10 })
+    ).resolves.toHaveLength(1);
+
+    await expect(
+      repo.vectorSearch({
+        guildId,
+        visibleChannelIds: [triviaChannelId, otherChannelId],
+        embedding: Array.from({ length: 1536 }, () => 0.001),
+        limit: 10
+      })
+    ).resolves.toHaveLength(1);
+
+    await expect(
+      repo.searchDiscordAttachments({
+        guildId,
+        visibleChannelIds: [triviaChannelId, otherChannelId],
+        limit: 10
+      })
+    ).resolves.toHaveLength(0);
+
+    const stats = await repo.discordStats({
+      guildId,
+      visibleChannelIds: [triviaChannelId, otherChannelId],
+      limit: 10
+    });
+    expect(stats.totalMessages).toBe(1);
+
+    const topics = await repo.discordChannelTopicCandidates({
+      guildId,
+      visibleChannelIds: [triviaChannelId, otherChannelId],
+      channelLimit: 5,
+      samplesPerChannel: 20,
+      minChannelMessages: 1,
+      minMessageChars: 1
+    });
+    expect(topics.map((c) => c.channelId)).not.toContain(triviaChannelId);
+  }, 15_000);
+
   it("resets crawl cursors for a true reindex", async () => {
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;

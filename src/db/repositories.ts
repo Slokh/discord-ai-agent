@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DbPool } from "./pool.js";
 import { currentTraceContext } from "../util/trace.js";
 import { redactSensitiveText } from "../observability/redaction.js";
+import { HARD_EXCLUDED_CHANNEL_IDS, isHardExcludedChannel, withoutHardExcludedChannels } from "./hardExcludedChannels.js";
 
 const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
 const LARGE_ARTIFACT_RETENTION_DAYS = 14;
@@ -1193,7 +1194,8 @@ export class DiscordAiAgentRepository {
   }
 
   async getVisibleIndexedChannelIds(guildId: string, visibleChannelIds: string[]) {
-    if (visibleChannelIds.length === 0) return [];
+    const requestedChannelIds = withoutHardExcludedChannels(visibleChannelIds);
+    if (requestedChannelIds.length === 0) return [];
     const result = await this.pool.query(
       `
         SELECT c.id
@@ -1207,10 +1209,11 @@ export class DiscordAiAgentRepository {
           )
           AND c.is_excluded = false
           AND coalesce(parent.is_excluded, false) = false
+          AND NOT (c.id = ANY($3::text[]))
       `,
-      [guildId, visibleChannelIds]
+      [guildId, requestedChannelIds, [...HARD_EXCLUDED_CHANNEL_IDS]]
     );
-    return result.rows.map((row) => String(row.id));
+    return result.rows.map((row) => String(row.id)).filter((id) => !isHardExcludedChannel(id));
   }
 
   async keywordSearch(input: {
@@ -1225,9 +1228,10 @@ export class DiscordAiAgentRepository {
     dateFrom?: Date;
     dateTo?: Date;
   }): Promise<SearchResult[]> {
-    if (input.visibleChannelIds.length === 0 || !input.query.trim()) return [];
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0 || !input.query.trim()) return [];
     const authorIds = normalizeFilterIds(input.authorIds, input.authorId);
-    const channelIds = normalizeFilterIds(input.channelIds);
+    const channelIds = withoutHardExcludedChannels(normalizeFilterIds(input.channelIds));
     const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
     const result = await this.pool.query(
       `
@@ -1275,7 +1279,7 @@ export class DiscordAiAgentRepository {
       `,
       [
         input.guildId,
-        input.visibleChannelIds,
+        visibleChannelIds,
         input.query,
         input.limit,
         authorIds,
@@ -1300,9 +1304,10 @@ export class DiscordAiAgentRepository {
     dateFrom?: Date;
     dateTo?: Date;
   }): Promise<SearchResult[]> {
-    if (input.visibleChannelIds.length === 0 || input.embedding.length === 0) return [];
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0 || input.embedding.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds, input.authorId);
-    const channelIds = normalizeFilterIds(input.channelIds);
+    const channelIds = withoutHardExcludedChannels(normalizeFilterIds(input.channelIds));
     const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
     const hasResultFilters = authorIds.length > 0 || aboutUserTerms.length > 0 || channelIds.length > 0 || input.dateFrom != null || input.dateTo != null;
     const candidateLimit = Math.min(
@@ -1372,7 +1377,7 @@ export class DiscordAiAgentRepository {
         `,
             [
               input.guildId,
-              input.visibleChannelIds,
+              visibleChannelIds,
               vectorLiteral(input.embedding),
               input.limit,
               authorIds,
@@ -1428,7 +1433,7 @@ export class DiscordAiAgentRepository {
         `,
         [
           input.guildId,
-          input.visibleChannelIds,
+          visibleChannelIds,
           vectorLiteral(input.embedding),
           input.limit,
           authorIds,
@@ -1449,6 +1454,7 @@ export class DiscordAiAgentRepository {
   }
 
   async recentMessages(input: { guildId: string; channelId: string; limit: number; includeBots?: boolean }): Promise<SearchResult[]> {
+    if (isHardExcludedChannel(input.channelId)) return [];
     const result = await this.pool.query(
       `
         SELECT
@@ -1492,8 +1498,9 @@ export class DiscordAiAgentRepository {
     dateTo?: Date;
     includeBots?: boolean;
   }): Promise<SearchResult[]> {
-    const requestedChannelIds = normalizeFilterIds(input.channelIds);
-    if (input.visibleChannelIds.length === 0) return [];
+    const requestedChannelIds = withoutHardExcludedChannels(normalizeFilterIds(input.channelIds));
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds);
     const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
     const result = await this.pool.query(
@@ -1541,7 +1548,7 @@ export class DiscordAiAgentRepository {
       `,
       [
         input.guildId,
-        input.visibleChannelIds,
+        visibleChannelIds,
         input.limit,
         authorIds,
         input.dateFrom ?? null,
@@ -1565,8 +1572,9 @@ export class DiscordAiAgentRepository {
     dateTo?: Date;
     includeBots?: boolean;
   }): Promise<SearchResult[]> {
-    const requestedChannelIds = normalizeFilterIds(input.channelIds);
-    if (input.visibleChannelIds.length === 0) return [];
+    const requestedChannelIds = withoutHardExcludedChannels(normalizeFilterIds(input.channelIds));
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds);
     const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
     const result = await this.pool.query(
@@ -1647,7 +1655,7 @@ export class DiscordAiAgentRepository {
       `,
       [
         input.guildId,
-        input.visibleChannelIds,
+        visibleChannelIds,
         input.limit,
         authorIds,
         input.dateFrom ?? null,
@@ -1687,7 +1695,8 @@ export class DiscordAiAgentRepository {
     query?: string;
     limit: number;
   }): Promise<DiscordUserLookupResult[]> {
-    if (input.visibleChannelIds.length === 0) return [];
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0) return [];
     const query = normalizeLookupQuery(input.query ?? "");
     const result = await this.pool.query(
       `
@@ -1755,7 +1764,7 @@ export class DiscordAiAgentRepository {
         ORDER BY score DESC, v.message_count DESC, v.last_message_at DESC
         LIMIT $4
       `,
-      [input.guildId, input.visibleChannelIds, query, input.limit]
+      [input.guildId, visibleChannelIds, query, input.limit]
     );
     return result.rows.map(rowToDiscordUserLookupResult);
   }
@@ -1824,7 +1833,8 @@ export class DiscordAiAgentRepository {
     query?: string;
     limit: number;
   }): Promise<DiscordChannelLookupResult[]> {
-    if (input.visibleChannelIds.length === 0) return [];
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0) return [];
     const query = normalizeLookupQuery(input.query ?? "", { stripChannelPrefix: true });
     const result = await this.pool.query(
       `
@@ -1875,9 +1885,11 @@ export class DiscordAiAgentRepository {
         ORDER BY score DESC, message_count DESC, last_message_at DESC NULLS LAST
         LIMIT $4
       `,
-      [input.guildId, input.visibleChannelIds, query, input.limit]
+      [input.guildId, visibleChannelIds, query, input.limit]
     );
-    return result.rows.map(rowToDiscordChannelLookupResult);
+    return result.rows
+      .map(rowToDiscordChannelLookupResult)
+      .filter((row) => !isHardExcludedChannel(row.id) && !isHardExcludedChannel(row.parentId ?? null));
   }
 
   async messageContext(input: {
@@ -1887,7 +1899,8 @@ export class DiscordAiAgentRepository {
     before: number;
     after: number;
   }): Promise<SearchResult[]> {
-    if (input.visibleChannelIds.length === 0 || !input.messageId) return [];
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0 || !input.messageId) return [];
     const target = await this.pool.query(
       `
         SELECT
@@ -1913,10 +1926,10 @@ export class DiscordAiAgentRepository {
           AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
         LIMIT 1
       `,
-      [input.guildId, input.messageId, input.visibleChannelIds]
+      [input.guildId, input.messageId, visibleChannelIds]
     );
     const targetRow = target.rows[0];
-    if (!targetRow) return [];
+    if (!targetRow || isHardExcludedChannel(targetRow.channel_id)) return [];
 
     const [before, after] = await Promise.all([
       this.pool.query(
@@ -1983,8 +1996,9 @@ export class DiscordAiAgentRepository {
     contentType?: string;
     limit: number;
   }): Promise<DiscordAttachmentSearchResult[]> {
-    const requestedChannelIds = normalizeFilterIds(input.channelIds);
-    if (input.visibleChannelIds.length === 0) return [];
+    const requestedChannelIds = withoutHardExcludedChannels(normalizeFilterIds(input.channelIds));
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0) return [];
     const query = normalizeAttachmentQuery(input.query ?? "");
     const authorIds = normalizeFilterIds(input.authorIds);
     const contentType = input.contentType?.trim().toLowerCase() ?? "";
@@ -2031,7 +2045,7 @@ export class DiscordAiAgentRepository {
         ORDER BY m.created_at DESC
         LIMIT $6
       `,
-      [input.guildId, input.visibleChannelIds, query, authorIds, contentType, input.limit, requestedChannelIds]
+      [input.guildId, visibleChannelIds, query, authorIds, contentType, input.limit, requestedChannelIds]
     );
     return result.rows.map(rowToDiscordAttachmentSearchResult);
   }
@@ -2043,7 +2057,8 @@ export class DiscordAiAgentRepository {
     contentType?: string;
     limit: number;
   }): Promise<DiscordAttachmentSearchResult[]> {
-    if (input.visibleChannelIds.length === 0 || !input.messageId.trim()) return [];
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0 || !input.messageId.trim()) return [];
     const contentType = input.contentType?.trim().toLowerCase() ?? "";
     const result = await this.pool.query(
       `
@@ -2077,9 +2092,11 @@ export class DiscordAiAgentRepository {
         ORDER BY a.id ASC
         LIMIT $5
       `,
-      [input.guildId, input.messageId.trim(), input.visibleChannelIds, contentType, input.limit]
+      [input.guildId, input.messageId.trim(), visibleChannelIds, contentType, input.limit]
     );
-    return result.rows.map(rowToDiscordAttachmentSearchResult);
+    return result.rows
+      .map(rowToDiscordAttachmentSearchResult)
+      .filter((row) => !isHardExcludedChannel(row.channelId));
   }
 
   async discordStats(input: {
@@ -2099,20 +2116,25 @@ export class DiscordAiAgentRepository {
   }): Promise<DiscordStats> {
     const metric = input.metric ?? "messages";
     const groupBy = input.groupBy ?? "overall";
-    if (input.visibleChannelIds.length === 0) {
+    const baseInput = {
+      ...input,
+      visibleChannelIds: withoutHardExcludedChannels(input.visibleChannelIds),
+      channelIds: withoutHardExcludedChannels(normalizeFilterIds(input.channelIds))
+    };
+    if (baseInput.visibleChannelIds.length === 0) {
       return emptyDiscordStats(metric, groupBy);
     }
 
     const includeOverallBreakdowns = groupBy === "overall";
-    const totalsBase = buildDiscordStatsBaseQuery(input, {
+    const totalsBase = buildDiscordStatsBaseQuery(baseInput, {
       includeAttachmentStats: metric === "attachments" || includeOverallBreakdowns,
       includeReactionStats: metric === "reactions" || includeOverallBreakdowns
     });
-    const rowsBase = buildDiscordStatsBaseQuery(input, {
+    const rowsBase = buildDiscordStatsBaseQuery(baseInput, {
       includeAttachmentStats: metric === "attachments",
       includeReactionStats: metric === "reactions"
     });
-    const topBase = buildDiscordStatsBaseQuery(input, {
+    const topBase = buildDiscordStatsBaseQuery(baseInput, {
       includeAttachmentStats: false,
       includeReactionStats: false
     });
@@ -2232,8 +2254,9 @@ export class DiscordAiAgentRepository {
     minMessageChars: number;
     includeBots?: boolean;
   }): Promise<DiscordChannelTopicCandidate[]> {
-    if (input.visibleChannelIds.length === 0) return [];
-    const params: unknown[] = [input.guildId, input.visibleChannelIds];
+    const visibleChannelIds = withoutHardExcludedChannels(input.visibleChannelIds);
+    if (visibleChannelIds.length === 0) return [];
+    const params: unknown[] = [input.guildId, visibleChannelIds];
     const addParam = (value: unknown) => {
       params.push(value);
       return `$${params.length}`;
@@ -2254,7 +2277,7 @@ export class DiscordAiAgentRepository {
       conditions.push("coalesce(u.is_bot, false) = false");
     }
 
-    const channelIds = normalizeFilterIds(input.channelIds);
+    const channelIds = withoutHardExcludedChannels(normalizeFilterIds(input.channelIds));
     if (channelIds.length > 0) {
       const placeholder = addParam(channelIds);
       conditions.push(`(m.channel_id = ANY(${placeholder}::text[]) OR (c.parent_id = ANY(${placeholder}::text[]) AND c.type IN (10, 11)))`);

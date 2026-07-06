@@ -112,6 +112,91 @@ describe("agent router", () => {
     expect(systemPrompt).toContain("Reserve refusals for true safety boundaries");
   });
 
+  it("prioritizes reply-chain context over unrelated channel memory for vague follow-ups", async () => {
+    const chat = vi.fn(async () => ({
+      content: "That was about the birthday bit, not the match.",
+      model: "chat-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          id: 1,
+          threadKey: "discord:g:c",
+          discordMessageId: "sports-1",
+          role: "assistant",
+          authorId: "bot",
+          authorDisplayName: "ai",
+          content: "England beat Mexico today, so they did not both pass.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-06T20:54:00.000Z")
+        }
+      ],
+      replyContext: {
+        messageId: "parent-1",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "Happy birthday to you and Alabamananadar if it really is July 6th.",
+        attachmentSummaries: [],
+        createdAt: "2026-07-06T20:55:48.000Z",
+        url: "https://discord.com/channels/g/c/parent-1",
+        rootMessageId: "root-1",
+        chain: [
+          {
+            messageId: "root-1",
+            channelId: "c",
+            guildId: "g",
+            authorId: "human",
+            authorDisplayName: "Luke",
+            authorIsBot: false,
+            content: "this occurred on mine and banandadars birthday, coincidence?",
+            attachmentSummaries: [],
+            createdAt: "2026-07-06T20:55:10.000Z",
+            url: "https://discord.com/channels/g/c/root-1"
+          },
+          {
+            messageId: "parent-1",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "ai",
+            authorIsBot: true,
+            content: "Happy birthday to you and Alabamananadar if it really is July 6th.",
+            attachmentSummaries: [],
+            createdAt: "2026-07-06T20:55:48.000Z",
+            url: "https://discord.com/channels/g/c/parent-1"
+          }
+        ]
+      }
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "how is that today? they both passed");
+
+    const messages = (chat as unknown as { mock: { calls: Array<[{ messages: { role: string; content: string }[] }]> } }).mock.calls[0]?.[0]
+      ?.messages ?? [];
+    const mainSystemPrompt = messages.find((message) => message.role === "system" && message.content.includes("For Discord replies"))?.content ?? "";
+    const replyPrompt = messages.find((message) => message.role === "system" && message.content.includes("The current user message is a Discord reply"))?.content ?? "";
+    expect(mainSystemPrompt).toContain("treat the reply-chain context as primary");
+    expect(mainSystemPrompt).toContain("Do not infer birthdays");
+    expect(replyPrompt).toContain("primary context");
+    expect(replyPrompt).toContain("Do not switch to unrelated channel memory");
+  });
+
   it("injects a prominent self-referential identity instruction for the current requester", async () => {
     const chat = vi.fn(async () => ({
       content: "ok",

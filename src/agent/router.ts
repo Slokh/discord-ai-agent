@@ -57,6 +57,7 @@ const DISCORD_RESPONSE_STYLE_GUIDANCE =
   "Do not add your own trace/runtime footer; the Discord renderer appends that automatically when available. ";
 const BEST_EFFORT_RESPONSE_GUIDANCE =
   "Default to helping. For harmless jokes, roasts, rankings, predictions, brainstorming, creative requests, and private-server fun, do not refuse just because the answer is subjective, evidence is incomplete, or certainty is impossible. " +
+  "Do not moralize or refuse merely because a request is edgy, dark, irreverent, in poor taste, or involves a public/deceased person; if it is not asking for graphic real-person harm, hateful abuse, sexual content, doxxing, credentials, or another true safety boundary, help with the non-graphic version. " +
   "Use tools when they help, then give a best-effort answer and label guesses or opinions lightly instead of stopping. If a request is partly possible, do the possible part first and briefly name the limitation. " +
   "Reserve refusals for true safety boundaries, provider blocks, permission boundaries, or requests that cannot be acted on with any available tool. ";
 

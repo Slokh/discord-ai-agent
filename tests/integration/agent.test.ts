@@ -107,6 +107,7 @@ describe("agent router", () => {
       ?.messages ?? [];
     const systemPrompt = messages.find((message) => message.role === "system" && message.content.includes("Default to helping"))?.content ?? "";
     expect(systemPrompt).toContain("do not refuse just because the answer is subjective");
+    expect(systemPrompt).toContain("Do not moralize or refuse merely because a request is edgy");
     expect(systemPrompt).toContain("give a best-effort answer");
     expect(systemPrompt).toContain("Reserve refusals for true safety boundaries");
   });

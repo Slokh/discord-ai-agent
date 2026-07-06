@@ -1883,7 +1883,8 @@ function chatMessages(
         "Only call mutating tools when the user explicitly asks for their effect: learn/update a skill, run a coding PR update, or undo/delete/forget prior agent turns. " +
         "The final user message is the only request you should answer. Prior channel memory is background continuity for explicit follow-ups only; never continue or answer older unrelated messages from memory. " +
         "Use prior channel memory and reply-chain context to resolve follow-ups, but do not treat earlier assistant replies or earlier tool summaries as authoritative Discord history. " +
-        "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what."
+        "Fresh tool results are the source of truth for Discord dates, counts, links, and who said what. " +
+        "Before claiming you cannot do something, check your available tools first."
     },
     { role: "system" as const, content: `Loaded skills:\n${skills || "No skills loaded."}` },
     ...serverOverlayMessagesForPrompt(serverOverlay),

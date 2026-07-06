@@ -119,15 +119,18 @@ export class DiscordResponseSink {
 
     const channel = this.sourceMessage.channel;
     const sendable = isSendableChannel(channel) ? channel : null;
+    let previousMessageId = firstMessage.id;
     for (let i = 1; i < chunks.length; i++) {
       const isLast = i === chunks.length - 1;
       const content = isLast && footerLine ? `${chunks[i]}${separator}${footerLine}` : chunks[i];
       if (!sendable) continue;
       if (content.length <= this.maxReplyChars) {
-        await sendable.send(this.continuationPayload(content));
+        const sent = await sendable.send(this.continuationPayload(content, previousMessageId));
+        previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
       } else {
         for (const overflow of splitForDiscord(content, this.maxReplyChars)) {
-          await sendable.send(this.continuationPayload(overflow));
+          const sent = await sendable.send(this.continuationPayload(overflow, previousMessageId));
+          previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
         }
       }
     }
@@ -183,10 +186,10 @@ export class DiscordResponseSink {
     }
   }
 
-  private continuationPayload(content: string): MessageCreateOptions {
+  private continuationPayload(content: string, referenceMessageId: string): MessageCreateOptions {
     return {
       content,
-      reply: { messageReference: this.sourceMessage.id, failIfNotExists: false },
+      reply: { messageReference: referenceMessageId, failIfNotExists: false },
       allowedMentions: { parse: [], repliedUser: false }
     };
   }

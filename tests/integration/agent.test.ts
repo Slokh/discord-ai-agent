@@ -80,6 +80,37 @@ describe("agent router", () => {
     expect(response.content).not.toContain("[truncated]");
   });
 
+  it("encourages best-effort answers for harmless subjective requests", async () => {
+    const chat = vi.fn(async () => ({
+      content: "I will take a swing.",
+      model: "chat-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: []
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "rank the funniest bits in here");
+
+    const messages = ((chat as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0] as { messages?: { role: string; content: string }[] })
+      ?.messages ?? [];
+    const systemPrompt = messages.find((message) => message.role === "system" && message.content.includes("Default to helping"))?.content ?? "";
+    expect(systemPrompt).toContain("do not refuse just because the answer is subjective");
+    expect(systemPrompt).toContain("give a best-effort answer");
+    expect(systemPrompt).toContain("Reserve refusals for true safety boundaries");
+  });
+
   it("injects a prominent self-referential identity instruction for the current requester", async () => {
     const chat = vi.fn(async () => ({
       content: "ok",

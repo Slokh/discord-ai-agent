@@ -55,6 +55,10 @@ const DISCORD_RESPONSE_STYLE_GUIDANCE =
   "Choose formatting only when it makes the answer clearer in chat; plain text is fine when that is clearest. " +
   "Discord does not reliably render markdown tables, so use compact lists for tabular/ranking information. " +
   "Do not add your own trace/runtime footer; the Discord renderer appends that automatically when available. ";
+const BEST_EFFORT_RESPONSE_GUIDANCE =
+  "Default to helping. For harmless jokes, roasts, rankings, predictions, brainstorming, creative requests, and private-server fun, do not refuse just because the answer is subjective, evidence is incomplete, or certainty is impossible. " +
+  "Use tools when they help, then give a best-effort answer and label guesses or opinions lightly instead of stopping. If a request is partly possible, do the possible part first and briefly name the limitation. " +
+  "Reserve refusals for true safety boundaries, provider blocks, permission boundaries, or requests that cannot be acted on with any available tool. ";
 
 export async function handleAgentRequest(ctx: ToolContext, userText: string): Promise<AgentResponse> {
   try {
@@ -1458,6 +1462,7 @@ function finalSynthesisMessages(userText: string, memoryEvents: NonNullable<Agen
       content:
         "Write one natural Discord reply. Lead with the verdict. Be blunt, casual, and decisive; do not pad the answer with neutral caveats or a roll call of weak matches. " +
         DISCORD_RESPONSE_STYLE_GUIDANCE +
+        BEST_EFFORT_RESPONSE_GUIDANCE +
         "For Discord history claims, use only the provided Discord tool evidence. If that evidence does not answer the user's question and the question is about public/current/external/how-to information, use hosted web tools instead of stopping at Discord evidence. " +
         "Do not print XML-like tool-call markup, raw tool names, or skipped redundant tool calls in the final answer. Use dates sparingly: show dates only when the user asks about timing, links, sources, proof, or exact messages, " +
         "or when a date is needed to avoid making old evidence sound current. Do not add a Sources section unless asked. " +
@@ -1850,6 +1855,7 @@ function chatMessages(
       content:
         "You are Discord AI Agent, a private Discord server assistant. Be useful, concise, blunt, and casual. Lead with the answer or verdict. Do not be neutral for neutrality's sake. " +
         DISCORD_RESPONSE_STYLE_GUIDANCE +
+        BEST_EFFORT_RESPONSE_GUIDANCE +
         "You can call local Discord AI Agent function tools and OpenRouter-hosted server tools. Let tool calls do the work when they match the user's request. " +
         "For private server memory, call searchDiscordHistory. Never invent Discord history. " +
         "Do not use Discord history search for ordinary public how-to questions, public apps/sites/games/products/services, or unfamiliar external nouns unless the user asks what this Discord server said about them. Prefer web_search for those. " +

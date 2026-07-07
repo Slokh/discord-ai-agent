@@ -197,6 +197,25 @@ export type ConversationMessage = {
   createdAt: Date;
 };
 
+export type AgentMemoryAnchorMessage = {
+  messageId: string;
+  guildId: string;
+  channelId: string;
+  authorId: string;
+  authorUsername: string | null;
+  authorDisplayName: string | null;
+  content: string;
+  normalizedContent: string;
+  createdAt: Date;
+  link: string;
+};
+
+export type AgentMemoryTurnStats = {
+  anchor: AgentMemoryAnchorMessage | null;
+  completedTurnCount: number;
+  recentAssistantTurns: ConversationMessage[];
+};
+
 export type MessageForEmbedding = {
   id: string;
   guildId: string;
@@ -4870,6 +4889,109 @@ export class DiscordAiAgentRepository {
     return result.rows.map(rowToConversationMessage);
   }
 
+  async agentMemoryTurnStats(input: {
+    guildId: string;
+    channelId: string;
+    threadKey: string;
+    anchorText?: string | null;
+    anchorMessageId?: string | null;
+    anchorAuthorId?: string | null;
+    excludeMessageId?: string | null;
+    limit?: number;
+  }): Promise<AgentMemoryTurnStats> {
+    const anchorText = input.anchorText?.trim() || null;
+    const looseAnchorText = anchorText ? normalizeLooseAnchorText(anchorText) : null;
+    const anchorMessageId = input.anchorMessageId?.trim() || null;
+    const anchorAuthorId = input.anchorAuthorId?.trim() || null;
+    const excludeMessageId = input.excludeMessageId?.trim() || null;
+    const limit = Math.max(0, Math.min(20, Math.trunc(input.limit ?? 8)));
+    const requestedAnchor = Boolean(anchorText || anchorMessageId);
+    const anchorResult = requestedAnchor
+      ? await this.pool.query(
+          `
+            SELECT
+              m.id AS message_id,
+              m.guild_id,
+              m.channel_id,
+              m.author_id,
+              u.username AS author_username,
+              gm.display_name AS author_display_name,
+              m.content,
+              m.normalized_content,
+              m.created_at
+            FROM messages m
+            LEFT JOIN discord_users u ON u.id = m.author_id
+            LEFT JOIN guild_members gm ON gm.guild_id = m.guild_id AND gm.user_id = m.author_id
+            WHERE m.guild_id = $1
+              AND m.channel_id = $2
+              AND m.deleted_at IS NULL
+              AND m.content <> ''
+              AND ($3::text IS NULL OR m.author_id = $3)
+              AND ($8::text IS NULL OR m.id <> $8)
+              AND (
+                ($4::text IS NOT NULL AND m.id = $4)
+                OR (
+                  $5::text IS NOT NULL
+                  AND (
+                    m.content ILIKE '%' || $5 || '%'
+                    OR m.normalized_content ILIKE '%' || $5 || '%'
+                    OR replace(replace(m.content, '’', $6), '‘', $6) ILIKE '%' || $7 || '%'
+                    OR replace(replace(m.normalized_content, '’', $6), '‘', $6) ILIKE '%' || $7 || '%'
+                  )
+                )
+              )
+            ORDER BY
+              CASE WHEN $4::text IS NOT NULL AND m.id = $4 THEN 0 ELSE 1 END,
+              m.created_at DESC
+            LIMIT 1
+          `,
+          [input.guildId, input.channelId, anchorAuthorId, anchorMessageId, anchorText, "'", looseAnchorText, excludeMessageId]
+        )
+      : { rows: [] };
+    const anchor = anchorResult.rows[0] ? rowToAgentMemoryAnchor(anchorResult.rows[0]) : null;
+    if (requestedAnchor && !anchor) {
+      return { anchor: null, completedTurnCount: 0, recentAssistantTurns: [] };
+    }
+
+    const countResult = await this.pool.query(
+      `
+        SELECT count(*)::int AS count
+        FROM conversation_messages
+        WHERE thread_key = $1
+          AND role = 'assistant'
+          AND content <> ''
+          AND ($2::timestamptz IS NULL OR created_at > $2)
+      `,
+      [input.threadKey, anchor?.createdAt ?? null]
+    );
+    const turnsResult =
+      limit > 0
+        ? await this.pool.query(
+            `
+              WITH recent AS (
+                SELECT id, thread_key, discord_message_id, role, author_id, author_display_name, content, parts, metadata, created_at
+                FROM conversation_messages
+                WHERE thread_key = $1
+                  AND role = 'assistant'
+                  AND content <> ''
+                  AND ($2::timestamptz IS NULL OR created_at > $2)
+                ORDER BY created_at DESC, id DESC
+                LIMIT $3
+              )
+              SELECT *
+              FROM recent
+              ORDER BY created_at ASC, id ASC
+            `,
+            [input.threadKey, anchor?.createdAt ?? null, limit]
+          )
+        : { rows: [] };
+    return {
+      anchor,
+      completedTurnCount: Number(countResult.rows[0]?.count ?? 0),
+      recentAssistantTurns: turnsResult.rows.map(rowToConversationMessage)
+    };
+  }
+
   async deleteConversationMessagesByDiscordMessageIds(input: { threadKey: string; discordMessageIds: string[] }): Promise<number> {
     const messageIds = [...new Set(input.discordMessageIds)].filter(Boolean);
     if (messageIds.length === 0) return 0;
@@ -5845,6 +5967,28 @@ function rowToConversationMessage(row: any): ConversationMessage {
     metadata: row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {},
     createdAt: new Date(row.created_at)
   };
+}
+
+function rowToAgentMemoryAnchor(row: any): AgentMemoryAnchorMessage {
+  const guildId = String(row.guild_id);
+  const channelId = String(row.channel_id);
+  const messageId = String(row.message_id);
+  return {
+    messageId,
+    guildId,
+    channelId,
+    authorId: String(row.author_id),
+    authorUsername: row.author_username == null ? null : String(row.author_username),
+    authorDisplayName: row.author_display_name == null ? null : String(row.author_display_name),
+    content: String(row.content ?? ""),
+    normalizedContent: String(row.normalized_content ?? ""),
+    createdAt: new Date(row.created_at),
+    link: `https://discord.com/channels/${guildId}/${channelId}/${messageId}`
+  };
+}
+
+function normalizeLooseAnchorText(value: string) {
+  return value.replace(/[’‘]/g, "'").trim();
 }
 
 function rowToInteractionBlock(row: any): InteractionBlock {

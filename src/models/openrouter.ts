@@ -90,6 +90,7 @@ export type ImageReference = {
 const OPENROUTER_CHAT_TIMEOUT_MS = 45_000;
 const OPENROUTER_EMBEDDING_TIMEOUT_MS = 20_000;
 const OPENROUTER_IMAGE_TIMEOUT_MS = 120_000;
+const OPENROUTER_TRANSIENT_RETRY_DELAYS_MS = [500, 1_500];
 
 export class OpenRouterClient {
   constructor(private readonly config: AppConfig["openRouter"]) {}
@@ -284,84 +285,132 @@ export class OpenRouterClient {
       throw new Error("OPENROUTER_API_KEY is required for this operation.");
     }
 
-    const startedAt = Date.now();
-    const abortController = new AbortController();
-    const timeout = setTimeout(() => abortController.abort(), timeoutMs);
-    timeout.unref?.();
-    let response: Response;
-    try {
-      response = await fetch(`${this.config.baseUrl}${path}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.config.apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": this.config.httpReferer,
-          "X-Title": this.config.appTitle
-        },
-        body: JSON.stringify(body),
-        signal: abortController.signal
-      });
-    } catch (error) {
-      if (abortController.signal.aborted) {
+    const totalStartedAt = Date.now();
+    const maxAttempts = OPENROUTER_TRANSIENT_RETRY_DELAYS_MS.length + 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const startedAt = Date.now();
+      const abortController = new AbortController();
+      const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+      timeout.unref?.();
+      let response: Response;
+      try {
+        response = await fetch(`${this.config.baseUrl}${path}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.config.apiKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": this.config.httpReferer,
+            "X-Title": this.config.appTitle
+          },
+          body: JSON.stringify(body),
+          signal: abortController.signal
+        });
+      } catch (error) {
+        if (abortController.signal.aborted) {
+          logger.warn(
+            {
+              provider: "openrouter",
+              path,
+              timeoutMs,
+              attempt,
+              maxAttempts,
+              durationMs: durationMs(startedAt)
+            },
+            "OpenRouter request timed out"
+          );
+          throw new Error(`OpenRouter request timed out after ${timeoutMs}ms (${path}).`);
+        }
+        if (attempt < maxAttempts && isTransientFetchError(error)) {
+          const retryDelayMs = OPENROUTER_TRANSIENT_RETRY_DELAYS_MS[attempt - 1] ?? 0;
+          logger.warn(
+            {
+              provider: "openrouter",
+              path,
+              attempt,
+              maxAttempts,
+              retryDelayMs,
+              durationMs: durationMs(startedAt),
+              error: error instanceof Error ? error.message : String(error)
+            },
+            "OpenRouter network request failed; retrying"
+          );
+          await sleep(retryDelayMs);
+          continue;
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      const text = await response.text();
+      let json: any;
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        json = { raw: text };
+      }
+
+      if (!response.ok) {
+        const details = openRouterErrorDetails(response.status, json, text);
         logger.warn(
           {
             provider: "openrouter",
             path,
-            timeoutMs,
-            durationMs: durationMs(startedAt)
+            status: response.status,
+            attempt,
+            maxAttempts,
+            durationMs: durationMs(startedAt),
+            totalDurationMs: durationMs(totalStartedAt),
+            code: details.code,
+            error: details.message
           },
-          "OpenRouter request timed out"
+          "OpenRouter request failed"
         );
-        throw new Error(`OpenRouter request timed out after ${timeoutMs}ms (${path}).`);
+        if (isContentFilterSignal(details.message) || isContentFilterSignal(details.code)) {
+          throw new OpenRouterContentFilterError({
+            status: response.status,
+            model: typeof body.model === "string" ? body.model : undefined,
+            message: details.message
+          });
+        }
+        if (attempt < maxAttempts && isRetryableOpenRouterStatus(response.status)) {
+          const retryDelayMs = retryDelayMsForResponse(response, attempt);
+          logger.warn(
+            {
+              provider: "openrouter",
+              path,
+              status: response.status,
+              attempt,
+              maxAttempts,
+              retryDelayMs,
+              code: details.code
+            },
+            "OpenRouter transient request failed; retrying"
+          );
+          await sleep(retryDelayMs);
+          continue;
+        }
+        throw new Error(`OpenRouter request failed (${response.status}): ${details.message}`);
       }
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
 
-    const text = await response.text();
-    let json: any;
-    try {
-      json = text ? JSON.parse(text) : {};
-    } catch {
-      json = { raw: text };
-    }
-
-    if (!response.ok) {
-      const message = json.error?.message ?? json.message ?? text;
-      const code = json.error?.code ?? json.code ?? json.error?.metadata?.reason;
-      logger.warn(
+      logger.debug(
         {
           provider: "openrouter",
           path,
           status: response.status,
+          attempt,
+          maxAttempts,
           durationMs: durationMs(startedAt),
-          code: code == null ? undefined : String(code),
-          error: String(message).slice(0, 500)
+          totalDurationMs: durationMs(totalStartedAt)
         },
-        "OpenRouter request failed"
+        "OpenRouter HTTP request complete"
       );
-      if (isContentFilterSignal(message) || isContentFilterSignal(code)) {
-        throw new OpenRouterContentFilterError({
-          status: response.status,
-          model: typeof body.model === "string" ? body.model : undefined,
-          message: String(message)
-        });
-      }
-      throw new Error(`OpenRouter request failed (${response.status}): ${message}`);
+
+      return json;
     }
 
-    logger.debug(
-      {
-        provider: "openrouter",
-        path,
-        status: response.status,
-        durationMs: durationMs(startedAt)
-      },
-      "OpenRouter HTTP request complete"
-    );
-
-    return json;
+    throw new Error("OpenRouter request failed after retries.");
   }
 }
 
@@ -426,6 +475,84 @@ function finishReasonFromChoice(choice: any): string | undefined {
 
 function isContentFilterSignal(value: unknown) {
   return /\bcontent[_ -]?filter(?:ed)?\b/i.test(String(value ?? ""));
+}
+
+function isRetryableOpenRouterStatus(status: number) {
+  return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 529;
+}
+
+function isTransientFetchError(error: unknown) {
+  if (error instanceof TypeError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch failed|network|socket|econnreset|etimedout/i.test(message);
+}
+
+function retryDelayMsForResponse(response: Response, attempt: number) {
+  const retryAfterSeconds = Number(response.headers?.get?.("retry-after"));
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+    return Math.min(retryAfterSeconds * 1000, 5_000);
+  }
+  return OPENROUTER_TRANSIENT_RETRY_DELAYS_MS[attempt - 1] ?? 0;
+}
+
+function openRouterErrorDetails(status: number, json: any, text: string): { message: string; code?: string } {
+  const rawMessage = firstString(json?.error?.message, json?.message);
+  const rawCode = firstString(json?.error?.code, json?.code, json?.error?.metadata?.reason);
+  const message = sanitizeOpenRouterErrorMessage(rawMessage ?? text, status);
+  return {
+    message,
+    code: rawCode == null ? undefined : sanitizePlainText(rawCode).slice(0, 120)
+  };
+}
+
+function sanitizeOpenRouterErrorMessage(raw: string, status: number) {
+  const trimmed = raw.trim();
+  if (!trimmed) return `HTTP ${status}`;
+  if (/<html[\s>]|<!doctype html/i.test(trimmed)) {
+    return summarizeHtmlError(trimmed) ?? `HTML error response from OpenRouter (HTTP ${status})`;
+  }
+  return sanitizePlainText(trimmed).slice(0, 500);
+}
+
+function summarizeHtmlError(html: string) {
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  const heading = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i)?.[1];
+  const cfCode = html.match(/cf-error-code[^>]*>\s*([0-9]{3,4})\s*</i)?.[1] ?? html.match(/Error\s*([0-9]{3,4})/i)?.[1];
+  const base = sanitizePlainText(title ?? heading ?? "");
+  const conciseBase = base.replace(/\s*\|\s*openrouter\.ai\s*\|\s*Cloudflare\s*$/i, "").trim();
+  if (!conciseBase) return cfCode ? `Cloudflare error ${cfCode}` : undefined;
+  return cfCode ? `${conciseBase} (Cloudflare ${cfCode})` : conciseBase;
+}
+
+function sanitizePlainText(value: string) {
+  return decodeHtmlEntities(value)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeHtmlEntities(value: string) {
+  return value
+    .replace(/&bull;/g, "-")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'");
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+}
+
+async function sleep(ms: number) {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function countChatImageInputs(messages: ChatMessage[]) {

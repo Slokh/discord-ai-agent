@@ -164,6 +164,45 @@ describe("OpenRouterClient", () => {
     );
   });
 
+  it("retries transient OpenRouter 503 responses", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(htmlResponse(503, cloudflareWorkerLimitHtml()))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          model: "test/chat",
+          choices: [{ message: { content: "The US are still the real winners because vibes." } }]
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    const request = client.chat({ messages: [{ role: "user", content: "explain why the US are still the real winners" }] });
+
+    await vi.runAllTimersAsync();
+
+    await expect(request).resolves.toMatchObject({
+      content: "The US are still the real winners because vibes."
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sanitizes exhausted HTML provider errors", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => htmlResponse(503, cloudflareWorkerLimitHtml()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    const request = client.chat({ messages: [{ role: "user", content: "hello" }] });
+    const assertion = expect(request).rejects.toThrow("OpenRouter request failed (503): Worker exceeded resource limits (Cloudflare 1102)");
+
+    await vi.runAllTimersAsync();
+
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("aborts chat requests that exceed the hard timeout", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;
@@ -303,6 +342,27 @@ function jsonResponse(body: unknown) {
   return {
     ok: true,
     status: 200,
+    headers: new Headers(),
     text: async () => JSON.stringify(body)
   } as Response;
+}
+
+function htmlResponse(status: number, body: string) {
+  return {
+    ok: false,
+    status,
+    headers: new Headers(),
+    text: async () => body
+  } as Response;
+}
+
+function cloudflareWorkerLimitHtml() {
+  return `<!DOCTYPE html>
+<html>
+<head><title>Worker exceeded resource limits | openrouter.ai | Cloudflare</title></head>
+<body>
+<span class="cf-error-code">1102</span>
+<span id="cf-footer-ip">203.0.113.10</span>
+</body>
+</html>`;
 }

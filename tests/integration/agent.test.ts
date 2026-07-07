@@ -888,6 +888,81 @@ describe("agent router", () => {
     );
   });
 
+  it("lets the model count completed agent turns since an anchor phrase", async () => {
+    const agentMemoryTurnStats = vi.fn(async () => ({
+      anchor: {
+        messageId: "anchor-1",
+        guildId: "g",
+        channelId: "c",
+        authorId: "u",
+        authorUsername: "connor",
+        authorDisplayName: "Connor",
+        content: "where she’s staying for the time being",
+        normalizedContent: "where she’s staying for the time being",
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        link: "https://discord.com/channels/g/c/anchor-1"
+      },
+      completedTurnCount: 3,
+      recentAssistantTurns: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        agentMemoryTurnStats,
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [
+              {
+                id: "call-1",
+                name: "getAgentMemoryStats",
+                argumentsText: JSON.stringify({
+                  sinceText: "where she's staying for the time being",
+                  sinceAuthor: "requester"
+                })
+              }
+            ]
+          })
+          .mockResolvedValueOnce({
+            content: "3 turns.",
+            model: "chat-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "Connor",
+      visibleChannelIds: ["c"],
+      requestId: "current-message"
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "how many turns have you completed since I said where she's staying?");
+
+    expect(response.content).toBe("3 turns.");
+    expect(agentMemoryTurnStats).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "g",
+        channelId: "c",
+        threadKey: "discord:g:c",
+        anchorText: "where she's staying for the time being",
+        anchorAuthorId: "u",
+        excludeMessageId: "current-message"
+      })
+    );
+    expect((ctx.openRouter.chat as any).mock.calls[1][0].messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ role: "tool", name: "getAgentMemoryStats", content: expect.stringContaining("Completed assistant turns") })])
+    );
+  });
+
   it("lets the model route recurring channel-topic requests to semantic topic analysis", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {

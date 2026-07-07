@@ -10,6 +10,7 @@ import {
   getDiscordChannelTopics,
   getDiscordMessageContext,
   getDiscordStats,
+  getAgentMemoryStats,
   inspectDiscordImages,
   getRecentAgentMemory,
   getAgentTaskStatus,
@@ -913,6 +914,20 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
         await getRecentAgentMemory(ctx, {
           limit: numberArgument(route.arguments, "limit"),
           includeToolResults: booleanArgument(route.arguments, "includeToolResults")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "getAgentMemoryStats") {
+    return {
+      content: cleanResponse(
+        await getAgentMemoryStats(ctx, {
+          sinceText: stringArgument(route.arguments, "sinceText"),
+          sinceMessageIdOrUrl: stringArgument(route.arguments, "sinceMessageIdOrUrl"),
+          sinceAuthor: enumArgument(route.arguments, "sinceAuthor", ["requester", "anyone"]),
+          limit: numberArgument(route.arguments, "limit")
         }),
         ctx.config.maxReplyChars
       )
@@ -1833,6 +1848,11 @@ function stringArrayArgument(args: Record<string, unknown> | undefined, key: str
   return strings.length > 0 ? strings : undefined;
 }
 
+function enumArgument<const T extends string>(args: Record<string, unknown> | undefined, key: string, values: readonly T[]): T | undefined {
+  const value = stringArgument(args, key);
+  return value && values.includes(value as T) ? (value as T) : undefined;
+}
+
 function numberArgument(args: Record<string, unknown> | undefined, key: string) {
   const value = args?.[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -1879,6 +1899,7 @@ function chatMessages(
         "For requests to link, show, or list a person's own messages, use searchDiscordHistory with authorQueries/authorIds; for requests to find messages about a person, use aboutUserQueries/aboutUserIds. Do not search for the username as ordinary message text when a structured person filter fits. " +
         "Top-level Discord mentions include recent channel memory by default. Reply messages additionally include their reply-chain context. If a user asks what you previously said, did, generated, or opened, call getRecentAgentMemory instead of guessing from absent context. " +
         "Use getRecentAgentMemory only for Discord AI Agent's own previous replies/tool results in the current channel, not for factual server-history questions. " +
+        "For counts of Discord AI Agent turns, replies, completions, or actions in the current channel, especially since a message link or phrase like 'since I said ...', call getAgentMemoryStats instead of Discord history search. " +
         "Use getRecentDiscordMessages for recent channel context, getDiscordMessageContext only for a specific Discord message link/ID or explicit surrounding-context request, searchDiscordAttachments for files/images, and getDiscordStats for counts, rankings, per-user/per-channel breakdowns, reactions, attachments, and activity over time. " +
         "For repeated game-score, leaderboard, or exact math questions, use getDiscordStats when the request can be answered by its metrics; otherwise gather focused Discord history evidence and explain the limitation bluntly. " +
         "For broad recaps like what a person or channel has been up to, what happened recently, or summarize activity over a period, use summarizeDiscordHistory after resolving ambiguous users/channels. Do not answer those from resolver output alone. " +

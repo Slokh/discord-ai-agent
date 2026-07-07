@@ -1811,6 +1811,45 @@ describe("agent router", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
   });
 
+  it("recovers when a hosted OpenRouter tool call leaks as a partial closing fragment", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "openrouter_web_search</tool_call>",
+            model: "tool-leak-model",
+            raw: {},
+            toolCalls: []
+          })
+          .mockResolvedValueOnce({
+            content: "A flyover happened before the match.",
+            model: "recovery-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what flew over the game?");
+
+    expect(response.content).toBe("A flyover happened before the match.");
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
+    expect((ctx.openRouter.chat as any).mock.calls[1][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
+  });
+
   it("preserves reply context and fresh tool evidence when recovering leaked hosted tool markup", async () => {
     const auditTool = vi.fn(async () => undefined);
     const storeProcessRunArtifact = vi.fn(async () => ({ artifactId: "artifact-leaked-hosted-tool" }));

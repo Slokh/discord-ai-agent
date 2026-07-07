@@ -4920,7 +4920,7 @@ export class DiscordAiAgentRepository {
               m.normalized_content,
               m.created_at
             FROM messages m
-            LEFT JOIN users u ON u.id = m.author_id
+            LEFT JOIN discord_users u ON u.id = m.author_id
             LEFT JOIN guild_members gm ON gm.guild_id = m.guild_id AND gm.user_id = m.author_id
             WHERE m.guild_id = $1
               AND m.channel_id = $2

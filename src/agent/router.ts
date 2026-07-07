@@ -1376,7 +1376,7 @@ function hostedToolMarkupRecoveryMessages(text: string, messages: ChatMessage[] 
 
 function parseLeakedHostedToolCalls(content: string): LeakedHostedToolCall[] {
   const calls: LeakedHostedToolCall[] = [];
-  const callPattern = /<tool_call>\s*(openrouter_(?:web_search|web_fetch|datetime))\b([\s\S]*?)(?:<\/tool_call>|$)/gi;
+  const callPattern = /(?:<tool_call>\s*)?(openrouter_(?:web_search|web_fetch|datetime))\b([\s\S]*?)(?:<\/tool_call>|$)/gi;
   let match: RegExpExecArray | null;
   while ((match = callPattern.exec(content)) != null) {
     const toolName = match[1] ?? "";
@@ -1494,14 +1494,20 @@ function renderMemoryEventsForFinalSynthesis(memoryEvents: NonNullable<AgentResp
 }
 
 function isLeakedHostedToolMarkup(content: string) {
-  return /<tool_call>\s*openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/i.test(content.trim());
+  const trimmed = content.trim();
+  return (
+    /<tool_call>\s*openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/i.test(trimmed) ||
+    /^openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/i.test(trimmed)
+  );
 }
 
 function stripLeakedHostedToolMarkup(content: string) {
-  return content
+  const stripped = content
     .replace(/<tool_call>\s*openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/gi, "")
+    .replace(/^openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/gi, "")
     .replace(/<arg_key>[\s\S]*?<\/arg_key>\s*<arg_value>[\s\S]*?<\/arg_value>/gi, "")
     .trim();
+  return stripped;
 }
 
 function emptyNoToolRecoveryMessage(

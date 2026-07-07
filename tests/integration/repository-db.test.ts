@@ -2312,6 +2312,97 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(messages.map((message) => message.content)).toEqual(["fast question", "fast answer", "slow question", "slow answer"]);
   });
 
+  it("counts completed agent turns after an indexed channel message anchor", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const otherUserId = `user-${randomUUID()}`;
+    const threadKey = `discord:${guildId}:${channelId}`;
+    const anchorMessageId = `message-${randomUUID()}`;
+    const currentQuestionMessageId = `message-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.ensureConversationSession({ threadKey, guildId, channelId });
+    await repo.upsertMessage({
+      id: `message-${randomUUID()}`,
+      guildId,
+      channelId,
+      authorId: otherUserId,
+      content: "where she's staying for the time being",
+      normalizedContent: "where she's staying for the time being",
+      createdAt: new Date("2026-01-01T00:00:00.000Z")
+    });
+    await repo.upsertMessage({
+      id: anchorMessageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "where she’s staying for the time being",
+      normalizedContent: "where she’s staying for the time being",
+      createdAt: new Date("2026-01-01T00:01:00.000Z")
+    });
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: `turn-${randomUUID()}`,
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: userId,
+        authorDisplayName: "Connor",
+        content: "first prompt after anchor",
+        createdAt: new Date("2026-01-01T00:02:00.000Z")
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "first answer after anchor",
+        createdAt: new Date("2026-01-01T00:02:01.000Z")
+      }
+    });
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: `turn-${randomUUID()}`,
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: userId,
+        authorDisplayName: "Connor",
+        content: "second prompt after anchor",
+        createdAt: new Date("2026-01-01T00:03:00.000Z")
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "second answer after anchor",
+        createdAt: new Date("2026-01-01T00:03:01.000Z")
+      }
+    });
+    await repo.upsertMessage({
+      id: currentQuestionMessageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "how many turns since I said where she's staying for the time being?",
+      normalizedContent: "how many turns since I said where she's staying for the time being?",
+      createdAt: new Date("2026-01-01T00:04:00.000Z")
+    });
+
+    const stats = await repo.agentMemoryTurnStats({
+      guildId,
+      channelId,
+      threadKey,
+      anchorText: "where she's staying for the time being",
+      anchorAuthorId: userId,
+      excludeMessageId: currentQuestionMessageId,
+      limit: 5
+    });
+
+    expect(stats.anchor?.messageId).toBe(anchorMessageId);
+    expect(stats.completedTurnCount).toBe(2);
+    expect(stats.recentAssistantTurns.map((turn) => turn.content)).toEqual(["first answer after anchor", "second answer after anchor"]);
+  });
+
   it("deletes the most recent user/tool/assistant conversation turns", async () => {
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;

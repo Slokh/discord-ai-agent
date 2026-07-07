@@ -6,6 +6,7 @@ export type ToolName =
   | "findDiscordChannels"
   | "searchDiscordHistory"
   | "getRecentAgentMemory"
+  | "getAgentMemoryStats"
   | "getRecentDiscordMessages"
   | "getDiscordMessageContext"
   | "searchDiscordAttachments"
@@ -211,6 +212,37 @@ export const toolRegistry: ToolRegistryEntry[] = [
         includeToolResults: {
           type: "boolean",
           description: "Whether to include previous local tool results. Defaults to true."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "getAgentMemoryStats",
+    description:
+      "Count or inspect Discord AI Agent's completed assistant turns in the current channel. Use for questions like how many turns/replies/actions the bot completed, especially since a specific Discord message, message link, or anchor phrase. This queries agent memory and indexed channel messages; do not approximate this with Discord history search.",
+    userVisible: true,
+    mutates: false,
+    category: "memory",
+    parameters: {
+      type: "object",
+      properties: {
+        sinceText: {
+          type: "string",
+          description: "Optional exact or memorable text from an earlier channel message to count after."
+        },
+        sinceMessageIdOrUrl: {
+          type: "string",
+          description: "Optional Discord message ID or URL to count after."
+        },
+        sinceAuthor: {
+          type: "string",
+          enum: ["requester", "anyone"],
+          description: "Whose anchor message to match when sinceText is provided. Use requester for phrases like 'since I said...'; use anyone if the user does not specify who said it."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum recent counted assistant turns to include as examples. Defaults to 8."
         }
       },
       additionalProperties: false
@@ -1314,6 +1346,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   findDiscordChannels: "resolver",
   searchDiscordHistory: "retrieval",
   getRecentAgentMemory: "memory",
+  getAgentMemoryStats: "memory",
   getRecentDiscordMessages: "retrieval",
   getDiscordMessageContext: "retrieval",
   searchDiscordAttachments: "retrieval",
@@ -1374,6 +1407,7 @@ function defaultToolExamples(name: ToolName): string[] {
     findDiscordChannels: "@ai find channel movies",
     searchDiscordHistory: "@ai what did we say about job hunting?",
     getRecentAgentMemory: "@ai what did you just say?",
+    getAgentMemoryStats: "@ai how many turns have you completed since this message?",
     getRecentDiscordMessages: "@ai what just happened in here?",
     getDiscordMessageContext: "@ai show the context around this message link",
     searchDiscordAttachments: "@ai find the image of nachos",

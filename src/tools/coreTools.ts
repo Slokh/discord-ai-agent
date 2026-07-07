@@ -29,6 +29,7 @@ import {
 } from "./discordStatsFormatting.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 import type {
+  AgentMemoryTurnStats,
   ConversationMessage,
   DiscordAttachmentSearchResult,
   DiscordChannelLookupResult,
@@ -873,6 +874,46 @@ export async function getRecentAgentMemory(
   return formatRecentAgentMemory(messages);
 }
 
+export async function getAgentMemoryStats(
+  ctx: ToolContext,
+  input: { sinceText?: string; sinceMessageIdOrUrl?: string; sinceAuthor?: "requester" | "anyone"; limit?: number } = {}
+): Promise<string> {
+  const threadKey = ctx.threadKey ?? `discord:${ctx.guildId}:${ctx.channelId}`;
+  const sinceText = input.sinceText?.trim() || undefined;
+  const sinceMessageId = input.sinceMessageIdOrUrl ? extractDiscordMessageId(input.sinceMessageIdOrUrl) : undefined;
+  const anchorAuthorId = input.sinceAuthor === "anyone" ? null : ctx.userId;
+  const stats = await ctx.repo.agentMemoryTurnStats({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    threadKey,
+    anchorText: sinceText,
+    anchorMessageId: sinceMessageId,
+    anchorAuthorId,
+    excludeMessageId: ctx.requestId,
+    limit: boundedLimit(input.limit, 8, 0, 20)
+  });
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "getAgentMemoryStats",
+    argumentsSummary: summarizeForAudit({ threadKey, sinceText, sinceMessageId, sinceAuthor: input.sinceAuthor ?? "requester" }),
+    resultSummary: summarizeForAudit({
+      anchorFound: Boolean(stats.anchor),
+      completedTurnCount: stats.completedTurnCount,
+      recentAssistantTurns: stats.recentAssistantTurns.length
+    })
+  });
+
+  if ((sinceText || sinceMessageId) && !stats.anchor) {
+    const target = sinceMessageId ? `message ${sinceMessageId}` : JSON.stringify(sinceText);
+    const authorScope = input.sinceAuthor === "anyone" ? "in this channel" : "from the requester in this channel";
+    return `I could not find anchor ${target} ${authorScope}, so I cannot count completed agent turns after it.`;
+  }
+  return formatAgentMemoryStats(stats);
+}
+
 export async function reportStatus(ctx: ToolContext): Promise<string> {
   const [health, crawl, embeddingBacklog, blockedUsers] = await Promise.all([
     ctx.repo.health(),
@@ -1065,6 +1106,25 @@ function formatRecentAgentMemory(messages: ConversationMessage[]) {
       return `[${index + 1}] ${timestamp} ${role} ${author}\n${content}${url}`;
     })
   ].join("\n\n");
+}
+
+function formatAgentMemoryStats(stats: AgentMemoryTurnStats) {
+  const lines = ["Discord AI Agent memory stats for this channel:"];
+  lines.push(`- Completed assistant turns${stats.anchor ? " after anchor" : ""}: ${stats.completedTurnCount}`);
+  if (stats.anchor) {
+    const author = stats.anchor.authorDisplayName || stats.anchor.authorUsername || stats.anchor.authorId;
+    lines.push(`- Anchor: ${stats.anchor.createdAt.toISOString()} ${author}`);
+    lines.push(`  ${truncateForDiscord(stats.anchor.normalizedContent || stats.anchor.content, 220)}`);
+    lines.push(`  ${stats.anchor.link}`);
+  }
+  if (stats.recentAssistantTurns.length > 0) {
+    lines.push("- Recent counted turns:");
+    for (const turn of stats.recentAssistantTurns) {
+      const url = typeof turn.metadata.discordUrl === "string" ? ` ${turn.metadata.discordUrl}` : "";
+      lines.push(`  - ${turn.createdAt.toISOString()}: ${truncateForDiscord(turn.content, 180)}${url}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function formatDiscordChannelMatches(results: DiscordChannelLookupResult[]) {

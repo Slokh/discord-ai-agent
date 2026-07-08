@@ -65,7 +65,7 @@ export {
   retryAgentTask
 } from "./agentTaskTools.js";
 export { extractHistorySearchSyntax } from "./discordHistoryFormatting.js";
-export { generateImage, inspectDiscordImages, type GenerateImageInput, type InspectDiscordImagesInput } from "./imageTools.js";
+export { generateImage, inspectDiscordImages, getDiscordUserAvatar, type GenerateImageInput, type InspectDiscordImagesInput, type GetDiscordUserAvatarInput } from "./imageTools.js";
 export { cleanResponse } from "./responseFormatting.js";
 export { createSkillFromRequest, type SkillDraftInput } from "./skillTools.js";
 export { createDiscordPoll, type CreateDiscordPollInput, type DiscordPollSendResult } from "./discordPollTools.js";

@@ -21,6 +21,7 @@ describe("toolRegistry", () => {
       "getDiscordMessageContext",
       "searchDiscordAttachments",
       "inspectDiscordImages",
+      "getDiscordUserAvatar",
       "getDiscordStats",
       "getDiscordChannelTopics",
       "summarizeDiscordHistory",

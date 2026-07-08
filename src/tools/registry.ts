@@ -11,6 +11,7 @@ export type ToolName =
   | "getDiscordMessageContext"
   | "searchDiscordAttachments"
   | "inspectDiscordImages"
+  | "getDiscordUserAvatar"
   | "getDiscordStats"
   | "getDiscordChannelTopics"
   | "summarizeDiscordHistory"
@@ -362,6 +363,31 @@ export const toolRegistry: ToolRegistryEntry[] = [
           description: "Whether to include images attached to the current request or replied-to chain. Defaults to true."
         }
       },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "getDiscordUserAvatar",
+    description:
+      "Resolve a visible Discord user by username, display name, mention, or user ID and return their avatar image URL(s) from Discord's CDN. Use this when the user asks to enhance, inspect, describe, or zoom into their own or someone else's profile picture/avatar/pfp. After this tool returns an avatar URL, call inspectDiscordImages with that URL as an imageUrls entry so the vision model can describe or enhance it. Works for any visible user in the server; resolution prefers an exact user ID or mention, then indexed username/display-name matches.",
+    userVisible: true,
+    mutates: false,
+    category: "discord",
+    toolClass: "resolver",
+    outputContract: ["resolved user ID and display name", "avatar image URL", "default avatar note when no custom avatar", "match count or ambiguity notes"],
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Discord username, display name, @mention, or user ID whose avatar should be fetched. Use the requester's own ID/mention for my/me avatar requests."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum matching users to return avatar URLs for when the query is ambiguous. Defaults to 1 and is capped at 5."
+        }
+      },
+      required: ["query"],
       additionalProperties: false
     }
   },
@@ -1351,6 +1377,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   getDiscordMessageContext: "retrieval",
   searchDiscordAttachments: "retrieval",
   inspectDiscordImages: "image",
+  getDiscordUserAvatar: "resolver",
   getDiscordStats: "stats",
   getDiscordChannelTopics: "summary",
   summarizeDiscordHistory: "summary",
@@ -1412,6 +1439,7 @@ function defaultToolExamples(name: ToolName): string[] {
     getDiscordMessageContext: "@ai show the context around this message link",
     searchDiscordAttachments: "@ai find the image of nachos",
     inspectDiscordImages: "@ai what is in this screenshot?",
+    getDiscordUserAvatar: "@ai enhance my profile picture",
     getDiscordStats: "@ai rank channels by messages per day",
     getDiscordChannelTopics: "@ai what are the main recurring topics in each channel?",
     summarizeDiscordHistory: "@ai what has tyler been up to recently?",

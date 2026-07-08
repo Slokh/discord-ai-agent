@@ -17,6 +17,7 @@ const CODEGEN_TOOL_NAME_ANCHORS = new Set([
   "getDiscordMessageContext",
   "searchDiscordAttachments",
   "inspectDiscordImages",
+  "getDiscordUserAvatar",
   "getDiscordStats",
   "getDiscordChannelTopics",
   "summarizeDiscordHistory",

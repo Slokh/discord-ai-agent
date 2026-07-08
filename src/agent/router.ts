@@ -4,6 +4,7 @@ import {
   createAgentUpdateFromRequest,
   cancelAgentTask,
   createDiscordPoll,
+  updateBotAvatar,
   findDiscordChannels,
   findDiscordUsers,
   generateImage,
@@ -1033,6 +1034,19 @@ async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, or
           answers: stringArrayArgument(route.arguments, "answers") ?? [],
           durationHours: numberArgument(route.arguments, "durationHours"),
           allowMultiselect: booleanArgument(route.arguments, "allowMultiselect")
+        }),
+        ctx.config.maxReplyChars
+      )
+    };
+  }
+
+  if (route.name === "updateBotAvatar") {
+    return {
+      content: cleanResponse(
+        await updateBotAvatar(ctx, {
+          imageUrl: stringArgument(route.arguments, "imageUrl"),
+          messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
+          useContextImage: booleanArgument(route.arguments, "useContextImage")
         }),
         ctx.config.maxReplyChars
       )

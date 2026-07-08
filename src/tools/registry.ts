@@ -36,7 +36,8 @@ export type ToolName =
   | "compareSpotifyPlaylists"
   | "searchSpotify"
   | "getSpotifyItem"
-  | "createDiscordPoll";
+  | "createDiscordPoll"
+  | "updateBotAvatar";
 
 export type ToolClass =
   | "resolver"
@@ -1208,6 +1209,34 @@ export const toolRegistry: ToolRegistryEntry[] = [
       required: ["question", "answers"],
       additionalProperties: false
     }
+  },
+  {
+    name: "updateBotAvatar",
+    description:
+      "Update the bot's own Discord profile avatar using an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Uses the Discord Modify Current User API (PATCH /users/@me with a base64 data-URI avatar). Requires the bot token from environment config. Use this when the user asks to change, set, or update the bot's avatar/profile picture. Discord accepts PNG, JPEG, WebP, or GIF avatars; large or unsupported images are rejected before the API call. Handle rate limits, permission errors, and invalid image URLs gracefully.",
+    userVisible: true,
+    mutates: true,
+    category: "discord",
+    toolClass: "ops",
+    outputContract: ["image source label", "Discord avatar update status", "new avatar URL when available", "failure reason when the image is invalid, rate-limited, or unauthorized"],
+    parameters: {
+      type: "object",
+      properties: {
+        imageUrl: {
+          type: "string",
+          description: "Optional direct image URL to use as the new avatar. Accepts http(s) URLs or data: image URIs. If omitted, the tool falls back to a generated image, then the current request attachment, then reply-chain/message attachments."
+        },
+        messageIdOrUrl: {
+          type: "string",
+          description: "Optional Discord message ID or message URL whose visible image attachments should be used as the avatar source."
+        },
+        useContextImage: {
+          type: "boolean",
+          description: "Whether to fall back to images attached to the current request or replied-to chain when imageUrl is omitted. Defaults to true."
+        }
+      },
+      additionalProperties: false
+    }
   }
 ];
 
@@ -1376,7 +1405,8 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   compareSpotifyPlaylists: "external",
   searchSpotify: "external",
   getSpotifyItem: "external",
-  createDiscordPoll: "ops"
+  createDiscordPoll: "ops",
+  updateBotAvatar: "ops"
 };
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
@@ -1437,7 +1467,8 @@ function defaultToolExamples(name: ToolName): string[] {
     compareSpotifyPlaylists: "@ai compare these two Spotify playlists: https://open.spotify.com/playlist/abc123 and https://open.spotify.com/playlist/def456",
     searchSpotify: "@ai search Spotify for Running Up That Hill",
     getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123",
-    createDiscordPoll: "@ai make a poll: what day should we play, Friday or Saturday?"
+    createDiscordPoll: "@ai make a poll: what day should we play, Friday or Saturday?",
+    updateBotAvatar: "@ai change your avatar to this image: https://example.com/avatar.png"
   };
   return [examples[name]];
 }

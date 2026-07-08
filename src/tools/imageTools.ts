@@ -139,14 +139,14 @@ export async function generateImage(
   return { content, files };
 }
 
-type ImageReferenceContext = {
+export type ImageReferenceContext = {
   url: string;
   label: string;
   contentType?: string | null;
   source: "current_request" | "reply_context" | "message_attachment" | "explicit_url";
 };
 
-async function imageReferencesForInput(
+export async function imageReferencesForInput(
   ctx: ToolContext,
   input: { explicitUrls?: string[]; messageIdOrUrl?: string; useContextImages?: boolean }
 ): Promise<ImageReferenceContext[]> {

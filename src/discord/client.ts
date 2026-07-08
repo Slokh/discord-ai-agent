@@ -510,7 +510,7 @@ async function handleMessageCreate(
         })
         .catch((deleteError) => requestLogger.warn({ err: deleteError }, "Failed to remove failed queued user turn from channel memory"));
       const errorContent = `I hit an error: ${error instanceof Error ? error.message : String(error)}`;
-      const finalReply = (await responseSink.sendError(errorContent, await discordTraceFooter(input, requestId, messageStartedAt, requestLogger))).message;
+      const finalReply = (await responseSink.sendError(errorContent, discordTraceFooter(input.config, requestId, messageStartedAt))).message;
       await input.repo
         .updateProcessRun({
           runId: message.id,
@@ -758,7 +758,7 @@ async function executeDiscordAgentRequest(
       await responseSink.sendFinal({
         content: response.content,
         files: response.files,
-        footer: await discordTraceFooter(input, request.requestId, request.messageStartedAt, requestLogger)
+        footer: discordTraceFooter(input.config, request.requestId, request.messageStartedAt)
       })
     ).message;
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
@@ -861,9 +861,7 @@ async function executeDiscordAgentRequest(
         "The model/provider blocked that one, so I’m not going to keep it in channel memory. Try rephrasing it.",
         input.config.maxReplyChars
       );
-      const finalReply = (
-        await responseSink.sendError(filteredContent, await discordTraceFooter(input, request.requestId, request.messageStartedAt, requestLogger))
-      ).message;
+      const finalReply = (await responseSink.sendError(filteredContent, discordTraceFooter(input.config, request.requestId, request.messageStartedAt))).message;
       await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
       const deletedMemoryRows = await input.repo
         .deleteConversationMessagesByDiscordMessageIds({
@@ -927,7 +925,7 @@ async function executeDiscordAgentRequest(
         .catch((auditError) => requestLogger.warn({ err: auditError }, "Failed to audit agent timeout"));
     }
     const errorContent = cleanResponse(`I hit an error: ${error instanceof Error ? error.message : String(error)}`, input.config.maxReplyChars);
-    const finalReply = (await responseSink.sendError(errorContent, await discordTraceFooter(input, request.requestId, request.messageStartedAt, requestLogger))).message;
+    const finalReply = (await responseSink.sendError(errorContent, discordTraceFooter(input.config, request.requestId, request.messageStartedAt))).message;
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord error response");
     await recordTraceEvent(input.repo, {
@@ -1989,31 +1987,13 @@ export function hasExplicitBotAddress(content: string, botUserId: string, botRol
   return explicitRoleMentionIds(content).some((roleId) => botRoleIds.includes(roleId));
 }
 
-async function discordTraceFooter(
-  input: Pick<DiscordAgentRequestInput, "config" | "repo">,
-  runId: string,
-  startedAt: number,
-  requestLogger?: Logger
-): Promise<DiscordResponseFooter | null> {
-  const traceUrl = discordRunConsoleUrl(input.config, runId);
+function discordTraceFooter(config: AppConfig, runId: string, startedAt: number): DiscordResponseFooter | null {
+  const traceUrl = discordRunConsoleUrl(config, runId);
   if (!traceUrl) return null;
   return {
     traceUrl,
-    durationMs: durationMs(startedAt),
-    estimatedCostUsd: await estimatedTraceCostUsd(input.repo, runId, requestLogger)
+    durationMs: durationMs(startedAt)
   };
-}
-
-async function estimatedTraceCostUsd(repo: DiscordAiAgentRepository, traceId: string, requestLogger?: Logger) {
-  const logs = await repo.getToolAuditLogsForTrace({ traceId, limit: 300 }).catch((error) => {
-    requestLogger?.warn({ err: error, traceId }, "Failed to load estimated trace cost for Discord footer");
-    return [];
-  });
-  const cost = logs.reduce((total, log) => {
-    const value = Number(log.estimatedCostUsd);
-    return Number.isFinite(value) && value > 0 ? total + value : total;
-  }, 0);
-  return cost > 0 ? cost : null;
 }
 
 function discordRunConsoleUrl(config: AppConfig, runId: string) {

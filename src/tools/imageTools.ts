@@ -1,6 +1,6 @@
 import type { ChatContentPart, ImageReference } from "../models/openrouter.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
-import type { AgentFile, DiscordAttachmentContext, DiscordUserAvatarResult, ToolContext } from "./types.js";
+import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 
 const DEFAULT_VISION_MODEL = "google/gemini-3.1-flash-lite";

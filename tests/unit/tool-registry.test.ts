@@ -46,7 +46,8 @@ describe("toolRegistry", () => {
       "compareSpotifyPlaylists",
       "searchSpotify",
       "getSpotifyItem",
-      "createDiscordPoll"
+      "createDiscordPoll",
+      "updateBotAvatar"
     ]);
   });
 

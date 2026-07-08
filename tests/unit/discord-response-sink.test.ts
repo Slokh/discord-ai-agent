@@ -32,26 +32,7 @@ describe("DiscordResponseSink", () => {
 
     await sink.sendFinal({
       content: "done",
-      footer: { traceUrl: "https://tasks.example/runs/run-1", durationMs: 42_183, estimatedCostUsd: 0.0001234 }
-    });
-
-    expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "done\n\n-# [trace](https://tasks.example/runs/run-1) · 42.183s · cost $0.000123"
-    });
-  });
-
-  it("omits footer cost when no positive estimate is available", async () => {
-    const sourceMessage = fakeMessage();
-    const sink = new DiscordResponseSink({
-      client: fakeClient(),
-      sourceMessage: sourceMessage as any,
-      maxReplyChars: 2_000,
-      logger: fakeLogger() as any
-    });
-
-    await sink.sendFinal({
-      content: "done",
-      footer: { traceUrl: "https://tasks.example/runs/run-1", durationMs: 42_183, estimatedCostUsd: 0 }
+      footer: { traceUrl: "https://tasks.example/runs/run-1", durationMs: 42_183 }
     });
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({

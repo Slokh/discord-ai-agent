@@ -15,6 +15,7 @@ export type DiscordResponseResult = {
 export type DiscordResponseFooter = {
   traceUrl?: string | null;
   durationMs?: number | null;
+  estimatedCostUsd?: number | null;
 };
 
 export type DiscordReactionOutcome = {
@@ -202,11 +203,22 @@ export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | nul
   if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
     parts.push(formatFooterDuration(footer.durationMs));
   }
+  if (typeof footer?.estimatedCostUsd === "number" && Number.isFinite(footer.estimatedCostUsd) && footer.estimatedCostUsd > 0) {
+    parts.push(`cost ${formatFooterCost(footer.estimatedCostUsd)}`);
+  }
   return `-# ${parts.join(" · ")}`;
 }
 
 function formatFooterDuration(ms: number) {
   return `${(Math.max(0, ms) / 1000).toFixed(3)}s`;
+}
+
+function formatFooterCost(costUsd: number) {
+  const cost = Math.max(0, costUsd);
+  if (cost < 0.000001) return "$<0.000001";
+  if (cost < 0.01) return `$${cost.toFixed(6)}`;
+  if (cost < 1) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(2)}`;
 }
 
 type DiscordReactionMatch = {

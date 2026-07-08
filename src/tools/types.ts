@@ -37,6 +37,19 @@ export type ToolContext = {
     durationHours: number;
     allowMultiselect: boolean;
   }) => Promise<{ messageId: string; channelId: string; url: string }>;
+  fetchDiscordUserAvatar?: (input: {
+    guildId: string;
+    userId: string;
+  }) => Promise<DiscordUserAvatarResult | null>;
+};
+
+export type DiscordUserAvatarResult = {
+  avatarUrl: string;
+  globalAvatarUrl: string | null;
+  username: string | null;
+  globalName: string | null;
+  isBot: boolean;
+  hasCustomAvatar: boolean;
 };
 
 export type DiscordAttachmentContext = {

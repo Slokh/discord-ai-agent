@@ -5,6 +5,7 @@ import {
   MessageFlags,
   Partials,
   type Guild,
+  type GuildMember,
   type Message,
   type MessageReaction,
   type PartialMessage,
@@ -42,7 +43,7 @@ import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution, t
 import { enqueueAgentRuntimeSessionExecution, storeAgentRuntimeExecutionInputLines } from "../agent/runtimeControlPlane.js";
 import { agentRuntimeInputLinesFromEnvelope, conversationMessagesFromEnvelope } from "../agent/sandboxPromptProtocol.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
-import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, ToolContext } from "../tools/types.js";
+import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage, DiscordUserAvatarResult, ToolContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { runWithTrace, type TraceContext } from "../util/trace.js";
 import type { Logger } from "pino";
@@ -704,7 +705,8 @@ async function executeDiscordAgentRequest(
         }
         return deleted;
       },
-      sendDiscordPoll: async (pollInput) => sendDiscordPollMessage(message, pollInput)
+      sendDiscordPoll: async (pollInput) => sendDiscordPollMessage(message, pollInput),
+      fetchDiscordUserAvatar: async ({ userId }) => fetchDiscordUserAvatar(client, turnEnvelope.guildId, userId)
     };
     const response = await agentExecutor.execute({
       toolContext,
@@ -1630,6 +1632,38 @@ async function sendDiscordPollMessage(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Discord rejected the poll message: ${message}`);
+  }
+}
+
+async function fetchDiscordUserAvatar(
+  client: Client,
+  guildId: string,
+  userId: string
+): Promise<DiscordUserAvatarResult | null> {
+  try {
+    let member: GuildMember | null = null;
+    try {
+      const guild = client.guilds.cache.get(guildId) ?? (await client.guilds.fetch(guildId));
+      member = await guild.members.fetch(userId).catch(() => null);
+    } catch {
+      member = null;
+    }
+    const user = member?.user ?? (await client.users.fetch(userId, { force: false }).catch(() => null));
+    if (!user) return null;
+    const avatarOptions = { extension: "png" as const, size: 1024 };
+    const globalAvatarUrl = user.displayAvatarURL(avatarOptions);
+    const memberAvatarUrl = member?.displayAvatarURL(avatarOptions) ?? globalAvatarUrl;
+    return {
+      avatarUrl: memberAvatarUrl,
+      globalAvatarUrl: memberAvatarUrl === globalAvatarUrl ? null : globalAvatarUrl,
+      username: user.username ?? null,
+      globalName: user.globalName ?? null,
+      isBot: Boolean(user.bot),
+      hasCustomAvatar: Boolean(user.avatar ?? member?.avatar ?? false)
+    };
+  } catch (error) {
+    logger.warn({ err: error, userId }, "Failed to fetch Discord user avatar");
+    return null;
   }
 }
 

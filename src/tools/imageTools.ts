@@ -1,7 +1,7 @@
 import type { ChatContentPart, ImageReference } from "../models/openrouter.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
-import { extractDiscordMessageId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
+import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 
 const DEFAULT_VISION_MODEL = "google/gemini-3.1-flash-lite";
 const MAX_IMAGE_REFERENCES = 4;
@@ -18,6 +18,76 @@ export type InspectDiscordImagesInput = {
   messageIdOrUrl?: string;
   useContextImages?: boolean;
 };
+
+export type GetDiscordUserAvatarInput = {
+  query: string;
+  limit?: number;
+};
+
+export async function getDiscordUserAvatar(ctx: ToolContext, input: GetDiscordUserAvatarInput): Promise<string> {
+  const query = input.query.trim();
+  if (!query) return "Provide a Discord username, mention, or user ID to look up the avatar.";
+
+  const limit = Math.max(1, Math.min(5, Math.floor(input.limit ?? 1)));
+  const resolvedUserIds = await resolveDiscordUserIdsForAvatar(ctx, query, limit);
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "getDiscordUserAvatar",
+    argumentsSummary: summarizeForAudit({ query, limit, resolvedUserIds: resolvedUserIds.length }),
+    resultSummary: summarizeForAudit({ resolvedUserIds: resolvedUserIds.length })
+  });
+
+  if (resolvedUserIds.length === 0) {
+    return "I could not resolve a visible Discord user matching that query. Try a username, @mention, or user ID.";
+  }
+
+  if (!ctx.fetchDiscordUserAvatar) {
+    return [
+      "I resolved the user but cannot fetch a live avatar URL in this execution context.",
+      `Resolved user ID(s): ${resolvedUserIds.join(", ")}`,
+      "Avatar fetching requires the Discord client, which is not attached to this run."
+    ].join("\n");
+  }
+
+  const rows: string[] = [];
+  for (const [index, userId] of resolvedUserIds.entries()) {
+    const avatar = await ctx.fetchDiscordUserAvatar({ guildId: ctx.guildId, userId }).catch(() => null);
+    if (!avatar) {
+      rows.push(`[${index + 1}] id=${userId} avatar=unavailable (user not found via Discord)`);
+      continue;
+    }
+    const name = [avatar.globalName, avatar.username ? `@${avatar.username}` : null].filter(Boolean).join(" / ") || "(unknown user)";
+    const botTag = avatar.isBot ? " bot=true" : "";
+    const customTag = avatar.hasCustomAvatar ? "" : " default_avatar=true";
+    const globalLine = avatar.globalAvatarUrl && avatar.globalAvatarUrl !== avatar.avatarUrl ? `\nGlobal avatar: ${avatar.globalAvatarUrl}` : "";
+    rows.push(`[${index + 1}] ${name} id=${userId}${botTag}${customTag}\nAvatar: ${avatar.avatarUrl}${globalLine}`);
+  }
+
+  return [
+    "Discord avatar(s):",
+    ...rows,
+    "",
+    "Pass the avatar URL above to inspectDiscordImages (imageUrls) to describe, enhance, or zoom into the profile picture."
+  ].join("\n");
+}
+
+async function resolveDiscordUserIdsForAvatar(ctx: ToolContext, query: string, limit: number): Promise<string[]> {
+  const mentionId = extractMentionId(query, "user");
+  if (mentionId) return [mentionId];
+  if (/^\d{17,20}$/.test(query)) return [query];
+
+  const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
+  const matches = await ctx.repo.findDiscordUsers({
+    guildId: ctx.guildId,
+    visibleChannelIds: visibleIndexedChannels,
+    query,
+    limit
+  });
+  return matches.map((match) => match.id);
+}
 
 export async function inspectDiscordImages(ctx: ToolContext, input: InspectDiscordImagesInput = {}): Promise<string> {
   const question = input.question?.trim() || "Describe the relevant visual details in these Discord image attachments.";

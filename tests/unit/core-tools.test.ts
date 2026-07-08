@@ -11,6 +11,7 @@ import {
   getDeploymentStatus,
   getDiscordChannelTopics,
   getDiscordStats,
+  getDiscordUserAvatar,
   inspectDiscordImages,
   inspectAgentLogs,
   reportStatus,
@@ -1085,6 +1086,133 @@ describe("generateImage", () => {
 
     expect(result.files).toEqual([]);
     expect(result.content).toContain("https://example.com/generated.png");
+  });
+});
+
+describe("getDiscordUserAvatar", () => {
+  it("resolves a mention directly and returns the avatar URL via the discord client callback", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const findDiscordUsers = vi.fn(async () => []);
+    const fetchDiscordUserAvatar = vi.fn(async () => ({
+      avatarUrl: "https://cdn.discordapp.com/avatars/123/abc.png",
+      globalAvatarUrl: null,
+      username: "kartik",
+      globalName: "Kartik",
+      isBot: false,
+      hasCustomAvatar: true
+    }));
+    const ctx = {
+      repo: { auditTool, findDiscordUsers },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      fetchDiscordUserAvatar
+    } as unknown as ToolContext;
+
+    const result = await getDiscordUserAvatar(ctx, { query: "<@123>" });
+
+    expect(findDiscordUsers).not.toHaveBeenCalled();
+    expect(fetchDiscordUserAvatar).toHaveBeenCalledWith({ guildId: "guild", userId: "123" });
+    expect(result).toContain("https://cdn.discordapp.com/avatars/123/abc.png");
+    expect(result).toContain("inspectDiscordImages");
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDiscordUserAvatar" }));
+  });
+
+  it("resolves a bare user ID without hitting the user resolver", async () => {
+    const findDiscordUsers = vi.fn(async () => []);
+    const fetchDiscordUserAvatar = vi.fn(async () => ({
+      avatarUrl: "https://cdn.discordapp.com/embed/avatars/0.png",
+      globalAvatarUrl: null,
+      username: null,
+      globalName: null,
+      isBot: false,
+      hasCustomAvatar: false
+    }));
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined), findDiscordUsers },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      fetchDiscordUserAvatar
+    } as unknown as ToolContext;
+
+    const result = await getDiscordUserAvatar(ctx, { query: "987654321098765432" });
+
+    expect(findDiscordUsers).not.toHaveBeenCalled();
+    expect(fetchDiscordUserAvatar).toHaveBeenCalledWith({ guildId: "guild", userId: "987654321098765432" });
+    expect(result).toContain("default_avatar=true");
+  });
+
+  it("resolves a username query through the indexed user resolver", async () => {
+    const findDiscordUsers = vi.fn(async () => [
+      { id: "555", username: "tyler", globalName: "Tyler", aliases: [], isBot: false, messageCount: 12, lastMessageAt: null, score: 90 }
+    ]);
+    const fetchDiscordUserAvatar = vi.fn(async () => ({
+      avatarUrl: "https://cdn.discordapp.com/avatars/555/zzz.png",
+      globalAvatarUrl: "https://cdn.discordapp.com/avatars/555/zzz.png",
+      username: "tyler",
+      globalName: "Tyler",
+      isBot: false,
+      hasCustomAvatar: true
+    }));
+    const ctx = {
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        findDiscordUsers,
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"])
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      fetchDiscordUserAvatar
+    } as unknown as ToolContext;
+
+    const result = await getDiscordUserAvatar(ctx, { query: "tyler" });
+
+    expect(findDiscordUsers).toHaveBeenCalledWith(expect.objectContaining({ query: "tyler", limit: 1 }));
+    expect(fetchDiscordUserAvatar).toHaveBeenCalledWith({ guildId: "guild", userId: "555" });
+    expect(result).toContain("https://cdn.discordapp.com/avatars/555/zzz.png");
+  });
+
+  it("reports no match when the user cannot be resolved", async () => {
+    const findDiscordUsers = vi.fn(async () => []);
+    const fetchDiscordUserAvatar = vi.fn(async () => null);
+    const ctx = {
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        findDiscordUsers,
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"])
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      fetchDiscordUserAvatar
+    } as unknown as ToolContext;
+
+    const result = await getDiscordUserAvatar(ctx, { query: "nobody" });
+
+    expect(result).toContain("could not resolve");
+    expect(fetchDiscordUserAvatar).not.toHaveBeenCalled();
+  });
+
+  it("degrades gracefully when the discord client callback is unavailable", async () => {
+    const ctx = {
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        findDiscordUsers: vi.fn(async () => []),
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"])
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const result = await getDiscordUserAvatar(ctx, { query: "<@123>" });
+
+    expect(result).toContain("cannot fetch a live avatar URL");
   });
 });
 

@@ -13,7 +13,7 @@ Owns durable Postgres state and query contracts.
 - Trace events and tool audit logs live in `auditRepository.ts`.
 - Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `agent_runtime_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters.
 - Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history.
-- DB-backed skills, server overlays, durable workflows, and health checks live in `skillsRepository.ts`.
+- DB-backed skills, server overlays, and health checks live in `skillsRepository.ts`.
 - `repositories.ts` is a compatibility facade that delegates to the focused modules; shared types live in `types.ts`, with only cross-domain helpers left in `shared.ts`.
 
 ## Change Routing
@@ -34,4 +34,4 @@ Owns durable Postgres state and query contracts.
 
 ## Structure
 
-`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, skills, and workflows. `agentRuntimeRepository.ts` owns writes to the shared agent-runtime ledger tables. Add new queries to the owning focused module, not the facade.
+`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, and skills. `agentRuntimeRepository.ts` owns the shared `agent_runtime_*` ledger tables: sessions, executions, events, messages, artifacts/chunks, and sandbox leases. Add new queries to the owning focused module, not the facade.

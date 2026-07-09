@@ -11,7 +11,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Delivery obligations are persisted for in-flight agent-runtime turns and swept on bot startup to complete terminal replies or post a conservative restart notice.
 - Queue handoff into durable agent runtime executions.
 - Full-server crawl and incremental message persistence.
-- Codegen task progress rendering back to Discord.
+- Code-update task progress rendering back to Discord.
 
 ## Change Routing
 

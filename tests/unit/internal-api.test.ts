@@ -55,7 +55,8 @@ describe("internal API metrics", () => {
 
     const metrics = await renderMetrics(repo as any);
 
-    expect(metrics).toContain("# HELP discord_ai_agent_agent_runtime_sandbox_leases_total Codegen sandbox leases by backend and status.");
+    expect(metrics).toContain("# HELP discord_ai_agent_agent_runtime_sandbox_leases_total Agent runtime sandbox leases by backend and status.");
+    expect(metrics).toContain("# TYPE discord_ai_agent_task_phase_duration_avg_ms gauge");
     expect(metrics).toContain('discord_ai_agent_agent_runtime_sandbox_leases_total{backend="local-process-sandbox",status="idle"} 1');
     expect(metrics).toContain("# HELP discord_ai_agent_agent_task_backlog_oldest_age_seconds Oldest active queued/running agent task age by backend and status.");
     expect(metrics).toContain('discord_ai_agent_agent_task_backlog_total{backend="local-process-sandbox",status="queued"} 2');

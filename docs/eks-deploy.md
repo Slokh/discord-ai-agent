@@ -174,7 +174,7 @@ The default allowed hosts cover GitHub, OpenRouter, and npm package downloads. A
 
 ## Public Task Viewer
 
-The codegen task viewer is available at `/tasks` on the API service. Keep the default cluster-internal service for the lowest-cost setup, then open it with:
+The code-update task viewer redirects from `/tasks` to the run console on the API service. Keep the default cluster-internal service for the lowest-cost setup, then open it with:
 
 ```bash
 kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080
@@ -205,7 +205,7 @@ Ask the bot:
 @ai why did that update fail?
 ```
 
-The diagnostics tool reads persisted trace events, task events, and tool audit logs. It does not need direct access to cloud-provider logs for normal task debugging.
+The diagnostics tool reads persisted trace events, agent task runtime events, and tool audit logs. It does not need direct access to cloud-provider logs for normal task debugging.
 
 The API service also exposes Prometheus text metrics at `/metrics`. The Helm chart adds scrape annotations by default:
 

@@ -8,7 +8,7 @@ Owns the model loop for one user prompt.
 - Execute model-selected local tools and hosted OpenRouter tools.
 - Record trace spans, tool audit logs, costs, and final response memory.
 - Synthesize the final answer and files.
-- Record durable agent-runtime prompt executions through `runtimeLedger.ts` while the sandbox-backed runtime migration proceeds.
+- Record durable agent-runtime prompt executions through `runtimeLedger.ts`; Discord chat turns execute in-process, while sandboxes are reserved for code-update tasks.
 - Persist replayable Discord turn context through `runtimeEnvelope.ts` before executing a prompt, so future sandbox executors can deserialize the same request boundary.
 - Discord chat prompt execution runs in-process permanently through `runtimeRunner.ts`, `runtimeExecutor.ts`, and `inProcessRuntimeExecutor.ts`; sandboxes are only for code-update tasks.
 
@@ -25,7 +25,7 @@ Owns the model loop for one user prompt.
 
 ## Change Routing
 
-- Tool choice problems usually start in `src/tools/registry.ts`; tool behavior problems route through `src/tools/README.md` to the focused implementation module behind the `coreTools.ts` facade.
+- Tool choice problems usually start in `src/tools/registry.ts`; tool behavior problems route through `src/tools/README.md` to the focused implementation module that owns the selected tool family.
 - Prompt composition and memory/reply/image context problems start here.
 - Agent session/execution state transitions start in `runtimeLedger.ts`; execution input payloads start in `runtimeEnvelope.ts`; both are called by Discord ingress/delivery or the sandbox executor caller.
 - Agent session execution queue handoffs start in `runtimeControlPlane.ts`; Discord ingress and `/api/agent/sessions/:threadKey/execute` should share this path so durable execution metadata and events stay consistent.

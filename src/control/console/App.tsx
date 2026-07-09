@@ -1269,7 +1269,7 @@ function TerminalView({
   query: string;
   onQueryChange: (value: string) => void;
 }) {
-  const entries = terminal.entries.length > 0 ? terminal.entries : legacyTerminalEntries(terminal.content);
+  const entries = terminal.entries;
   const [step, setStep] = useState("all");
   const [streams, setStreams] = useState<Record<TerminalStream, boolean>>({
     command: true,
@@ -1626,21 +1626,6 @@ function codegenDiagnosisCategory(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const category = (value as Record<string, unknown>).category;
   return typeof category === "string" && category.trim() ? category.trim() : null;
-}
-
-function legacyTerminalEntries(content: string): TerminalEntry[] {
-  if (!content) return [];
-  return [
-    {
-      id: "legacy-terminal",
-      source: "command",
-      stream: "stdout",
-      step: "legacy",
-      command: null,
-      createdAt: new Date().toISOString(),
-      content
-    }
-  ];
 }
 
 function uniqueStrings(values: string[]) {

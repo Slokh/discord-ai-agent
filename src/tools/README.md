@@ -5,7 +5,6 @@ Owns model-facing local tool contracts and implementations.
 ## Responsibilities
 
 - `registry.ts`: names, descriptions, schemas, examples, output contracts, and tool taxonomy exposed to the model.
-- `coreTools.ts`: current compatibility facade for local tool implementations.
 - `agentTaskTools.ts`: model-facing code-update task creation, status, retry/cancel, deployment status, and task log snippets.
 - `agentTaskFormatting.ts`: code-update task titles, task result messages, compact timing/cache lines, and shared duration formatting.
 - `discordHistoryFormatting.ts`: Discord history search syntax, date coercion, no-results text, and history evidence/summary formatting.
@@ -35,7 +34,7 @@ Owns model-facing local tool contracts and implementations.
 
 ## Structure
 
-`src/tools/coreTools.ts` is a compatibility facade; implementation lives in focused modules by tool family: resolvers, retrieval, stats, image, skills, coding, and ops. Add new tools to the owning family module, not the facade.
+Implementation lives directly in focused modules by tool family: Discord resolvers/retrieval/summary/ops, agent memory, generated files, images, skills, code-update tasks, spend, Spotify, and response formatting. Add new tools to the owning family module and expose them through `registry.ts`.
 
 ## Tool Groups and Scoped Toolsets
 

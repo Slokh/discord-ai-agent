@@ -17,7 +17,7 @@ Owns sandboxed code-update execution from queued task to PR.
 - `repoWorkspace.ts`: cached mirror/worktree, target branch/PR resolution, git state, push refs, git auth.
 - `dependencyCache.ts`: dependency cache key, node_modules restore/install, npm env scrubbing.
 - `contextPack.ts`: codegen request context (repo guide excerpt, anchors, project map, check commands).
-- `harness/types.ts`: `CodegenHarness`, attempt/run summaries, `CodegenNoDiffError`, `CodegenHarnessAdapter`.
+- `harness/types.ts`: `CodegenHarness`, `AgentAttemptSummary`, `AgentRunSummary`, `CodegenNoDiffError`, `CodegenHarnessRunInput`, `CodegenHarnessConfigInput`, and `CodegenHarnessAdapter`.
 - `harness/codex.ts` + `harness/opencode.ts`: harness adapters (config, run/recovery, output parsing).
 - `callbacks.ts`: control-plane progress/complete/command/artifact callbacks.
 - `commands.ts`: sandbox command execution with output capture and activity events.

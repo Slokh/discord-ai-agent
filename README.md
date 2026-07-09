@@ -38,7 +38,7 @@ The app has three roles, runnable as one process (`all`) or split across service
 - `worker`: crawling, embeddings, queue processing, code-update task execution, reconciliation, and cleanup. Needed for history indexing and code-update PRs.
 - `api`: internal callback API for sandbox task progress and the run console. Needed for code-update PRs and debugging UI.
 
-Postgres with `pgvector` is the source of truth for Discord history, embeddings, sessions, skills, traces, task events, and sandbox runs.
+Postgres with `pgvector` is the source of truth for Discord history, embeddings, skills, traces, the `agent_runtime_*` execution ledger, task projections, and sandbox runs.
 
 ## Capabilities
 
@@ -54,7 +54,7 @@ Postgres with `pgvector` is the source of truth for Discord history, embeddings,
 - Public Spotify catalog search, item lookup, playlist/album track-list, artist discography, playlist stats, and playlist comparison tools when Spotify client credentials are configured
 - Private DB-backed skills
 - Code-update PRs through sandboxed agent tasks
-- Structured logs and trace/task event inspection
+- Structured logs and trace/agent-runtime event inspection
 
 ## Requirements
 
@@ -177,7 +177,7 @@ npm run sandbox-cache:prune
 npm run sandbox-cache:clear
 ```
 
-For the cache-first runtime, durable codegen session API, and backend details, see [docs/codegen-runtime.md](docs/codegen-runtime.md).
+For the durable agent runtime, code-update task ledger, and sandbox lease model, see [docs/agent-runtime.md](docs/agent-runtime.md).
 For a concise coding-agent map of the repo, see [docs/architecture.md](docs/architecture.md).
 For source ownership maps used by coding agents, start with [src/README.md](src/README.md) and the nearest folder README.
 For the current improvement roadmap, see [docs/improvement-plan.md](docs/improvement-plan.md).
@@ -227,8 +227,8 @@ Common optional settings:
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
 | `CODEGEN_EXECUTION_BACKEND` | `local-process` | `local-process` runs code-update tasks in a warm worker child process; `kubernetes-job` runs each task in an isolated Kubernetes Job (advanced) |
 | `CODEGEN_HARNESS` | `opencode` | Coding harness for code-update tasks: `opencode` by default, or `codex` to run tasks through Codex |
-| `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_DISCORD_AGENT_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated codegen worker |
-| `RETENTION_EVENTS_DAYS` | `60` | Worker-side age cutoff for trace/task/process/codegen/sandbox event cleanup; `0` disables event retention cleanup |
+| `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_DISCORD_AGENT_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated code-update worker |
+| `RETENTION_EVENTS_DAYS` | `60` | Worker-side age cutoff for trace, process-run, agent-runtime, and sandbox command event cleanup; `0` disables event retention cleanup |
 | `RETENTION_AUDIT_DAYS` | `90` | Worker-side age cutoff for `tool_audit_logs`; `0` disables audit cleanup |
 | `RETENTION_EMBEDDING_RUNS_DAYS` | `14` | Worker-side age cutoff for terminal embedding `process_runs` and cascading artifacts/events; `0` disables embedding-run cleanup |
 | `MEMORY_COMPACTION_THRESHOLD` | `100` | Raw `conversation_messages` per thread key before worker compaction runs; `0` disables compaction |
@@ -248,6 +248,8 @@ Common optional settings:
 | `IMAGE_TOOLS_ALLOWLIST_ONLY` | `false` | When true, image generation also requires owner/ops allowlist membership |
 | `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all`. Chat/memory need `bot`; indexing and code-update tasks need `worker`; sandbox callbacks and the run console need `api`. Use `all` for a single-process setup |
 | `RUN_MIGRATIONS` | `true` | Run migrations on process startup; Helm runtime pods set this to `false` because migrations run as a hook |
+
+Database schema setup is intentionally simple for new installs: `migrations/001_initial.sql` is the single baseline migration. If you are upgrading a database created before the migration squash, run `scripts/legacy-schema-transition.sql` once to rename the old runtime tables/columns in place before using the current baseline.
 
 ## Private Content And The Overlay Boundary
 

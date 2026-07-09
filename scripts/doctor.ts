@@ -40,8 +40,11 @@ async function main() {
       "skills",
       "skill_changes",
       "agent_tasks",
-      "task_events",
-      "sandbox_runs"
+      "sandbox_runs",
+      "sandbox_command_events",
+      "agent_runtime_sessions",
+      "agent_runtime_executions",
+      "agent_runtime_events"
     ];
     const tables = await pool.query(
       `

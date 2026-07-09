@@ -301,3 +301,7 @@ npm run runs:inspect -- --list --limit 5   # token/cost baseline for WS3
 ```
 
 Baseline as of 2026-07: verify green (466 passed / 56 skipped), scan:release green (but see WS1 scanner gaps), typical turn ≈ 13k static input tokens/round with up to 4 rounds.
+
+## Post-plan cleanup (completed)
+
+The settled runtime cleanup removed the compatibility surfaces that were still present while this checklist was being executed: the `src/tools/coreTools.ts` barrel/facade is gone, durable workflow code and tables are gone, `task_events` and its dual-write/fallback path are gone, and the former `codegen_*` runtime ledger has been renamed to `agent_runtime_*` with `harness_thread_id`. Migrations are now squashed into the single `migrations/001_initial.sql` baseline, with `scripts/legacy-schema-transition.sql` for one-time upgrades of pre-squash databases. Legacy `/api/codegen/*` routes were removed in favor of `/api/agent/sessions/:threadKey` and `/api/tasks/status`.

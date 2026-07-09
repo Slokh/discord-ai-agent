@@ -9,10 +9,10 @@ describe("decideDiscordDeliverySweep", () => {
   it("marks already-delivered executions without re-sending", () => {
     expect(
       decideDiscordDeliverySweep({
-        execution: { status: "succeeded", error: null, metadata: { replyMessageId: "1524858386733334708", replyUrl: "https://discord.com/..." } },
+        execution: { status: "succeeded", error: null, metadata: { replyMessageId: "reply-message-1", replyUrl: "https://discord.com/..." } },
         finalText: "done"
       })
-    ).toEqual({ action: "already_delivered", replyMessageId: "1524858386733334708" });
+    ).toEqual({ action: "already_delivered", replyMessageId: "reply-message-1" });
   });
 
   it("ignores blank replyMessageId metadata and still delivers stored text", () => {

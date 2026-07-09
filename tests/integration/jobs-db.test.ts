@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
-import PgBoss from "pg-boss";
+import { PgBoss } from "pg-boss";
 import { loadConfig } from "../../src/config/env.js";
 import {
   AGENT_RUNTIME_EXECUTION_JOB,
@@ -23,7 +23,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
 
   afterAll(async () => {
     await Promise.all(runtimes.map((runtime) => runtime.stop().catch(() => undefined)));
-    await Promise.all(bosses.map((boss) => boss.stop({ graceful: false, wait: false }).catch(() => undefined)));
+    await Promise.all(bosses.map((boss) => boss.stop({ graceful: false, timeout: 5_000 }).catch(() => undefined)));
     const pool = createPool(loadConfig());
     try {
       await pool.query("DROP SCHEMA IF EXISTS pgboss_test CASCADE");
@@ -36,15 +36,14 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     const config = testConfig();
     const boss = new PgBoss({
       connectionString: config.databaseUrl,
-      schema: "pgboss_test",
-      pollingIntervalSeconds: 1
+      schema: "pgboss_test"
     });
     bosses.push(boss);
 
     let processed = 0;
     await boss.start();
     await boss.createQueue("discord-ai-agent.test");
-    await boss.work("discord-ai-agent.test", async () => {
+    await boss.work("discord-ai-agent.test", { pollingIntervalSeconds: 1 }, async () => {
       processed += 1;
     });
 
@@ -53,7 +52,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
 
     await waitFor(() => processed === 1, 10_000);
     expect(processed).toBe(1);
-    await boss.stop({ graceful: false, wait: true });
+    await boss.stop({ graceful: false });
   });
 
   it("starts the Discord AI Agent crawl queue wrapper and processes an enqueued crawl", async () => {

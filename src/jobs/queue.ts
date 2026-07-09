@@ -1,4 +1,4 @@
-import PgBoss from "pg-boss";
+import { PgBoss } from "pg-boss";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
 import { agentRuntimeSessionId } from "../db/agentRuntimeRepository.js";
@@ -125,14 +125,12 @@ export async function startJobs(input: {
     "Starting pg-boss"
   );
   await boss.start();
-  await boss.createQueue(CRAWL_GUILD_JOB, { name: CRAWL_GUILD_JOB, policy: "short" });
-  await boss.updateQueue(CRAWL_GUILD_JOB, { name: CRAWL_GUILD_JOB, policy: "short" });
-  await boss.createQueue(EMBED_MESSAGE_JOB, { name: EMBED_MESSAGE_JOB, policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
-  await boss.updateQueue(EMBED_MESSAGE_JOB, { name: EMBED_MESSAGE_JOB, policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
-  await boss.createQueue(AGENT_TASK_JOB, { name: AGENT_TASK_JOB, policy: "short", retryLimit: 0 });
-  await boss.updateQueue(AGENT_TASK_JOB, { name: AGENT_TASK_JOB, policy: "short", retryLimit: 0 });
+  await boss.createQueue(CRAWL_GUILD_JOB, { policy: "short" });
+  await boss.createQueue(EMBED_MESSAGE_JOB, { policy: "short", retryLimit: 3, retryDelay: 10, retryBackoff: true });
+  await boss.updateQueue(EMBED_MESSAGE_JOB, { retryLimit: 3, retryDelay: 10, retryBackoff: true });
+  await boss.createQueue(AGENT_TASK_JOB, { policy: "short", retryLimit: 0 });
+  await boss.updateQueue(AGENT_TASK_JOB, { retryLimit: 0 });
   await boss.createQueue(DISCORD_AGENT_REQUEST_JOB, {
-    name: DISCORD_AGENT_REQUEST_JOB,
     policy: "short",
     retryLimit: 2,
     retryDelay: 15,
@@ -140,8 +138,6 @@ export async function startJobs(input: {
     expireInSeconds: DISCORD_AGENT_JOB_EXPIRE_SECONDS
   });
   await boss.updateQueue(DISCORD_AGENT_REQUEST_JOB, {
-    name: DISCORD_AGENT_REQUEST_JOB,
-    policy: "short",
     retryLimit: 2,
     retryDelay: 15,
     retryBackoff: true,
@@ -262,7 +258,7 @@ export async function startJobs(input: {
       dataRetentionMaintenance?.stop();
       conversationCompactionMaintenance?.stop();
       await stopSandboxLeaseHeartbeat?.();
-      await boss.stop({ graceful: true, wait: true, timeout: 100_000 });
+      await boss.stop({ graceful: true, timeout: 100_000 });
     }
   };
 

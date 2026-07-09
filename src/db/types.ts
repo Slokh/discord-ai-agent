@@ -518,20 +518,3 @@ export type ServerOverlay = {
   updatedAt: Date;
 };
 
-export type DurableWorkflowStatus = "paused" | "active" | "running" | "failed" | "complete";
-
-export type DurableWorkflow = {
-  id: string;
-  guildId: string | null;
-  name: string;
-  kind: string;
-  status: DurableWorkflowStatus;
-  schedule: string | null;
-  state: Record<string, unknown>;
-  lastStartedAt: Date | null;
-  lastCompletedAt: Date | null;
-  nextRunAt: Date | null;
-  lockedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-};

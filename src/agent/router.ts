@@ -2,8 +2,6 @@ import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { runAgentModelLoop } from "./modelLoop.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
-export { chatMessages, toolResultContentForPrompt } from "./promptBuilder.js";
-
 export async function handleAgentRequest(
   ctx: ToolContext,
   userText: string,

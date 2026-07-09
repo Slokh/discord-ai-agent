@@ -14,9 +14,6 @@ export type AgentAttemptSummary = {
   stderrTail: string;
 };
 
-/** @deprecated Use AgentAttemptSummary. */
-export type CodexAttemptSummary = AgentAttemptSummary;
-
 export type AgentRunSummary = {
   attempts: AgentAttemptSummary[];
 };

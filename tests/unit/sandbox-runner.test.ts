@@ -6,33 +6,45 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
-  branchPushRef,
-  buildCodegenContextPack,
-  codeUpdateTargetFromInputs,
+  codeUpdatePrompt,
+  codeUpdateRecoveryPrompt,
+  renderCodegenContextPack,
+} from "../../src/execution/codegenPrompts.js";
+import {
+  diagnoseCodegenFailure,
+  renderCodegenFailureDiagnosis,
+} from "../../src/execution/codegenFailureDiagnosis.js";
+import { buildCodegenContextPack } from "../../src/execution/contextPack.js";
+import {
   codegenNpmInstallEnv,
   codegenNpmScriptEnv,
+  dependencyCacheKey,
+} from "../../src/execution/dependencyCache.js";
+import {
   codexConfigToml,
   codexExecArgs,
   codexHomePathForTask,
   codexResumeExecArgs,
-  codeUpdateBranchName,
-  codeUpdatePullRequestBody,
-  codeUpdatePullRequestTitle,
-  codeUpdatePrompt,
-  codeUpdateRecoveryPrompt,
-  diagnoseCodegenFailure,
-  dependencyCacheKey,
+} from "../../src/execution/harness/codex.js";
+import {
   fetchOpenCodeHealth,
   extractOpenCodeFinalText,
   openCodeConfigJson,
   openCodeModelId,
   openCodeRunArgs,
   openCodeServeArgs,
+} from "../../src/execution/harness/opencode.js";
+import {
+  codeUpdateBranchName,
+  codeUpdatePullRequestBody,
+  codeUpdatePullRequestTitle,
+} from "../../src/execution/prFormatting.js";
+import {
+  branchPushRef,
+  codeUpdateTargetFromInputs,
   readGitChangeState,
-  renderCodegenFailureDiagnosis,
-  renderCodegenContextPack,
   repairWorktreeRemoteForBranchPush
-} from "../../src/execution/sandboxRunner.js";
+} from "../../src/execution/repoWorkspace.js";
 
 const execFileAsync = promisify(execFile);
 

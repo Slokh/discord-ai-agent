@@ -29,7 +29,6 @@ export async function runDataRetentionOnce(input: {
 
   if (eventCutoff) {
     result.traceEvents = await deleteBatches(input.db, "trace_events", "created_at < $1", [eventCutoff], limit);
-    result.taskEvents = await deleteBatches(input.db, "task_events", "created_at < $1", [eventCutoff], limit);
     result.processRunEvents = await deleteBatches(input.db, "process_run_events", "created_at < $1", [eventCutoff], limit);
     result.processRunSpans = await deleteBatches(input.db, "process_run_spans", "updated_at < $1", [eventCutoff], limit);
     result.sandboxCommandEvents = await deleteBatches(input.db, "sandbox_command_events", "created_at < $1", [eventCutoff], limit);

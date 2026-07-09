@@ -4,8 +4,8 @@ export const VECTOR_SEARCH_STATEMENT_TIMEOUT_MS = 8_000;
 export const VECTOR_SEARCH_MAX_CANDIDATES = 1_000;
 export const FILTERED_VECTOR_SEARCH_MAX_CANDIDATES = 2_000;
 
-import type { SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, MessageForEmbedding, InteractionBlock, DatabaseSkill, AgentTaskStatus, AgentTaskRecord, SandboxCommandEvent, ServerOverlay, DurableWorkflowStatus, DurableWorkflow } from "./types.js";
-export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, DurableWorkflowStatus, DurableWorkflow } from "./types.js";
+import type { SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, MessageForEmbedding, InteractionBlock, DatabaseSkill, AgentTaskStatus, AgentTaskRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
+export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
 export { rowToTraceEvent, rowToToolAuditLog, rowToAgentRuntimeEvent, rowToAgentRuntimeChatExecution, rowToAgentRuntimeArtifact, rowToAgentRuntimeMessage, rowToProcessRun, rowToProcessRunSpan, rowToProcessRunEvent, rowToProcessRunArtifact, jsonObject, rowToTaskEvent, rowToSandboxRun } from "./runtimeMappers.js";
 export function rowToSearchResult(row: any): SearchResult {
   return {
@@ -645,24 +645,6 @@ export function rowToServerOverlay(row: any): ServerOverlay {
     metadata: row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {},
     createdBy: row.created_by == null ? null : String(row.created_by),
     updatedBy: row.updated_by == null ? null : String(row.updated_by),
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at)
-  };
-}
-
-export function rowToDurableWorkflow(row: any): DurableWorkflow {
-  return {
-    id: String(row.id),
-    guildId: row.guild_id == null ? null : String(row.guild_id),
-    name: String(row.name),
-    kind: String(row.kind),
-    status: row.status as DurableWorkflowStatus,
-    schedule: row.schedule == null ? null : String(row.schedule),
-    state: row.state && typeof row.state === "object" && !Array.isArray(row.state) ? row.state : {},
-    lastStartedAt: row.last_started_at == null ? null : new Date(row.last_started_at),
-    lastCompletedAt: row.last_completed_at == null ? null : new Date(row.last_completed_at),
-    nextRunAt: row.next_run_at == null ? null : new Date(row.next_run_at),
-    lockedAt: row.locked_at == null ? null : new Date(row.locked_at),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at)
   };

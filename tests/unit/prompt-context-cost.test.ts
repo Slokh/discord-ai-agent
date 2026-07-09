@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   chatMessages,
   toolResultContentForPrompt,
-} from "../../src/agent/router.js";
+} from "../../src/agent/promptBuilder.js";
 import {
   REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT,
   SESSION_CONTEXT_MESSAGE_LIMIT,

@@ -1,6 +1,6 @@
 import type { DbPool } from "./pool.js";
-import { databaseSkillFromRow, rowToServerOverlay, rowToDurableWorkflow } from "./shared.js";
-import type { DatabaseSkill, ServerOverlay, DurableWorkflowStatus, DurableWorkflow } from "./shared.js";
+import { databaseSkillFromRow, rowToServerOverlay } from "./shared.js";
+import type { DatabaseSkill, ServerOverlay } from "./shared.js";
 
 export async function recordSkillChange(pool: DbPool, input: {
     skillName: string;
@@ -195,101 +195,6 @@ export async function upsertServerOverlay(pool: DbPool, input: {
       ]
     );
     return rowToServerOverlay(result.rows[0]);
-  }
-
-export async function upsertDurableWorkflow(pool: DbPool, input: {
-    id: string;
-    guildId?: string | null;
-    name: string;
-    kind: string;
-    status?: DurableWorkflowStatus;
-    schedule?: string | null;
-    state?: Record<string, unknown>;
-    nextRunAt?: Date | null;
-  }): Promise<DurableWorkflow> {
-    const result = await pool.query(
-      `
-        INSERT INTO durable_workflows(id, guild_id, name, kind, status, schedule, state, next_run_at, updated_at)
-        VALUES ($1, $2, $3, $4, coalesce($5, 'paused'), $6, $7, $8, now())
-        ON CONFLICT(id) DO UPDATE SET
-          guild_id = EXCLUDED.guild_id,
-          name = EXCLUDED.name,
-          kind = EXCLUDED.kind,
-          status = EXCLUDED.status,
-          schedule = EXCLUDED.schedule,
-          state = durable_workflows.state || EXCLUDED.state,
-          next_run_at = EXCLUDED.next_run_at,
-          updated_at = now()
-        RETURNING id, guild_id, name, kind, status, schedule, state, last_started_at, last_completed_at, next_run_at, locked_at, created_at, updated_at
-      `,
-      [
-        input.id,
-        input.guildId ?? null,
-        input.name,
-        input.kind,
-        input.status ?? null,
-        input.schedule ?? null,
-        JSON.stringify(input.state ?? {}),
-        input.nextRunAt ?? null
-      ]
-    );
-    return rowToDurableWorkflow(result.rows[0]);
-  }
-
-export async function listDueDurableWorkflows(pool: DbPool, input: { limit: number; now?: Date }): Promise<DurableWorkflow[]> {
-    const result = await pool.query(
-      `
-        SELECT id, guild_id, name, kind, status, schedule, state, last_started_at, last_completed_at, next_run_at, locked_at, created_at, updated_at
-        FROM durable_workflows
-        WHERE status = 'active'
-          AND next_run_at IS NOT NULL
-          AND next_run_at <= $1
-        ORDER BY next_run_at ASC, id ASC
-        LIMIT $2
-      `,
-      [input.now ?? new Date(), Math.max(1, Math.min(100, Math.trunc(input.limit)))]
-    );
-    return result.rows.map(rowToDurableWorkflow);
-  }
-
-export async function markDurableWorkflowRunStarted(pool: DbPool, input: { id: string; lockedAt?: Date }): Promise<boolean> {
-    const result = await pool.query(
-      `
-        UPDATE durable_workflows
-        SET status = 'running',
-            locked_at = $2,
-            last_started_at = $2,
-            updated_at = now()
-        WHERE id = $1
-          AND status = 'active'
-        RETURNING id
-      `,
-      [input.id, input.lockedAt ?? new Date()]
-    );
-    return Boolean(result.rowCount && result.rowCount > 0);
-  }
-
-export async function markDurableWorkflowRunFinished(pool: DbPool, input: {
-    id: string;
-    status?: DurableWorkflowStatus;
-    state?: Record<string, unknown>;
-    nextRunAt?: Date | null;
-  }): Promise<boolean> {
-    const result = await pool.query(
-      `
-        UPDATE durable_workflows
-        SET status = $2,
-            state = state || $3,
-            last_completed_at = now(),
-            next_run_at = $4,
-            locked_at = NULL,
-            updated_at = now()
-        WHERE id = $1
-        RETURNING id
-      `,
-      [input.id, input.status ?? "active", JSON.stringify(input.state ?? {}), input.nextRunAt ?? null]
-    );
-    return Boolean(result.rowCount && result.rowCount > 0);
   }
 
 export async function health(pool: DbPool, ) {

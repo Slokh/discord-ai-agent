@@ -252,11 +252,6 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
           UPDATE sandbox_runs
           SET status = 'cancelled', completed_at = coalesce(completed_at, now()), updated_at = now()
           WHERE task_id = $1 AND completed_at IS NULL
-        ),
-        event_insert AS (
-          INSERT INTO task_events(task_id, trace_id, event_name, level, summary, metadata)
-          SELECT task_id, trace_id, 'task.cancelled', 'info', $2, '{}'::jsonb
-          FROM updated
         )
         INSERT INTO trace_events(trace_id, request_id, guild_id, channel_id, user_id, event_name, level, summary, metadata)
         SELECT coalesce(trace_id, task_id), task_id, guild_id, channel_id, user_id, 'task.cancelled', 'info', $2, '{}'::jsonb
@@ -545,32 +540,6 @@ export async function findAgentTaskByDiscordMessageId(pool: DbPool, messageId: s
   }
 
 
-export async function getTaskEvents(pool: DbPool, input: {
-    guildId: string;
-    visibleChannelIds: string[];
-    traceId?: string;
-    limit: number;
-  }): Promise<TaskEvent[]> {
-    const limit = Math.max(1, Math.min(100, Math.trunc(input.limit)));
-    const result = await pool.query(
-      `
-        SELECT
-          te.id, te.task_id, te.trace_id, te.event_name, te.level,
-          te.summary, te.metadata, te.created_at
-        FROM task_events te
-        JOIN agent_tasks at ON at.task_id = te.task_id
-        WHERE at.guild_id = $1
-          AND ($2::text IS NULL OR te.trace_id = $2 OR te.task_id = $2)
-          AND (at.channel_id IS NULL OR at.channel_id = ANY($3::text[]))
-        ORDER BY te.created_at DESC, te.id DESC
-        LIMIT $4
-      `,
-      [input.guildId, input.traceId ?? null, input.visibleChannelIds, limit]
-    );
-    return result.rows.map(rowToTaskEvent);
-  }
-
-
 export async function getAgentRuntimeTaskEvents(pool: DbPool, input: {
     guildId: string;
     visibleChannelIds: string[];
@@ -612,12 +581,7 @@ export async function getTaskProgressEvents(pool: DbPool, input: {
     traceId?: string;
     limit: number;
   }): Promise<TaskEvent[]> {
-    const [runtimeEvents, legacyEvents] = await Promise.all([getAgentRuntimeTaskEvents(pool, input), getTaskEvents(pool, input)]);
-    if (runtimeEvents.length === 0) return legacyEvents;
-    const runtimeTaskIds = new Set(runtimeEvents.map((event) => event.taskId));
-    return [...runtimeEvents, ...legacyEvents.filter((event) => !runtimeTaskIds.has(event.taskId))]
-      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id - left.id)
-      .slice(0, Math.max(1, Math.min(100, Math.trunc(input.limit))));
+    return getAgentRuntimeTaskEvents(pool, input);
   }
 
 

@@ -1,41 +1,45 @@
 import {
-  answerFromHistory,
-  createSkillFromRequest,
   createAgentUpdateFromRequest,
   cancelAgentTask,
-  createDiscordPoll,
-  updateBotAvatar,
-  findDiscordChannels,
-  findDiscordUsers,
-  generateImage,
-  getDiscordChannelTopics,
-  getDiscordMessageContext,
-  getDiscordStats,
-  getDiscordUserAvatar,
-  getAgentMemoryStats,
-  inspectDiscordImages,
-  getRecentAgentMemory,
   getAgentTaskStatus,
   getDeploymentStatus,
-  getSpendSummary,
-  inspectAgentLogs,
-  getRecentDiscordMessages,
   listAgentTasks,
-  listTools,
-  reportStatus,
   retryAgentTask,
+} from "../tools/agentTaskTools.js";
+import { updateBotAvatar } from "../tools/botProfileTools.js";
+import { createDiscordPoll } from "../tools/discordPollTools.js";
+import { findDiscordChannels, findDiscordUsers } from "../tools/discordResolverTools.js";
+import {
+  answerFromHistory,
+  getDiscordMessageContext,
+  getDiscordStats,
+  getRecentDiscordMessages,
   searchDiscordAttachments,
-  summarizeDiscordHistory,
+} from "../tools/discordRetrievalTools.js";
+import {
+  getDiscordChannelTopics,
   summarizeCurrentThread,
-  undoConversationTurns,
+  summarizeDiscordHistory,
+} from "../tools/discordSummaryTools.js";
+import { getAgentMemoryStats, getRecentAgentMemory, undoConversationTurns } from "../tools/agentMemoryTools.js";
+import { inspectAgentLogs, reportStatus } from "../tools/discordOpsTools.js";
+import {
+  generateImage,
+  getDiscordUserAvatar,
+  inspectDiscordImages,
+} from "../tools/imageTools.js";
+import { createSkillFromRequest } from "../tools/skillTools.js";
+import { getSpendSummary } from "../tools/spendTools.js";
+import {
   compareSpotifyPlaylists,
   getSpotifyAlbumTracks,
   getSpotifyArtistDiscography,
-  getSpotifyPlaylistTracks,
-  getSpotifyPlaylistStats,
   getSpotifyItem,
+  getSpotifyPlaylistStats,
+  getSpotifyPlaylistTracks,
   searchSpotify,
-} from "../tools/coreTools.js";
+} from "../tools/spotify/spotifyTools.js";
+import { listTools } from "../tools/toolListTools.js";
 import {
   queryGeneratedCsv,
   queryGeneratedTable,

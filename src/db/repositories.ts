@@ -7,8 +7,8 @@ import * as processRunRepository from "./processRunRepository.js";
 import * as agentTaskRepository from "./agentTaskRepository.js";
 import * as discordArchiveRepository from "./discordArchiveRepository.js";
 import * as retrievalRepository from "./retrievalRepository.js";
-import type { PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, DurableWorkflowStatus, DurableWorkflow } from "./types.js";
-export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, DurableWorkflowStatus, DurableWorkflow } from "./types.js";
+import type { PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
+export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
 // for repository-permissions.test.ts import-compatibility coverage:
@@ -42,24 +42,6 @@ export class DiscordAiAgentRepository {
     metadata?: Record<string, unknown>;
     updatedBy?: string | null;
   }): Promise<ServerOverlay> { return skillsRepository.upsertServerOverlay(this.pool, input); }
-  upsertDurableWorkflow(input: {
-    id: string;
-    guildId?: string | null;
-    name: string;
-    kind: string;
-    status?: DurableWorkflowStatus;
-    schedule?: string | null;
-    state?: Record<string, unknown>;
-    nextRunAt?: Date | null;
-  }): Promise<DurableWorkflow> { return skillsRepository.upsertDurableWorkflow(this.pool, input); }
-  listDueDurableWorkflows(input: { limit: number; now?: Date }): Promise<DurableWorkflow[]> { return skillsRepository.listDueDurableWorkflows(this.pool, input); }
-  markDurableWorkflowRunStarted(input: { id: string; lockedAt?: Date }): Promise<boolean> { return skillsRepository.markDurableWorkflowRunStarted(this.pool, input); }
-  markDurableWorkflowRunFinished(input: {
-    id: string;
-    status?: DurableWorkflowStatus;
-    state?: Record<string, unknown>;
-    nextRunAt?: Date | null;
-  }): Promise<boolean> { return skillsRepository.markDurableWorkflowRunFinished(this.pool, input); }
   health() { return skillsRepository.health(this.pool); }
   storeMessageEmbedding(input: {
     messageId: string;
@@ -362,12 +344,6 @@ export class DiscordAiAgentRepository {
   listTerminalSandboxRunsPendingCleanup(input: { backend?: string; limit?: number } = {}): Promise<SandboxRunRecord[]> { return agentTaskRepository.listTerminalSandboxRunsPendingCleanup(this.pool, input); }
   markSandboxRunCleanedUp(sandboxRunId: string) { return agentTaskRepository.markSandboxRunCleanedUp(this.pool, sandboxRunId); }
   findAgentTaskByDiscordMessageId(messageId: string): Promise<AgentTaskRecord | undefined> { return agentTaskRepository.findAgentTaskByDiscordMessageId(this.pool, messageId); }
-  getTaskEvents(input: {
-    guildId: string;
-    visibleChannelIds: string[];
-    traceId?: string;
-    limit: number;
-  }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskEvents(this.pool, input); }
   getAgentRuntimeTaskEvents(input: {
     guildId: string;
     visibleChannelIds: string[];
@@ -386,7 +362,6 @@ export class DiscordAiAgentRepository {
   findAgentRuntimeChatExecutionByTraceId(traceId: string): Promise<AgentRuntimeChatExecution | undefined> { return agentTaskRepository.findAgentRuntimeChatExecutionByTraceId(this.pool, traceId); }
   getAgentRuntimeArtifactsForExecution(input: { executionId: string; sessionId: string }): Promise<AgentRuntimeArtifactRecord[]> { return agentTaskRepository.getAgentRuntimeArtifactsForExecution(this.pool, input); }
   getAgentRuntimeArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> { return agentTaskRepository.getAgentRuntimeArtifact(this.pool, input); }
-  getTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskEventsForTask(this.pool, input); }
   getAgentRuntimeTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getAgentRuntimeTaskEventsForTask(this.pool, input); }
   getTaskProgressEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskProgressEventsForTask(this.pool, input); }
   getAgentTaskMetrics(): Promise<{

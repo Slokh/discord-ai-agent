@@ -191,29 +191,6 @@ export async function getAgentRuntimeArtifact(pool: DbPool, input: { artifactId:
 
 
 
-export async function getTaskEventsForTask(pool: DbPool, input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
-    const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
-    const result = await pool.query(
-      `
-        SELECT *
-        FROM (
-          SELECT
-            id, task_id, trace_id, event_name, level,
-            summary, metadata, created_at
-          FROM task_events
-          WHERE task_id = $1
-          ORDER BY created_at DESC, id DESC
-          LIMIT $2
-        ) recent
-        ORDER BY created_at ASC, id ASC
-      `,
-      [input.taskId, limit]
-    );
-    return result.rows.map(rowToTaskEvent);
-  }
-
-
-
 export async function getAgentRuntimeTaskEventsForTask(pool: DbPool, input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
     const limit = Math.max(1, Math.min(300, Math.trunc(input.limit ?? 200)));
     const result = await pool.query(
@@ -247,9 +224,7 @@ export async function getAgentRuntimeTaskEventsForTask(pool: DbPool, input: { ta
 
 
 export async function getTaskProgressEventsForTask(pool: DbPool, input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
-    const runtimeEvents = await getAgentRuntimeTaskEventsForTask(pool, input);
-    if (runtimeEvents.length > 0) return runtimeEvents;
-    return getTaskEventsForTask(pool, input);
+    return getAgentRuntimeTaskEventsForTask(pool, input);
   }
 
 
@@ -291,8 +266,8 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
           count(*)::int AS count,
           round(avg((metadata->>'durationMs')::numeric))::int AS avg_ms,
           max((metadata->>'durationMs')::numeric)::int AS max_ms
-        FROM task_events
-        WHERE event_name = 'task.progress'
+        FROM codegen_events
+        WHERE event_name = 'agent.task.progress'
           AND metadata ? 'durationMs'
           AND (metadata->>'step') ~ '_complete$'
         GROUP BY phase
@@ -303,8 +278,8 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
           metadata->>'cacheType' AS cache_type,
           metadata->>'cacheStatus' AS cache_status,
           count(*)::int AS count
-        FROM task_events
-        WHERE event_name = 'task.progress'
+        FROM codegen_events
+        WHERE event_name = 'agent.task.progress'
           AND metadata ? 'cacheType'
           AND metadata ? 'cacheStatus'
         GROUP BY cache_type, cache_status

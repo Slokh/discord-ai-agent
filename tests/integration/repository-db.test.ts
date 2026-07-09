@@ -577,17 +577,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
       })
     ]);
-    await pool.query(
-      `
-        INSERT INTO task_events(task_id, trace_id, event_name, level, summary, metadata, created_at)
-        VALUES ($1, $2, 'task.progress', 'info', 'Legacy progress should be ignored.', '{}'::jsonb, now())
-      `,
-      [taskId, traceId]
-    );
-    const runtimeOnlyProgress = await repo.getTaskProgressEventsForTask({ taskId, limit: 10 });
-    expect(runtimeOnlyProgress.map((event) => event.eventName)).toEqual(["agent.task.started", "agent.task.progress"]);
-    expect(runtimeOnlyProgress.map((event) => event.summary)).not.toContain("Legacy progress should be ignored.");
-
     await repo.markAgentTaskSucceeded({
       taskId,
       branchName: "kartik/bridge-test",
@@ -1100,7 +1089,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.listDatabaseSkills({ includeDisabled: true })).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ name: skillName })]));
   });
 
-  it("stores server overlays and durable workflow state", async () => {
+  it("stores server overlays", async () => {
     const guildId = `guild-${randomUUID()}`;
     await repo.upsertGuild({ id: guildId, name: "Overlay Guild" });
 
@@ -1120,31 +1109,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     await expect(repo.getServerOverlay(guildId)).resolves.toMatchObject({ guildId, systemPrompt: "Prefer terse answers for this server." });
 
-    const workflowId = `workflow-${randomUUID()}`;
-    const dueAt = new Date("2026-06-29T12:00:00.000Z");
-    const workflow = await repo.upsertDurableWorkflow({
-      id: workflowId,
-      guildId,
-      name: "Daily digest",
-      kind: "digest",
-      status: "active",
-      schedule: "daily",
-      state: { channelId: "channel-digest" },
-      nextRunAt: dueAt
-    });
-    expect(workflow).toMatchObject({ id: workflowId, guildId, status: "active", nextRunAt: dueAt });
-    await expect(repo.listDueDurableWorkflows({ now: new Date("2026-06-29T13:00:00.000Z"), limit: 10 })).resolves.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: workflowId, kind: "digest" })])
-    );
-    await expect(repo.markDurableWorkflowRunStarted({ id: workflowId, lockedAt: dueAt })).resolves.toBe(true);
-    await expect(
-      repo.markDurableWorkflowRunFinished({
-        id: workflowId,
-        status: "active",
-        state: { sent: true },
-        nextRunAt: new Date("2026-06-30T12:00:00.000Z")
-      })
-    ).resolves.toBe(true);
   });
 
   it("keeps sandbox runs terminal when completion callback wins the creation race", async () => {
@@ -1379,9 +1343,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
     ]);
     await expect(repo.listRecentAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
-    await expect(repo.getTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({ taskId, summary: "codex is still running.", metadata: expect.objectContaining({ stderrTail: "live stderr tail" }) })
-    ]);
+    // Tasks without a registered runtime execution have no runtime events.
+    await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual([]);
     await expect(repo.getSandboxCommandEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
       expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
     ]);
@@ -1456,18 +1419,41 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const taskId = `task-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;
+    const traceId = `trace-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
     await repo.upsertGuild({ id: guildId, name: "Task Metrics Guild" });
     await repo.upsertAgentTaskQueued({
       taskId,
-      traceId: `trace-${randomUUID()}`,
+      traceId,
       guildId,
       channelId,
-      userId: `user-${randomUUID()}`,
+      userId,
       taskType: "code_update",
       title: "metrics test",
       request: "measure cache",
       requestedBy: "test",
       backend: "kubernetes-sandbox"
+    });
+    await codegenRepo.upsertSession({
+      sessionId: `agent-session-${taskId}`,
+      traceId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "metrics test",
+      request: "measure cache",
+      requestedBy: "test",
+      metadata: { runtime: "agent" }
+    });
+    await codegenRepo.createExecution({
+      executionId: `agent-task-execution-${taskId}`,
+      sessionId: `agent-session-${taskId}`,
+      taskId,
+      traceId,
+      status: "queued",
+      harness: "runCodingAgent",
+      metadata: { runtime: "agent" }
     });
 
     await repo.markAgentTaskProgress({
@@ -2746,7 +2732,6 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM conversation_sessions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM crawl_cursors WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM agent_tasks WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR task_id LIKE 'task-%'");
-  await pool.query("DELETE FROM durable_workflows WHERE guild_id LIKE 'guild-%' OR id LIKE 'workflow-%'");
   await pool.query("DELETE FROM server_overlays WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM interaction_blocks WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
   await pool.query("DELETE FROM discord_user_aliases WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");

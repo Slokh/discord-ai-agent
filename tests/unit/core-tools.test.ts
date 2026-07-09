@@ -1,25 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { agentUpdateTitleFromRequest, formatAgentTaskResult } from "../../src/tools/agentTaskFormatting.js";
 import {
-  answerFromHistory,
-  agentUpdateTitleFromRequest,
   createAgentUpdateFromRequest,
-  createSkillFromRequest,
-  extractHistorySearchSyntax,
-  findDiscordUsers,
-  formatAgentTaskResult,
-  generateImage,
   getAgentTaskStatus,
   getDeploymentStatus,
-  getDiscordChannelTopics,
+} from "../../src/tools/agentTaskTools.js";
+import { extractHistorySearchSyntax } from "../../src/tools/discordHistoryFormatting.js";
+import { inspectAgentLogs, reportStatus } from "../../src/tools/discordOpsTools.js";
+import {
+  answerFromHistory,
   getDiscordStats,
-  getDiscordUserAvatar,
-  inspectDiscordImages,
-  inspectAgentLogs,
-  reportStatus,
+} from "../../src/tools/discordRetrievalTools.js";
+import {
+  getDiscordChannelTopics,
   summarizeDiscordHistory,
   summarizeCurrentThread,
-  undoConversationTurns
-} from "../../src/tools/coreTools.js";
+} from "../../src/tools/discordSummaryTools.js";
+import { findDiscordUsers } from "../../src/tools/discordResolverTools.js";
+import { undoConversationTurns } from "../../src/tools/agentMemoryTools.js";
+import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../src/tools/imageTools.js";
+import { createSkillFromRequest } from "../../src/tools/skillTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 afterEach(() => {
@@ -1773,7 +1773,6 @@ describe("inspectAgentLogs", () => {
         getProcessRunArtifacts: vi.fn(async () => []),
         getProcessRunArtifact: vi.fn(async () => undefined),
         getTaskProgressEventsForTask: vi.fn(async () => []),
-        getTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => [
           {
             id: 1,
@@ -1797,7 +1796,6 @@ describe("inspectAgentLogs", () => {
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
         getTaskProgressEvents: vi.fn(async () => []),
-        getTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
         auditTool
@@ -1857,7 +1855,6 @@ describe("inspectAgentLogs", () => {
         getProcessRunEvents: vi.fn(async () => []),
         getProcessRunArtifacts: vi.fn(async () => []),
         getTaskProgressEventsForTask: vi.fn(async () => []),
-        getTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => []),
         getSandboxRunsForTask: vi.fn(async () => []),
         getTraceEventsForTrace: vi.fn(async () => []),
@@ -1868,7 +1865,6 @@ describe("inspectAgentLogs", () => {
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
         getTaskProgressEvents: vi.fn(async () => []),
-        getTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
         auditTool

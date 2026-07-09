@@ -42,6 +42,22 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.embeddingDimensions | quote }}
 - name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS
   value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
+{{- if .Values.config.budgetUserTurnsPerDay }}
+- name: BUDGET_USER_TURNS_PER_DAY
+  value: {{ .Values.config.budgetUserTurnsPerDay | quote }}
+{{- end }}
+{{- if .Values.config.budgetUserImagesPerDay }}
+- name: BUDGET_USER_IMAGES_PER_DAY
+  value: {{ .Values.config.budgetUserImagesPerDay | quote }}
+{{- end }}
+{{- if .Values.config.budgetUserCodegenPerDay }}
+- name: BUDGET_USER_CODEGEN_PER_DAY
+  value: {{ .Values.config.budgetUserCodegenPerDay | quote }}
+{{- end }}
+{{- if .Values.config.budgetGuildDailyUsd }}
+- name: BUDGET_GUILD_DAILY_USD
+  value: {{ .Values.config.budgetGuildDailyUsd | quote }}
+{{- end }}
 - name: CODEGEN_HARNESS
   value: {{ .Values.codegen.harness | quote }}
 {{- end -}}

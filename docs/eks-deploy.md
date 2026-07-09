@@ -127,6 +127,15 @@ For GitHub Actions deploys, set repository variables instead:
 - optional `SANDBOX_CACHE_SIZE`
 - optional `SANDBOX_CACHE_STORAGE_CLASS`
 
+Daily budget limits can also be overridden with repository variables. Leave
+them unset to keep the application defaults (50 turns, 10 images, 1
+code-update task per user; $10/day guild spend); use `-1` to disable a limit:
+
+- optional `BUDGET_USER_TURNS_PER_DAY`
+- optional `BUDGET_USER_IMAGES_PER_DAY`
+- optional `BUDGET_USER_CODEGEN_PER_DAY`
+- optional `BUDGET_GUILD_DAILY_USD`
+
 That deployment consumes only `agent.task`, uses the `local-process` backend, registers a lease in Postgres, and keeps repo, dependency, and harness caches warm on the mounted sandbox cache volume. The regular worker automatically stops consuming code-update task jobs while continuing crawl, embedding, and Discord request work.
 
 The default warm lease settings heartbeat every 15 seconds, mark stale leases after 120 seconds, poll every 5 seconds while waiting, and wait up to 30 minutes for the warm slot. For hobby deployments where queued code updates should fail faster instead of sitting behind a wedged worker, lower `CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS`.

@@ -403,7 +403,7 @@ function fakeMessage(overrides: Record<string, unknown> = {}) {
     id: "source-1",
     channelId: "channel-1",
     url: "https://discord/source-1",
-    react: vi.fn(async () => fakeReaction()),
+    react: vi.fn(async (_emoji: string) => fakeReaction()),
     reply: vi.fn(async () => fakeMessage({ id: "reply-1" })),
     edit: vi.fn(async () => fakeMessage({ id: "edited-1" })),
     reactions: {

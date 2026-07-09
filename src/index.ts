@@ -132,7 +132,7 @@ async function main() {
         await embedStoredMessage({ repo, openRouter, config, messageId });
       }
     },
-    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, budgetRepo, agentRuntimeRepo, openRouter, client }) : undefined,
+    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, budgetRepo, agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, client }) : undefined,
     crawlWorker: startsCrawlWorker,
     embeddingWorker: startsEmbeddingWorker,
     taskWorker: startsTaskWorker,

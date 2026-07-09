@@ -2,6 +2,7 @@ import type { Client } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { BudgetRepository } from "../db/budgetRepository.js";
+import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { runQueuedAgentRuntimeExecution } from "../discord/client.js";
 import type { AgentRuntimeExecutionRunner } from "../jobs/queue.js";
@@ -13,6 +14,7 @@ export function createAgentRuntimeRunner(input: {
   repo: DiscordAiAgentRepository;
   budgetRepo?: BudgetRepository;
   agentRuntimeRepo: AgentRuntimeRepository;
+  deliveryObligations?: DeliveryObligationsRepository;
   openRouter: OpenRouterClient;
   client: Client;
 }): AgentRuntimeExecutionRunner {
@@ -25,6 +27,7 @@ export function createAgentRuntimeRunner(input: {
           repo: input.repo,
           budgetRepo: input.budgetRepo,
           agentRuntime: input.agentRuntimeRepo,
+          deliveryObligations: input.deliveryObligations,
           agentExecutor,
           openRouter: input.openRouter,
           jobs: context.jobs,

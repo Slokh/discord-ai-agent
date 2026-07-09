@@ -8,11 +8,13 @@ vi.mock("../../src/discord/client.js", () => ({
 }));
 
 describe("agent runtime runner factory", () => {
-  it("uses the in-process executor", async () => {
+  it("uses the in-process executor and forwards delivery obligations", async () => {
+    const deliveryObligations = { markDelivered: vi.fn() };
     const runner = createAgentRuntimeRunner({
       config: loadConfig(),
       repo: {} as never,
       agentRuntimeRepo: {} as never,
+      deliveryObligations: deliveryObligations as never,
       openRouter: {} as never,
       client: {} as never
     });
@@ -21,7 +23,8 @@ describe("agent runtime runner factory", () => {
 
     expect(runQueuedAgentRuntimeExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentExecutor: expect.objectContaining({ name: "in-process" })
+        agentExecutor: expect.objectContaining({ name: "in-process" }),
+        deliveryObligations
       }),
       expect.objectContaining({ runId: "message-1" })
     );

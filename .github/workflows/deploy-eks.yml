@@ -34,6 +34,10 @@ jobs:
       CODEGEN_LEASE_STALE_SECONDS: ${{ vars.CODEGEN_LEASE_STALE_SECONDS }}
       CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS: ${{ vars.CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS }}
       CODEGEN_LEASE_ACQUIRE_POLL_SECONDS: ${{ vars.CODEGEN_LEASE_ACQUIRE_POLL_SECONDS }}
+      BUDGET_USER_TURNS_PER_DAY: ${{ vars.BUDGET_USER_TURNS_PER_DAY }}
+      BUDGET_USER_IMAGES_PER_DAY: ${{ vars.BUDGET_USER_IMAGES_PER_DAY }}
+      BUDGET_USER_CODEGEN_PER_DAY: ${{ vars.BUDGET_USER_CODEGEN_PER_DAY }}
+      BUDGET_GUILD_DAILY_USD: ${{ vars.BUDGET_GUILD_DAILY_USD }}
       SANDBOX_CACHE_ENABLED: ${{ vars.SANDBOX_CACHE_ENABLED }}
       SANDBOX_CACHE_SIZE: ${{ vars.SANDBOX_CACHE_SIZE }}
       SANDBOX_CACHE_STORAGE_CLASS: ${{ vars.SANDBOX_CACHE_STORAGE_CLASS }}
@@ -107,6 +111,18 @@ jobs:
           fi
           if [ -n "${CODEGEN_LEASE_ACQUIRE_POLL_SECONDS:-}" ]; then
             helm_args+=(--set "codegenWorker.lease.acquirePollSeconds=$CODEGEN_LEASE_ACQUIRE_POLL_SECONDS")
+          fi
+          if [ -n "${BUDGET_USER_TURNS_PER_DAY:-}" ]; then
+            helm_args+=(--set-string "config.budgetUserTurnsPerDay=$BUDGET_USER_TURNS_PER_DAY")
+          fi
+          if [ -n "${BUDGET_USER_IMAGES_PER_DAY:-}" ]; then
+            helm_args+=(--set-string "config.budgetUserImagesPerDay=$BUDGET_USER_IMAGES_PER_DAY")
+          fi
+          if [ -n "${BUDGET_USER_CODEGEN_PER_DAY:-}" ]; then
+            helm_args+=(--set-string "config.budgetUserCodegenPerDay=$BUDGET_USER_CODEGEN_PER_DAY")
+          fi
+          if [ -n "${BUDGET_GUILD_DAILY_USD:-}" ]; then
+            helm_args+=(--set-string "config.budgetGuildDailyUsd=$BUDGET_GUILD_DAILY_USD")
           fi
           if is_true "$SANDBOX_CACHE_ENABLED"; then
             helm_args+=(--set "sandbox.cache.enabled=true")

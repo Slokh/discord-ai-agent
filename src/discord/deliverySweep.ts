@@ -8,11 +8,19 @@ import { discordEdit, discordReply } from "./api.js";
 const RESTART_NOTICE = "I was restarted before finishing this reply — please re-ask.";
 
 type SweepExecutionSnapshot = { execution?: Pick<AgentRuntimeExecutionRecord, "status" | "error" | "metadata"> | null; finalText?: string | null };
-export type DeliverySweepDecision = { action: "deliver"; content: string } | { action: "abandon"; content: string; error: string } | { action: "wait" };
+export type DeliverySweepDecision =
+  | { action: "deliver"; content: string }
+  | { action: "already_delivered"; replyMessageId: string }
+  | { action: "abandon"; content: string; error: string }
+  | { action: "wait" };
 
 export function decideDiscordDeliverySweep(snapshot: SweepExecutionSnapshot): DeliverySweepDecision {
   const status = snapshot.execution?.status;
   if (isTerminalStatus(status)) {
+    const replyMessageId = snapshot.execution?.metadata?.replyMessageId;
+    if (typeof replyMessageId === "string" && replyMessageId.trim()) {
+      return { action: "already_delivered", replyMessageId };
+    }
     const text = snapshot.finalText?.trim();
     if (text) return { action: "deliver", content: text };
     return { action: "abandon", content: RESTART_NOTICE, error: snapshot.execution?.error ?? "terminal execution had no stored response text" };
@@ -45,6 +53,11 @@ async function sweepOne(input: { client: Client; obligations: DeliveryObligation
   const finalText = execution ? await input.agentRuntime.getLatestResponseText?.({ executionId: obligation.executionId }) : null;
   const decision = decideDiscordDeliverySweep({ execution, finalText });
   if (decision.action === "wait") return;
+  if (decision.action === "already_delivered") {
+    input.logger.info({ executionId: obligation.executionId, replyMessageId: decision.replyMessageId }, "Discord delivery obligation already delivered; marking without re-sending");
+    await input.obligations.markDelivered({ executionId: obligation.executionId, statusMessageId: decision.replyMessageId, metadata: { swept: true, reconciledWithoutResend: true } });
+    return;
+  }
   const source = await fetchMessage(input.client, obligation.channelId, obligation.sourceMessageId);
   const status = obligation.statusChannelId && obligation.statusMessageId ? await fetchMessage(input.client, obligation.statusChannelId, obligation.statusMessageId).catch(() => null) : null;
   const content = cleanResponse(decision.content, input.maxReplyChars);

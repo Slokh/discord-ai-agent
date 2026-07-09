@@ -368,8 +368,8 @@ export class DiscordAiAgentRepository {
     tasksByStatus: Array<{ status: string; count: number }>;
     agentTaskBacklog: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>;
     sandboxRunsByStatus: Array<{ status: string; count: number }>;
-    codegenSandboxLeases: Array<{ backend: string; status: string; count: number }>;
-    codegenPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
+    sandboxLeases: Array<{ backend: string; status: string; count: number }>;
+    taskPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
     sandboxCacheEvents: Array<{ cacheType: string; cacheStatus: string; count: number }>;
   }> { return agentTaskRepository.getAgentTaskMetrics(this.pool); }
   upsertGuild(input: { id: string; name?: string | null; raw?: unknown }) { return discordArchiveRepository.upsertGuild(this.pool, input); }

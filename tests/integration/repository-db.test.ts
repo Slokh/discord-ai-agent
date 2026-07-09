@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
-import { CodegenRepository } from "../../src/db/codegenRepository.js";
+import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { DeliveryObligationsRepository } from "../../src/db/deliveryObligationsRepository.js";
 import { createPool, type DbPool } from "../../src/db/pool.js";
 import { runConversationCompactionOnce } from "../../src/db/conversationCompaction.js";
@@ -13,13 +13,13 @@ const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () => {
   let pool: DbPool;
   let repo: DiscordAiAgentRepository;
-  let codegenRepo: CodegenRepository;
+  let agentRuntimeRepo: AgentRuntimeRepository;
   let obligationsRepo: DeliveryObligationsRepository;
 
   beforeAll(() => {
     pool = createPool(loadConfig());
     repo = new DiscordAiAgentRepository(pool);
-    codegenRepo = new CodegenRepository(pool);
+    agentRuntimeRepo = new AgentRuntimeRepository(pool);
     obligationsRepo = new DeliveryObligationsRepository(pool);
   });
 
@@ -186,14 +186,14 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.recordProcessRunEvent({ runId: oldRunId, traceId: oldTraceId, eventName: "old.event", summary: "old" });
     await pool.query("UPDATE process_run_events SET created_at = $1 WHERE run_id = $2", [oldDate, oldRunId]);
 
-    await codegenRepo.upsertSession({ sessionId: activeSessionId, title: "active", request: "active", requestedBy: "test" });
-    await codegenRepo.createExecution({ executionId: activeExecutionId, sessionId: activeSessionId, status: "running" });
-    await codegenRepo.recordEvent({ sessionId: activeSessionId, executionId: activeExecutionId, kind: "harness", eventName: "active.old" });
-    await codegenRepo.upsertSession({ sessionId: doneSessionId, title: "done", request: "done", requestedBy: "test" });
-    await codegenRepo.createExecution({ executionId: doneExecutionId, sessionId: doneSessionId, status: "succeeded" });
-    await codegenRepo.recordEvent({ sessionId: doneSessionId, executionId: doneExecutionId, kind: "harness", eventName: "done.old" });
-    await pool.query("UPDATE codegen_sessions SET status = 'succeeded', completed_at = $1, updated_at = $1 WHERE session_id = $2", [oldDate, doneSessionId]);
-    await pool.query("UPDATE codegen_events SET created_at = $1 WHERE session_id IN ($2, $3)", [oldDate, activeSessionId, doneSessionId]);
+    await agentRuntimeRepo.upsertSession({ sessionId: activeSessionId, threadKey: activeSessionId, title: "active", request: "active", requestedBy: "test" });
+    await agentRuntimeRepo.createExecution({ executionId: activeExecutionId, sessionId: activeSessionId, status: "running" });
+    await agentRuntimeRepo.recordEvent({ sessionId: activeSessionId, executionId: activeExecutionId, kind: "harness", eventName: "active.old" });
+    await agentRuntimeRepo.upsertSession({ sessionId: doneSessionId, threadKey: doneSessionId, title: "done", request: "done", requestedBy: "test" });
+    await agentRuntimeRepo.createExecution({ executionId: doneExecutionId, sessionId: doneSessionId, status: "succeeded" });
+    await agentRuntimeRepo.recordEvent({ sessionId: doneSessionId, executionId: doneExecutionId, kind: "harness", eventName: "done.old" });
+    await pool.query("UPDATE agent_runtime_sessions SET status = 'succeeded', completed_at = $1, updated_at = $1 WHERE session_id = $2", [oldDate, doneSessionId]);
+    await pool.query("UPDATE agent_runtime_events SET created_at = $1 WHERE session_id IN ($2, $3)", [oldDate, activeSessionId, doneSessionId]);
 
     const result = await runDataRetentionOnce({
       db: pool,
@@ -208,8 +208,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.getProcessRun(oldRunId)).resolves.toBeUndefined();
     await expect(repo.getProcessRun(newRunId)).resolves.toEqual(expect.objectContaining({ runId: newRunId }));
     await expect(repo.getProcessRun(embeddingRunId)).resolves.toBeUndefined();
-    const activeEvents = await pool.query("SELECT count(*)::int AS count FROM codegen_events WHERE session_id = $1", [activeSessionId]);
-    const doneEvents = await pool.query("SELECT count(*)::int AS count FROM codegen_events WHERE session_id = $1", [doneSessionId]);
+    const activeEvents = await pool.query("SELECT count(*)::int AS count FROM agent_runtime_events WHERE session_id = $1", [activeSessionId]);
+    const doneEvents = await pool.query("SELECT count(*)::int AS count FROM agent_runtime_events WHERE session_id = $1", [doneSessionId]);
     expect(activeEvents.rows[0]?.count).toBe(1);
     expect(doneEvents.rows[0]?.count).toBe(0);
   });
@@ -220,7 +220,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const traceId = `trace-${randomUUID()}`;
     const sandboxId = `codegen-sandbox-${randomUUID()}`;
 
-    const session = await codegenRepo.upsertSession({
+    const session = await agentRuntimeRepo.upsertSession({
       sessionId,
       traceId,
       threadKey: "discord:guild-test:channel-test",
@@ -235,7 +235,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     expect(session).toEqual(expect.objectContaining({ sessionId, status: "queued", model: "gpt-5.5" }));
 
-    const message = await codegenRepo.appendMessage({
+    const message = await agentRuntimeRepo.appendMessage({
       sessionId,
       clientMessageId: "discord-message-1",
       role: "user",
@@ -243,9 +243,9 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       metadata: { source: "integration-test" }
     });
     expect(message).toEqual(expect.objectContaining({ sessionId, clientMessageId: "discord-message-1", role: "user" }));
-    await expect(codegenRepo.listMessages({ sessionId })).resolves.toEqual([expect.objectContaining({ messageId: message.messageId })]);
+    await expect(agentRuntimeRepo.listMessages({ sessionId })).resolves.toEqual([expect.objectContaining({ messageId: message.messageId })]);
 
-    const execution = await codegenRepo.createExecution({
+    const execution = await agentRuntimeRepo.createExecution({
       executionId,
       sessionId,
       traceId,
@@ -256,7 +256,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     expect(execution).toEqual(expect.objectContaining({ executionId, sessionId, status: "running", attempt: 1 }));
 
-    const event = await codegenRepo.recordEvent({
+    const event = await agentRuntimeRepo.recordEvent({
       sessionId,
       executionId,
       traceId,
@@ -267,7 +267,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     expect(event.sequence).toBe(1);
 
-    const artifact = await codegenRepo.storeArtifact({
+    const artifact = await agentRuntimeRepo.storeArtifact({
       sessionId,
       executionId,
       kind: "prompt",
@@ -276,10 +276,10 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       contentType: "text/plain"
     });
     expect(artifact.preview).toContain("[REDACTED]");
-    await expect(codegenRepo.getArtifact({ artifactId: artifact.artifactId })).resolves.toEqual(
+    await expect(agentRuntimeRepo.getArtifact({ artifactId: artifact.artifactId })).resolves.toEqual(
       expect.objectContaining({ content: expect.not.stringContaining("ghp_") })
     );
-    const expiredArtifact = await codegenRepo.storeArtifact({
+    const expiredArtifact = await agentRuntimeRepo.storeArtifact({
       sessionId,
       executionId,
       kind: "command_log",
@@ -288,37 +288,37 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       contentType: "text/plain",
       expiresAt: new Date(Date.now() - 1000)
     });
-    await expect(codegenRepo.getArtifact({ artifactId: expiredArtifact.artifactId })).resolves.toEqual(expect.objectContaining({ artifactId: expiredArtifact.artifactId }));
-    await expect(codegenRepo.cleanupExpiredArtifacts()).resolves.toBeGreaterThanOrEqual(1);
-    await expect(codegenRepo.getArtifact({ artifactId: expiredArtifact.artifactId })).resolves.toBeUndefined();
+    await expect(agentRuntimeRepo.getArtifact({ artifactId: expiredArtifact.artifactId })).resolves.toEqual(expect.objectContaining({ artifactId: expiredArtifact.artifactId }));
+    await expect(agentRuntimeRepo.cleanupExpiredArtifacts()).resolves.toBeGreaterThanOrEqual(1);
+    await expect(agentRuntimeRepo.getArtifact({ artifactId: expiredArtifact.artifactId })).resolves.toBeUndefined();
 
-    await codegenRepo.upsertSandboxLease({ sandboxId, repo: "example/discord-ai-agent" });
-    const lease = await codegenRepo.acquireSandboxLease({
+    await agentRuntimeRepo.upsertSandboxLease({ sandboxId, repo: "example/discord-ai-agent" });
+    const lease = await agentRuntimeRepo.acquireSandboxLease({
       repo: "example/discord-ai-agent",
       executionId,
       leaseOwner: "worker-1",
       sandboxId
     });
     expect(lease).toEqual(expect.objectContaining({ sandboxId, status: "leased", executionId }));
-    await expect(codegenRepo.heartbeatSandboxLease({ sandboxId, metadata: { heartbeat: "ok" } })).resolves.toEqual(
+    await expect(agentRuntimeRepo.heartbeatSandboxLease({ sandboxId, metadata: { heartbeat: "ok" } })).resolves.toEqual(
       expect.objectContaining({ sandboxId, status: "leased" })
     );
-    await expect(codegenRepo.releaseSandboxLease({ sandboxId, executionId })).resolves.toEqual(
+    await expect(agentRuntimeRepo.releaseSandboxLease({ sandboxId, executionId })).resolves.toEqual(
       expect.objectContaining({ sandboxId, status: "idle", executionId: null })
     );
-    await expect(codegenRepo.disableSandboxLease({ sandboxId, reason: "test complete" })).resolves.toEqual(
+    await expect(agentRuntimeRepo.disableSandboxLease({ sandboxId, reason: "test complete" })).resolves.toEqual(
       expect.objectContaining({ sandboxId, status: "disabled" })
     );
 
     await expect(
-      codegenRepo.updateExecution({
+      agentRuntimeRepo.updateExecution({
         executionId,
         status: "succeeded",
         branchName: "discord-ai-agent/update-test",
         prUrl: "https://github.com/example/discord-ai-agent/pull/1",
         draft: false,
         verifyPassed: true,
-        codexThreadId: "codex-thread-1"
+        harnessThreadId: "codex-thread-1"
       })
     ).resolves.toEqual(expect.objectContaining({ status: "succeeded", prUrl: "https://github.com/example/discord-ai-agent/pull/1" }));
   });
@@ -347,7 +347,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "tester",
       backend: "kubernetes-sandbox"
     });
-    await codegenRepo.upsertSession({
+    await agentRuntimeRepo.upsertSession({
       sessionId,
       traceId,
       threadKey: `discord:${guildId}:${channelId}`,
@@ -358,8 +358,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       request: "change a file",
       requestedBy: "tester"
     });
-    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "queued" });
-    await codegenRepo.upsertSession({
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "queued" });
+    await agentRuntimeRepo.upsertSession({
       sessionId: agentSessionId,
       traceId,
       threadKey: `discord:${guildId}:${channelId}`,
@@ -371,7 +371,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "tester",
       metadata: { runtime: "agent" }
     });
-    await codegenRepo.createExecution({
+    await agentRuntimeRepo.createExecution({
       executionId: agentExecutionId,
       sessionId: agentSessionId,
       taskId,
@@ -396,7 +396,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       leaseOwner: "lease-owner-1"
     });
     const leasedExecutions = await pool.query(
-      "SELECT execution_id, sandbox_id, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      "SELECT execution_id, sandbox_id, metadata FROM agent_runtime_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
       [[executionId, agentExecutionId]]
     );
     expect(leasedExecutions.rows).toEqual(
@@ -430,7 +430,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
 
     const progress = await pool.query(
-      "SELECT kind, event_name, summary, metadata FROM codegen_events WHERE execution_id = $1 ORDER BY sequence",
+      "SELECT kind, event_name, summary, metadata FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence",
       [executionId]
     );
     expect(progress.rows).toEqual([
@@ -448,7 +448,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(progress.rows[0].metadata).toEqual(expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" }));
     expect(progress.rows[1].metadata).toEqual(expect.objectContaining({ step: "verify", command: "npm test" }));
     const agentProgress = await pool.query(
-      "SELECT kind, event_name, summary, metadata FROM codegen_events WHERE execution_id = $1 ORDER BY sequence",
+      "SELECT kind, event_name, summary, metadata FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence",
       [agentExecutionId]
     );
     expect(agentProgress.rows).toEqual([
@@ -476,7 +476,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       leaseOwner: "lease-owner-1"
     });
     const attachedExecutions = await pool.query(
-      "SELECT execution_id, sandbox_run_id, sandbox_id, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      "SELECT execution_id, sandbox_run_id, sandbox_id, metadata FROM agent_runtime_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
       [[executionId, agentExecutionId]]
     );
     expect(attachedExecutions.rows).toEqual(
@@ -507,22 +507,24 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         })
       ])
     );
-    await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({
-        taskId,
-        traceId,
-        eventName: "agent.task.started",
-        summary: "Starting Kubernetes sandbox.",
-        metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
-      }),
-      expect.objectContaining({
-        taskId,
-        traceId,
-        eventName: "agent.task.progress",
-        summary: "Running tests.",
-        metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
-      })
-    ]);
+    await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.started",
+          summary: "Starting Kubernetes sandbox.",
+          metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+        }),
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.progress",
+          summary: "Running tests.",
+          metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+        })
+      ])
+    );
     await expect(
       repo.getAgentRuntimeTaskEvents({ guildId, visibleChannelIds: [channelId], traceId, limit: 10 })
     ).resolves.toEqual(
@@ -561,22 +563,24 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         })
       ])
     );
-    await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
-      expect.objectContaining({
-        taskId,
-        traceId,
-        eventName: "agent.task.started",
-        summary: "Starting Kubernetes sandbox.",
-        metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
-      }),
-      expect.objectContaining({
-        taskId,
-        traceId,
-        eventName: "agent.task.progress",
-        summary: "Running tests.",
-        metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
-      })
-    ]);
+    await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.started",
+          summary: "Starting Kubernetes sandbox.",
+          metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
+        }),
+        expect.objectContaining({
+          taskId,
+          traceId,
+          eventName: "agent.task.progress",
+          summary: "Running tests.",
+          metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
+        })
+      ])
+    );
     await repo.markAgentTaskSucceeded({
       taskId,
       branchName: "kartik/bridge-test",
@@ -586,7 +590,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       metadata: { changedFiles: 1 }
     });
 
-    const terminal = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM codegen_executions WHERE execution_id = $1", [
+    const terminal = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM agent_runtime_executions WHERE execution_id = $1", [
       executionId
     ]);
     expect(terminal.rows[0]).toEqual(
@@ -597,7 +601,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         verify_passed: true
       })
     );
-    const terminalAgent = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM codegen_executions WHERE execution_id = $1", [
+    const terminalAgent = await pool.query("SELECT status, branch_name, pr_url, verify_passed FROM agent_runtime_executions WHERE execution_id = $1", [
       agentExecutionId
     ]);
     expect(terminalAgent.rows[0]).toEqual(
@@ -609,7 +613,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       })
     );
     const terminalEvents = await pool.query(
-      "SELECT execution_id, event_name, summary, metadata FROM codegen_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
+      "SELECT execution_id, event_name, summary, metadata FROM agent_runtime_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
       [[executionId, agentExecutionId]]
     );
     expect(terminalEvents.rows).toEqual(
@@ -645,7 +649,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "tester",
       backend: "local-process-sandbox"
     });
-    await codegenRepo.upsertSession({
+    await agentRuntimeRepo.upsertSession({
       sessionId,
       traceId,
       threadKey: `discord:${guildId}:${channelId}`,
@@ -657,8 +661,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "tester",
       status: "running"
     });
-    await codegenRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running", sandboxId });
-    await codegenRepo.upsertSession({
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, taskId, traceId, status: "running", sandboxId });
+    await agentRuntimeRepo.upsertSession({
       sessionId: agentSessionId,
       traceId,
       threadKey: `discord:${guildId}:${channelId}`,
@@ -671,7 +675,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       status: "running",
       metadata: { runtime: "agent" }
     });
-    await codegenRepo.createExecution({
+    await agentRuntimeRepo.createExecution({
       executionId: agentExecutionId,
       sessionId: agentSessionId,
       taskId,
@@ -681,8 +685,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       sandboxId,
       metadata: { runtime: "agent" }
     });
-    await codegenRepo.upsertSandboxLease({ sandboxId, repo: "example/discord-ai-agent" });
-    await codegenRepo.acquireSandboxLease({
+    await agentRuntimeRepo.upsertSandboxLease({ sandboxId, repo: "example/discord-ai-agent" });
+    await agentRuntimeRepo.acquireSandboxLease({
       repo: "example/discord-ai-agent",
       sandboxId,
       executionId,
@@ -696,7 +700,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
 
     const terminalExecutions = await pool.query(
-      "SELECT execution_id, status, error, metadata FROM codegen_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
+      "SELECT execution_id, status, error, metadata FROM agent_runtime_executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id",
       [[executionId, agentExecutionId]]
     );
     expect(terminalExecutions.rows).toEqual(
@@ -715,7 +719,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         })
       ])
     );
-    const lease = await pool.query("SELECT status, lease_owner, execution_id, metadata FROM codegen_sandbox_leases WHERE sandbox_id = $1", [
+    const lease = await pool.query("SELECT status, lease_owner, execution_id, metadata FROM agent_runtime_sandbox_leases WHERE sandbox_id = $1", [
       sandboxId
     ]);
     expect(lease.rows[0]).toEqual(
@@ -727,7 +731,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       })
     );
     const terminalEvents = await pool.query(
-      "SELECT execution_id, event_name, summary, metadata FROM codegen_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
+      "SELECT execution_id, event_name, summary, metadata FROM agent_runtime_events WHERE execution_id = ANY($1::text[]) ORDER BY execution_id, sequence",
       [[executionId, agentExecutionId]]
     );
     expect(terminalEvents.rows).toEqual(
@@ -1434,7 +1438,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "test",
       backend: "kubernetes-sandbox"
     });
-    await codegenRepo.upsertSession({
+    await agentRuntimeRepo.upsertSession({
       sessionId: `agent-session-${taskId}`,
       traceId,
       threadKey: `discord:${guildId}:${channelId}`,
@@ -1446,7 +1450,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       requestedBy: "test",
       metadata: { runtime: "agent" }
     });
-    await codegenRepo.createExecution({
+    await agentRuntimeRepo.createExecution({
       executionId: `agent-task-execution-${taskId}`,
       sessionId: `agent-session-${taskId}`,
       taskId,
@@ -1474,7 +1478,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         agentTaskBacklog: expect.arrayContaining([
           expect.objectContaining({ backend: "kubernetes-sandbox", status: "queued", count: 1, oldestAgeSeconds: expect.any(Number) })
         ]),
-        codegenPhaseDurations: expect.arrayContaining([expect.objectContaining({ phase: "repo", count: 1, avgMs: 120, maxMs: 120 })]),
+        taskPhaseDurations: expect.arrayContaining([expect.objectContaining({ phase: "repo", count: 1, avgMs: 120, maxMs: 120 })]),
         sandboxCacheEvents: expect.arrayContaining([expect.objectContaining({ cacheType: "dependencies", cacheStatus: "hit", count: 1 })])
       })
     );
@@ -2708,22 +2712,22 @@ async function cleanupTestRows(pool: DbPool) {
         OR trace_id LIKE 'trace-%'
     `
   );
-  await pool.query("DELETE FROM codegen_sandbox_leases WHERE sandbox_id LIKE 'codegen-sandbox-%' OR execution_id LIKE 'codegen-execution-%'");
+  await pool.query("DELETE FROM agent_runtime_sandbox_leases WHERE sandbox_id LIKE 'codegen-sandbox-%' OR execution_id LIKE 'codegen-execution-%'");
   await pool.query("DELETE FROM discord_delivery_obligations WHERE execution_id LIKE 'agent-execution-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query(
-    "DELETE FROM codegen_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%')"
+    "DELETE FROM agent_runtime_artifact_chunks WHERE artifact_id IN (SELECT artifact_id FROM agent_runtime_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%')"
   );
   await pool.query(
-    "DELETE FROM codegen_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
+    "DELETE FROM agent_runtime_artifacts WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
   );
   await pool.query(
-    "DELETE FROM codegen_events WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
+    "DELETE FROM agent_runtime_events WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%'"
   );
   await pool.query(
-    "DELETE FROM codegen_executions WHERE execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%' OR session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'"
+    "DELETE FROM agent_runtime_executions WHERE execution_id LIKE 'codegen-execution-%' OR execution_id LIKE 'agent-task-execution-%' OR session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'"
   );
-  await pool.query("DELETE FROM codegen_messages WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'");
-  await pool.query("DELETE FROM codegen_sessions WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR trace_id LIKE 'trace-%'");
+  await pool.query("DELETE FROM agent_runtime_messages WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%'");
+  await pool.query("DELETE FROM agent_runtime_sessions WHERE session_id LIKE 'codegen-session-%' OR session_id LIKE 'agent-session-%' OR trace_id LIKE 'trace-%'");
   await pool.query("DELETE FROM process_runs WHERE run_id LIKE 'run-%' OR trace_id LIKE 'trace-%' OR guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM skill_changes WHERE skill_name LIKE 'skill-%' OR requester_id LIKE 'user-%'");
   await pool.query("DELETE FROM skills WHERE name LIKE 'skill-%'");

@@ -1,31 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
-  diagnoseCodegenStatus,
-  formatCodegenStatusSnapshot,
+  diagnoseAgentTaskStatus,
+  formatAgentTaskStatusSnapshot,
   staleActiveTasks,
   staleSandboxLeases,
-  type CodegenStatusSnapshot
-} from "../../src/observability/codegenStatus.js";
+  type AgentTaskStatusSnapshot
+} from "../../src/observability/agentTaskStatus.js";
 
-describe("codegen status formatter", () => {
+describe("agent task status formatter", () => {
   it("surfaces stale work, lease health, queue backlog, and cleanup backlog", () => {
     const snapshot = snapshotFixture();
 
     expect(staleActiveTasks(snapshot).map((task) => task.taskId)).toEqual(["task-stale"]);
     expect(staleSandboxLeases(snapshot).map((lease) => lease.sandboxId)).toEqual(["sandbox-stale"]);
-    expect(diagnoseCodegenStatus(snapshot)).toEqual(
+    expect(diagnoseAgentTaskStatus(snapshot)).toEqual(
       expect.arrayContaining([
         "1 active task has not progressed within the stale threshold.",
         "pg-boss has 3 live agent.task jobs for 2 tracked active tasks.",
-        "1 codegen sandbox lease has stale heartbeats.",
+        "1 agent-task sandbox lease has stale heartbeats.",
         "1 terminal sandbox run still needs cleanup.",
         "1 recent terminal task failed; inspect the run or terminal artifact for the first error."
       ])
     );
 
-    const report = formatCodegenStatusSnapshot(snapshot);
+    const report = formatAgentTaskStatusSnapshot(snapshot);
 
-    expect(report).toContain("Codegen status");
+    expect(report).toContain("Agent task status");
     expect(report).toContain("active agent sessions: 1 | active tasks: 2 | stale active: 1");
     expect(report).toContain("Agent runtime session counts: running=1");
     expect(report).toContain("agent-session-active running | execution=running | harness=opencode");
@@ -50,12 +50,12 @@ describe("codegen status formatter", () => {
       leases: []
     };
 
-    expect(diagnoseCodegenStatus(snapshot)).toEqual(["No active code-update tasks."]);
-    expect(formatCodegenStatusSnapshot(snapshot)).toContain("Task counts: none");
+    expect(diagnoseAgentTaskStatus(snapshot)).toEqual(["No active code-update tasks."]);
+    expect(formatAgentTaskStatusSnapshot(snapshot)).toContain("Task counts: none");
   });
 });
 
-function snapshotFixture(): CodegenStatusSnapshot {
+function snapshotFixture(): AgentTaskStatusSnapshot {
   const generatedAt = new Date("2026-07-01T12:30:00.000Z");
   return {
     generatedAt,

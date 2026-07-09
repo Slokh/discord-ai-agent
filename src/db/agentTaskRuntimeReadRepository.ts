@@ -18,9 +18,9 @@ export async function getAgentRuntimeEventsForTrace(pool: DbPool, input: { trace
           ce.metadata,
           ce.duration_ms,
           ce.created_at
-        FROM codegen_events ce
-        JOIN codegen_sessions cs ON cs.session_id = ce.session_id
-        LEFT JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+        FROM agent_runtime_events ce
+        JOIN agent_runtime_sessions cs ON cs.session_id = ce.session_id
+        LEFT JOIN agent_runtime_executions cex ON cex.execution_id = ce.execution_id
         WHERE (
             ce.trace_id = $1
             OR cex.trace_id = $1
@@ -31,7 +31,7 @@ export async function getAgentRuntimeEventsForTrace(pool: DbPool, input: { trace
             OR ce.metadata->>'runId' = $1
             OR ce.metadata->>'executionId' IN (
               SELECT execution_id
-              FROM codegen_executions
+              FROM agent_runtime_executions
               WHERE trace_id = $1
                  OR metadata->>'parentAgentExecutionId' = (
                    SELECT metadata->>'agentExecutionId'
@@ -71,8 +71,8 @@ export async function getAgentRuntimeMessagesForTrace(pool: DbPool, input: { tra
           cm.parts,
           cm.metadata,
           cm.created_at
-        FROM codegen_messages cm
-        JOIN codegen_sessions cs ON cs.session_id = cm.session_id
+        FROM agent_runtime_messages cm
+        JOIN agent_runtime_sessions cs ON cs.session_id = cm.session_id
         WHERE cs.metadata->>'runtime' = 'agent'
           AND (
             cm.client_message_id = $1
@@ -81,7 +81,7 @@ export async function getAgentRuntimeMessagesForTrace(pool: DbPool, input: { tra
             OR cm.metadata->>'promptMessageId' = $1
             OR cm.metadata->>'executionId' IN (
               SELECT execution_id
-              FROM codegen_executions
+              FROM agent_runtime_executions
               WHERE trace_id = $1
                  OR metadata->>'parentAgentExecutionId' = (
                    SELECT metadata->>'agentExecutionId'
@@ -98,7 +98,7 @@ export async function getAgentRuntimeMessagesForTrace(pool: DbPool, input: { tra
             )
             OR cm.client_message_id IN (
               SELECT metadata->>'replyMessageId'
-              FROM codegen_executions
+              FROM agent_runtime_executions
               WHERE trace_id = $1
                 AND metadata->>'replyMessageId' IS NOT NULL
             )
@@ -118,8 +118,8 @@ export async function listAgentRuntimeChatExecutions(pool: DbPool, input: { limi
     const result = await pool.query(
       `
         SELECT ${AGENT_RUNTIME_CHAT_EXECUTION_COLUMNS}
-        FROM codegen_executions cex
-        JOIN codegen_sessions cs ON cs.session_id = cex.session_id
+        FROM agent_runtime_executions cex
+        JOIN agent_runtime_sessions cs ON cs.session_id = cex.session_id
         WHERE cex.task_id IS NULL
           AND cs.metadata->>'kind' = 'discord_channel'
         ORDER BY cex.updated_at DESC
@@ -136,8 +136,8 @@ export async function findAgentRuntimeChatExecutionByTraceId(pool: DbPool, trace
     const result = await pool.query(
       `
         SELECT ${AGENT_RUNTIME_CHAT_EXECUTION_COLUMNS}
-        FROM codegen_executions cex
-        JOIN codegen_sessions cs ON cs.session_id = cex.session_id
+        FROM agent_runtime_executions cex
+        JOIN agent_runtime_sessions cs ON cs.session_id = cex.session_id
         WHERE cex.task_id IS NULL
           AND cs.metadata->>'kind' = 'discord_channel'
           AND (
@@ -160,7 +160,7 @@ export async function getAgentRuntimeArtifactsForExecution(pool: DbPool, input: 
     const result = await pool.query(
       `
         SELECT artifact_id, session_id, execution_id, kind, name, content_type, size_bytes, preview, redacted, expires_at, metadata, created_at
-        FROM codegen_artifacts
+        FROM agent_runtime_artifacts
         WHERE execution_id = $1
            OR (session_id = $2 AND execution_id IS NULL)
         ORDER BY created_at ASC, artifact_id ASC
@@ -176,10 +176,10 @@ export async function getAgentRuntimeArtifact(pool: DbPool, input: { artifactId:
     const [artifact, chunks] = await Promise.all([
       pool.query(
         `SELECT artifact_id, session_id, execution_id, kind, name, content_type, size_bytes, preview, redacted, expires_at, metadata, created_at
-         FROM codegen_artifacts WHERE artifact_id = $1`,
+         FROM agent_runtime_artifacts WHERE artifact_id = $1`,
         [input.artifactId]
       ),
-      pool.query("SELECT content FROM codegen_artifact_chunks WHERE artifact_id = $1 ORDER BY chunk_index ASC", [input.artifactId])
+      pool.query("SELECT content FROM agent_runtime_artifact_chunks WHERE artifact_id = $1 ORDER BY chunk_index ASC", [input.artifactId])
     ]);
     const row = artifact.rows[0];
     if (!row) return undefined;
@@ -206,8 +206,8 @@ export async function getAgentRuntimeTaskEventsForTask(pool: DbPool, input: { ta
             ce.summary,
             ce.metadata,
             ce.created_at
-          FROM codegen_events ce
-          JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+          FROM agent_runtime_events ce
+          JOIN agent_runtime_executions cex ON cex.execution_id = ce.execution_id
           WHERE cex.task_id = $1
             AND cex.metadata->>'runtime' = 'agent'
             AND ce.event_name LIKE 'agent.task.%'
@@ -233,11 +233,11 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     agentTaskBacklog: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>;
     sandboxRunsByStatus: Array<{ status: string; count: number }>;
-    codegenSandboxLeases: Array<{ backend: string; status: string; count: number }>;
-    codegenPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
+    sandboxLeases: Array<{ backend: string; status: string; count: number }>;
+    taskPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
     sandboxCacheEvents: Array<{ cacheType: string; cacheStatus: string; count: number }>;
   }> {
-    const [tasks, taskBacklog, sandboxRuns, codegenSandboxLeases, phaseDurations, cacheEvents] = await Promise.all([
+    const [tasks, taskBacklog, sandboxRuns, sandboxLeases, phaseDurations, cacheEvents] = await Promise.all([
       pool.query("SELECT status, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
       pool.query(`
         SELECT
@@ -256,7 +256,7 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
           coalesce(nullif(metadata->>'backend', ''), 'unknown') AS backend,
           status,
           count(*)::int AS count
-        FROM codegen_sandbox_leases
+        FROM agent_runtime_sandbox_leases
         GROUP BY backend, status
         ORDER BY backend, status
       `),
@@ -266,7 +266,7 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
           count(*)::int AS count,
           round(avg((metadata->>'durationMs')::numeric))::int AS avg_ms,
           max((metadata->>'durationMs')::numeric)::int AS max_ms
-        FROM codegen_events
+        FROM agent_runtime_events
         WHERE event_name = 'agent.task.progress'
           AND metadata ? 'durationMs'
           AND (metadata->>'step') ~ '_complete$'
@@ -278,7 +278,7 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
           metadata->>'cacheType' AS cache_type,
           metadata->>'cacheStatus' AS cache_status,
           count(*)::int AS count
-        FROM codegen_events
+        FROM agent_runtime_events
         WHERE event_name = 'agent.task.progress'
           AND metadata ? 'cacheType'
           AND metadata ? 'cacheStatus'
@@ -295,12 +295,12 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
         oldestAgeSeconds: Number(row.oldest_age_seconds)
       })),
       sandboxRunsByStatus: sandboxRuns.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
-      codegenSandboxLeases: codegenSandboxLeases.rows.map((row) => ({
+      sandboxLeases: sandboxLeases.rows.map((row) => ({
         backend: String(row.backend),
         status: String(row.status),
         count: Number(row.count)
       })),
-      codegenPhaseDurations: phaseDurations.rows.map((row) => ({
+      taskPhaseDurations: phaseDurations.rows.map((row) => ({
         phase: String(row.phase),
         count: Number(row.count),
         avgMs: Number(row.avg_ms),

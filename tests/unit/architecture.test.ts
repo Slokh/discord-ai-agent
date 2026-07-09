@@ -9,7 +9,7 @@ const legacyLargeFiles = new Map<string, string>([
   ["src/control/taskTerminalUi.ts", "Legacy terminal UI renderer pending extraction or replacement by the run console."],
   ["src/control/internalApi.ts", "Compatibility internal API entrypoint while route handlers are extracted."],
   ["src/tools/registry.ts", "Current single registry pending schema-family extraction."],
-  ["src/db/codegenRepository.ts", "Legacy durable codegen session repository pending merge into domain repository modules."],
+  ["src/db/agentRuntimeRepository.ts", "Legacy durable codegen session repository pending merge into domain repository modules."],
   ["src/observability/runs.ts", "Compatibility run-console adapter while process-run and runtime-ledger projections are split into modules."]
 ]);
 

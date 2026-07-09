@@ -1,13 +1,13 @@
 import { hostname } from "node:os";
 import type { AppConfig } from "../config/env.js";
-import type { CodegenRepository, CodegenSandboxLeaseRecord } from "../db/codegenRepository.js";
+import type { AgentRuntimeRepository, AgentRuntimeSandboxLeaseRecord } from "../db/agentRuntimeRepository.js";
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_STALE_LEASE_MS = 2 * 60_000;
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_ACQUIRE_POLL_MS = 5_000;
 
-export type CodegenLeaseScheduler = {
+export type SandboxLeaseScheduler = {
   enabled: true;
   sandboxId: string;
   leaseOwner: string;
@@ -20,15 +20,15 @@ export type CodegenLeaseScheduler = {
 };
 
 type LeaseRepo = Pick<
-  CodegenRepository,
+  AgentRuntimeRepository,
   "upsertSandboxLease" | "heartbeatSandboxLease" | "disableSandboxLease" | "acquireSandboxLease" | "recordEvent"
 >;
 
-export function createCodegenLeaseScheduler(
+export function createSandboxLeaseScheduler(
   config: AppConfig,
   backendName: string,
   processInfo: { hostname?: string; pid?: number } = {}
-): CodegenLeaseScheduler | null {
+): SandboxLeaseScheduler | null {
   if (config.execution.codegenBackend !== "local-process" || backendName !== "local-process-sandbox") return null;
   const host = sanitizeLeasePart(processInfo.hostname ?? process.env.HOSTNAME ?? hostname());
   const pid = processInfo.pid ?? process.pid;
@@ -48,7 +48,7 @@ export function createCodegenLeaseScheduler(
   };
 }
 
-export async function registerCodegenWorkerLease(repo: LeaseRepo, scheduler: CodegenLeaseScheduler) {
+export async function registerSandboxWorkerLease(repo: LeaseRepo, scheduler: SandboxLeaseScheduler) {
   return repo.upsertSandboxLease({
     sandboxId: scheduler.sandboxId,
     repo: scheduler.repo,
@@ -66,9 +66,9 @@ export async function registerCodegenWorkerLease(repo: LeaseRepo, scheduler: Cod
   });
 }
 
-export function startCodegenLeaseHeartbeat(input: {
+export function startSandboxLeaseHeartbeat(input: {
   repo: LeaseRepo;
-  scheduler: CodegenLeaseScheduler;
+  scheduler: SandboxLeaseScheduler;
   onError?: (error: unknown) => void;
 }) {
   const beat = () =>
@@ -95,9 +95,9 @@ export function startCodegenLeaseHeartbeat(input: {
   };
 }
 
-export async function waitForCodegenSandboxLease(input: {
+export async function waitForSandboxLease(input: {
   repo: LeaseRepo;
-  scheduler: CodegenLeaseScheduler;
+  scheduler: SandboxLeaseScheduler;
   sessionId: string;
   executionId: string;
   traceId?: string | null;
@@ -107,7 +107,7 @@ export async function waitForCodegenSandboxLease(input: {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   onWait?: (input: { waitedMs: number; attempt: number }) => Promise<void> | void;
-}): Promise<CodegenSandboxLeaseRecord> {
+}): Promise<AgentRuntimeSandboxLeaseRecord> {
   const now = input.now ?? Date.now;
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const timeoutMs = input.timeoutMs ?? input.scheduler.acquireTimeoutMs;

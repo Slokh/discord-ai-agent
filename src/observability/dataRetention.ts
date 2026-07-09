@@ -32,7 +32,7 @@ export async function runDataRetentionOnce(input: {
     result.processRunEvents = await deleteBatches(input.db, "process_run_events", "created_at < $1", [eventCutoff], limit);
     result.processRunSpans = await deleteBatches(input.db, "process_run_spans", "updated_at < $1", [eventCutoff], limit);
     result.sandboxCommandEvents = await deleteBatches(input.db, "sandbox_command_events", "created_at < $1", [eventCutoff], limit);
-    result.codegenEvents = await deleteCodegenEvents(input.db, eventCutoff, limit);
+    result.agentRuntimeEvents = await deleteAgentRuntimeEvents(input.db, eventCutoff, limit);
     result.processRuns = await deleteProcessRuns(input.db, eventCutoff, limit, false);
   }
   if (auditCutoff) {
@@ -108,17 +108,17 @@ async function deleteProcessRuns(db: DbPool, cutoffDate: Date, limit: number, em
   }
 }
 
-async function deleteCodegenEvents(db: DbPool, cutoffDate: Date, limit: number): Promise<number> {
+async function deleteAgentRuntimeEvents(db: DbPool, cutoffDate: Date, limit: number): Promise<number> {
   let total = 0;
   for (;;) {
     const deleted = await db.query(
       `
-        DELETE FROM codegen_events ce
+        DELETE FROM agent_runtime_events ce
         WHERE ce.id IN (
           SELECT ce2.id
-          FROM codegen_events ce2
-          JOIN codegen_sessions cs ON cs.session_id = ce2.session_id
-          LEFT JOIN codegen_executions cx ON cx.execution_id = ce2.execution_id
+          FROM agent_runtime_events ce2
+          JOIN agent_runtime_sessions cs ON cs.session_id = ce2.session_id
+          LEFT JOIN agent_runtime_executions cx ON cx.execution_id = ce2.execution_id
           WHERE ce2.created_at < $1
             AND cs.status = ANY($2::text[])
             AND (ce2.execution_id IS NULL OR cx.status = ANY($2::text[]))

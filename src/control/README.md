@@ -6,14 +6,14 @@ Owns internal HTTP APIs, sandbox callbacks, metrics, and debugging surfaces.
 
 - Authenticated run-console APIs under `/api/runs`.
 - Sandbox task callbacks and artifact ingestion.
-- Generic agent session APIs under `/api/agent/sessions` and legacy codegen session APIs under `/api/codegen/sessions`.
+- Generic agent session APIs under `/api/agent/sessions` and agent-task status under `/api/tasks/status`.
 - Metrics and lightweight HTML fallback pages.
 - React run console source under `console/`.
 
 ## Change Routing
 
 - API shape changes start in `internalApi.ts`, then update console API clients and tests.
-- Centaur-style runtime work should add agent-session behavior before adding codegen-only endpoints.
+- Centaur-style runtime work should add agent-session behavior under `/api/agent/sessions`.
 - Run normalization and diagnostics usually belong in `src/observability/` before React rendering.
 - Console-only layout changes belong under `src/control/console/`.
 

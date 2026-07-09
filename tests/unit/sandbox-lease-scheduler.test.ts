@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
 import {
-  createCodegenLeaseScheduler,
-  registerCodegenWorkerLease,
-  waitForCodegenSandboxLease
-} from "../../src/jobs/codegenLeaseScheduler.js";
-import type { CodegenSandboxLeaseRecord } from "../../src/db/codegenRepository.js";
+  createSandboxLeaseScheduler,
+  registerSandboxWorkerLease,
+  waitForSandboxLease
+} from "../../src/jobs/sandboxLeaseScheduler.js";
+import type { AgentRuntimeSandboxLeaseRecord } from "../../src/db/agentRuntimeRepository.js";
 
 describe("codegen lease scheduler", () => {
   it("creates a local-process worker lease identity only for the local backend", () => {
-    const local = createCodegenLeaseScheduler(
+    const local = createSandboxLeaseScheduler(
       testConfig({ CODEGEN_EXECUTION_BACKEND: "local-process", GITHUB_REPOSITORY: "example/discord-ai-agent" }),
       "local-process-sandbox",
       { hostname: "worker-pod-1", pid: 123 }
@@ -27,12 +27,12 @@ describe("codegen lease scheduler", () => {
       })
     );
 
-    const kubernetes = createCodegenLeaseScheduler(testConfig({ CODEGEN_EXECUTION_BACKEND: "kubernetes-job" }), "kubernetes-sandbox");
+    const kubernetes = createSandboxLeaseScheduler(testConfig({ CODEGEN_EXECUTION_BACKEND: "kubernetes-job" }), "kubernetes-sandbox");
     expect(kubernetes).toBeNull();
   });
 
   it("registers and acquires only the current worker lease", async () => {
-    const scheduler = createCodegenLeaseScheduler(
+    const scheduler = createSandboxLeaseScheduler(
       testConfig({ CODEGEN_EXECUTION_BACKEND: "local-process", GITHUB_REPOSITORY: "example/discord-ai-agent" }),
       "local-process-sandbox",
       { hostname: "worker-pod-1", pid: 123 }
@@ -42,8 +42,8 @@ describe("codegen lease scheduler", () => {
       leaseRecord({ sandboxId: "local-process:other", repo: scheduler.repo, status: "idle" })
     ]);
 
-    await registerCodegenWorkerLease(repo, scheduler);
-    const lease = await waitForCodegenSandboxLease({
+    await registerSandboxWorkerLease(repo, scheduler);
+    const lease = await waitForSandboxLease({
       repo,
       scheduler,
       sessionId: "session-1",
@@ -81,7 +81,7 @@ describe("codegen lease scheduler", () => {
 
   it("uses configured lease wait timings when no lease is available", async () => {
     let now = 0;
-    const scheduler = createCodegenLeaseScheduler(
+    const scheduler = createSandboxLeaseScheduler(
       testConfig({
         CODEGEN_EXECUTION_BACKEND: "local-process",
         CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS: "2",
@@ -97,7 +97,7 @@ describe("codegen lease scheduler", () => {
     const waits: number[] = [];
 
     await expect(
-      waitForCodegenSandboxLease({
+      waitForSandboxLease({
         repo,
         scheduler,
         sessionId: "session-1",
@@ -139,10 +139,10 @@ function testConfig(env: Record<string, string> = {}) {
   }
 }
 
-function fakeLeaseRepo(initial: CodegenSandboxLeaseRecord[]) {
+function fakeLeaseRepo(initial: AgentRuntimeSandboxLeaseRecord[]) {
   const leases = new Map(initial.map((lease) => [lease.sandboxId, lease]));
   return {
-    upsertSandboxLease: vi.fn(async (input: { sandboxId: string; repo: string; status?: CodegenSandboxLeaseRecord["status"]; leaseOwner?: string | null }) => {
+    upsertSandboxLease: vi.fn(async (input: { sandboxId: string; repo: string; status?: AgentRuntimeSandboxLeaseRecord["status"]; leaseOwner?: string | null }) => {
       const lease = leaseRecord({
         sandboxId: input.sandboxId,
         repo: input.repo,
@@ -188,10 +188,10 @@ function fakeLeaseRepo(initial: CodegenSandboxLeaseRecord[]) {
 function leaseRecord(input: {
   sandboxId: string;
   repo?: string;
-  status?: CodegenSandboxLeaseRecord["status"];
+  status?: AgentRuntimeSandboxLeaseRecord["status"];
   leaseOwner?: string | null;
   executionId?: string | null;
-}): CodegenSandboxLeaseRecord {
+}): AgentRuntimeSandboxLeaseRecord {
   return {
     sandboxId: input.sandboxId,
     repo: input.repo ?? "example/discord-ai-agent",

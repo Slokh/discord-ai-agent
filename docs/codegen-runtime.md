@@ -151,7 +151,7 @@ To share a pre-authenticated link, append `?auth=$CONTROL_UI_AUTH_PASSWORD` to a
 For a terminal-first health check, run:
 
 ```sh
-npm run codegen:status
+npm run tasks:status
 ```
 
 The status command summarizes active code-update tasks, pg-boss `agent.task` state counts, sandbox run cleanup backlog, warm-worker lease heartbeats, recent terminal failures, and stale-work diagnostics. Use `--stale-minutes` to tune the threshold while debugging a suspected hang, and `--json` when another tool needs the raw snapshot.
@@ -159,7 +159,7 @@ The status command summarizes active code-update tasks, pg-boss `agent.task` sta
 When you do not have direct database access, point the same command at the authenticated control API:
 
 ```sh
-npm run codegen:status -- --source api --api-url https://tasks.example.com
+npm run tasks:status -- --source api --api-url https://tasks.example.com
 ```
 
 ## Local Codegen Smoke Tests

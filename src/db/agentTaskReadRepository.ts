@@ -271,7 +271,7 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
         .query(
           `
             WITH updated_execution AS (
-              UPDATE codegen_executions
+              UPDATE agent_runtime_executions
               SET status = 'cancelled',
                   error = $2,
                   completed_at = coalesce(completed_at, now()),
@@ -280,14 +280,14 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
               RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
             ),
             session_update AS (
-              UPDATE codegen_sessions
+              UPDATE agent_runtime_sessions
               SET status = 'cancelled',
                   completed_at = coalesce(completed_at, now()),
                   updated_at = now()
               WHERE session_id IN (SELECT session_id FROM updated_execution)
             ),
             lease_update AS (
-              UPDATE codegen_sandbox_leases
+              UPDATE agent_runtime_sandbox_leases
               SET status = 'idle',
                   lease_owner = NULL,
                   execution_id = NULL,
@@ -303,12 +303,12 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
                 updated_execution.execution_id,
                 updated_execution.trace_id,
                 updated_execution.is_agent_runtime,
-                coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+                coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
               FROM updated_execution
-              LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+              LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = updated_execution.execution_id
               GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
             )
-            INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+            INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
             SELECT
               session_id,
               execution_id,
@@ -558,8 +558,8 @@ export async function getAgentRuntimeTaskEvents(pool: DbPool, input: {
           ce.summary,
           ce.metadata,
           ce.created_at
-        FROM codegen_events ce
-        JOIN codegen_executions cex ON cex.execution_id = ce.execution_id
+        FROM agent_runtime_events ce
+        JOIN agent_runtime_executions cex ON cex.execution_id = ce.execution_id
         JOIN agent_tasks at ON at.task_id = cex.task_id
         WHERE at.guild_id = $1
           AND ($2::text IS NULL OR ce.trace_id = $2 OR cex.trace_id = $2 OR at.trace_id = $2 OR cex.task_id = $2 OR at.task_id = $2)

@@ -1,6 +1,6 @@
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
-import { collectCodegenStatusSnapshot, formatCodegenStatusSnapshot, type CodegenStatusSnapshot } from "../src/observability/codegenStatus.js";
+import { collectAgentTaskStatusSnapshot, formatAgentTaskStatusSnapshot, type AgentTaskStatusSnapshot } from "../src/observability/agentTaskStatus.js";
 
 type Args = {
   source: "db" | "api";
@@ -28,33 +28,34 @@ async function main() {
     process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
     return;
   }
-  process.stdout.write(formatCodegenStatusSnapshot(snapshot));
+  process.stdout.write(formatAgentTaskStatusSnapshot(snapshot));
 }
 
-async function loadFromDatabase(config: ReturnType<typeof loadConfig>, args: Args): Promise<CodegenStatusSnapshot> {
+async function loadFromDatabase(config: ReturnType<typeof loadConfig>, args: Args): Promise<AgentTaskStatusSnapshot> {
   const pool = createPool(config);
   try {
-    return await collectCodegenStatusSnapshot(pool, { limit: args.limit, staleAfterMs: args.staleAfterMs });
+    return await collectAgentTaskStatusSnapshot(pool, { limit: args.limit, staleAfterMs: args.staleAfterMs });
   } finally {
     await pool.end().catch(() => undefined);
   }
 }
 
-async function loadFromApi(input: { apiUrl?: string; auth?: string; args: Args }): Promise<CodegenStatusSnapshot> {
+async function loadFromApi(input: { apiUrl?: string; auth?: string; args: Args }): Promise<AgentTaskStatusSnapshot> {
   if (!input.apiUrl) throw new Error("--api-url or CONTROL_UI_PUBLIC_URL is required with --source api.");
   const headers = input.auth ? { authorization: `Bearer ${input.auth}` } : undefined;
-  const url = new URL("/api/codegen/status", input.apiUrl);
+  const url = new URL("/api/tasks/status", input.apiUrl);
   url.searchParams.set("limit", String(input.args.limit));
   url.searchParams.set("staleMinutes", String(input.args.staleAfterMs / 60_000));
   const response = await fetch(url, { headers });
   if (!response.ok) throw new Error(`GET ${url.toString()} failed: ${response.status} ${await response.text()}`);
-  return reviveSnapshot((await response.json()) as CodegenStatusSnapshot);
+  return reviveSnapshot((await response.json()) as AgentTaskStatusSnapshot);
 }
 
-function reviveSnapshot(value: CodegenStatusSnapshot): CodegenStatusSnapshot {
+function reviveSnapshot(value: AgentTaskStatusSnapshot): AgentTaskStatusSnapshot {
   return {
     ...value,
     generatedAt: new Date(value.generatedAt),
+    activeAgentSessions: value.activeAgentSessions.map(reviveAgentSession),
     activeTasks: value.activeTasks.map(reviveTask),
     recentTerminalTasks: value.recentTerminalTasks.map(reviveTask),
     activeSandboxRuns: value.activeSandboxRuns.map(reviveSandboxRun),
@@ -68,7 +69,18 @@ function reviveSnapshot(value: CodegenStatusSnapshot): CodegenStatusSnapshot {
   };
 }
 
-function reviveTask(task: CodegenStatusSnapshot["activeTasks"][number]) {
+function reviveAgentSession(session: AgentTaskStatusSnapshot["activeAgentSessions"][number]) {
+  return {
+    ...session,
+    createdAt: new Date(session.createdAt),
+    startedAt: reviveNullableDate(session.startedAt),
+    completedAt: reviveNullableDate(session.completedAt),
+    updatedAt: new Date(session.updatedAt),
+    executionUpdatedAt: reviveNullableDate(session.executionUpdatedAt)
+  };
+}
+
+function reviveTask(task: AgentTaskStatusSnapshot["activeTasks"][number]) {
   return {
     ...task,
     createdAt: new Date(task.createdAt),
@@ -79,7 +91,7 @@ function reviveTask(task: CodegenStatusSnapshot["activeTasks"][number]) {
   };
 }
 
-function reviveSandboxRun(run: CodegenStatusSnapshot["activeSandboxRuns"][number]) {
+function reviveSandboxRun(run: AgentTaskStatusSnapshot["activeSandboxRuns"][number]) {
   return {
     ...run,
     startedAt: reviveNullableDate(run.startedAt),
@@ -95,7 +107,7 @@ function reviveNullableDate(value: Date | string | null) {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    source: process.env.CODEGEN_STATUS_SOURCE === "api" ? "api" : "db",
+    source: process.env.AGENT_TASK_STATUS_SOURCE === "api" ? "api" : "db",
     limit: 10,
     staleAfterMs: 15 * 60 * 1000,
     json: false
@@ -167,10 +179,10 @@ function printUsage() {
   process.stdout.write(`Inspect code-update task health.
 
 Usage:
-  npm run codegen:status -- [options]
+  npm run tasks:status -- [options]
 
 Options:
-  --source <db|api>          Data source. Default: db, or CODEGEN_STATUS_SOURCE=api.
+  --source <db|api>          Data source. Default: db, or AGENT_TASK_STATUS_SOURCE=api.
   --api-url <url>            Control UI/API base URL. Implies --source api.
   --auth <password>          Control UI password for API mode. Defaults to CONTROL_UI_AUTH_PASSWORD.
   --limit <count>            Rows per section. Default: 10.
@@ -178,9 +190,9 @@ Options:
   --json                     Print raw JSON.
 
 Examples:
-  npm run codegen:status
-  npm run codegen:status -- --limit 25 --stale-minutes 5
-  npm run codegen:status -- --source api --api-url https://tasks.example.com
+  npm run tasks:status
+  npm run tasks:status -- --limit 25 --stale-minutes 5
+  npm run tasks:status -- --source api --api-url https://tasks.example.com
 `);
 }
 

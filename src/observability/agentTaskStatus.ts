@@ -1,12 +1,12 @@
 import type { DbPool } from "../db/pool.js";
 import { formatSeconds } from "./runInspector.js";
 
-export type CodegenStatusCount = {
+export type AgentTaskStatusCount = {
   name: string;
   count: number;
 };
 
-export type CodegenStatusTask = {
+export type AgentTaskStatusTask = {
   taskId: string;
   traceId: string | null;
   title: string;
@@ -25,7 +25,7 @@ export type CodegenStatusTask = {
   updatedAt: Date;
 };
 
-export type CodegenStatusSandboxRun = {
+export type AgentTaskStatusSandboxRun = {
   sandboxRunId: string;
   taskId: string;
   taskStatus: string | null;
@@ -39,7 +39,7 @@ export type CodegenStatusSandboxRun = {
   updatedAt: Date;
 };
 
-export type CodegenStatusLease = {
+export type AgentTaskStatusLease = {
   sandboxId: string;
   repo: string;
   backend: string;
@@ -69,26 +69,26 @@ export type AgentRuntimeStatusSession = {
   executionUpdatedAt: Date | null;
 };
 
-export type CodegenStatusSnapshot = {
+export type AgentTaskStatusSnapshot = {
   generatedAt: Date;
   staleAfterMs: number;
-  agentSessionCounts: CodegenStatusCount[];
+  agentSessionCounts: AgentTaskStatusCount[];
   activeAgentSessions: AgentRuntimeStatusSession[];
-  taskCounts: CodegenStatusCount[];
-  queueCounts: CodegenStatusCount[];
-  activeTasks: CodegenStatusTask[];
-  recentTerminalTasks: CodegenStatusTask[];
-  activeSandboxRuns: CodegenStatusSandboxRun[];
-  pendingSandboxCleanup: CodegenStatusSandboxRun[];
-  leases: CodegenStatusLease[];
+  taskCounts: AgentTaskStatusCount[];
+  queueCounts: AgentTaskStatusCount[];
+  activeTasks: AgentTaskStatusTask[];
+  recentTerminalTasks: AgentTaskStatusTask[];
+  activeSandboxRuns: AgentTaskStatusSandboxRun[];
+  pendingSandboxCleanup: AgentTaskStatusSandboxRun[];
+  leases: AgentTaskStatusLease[];
 };
 
-export type CodegenStatusOptions = {
+export type AgentTaskStatusOptions = {
   limit?: number;
   staleAfterMs?: number;
 };
 
-export async function collectCodegenStatusSnapshot(pool: DbPool, options: CodegenStatusOptions = {}): Promise<CodegenStatusSnapshot> {
+export async function collectAgentTaskStatusSnapshot(pool: DbPool, options: AgentTaskStatusOptions = {}): Promise<AgentTaskStatusSnapshot> {
   const limit = clampInteger(options.limit ?? 10, 1, 100);
   const generatedAt = new Date();
   const [
@@ -104,7 +104,7 @@ export async function collectCodegenStatusSnapshot(pool: DbPool, options: Codege
   ] = await Promise.all([
     queryCounts(
       pool,
-      "SELECT status AS name, count(*)::int AS count FROM codegen_sessions WHERE metadata->>'runtime' = 'agent' GROUP BY status ORDER BY status"
+      "SELECT status AS name, count(*)::int AS count FROM agent_runtime_sessions WHERE metadata->>'runtime' = 'agent' GROUP BY status ORDER BY status"
     ),
     queryAgentRuntimeSessions(pool, limit),
     queryCounts(pool, "SELECT status AS name, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
@@ -179,13 +179,13 @@ export async function collectCodegenStatusSnapshot(pool: DbPool, options: Codege
   };
 }
 
-export function formatCodegenStatusSnapshot(snapshot: CodegenStatusSnapshot): string {
+export function formatAgentTaskStatusSnapshot(snapshot: AgentTaskStatusSnapshot): string {
   const lines: string[] = [];
-  const diagnostics = diagnoseCodegenStatus(snapshot);
+  const diagnostics = diagnoseAgentTaskStatus(snapshot);
   const activeStaleTasks = staleActiveTasks(snapshot);
   const staleLeases = staleSandboxLeases(snapshot);
 
-  lines.push("Codegen status");
+  lines.push("Agent task status");
   lines.push(`Generated: ${formatDateTime(snapshot.generatedAt)} | stale threshold: ${formatSeconds(snapshot.staleAfterMs)}`);
   lines.push(
     [
@@ -212,7 +212,7 @@ export function formatCodegenStatusSnapshot(snapshot: CodegenStatusSnapshot): st
   return `${lines.join("\n")}\n`;
 }
 
-export function diagnoseCodegenStatus(snapshot: CodegenStatusSnapshot): string[] {
+export function diagnoseAgentTaskStatus(snapshot: AgentTaskStatusSnapshot): string[] {
   const diagnostics: string[] = [];
   const activeStaleTasks = staleActiveTasks(snapshot);
   const staleLeases = staleSandboxLeases(snapshot);
@@ -231,7 +231,7 @@ export function diagnoseCodegenStatus(snapshot: CodegenStatusSnapshot): string[]
     diagnostics.push(`pg-boss has ${blockedQueueCount} live agent.task ${plural(blockedQueueCount, "job")} for ${snapshot.activeTasks.length} tracked active ${plural(snapshot.activeTasks.length, "task")}.`);
   }
   if (staleLeases.length > 0) {
-    diagnostics.push(`${staleLeases.length} codegen sandbox ${plural(staleLeases.length, "lease")} ${verb(staleLeases.length, "has", "have")} stale heartbeats.`);
+    diagnostics.push(`${staleLeases.length} agent-task sandbox ${plural(staleLeases.length, "lease")} ${verb(staleLeases.length, "has", "have")} stale heartbeats.`);
   }
   if (snapshot.pendingSandboxCleanup.length > 0) {
     diagnostics.push(`${snapshot.pendingSandboxCleanup.length} terminal sandbox ${plural(snapshot.pendingSandboxCleanup.length, "run")} still ${verb(snapshot.pendingSandboxCleanup.length, "needs", "need")} cleanup.`);
@@ -242,14 +242,14 @@ export function diagnoseCodegenStatus(snapshot: CodegenStatusSnapshot): string[]
   return diagnostics;
 }
 
-export function staleActiveTasks(snapshot: CodegenStatusSnapshot): CodegenStatusTask[] {
+export function staleActiveTasks(snapshot: AgentTaskStatusSnapshot): AgentTaskStatusTask[] {
   return snapshot.activeTasks.filter((task) => {
     const progressedAt = task.progressUpdatedAt ?? task.updatedAt ?? task.startedAt ?? task.createdAt;
     return snapshot.generatedAt.getTime() - progressedAt.getTime() >= snapshot.staleAfterMs;
   });
 }
 
-export function staleSandboxLeases(snapshot: CodegenStatusSnapshot): CodegenStatusLease[] {
+export function staleSandboxLeases(snapshot: AgentTaskStatusSnapshot): AgentTaskStatusLease[] {
   return snapshot.leases.filter((lease) => {
     if (lease.status !== "leased") return false;
     const heartbeatAt = lease.heartbeatAt ?? lease.updatedAt;
@@ -257,7 +257,7 @@ export function staleSandboxLeases(snapshot: CodegenStatusSnapshot): CodegenStat
   });
 }
 
-function appendCounts(lines: string[], title: string, counts: CodegenStatusCount[]) {
+function appendCounts(lines: string[], title: string, counts: AgentTaskStatusCount[]) {
   lines.push("");
   lines.push(`${title}: ${counts.length === 0 ? "none" : counts.map((row) => `${row.name}=${row.count}`).join(", ")}`);
 }
@@ -269,7 +269,7 @@ function appendDiagnostics(lines: string[], diagnostics: string[]) {
   for (const diagnostic of diagnostics) lines.push(`- ${diagnostic}`);
 }
 
-function appendTasks(lines: string[], title: string, tasks: CodegenStatusTask[], snapshot: CodegenStatusSnapshot) {
+function appendTasks(lines: string[], title: string, tasks: AgentTaskStatusTask[], snapshot: AgentTaskStatusSnapshot) {
   lines.push("");
   lines.push(`${title}: ${tasks.length === 0 ? "none" : ""}`.trimEnd());
   for (const task of tasks) {
@@ -299,7 +299,7 @@ function appendAgentRuntimeSessions(
   lines: string[],
   title: string,
   sessions: AgentRuntimeStatusSession[],
-  snapshot: CodegenStatusSnapshot
+  snapshot: AgentTaskStatusSnapshot
 ) {
   lines.push("");
   lines.push(`${title}: ${sessions.length === 0 ? "none" : ""}`.trimEnd());
@@ -325,9 +325,9 @@ function appendAgentRuntimeSessions(
   }
 }
 
-function appendLeases(lines: string[], snapshot: CodegenStatusSnapshot) {
+function appendLeases(lines: string[], snapshot: AgentTaskStatusSnapshot) {
   lines.push("");
-  lines.push(`Codegen sandbox leases: ${snapshot.leases.length === 0 ? "none" : ""}`.trimEnd());
+  lines.push(`Agent-task sandbox leases: ${snapshot.leases.length === 0 ? "none" : ""}`.trimEnd());
   for (const lease of snapshot.leases) {
     const heartbeatAgeMs = lease.heartbeatAt ? snapshot.generatedAt.getTime() - lease.heartbeatAt.getTime() : null;
     const stale = staleSandboxLeases(snapshot).some((candidate) => candidate.sandboxId === lease.sandboxId);
@@ -339,7 +339,7 @@ function appendLeases(lines: string[], snapshot: CodegenStatusSnapshot) {
   }
 }
 
-function appendSandboxRuns(lines: string[], title: string, runs: CodegenStatusSandboxRun[], snapshot: CodegenStatusSnapshot) {
+function appendSandboxRuns(lines: string[], title: string, runs: AgentTaskStatusSandboxRun[], snapshot: AgentTaskStatusSnapshot) {
   lines.push("");
   lines.push(`${title}: ${runs.length === 0 ? "none" : ""}`.trimEnd());
   for (const run of runs) {
@@ -372,7 +372,7 @@ function truncate(value: string, maxChars: number) {
   return `${normalized.slice(0, Math.max(0, maxChars - 15)).trimEnd()}... [truncated]`;
 }
 
-async function queryCounts(pool: DbPool, sql: string): Promise<CodegenStatusCount[]> {
+async function queryCounts(pool: DbPool, sql: string): Promise<AgentTaskStatusCount[]> {
   const rows = await optionalRows(pool, sql);
   return rows.map((row) => ({
     name: String(row.name ?? "unknown"),
@@ -380,12 +380,12 @@ async function queryCounts(pool: DbPool, sql: string): Promise<CodegenStatusCoun
   }));
 }
 
-async function queryTasks(pool: DbPool, sql: string, params: unknown[]): Promise<CodegenStatusTask[]> {
+async function queryTasks(pool: DbPool, sql: string, params: unknown[]): Promise<AgentTaskStatusTask[]> {
   const rows = await optionalRows(pool, sql, params);
   return rows.map(rowToTask);
 }
 
-async function querySandboxRuns(pool: DbPool, sql: string, params: unknown[]): Promise<CodegenStatusSandboxRun[]> {
+async function querySandboxRuns(pool: DbPool, sql: string, params: unknown[]): Promise<AgentTaskStatusSandboxRun[]> {
   const rows = await optionalRows(pool, sql, params);
   return rows.map(rowToSandboxRun);
 }
@@ -399,10 +399,10 @@ async function queryAgentRuntimeSessions(pool: DbPool, limit: number): Promise<A
         s.status, s.harness, s.model, s.created_at, s.started_at, s.completed_at,
         s.updated_at,
         e.execution_id, e.status AS execution_status, e.updated_at AS execution_updated_at
-      FROM codegen_sessions s
+      FROM agent_runtime_sessions s
       LEFT JOIN LATERAL (
         SELECT execution_id, status, updated_at
-        FROM codegen_executions
+        FROM agent_runtime_executions
         WHERE session_id = s.session_id
         ORDER BY created_at DESC, execution_id DESC
         LIMIT 1
@@ -417,14 +417,14 @@ async function queryAgentRuntimeSessions(pool: DbPool, limit: number): Promise<A
   return rows.map(rowToAgentRuntimeSession);
 }
 
-async function queryLeases(pool: DbPool, limit: number): Promise<CodegenStatusLease[]> {
+async function queryLeases(pool: DbPool, limit: number): Promise<AgentTaskStatusLease[]> {
   const rows = await optionalRows(
     pool,
     `
       SELECT
         sandbox_id, repo, status, lease_owner, execution_id, heartbeat_at, last_used_at,
         metadata, updated_at
-      FROM codegen_sandbox_leases
+      FROM agent_runtime_sandbox_leases
       ORDER BY
         CASE status WHEN 'leased' THEN 0 WHEN 'recycling' THEN 1 WHEN 'idle' THEN 2 ELSE 3 END,
         updated_at ASC
@@ -445,7 +445,7 @@ async function optionalRows(pool: DbPool, sql: string, params: unknown[] = []): 
   }
 }
 
-function rowToTask(row: Record<string, unknown>): CodegenStatusTask {
+function rowToTask(row: Record<string, unknown>): AgentTaskStatusTask {
   return {
     taskId: stringValue(row.task_id),
     traceId: nullableString(row.trace_id),
@@ -466,7 +466,7 @@ function rowToTask(row: Record<string, unknown>): CodegenStatusTask {
   };
 }
 
-function rowToSandboxRun(row: Record<string, unknown>): CodegenStatusSandboxRun {
+function rowToSandboxRun(row: Record<string, unknown>): AgentTaskStatusSandboxRun {
   return {
     sandboxRunId: stringValue(row.sandbox_run_id),
     taskId: stringValue(row.task_id),
@@ -502,7 +502,7 @@ function rowToAgentRuntimeSession(row: Record<string, unknown>): AgentRuntimeSta
   };
 }
 
-function rowToLease(row: Record<string, unknown>): CodegenStatusLease {
+function rowToLease(row: Record<string, unknown>): AgentTaskStatusLease {
   const metadata = objectValue(row.metadata);
   return {
     sandboxId: stringValue(row.sandbox_id),

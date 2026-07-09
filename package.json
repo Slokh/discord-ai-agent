@@ -47,7 +47,7 @@
     "prompt": "tsx scripts/prompt.ts",
     "eval": "tsx scripts/eval.ts",
     "runs:inspect": "tsx scripts/inspectRun.ts",
-    "codegen:status": "tsx scripts/codegenStatus.ts",
+    "tasks:status": "tsx scripts/agentTaskStatus.ts",
     "invite-url": "tsx scripts/discordInviteUrl.ts",
     "preflight": "tsx scripts/preflight.ts",
     "preflight:deploy": "tsx scripts/deployPreflight.ts",

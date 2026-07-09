@@ -55,7 +55,7 @@ Code-update tasks are being folded into the generic agent runtime. New control-p
 1. `src/observability/runs.ts` normalizes process runs, agent-runtime chat executions, trace events, task events, tool audits, terminal logs, and artifacts. Chat-run console views are derived from runtime executions/events/messages/artifacts; process runs remain for crawler, embedding, and task infrastructure.
 2. `src/control/internalApi.ts` exposes `/api/runs`, `/api/runs/:id`, artifact fetch, and streams.
 3. `src/control/console/` renders the React run console.
-4. `scripts/inspectRun.ts`, `scripts/codegenStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths.
+4. `scripts/inspectRun.ts`, `scripts/agentTaskStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths.
 5. `inspectAgentLogs` accepts Discord message links, message IDs, run IDs, or trace IDs and includes the same normalized run diagnostics as the console when the referenced run is visible to the requester.
 6. Worker processes run `src/observability/artifactRetention.ts` periodically to delete expired large run/codegen artifacts and their chunks.
 
@@ -64,7 +64,7 @@ Useful terminal entrypoints:
 ```sh
 npm run runs:inspect -- --list --kind codegen --sort slowest --limit 10
 npm run runs:inspect -- <run-id-or-discord-message-link> --terminal
-npm run codegen:status
+npm run tasks:status
 ```
 
 `runs:inspect` includes model token usage when providers return usage metadata and estimated spend from audited model/tool calls. Use it before digging through raw artifacts when debugging latency or cost.

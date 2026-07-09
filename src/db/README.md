@@ -11,7 +11,7 @@ Owns durable Postgres state and query contracts.
 - Agent task lifecycle writes live in `agentTaskRepository.ts`; task/status/timeline readers live in `agentTaskReadRepository.ts`; runtime task/event projection readers live in `agentTaskRuntimeReadRepository.ts`.
 - Process runs, spans, run events, artifacts, and cleanup live in `processRunRepository.ts`.
 - Trace events and tool audit logs live in `auditRepository.ts`.
-- Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `codegen_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters.
+- Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `agent_runtime_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters.
 - Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history.
 - DB-backed skills, server overlays, durable workflows, and health checks live in `skillsRepository.ts`.
 - `repositories.ts` is a compatibility facade that delegates to the focused modules; shared types live in `types.ts`, with only cross-domain helpers left in `shared.ts`.
@@ -20,7 +20,7 @@ Owns durable Postgres state and query contracts.
 
 - Storage/indexing/exclusion changes start here, then update crawler/persistence/retrieval callers.
 - Retrieval behavior changes usually touch `retrievalRepository.ts` or `retrievalStatsRepository.ts` plus `src/memory/search.ts`.
-- Agent-runtime/codegen/task/run-console persistence changes usually touch `codegenRepository.ts`/`agentRuntimeRepository.ts`, `agentTaskRepository.ts`/`agentTaskReadRepository.ts`/`agentTaskRuntimeReadRepository.ts`, `processRunRepository.ts`, plus `src/observability/runs.ts`.
+- Agent-runtime/task/run-console persistence changes usually touch `agentRuntimeRepository.ts`, `agentTaskRepository.ts`/`agentTaskReadRepository.ts`/`agentTaskRuntimeReadRepository.ts`, `processRunRepository.ts`, plus `src/observability/runs.ts`.
 
 ## Scaling Notes
 
@@ -34,4 +34,4 @@ Owns durable Postgres state and query contracts.
 
 ## Structure
 
-`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, skills, and workflows. `agentRuntimeRepository.ts` is the generic durable session facade; `codegenRepository.ts` owns writes to the shared codegen ledger tables. Add new queries to the owning focused module, not the facade.
+`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, skills, and workflows. `agentRuntimeRepository.ts` owns writes to the shared agent-runtime ledger tables. Add new queries to the owning focused module, not the facade.

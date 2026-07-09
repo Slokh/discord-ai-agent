@@ -1280,11 +1280,11 @@ describe("getDeploymentStatus", () => {
           tasksByStatus: [{ status: "running", count: 1 }],
           agentTaskBacklog: [{ backend: "local-process-sandbox", status: "running", count: 1, oldestAgeSeconds: 125 }],
           sandboxRunsByStatus: [],
-          codegenSandboxLeases: [
+          sandboxLeases: [
             { backend: "local-process-sandbox", status: "idle", count: 1 },
             { backend: "local-process-sandbox", status: "leased", count: 1 }
           ],
-          codegenPhaseDurations: [],
+          taskPhaseDurations: [],
           sandboxCacheEvents: []
         })),
         listAgentTasks: vi.fn(async () => []),
@@ -1329,8 +1329,8 @@ describe("getDeploymentStatus", () => {
           tasksByStatus: [{ status: "running", count: 1 }],
           agentTaskBacklog: [],
           sandboxRunsByStatus: [],
-          codegenSandboxLeases: [],
-          codegenPhaseDurations: [],
+          sandboxLeases: [],
+          taskPhaseDurations: [],
           sandboxCacheEvents: []
         })),
         listAgentTasks,

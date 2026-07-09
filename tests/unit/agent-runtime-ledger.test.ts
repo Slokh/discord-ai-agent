@@ -116,7 +116,7 @@ function fakeAgentRuntime() {
     harness: "in-process",
     model: null,
     provider: null,
-    codexThreadId: null,
+    harnessThreadId: null,
     metadata: {},
     createdAt: new Date("2026-07-01T12:00:00Z"),
     startedAt: null,

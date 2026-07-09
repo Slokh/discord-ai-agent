@@ -1,12 +1,11 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
 import { startInternalApi } from "./control/internalApi.js";
-import { AgentRuntimeRepository } from "./db/agentRuntimeRepository.js";
 import { BudgetRepository } from "./db/budgetRepository.js";
 import { DeliveryObligationsRepository } from "./db/deliveryObligationsRepository.js";
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
-import { CodegenRepository } from "./db/codegenRepository.js";
+import { AgentRuntimeRepository } from "./db/agentRuntimeRepository.js";
 import { DiscordAiAgentRepository } from "./db/repositories.js";
 import { createExecutionBackend } from "./execution/backend.js";
 import { startSandboxReconciler } from "./execution/reconciler.js";
@@ -75,9 +74,8 @@ async function main() {
   const pool = createPool(config);
   logger.debug("Postgres pool created");
   const repo = new DiscordAiAgentRepository(pool);
-  const codegenRepo = new CodegenRepository(pool);
+  const agentRuntimeRepo = new AgentRuntimeRepository(pool);
   const budgetRepo = new BudgetRepository(pool);
-  const agentRuntimeRepo = new AgentRuntimeRepository(codegenRepo);
   const deliveryObligationsRepo = new DeliveryObligationsRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
@@ -140,7 +138,6 @@ async function main() {
     taskWorker: startsTaskWorker,
     discordAgentWorker: startsDiscordAgentWorker,
     repo,
-    codegenRepo,
     agentRuntimeRepo,
     openRouter,
     db: pool
@@ -150,7 +147,7 @@ async function main() {
     { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsDiscordAgentWorker },
     "Job runtime ready"
   );
-  const internalApi = startsApi ? await startInternalApi({ config, repo, codegenRepo, db: pool, jobs }) : null;
+  const internalApi = startsApi ? await startInternalApi({ config, repo, agentRuntimeRepo, db: pool, jobs }) : null;
   const staleRunReconciler = startsApi
     ? startStaleRunReconciler({
         repo,

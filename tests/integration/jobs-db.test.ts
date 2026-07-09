@@ -12,7 +12,7 @@ import {
 } from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
-import { CodegenRepository } from "../../src/db/codegenRepository.js";
+import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
@@ -171,13 +171,13 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     const config = testConfig();
     const pool = createPool(config);
     const repo = new DiscordAiAgentRepository(pool);
-    const codegenRepo = new CodegenRepository(pool);
+    const agentRuntimeRepo = new AgentRuntimeRepository(pool);
     const processedRequests: string[] = [];
     const processedJobs: unknown[] = [];
     const runtime = await startJobs({
       config,
       repo,
-      codegenRepo,
+      agentRuntimeRepo,
       pgBossSchema: "pgboss_test",
       crawlWorker: false,
       embeddingWorker: false,
@@ -234,7 +234,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         })
       );
       const sessionId = agentRuntimeSessionId(`agent-task:${taskId}`);
-      const session = await codegenRepo.getSession({ sessionId });
+      const session = await agentRuntimeRepo.getSession({ sessionId });
       expect(session).toEqual(
         expect.objectContaining({
           status: "running",
@@ -248,14 +248,14 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           })
         })
       );
-      await expect(codegenRepo.listMessages({ sessionId })).resolves.toEqual([
+      await expect(agentRuntimeRepo.listMessages({ sessionId })).resolves.toEqual([
         expect.objectContaining({
           clientMessageId: taskId,
           role: "tool",
           parts: [expect.objectContaining({ type: "tool_result", toolName: "runCodingAgent", taskId })]
         })
       ]);
-      await expect(codegenRepo.listExecutions({ sessionId })).resolves.toEqual([
+      await expect(agentRuntimeRepo.listExecutions({ sessionId })).resolves.toEqual([
         expect.objectContaining({
           executionId: `agent-task-execution-${taskId}`,
           taskId,

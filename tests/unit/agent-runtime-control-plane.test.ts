@@ -370,7 +370,7 @@ function fakeSession(): AgentRuntimeSessionRecord {
     harness: "in-process",
     model: null,
     provider: null,
-    codexThreadId: null,
+    harnessThreadId: null,
     metadata: {},
     createdAt: new Date("2026-07-03T12:00:00.000Z"),
     startedAt: null,

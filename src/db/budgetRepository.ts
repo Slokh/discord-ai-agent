@@ -9,8 +9,8 @@ export class BudgetRepository {
     const result = await this.pool.query(
       `
         SELECT count(*)::int AS count
-        FROM codegen_executions cex
-        JOIN codegen_sessions cs ON cs.session_id = cex.session_id
+        FROM agent_runtime_executions cex
+        JOIN agent_runtime_sessions cs ON cs.session_id = cex.session_id
         WHERE cex.task_id IS NULL
           AND cs.guild_id = $1
           AND cs.user_id = $2

@@ -149,7 +149,7 @@ export async function markAgentTaskRunning(pool: DbPool, input: {
       .query(
         `
           WITH updated_execution AS (
-            UPDATE codegen_executions
+            UPDATE agent_runtime_executions
             SET status = 'running',
                 metadata = metadata || $2::jsonb,
                 started_at = coalesce(started_at, now()),
@@ -159,7 +159,7 @@ export async function markAgentTaskRunning(pool: DbPool, input: {
             RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
           ),
           session_update AS (
-            UPDATE codegen_sessions
+            UPDATE agent_runtime_sessions
             SET status = 'running',
                 started_at = coalesce(started_at, now()),
                 updated_at = now()
@@ -171,12 +171,12 @@ export async function markAgentTaskRunning(pool: DbPool, input: {
               updated_execution.execution_id,
               updated_execution.trace_id,
               updated_execution.is_agent_runtime,
-              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+              coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
             FROM updated_execution
-            LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+            LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = updated_execution.execution_id
             GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
-          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
             session_id,
             execution_id,
@@ -241,7 +241,7 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
               execution_id,
               trace_id,
               metadata->>'runtime' = 'agent' AS is_agent_runtime
-            FROM codegen_executions
+            FROM agent_runtime_executions
             WHERE task_id = $1
           ),
           next_sequence AS (
@@ -250,12 +250,12 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
               target.execution_id,
               target.trace_id,
               target.is_agent_runtime,
-              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+              coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
             FROM target
-            LEFT JOIN codegen_events ON codegen_events.execution_id = target.execution_id
+            LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = target.execution_id
             GROUP BY target.session_id, target.execution_id, target.trace_id, target.is_agent_runtime
           )
-          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
             session_id,
             execution_id,
@@ -309,14 +309,14 @@ export async function recordAgentTaskSandboxLease(pool: DbPool, input: {
       .query(
         `
           WITH updated_executions AS (
-            UPDATE codegen_executions
+            UPDATE agent_runtime_executions
             SET sandbox_id = coalesce($2::text, sandbox_id),
                 metadata = metadata || $3::jsonb,
                 updated_at = now()
             WHERE task_id = $1
             RETURNING session_id
           )
-          UPDATE codegen_sessions
+          UPDATE agent_runtime_sessions
           SET updated_at = now()
           WHERE session_id IN (SELECT session_id FROM updated_executions)
         `,
@@ -399,7 +399,7 @@ export async function recordSandboxRun(pool: DbPool, input: {
       .query(
         `
           WITH updated_executions AS (
-            UPDATE codegen_executions
+            UPDATE agent_runtime_executions
             SET sandbox_run_id = coalesce($2::text, sandbox_run_id),
                 sandbox_id = coalesce($3::text, sandbox_id),
                 metadata = metadata || $4::jsonb,
@@ -407,7 +407,7 @@ export async function recordSandboxRun(pool: DbPool, input: {
             WHERE task_id = $1
             RETURNING session_id
           )
-          UPDATE codegen_sessions
+          UPDATE agent_runtime_sessions
           SET updated_at = now()
           WHERE session_id IN (SELECT session_id FROM updated_executions)
         `,
@@ -464,7 +464,7 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
       .query(
         `
           WITH updated_execution AS (
-            UPDATE codegen_executions
+            UPDATE agent_runtime_executions
             SET status = 'succeeded',
                 branch_name = $2,
                 pr_url = $3,
@@ -478,14 +478,14 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
             RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
           ),
           session_update AS (
-            UPDATE codegen_sessions
+            UPDATE agent_runtime_sessions
             SET status = 'succeeded',
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
           ),
           lease_update AS (
-            UPDATE codegen_sandbox_leases
+            UPDATE agent_runtime_sandbox_leases
             SET status = 'idle',
                 lease_owner = NULL,
                 execution_id = NULL,
@@ -501,12 +501,12 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
               updated_execution.execution_id,
               updated_execution.trace_id,
               updated_execution.is_agent_runtime,
-              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+              coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
             FROM updated_execution
-            LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+            LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = updated_execution.execution_id
             GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
-          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
             session_id,
             execution_id,
@@ -566,7 +566,7 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
       .query(
         `
           WITH updated_execution AS (
-            UPDATE codegen_executions
+            UPDATE agent_runtime_executions
             SET status = $2,
                 error = $3,
                 metadata = metadata || $4::jsonb,
@@ -576,14 +576,14 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
             RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
           ),
           session_update AS (
-            UPDATE codegen_sessions
+            UPDATE agent_runtime_sessions
             SET status = $2,
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
           ),
           lease_update AS (
-            UPDATE codegen_sandbox_leases
+            UPDATE agent_runtime_sandbox_leases
             SET status = 'idle',
                 lease_owner = NULL,
                 execution_id = NULL,
@@ -599,12 +599,12 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
               updated_execution.execution_id,
               updated_execution.trace_id,
               updated_execution.is_agent_runtime,
-              coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+              coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
             FROM updated_execution
-            LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+            LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = updated_execution.execution_id
             GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
           )
-          INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+          INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
           SELECT
             session_id,
             execution_id,

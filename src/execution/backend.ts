@@ -4,7 +4,7 @@ import * as k8s from "@kubernetes/client-node";
 import type { AppConfig } from "../config/env.js";
 import { assertExecutionConfig } from "../config/env.js";
 import type { SandboxRunRecord } from "../db/repositories.js";
-import { resolveGitHubTaskToken } from "../github/appToken.js";
+import { resolveGitHubTaskToken } from "./githubAuth.js";
 import { redactSensitiveText } from "../observability/redaction.js";
 import { slugify } from "../util/text.js";
 import { taskBearerToken } from "./token.js";
@@ -16,6 +16,7 @@ const LOCAL_PROCESS_GRACEFUL_SHUTDOWN_MS = 10_000;
 export type ExecutionContext = {
   sandboxId?: string | null;
   progress?: (event: { step: string; message: string; metadata?: Record<string, unknown> }) => Promise<void> | void;
+  recordSandboxRun?: (run: AgentTaskStartResult) => Promise<void> | void;
 };
 
 export type ExecutionBackend = {
@@ -32,7 +33,7 @@ export type ObservedSandboxRun = {
 };
 
 export type KubernetesExecutionClients = {
-  batch: Pick<k8s.BatchV1Api, "createNamespacedJob" | "readNamespacedJob" | "deleteNamespacedJob">;
+  batch: Pick<k8s.BatchV1Api, "createNamespacedJob" | "readNamespacedJob" | "deleteNamespacedJob"> & Partial<Pick<k8s.BatchV1Api, "listNamespacedJob">>;
   core: Pick<
     k8s.CoreV1Api,
     | "createNamespacedSecret"
@@ -41,7 +42,8 @@ export type KubernetesExecutionClients = {
     | "createNamespacedConfigMap"
     | "replaceNamespacedConfigMap"
     | "deleteNamespacedConfigMap"
-  >;
+  > &
+    Partial<Pick<k8s.CoreV1Api, "listNamespacedSecret" | "listNamespacedConfigMap">>;
 };
 
 type LocalProcessState = {
@@ -91,9 +93,9 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
   async start(job: AgentTaskJob, context: ExecutionContext = {}): Promise<AgentTaskStartResult> {
     assertExecutionConfig(this.config);
     const sandboxRunId = `run-${randomUUID()}`;
-    const name = kubernetesName(`agent-task-${slugify(job.title)}-${job.taskId.slice(-8)}`);
+    const name = kubernetesName(`agent-task-${slugify(job.taskId)}`);
     const namespace = this.config.execution.kubernetes.namespace;
-    const token = taskBearerToken({ taskId: job.taskId, secret: this.config.execution.taskSigningSecret });
+    const token = taskBearerToken({ taskId: job.taskId, sandboxRunId, secret: this.config.execution.taskSigningSecret });
     const githubToken = await resolveGitHubTaskToken(this.config);
     const labels = {
       "app.kubernetes.io/name": "discord-ai-agent",
@@ -103,17 +105,20 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
     };
     const secretName = `${name}-secret`;
     const configMapName = `${name}-config`;
+    const startResult = { sandboxRunId, backendJobName: name, namespace, image: this.config.execution.kubernetes.sandboxImage };
 
     await context.progress?.({
       step: "sandbox_prepare",
       message: "Preparing an isolated Kubernetes sandbox for the code change.",
       metadata: { namespace, jobName: name, sandboxRunId }
     });
+    await context.recordSandboxRun?.(startResult);
     try {
       await this.createSecret(namespace, secretName, labels, {
         GITHUB_TOKEN: githubToken,
         OPENROUTER_API_KEY: this.config.openRouter.apiKey,
-        AGENT_TASK_TOKEN: token
+        AGENT_TASK_TOKEN: token,
+        AGENT_TASK_SIGNATURE_SECRET: this.config.execution.taskSigningSecret
       });
       await this.createConfigMap(namespace, configMapName, labels, {
         TASK_ID: job.taskId,
@@ -131,7 +136,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         OPENROUTER_CHAT_MODEL: this.config.openRouter.chatModel,
         OPENROUTER_CODEGEN_MODEL: this.config.openRouter.codegenModel,
         CODEGEN_HARNESS: this.config.execution.codegenHarness,
-        SANDBOX_CACHE_DIR: this.config.execution.kubernetes.cacheDir,
+        SANDBOX_CACHE_DIR: this.config.execution.sandbox.cacheDir,
         SANDBOX_STARTED_AT_MS: String(Date.now())
       });
 
@@ -152,7 +157,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       throw error;
     }
 
-    return { sandboxRunId, backendJobName: name };
+    return startResult;
   }
 
   async observeRun(run: SandboxRunRecord): Promise<ObservedSandboxRun> {
@@ -203,6 +208,28 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
     ]);
   }
 
+  async sweepOrphanResources(knownTaskIds: Set<string>): Promise<void> {
+    const namespace = this.config.execution.kubernetes.namespace;
+    const selector = "app.kubernetes.io/name=discord-ai-agent,app.kubernetes.io/component=sandbox";
+    if (!this.batch.listNamespacedJob || !this.core.listNamespacedSecret || !this.core.listNamespacedConfigMap) return;
+    const [jobs, secrets, configMaps] = await Promise.all([
+      this.batch.listNamespacedJob({ namespace, labelSelector: selector }),
+      this.core.listNamespacedSecret({ namespace, labelSelector: selector }),
+      this.core.listNamespacedConfigMap({ namespace, labelSelector: selector })
+    ]);
+    await Promise.all([
+      ...(jobs.items ?? [])
+        .filter((item) => isOrphanTaskLabel(item.metadata?.labels?.["discord-ai-agent/task-id"], knownTaskIds))
+        .map((item) => (item.metadata?.name ? this.deleteJob(namespace, item.metadata.name) : undefined)),
+      ...(secrets.items ?? [])
+        .filter((item) => isOrphanTaskLabel(item.metadata?.labels?.["discord-ai-agent/task-id"], knownTaskIds))
+        .map((item) => (item.metadata?.name ? this.deleteSecret(namespace, item.metadata.name) : undefined)),
+      ...(configMaps.items ?? [])
+        .filter((item) => isOrphanTaskLabel(item.metadata?.labels?.["discord-ai-agent/task-id"], knownTaskIds))
+        .map((item) => (item.metadata?.name ? this.deleteConfigMap(namespace, item.metadata.name) : undefined))
+    ]);
+  }
+
   private async createSecret(namespace: string, name: string, labels: Record<string, string>, data: Record<string, string>) {
     const body = {
       metadata: { name, labels },
@@ -236,7 +263,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       ? [
           {
             name: "sandbox-cache",
-            mountPath: k8sConfig.cacheDir
+            mountPath: this.config.execution.sandbox.cacheDir
           }
         ]
       : undefined;
@@ -255,7 +282,7 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         labels: input.labels
       },
       spec: {
-        activeDeadlineSeconds: k8sConfig.taskTimeoutSeconds,
+        activeDeadlineSeconds: this.config.execution.sandbox.taskTimeoutSeconds,
         backoffLimit: 0,
         ttlSecondsAfterFinished: k8sConfig.ttlSecondsAfterFinished,
         template: {
@@ -335,14 +362,15 @@ export class LocalProcessExecutionBackend implements ExecutionBackend {
     const sandboxRunId = `run-${randomUUID()}`;
     const backendJobName = localProcessName(`agent-task-${slugify(job.title)}-${job.taskId.slice(-8)}`);
     const startedAtMs = this.now();
-    const taskToken = taskBearerToken({ taskId: job.taskId, secret: this.config.execution.taskSigningSecret });
+    const taskToken = taskBearerToken({ taskId: job.taskId, sandboxRunId, secret: this.config.execution.taskSigningSecret });
     const githubToken = await this.githubTokenResolver(this.config);
 
     await context.progress?.({
       step: "sandbox_prepare",
       message: "Preparing a warm local codegen worker process.",
-      metadata: { sandboxId: context.sandboxId ?? null, sandboxRunId, backendJobName, cacheDir: this.config.execution.kubernetes.cacheDir }
+      metadata: { sandboxId: context.sandboxId ?? null, sandboxRunId, backendJobName, cacheDir: this.config.execution.sandbox.cacheDir }
     });
+    await context.recordSandboxRun?.({ sandboxRunId, backendJobName, namespace: null, image: "local-process" });
 
     const child = this.spawnProcess(process.execPath, ["dist/src/execution/sandboxRunner.js"], {
       cwd: process.cwd(),
@@ -387,7 +415,7 @@ export class LocalProcessExecutionBackend implements ExecutionBackend {
     await context.progress?.({
       step: "sandbox_start",
       message: "Started the warm local codegen worker process.",
-      metadata: { sandboxId: context.sandboxId ?? null, sandboxRunId, backendJobName, pid: child.pid, cacheDir: this.config.execution.kubernetes.cacheDir }
+      metadata: { sandboxId: context.sandboxId ?? null, sandboxRunId, backendJobName, pid: child.pid, cacheDir: this.config.execution.sandbox.cacheDir }
     });
 
     return {
@@ -407,7 +435,7 @@ export class LocalProcessExecutionBackend implements ExecutionBackend {
     if (state.timedOutAtMs != null) {
       return {
         status: "failed",
-        reason: state.error ?? `Local codegen process exceeded ${this.config.execution.kubernetes.taskTimeoutSeconds}s sandbox timeout.`,
+        reason: state.error ?? `Local codegen process exceeded ${this.config.execution.sandbox.taskTimeoutSeconds}s sandbox timeout.`,
         metadata: { ...metadata, timedOut: true }
       };
     }
@@ -460,10 +488,10 @@ export class LocalProcessExecutionBackend implements ExecutionBackend {
   }
 
   private armTaskTimeout(state: LocalProcessState) {
-    const timeoutMs = this.config.execution.kubernetes.taskTimeoutSeconds * 1000;
+    const timeoutMs = this.config.execution.sandbox.taskTimeoutSeconds * 1000;
     state.timeout = setTimeout(() => {
       state.timedOutAtMs = this.now();
-      state.error = `Local codegen process exceeded ${this.config.execution.kubernetes.taskTimeoutSeconds}s sandbox timeout.`;
+      state.error = `Local codegen process exceeded ${this.config.execution.sandbox.taskTimeoutSeconds}s sandbox timeout.`;
       state.child.kill("SIGTERM");
       state.killTimeout = setTimeout(() => {
         if (!state.exited) state.child.kill("SIGKILL");
@@ -526,7 +554,8 @@ export function buildSandboxRunnerEnv(input: {
     OPENROUTER_CODEGEN_MODEL: input.config.openRouter.codegenModel,
     CODEGEN_HARNESS: input.config.execution.codegenHarness,
     AGENT_TASK_TOKEN: input.taskToken,
-    SANDBOX_CACHE_DIR: input.config.execution.kubernetes.cacheDir,
+    AGENT_TASK_SIGNATURE_SECRET: input.config.execution.taskSigningSecret,
+    SANDBOX_CACHE_DIR: input.config.execution.sandbox.cacheDir,
     SANDBOX_STARTED_AT_MS: String(input.startedAtMs)
   };
 }
@@ -537,6 +566,10 @@ function isKubernetesConflict(error: unknown) {
 
 function isKubernetesNotFound(error: unknown) {
   return kubernetesErrorStatus(error) === 404;
+}
+
+function isOrphanTaskLabel(taskId: string | undefined, knownTaskIds: Set<string>) {
+  return Boolean(taskId && !knownTaskIds.has(taskId));
 }
 
 function boundedAppend(previous: string, next: string, maxChars: number) {

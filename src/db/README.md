@@ -4,18 +4,27 @@ Owns durable Postgres state and query contracts.
 
 ## Responsibilities
 
-- Discord guilds, channels, users, messages, attachments, edits/deletes, aliases, and exclusions.
-- Message embeddings and embedding backlog selection.
-- Permission-aware retrieval, stats, topic candidates, attachment search, and message context.
-- Conversation sessions and per-channel agent memory.
-- Agent runtime sessions, agent tasks, sandbox runs, command events, process runs, run artifacts, traces, and tool audit logs.
-- DB-backed skills, server overlays, durable workflows, and health/metrics.
+- Discord guilds, channels, users, messages, attachments, edits/deletes, aliases, crawl cursors, interaction blocks, and exclusions live in `discordArchiveRepository.ts`.
+- Message embeddings and embedding backlog selection live in `embeddingRepository.ts`.
+- Permission-aware retrieval, search, attachment search, and message context live in `retrievalRepository.ts`; stats and topic candidates live in `retrievalStatsRepository.ts`.
+- Conversation sessions and per-channel agent memory live in `conversationMemoryRepository.ts`.
+- Agent task lifecycle writes live in `agentTaskRepository.ts`; task/status/timeline readers live in `agentTaskReadRepository.ts`; runtime task/event projection readers live in `agentTaskRuntimeReadRepository.ts`.
+- Process runs, spans, run events, artifacts, and cleanup live in `processRunRepository.ts`.
+- Trace events and tool audit logs live in `auditRepository.ts`.
+- Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `codegen_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters.
+- Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history.
+- DB-backed skills, server overlays, durable workflows, and health checks live in `skillsRepository.ts`.
+- `repositories.ts` is a compatibility facade that delegates to the focused modules; shared types live in `types.ts`, with only cross-domain helpers left in `shared.ts`.
 
 ## Change Routing
 
 - Storage/indexing/exclusion changes start here, then update crawler/persistence/retrieval callers.
-- Retrieval behavior changes usually touch repository search/stats methods plus `src/memory/search.ts`.
-- Agent-runtime/codegen/task/run-console persistence changes usually touch `agentRuntimeRepository.ts`, process-run/task/sandbox sections, plus `src/observability/runs.ts`.
+- Retrieval behavior changes usually touch `retrievalRepository.ts` or `retrievalStatsRepository.ts` plus `src/memory/search.ts`.
+- Agent-runtime/codegen/task/run-console persistence changes usually touch `codegenRepository.ts`/`agentRuntimeRepository.ts`, `agentTaskRepository.ts`/`agentTaskReadRepository.ts`/`agentTaskRuntimeReadRepository.ts`, `processRunRepository.ts`, plus `src/observability/runs.ts`.
+
+## Scaling Notes
+
+- Filtered vector search currently takes the filtered branch in `retrievalRepository.ts`, which gathers a permission/date/channel-filtered candidate set before ranking by vector distance. That branch bypasses the IVFFLAT index on `message_embeddings.embedding`; revisit with ANN-first candidate escalation or an HNSW index before any deployment approaches roughly 1M indexed messages.
 
 ## Tests
 
@@ -23,6 +32,6 @@ Owns durable Postgres state and query contracts.
 - Non-DB retrieval helpers: `tests/unit/search.test.ts`.
 - Run-console API snapshots: `tests/unit/internal-api-runs.test.ts`.
 
-## Migration Direction
+## Structure
 
-Keep `src/db/repositories.ts` as a compatibility facade. New implementation should move toward focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, process runs, skills, and workflows. `agentRuntimeRepository.ts` is the generic durable session facade; the current implementation intentionally reuses the existing codegen tables while the Centaur-style runtime migration proceeds.
+`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, skills, and workflows. `agentRuntimeRepository.ts` is the generic durable session facade; `codegenRepository.ts` owns writes to the shared codegen ledger tables. Add new queries to the owning focused module, not the facade.

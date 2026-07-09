@@ -175,7 +175,7 @@ describe("agent runtime control plane", () => {
       parentExecutionId: "agent-execution-parent",
       targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
       targetPullRequestNumber: 120,
-      targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+      targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
     });
 
     expect(result).toEqual({ taskId: "task-runtime-first", jobId: "job-task-1" });
@@ -207,7 +207,7 @@ describe("agent runtime control plane", () => {
           parentAgentThreadKey: "discord:guild:channel",
           targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
           targetPullRequestNumber: 120,
-          targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+          targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
         }),
         parts: [
           expect.objectContaining({
@@ -217,7 +217,7 @@ describe("agent runtime control plane", () => {
             status: "queued",
             targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
             targetPullRequestNumber: 120,
-            targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+            targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
           })
         ]
       })
@@ -241,7 +241,7 @@ describe("agent runtime control plane", () => {
           codegenProvider: "openrouter",
           targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
           targetPullRequestNumber: 120,
-          targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+          targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
         })
       })
     );
@@ -257,7 +257,7 @@ describe("agent runtime control plane", () => {
         parentAgentThreadKey: "discord:guild:channel",
         targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
         targetPullRequestNumber: 120,
-        targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+        targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
       })
     );
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "agent.task.queued" }));
@@ -273,7 +273,7 @@ describe("agent runtime control plane", () => {
           codegenHarness: "opencode",
           targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
           targetPullRequestNumber: 120,
-          targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+          targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
         })
       })
     );

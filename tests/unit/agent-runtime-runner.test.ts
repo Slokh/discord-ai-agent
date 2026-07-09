@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAgentRuntimeRunner } from "../../src/agent/runtimeRunner.js";
-import { loadConfig, type AppConfig } from "../../src/config/env.js";
+import { loadConfig } from "../../src/config/env.js";
 import { runQueuedAgentRuntimeExecution } from "../../src/discord/client.js";
 
 vi.mock("../../src/discord/client.js", () => ({
@@ -8,8 +8,14 @@ vi.mock("../../src/discord/client.js", () => ({
 }));
 
 describe("agent runtime runner factory", () => {
-  it("uses the in-process executor by default", async () => {
-    const runner = createAgentRuntimeRunner(testInput("in-process"));
+  it("uses the in-process executor", async () => {
+    const runner = createAgentRuntimeRunner({
+      config: loadConfig(),
+      repo: {} as never,
+      agentRuntimeRepo: {} as never,
+      openRouter: {} as never,
+      client: {} as never
+    });
 
     await runner.run(agentJob(), { jobs: {} as never });
 
@@ -20,33 +26,7 @@ describe("agent runtime runner factory", () => {
       expect.objectContaining({ runId: "message-1" })
     );
   });
-
-  it("selects the warm-sandbox executor without throwing during startup", async () => {
-    const runner = createAgentRuntimeRunner(testInput("warm-sandbox"));
-
-    await runner.run(agentJob(), { jobs: {} as never });
-
-    expect(runQueuedAgentRuntimeExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentExecutor: expect.objectContaining({ name: "warm-sandbox" })
-      }),
-      expect.objectContaining({ runId: "message-1" })
-    );
-  });
 });
-
-function testInput(executionBackend: AppConfig["agentRuntime"]["executionBackend"]) {
-  return {
-    config: {
-      ...loadConfig(),
-      agentRuntime: { ...loadConfig().agentRuntime, executionBackend }
-    },
-    repo: {} as never,
-    agentRuntimeRepo: {} as never,
-    openRouter: {} as never,
-    client: {} as never
-  };
-}
 
 function agentJob() {
   return {

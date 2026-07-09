@@ -5,8 +5,18 @@ export async function executeInProcessAgentRuntime(input: {
   toolContext: ToolContext;
   text: string;
   timeoutMs: number;
+  silenceTimeoutMs?: number;
+  hardTimeoutMs?: number;
 }): Promise<AgentResponse> {
-  return withTimeout(handleAgentRequest(input.toolContext, input.text), input.timeoutMs, "Discord AI Agent agent request");
+  return withTimeouts({
+    promiseFactory: (noteProgress) => {
+      input.toolContext.noteProgress = noteProgress;
+      return handleAgentRequest(input.toolContext, input.text);
+    },
+    hardTimeoutMs: input.hardTimeoutMs ?? input.timeoutMs,
+    silenceTimeoutMs: input.silenceTimeoutMs,
+    label: "Discord AI Agent agent request"
+  });
 }
 
 export class AgentRuntimeTimeoutError extends Error {
@@ -20,16 +30,35 @@ export function isAgentRuntimeTimeoutError(error: unknown): error is AgentRuntim
   return error instanceof AgentRuntimeTimeoutError;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
+async function withTimeouts<T>(input: {
+  promiseFactory: (noteProgress: () => void) => Promise<T>;
+  hardTimeoutMs: number;
+  silenceTimeoutMs?: number;
+  label: string;
+}): Promise<T> {
+  let hardTimeout: NodeJS.Timeout | undefined;
+  let silenceTimeout: NodeJS.Timeout | undefined;
+  let rejectTimeout: ((error: AgentRuntimeTimeoutError) => void) | undefined;
+  const resetSilenceTimeout = () => {
+    if (!input.silenceTimeoutMs) return;
+    if (silenceTimeout) clearTimeout(silenceTimeout);
+    silenceTimeout = setTimeout(
+      () => rejectTimeout?.(new AgentRuntimeTimeoutError(`${input.label} was silent for ${input.silenceTimeoutMs}ms.`)),
+      input.silenceTimeoutMs
+    );
+    silenceTimeout.unref?.();
+  };
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new AgentRuntimeTimeoutError(`${label} timed out after ${timeoutMs}ms.`)), timeoutMs);
-    timeout.unref?.();
+    rejectTimeout = reject;
+    hardTimeout = setTimeout(() => reject(new AgentRuntimeTimeoutError(`${input.label} timed out after ${input.hardTimeoutMs}ms.`)), input.hardTimeoutMs);
+    hardTimeout.unref?.();
+    resetSilenceTimeout();
   });
 
   try {
-    return await Promise.race([promise, timeoutPromise]);
+    return await Promise.race([input.promiseFactory(resetSilenceTimeout), timeoutPromise]);
   } finally {
-    if (timeout) clearTimeout(timeout);
+    if (hardTimeout) clearTimeout(hardTimeout);
+    if (silenceTimeout) clearTimeout(silenceTimeout);
   }
 }

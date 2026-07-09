@@ -5,17 +5,12 @@ import { describe, expect, it } from "vitest";
 const SOURCE_LINE_LIMIT = 800;
 
 const legacyLargeFiles = new Map<string, string>([
-  ["src/db/repositories.ts", "Compatibility facade for durable repository methods while domain modules are extracted."],
-  ["src/execution/sandboxRunner.ts", "Compatibility facade for codegen sandbox runtime while prompt/harness/git/cache modules are extracted."],
   ["src/control/console/App.tsx", "Compatibility shell for the run console while view modules are extracted."],
-  ["src/tools/coreTools.ts", "Compatibility facade for model-facing tool implementations while tool-family modules are extracted."],
-  ["src/agent/router.ts", "Compatibility entrypoint for model loop while prompt/tool/final-response modules are extracted."],
-  ["src/discord/client.ts", "Compatibility entrypoint for Discord gateway while event/request/trace modules are extracted."],
   ["src/control/taskTerminalUi.ts", "Legacy terminal UI renderer pending extraction or replacement by the run console."],
   ["src/control/internalApi.ts", "Compatibility internal API entrypoint while route handlers are extracted."],
   ["src/tools/registry.ts", "Current single registry pending schema-family extraction."],
   ["src/db/codegenRepository.ts", "Legacy durable codegen session repository pending merge into domain repository modules."],
-  ["src/jobs/queue.ts", "Queue worker coordinator pending consumer extraction."]
+  ["src/observability/runs.ts", "Compatibility run-console adapter while process-run and runtime-ledger projections are split into modules."]
 ]);
 
 const requiredDomainReadmes = [

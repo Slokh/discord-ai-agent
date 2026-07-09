@@ -26,6 +26,8 @@ jobs:
       API_SERVICE_TYPE: ${{ vars.API_SERVICE_TYPE }}
       API_TLS_CERTIFICATE_ARN: ${{ vars.API_TLS_CERTIFICATE_ARN }}
       CONTROL_UI_PUBLIC_URL: ${{ vars.CONTROL_UI_PUBLIC_URL }}
+      # Repo the bot opens code-update PRs against; defaults to this repo.
+      CODE_UPDATE_REPOSITORY: ${{ vars.CODE_UPDATE_REPOSITORY || github.repository }}
       CODEGEN_WORKER_ENABLED: ${{ vars.CODEGEN_WORKER_ENABLED }}
       CODEGEN_WORKER_REPLICAS: ${{ vars.CODEGEN_WORKER_REPLICAS }}
       CODEGEN_LEASE_HEARTBEAT_SECONDS: ${{ vars.CODEGEN_LEASE_HEARTBEAT_SECONDS }}
@@ -66,7 +68,7 @@ jobs:
             --set "image.repository=$REGISTRY/$ECR_REPOSITORY"
             --set "image.tag=$IMAGE_TAG"
             --set "sandbox.image=$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
-            --set "config.githubRepository=$GITHUB_REPOSITORY"
+            --set "config.githubRepository=$CODE_UPDATE_REPOSITORY"
           )
           if [ -n "${API_SERVICE_TYPE:-}" ]; then
             helm_args+=(--set "api.publicService.type=$API_SERVICE_TYPE")

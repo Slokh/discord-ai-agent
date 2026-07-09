@@ -3,6 +3,7 @@ import { resolveGitHubTaskToken } from "../github/appToken.js";
 import { parseGitHubRepository } from "../github/repository.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentTaskRecord, AgentTaskStatus, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
+import { missingCodegenConfig } from "./toolScope.js";
 import type { ToolContext } from "./types.js";
 import {
   agentTaskAuditSummary,
@@ -30,6 +31,8 @@ export async function createAgentUpdateFromRequest(
   title?: string | null,
   target: AgentUpdateTarget = {}
 ): Promise<string> {
+  const notConfigured = codegenNotConfiguredMessage(ctx);
+  if (notConfigured) return notConfigured;
   const updateName = agentUpdateTitleFromRequest(request, title);
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
@@ -66,40 +69,24 @@ async function enqueueAgentCodeUpdateTask(
     throw new Error("Agent task queue is unavailable in this process.");
   }
   await ctx.updateStatus?.("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
-  if (ctx.agentRuntime && ctx.agentRuntimeSession) {
-    return enqueueAgentRuntimeCodeUpdateTask({
-      config: ctx.config,
-      repo: ctx.repo,
-      agentRuntime: ctx.agentRuntime,
-      jobs: ctx.jobs,
-      session: ctx.agentRuntimeSession,
-      traceId: ctx.requestId,
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      threadKey: ctx.threadKey,
-      parentExecutionId: ctx.agentRuntimeExecutionId,
-      request: input.request.trim(),
-      title: input.updateName,
-      requestedBy: input.requestedBy,
-      discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
-      discordResponseMessageId: ctx.statusMessageId,
-      retriedFromTaskId: input.retriedFromTaskId ?? undefined,
-      targetBranch: nonEmptyString(input.targetBranch),
-      targetPullRequestNumber: finitePositiveInteger(input.targetPullRequestNumber),
-      targetPullRequestUrl: nonEmptyString(input.targetPullRequestUrl)
-    });
+  if (!ctx.agentRuntime || !ctx.agentRuntimeSession) {
+    throw new Error("Agent runtime session is unavailable; cannot enqueue a code-update task.");
   }
-  return ctx.jobs.enqueueAgentTask({
+  return enqueueAgentRuntimeCodeUpdateTask({
+    config: ctx.config,
+    repo: ctx.repo,
+    agentRuntime: ctx.agentRuntime,
+    jobs: ctx.jobs,
+    session: ctx.agentRuntimeSession,
     traceId: ctx.requestId,
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
+    threadKey: ctx.threadKey,
+    parentExecutionId: ctx.agentRuntimeExecutionId,
     request: input.request.trim(),
     title: input.updateName,
     requestedBy: input.requestedBy,
-    taskType: "code_update",
-    threadKey: ctx.threadKey,
     discordResponseChannelId: ctx.statusChannelId ?? ctx.channelId,
     discordResponseMessageId: ctx.statusMessageId,
     retriedFromTaskId: input.retriedFromTaskId ?? undefined,
@@ -396,6 +383,8 @@ export async function listAgentTasks(ctx: ToolContext, input: { statuses?: strin
 }
 
 export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string } = {}): Promise<string> {
+  const notConfigured = codegenNotConfiguredMessage(ctx);
+  if (notConfigured) return notConfigured;
   const task = await resolveVisibleAgentTask(ctx, input.taskId, {
     statuses: ["failed", "no_changes", "cancelled"],
     limit: 1
@@ -532,6 +521,16 @@ export function formatSandboxCommandEvents(events: SandboxCommandEvent[]) {
           tail ? `\n  ${truncateForDiscord(tail, 300)}` : ""
         }`;
       })
+  ].join("\n");
+}
+
+function codegenNotConfiguredMessage(ctx: ToolContext): string | null {
+  const missing = missingCodegenConfig(ctx.config);
+  if (missing.length === 0) return null;
+  return [
+    "Code-update tasks are not configured on this bot, so I can't start one.",
+    `Missing configuration: ${missing.join(", ")}.`,
+    "The operator can enable code updates by setting those environment variables and restarting the bot."
   ].join("\n");
 }
 

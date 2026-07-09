@@ -13,6 +13,7 @@ import {
 import { createPool } from "../../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { CodegenRepository } from "../../src/db/codegenRepository.js";
+import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -232,12 +233,14 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           statusMessage: "Codegen sandbox is running the task."
         })
       );
-      const session = await codegenRepo.getSession({ sessionId: `codegen-session-${taskId}` });
+      const sessionId = agentRuntimeSessionId(`agent-task:${taskId}`);
+      const session = await codegenRepo.getSession({ sessionId });
       expect(session).toEqual(
         expect.objectContaining({
           status: "running",
-          harness: "opencode",
+          harness: "runCodingAgent",
           metadata: expect.objectContaining({
+            runtime: "agent",
             codegenHarness: "opencode",
             codegenModel: "z-ai/glm-5.2",
             parentAgentSessionId: "agent-session-parent",
@@ -245,20 +248,22 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           })
         })
       );
-      await expect(codegenRepo.listMessages({ sessionId: `codegen-session-${taskId}` })).resolves.toEqual([
+      await expect(codegenRepo.listMessages({ sessionId })).resolves.toEqual([
         expect.objectContaining({
           clientMessageId: taskId,
-          role: "user",
-          parts: [{ type: "text", text: "add a calendar integration" }]
+          role: "tool",
+          parts: [expect.objectContaining({ type: "tool_result", toolName: "runCodingAgent", taskId })]
         })
       ]);
-      await expect(codegenRepo.listExecutions({ sessionId: `codegen-session-${taskId}` })).resolves.toEqual([
+      await expect(codegenRepo.listExecutions({ sessionId })).resolves.toEqual([
         expect.objectContaining({
+          executionId: `agent-task-execution-${taskId}`,
           taskId,
           status: "running",
-          harness: "opencode",
+          harness: "runCodingAgent",
           sandboxRunId: "sandbox-run-1",
           metadata: expect.objectContaining({
+            runtime: "agent",
             codegenHarness: "opencode",
             codegenModel: "z-ai/glm-5.2",
             parentAgentSessionId: "agent-session-parent",

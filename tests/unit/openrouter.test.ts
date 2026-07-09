@@ -8,6 +8,7 @@ const config = {
   httpReferer: "http://localhost",
   chatModel: "test/chat",
   codegenModel: "test/codegen",
+  utilityModel: "test/utility",
   embeddingModel: "test/embed",
   imageModel: "test/image"
 };
@@ -164,6 +165,33 @@ describe("OpenRouterClient", () => {
     );
   });
 
+  it("adds Anthropic cache_control only to the first system message", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ choices: [{ message: { content: "ok" } }] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    await client.chat({
+      model: "anthropic/claude-sonnet-4",
+      messages: [
+        { role: "system", content: "static system prompt" },
+        { role: "system", content: "dynamic system tail" },
+        { role: "user", content: "hello" }
+      ]
+    });
+
+    const body = JSON.parse(String(((fetchMock.mock.calls[0] as unknown[] | undefined)?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    expect(body.messages[0].content).toEqual([{ type: "text", text: "static system prompt", cache_control: { type: "ephemeral" } }]);
+    expect(body.messages[1].content).toBe("dynamic system tail");
+
+    fetchMock.mockClear();
+    await client.chat({
+      model: "openai/gpt-4.1",
+      messages: [{ role: "system", content: "static system prompt" }, { role: "user", content: "hello" }]
+    });
+    const openAiBody = JSON.parse(String(((fetchMock.mock.calls[0] as unknown[] | undefined)?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    expect(openAiBody.messages[0].content).toBe("static system prompt");
+  });
+
   it("retries transient OpenRouter 503 responses", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
@@ -185,6 +213,52 @@ describe("OpenRouterClient", () => {
     await expect(request).resolves.toMatchObject({
       content: "The US are still the real winners because vibes."
     });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry 429 responses for expensive chat calls without Retry-After", async () => {
+    const fetchMock = vi.fn(async () => jsonErrorResponse(429, { error: { message: "rate limited" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    await expect(
+      client.chat({ messages: [{ role: "user", content: "hello" }], retryPolicy: "expensive" })
+    ).rejects.toThrow("OpenRouter request failed (429): rate limited");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries one short Retry-After 429 for expensive chat calls", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonErrorResponse(429, { error: { message: "rate limited" } }, { "retry-after": "2" }))
+      .mockResolvedValueOnce(jsonResponse({ model: "test/chat", choices: [{ message: { content: "ok" } }] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    const request = client.chat({ messages: [{ role: "user", content: "hello" }], retryPolicy: "expensive" });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(request).resolves.toMatchObject({ content: "ok" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("still retries 5xx responses for expensive chat calls", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(htmlResponse(503, cloudflareWorkerLimitHtml()))
+      .mockResolvedValueOnce(jsonResponse({ model: "test/chat", choices: [{ message: { content: "ok" } }] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    const request = client.chat({ messages: [{ role: "user", content: "hello" }], retryPolicy: "expensive" });
+
+    await vi.runAllTimersAsync();
+
+    await expect(request).resolves.toMatchObject({ content: "ok" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -353,6 +427,15 @@ function htmlResponse(status: number, body: string) {
     status,
     headers: new Headers(),
     text: async () => body
+  } as Response;
+}
+
+function jsonErrorResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
+  return {
+    ok: false,
+    status,
+    headers: new Headers(headers),
+    text: async () => JSON.stringify(body)
   } as Response;
 }
 

@@ -1,6 +1,14 @@
 {
   "name": "discord-ai-agent",
   "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Slokh/discord-ai-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Slokh/discord-ai-agent/issues"
+  },
   "private": true,
   "type": "module",
   "description": "Self-hosted Discord AI agent with permission-aware memory, model-led tools, and sandboxed code-update PRs.",
@@ -9,12 +17,10 @@
     "api": "tsx watch src/index.ts api",
     "bot": "tsx watch src/index.ts bot",
     "worker": "tsx watch src/index.ts worker",
-    "agent:warm-server": "tsx src/agent/sandboxPromptServer.ts",
     "start": "node dist/src/index.js",
     "start:api": "node dist/src/index.js api",
     "start:bot": "node dist/src/index.js bot",
     "start:worker": "node dist/src/index.js worker",
-    "start:agent-warm-server": "node dist/src/agent/sandboxPromptServer.js",
     "start:all": "node dist/src/index.js all",
     "build": "npm run console:build && tsc -p tsconfig.json",
     "console:dev": "vite --config vite.console.config.ts --mode fixture",
@@ -22,6 +28,7 @@
     "console:build": "vite build --config vite.console.config.ts",
     "console:preview": "vite preview --config vite.console.config.ts",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:db": "DISCORD_AI_AGENT_DB_TESTS=true vitest run tests/integration/repository-db.test.ts tests/integration/jobs-db.test.ts",
     "test:watch": "vitest",
     "lint": "eslint .",
@@ -54,7 +61,6 @@
     "smoke:startup": "tsx scripts/smokeStartup.ts",
     "scan:release": "tsx scripts/scanRelease.ts",
     "clear-commands": "tsx src/discord/registerCommands.ts",
-    "register-commands": "tsx src/discord/registerCommands.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
@@ -86,6 +92,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
+    "@vitest/coverage-v8": "^3.2.6",
     "eslint": "^9.31.0",
     "jsdom": "^29.1.1",
     "tsx": "^4.20.3",

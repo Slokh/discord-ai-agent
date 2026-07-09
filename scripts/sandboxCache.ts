@@ -16,7 +16,7 @@ type CacheEntry = {
 async function main() {
   const command = process.argv[2] ?? "status";
   const config = loadConfig();
-  const cacheDir = process.env.SANDBOX_CACHE_DIR || config.execution.kubernetes.cacheDir;
+  const cacheDir = process.env.SANDBOX_CACHE_DIR || config.execution.sandbox.cacheDir;
   const workspaceRoot = path.join(os.tmpdir(), "discord-ai-agent-workspaces");
 
   if (command === "status") {

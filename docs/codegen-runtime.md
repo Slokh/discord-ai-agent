@@ -34,50 +34,17 @@ During model execution, assistant tool-call turns and non-codegen local tool res
 
 `POST /api/agent/sessions/:threadKey/execute` is also the migration seam for making the session API the real control plane. It accepts Centaur-style opaque `input_lines` / `inputLines` arrays, stores them as a durable `input_lines` artifact, records `agent.execution.input_lines_stored`, and returns the artifact id so future warm harness runners can replay exactly what the client intended to write to runtime stdin. When `text` is omitted, queue handoff derives the execution prompt from the latest user input line before falling back to the session request. When the API process has a job runtime and the request includes `enqueue: true` plus enough Discord delivery context (`messageId`, `guildId`, `channelId`, `userId`, and prompt text from `text`, `input_lines`, or the session), the endpoint creates the durable execution row, enqueues the `agent.runtime.execution` job, records `agent.execution.job_enqueued`, and returns the pg-boss `jobId`. Clients that only need ledger state can omit `enqueue`. Discord gateway ingress uses the same control-plane helper for this queue handoff, falling back to direct enqueue only if session recording failed.
 
-`AGENT_RUNTIME_EXECUTION_BACKEND` selects the prompt execution backend. It defaults to `in-process`, which calls the existing model/tool router through `src/agent/inProcessRuntimeExecutor.ts`. The selection now flows through `src/agent/runtimeRunner.ts` and `src/agent/runtimeExecutor.ts` so the worker can prepare the Discord turn once, store the replay envelope, then hand response generation to the selected executor. `warm-sandbox` sends that envelope, durable input lines, and the current agent session/execution ids to `AGENT_RUNTIME_WARM_SANDBOX_URL` when configured; otherwise it falls back to the out-of-process `sandboxPromptRunner` child for local compatibility.
+Discord chat prompt execution is in-process permanently. `src/agent/runtimeRunner.ts` always constructs the in-process prompt executor, and sandboxes remain scoped to code-update tasks. Durable prompt session/execution rows and `agent.execution.*` events still record the executor name (`in-process`) so the run console reflects the active path.
 
-Durable prompt session/execution rows and `agent.execution.*` events record the selected executor name. This keeps the run console aligned with the actual runtime path, especially when the worker is using `warm-sandbox` instead of the compatibility in-process model loop.
+The old task callback endpoints remain for the current sandbox runner. New runtime work should attach to the generic agent session API first, then route code-update executions to sandbox or harness servers and Discord delivery from that durable event stream.
 
-Warm prompt executions write durable `agent.execution.executor_*` events, a `Warm sandbox prompt runner` span, and `raw_json` artifacts for the serialized prompt request and response. Event/span/artifact metadata includes the selected transport (`http` or `child_process`) plus HTTP status or process byte counts, so latency and protocol bugs are visible in the run console and replayable session stream.
+Today, `runCodingAgent` creates a runtime-first code-update execution when the current model loop is attached to a durable agent session: it appends a `runCodingAgent` tool message, creates a task-linked `agent.task.*` execution in the current session, records the selected codegen backend, harness, model, and provider on the message/execution/events, then hands the known `taskId` to the existing `agent.task` sandbox worker. That task job carries `parentAgentSessionId`, `parentAgentExecutionId`, and `parentAgentThreadKey` through pg-boss, process-run metadata, and worker progress so compatibility code-update work remains traceable to the exact prompt turn that spawned it. The legacy `agent_tasks` row remains a projection, while the runtime-tagged session/execution is the canonical ledger row.
 
-Run a local warm prompt server with:
+The same enqueue path calls `src/jobs/agentTaskRuntimeWrite.ts` only when the caller has not already created the runtime records. Runtime-first callers mark the runtime write as externally managed so the queue does not duplicate the session message or execution.
 
-```sh
-npm run agent:warm-server
-```
+Queue handoff bookkeeping is split by lifecycle phase. `src/jobs/agentTaskEnqueue.ts` owns the code-update task enqueue transaction: it writes the durable task projection row, writes the canonical runtime record when needed, sends the `pg-boss` job, and then attaches the returned job id as metadata. Do not re-create task-linked executions with `status: queued` after enqueue; that can race with the worker and make an active runtime look queued again.
 
-In Kubernetes, set:
-
-```sh
---set agentRuntime.executionBackend=warm-sandbox
---set agentRuntime.warmSandbox.enabled=true
-```
-
-The Helm chart deploys a ClusterIP `agent-runtime` service and points the worker at it through `AGENT_RUNTIME_WARM_SANDBOX_URL`. The warm prompt server starts an enqueue-only job runtime so model-selected code-update tools can still enqueue normal `agent.task` work while prompt execution runs behind the remote runtime boundary. When a warm-runtime tool enqueues a code-update task before a Discord status message exists, the Discord worker attaches tasks from the same prompt trace to the final reply message so the normal task notifier can edit that reply with progress and the PR link.
-
-## Legacy Codegen Session API
-
-The internal API now exposes the codegen control-plane objects directly. This is the migration point from the original `agent.task` callback flow toward a Centaur-style runtime where Discord is only ingress/delivery and the API owns durable execution state.
-
-Authenticated clients can:
-
-- `POST /api/codegen/sessions/:threadKey` to create or reuse a durable codegen session for a Discord channel/thread/task context.
-- `GET /api/codegen/sessions/:threadKey` to replay the session, messages, executions, and events.
-- `POST /api/codegen/sessions/:threadKey/messages` to persist one user/system/assistant/tool turn as structured parts.
-- `GET /api/codegen/sessions/:threadKey/messages` to replay stored turns.
-- `POST /api/codegen/sessions/:threadKey/execute` to create a durable queued execution row.
-- `GET /api/codegen/sessions/:threadKey/events` to replay normalized execution events.
-- `GET /api/codegen/sessions/:threadKey/stream` to follow the replayable event trail over SSE.
-
-The old task callback endpoints remain for the current sandbox runner. New runtime work should attach to the generic agent session API first, then route executions to warm sandboxes, harness servers, and Discord delivery from that durable event stream.
-
-Today, `runCodingAgent` creates a runtime-first code-update execution when the current model loop is attached to a durable agent session: it appends a `runCodingAgent` tool message, creates a task-linked `agent.task.*` execution in the current session, records the selected codegen backend, harness, model, and provider on the message/execution/events, then hands the known `taskId` to the existing `agent.task` sandbox worker. That task job carries `parentAgentSessionId`, `parentAgentExecutionId`, and `parentAgentThreadKey` through pg-boss, process-run metadata, mirrors, and worker progress so compatibility code-update work remains traceable to the exact prompt turn that spawned it. `src/jobs/agentTaskCodegenMirror.ts` still creates or reuses the legacy durable codegen session, appends the code-update request as a `user` message, and creates a queued harness execution for sandbox callbacks. This keeps the current Discord behavior intact while shifting ownership of user-visible code-update state toward the generic agent session.
-
-The same enqueue path still calls `src/jobs/agentTaskRuntimeMirror.ts` as a fallback for callers without agent-runtime context. The mirror writes a `runCodingAgent` tool message, a task-linked execution with the same `taskId`, and `agent.task.*` events for queue, start, progress, sandbox attachment, and immediate start failures. Runtime-first callers mark that mirror as externally managed so the queue does not duplicate the session message or execution.
-
-Queue handoff bookkeeping is split by lifecycle phase. `src/jobs/agentTaskEnqueue.ts` owns the code-update task enqueue transaction: it writes the durable task row, calls the legacy codegen mirror, calls the generic runtime fallback mirror when needed, sends the `pg-boss` job, and then attaches the returned job id as metadata. Do not re-create task-linked executions with `status: queued` after enqueue; that can race with the worker and make an active runtime look queued again.
-
-Discord task progress rendering, codegen run snapshots, trace log inspection, and the model-facing task-status tool now read those mirrored `agent.task.*` runtime events first and fall back to legacy `task_events` only when a runtime mirror is not available. That makes the user-facing delivery and debugging paths follow the replayable session event stream without requiring the sandbox runner callback protocol to be removed in the same migration slice.
+Discord task progress rendering, codegen run snapshots, trace log inspection, and the model-facing task-status tool now read the canonical `agent.task.*` runtime events first and fall back to legacy `task_events` only when runtime events are not available. That makes the user-facing delivery and debugging paths follow the replayable session event stream without requiring the sandbox runner callback protocol to be removed in the same migration slice.
 
 The sandbox worker now records task start, warm-lease attachment, and sandbox-run attachment through shared repository lifecycle methods. Those methods update the legacy task/process rows, mark every task-linked codegen execution running, attach the same sandbox metadata to legacy and generic runtime executions, and emit either `codegen.execution.started` or `agent.task.started` depending on whether the execution belongs to the generic runtime. Queue code starts the sandbox, then reports lifecycle facts to the repository instead of hand-writing separate runtime events.
 

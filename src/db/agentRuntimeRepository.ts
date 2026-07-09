@@ -114,6 +114,10 @@ export class AgentRuntimeRepository {
     return this.codegenRepo.listExecutions(input);
   }
 
+  async getExecution(input: { executionId: string }): Promise<AgentRuntimeExecutionRecord | undefined> {
+    return this.codegenRepo.getExecution(input);
+  }
+
   async updateExecution(input: {
     executionId: string;
     status?: AgentRuntimeStatus;
@@ -188,6 +192,11 @@ export class AgentRuntimeRepository {
 
   async getArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> {
     return this.codegenRepo.getArtifact(input);
+  }
+
+  async getLatestResponseText(input: { executionId: string }): Promise<string | undefined> {
+    const artifact = await this.codegenRepo.getLatestArtifactContentForExecution({ executionId: input.executionId, kind: "response" });
+    return artifact?.content;
   }
 }
 

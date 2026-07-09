@@ -13,7 +13,7 @@ import {
   type AgentRuntimeExecutionQueueInput
 } from "../agent/runtimeControlPlane.js";
 import { logger } from "../util/logger.js";
-import { verifyTaskBearerToken } from "../execution/token.js";
+import { verifyCallbackBodySignature, verifyTaskBearerToken } from "../execution/token.js";
 import type { AgentTaskCompletionEvent, AgentTaskProgressEvent } from "../execution/types.js";
 import { collectCodegenStatusSnapshot } from "../observability/codegenStatus.js";
 import { buildRunListAggregate } from "../observability/runAggregates.js";
@@ -451,7 +451,9 @@ async function handleRequest(input: {
     if (!authorizedUi(input.config, input.request, input.response, url)) return;
     const runId = decodeURIComponent(runArtifactMatch[1] ?? "");
     const artifactId = decodeURIComponent(runArtifactMatch[2] ?? "");
-    const artifact = await input.repo.getProcessRunArtifact({ runId, artifactId });
+    const artifact =
+      (await input.repo.getProcessRunArtifact({ runId, artifactId })) ??
+      (typeof input.repo.getAgentRuntimeArtifact === "function" ? await input.repo.getAgentRuntimeArtifact({ artifactId }) : undefined);
     if (!artifact) {
       sendJson(input.response, 404, { error: "artifact_not_found" });
       return;
@@ -694,11 +696,18 @@ async function handleRequest(input: {
   const eventMatch = url.pathname.match(/^\/internal\/tasks\/([^/]+)\/events$/);
   if (method === "POST" && eventMatch) {
     const taskId = decodeURIComponent(eventMatch[1] ?? "");
-    if (!authorized(input.config, input.request, taskId)) {
+    const rawBody = await readRawBody(input.request);
+    const body = parseProgressEvent(parseJsonBody(rawBody));
+    const sandboxRunId = sandboxRunIdFromMetadata(body.metadata);
+    if (!authorized(input.config, input.request, taskId, sandboxRunId, rawBody)) {
       sendJson(input.response, 401, { error: "unauthorized" });
       return;
     }
-    const body = parseProgressEvent(await readJsonBody(input.request));
+    const task = await input.repo.getAgentTask(taskId);
+    if (task && isTerminalTaskStatus(task.status)) {
+      sendJson(input.response, 409, { error: "task_terminal" });
+      return;
+    }
     await input.repo.markAgentTaskProgress({
       taskId,
       step: body.step,
@@ -712,11 +721,18 @@ async function handleRequest(input: {
   const completeMatch = url.pathname.match(/^\/internal\/tasks\/([^/]+)\/complete$/);
   if (method === "POST" && completeMatch) {
     const taskId = decodeURIComponent(completeMatch[1] ?? "");
-    if (!authorized(input.config, input.request, taskId)) {
+    const rawBody = await readRawBody(input.request);
+    const body = parseCompletionEvent(parseJsonBody(rawBody));
+    const sandboxRunId = sandboxRunIdFromMetadata(body.metadata);
+    if (!authorized(input.config, input.request, taskId, sandboxRunId, rawBody)) {
       sendJson(input.response, 401, { error: "unauthorized" });
       return;
     }
-    const body = parseCompletionEvent(await readJsonBody(input.request));
+    const task = await input.repo.getAgentTask(taskId);
+    if (task && isTerminalTaskStatus(task.status)) {
+      sendJson(input.response, 200, { ok: true, idempotent: true });
+      return;
+    }
     if (body.status === "succeeded") {
       await input.repo.markAgentTaskSucceeded({
         taskId,
@@ -741,11 +757,12 @@ async function handleRequest(input: {
   const commandMatch = url.pathname.match(/^\/internal\/tasks\/([^/]+)\/commands$/);
   if (method === "POST" && commandMatch) {
     const taskId = decodeURIComponent(commandMatch[1] ?? "");
-    if (!authorized(input.config, input.request, taskId)) {
+    const rawBody = await readRawBody(input.request);
+    const body = parseCommandEvent(parseJsonBody(rawBody));
+    if (!authorized(input.config, input.request, taskId, body.sandboxRunId ?? undefined, rawBody)) {
       sendJson(input.response, 401, { error: "unauthorized" });
       return;
     }
-    const body = parseCommandEvent(await readJsonBody(input.request));
     await input.repo.recordSandboxCommandEvent({
       taskId,
       sandboxRunId: body.sandboxRunId,
@@ -764,11 +781,13 @@ async function handleRequest(input: {
   const artifactMatch = url.pathname.match(/^\/internal\/tasks\/([^/]+)\/artifacts$/);
   if (method === "POST" && artifactMatch) {
     const taskId = decodeURIComponent(artifactMatch[1] ?? "");
-    if (!authorized(input.config, input.request, taskId)) {
+    const rawBody = await readRawBody(input.request);
+    const body = parseArtifactEvent(parseJsonBody(rawBody));
+    const sandboxRunId = sandboxRunIdFromMetadata(body.metadata);
+    if (!authorized(input.config, input.request, taskId, sandboxRunId, rawBody)) {
       sendJson(input.response, 401, { error: "unauthorized" });
       return;
     }
-    const body = parseArtifactEvent(await readJsonBody(input.request));
     const artifact = await input.repo.storeProcessRunArtifact({
       runId: taskId,
       kind: body.kind,
@@ -784,10 +803,16 @@ async function handleRequest(input: {
   sendJson(input.response, 404, { error: "not_found" });
 }
 
-function authorized(config: AppConfig, request: http.IncomingMessage, taskId: string) {
+function authorized(config: AppConfig, request: http.IncomingMessage, taskId: string, sandboxRunId: string | undefined, rawBody: Buffer) {
+  if (!sandboxRunId) return false;
   const auth = request.headers.authorization;
   const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined;
-  return verifyTaskBearerToken({ taskId, token, secret: config.execution.taskSigningSecret });
+  const timestamp = singleHeader(request.headers["x-agent-task-timestamp"]);
+  const signature = singleHeader(request.headers["x-agent-task-signature"]);
+  return (
+    verifyTaskBearerToken({ taskId, sandboxRunId, token, secret: config.execution.taskSigningSecret }) &&
+    verifyCallbackBodySignature({ secret: config.execution.taskSigningSecret, timestamp, signature, rawBody })
+  );
 }
 
 function authorizedUi(
@@ -870,6 +895,10 @@ function parseCookie(cookieHeader: string): Record<string, string> {
 }
 
 async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
+  return parseJsonBody(await readRawBody(request));
+}
+
+async function readRawBody(request: http.IncomingMessage): Promise<Buffer> {
   let total = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -878,8 +907,24 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
     if (total > MAX_BODY_BYTES) throw new Error("Internal API request body is too large.");
     chunks.push(buffer);
   }
-  if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return Buffer.concat(chunks);
+}
+
+function parseJsonBody(rawBody: Buffer): unknown {
+  if (rawBody.length === 0) return {};
+  return JSON.parse(rawBody.toString("utf8"));
+}
+
+function singleHeader(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function sandboxRunIdFromMetadata(metadata: Record<string, unknown> | undefined) {
+  return typeof metadata?.sandboxRunId === "string" && metadata.sandboxRunId ? metadata.sandboxRunId : undefined;
+}
+
+function isTerminalTaskStatus(status: string) {
+  return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
 }
 
 function parseProgressEvent(value: unknown): AgentTaskProgressEvent {

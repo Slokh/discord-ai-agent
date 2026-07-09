@@ -5,6 +5,7 @@ import { formatAgentTaskResult } from "../tools/coreTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import { durationMs, logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
+import { discordEdit } from "./api.js";
 
 const DEFAULT_POLL_MS = 2_000;
 const RENDER_LIMIT = 20;
@@ -86,7 +87,9 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
           ? renderAgentTaskMessage(task, ...(await taskDetails(input.repo, task)), { runConsoleUrl })
           : rendered;
         const content = cleanResponse(renderedWithDetails.content, input.config.maxReplyChars);
-        const edited = await message.edit(content);
+        const editedResult = await discordEdit(message, content, { logger });
+        if (!editedResult.ok) throw editedResult.error;
+        const edited = editedResult.value;
         await input.repo.markAgentTaskRendered({
           taskId: task.taskId,
           signature: renderedWithDetails.signature,

@@ -345,6 +345,11 @@ export class CodegenRepository {
     return result.rows.map(rowToCodegenExecution);
   }
 
+  async getExecution(input: { executionId: string }): Promise<CodegenExecutionRecord | undefined> {
+    const result = await this.pool.query(`SELECT * FROM codegen_executions WHERE execution_id = $1`, [input.executionId]);
+    return result.rows[0] ? rowToCodegenExecution(result.rows[0]) : undefined;
+  }
+
   async updateExecution(input: {
     executionId: string;
     status?: CodegenStatus;
@@ -468,6 +473,214 @@ export class CodegenRepository {
     return rowToCodegenEvent(result.rows[0]);
   }
 
+  async markTaskExecutionRunning(input: {
+    taskId: string;
+    metadata?: Record<string, unknown>;
+    summary?: string | null;
+    step?: string | null;
+  }): Promise<void> {
+    await this.pool.query(
+      `
+        WITH updated_execution AS (
+          UPDATE codegen_executions
+          SET status = 'running',
+              metadata = metadata || $2::jsonb,
+              started_at = coalesce(started_at, now()),
+              updated_at = now()
+          WHERE task_id = $1
+            AND status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+          RETURNING session_id, execution_id, trace_id
+        ),
+        session_update AS (
+          UPDATE codegen_sessions
+          SET status = 'running',
+              started_at = coalesce(started_at, now()),
+              updated_at = now()
+          WHERE session_id IN (SELECT session_id FROM updated_execution)
+        ),
+        next_sequence AS (
+          SELECT
+            updated_execution.session_id,
+            updated_execution.execution_id,
+            updated_execution.trace_id,
+            coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+          FROM updated_execution
+          LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+          GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+        )
+        INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+        SELECT
+          session_id,
+          execution_id,
+          trace_id,
+          sequence,
+          'status',
+          'info',
+          'agent.task.started',
+          $3,
+          jsonb_build_object('taskId', $1, 'step', $4::text) || $2::jsonb
+        FROM next_sequence
+      `,
+      [input.taskId, JSON.stringify(input.metadata ?? {}), input.summary ?? "Running agent task.", input.step ?? "running"]
+    );
+  }
+
+  async recordTaskExecutionProgress(input: {
+    taskId: string;
+    step: string;
+    summary: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.pool.query(
+      `
+        WITH target AS (
+          SELECT session_id, execution_id, trace_id
+          FROM codegen_executions
+          WHERE task_id = $1
+        ),
+        next_sequence AS (
+          SELECT
+            target.session_id,
+            target.execution_id,
+            target.trace_id,
+            coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+          FROM target
+          LEFT JOIN codegen_events ON codegen_events.execution_id = target.execution_id
+          GROUP BY target.session_id, target.execution_id, target.trace_id
+        )
+        INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+        SELECT
+          session_id,
+          execution_id,
+          trace_id,
+          sequence,
+          CASE
+            WHEN $2 ~* 'failed|error' THEN 'error'
+            WHEN $2 ~* 'git|branch|push|pr|diff|commit' THEN 'git'
+            WHEN $2 ~* 'command|verify|scan|dependencies|repo|checkout|test|lint|typecheck' THEN 'command'
+            WHEN $2 ~* 'artifact|prompt' THEN 'artifact'
+            WHEN $2 ~* 'codex|model|harness' THEN 'harness'
+            ELSE 'status'
+          END,
+          CASE WHEN $2 ~* 'failed|error' THEN 'error' ELSE 'info' END,
+          'agent.task.progress',
+          $3,
+          jsonb_build_object('taskId', $1, 'step', $2) || $4::jsonb
+        FROM next_sequence
+      `,
+      [input.taskId, input.step, input.summary, JSON.stringify(input.metadata ?? {})]
+    );
+  }
+
+  async updateTaskExecutionSandbox(input: {
+    taskId: string;
+    sandboxId?: string | null;
+    sandboxRunId?: string | null;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.pool.query(
+      `
+        WITH updated_executions AS (
+          UPDATE codegen_executions
+          SET sandbox_run_id = coalesce($2::text, sandbox_run_id),
+              sandbox_id = coalesce($3::text, sandbox_id),
+              metadata = metadata || $4::jsonb,
+              updated_at = now()
+          WHERE task_id = $1
+          RETURNING session_id
+        )
+        UPDATE codegen_sessions
+        SET updated_at = now()
+        WHERE session_id IN (SELECT session_id FROM updated_executions)
+      `,
+      [input.taskId, input.sandboxRunId ?? null, input.sandboxId ?? null, JSON.stringify(input.metadata ?? {})]
+    );
+  }
+
+  async markTaskExecutionCompleted(input: {
+    taskId: string;
+    status: Extract<CodegenStatus, "succeeded" | "failed" | "no_changes" | "cancelled">;
+    summary: string;
+    branchName?: string | null;
+    prUrl?: string | null;
+    draft?: boolean | null;
+    verifyPassed?: boolean | null;
+    error?: string | null;
+    metadata?: Record<string, unknown>;
+    releasedBy?: string | null;
+  }): Promise<void> {
+    await this.pool.query(
+      `
+        WITH updated_execution AS (
+          UPDATE codegen_executions
+          SET status = $2,
+              branch_name = coalesce($4, branch_name),
+              pr_url = coalesce($5, pr_url),
+              draft = coalesce($6, draft),
+              verify_passed = coalesce($7, verify_passed),
+              error = $8,
+              metadata = metadata || $9::jsonb,
+              completed_at = coalesce(completed_at, now()),
+              updated_at = now()
+          WHERE task_id = $1
+          RETURNING session_id, execution_id, trace_id
+        ),
+        session_update AS (
+          UPDATE codegen_sessions
+          SET status = $2,
+              completed_at = coalesce(completed_at, now()),
+              updated_at = now()
+          WHERE session_id IN (SELECT session_id FROM updated_execution)
+        ),
+        lease_update AS (
+          UPDATE codegen_sandbox_leases
+          SET status = 'idle',
+              lease_owner = NULL,
+              execution_id = NULL,
+              heartbeat_at = NULL,
+              last_used_at = now(),
+              metadata = metadata || jsonb_build_object('releasedBy', $10::text, 'releasedTaskId', $1, 'releasedStatus', $2),
+              updated_at = now()
+          WHERE execution_id IN (SELECT execution_id FROM updated_execution)
+        ),
+        next_sequence AS (
+          SELECT
+            updated_execution.session_id,
+            updated_execution.execution_id,
+            updated_execution.trace_id,
+            coalesce(max(codegen_events.sequence), 0) + 1 AS sequence
+          FROM updated_execution
+          LEFT JOIN codegen_events ON codegen_events.execution_id = updated_execution.execution_id
+          GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id
+        )
+        INSERT INTO codegen_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
+        SELECT
+          session_id,
+          execution_id,
+          trace_id,
+          sequence,
+          CASE WHEN $2 = 'succeeded' THEN 'git' WHEN $2 = 'cancelled' THEN 'status' ELSE 'error' END,
+          CASE WHEN $2 IN ('succeeded', 'cancelled') THEN 'info' ELSE 'error' END,
+          'agent.task.completed',
+          $3,
+          jsonb_build_object('taskId', $1, 'status', $2) || CASE WHEN $8::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('error', $8::text) END || $9::jsonb
+        FROM next_sequence
+      `,
+      [
+        input.taskId,
+        input.status,
+        input.summary,
+        input.branchName ?? null,
+        input.prUrl ?? null,
+        input.draft ?? null,
+        input.verifyPassed ?? null,
+        input.error ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        input.releasedBy ?? "task.completed"
+      ]
+    );
+  }
+
   async listEvents(input: {
     sessionId: string;
     executionId?: string | null;
@@ -568,6 +781,15 @@ export class CodegenRepository {
       ...rowToCodegenArtifact(artifact.rows[0]),
       content: chunks.rows.map((row) => String(row.content ?? "")).join("")
     };
+  }
+
+  async getLatestArtifactContentForExecution(input: { executionId: string; kind: string }): Promise<CodegenArtifactContent | undefined> {
+    const result = await this.pool.query(
+      `SELECT artifact_id FROM codegen_artifacts WHERE execution_id = $1 AND kind = $2 AND (expires_at IS NULL OR expires_at > now()) ORDER BY created_at DESC, artifact_id DESC LIMIT 1`,
+      [input.executionId, input.kind]
+    );
+    const artifactId = result.rows[0]?.artifact_id;
+    return artifactId ? this.getArtifact({ artifactId: String(artifactId) }) : undefined;
   }
 
   async cleanupExpiredArtifacts(limit = 500): Promise<number> {

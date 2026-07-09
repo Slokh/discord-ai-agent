@@ -179,7 +179,7 @@ describe("DiscordResponseSink", () => {
   });
 
   it("falls back to cached loading reaction cleanup when the acknowledgement reaction was not captured", async () => {
-    const reaction = fakeReaction({ id: "1521299407214084337", name: "loading" });
+    const reaction = fakeReaction({ id: "123456789012345678", name: "loading" });
     const sourceMessage = fakeMessage({
       reactions: {
         cache: {
@@ -192,7 +192,8 @@ describe("DiscordResponseSink", () => {
       client: fakeClient(),
       sourceMessage: sourceMessage as any,
       maxReplyChars: 2_000,
-      logger: fakeLogger() as any
+      logger: fakeLogger() as any,
+      loadingReactionEmoji: "<a:loading:123456789012345678>"
     });
 
     await sink.clearAcknowledgement();
@@ -201,7 +202,7 @@ describe("DiscordResponseSink", () => {
   });
 
   it("supports configured custom loading reactions", async () => {
-    const reaction = fakeReaction({ id: "1521299407214084337", name: "loading" });
+    const reaction = fakeReaction({ id: "123456789012345678", name: "loading" });
     const sourceMessage = fakeMessage({
       react: vi.fn(async () => reaction),
       reactions: {
@@ -216,13 +217,13 @@ describe("DiscordResponseSink", () => {
       sourceMessage: sourceMessage as any,
       maxReplyChars: 2_000,
       logger: fakeLogger() as any,
-      loadingReactionEmoji: "<a:loading:1521299407214084337>"
+      loadingReactionEmoji: "<a:loading:123456789012345678>"
     });
 
     await sink.acknowledge();
     await sink.clearAcknowledgement();
 
-    expect(sourceMessage.react).toHaveBeenCalledWith("<a:loading:1521299407214084337>");
+    expect(sourceMessage.react).toHaveBeenCalledWith("<a:loading:123456789012345678>");
     expect(reaction.users.remove).toHaveBeenCalledWith("bot-user");
   });
 

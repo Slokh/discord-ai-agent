@@ -45,14 +45,14 @@ describe("internal API run endpoints", () => {
     );
 
     const resolved = await fetch(
-      `${runtime.url}/api/runs/resolve?query=${encodeURIComponent("https://discord.com/channels/111111111111111111/222222222222222222/1521541635580756031")}`,
+      `${runtime.url}/api/runs/resolve?query=${encodeURIComponent("https://discord.com/channels/111111111111111111/222222222222222222/1234567890123450031")}`,
       {
         headers: auth
       }
     );
     expect(resolved.status).toBe(200);
     await expect(resolved.json()).resolves.toEqual(
-      expect.objectContaining({ messageId: "1521541635580756031", run: expect.objectContaining({ runId: "run-1" }) })
+      expect.objectContaining({ messageId: "1234567890123450031", run: expect.objectContaining({ runId: "run-1" }) })
     );
 
     const detail = await fetch(`${runtime.url}/api/runs/run-1`, { headers: auth });
@@ -371,7 +371,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     guildId: null,
     channelId: null,
     userId: null,
-    messageId: "1521541635580756031",
+    messageId: "1234567890123450031",
     requester: "test",
     source: "test",
     metadata: { agentExecutionId: "agent-execution-1" },
@@ -433,7 +433,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
       options.onListProcessRuns?.(input);
       return [run];
     },
-    findProcessRunByDiscordMessageId: async (messageId: string) => (messageId === "1521541635580756031" ? run : undefined),
+    findProcessRunByDiscordMessageId: async (messageId: string) => (messageId === "1234567890123450031" ? run : undefined),
     findAgentTaskByDiscordMessageId: async () => undefined,
     listRecentAgentTasks: async () => [],
     listProcessRunsForTrace: async () => [run],
@@ -521,7 +521,7 @@ function fakeCodegenStatusPool() {
           rows: [
             {
               sandbox_id: "sandbox-1",
-              repo: "Slokh/discord-ai-agent",
+              repo: "example/discord-ai-agent",
               status: "leased",
               lease_owner: "worker-1",
               execution_id: "execution-1",

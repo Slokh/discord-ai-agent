@@ -1,6 +1,6 @@
 import { slugify } from "../util/text.js";
 
-const CODE_UPDATE_BRANCH_PREFIX = "ai";
+const CODE_UPDATE_BRANCH_PREFIX = "agent";
 const CODE_UPDATE_BRANCH_SLUG_MAX_CHARS = 40;
 const CODE_UPDATE_BRANCH_SUFFIX_CHARS = 4;
 const CODE_UPDATE_BRANCH_STOP_WORDS = new Set([

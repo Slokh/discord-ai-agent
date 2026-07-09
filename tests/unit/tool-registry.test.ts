@@ -12,6 +12,7 @@ describe("toolRegistry", () => {
   it("contains the local milestone tools", () => {
     expect(toolRegistry.map((tool) => tool.name)).toEqual([
       "listTools",
+      "requestAdditionalTools",
       "findDiscordUsers",
       "findDiscordChannels",
       "searchDiscordHistory",
@@ -37,6 +38,7 @@ describe("toolRegistry", () => {
       "retryAgentTask",
       "cancelAgentTask",
       "getDeploymentStatus",
+      "getSpendSummary",
       "undoConversationTurns",
       "inspectAgentLogs",
       "reportStatus",
@@ -54,6 +56,7 @@ describe("toolRegistry", () => {
 
   it("renders a user-visible tool list", () => {
     expect(renderToolList()).toContain("searchDiscordHistory");
+    expect(renderToolList()).not.toContain("requestAdditionalTools");
     expect(renderToolList()).toContain("inspectDiscordImages");
     expect(renderToolList()).toContain("Generate an image");
     expect(renderToolList()).toContain("web_search");

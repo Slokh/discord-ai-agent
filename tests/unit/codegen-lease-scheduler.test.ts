@@ -10,16 +10,16 @@ import type { CodegenSandboxLeaseRecord } from "../../src/db/codegenRepository.j
 describe("codegen lease scheduler", () => {
   it("creates a local-process worker lease identity only for the local backend", () => {
     const local = createCodegenLeaseScheduler(
-      testConfig({ CODEGEN_EXECUTION_BACKEND: "local-process", GITHUB_REPOSITORY: "Slokh/discord-ai-agent" }),
+      testConfig({ CODEGEN_EXECUTION_BACKEND: "local-process", GITHUB_REPOSITORY: "example/discord-ai-agent" }),
       "local-process-sandbox",
       { hostname: "worker-pod-1", pid: 123 }
     );
 
     expect(local).toEqual(
       expect.objectContaining({
-        sandboxId: "local-process:slokh-discord-ai-agent:worker-pod-1:123",
+        sandboxId: "local-process:example-discord-ai-agent:worker-pod-1:123",
         leaseOwner: "worker:worker-pod-1:123",
-        repo: "Slokh/discord-ai-agent",
+        repo: "example/discord-ai-agent",
         heartbeatIntervalMs: 15_000,
         staleLeaseMs: 120_000,
         acquireTimeoutMs: 1_800_000,
@@ -33,7 +33,7 @@ describe("codegen lease scheduler", () => {
 
   it("registers and acquires only the current worker lease", async () => {
     const scheduler = createCodegenLeaseScheduler(
-      testConfig({ CODEGEN_EXECUTION_BACKEND: "local-process", GITHUB_REPOSITORY: "Slokh/discord-ai-agent" }),
+      testConfig({ CODEGEN_EXECUTION_BACKEND: "local-process", GITHUB_REPOSITORY: "example/discord-ai-agent" }),
       "local-process-sandbox",
       { hostname: "worker-pod-1", pid: 123 }
     )!;
@@ -194,7 +194,7 @@ function leaseRecord(input: {
 }): CodegenSandboxLeaseRecord {
   return {
     sandboxId: input.sandboxId,
-    repo: input.repo ?? "Slokh/discord-ai-agent",
+    repo: input.repo ?? "example/discord-ai-agent",
     status: input.status ?? "idle",
     leaseOwner: input.leaseOwner ?? null,
     executionId: input.executionId ?? null,

@@ -1,5 +1,7 @@
 import type {
   AgentRuntimeEvent,
+  AgentRuntimeArtifactRecord,
+  AgentRuntimeChatExecution,
   AgentRuntimeMessage,
   AgentTaskRecord,
   DiscordAiAgentRepository,
@@ -41,7 +43,7 @@ export type RunSummary = {
 
 export type RunSpan = {
   id: string;
-  source: "process" | "task" | "sandbox" | "command";
+  source: "process" | "task" | "sandbox" | "command" | "runtime";
   name: string;
   status: ProcessRunStatus;
   startedAt: Date;
@@ -111,14 +113,19 @@ export type RunResolution = {
 
 export async function listRunSummaries(repo: DiscordAiAgentRepository, input: { limit?: number; includeEmbeddings?: boolean } = {}): Promise<RunSummary[]> {
   const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 100)));
-  const [processRuns, tasks] = await Promise.all([
+  const [processRuns, tasks, chatExecutions] = await Promise.all([
     repo.listProcessRuns({ limit, includeEmbeddings: input.includeEmbeddings ?? true }),
-    repo.listRecentAgentTasks(limit)
+    repo.listRecentAgentTasks(limit),
+    typeof repo.listAgentRuntimeChatExecutions === "function" ? repo.listAgentRuntimeChatExecutions({ limit }) : Promise.resolve([])
   ]);
   const byId = new Map<string, RunSummary>();
   for (const run of processRuns) byId.set(run.runId, summaryFromProcessRun(run));
   for (const task of tasks) {
     if (!byId.has(task.taskId)) byId.set(task.taskId, summaryFromTask(task));
+  }
+  for (const execution of chatExecutions) {
+    const summary = summaryFromAgentExecution(execution);
+    if (!byId.has(summary.runId)) byId.set(summary.runId, summary);
   }
   return [...byId.values()].sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime()).slice(0, limit);
 }
@@ -132,6 +139,12 @@ export async function resolveRunReference(repo: DiscordAiAgentRepository, input:
 
   const task = await repo.findAgentTaskByDiscordMessageId(messageId);
   if (task) return { run: summaryFromTask(task), messageId };
+
+  const execution =
+    typeof repo.findAgentRuntimeChatExecutionByTraceId === "function"
+      ? await repo.findAgentRuntimeChatExecutionByTraceId(messageId)
+      : undefined;
+  if (execution) return { run: summaryFromAgentExecution(execution), messageId };
 
   return undefined;
 }
@@ -156,15 +169,20 @@ export function extractDiscordMessageId(input: string): string | null {
 
 export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: string): Promise<RunSnapshot | undefined> {
   const [processRun, task] = await Promise.all([repo.getProcessRun(runId), repo.getAgentTask(runId)]);
-  if (!processRun && !task) return undefined;
+  const chatExecution =
+    !processRun && !task && typeof repo.findAgentRuntimeChatExecutionByTraceId === "function"
+      ? await repo.findAgentRuntimeChatExecutionByTraceId(runId)
+      : undefined;
+  if (!processRun && !task && !chatExecution) return undefined;
 
-  const traceId = processRun?.traceId ?? task?.traceId ?? runId;
+  const traceId = processRun?.traceId ?? task?.traceId ?? chatExecution?.traceId ?? chatExecution?.sessionTraceId ?? runId;
   const parentAgentExecutionId = processRun ? agentExecutionIdFromProcessRun(processRun) : null;
   const originAgentExecutionId = processRun ? parentAgentExecutionIdFromProcessRun(processRun) : null;
   const [
     processSpans,
     processEvents,
-    artifacts,
+    processArtifacts,
+    runtimeArtifacts,
     taskEvents,
     commands,
     sandboxRuns,
@@ -180,6 +198,9 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     processRun ? repo.getProcessRunSpans(processRun.runId) : Promise.resolve([]),
     processRun ? repo.getProcessRunEvents({ runId: processRun.runId, limit: 500 }) : Promise.resolve([]),
     processRun ? repo.getProcessRunArtifacts(processRun.runId) : Promise.resolve([]),
+    chatExecution && typeof repo.getAgentRuntimeArtifactsForExecution === "function"
+      ? repo.getAgentRuntimeArtifactsForExecution({ executionId: chatExecution.executionId, sessionId: chatExecution.sessionId })
+      : Promise.resolve([]),
     task ? repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit: 300 }) : Promise.resolve([]),
     task ? repo.getSandboxCommandEventsForTask({ taskId: task.taskId, limit: 100 }) : Promise.resolve([]),
     task ? repo.getSandboxRunsForTask(task.taskId) : Promise.resolve([]),
@@ -193,17 +214,18 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     traceId ? repo.listAgentTasksForTrace({ traceId, limit: 20 }) : Promise.resolve([])
   ]);
 
-  const runtimeScope = runtimeSnapshotScope({ traceId, runId, processRun, task });
+  const runtimeScope = runtimeSnapshotScope({ traceId, runId, processRun, task, chatExecution });
   const scopedRuntimeEvents = runtimeEvents.filter((event) => runtimeEventMatchesScope(event, runtimeScope));
   const scopedRuntimeMessages = runtimeMessages.filter((message) => runtimeMessageMatchesScope(message, runtimeScope));
 
   const spans = sortSpans([
     ...processSpans.map(spanFromProcess),
+    ...scopedRuntimeEvents.flatMap(spanFromRuntimeEvent),
     ...taskEvents.flatMap(spansFromTaskEvent),
     ...sandboxRuns.map(spanFromSandboxRun),
     ...commands.map(spanFromCommand)
   ]);
-  const run = processRun ? summaryFromProcessRun(processRun, spans) : summaryFromTask(task!, spans);
+  const run = processRun ? summaryFromProcessRun(processRun, spans) : task ? summaryFromTask(task, spans) : summaryFromAgentExecution(chatExecution!, spans);
   const events = sortEvents([
     ...processEvents.map(eventFromProcess),
     ...traceEvents.map(eventFromTrace),
@@ -217,7 +239,7 @@ export async function getRunSnapshot(repo: DiscordAiAgentRepository, runId: stri
     run,
     spans,
     events,
-    artifacts,
+    artifacts: [...processArtifacts, ...runtimeArtifacts.map(artifactFromRuntime)],
     terminal,
     diagnostics: diagnosticsForRun(run, spans, events),
     raw: { processRun, task, sandboxRuns },
@@ -244,6 +266,7 @@ function runtimeSnapshotScope(input: {
   runId: string;
   processRun?: ProcessRunRecord;
   task?: AgentTaskRecord;
+  chatExecution?: AgentRuntimeChatExecution;
 }): RuntimeSnapshotScope {
   const messageIds = new Set<string>();
   const taskIds = new Set<string>();
@@ -254,6 +277,9 @@ function runtimeSnapshotScope(input: {
   addSetValue(messageIds, input.processRun?.messageId);
   addSetValue(messageIds, input.task?.traceId);
   addSetValue(messageIds, input.task?.discordResponseMessageId);
+  addSetValue(messageIds, input.chatExecution?.traceId);
+  addSetValue(messageIds, input.chatExecution?.sessionTraceId);
+  addSetValue(messageIds, stringMetadata(input.chatExecution?.metadata.discordMessageId));
   addSetValue(messageIds, stringMetadata(input.processRun?.metadata.currentMessageId));
   addSetValue(messageIds, stringMetadata(input.processRun?.metadata.discordMessageId));
   addSetValue(messageIds, stringMetadata(input.processRun?.metadata.discordResponseMessageId));
@@ -271,6 +297,7 @@ function runtimeSnapshotScope(input: {
   addSetValue(executionIds, parentAgentExecutionIdFromProcessRun(input.processRun));
   addSetValue(executionIds, stringMetadata(input.processRun?.metadata.executionId));
   addSetValue(executionIds, stringMetadata(input.processRun?.metadata.agentRuntimeExecutionId));
+  addSetValue(executionIds, input.chatExecution?.executionId);
   addSetValue(executionIds, `agent-execution-${input.traceId}`);
   for (const taskId of taskIds) addSetValue(executionIds, `agent-task-execution-${taskId}`);
 
@@ -422,6 +449,34 @@ export function summaryFromTask(task: AgentTaskRecord, spans: RunSpan[] = []): R
   };
 }
 
+export function summaryFromAgentExecution(execution: AgentRuntimeChatExecution, spans: RunSpan[] = []): RunSummary {
+  const traceId = execution.traceId ?? execution.sessionTraceId ?? stringMetadata(execution.metadata.discordMessageId) ?? execution.executionId;
+  const replyUrl = stringMetadata(execution.metadata.replyUrl);
+  const discordUrl = stringMetadata(execution.metadata.discordUrl) ?? stringMetadata(execution.sessionMetadata.discordUrl);
+  return {
+    runId: traceId,
+    traceId,
+    kind: "discord",
+    status: execution.status,
+    title: execution.title,
+    summary: execution.error ?? (execution.status === "succeeded" ? "Discord prompt execution succeeded." : execution.request.slice(0, 200) || null),
+    requester: execution.requestedBy,
+    guildId: execution.guildId,
+    channelId: execution.channelId,
+    userId: execution.userId,
+    messageId: stringMetadata(execution.metadata.discordMessageId) ?? traceId,
+    source: "agent_runtime",
+    startedAt: execution.startedAt ?? execution.createdAt,
+    completedAt: execution.completedAt,
+    updatedAt: execution.updatedAt,
+    durationMs: durationBetween(execution.startedAt ?? execution.createdAt, execution.completedAt ?? (isTerminal(execution.status) ? execution.updatedAt : null)),
+    currentStep: null,
+    bottleneck: bottleneckSpan(spans),
+    links: { discordMessage: discordUrl, discordReply: replyUrl },
+    metadata: { ...execution.sessionMetadata, ...execution.metadata, sessionId: execution.sessionId, executionId: execution.executionId }
+  };
+}
+
 function spanFromProcess(span: ProcessRunSpanRecord): RunSpan {
   return {
     id: `process-${span.id}`,
@@ -490,6 +545,42 @@ function spanFromCommand(command: SandboxCommandEvent): RunSpan {
       stdoutChars: command.outputTail.length,
       stderrChars: command.errorTail.length
     }
+  };
+}
+
+function spanFromRuntimeEvent(event: AgentRuntimeEvent): RunSpan[] {
+  const span = event.metadata.span;
+  if (!span || typeof span !== "object") return [];
+  const data = span as Record<string, unknown>;
+  const startedAt = typeof data.startedAt === "string" ? new Date(data.startedAt) : event.createdAt;
+  const completedAt = typeof data.completedAt === "string" ? new Date(data.completedAt) : null;
+  return [
+    {
+      id: `runtime-${event.id}`,
+      source: "runtime",
+      name: typeof data.name === "string" ? data.name : event.summary ?? event.eventName,
+      status: normalizeStatus(typeof data.status === "string" ? data.status : "running"),
+      startedAt,
+      completedAt,
+      durationMs: typeof data.durationMs === "number" ? data.durationMs : event.durationMs,
+      metadata: { executionId: event.executionId, spanId: data.spanId, parentSpanId: data.parentSpanId, ...(typeof data.metadata === "object" && data.metadata ? (data.metadata as Record<string, unknown>) : {}) }
+    }
+  ];
+}
+
+function artifactFromRuntime(artifact: AgentRuntimeArtifactRecord): ProcessRunArtifactRecord {
+  return {
+    artifactId: artifact.artifactId,
+    runId: artifact.executionId ?? artifact.sessionId,
+    kind: artifact.kind as ProcessRunArtifactRecord["kind"],
+    name: artifact.name,
+    contentType: artifact.contentType,
+    sizeBytes: artifact.sizeBytes,
+    preview: artifact.preview,
+    redacted: artifact.redacted,
+    expiresAt: artifact.expiresAt,
+    metadata: { sessionId: artifact.sessionId, executionId: artifact.executionId, ...artifact.metadata },
+    createdAt: artifact.createdAt
   };
 }
 

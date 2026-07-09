@@ -10,7 +10,7 @@ import {
   parseSpotifyReference,
   resetSpotifyTokenCache,
   searchSpotify
-} from "../../src/tools/spotifyTools.js";
+} from "../../src/tools/spotify/spotifyTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 afterEach(() => {

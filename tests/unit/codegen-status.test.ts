@@ -180,7 +180,7 @@ function snapshotFixture(): CodegenStatusSnapshot {
     leases: [
       {
         sandboxId: "sandbox-stale",
-        repo: "Slokh/discord-ai-agent",
+        repo: "example/discord-ai-agent",
         backend: "local-process-sandbox",
         status: "leased",
         leaseOwner: "worker-a",
@@ -191,7 +191,7 @@ function snapshotFixture(): CodegenStatusSnapshot {
       },
       {
         sandboxId: "sandbox-idle",
-        repo: "Slokh/discord-ai-agent",
+        repo: "example/discord-ai-agent",
         backend: "local-process-sandbox",
         status: "idle",
         leaseOwner: null,

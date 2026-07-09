@@ -10,7 +10,18 @@ Owns the model loop for one user prompt.
 - Synthesize the final answer and files.
 - Record durable agent-runtime prompt executions through `runtimeLedger.ts` while the sandbox-backed runtime migration proceeds.
 - Persist replayable Discord turn context through `runtimeEnvelope.ts` before executing a prompt, so future sandbox executors can deserialize the same request boundary.
-- Select prompt execution backends through `runtimeRunner.ts` and `runtimeExecutor.ts`; the current default calls `inProcessRuntimeExecutor.ts`, while the warm-sandbox executor sends the serialized envelope to `sandboxPromptServer.ts` when configured and otherwise falls back to `sandboxPromptRunner.ts`.
+- Discord chat prompt execution runs in-process permanently through `runtimeRunner.ts`, `runtimeExecutor.ts`, and `inProcessRuntimeExecutor.ts`; sandboxes are only for code-update tasks.
+
+## Module Map
+
+- `router.ts`: thin compatibility entrypoint; `handleAgentRequest` plus re-exports of `chatMessages`/`toolResultContentForPrompt`.
+- `modelLoop.ts`: model round loop, toolset scoping state, route selection, redundant-call guard, direct tool completion.
+- `promptBuilder.ts`: system prompt, requester/skills/overlay/session/reply/image prompt sections, tool-result prompt truncation.
+- `toolDispatcher.ts`: local tool dispatch, restricted-tool gate and per-day budget checks, tool-argument coercion.
+- `finalSynthesis.ts`: forced final synthesis, empty-response recovery, model-call-ceiling fallback, tool-evidence fallback rendering.
+- `modelRecovery.ts`: leaked hosted-tool markup detection, stripping, recovery calls, and malformed-output artifacts.
+- `routerShared.ts`: `AgentToolRoute`/`ModelCallBudget` types, round/call ceilings, `reserveModelCall`.
+- `runtimeTranscript.ts`: single event-recording helper for trace events, spans, audits, and runtime transcript appends.
 
 ## Change Routing
 
@@ -18,7 +29,7 @@ Owns the model loop for one user prompt.
 - Prompt composition and memory/reply/image context problems start here.
 - Agent session/execution state transitions start in `runtimeLedger.ts`; execution input payloads start in `runtimeEnvelope.ts`; both are called by Discord ingress/delivery or the sandbox executor caller.
 - Agent session execution queue handoffs start in `runtimeControlPlane.ts`; Discord ingress and `/api/agent/sessions/:threadKey/execute` should share this path so durable execution metadata and events stay consistent.
-- Runtime backend selection changes start in `runtimeRunner.ts`; prompt executor behavior starts in `runtimeExecutor.ts`; remote warm-server behavior starts in `sandboxPromptServer.ts`; child-runner fallback behavior starts in `sandboxPromptRunner.ts`; compatibility model-loop changes start at `inProcessRuntimeExecutor.ts` before touching `router.ts`.
+- Prompt executor behavior starts in `runtimeExecutor.ts` and `inProcessRuntimeExecutor.ts` before touching `router.ts`; do not add chat prompt sandbox transports.
 - Discord rendering problems belong in `src/discord/responseSink.ts`, not the model loop.
 - Discord formatting knowledge belongs in prompt guidance, not response-specific branches. Teach the model what Discord markdown supports, then let it choose formatting when it improves chat clarity. The renderer owns automatic trace footers.
 
@@ -27,6 +38,6 @@ Owns the model loop for one user prompt.
 - End-to-end agent behavior: `tests/integration/agent.test.ts`.
 - Tool schema/behavior: `tests/unit/tool-registry.test.ts` and `tests/unit/core-tools.test.ts`.
 
-## Migration Direction
+## Discord chat runtime ledger
 
-Keep `router.ts` as the compatibility entrypoint. New implementation should separate prompt building, model rounds, local tool execution, hosted tool handling, memory writes, and final synthesis.
+Discord chat prompt executions are canonical agent-runtime sessions/executions. Ingress must have an `AgentRuntimeRepository`, appends the user transcript message, stores turn-envelope/input-lines artifacts, and enqueues via `enqueueAgentRuntimeSessionExecution`. Process runs are not a chat-turn fallback.

@@ -45,7 +45,7 @@ export async function readGeneratedFile(
   if (!resolved.file) {
     const content = generatedFileNotFoundMessage(ctx, resolved.reason);
     await audit(ctx, "readGeneratedFile", { ...input, error: resolved.reason });
-    return { content };
+    return { content, status: "error", errorCode: "not_found", retryable: false };
   }
 
   const offsetBytes = boundedInteger(input.offsetBytes, 0, resolved.file.data.length, 0);
@@ -77,7 +77,7 @@ export async function queryGeneratedCsv(ctx: ToolContext, input: QueryGeneratedC
   if (!resolved.file) {
     const content = generatedFileNotFoundMessage(ctx, resolved.reason);
     await audit(ctx, "queryGeneratedCsv", { ...auditInput(input), error: resolved.reason });
-    return { content };
+    return { content, status: "error", errorCode: "not_found", retryable: false };
   }
 
   if (!isCsvFile(resolved.file)) {
@@ -86,31 +86,31 @@ export async function queryGeneratedCsv(ctx: ToolContext, input: QueryGeneratedC
       "For exact CSV queries, call the tool that produced it again with a CSV output format when that tool supports one, then call queryGeneratedCsv on the CSV. " +
       "Use readGeneratedFile only for bounded text previews.";
     await audit(ctx, "queryGeneratedCsv", { ...auditInput(input), fileName: resolved.file.name, error: "not_csv" });
-    return { content };
+    return { content, status: "error", errorCode: "invalid_input", retryable: false };
   }
   if (resolved.file.data.length > MAX_CSV_BYTES) {
     const content = `Generated CSV ${resolved.file.name} is too large to query in-process (${resolved.file.data.length} bytes; max ${MAX_CSV_BYTES}).`;
     await audit(ctx, "queryGeneratedCsv", { ...auditInput(input), fileName: resolved.file.name, error: "csv_too_large" });
-    return { content };
+    return { content, status: "error", errorCode: "limitation_exceeded", retryable: false };
   }
 
   const parsed = parseCsv(resolved.file.data.toString("utf8"));
   if (parsed.rows.length > MAX_CSV_ROWS) {
     const content = `Generated CSV ${resolved.file.name} has too many rows to query in-process (${parsed.rows.length}; max ${MAX_CSV_ROWS}).`;
     await audit(ctx, "queryGeneratedCsv", { ...auditInput(input), fileName: resolved.file.name, error: "too_many_rows" });
-    return { content };
+    return { content, status: "error", errorCode: "limitation_exceeded", retryable: false };
   }
   if (parsed.headers.length === 0) {
     const content = `Generated CSV ${resolved.file.name} did not contain a header row.`;
     await audit(ctx, "queryGeneratedCsv", { ...auditInput(input), fileName: resolved.file.name, error: "missing_header" });
-    return { content };
+    return { content, status: "error", errorCode: "invalid_input", retryable: false };
   }
 
   const operation = csvOperation(input.operation);
   const filters = parseCsvFilters(input.filters, parsed.headers);
   if (filters.error) {
     await audit(ctx, "queryGeneratedCsv", { ...auditInput(input), fileName: resolved.file.name, error: filters.error });
-    return { content: filters.error };
+    return { content: filters.error, status: "error", errorCode: "invalid_input", retryable: false };
   }
 
   const filteredRows = parsed.rows.filter((row) => filters.filters.every((filter) => rowMatchesFilter(row, filter)));
@@ -138,19 +138,19 @@ export async function queryGeneratedTable(ctx: ToolContext, input: QueryGenerate
   if (!resolved.table) {
     const content = generatedTableNotFoundMessage(ctx, resolved.reason);
     await audit(ctx, "queryGeneratedTable", { ...auditInput(input), error: resolved.reason });
-    return { content };
+    return { content, status: "error", errorCode: "not_found", retryable: false };
   }
 
   const headers = resolved.table.columns;
   if (headers.length === 0) {
     const content = `Generated table ${resolved.table.name} did not contain any columns.`;
     await audit(ctx, "queryGeneratedTable", { ...auditInput(input), tableName: resolved.table.name, error: "missing_columns" });
-    return { content };
+    return { content, status: "error", errorCode: "invalid_input", retryable: false };
   }
   if (resolved.table.rows.length > MAX_CSV_ROWS) {
     const content = `Generated table ${resolved.table.name} has too many rows to query in-process (${resolved.table.rows.length}; max ${MAX_CSV_ROWS}).`;
     await audit(ctx, "queryGeneratedTable", { ...auditInput(input), tableName: resolved.table.name, error: "too_many_rows" });
-    return { content };
+    return { content, status: "error", errorCode: "limitation_exceeded", retryable: false };
   }
 
   const rows = tableRows(resolved.table);

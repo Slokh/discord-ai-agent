@@ -43,7 +43,7 @@ jobs:
       SANDBOX_CACHE_STORAGE_CLASS: ${{ vars.SANDBOX_CACHE_STORAGE_CLASS }}
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - uses: aws-actions/configure-aws-credentials@v4

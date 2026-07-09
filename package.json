@@ -67,7 +67,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@base-ui/react": "^1.6.0",
     "@kubernetes/client-node": "^1.4.0",
     "@octokit/rest": "^21.1.1",
     "discord.js": "^14.19.3",
@@ -102,6 +101,6 @@
     "vitest": "^3.2.4"
   },
   "overrides": {
-    "undici": "6.27.0"
+    "@base-ui/react": "~1.4.0"
   }
 }

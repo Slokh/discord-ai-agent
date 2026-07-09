@@ -132,6 +132,84 @@ BEGIN
   END IF;
 END $$;
 
+-- Catch-up: objects that exist in the squashed baseline but were never part of
+-- the legacy 001-007 chain. Everything here is idempotent, so databases that
+-- already have them are unaffected.
+
+CREATE TABLE IF NOT EXISTS conversation_snapshots (
+  snapshot_id bigserial PRIMARY KEY,
+  thread_key text NOT NULL REFERENCES conversation_sessions(thread_key) ON DELETE CASCADE,
+  summary text NOT NULL,
+  message_count integer NOT NULL DEFAULT 0,
+  from_message_id bigint,
+  to_message_id bigint NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS conversation_snapshots_thread_created_idx
+  ON conversation_snapshots(thread_key, created_at DESC, snapshot_id DESC);
+
+CREATE TABLE IF NOT EXISTS discord_delivery_obligations (
+  execution_id text PRIMARY KEY,
+  thread_key text,
+  guild_id text NOT NULL,
+  channel_id text NOT NULL,
+  status_channel_id text,
+  status_message_id text,
+  source_message_id text NOT NULL,
+  state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'delivered', 'abandoned')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  last_error text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS discord_delivery_obligations_pending_idx
+  ON discord_delivery_obligations(updated_at ASC, created_at ASC)
+  WHERE state = 'pending';
+
+CREATE INDEX IF NOT EXISTS messages_embedding_backlog_live_idx
+  ON messages(guild_id, created_at DESC, id)
+  WHERE deleted_at IS NULL
+    AND normalized_content <> '';
+
+CREATE INDEX IF NOT EXISTS conversation_messages_thread_id_idx
+  ON conversation_messages(thread_key, id);
+
+CREATE INDEX IF NOT EXISTS tool_audit_logs_guild_created_idx
+  ON tool_audit_logs(guild_id, created_at DESC)
+  WHERE guild_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS agent_tasks_updated_created_idx
+  ON agent_tasks(updated_at DESC, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS agent_tasks_stale_running_idx
+  ON agent_tasks((coalesce(progress_updated_at, updated_at, started_at, created_at)), created_at)
+  WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS agent_tasks_live_message_backlog_idx
+  ON agent_tasks(coalesce(progress_updated_at, updated_at) DESC, created_at DESC)
+  WHERE status IN ('queued', 'running')
+    AND discord_response_channel_id IS NOT NULL
+    AND discord_response_message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS agent_tasks_terminal_notification_idx
+  ON agent_tasks(updated_at DESC, created_at DESC)
+  WHERE status IN ('succeeded', 'failed', 'cancelled')
+    AND notified_at IS NULL
+    AND discord_response_channel_id IS NOT NULL
+    AND discord_response_message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS sandbox_command_events_created_idx
+  ON sandbox_command_events(created_at, id);
+
+CREATE INDEX IF NOT EXISTS process_run_artifacts_expires_idx
+  ON process_run_artifacts(expires_at)
+  WHERE expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS agent_runtime_events_created_idx
+  ON agent_runtime_events(created_at, id);
+
 DELETE FROM schema_migrations WHERE version <> '001_initial';
 
 COMMIT;

@@ -33,7 +33,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
     channelId: input.channelId,
     userId: input.userId,
     title: titleFromPrompt(input.text),
-    request: input.text,
+    request: previewFromPrompt(input.text),
     requestedBy: `${input.userDisplayName} (${input.userId})`,
     status: input.status,
     harness: executorName,
@@ -151,4 +151,9 @@ function titleFromPrompt(prompt: string) {
   const clean = prompt.trim().replace(/\s+/g, " ");
   if (!clean) return "Discord prompt";
   return clean.length <= 80 ? clean : `${clean.slice(0, 77)}...`;
+}
+
+function previewFromPrompt(prompt: string) {
+  const clean = prompt.trim().replace(/\s+/g, " ");
+  return clean.length <= 200 ? clean : `${clean.slice(0, 197)}...`;
 }

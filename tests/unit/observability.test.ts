@@ -18,11 +18,11 @@ describe("observability redaction", () => {
 
 describe("run summaries", () => {
   it("extracts Discord message ids from links and pasted text", () => {
-    expect(extractDiscordMessageId("1521541635580756031")).toBe("1521541635580756031");
-    expect(extractDiscordMessageId("https://discord.com/channels/111111111111111111/222222222222222222/1521541635580756031")).toBe(
-      "1521541635580756031"
+    expect(extractDiscordMessageId("1234567890123450031")).toBe("1234567890123450031");
+    expect(extractDiscordMessageId("https://discord.com/channels/111111111111111111/222222222222222222/1234567890123450031")).toBe(
+      "1234567890123450031"
     );
-    expect(extractDiscordMessageId("message: https://discord.com/channels/guild/channel/1521541635580756031 please")).toBe("1521541635580756031");
+    expect(extractDiscordMessageId("message: https://discord.com/channels/guild/channel/1234567890123450031 please")).toBe("1234567890123450031");
     expect(extractDiscordMessageId("not a message")).toBeNull();
   });
 

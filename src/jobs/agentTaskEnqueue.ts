@@ -1,14 +1,12 @@
 import type PgBoss from "pg-boss";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import type { CodegenRepository } from "../db/codegenRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import { logger } from "../util/logger.js";
 import { currentTraceContext } from "../util/trace.js";
 import { codegenExecutionSelection, type CodegenExecutionSelection } from "../execution/codegenSelection.js";
-import { attachCodegenQueueHandoff, codegenExecutionIdForTask, codegenSessionIdForTask, mirrorAgentTaskQueuedToCodegen } from "./agentTaskCodegenMirror.js";
-import { mirrorAgentTaskQueuedToAgentRuntime } from "./agentTaskRuntimeMirror.js";
+import { writeAgentTaskQueuedToRuntime } from "./agentTaskRuntimeWrite.js";
 import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 
 export type AgentTaskEnqueueInput = Omit<AgentTaskJob, "taskId" | "taskType"> & {
@@ -29,7 +27,6 @@ export async function enqueueAgentTaskJob(input: {
   queueName: string;
   config: AppConfig;
   repo?: DiscordAiAgentRepository;
-  codegenRepo?: CodegenRepository;
   agentRuntimeRepo?: AgentRuntimeRepository;
   backendName: string;
   job: AgentTaskEnqueueInput;
@@ -67,23 +64,13 @@ export async function enqueueAgentTaskJob(input: {
     backend: input.backendName,
     ...parentMetadata
   });
-  await mirrorAgentTaskQueuedToCodegen({
-    codegenRepo: input.codegenRepo,
-    config: input.config,
-    job: data,
-    backendName: input.backendName,
-    pgBossJobId: null,
-    onError: (phase, error) => logger.warn({ err: error, taskId, phase }, "Failed to create codegen task mirror")
-  });
   if (shouldMirrorAgentRuntime) {
-    await mirrorAgentTaskQueuedToAgentRuntime({
+    await writeAgentTaskQueuedToRuntime({
       agentRuntimeRepo: input.agentRuntimeRepo,
       config: input.config,
       job: data,
       backendName: input.backendName,
-      pgBossJobId: null,
-      codegenSessionId: codegenSessionIdForTask(data),
-      codegenExecutionId: codegenExecutionIdForTask(data)
+      pgBossJobId: null
     }).catch((error) => logger.warn({ err: error, taskId }, "Failed to create agent runtime task mirror"));
   }
   let id: string | null;
@@ -118,22 +105,13 @@ export async function enqueueAgentTaskJob(input: {
     backend: input.backendName,
     ...parentMetadata
   });
-  await attachCodegenQueueHandoff({
-    codegenRepo: input.codegenRepo,
-    config: input.config,
-    job: data,
-    backendName: input.backendName,
-    pgBossJobId: id
-  }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update codegen execution enqueue metadata"));
   if (shouldMirrorAgentRuntime) {
-    await mirrorAgentTaskQueuedToAgentRuntime({
+    await writeAgentTaskQueuedToRuntime({
       agentRuntimeRepo: input.agentRuntimeRepo,
       config: input.config,
       job: data,
       backendName: input.backendName,
-      pgBossJobId: id,
-      codegenSessionId: codegenSessionIdForTask(data),
-      codegenExecutionId: codegenExecutionIdForTask(data)
+      pgBossJobId: id
     }).catch((error) => logger.warn({ err: error, taskId }, "Failed to update agent runtime task mirror"));
   }
   logger.info({ queue: input.queueName, taskId, jobId: id }, "Agent task enqueue complete");

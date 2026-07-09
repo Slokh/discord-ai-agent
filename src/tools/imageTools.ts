@@ -121,7 +121,7 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
       {
         role: "system",
         content:
-          "You inspect Discord image attachments for a private server assistant. Answer the user's visual question using only the supplied images and labels. Be concise, direct, and mention uncertainty only when the image is unclear."
+          "You inspect Discord image attachments for a Discord server assistant. Answer the user's visual question using only the supplied images and labels. Be concise, direct, and mention uncertainty only when the image is unclear."
       },
       {
         role: "user",

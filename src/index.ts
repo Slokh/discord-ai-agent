@@ -1,10 +1,11 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
 import { startInternalApi } from "./control/internalApi.js";
-import { AgentRuntimeRepository } from "./db/agentRuntimeRepository.js";
+import { BudgetRepository } from "./db/budgetRepository.js";
+import { DeliveryObligationsRepository } from "./db/deliveryObligationsRepository.js";
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
-import { CodegenRepository } from "./db/codegenRepository.js";
+import { AgentRuntimeRepository } from "./db/agentRuntimeRepository.js";
 import { DiscordAiAgentRepository } from "./db/repositories.js";
 import { createExecutionBackend } from "./execution/backend.js";
 import { startSandboxReconciler } from "./execution/reconciler.js";
@@ -58,9 +59,6 @@ async function main() {
         taskEnabled: startsTaskWorker,
         discordAgentEnabled: startsDiscordAgentWorker
       },
-      agentRuntime: {
-        executionBackend: config.agentRuntime.executionBackend
-      }
     },
     "Starting Discord AI Agent"
   );
@@ -76,8 +74,9 @@ async function main() {
   const pool = createPool(config);
   logger.debug("Postgres pool created");
   const repo = new DiscordAiAgentRepository(pool);
-  const codegenRepo = new CodegenRepository(pool);
-  const agentRuntimeRepo = new AgentRuntimeRepository(codegenRepo);
+  const agentRuntimeRepo = new AgentRuntimeRepository(pool);
+  const budgetRepo = new BudgetRepository(pool);
+  const deliveryObligationsRepo = new DeliveryObligationsRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
 
@@ -118,9 +117,6 @@ async function main() {
   );
   const jobs = await startJobs({
     config,
-    repo,
-    codegenRepo,
-    agentRuntimeRepo,
     crawler,
     agentTask: executionBackend
       ? {
@@ -136,18 +132,22 @@ async function main() {
         await embedStoredMessage({ repo, openRouter, config, messageId });
       }
     },
-    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, agentRuntimeRepo, openRouter, client }) : undefined,
+    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, budgetRepo, agentRuntimeRepo, openRouter, client }) : undefined,
     crawlWorker: startsCrawlWorker,
     embeddingWorker: startsEmbeddingWorker,
     taskWorker: startsTaskWorker,
-    discordAgentWorker: startsDiscordAgentWorker
+    discordAgentWorker: startsDiscordAgentWorker,
+    repo,
+    agentRuntimeRepo,
+    openRouter,
+    db: pool
   });
   jobRuntimeRef.current = jobs;
   logger.info(
     { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsDiscordAgentWorker },
     "Job runtime ready"
   );
-  const internalApi = startsApi ? await startInternalApi({ config, repo, codegenRepo, db: pool, jobs }) : null;
+  const internalApi = startsApi ? await startInternalApi({ config, repo, agentRuntimeRepo, db: pool, jobs }) : null;
   const staleRunReconciler = startsApi
     ? startStaleRunReconciler({
         repo,
@@ -157,7 +157,7 @@ async function main() {
   const sandboxReconciler = startsTaskWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
   const runtime =
     startsBot && client && crawler instanceof DiscordCrawler
-      ? createDiscordAiAgentBot({ config, repo, agentRuntime: agentRuntimeRepo, openRouter, crawler, jobs, client })
+      ? createDiscordAiAgentBot({ config, repo, budgetRepo, agentRuntime: agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, crawler, jobs, client })
       : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
 

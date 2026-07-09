@@ -42,21 +42,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.embeddingDimensions | quote }}
 - name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS
   value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
-- name: AGENT_RUNTIME_EXECUTION_BACKEND
-  value: {{ .Values.agentRuntime.executionBackend | quote }}
-- name: AGENT_RUNTIME_WARM_SANDBOX_HOST
-  value: "0.0.0.0"
-- name: AGENT_RUNTIME_WARM_SANDBOX_PORT
-  value: {{ .Values.agentRuntime.warmSandbox.port | quote }}
 - name: CODEGEN_HARNESS
   value: {{ .Values.codegen.harness | quote }}
-{{- end -}}
-
-{{- define "discord-ai-agent.agentRuntimeWarmSandboxClientEnv" -}}
-{{- if .Values.agentRuntime.warmSandbox.enabled }}
-- name: AGENT_RUNTIME_WARM_SANDBOX_URL
-  value: http://{{ include "discord-ai-agent.fullname" . }}-agent-runtime:{{ .Values.agentRuntime.warmSandbox.port }}
-{{- end }}
 {{- end -}}
 
 {{- define "discord-ai-agent.controlUiPublicEnv" -}}

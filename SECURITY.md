@@ -2,7 +2,7 @@
 
 ## Reporting Vulnerabilities
 
-Please report vulnerabilities privately to the repository owner before public disclosure. Include:
+Please use GitHub's private vulnerability reporting: **Report a vulnerability** under the repository Security tab, at https://github.com/Slokh/discord-ai-agent/security/advisories/new. If that is unavailable, contact the repository owner (@Slokh) directly. Do not open a public issue for security reports. Include:
 
 - A short description of the issue.
 - Impacted versions or commits.

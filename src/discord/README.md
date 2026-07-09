@@ -7,9 +7,11 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Bot login, guild scoping, message/reaction/edit/delete events, and mention detection.
 - Reply context, request attachments, image metadata, permissions, and channel visibility.
 - Response sink for acknowledgements, lazy status messages, final replies, attachments, and cleanup.
+- `api.ts` wraps Discord writes (reply/edit/send/react/delete) with shared retry/error classification; user-visible rendering should route through it rather than calling message methods directly.
+- Delivery obligations are persisted for in-flight agent-runtime turns and swept on bot startup to complete terminal replies or post a conservative restart notice.
 - Queue handoff into durable agent runtime executions.
 - Full-server crawl and incremental message persistence.
-- Codegen task progress rendering back to Discord.
+- Code-update task progress rendering back to Discord.
 
 ## Change Routing
 
@@ -22,9 +24,14 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 
 - Discord client behavior: `tests/unit/discord-client.test.ts`.
 - Response lifecycle: `tests/unit/discord-response-sink.test.ts`.
+- Delivery write/sweep helpers: `tests/unit/discord-api.test.ts` and `tests/unit/discord-delivery-sweep.test.ts`.
 - Task rendering: `tests/unit/task-notifications.test.ts`.
 - Crawl/persistence: `tests/unit/crawler.test.ts` and `tests/unit/message-persistence.test.ts`.
 
-## Migration Direction
+## Structure
 
-Keep `client.ts` as the bot entrypoint. New implementation should separate mention parsing, event handlers, request context, agent-runtime queue handoff, response rendering, and trace recording.
+`client.ts` is the thin bot entrypoint. Mention parsing, message ingress/persistence, request context, agent-runtime queue handoff, response rendering, and delivery sweeps live in focused sibling modules; add new behavior to the owning module, not `client.ts`.
+
+### Runtime-ledger chat turns
+
+Discord mention handling writes chat-turn execution state to the agent-runtime session ledger only: user transcript message, execution row, runtime events, and replay artifacts. It does not create `process_runs` rows or process-run artifacts for chat turns; the run console reads chat views through the runtime adapter in `src/observability/runs.ts`.

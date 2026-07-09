@@ -6,154 +6,211 @@
       "id": "ops-tools-natural-language",
       "category": "ops",
       "prompt": "what can you do?",
-      "expectedTools": ["listTools"],
-      "mustContain": ["tools"],
+      "expectedTools": [
+        "listTools"
+      ],
+      "mustContain": [
+        "tools"
+      ],
       "notes": "Natural-language tool list should route through the model-selected listTools tool."
     },
     {
       "id": "ops-deployment-status",
       "category": "ops",
       "prompt": "deployment status",
-      "expectedTools": ["getDeploymentStatus"],
+      "expectedTools": [
+        "getDeploymentStatus"
+      ],
       "notes": "Deployment questions should use the ops status tool instead of Discord history."
     },
     {
       "id": "ops-debug-recent-failure",
       "category": "ops",
       "prompt": "why did the last answer fail?",
-      "expectedTools": ["inspectAgentLogs"],
+      "expectedTools": [
+        "inspectAgentLogs"
+      ],
       "notes": "Debugging the bot itself should inspect traces/logs, not search server history first."
     },
     {
       "id": "history-job-hunting",
       "category": "history",
       "prompt": "what have people said about job hunting or interviewing?",
-      "expectedTools": ["searchDiscordHistory"],
-      "mustNotContain": ["Sources:"],
+      "expectedTools": [
+        "searchDiscordHistory"
+      ],
+      "mustNotContain": [
+        "Sources:"
+      ],
       "notes": "Broad history question should be grounded without dumping citation blocks."
     },
     {
       "id": "history-changed-jobs-recently",
       "category": "history",
       "prompt": "has anyone changed jobs recently?",
-      "expectedTools": ["summarizeDiscordHistory"],
-      "mustNotContain": ["Sources:"],
+      "expectedTools": [
+        "summarizeDiscordHistory"
+      ],
+      "mustNotContain": [
+        "Sources:"
+      ],
       "notes": "Recent career recap should summarize evidence and avoid making old messages sound current."
     },
     {
       "id": "history-source-link",
       "category": "history",
       "prompt": "link me to the exact Discord message for a phrase someone mentioned recently",
-      "expectedTools": ["searchDiscordHistory"],
+      "expectedTools": [
+        "searchDiscordHistory"
+      ],
       "notes": "Explicit link requests should return exact Discord message URLs when evidence exists."
     },
     {
       "id": "history-message-identity-link",
       "category": "history",
       "prompt": "who is a rarely mentioned username, link to the message",
-      "expectedTools": ["searchDiscordHistory"],
+      "expectedTools": [
+        "searchDiscordHistory"
+      ],
       "notes": "Identity/link prompts should search broadly enough to surface direct evidence links."
     },
     {
       "id": "history-person-recap",
       "category": "history",
       "prompt": "what has a frequent member been up to recently?",
-      "expectedTools": ["summarizeDiscordHistory"],
-      "mustNotContain": ["Sources:"],
+      "expectedTools": [
+        "summarizeDiscordHistory"
+      ],
+      "mustNotContain": [
+        "Sources:"
+      ],
       "notes": "Person recaps should use summary/history tools with an explicit recency interpretation."
     },
     {
       "id": "stats-channel-popularity-normalized",
       "category": "stats",
       "prompt": "rank the channels by messages per day",
-      "expectedTools": ["getDiscordStats"],
+      "expectedTools": [
+        "getDiscordStats"
+      ],
       "notes": "Normalized channel popularity should use the stats tool, not freeform history search."
     },
     {
       "id": "stats-channel-least-messages",
       "category": "stats",
       "prompt": "what channel has the least amount of messages?",
-      "expectedTools": ["getDiscordStats"],
+      "expectedTools": [
+        "getDiscordStats"
+      ],
       "notes": "Lowest/fewest ranking should use countAsc stats."
     },
     {
       "id": "stats-user-message-count-by-channel",
       "category": "stats",
       "prompt": "show one user's message count per channel",
-      "expectedTools": ["getDiscordStats"],
+      "expectedTools": [
+        "getDiscordStats"
+      ],
       "notes": "Per-user/per-channel breakdowns should use stats, resolving the user first if needed."
     },
     {
       "id": "topics-recurring-channel-topics",
       "category": "topics",
       "prompt": "what are the main recurring topics in each channel?",
-      "expectedTools": ["getDiscordChannelTopics"],
+      "expectedTools": [
+        "getDiscordChannelTopics"
+      ],
       "notes": "Topic prompts should use the topic summary tool rather than grouping by exact message."
     },
     {
       "id": "memory-previous-image",
       "category": "memory",
       "prompt": "what image did we generate earlier?",
-      "expectedTools": ["getRecentAgentMemory"],
-      "mustNotContain": ["Sources:"],
+      "expectedTools": [
+        "getRecentAgentMemory"
+      ],
+      "mustNotContain": [
+        "Sources:"
+      ],
       "notes": "Questions about the agent's previous outputs should use agent memory."
     },
     {
       "id": "web-current-external-fact",
       "category": "web",
       "prompt": "what is the next world cup match?",
-      "expectedRequestedTools": ["openrouter:web_search"],
-      "mustNotContain": ["Discord evidence"],
+      "expectedRequestedTools": [
+        "openrouter:web_search"
+      ],
+      "mustNotContain": [
+        "Discord evidence"
+      ],
       "notes": "Current public facts should not over-index on Discord history."
     },
     {
       "id": "web-specific-game-help",
       "category": "web",
-      "prompt": "how can i see my batomon rank?",
-      "expectedRequestedTools": ["openrouter:web_search"],
-      "mustNotContain": ["Discord evidence"],
+      "prompt": "how can i see my ranked ladder position in vaultbreakers?",
+      "expectedRequestedTools": [
+        "openrouter:web_search"
+      ],
+      "mustNotContain": [
+        "Discord evidence"
+      ],
       "notes": "Niche external product questions should use web tools when Discord evidence is insufficient."
     },
     {
       "id": "spotify-playlist-tool-choice",
       "category": "spotify",
       "prompt": "list all the tracks in this Spotify playlist: https://open.spotify.com/playlist/abc123",
-      "expectedTools": ["getSpotifyPlaylistTracks"],
+      "expectedTools": [
+        "getSpotifyPlaylistTracks"
+      ],
       "notes": "Spotify playlist URLs should route to the Spotify API tool rather than web_fetch; without credentials it should return the tool's explicit configuration limitation."
     },
     {
       "id": "spotify-album-tool-choice",
       "category": "spotify",
       "prompt": "what tracks are on this Spotify album? https://open.spotify.com/album/abc123",
-      "expectedTools": ["getSpotifyAlbumTracks"],
+      "expectedTools": [
+        "getSpotifyAlbumTracks"
+      ],
       "notes": "Spotify album track-list requests should use the album track tool."
     },
     {
       "id": "spotify-playlist-stats-tool-choice",
       "category": "spotify",
       "prompt": "give me fun stats for this Spotify playlist: https://open.spotify.com/playlist/abc123",
-      "expectedTools": ["getSpotifyPlaylistStats"],
+      "expectedTools": [
+        "getSpotifyPlaylistStats"
+      ],
       "notes": "Fun playlist summaries should use deterministic playlist stats instead of deprecated audio features."
     },
     {
       "id": "spotify-playlist-generated-csv-ranking",
       "category": "spotify",
       "prompt": "top 10 artists added to this Spotify playlist in the last year: https://open.spotify.com/playlist/abc123",
-      "expectedTools": ["getSpotifyPlaylistTracks", "queryGeneratedCsv"],
+      "expectedTools": [
+        "getSpotifyPlaylistTracks",
+        "queryGeneratedCsv"
+      ],
       "notes": "Custom playlist rankings should compose a Spotify CSV export with the generic generated-CSV query tool rather than adding prompt-specific Spotify branches."
     },
     {
       "id": "vision-attached-image",
       "category": "image",
       "prompt": "what is in this screenshot?",
-      "expectedTools": ["inspectDiscordImages"],
+      "expectedTools": [
+        "inspectDiscordImages"
+      ],
       "notes": "Vision prompts should route to image inspection when image context exists."
     },
     {
       "id": "generation-image-skipped",
       "category": "image",
       "prompt": "make an image of a wizard eating nachos",
-      "expectedTools": ["generateImage"],
+      "expectedTools": [
+        "generateImage"
+      ],
       "skip": true,
       "skipReason": "Image generation spends credits; run explicitly by filtering this prompt after removing skip in a private eval file."
     },
@@ -161,9 +218,41 @@
       "id": "codegen-self-update-skipped",
       "category": "codegen",
       "prompt": "update yourself to make the run console show active codegen progress more clearly",
-      "expectedTools": ["runCodingAgent"],
+      "expectedTools": [
+        "runCodingAgent"
+      ],
       "skip": true,
       "skipReason": "Codegen opens PRs; keep this documented but skipped in the default suite."
+    },
+    {
+      "id": "toolscope-spotify-oblique-music",
+      "category": "spotify",
+      "prompt": "who shows up the most on this playlist? https://open.spotify.com/playlist/abc123",
+      "expectedTools": [
+        "getSpotifyPlaylistTracks",
+        "queryGeneratedCsv"
+      ],
+      "notes": "Scoped tool selector should include Spotify for oblique playlist/music requests."
+    },
+    {
+      "id": "toolscope-codegen-casual-bot-fix-skipped",
+      "category": "codegen",
+      "prompt": "can you make the bot stop double-posting that progress message?",
+      "expectedTools": [
+        "runCodingAgent"
+      ],
+      "skip": true,
+      "skipReason": "Codegen opens PRs; this covers scoped tool selection for casual code-update wording."
+    },
+    {
+      "id": "toolscope-image-draw-without-image-word-skipped",
+      "category": "image",
+      "prompt": "draw a raccoon debugging a Discord bot",
+      "expectedTools": [
+        "generateImage"
+      ],
+      "skip": true,
+      "skipReason": "Image generation spends credits; this covers scoped tool selection without the literal word image."
     }
   ]
 }

@@ -2,7 +2,7 @@ import type { AppConfig } from "../config/env.js";
 import { durationMs, logger } from "../util/logger.js";
 
 export type ChatContentPart =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } }
   | { type: "image_url"; image_url: { url: string } };
 
 export type ChatMessage = {
@@ -82,6 +82,8 @@ export type ImageOptions = {
   n?: number;
 };
 
+export type OpenRouterRetryPolicy = "cheap" | "expensive";
+
 export type ImageReference = {
   type: "image_url";
   image_url: { url: string };
@@ -101,6 +103,7 @@ export class OpenRouterClient {
     tools?: ToolDefinition[];
     temperature?: number;
     maxTokens?: number;
+    retryPolicy?: OpenRouterRetryPolicy;
   }): Promise<ChatResult> {
     const startedAt = Date.now();
     const model = input.model ?? this.config.chatModel;
@@ -125,12 +128,13 @@ export class OpenRouterClient {
       "/chat/completions",
       {
         model,
-        messages: input.messages,
+        messages: messagesForPromptCaching(model, input.messages),
         tools: input.tools,
         temperature: input.temperature ?? 0.3,
         max_tokens: input.maxTokens ?? 4096
       },
-      OPENROUTER_CHAT_TIMEOUT_MS
+      OPENROUTER_CHAT_TIMEOUT_MS,
+      { retryPolicy: input.retryPolicy }
     );
 
     const choice = json.choices?.[0];
@@ -257,7 +261,7 @@ export class OpenRouterClient {
     if (options?.background) body.background = options.background;
     if (options?.n != null) body.n = options.n;
 
-    const json = await this.request("/images", body, OPENROUTER_IMAGE_TIMEOUT_MS);
+    const json = await this.request("/images", body, OPENROUTER_IMAGE_TIMEOUT_MS, { retryPolicy: "expensive" });
 
     const result: ImageResult = {
       data: Array.isArray(json.data) ? json.data : [],
@@ -280,7 +284,12 @@ export class OpenRouterClient {
     return result;
   }
 
-  private async request(path: string, body: Record<string, unknown>, timeoutMs: number): Promise<any> {
+  private async request(
+    path: string,
+    body: Record<string, unknown>,
+    timeoutMs: number,
+    options: { retryPolicy?: OpenRouterRetryPolicy } = {}
+  ): Promise<any> {
     if (!this.config.apiKey) {
       throw new Error("OPENROUTER_API_KEY is required for this operation.");
     }
@@ -375,7 +384,10 @@ export class OpenRouterClient {
           });
         }
         if (attempt < maxAttempts && isRetryableOpenRouterStatus(response.status)) {
-          const retryDelayMs = retryDelayMsForResponse(response, attempt);
+          const retryDelayMs = retryDelayMsForResponse(response, attempt, options.retryPolicy ?? "cheap");
+          if (retryDelayMs == null) {
+            throw new Error(`OpenRouter request failed (${response.status}): ${details.message}`);
+          }
           logger.warn(
             {
               provider: "openrouter",
@@ -412,6 +424,19 @@ export class OpenRouterClient {
 
     throw new Error("OpenRouter request failed after retries.");
   }
+}
+
+function messagesForPromptCaching(model: string, messages: ChatMessage[]): ChatMessage[] {
+  if (!model.startsWith("anthropic/")) return messages;
+  const firstSystemIndex = messages.findIndex((message) => message.role === "system");
+  if (firstSystemIndex < 0) return messages;
+  return messages.map((message, index) => {
+    if (index !== firstSystemIndex || typeof message.content !== "string") return message;
+    return {
+      ...message,
+      content: [{ type: "text", text: message.content, cache_control: { type: "ephemeral" } }]
+    };
+  });
 }
 
 export class OpenRouterContentFilterError extends Error {
@@ -487,11 +512,15 @@ function isTransientFetchError(error: unknown) {
   return /fetch failed|network|socket|econnreset|etimedout/i.test(message);
 }
 
-function retryDelayMsForResponse(response: Response, attempt: number) {
-  const retryAfterSeconds = Number(response.headers?.get?.("retry-after"));
-  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
-    return Math.min(retryAfterSeconds * 1000, 5_000);
+function retryDelayMsForResponse(response: Response, attempt: number, retryPolicy: OpenRouterRetryPolicy) {
+  const retryAfterHeader = response.headers?.get?.("retry-after");
+  const retryAfterSeconds = retryAfterHeader == null ? undefined : Number(retryAfterHeader);
+  if (retryAfterSeconds != null && Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+    const retryDelayMs = retryAfterSeconds * 1000;
+    if (retryPolicy === "expensive" && (attempt > 1 || retryDelayMs > 5_000)) return undefined;
+    return Math.min(retryDelayMs, 5_000);
   }
+  if (retryPolicy === "expensive" && response.status === 429) return undefined;
   return OPENROUTER_TRANSIENT_RETRY_DELAYS_MS[attempt - 1] ?? 0;
 }
 

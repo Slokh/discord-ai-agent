@@ -6,6 +6,7 @@ const DEFAULT_RECONCILE_INTERVAL_MS = 30_000;
 const DEFAULT_STALE_RUNNING_TASK_MS = 15 * 60_000;
 
 type SandboxRunBackend = Pick<ExecutionBackend, "name" | "observeRun" | "cleanupRun">;
+type OrphanSweepBackend = SandboxRunBackend & { sweepOrphanResources?: (knownTaskIds: Set<string>) => Promise<void> };
 
 export type SandboxReconcilerRuntime = {
   stop: () => void;
@@ -55,6 +56,19 @@ export async function runSandboxReconciliationOnce(
   await reconcileActiveRuns(repo, backend);
   await reconcileRunningTasksWithoutActiveSandbox(repo, options);
   await cleanupTerminalRuns(repo, backend);
+  await sweepOrphanClusterResources(repo, backend as OrphanSweepBackend);
+}
+
+async function sweepOrphanClusterResources(repo: DiscordAiAgentRepository, backend: OrphanSweepBackend) {
+  if (backend.name !== "kubernetes-sandbox" || !backend.sweepOrphanResources) return;
+  const runs = await repo.listActiveSandboxRuns({ backend: backend.name, limit: 500 });
+  const terminalRuns = await repo.listTerminalSandboxRunsPendingCleanup({ backend: backend.name, limit: 500 });
+  const knownTaskIds = new Set([...runs, ...terminalRuns].map((run) => run.taskId));
+  await backend.sweepOrphanResources(knownTaskIds);
+}
+
+export function isOrphanSandboxResource(input: { taskId?: string | null; knownTaskIds: Set<string> }) {
+  return Boolean(input.taskId && !input.knownTaskIds.has(input.taskId));
 }
 
 async function reconcileActiveRuns(repo: DiscordAiAgentRepository, backend: SandboxRunBackend) {

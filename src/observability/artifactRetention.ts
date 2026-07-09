@@ -1,4 +1,4 @@
-import type { CodegenRepository } from "../db/codegenRepository.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
 
@@ -7,7 +7,7 @@ const DEFAULT_INITIAL_DELAY_MS = 5 * 60 * 1000;
 const DEFAULT_LIMIT = 500;
 
 type ArtifactRetentionRepo = Pick<DiscordAiAgentRepository, "cleanupExpiredProcessRunArtifacts">;
-type CodegenArtifactRetentionRepo = Pick<CodegenRepository, "cleanupExpiredArtifacts">;
+type AgentRuntimeArtifactRetentionRepo = Pick<AgentRuntimeRepository, "cleanupExpiredArtifacts">;
 
 export type ArtifactRetentionMaintenance = {
   stop: () => void;
@@ -15,25 +15,25 @@ export type ArtifactRetentionMaintenance = {
 
 export async function runArtifactRetentionCleanupOnce(input: {
   repo?: ArtifactRetentionRepo;
-  codegenRepo?: CodegenArtifactRetentionRepo;
+  agentRuntimeRepo?: AgentRuntimeArtifactRetentionRepo;
   limit?: number;
 }): Promise<{ processRunArtifacts: number; codegenArtifacts: number }> {
   const limit = cleanupLimit(input.limit);
   const [processRunArtifacts, codegenArtifacts] = await Promise.all([
     input.repo ? input.repo.cleanupExpiredProcessRunArtifacts(limit) : Promise.resolve(0),
-    input.codegenRepo ? input.codegenRepo.cleanupExpiredArtifacts(limit) : Promise.resolve(0)
+    input.agentRuntimeRepo ? input.agentRuntimeRepo.cleanupExpiredArtifacts(limit) : Promise.resolve(0)
   ]);
   return { processRunArtifacts, codegenArtifacts };
 }
 
 export function startArtifactRetentionMaintenance(input: {
   repo?: ArtifactRetentionRepo;
-  codegenRepo?: CodegenArtifactRetentionRepo;
+  agentRuntimeRepo?: AgentRuntimeArtifactRetentionRepo;
   intervalMs?: number;
   initialDelayMs?: number;
   limit?: number;
 }): ArtifactRetentionMaintenance | null {
-  if (!input.repo && !input.codegenRepo) return null;
+  if (!input.repo && !input.agentRuntimeRepo) return null;
   const intervalMs = positiveMs(input.intervalMs, DEFAULT_INTERVAL_MS);
   const initialDelayMs = positiveMs(input.initialDelayMs, DEFAULT_INITIAL_DELAY_MS);
   let stopped = false;

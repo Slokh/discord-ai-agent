@@ -33,6 +33,8 @@ Each local tool contract includes an `outputContract`. This is the model-facing 
 
 If a tool cannot satisfy its output contract, return an explicit limitation instead of forcing the model to infer missing context.
 
+Local tools that return structured `AgentResponse` may include an additive status envelope: `status` (`ok`, `error`, or `partial`), stable snake_case `errorCode`, `retryable`, and `limitation`. These fields are metadata only; human-readable `content` remains the primary model-facing text. Omitted `status` means success/ok. Use `limitation` for truncated or partial results.
+
 ## Change Workflow
 
 Before changing prompts or tool behavior:

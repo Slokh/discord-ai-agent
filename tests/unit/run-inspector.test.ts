@@ -19,8 +19,8 @@ describe("run inspector formatting", () => {
     expect(report).toContain("assistant (agent.router | round 1): requested runCodingAgent");
     expect(report).toContain("tool (agent.runtime.tool): runCodingAgent task-1 queued");
     expect(report).toContain("Related runs:");
-    expect(report).toContain("- 1520000000000000000 | discord | succeeded | 1.234s | User asked for a code update");
-    expect(report).toContain("trace=1520000000000000000 | message=1520000000000000000");
+    expect(report).toContain("- 1234567890123450000 | discord | succeeded | 1.234s | User asked for a code update");
+    expect(report).toContain("trace=1234567890123450000 | message=1234567890123450000");
     expect(report).toContain("- task-retry | codegen | running | unknown | Retry code update");
     expect(report).toContain("step=opencode_attempt_1");
     expect(report).toContain("Slowest spans:");
@@ -361,12 +361,12 @@ function snapshotFixture(): RunSnapshot {
     ],
     relatedRuns: [
       runSummary({
-        runId: "1520000000000000000",
-        traceId: "1520000000000000000",
+        runId: "1234567890123450000",
+        traceId: "1234567890123450000",
         kind: "discord",
         status: "succeeded",
         title: "User asked for a code update",
-        messageId: "1520000000000000000",
+        messageId: "1234567890123450000",
         durationMs: 1234
       }),
       runSummary({

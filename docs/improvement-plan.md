@@ -2,6 +2,8 @@
 
 This is the working plan for moving Discord AI Agent from prototype to a reliable private-server assistant.
 
+For the current tactical cleanup/hardening checklist (workstreams, tasks, and verification before new feature work), see `docs/pre-release-plan.md`.
+
 ## North Star
 
 The bot should be reliable in three loops:

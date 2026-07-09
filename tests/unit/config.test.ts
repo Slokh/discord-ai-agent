@@ -12,6 +12,7 @@ describe("config", () => {
         "RUN_MIGRATIONS",
         "OPENROUTER_CHAT_MODEL",
         "OPENROUTER_CODEGEN_MODEL",
+        "OPENROUTER_UTILITY_MODEL",
         "GITHUB_REPOSITORY",
         "INTERNAL_API_HOST",
         "INTERNAL_API_PORT",
@@ -19,10 +20,6 @@ describe("config", () => {
         "CONTROL_UI_PUBLIC_URL",
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
-        "AGENT_RUNTIME_EXECUTION_BACKEND",
-        "AGENT_RUNTIME_WARM_SANDBOX_URL",
-        "AGENT_RUNTIME_WARM_SANDBOX_HOST",
-        "AGENT_RUNTIME_WARM_SANDBOX_PORT",
         "CODEGEN_HARNESS",
         "CODEGEN_EXECUTION_BACKEND",
         "KUBERNETES_NAMESPACE",
@@ -38,7 +35,9 @@ describe("config", () => {
         "WORKER_TASK_ENABLED",
         "WORKER_DISCORD_AGENT_ENABLED",
         "SPOTIFY_CLIENT_ID",
-        "SPOTIFY_CLIENT_SECRET"
+        "SPOTIFY_CLIENT_SECRET",
+        "SPOTIFY_MARKET",
+        "TOOLSET_SCOPING"
       ],
       () => {
         const config = loadConfig();
@@ -46,11 +45,12 @@ describe("config", () => {
         expect(config.discord.clientId).toBe("");
         expect(config.discord.guildId).toBe("");
         expect(config.discord.botName).toBe("ai");
-        expect(config.discord.loadingReaction).toBe("<a:loading:1521299407214084337>");
+        expect(config.discord.loadingReaction).toBe("⏳");
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
         expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
         expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
+        expect(config.openRouter.utilityModel).toBe("z-ai/glm-5.2");
         expect(config.github.repository).toBe("owner/repo");
         expect(config.internalApi.host).toBe("0.0.0.0");
         expect(config.internalApi.port).toBe(8080);
@@ -58,15 +58,12 @@ describe("config", () => {
         expect(config.controlUi.publicUrl).toBeNull();
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
-        expect(config.agentRuntime.executionBackend).toBe("in-process");
-        expect(config.agentRuntime.warmSandboxUrl).toBeNull();
-        expect(config.agentRuntime.warmSandboxHost).toBe("0.0.0.0");
-        expect(config.agentRuntime.warmSandboxPort).toBe(8090);
         expect(config.execution.codegenHarness).toBe("opencode");
-        expect(config.execution.codegenBackend).toBe("kubernetes-job");
+        expect(config.execution.codegenBackend).toBe("local-process");
+        expect(config.execution.sandbox.cacheDir).toBe("/var/cache/discord-ai-agent");
+        expect(config.execution.sandbox.taskTimeoutSeconds).toBe(1800);
         expect(config.execution.kubernetes.namespace).toBe("discord-ai-agent");
         expect(config.execution.kubernetes.sandboxImage).toBe("discord-ai-agent-sandbox:latest");
-        expect(config.execution.kubernetes.cacheDir).toBe("/var/cache/discord-ai-agent");
         expect(config.execution.kubernetes.cachePvcName).toBeNull();
         expect(config.execution.codegenLease).toEqual({
           heartbeatMs: 15_000,
@@ -78,13 +75,24 @@ describe("config", () => {
           crawlEnabled: true,
           embeddingEnabled: true,
           taskEnabled: true,
-          discordAgentEnabled: true
+          discordAgentEnabled: true,
+          retention: {
+            eventsDays: 60,
+            auditDays: 90,
+            embeddingRunsDays: 14
+          },
+          memoryCompaction: {
+            threshold: 100,
+            keepRecent: 30
+          }
         });
         expect(config.spotify).toEqual({
           clientId: "",
-          clientSecret: ""
+          clientSecret: "",
+          market: "US"
         });
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
+        expect(config.toolsetScoping).toBe(true);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
         expect(config.crawlRetryMaxMs).toBe(30_000);
@@ -110,29 +118,24 @@ describe("config", () => {
     });
   });
 
-  it("allows configuring the Discord loading reaction", () => {
-    withEnv({ DISCORD_LOADING_REACTION: "<a:loading:1521299407214084337>" }, () => {
-      expect(loadConfig().discord.loadingReaction).toBe("<a:loading:1521299407214084337>");
+  it("allows disabling toolset scoping", () => {
+    withEnv({ TOOLSET_SCOPING: "false" }, () => {
+      expect(loadConfig().toolsetScoping).toBe(false);
     });
   });
 
-  it("allows selecting the warm-sandbox agent runtime backend", () => {
-    withEnv(
-      {
-        AGENT_RUNTIME_EXECUTION_BACKEND: "warm-sandbox",
-        AGENT_RUNTIME_WARM_SANDBOX_URL: "http://warm-sandbox:8090/",
-        AGENT_RUNTIME_WARM_SANDBOX_HOST: "127.0.0.1",
-        AGENT_RUNTIME_WARM_SANDBOX_PORT: "8091"
-      },
-      () => {
-        expect(loadConfig().agentRuntime).toEqual({
-          executionBackend: "warm-sandbox",
-          warmSandboxUrl: "http://warm-sandbox:8090",
-          warmSandboxHost: "127.0.0.1",
-          warmSandboxPort: 8091
-        });
-      }
-    );
+  it("treats empty optional string env values as unset so defaults apply", () => {
+    withEnv({ SPOTIFY_MARKET: "", DISCORD_LOADING_REACTION: "" }, () => {
+      const config = loadConfig();
+      expect(config.spotify.market).toBe("US");
+      expect(config.discord.loadingReaction).toBe("⏳");
+    });
+  });
+
+  it("allows configuring the Discord loading reaction", () => {
+    withEnv({ DISCORD_LOADING_REACTION: "<a:loading:123456789012345678>" }, () => {
+      expect(loadConfig().discord.loadingReaction).toBe("<a:loading:123456789012345678>");
+    });
   });
 
   it("allows codegen to use a different model than normal chat", () => {
@@ -143,9 +146,17 @@ describe("config", () => {
     });
   });
 
-  it("allows selecting the local-process codegen backend", () => {
-    withEnv({ CODEGEN_EXECUTION_BACKEND: "local-process" }, () => {
-      expect(loadConfig().execution.codegenBackend).toBe("local-process");
+  it("allows utility calls to use a different model than normal chat", () => {
+    withEnv({ OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2", OPENROUTER_UTILITY_MODEL: "openai/gpt-4o-mini" }, () => {
+      const config = loadConfig();
+      expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
+      expect(config.openRouter.utilityModel).toBe("openai/gpt-4o-mini");
+    });
+  });
+
+  it("allows selecting the kubernetes-job codegen backend", () => {
+    withEnv({ CODEGEN_EXECUTION_BACKEND: "kubernetes-job" }, () => {
+      expect(loadConfig().execution.codegenBackend).toBe("kubernetes-job");
     });
   });
 
@@ -187,7 +198,16 @@ describe("config", () => {
           crawlEnabled: false,
           embeddingEnabled: false,
           taskEnabled: true,
-          discordAgentEnabled: false
+          discordAgentEnabled: false,
+          retention: {
+            eventsDays: 60,
+            auditDays: 90,
+            embeddingRunsDays: 14
+          },
+          memoryCompaction: {
+            threshold: 100,
+            keepRecent: 30
+          }
         });
       }
     );
@@ -203,12 +223,14 @@ describe("config", () => {
     withEnv(
       {
         SPOTIFY_CLIENT_ID: "spotify-client",
-        SPOTIFY_CLIENT_SECRET: "spotify-secret"
+        SPOTIFY_CLIENT_SECRET: "spotify-secret",
+        SPOTIFY_MARKET: "GB"
       },
       () => {
         expect(loadConfig().spotify).toEqual({
           clientId: "spotify-client",
-          clientSecret: "spotify-secret"
+          clientSecret: "spotify-secret",
+          market: "GB"
         });
       }
     );

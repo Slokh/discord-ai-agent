@@ -1,23 +1,27 @@
 import PgBoss from "pg-boss";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
-import { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import type { CodegenRepository } from "../db/codegenRepository.js";
+import { agentRuntimeSessionId } from "../db/agentRuntimeRepository.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
 import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
+import type { DbPool } from "../db/pool.js";
+import { startConversationCompactionMaintenance } from "../db/conversationCompaction.js";
 import { startArtifactRetentionMaintenance } from "../observability/artifactRetention.js";
+import { startDataRetentionMaintenance } from "../observability/dataRetention.js";
+import type { OpenRouterClient } from "../models/openrouter.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
 import { enqueueAgentTaskJob, type AgentTaskEnqueueInput, type AgentTaskEnqueueResult } from "./agentTaskEnqueue.js";
 import {
-  createCodegenLeaseScheduler,
-  registerCodegenWorkerLease,
-  startCodegenLeaseHeartbeat,
-  waitForCodegenSandboxLease,
-  type CodegenLeaseScheduler
-} from "./codegenLeaseScheduler.js";
-import { codegenExecutionIdForTask, codegenSessionIdForTask } from "./agentTaskCodegenMirror.js";
+  createSandboxLeaseScheduler,
+  registerSandboxWorkerLease,
+  startSandboxLeaseHeartbeat,
+  waitForSandboxLease,
+  type SandboxLeaseScheduler
+} from "./sandboxLeaseScheduler.js";
+import { agentRuntimeExecutionIdForTask, agentRuntimeThreadKeyForTask } from "./agentTaskRuntimeWrite.js";
 import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
@@ -105,8 +109,9 @@ export async function startJobs(input: {
   discordAgentWorker?: boolean;
   pgBossSchema?: string;
   repo?: DiscordAiAgentRepository;
-  codegenRepo?: CodegenRepository;
   agentRuntimeRepo?: AgentRuntimeRepository;
+  openRouter?: OpenRouterClient;
+  db?: DbPool;
 }): Promise<JobRuntime> {
   const crawlWorkerEnabled = input.crawlWorker ?? input.worker !== false;
   const embeddingWorkerEnabled = input.embeddingWorker ?? input.worker !== false;
@@ -152,19 +157,29 @@ export async function startJobs(input: {
     },
     "pg-boss ready"
   );
-  const agentTaskBackendName = input.agentTask?.name ?? "kubernetes-sandbox";
+  const agentTaskBackendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
   const codegenLeaseScheduler =
-    taskWorkerEnabled && input.agentTask && input.codegenRepo ? createCodegenLeaseScheduler(input.config, agentTaskBackendName) : null;
-  let stopCodegenLeaseHeartbeat: (() => Promise<void>) | undefined;
+    taskWorkerEnabled && input.agentTask && input.agentRuntimeRepo ? createSandboxLeaseScheduler(input.config, agentTaskBackendName) : null;
+  let stopSandboxLeaseHeartbeat: (() => Promise<void>) | undefined;
   const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || discordAgentWorkerEnabled;
   const artifactRetentionMaintenance = runsAnyWorker
-    ? startArtifactRetentionMaintenance({ repo: input.repo, codegenRepo: input.codegenRepo })
+    ? startArtifactRetentionMaintenance({ repo: input.repo, agentRuntimeRepo: input.agentRuntimeRepo })
     : null;
-  const agentRuntimeRepo = input.agentRuntimeRepo ?? (input.codegenRepo ? new AgentRuntimeRepository(input.codegenRepo) : undefined);
-  if (codegenLeaseScheduler && input.codegenRepo) {
-    await registerCodegenWorkerLease(input.codegenRepo, codegenLeaseScheduler);
-    stopCodegenLeaseHeartbeat = startCodegenLeaseHeartbeat({
-      repo: input.codegenRepo,
+  const dataRetentionMaintenance = runsAnyWorker && input.db
+    ? startDataRetentionMaintenance({ db: input.db, config: input.config.worker.retention })
+    : null;
+  const conversationCompactionMaintenance = runsAnyWorker && input.db && input.openRouter
+    ? startConversationCompactionMaintenance({
+        db: input.db,
+        openRouter: input.openRouter,
+        config: { ...input.config.worker.memoryCompaction, utilityModel: input.config.openRouter.utilityModel }
+      })
+    : null;
+  const agentRuntimeRepo = input.agentRuntimeRepo;
+  if (codegenLeaseScheduler && input.agentRuntimeRepo) {
+    await registerSandboxWorkerLease(input.agentRuntimeRepo, codegenLeaseScheduler);
+    stopSandboxLeaseHeartbeat = startSandboxLeaseHeartbeat({
+      repo: input.agentRuntimeRepo,
       scheduler: codegenLeaseScheduler,
       onError: (error) => logger.warn({ err: error, sandboxId: codegenLeaseScheduler.sandboxId }, "Codegen worker lease heartbeat failed")
     });
@@ -238,14 +253,15 @@ export async function startJobs(input: {
         queueName: AGENT_TASK_JOB,
         config: input.config,
         repo: input.repo,
-        codegenRepo: input.codegenRepo,
         agentRuntimeRepo,
         backendName: agentTaskBackendName,
         job
       }),
     stop: async () => {
       artifactRetentionMaintenance?.stop();
-      await stopCodegenLeaseHeartbeat?.();
+      dataRetentionMaintenance?.stop();
+      conversationCompactionMaintenance?.stop();
+      await stopSandboxLeaseHeartbeat?.();
       await boss.stop({ graceful: true, wait: true, timeout: 100_000 });
     }
   };
@@ -377,10 +393,10 @@ export async function startJobs(input: {
               { queue: AGENT_TASK_JOB, jobId: job.id, taskId: job.data.taskId, title: job.data.title },
               "Starting agent.task sandbox"
             );
-            const backendName = input.agentTask?.name ?? "kubernetes-sandbox";
+            const backendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
             const runtimeParentMetadata = agentTaskRuntimeParentMetadata(job.data);
-            const sessionId = codegenSessionIdForTask(job.data);
-            const executionId = codegenExecutionIdForTask(job.data);
+            const sessionId = agentRuntimeSessionId(agentRuntimeThreadKeyForTask(job.data));
+            const executionId = agentRuntimeExecutionIdForTask(job.data);
             await input.repo?.markAgentTaskRunning({
               taskId: job.data.taskId,
               backend: backendName,
@@ -390,10 +406,18 @@ export async function startJobs(input: {
               workerStartedAt: new Date(startedAt),
               metadata: runtimeParentMetadata
             });
+            const existingRuns = (await input.repo?.getSandboxRunsForTask(job.data.taskId)) ?? [];
+            const activeRun = existingRuns.find((run) => !isTerminalStatus(run.status));
+            if (activeRun) {
+              logger.warn(
+                { queue: AGENT_TASK_JOB, jobId: job.id, taskId: job.data.taskId, sandboxRunId: activeRun.sandboxRunId, backend: activeRun.backend },
+                "Skipping duplicate agent.task launch because an active sandbox run already exists"
+              );
+              return;
+            }
             const acquiredLease = await acquireLeaseForAgentTask({
               scheduler: codegenLeaseScheduler,
-              codegenRepo: input.codegenRepo,
-              repo: input.repo,
+                    repo: input.repo,
               sessionId,
               executionId,
               traceId: job.data.traceId,
@@ -409,8 +433,24 @@ export async function startJobs(input: {
               });
             }
             try {
+              let sandboxRunRecorded = false;
+              const recordSandboxRunOnce = async (result: { sandboxRunId: string; backendJobName: string; namespace?: string | null; image?: string | null }) => {
+                sandboxRunRecorded = true;
+                await input.repo?.recordSandboxRun({
+                  taskId: job.data.taskId,
+                  sandboxRunId: result.sandboxRunId,
+                  backend: backendName,
+                  backendJobName: result.backendJobName,
+                  namespace:
+                    result.namespace ?? (backendName === "kubernetes-sandbox" ? input.config.execution.kubernetes.namespace : null),
+                  image: result.image ?? (backendName === "kubernetes-sandbox" ? input.config.execution.kubernetes.sandboxImage : null),
+                  sandboxId: acquiredLease?.sandboxId ?? null,
+                  leaseOwner: acquiredLease?.leaseOwner ?? null
+                });
+              };
               const result = await input.agentTask!.start(job.data, {
                 sandboxId: acquiredLease?.sandboxId ?? null,
+                recordSandboxRun: recordSandboxRunOnce,
                 progress: async (event) => {
                   await input.repo?.markAgentTaskProgress({
                     taskId: job.data.taskId,
@@ -421,16 +461,9 @@ export async function startJobs(input: {
                   });
                 }
               });
-              await input.repo?.recordSandboxRun({
-                taskId: job.data.taskId,
-                sandboxRunId: result.sandboxRunId,
-                backend: backendName,
-                backendJobName: result.backendJobName,
-                namespace: result.namespace ?? input.config.execution.kubernetes.namespace,
-                image: result.image ?? input.config.execution.kubernetes.sandboxImage,
-                sandboxId: acquiredLease?.sandboxId ?? null,
-                leaseOwner: acquiredLease?.leaseOwner ?? null
-              });
+              if (!sandboxRunRecorded && result?.sandboxRunId) {
+                await recordSandboxRunOnce(result);
+              }
               await input.repo?.markAgentTaskProgress({
                 taskId: job.data.taskId,
                 backend: backendName,
@@ -575,8 +608,8 @@ export async function startJobs(input: {
 }
 
 async function acquireLeaseForAgentTask(input: {
-  scheduler: CodegenLeaseScheduler | null;
-  codegenRepo?: CodegenRepository;
+  scheduler: SandboxLeaseScheduler | null;
+  agentRuntimeRepo?: AgentRuntimeRepository;
   repo?: DiscordAiAgentRepository;
   sessionId: string;
   executionId: string;
@@ -584,9 +617,9 @@ async function acquireLeaseForAgentTask(input: {
   taskId: string;
   backendName: string;
 }) {
-  if (!input.scheduler || !input.codegenRepo) return undefined;
-  return waitForCodegenSandboxLease({
-    repo: input.codegenRepo,
+  if (!input.scheduler || !input.agentRuntimeRepo) return undefined;
+  return waitForSandboxLease({
+    repo: input.agentRuntimeRepo,
     scheduler: input.scheduler,
     sessionId: input.sessionId,
     executionId: input.executionId,
@@ -610,6 +643,10 @@ async function acquireLeaseForAgentTask(input: {
   });
 }
 
+function defaultAgentTaskBackendName(config: AppConfig) {
+  return config.execution.codegenBackend === "local-process" ? "local-process-sandbox" : "kubernetes-sandbox";
+}
+
 function startingAgentTaskStatusMessage(backendName: string) {
   if (backendName === "local-process-sandbox") return "Starting warm local codegen worker process.";
   if (backendName === "kubernetes-sandbox") return "Starting Kubernetes sandbox.";
@@ -620,6 +657,10 @@ function runningAgentTaskStatusMessage(backendName: string) {
   if (backendName === "local-process-sandbox") return "Warm local codegen process is running the task.";
   if (backendName === "kubernetes-sandbox") return "Kubernetes sandbox is running the task.";
   return "Codegen sandbox is running the task.";
+}
+
+function isTerminalStatus(status: string) {
+  return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
 }
 
 function formatDurationSeconds(value: number) {

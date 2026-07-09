@@ -2,6 +2,7 @@ import type { FunctionToolDefinition, OpenRouterServerToolDefinition, ToolDefini
 
 export type ToolName =
   | "listTools"
+  | "requestAdditionalTools"
   | "findDiscordUsers"
   | "findDiscordChannels"
   | "searchDiscordHistory"
@@ -27,6 +28,7 @@ export type ToolName =
   | "retryAgentTask"
   | "cancelAgentTask"
   | "getDeploymentStatus"
+  | "getSpendSummary"
   | "inspectAgentLogs"
   | "undoConversationTurns"
   | "reportStatus"
@@ -39,6 +41,8 @@ export type ToolName =
   | "getSpotifyItem"
   | "createDiscordPoll"
   | "updateBotAvatar";
+
+export type ToolGroup = "core" | "discord-retrieval" | "image" | "spotify" | "codegen" | "ops" | "external";
 
 export type ToolClass =
   | "resolver"
@@ -58,6 +62,7 @@ export type ToolRegistryEntry = {
   userVisible: boolean;
   mutates: boolean;
   category?: "discord" | "generation" | "memory" | "ops" | "coding" | "external";
+  group: ToolGroup;
   toolClass?: ToolClass;
   outputContract?: string[];
   examples?: string[];
@@ -87,9 +92,35 @@ export const toolRegistry: ToolRegistryEntry[] = [
     description: "List Discord AI Agent's available local and hosted tools.",
     userVisible: true,
     mutates: false,
+    group: "core",
     parameters: {
       type: "object",
       properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    name: "requestAdditionalTools",
+    description:
+      "Escalation valve: request additional tool groups when the current scoped tools are insufficient. Use this instead of guessing when a needed capability is missing.",
+    userVisible: false,
+    mutates: false,
+    group: "core",
+    category: "ops",
+    toolClass: "ops",
+    outputContract: ["requested groups", "newly available tool names", "reason"],
+    parameters: {
+      type: "object",
+      properties: {
+        groups: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tool groups to add; omit to request all groups."
+        },
+        reason: { type: "string", description: "Why more tools are needed." }
+      },
+      required: ["reason"],
       additionalProperties: false
     }
   },
@@ -99,6 +130,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Intermediate resolver: find Discord users by username, display name, nickname-like text, mention, or ID before filtering history/stats by author. Do not answer from this alone when the user asked what someone said, did, or has been up to; call the relevant history, summary, or stats tool next.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -121,6 +153,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Intermediate resolver: find visible Discord channels, threads, or forums by name, mention, or ID before filtering history/stats by channel. Do not answer from this alone when the user asked what happened in a channel; call the relevant history, summary, topics, or stats tool next.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -143,6 +176,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Search permission-filtered indexed Discord history using hybrid keyword and semantic vector retrieval. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use authorIds/authorQueries for messages written by someone; use aboutUserIds/aboutUserQueries for messages about or mentioning someone. Use structured person/channel filters after findDiscordUsers/findDiscordChannels when names are ambiguous. One or two distinct searches is usually enough before answering. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -163,7 +197,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         aboutUserIds: {
           type: "array",
           items: { type: "string" },
-          description: "Discord user IDs that the messages should be about or mention. Use for subject requests like my birthday, people mentioning me, or what was said about Connor."
+          description: "Discord user IDs that the messages should be about or mention. Use for subject requests like my birthday, people mentioning me, or what was said about Alex."
         },
         aboutUserQueries: {
           type: "array",
@@ -203,6 +237,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Get recent Discord AI Agent conversation memory from the current channel. Use for questions about what the agent previously said, did, generated, linked, opened, or needs to continue. Do not use for factual claims about server history; use Discord history/stat tools for that.",
     userVisible: true,
     mutates: false,
+    group: "core",
     category: "memory",
     parameters: {
       type: "object",
@@ -225,6 +260,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Count or inspect Discord AI Agent's completed assistant turns in the current channel. Use for questions like how many turns/replies/actions the bot completed, especially since a specific Discord message, message link, or anchor phrase. This queries agent memory and indexed channel messages; do not approximate this with Discord history search.",
     userVisible: true,
     mutates: false,
+    group: "core",
     category: "memory",
     parameters: {
       type: "object",
@@ -255,6 +291,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
     description: "Get recent indexed messages from the current channel or specified visible channels.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -282,6 +319,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Get an indexed Discord message plus nearby messages from the same channel using a specific Discord message link or message ID. Use for exact-message context, replies, or surrounding conversation. Do not use this to analyze broad search results; searchDiscordHistory evidence already includes message URLs.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -308,6 +346,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Search indexed Discord attachments by filename, content type, surrounding message text, author, or channel. Returns attachment URLs and message links. For understanding what is in an image, call inspectDiscordImages after finding the relevant image URL.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -343,6 +382,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Use a vision model to inspect images from the current Discord request, the replied-to message chain, explicit image URLs, or a Discord message link/ID. Use this when the user asks what is shown in an attached/replied image, screenshot, meme, chart, photo, or visual Discord attachment. Do not use it for text-only history questions.",
     userVisible: true,
     mutates: false,
+    group: "image",
     parameters: {
       type: "object",
       properties: {
@@ -373,6 +413,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Resolve a visible Discord user by username, display name, mention, or user ID and return their avatar image URL(s) from Discord's CDN. Use this when the user asks to enhance, inspect, describe, or zoom into their own or someone else's profile picture/avatar/pfp. After this tool returns an avatar URL, call inspectDiscordImages with that URL as an imageUrls entry so the vision model can describe or enhance it. Works for any visible user in the server; resolution prefers an exact user ID or mention, then indexed username/display-name matches.",
     userVisible: true,
     mutates: false,
+    group: "image",
     category: "discord",
     toolClass: "resolver",
     outputContract: ["resolved user ID and display name", "avatar image URL", "default avatar note when no custom avatar", "match count or ambiguity notes"],
@@ -398,6 +439,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Compute permission-filtered Discord analytics over indexed visible messages. Use this for counts, rankings, lowest/highest rankings, activity over time, messages by channel/user, normalized messages-per-day comparisons, attachment stats, reaction totals, and active-day summaries.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -472,6 +514,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Summarize the main recurring topics, themes, memes, and bits in major Discord channels using sampled indexed messages and stored embeddings. Use this for 'what do people talk about in each channel' rather than exact counts.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -527,6 +570,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Summarize representative indexed Discord history over a user, channel, topic, or date window. Use this for broad questions like what a person/channel has been up to, what happened recently, or a recap over time. After resolving a named user/channel, call this rather than answering from resolver output alone. It samples across the window instead of only returning the newest messages.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -587,6 +631,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Summarize indexed messages from the current channel or thread. With no question, summarize recent chronological context. With a question, use hybrid semantic/keyword/recent evidence from this channel to focus the summary.",
     userVisible: true,
     mutates: false,
+    group: "discord-retrieval",
     parameters: {
       type: "object",
       properties: {
@@ -604,6 +649,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for make/draw/generate image requests and for edits like 'make this into...', 'modify this', or 'use the attached image as a reference'.",
     userVisible: true,
     mutates: false,
+    group: "image",
     parameters: {
       type: "object",
       properties: {
@@ -631,6 +677,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Read a bounded text chunk from a file produced by an earlier tool call in the same agent turn. Use this for generated text or CSV files when the user asks to inspect file contents, see examples, or when a small preview is enough. For exact counts, filters, or rankings over CSV files, use queryGeneratedCsv instead of reading the whole file.",
     userVisible: true,
     mutates: false,
+    group: "core",
     category: "memory",
     toolClass: "retrieval",
     outputContract: ["generated file metadata", "byte range", "bounded content excerpt", "truncation status"],
@@ -663,6 +710,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Run deterministic tabular queries over a CSV file produced by an earlier tool call in the same agent turn. Use this for exact row counts, top values, filters, rankings, and sample rows from generated CSVs instead of asking the model to count or parse raw CSV text. This is generic generated-file infrastructure and is not specific to any provider.",
     userVisible: true,
     mutates: false,
+    group: "core",
     category: "memory",
     toolClass: "stats",
     outputContract: ["generated CSV metadata", "filters applied", "row count", "ranked rows or values", "sample rows when requested"],
@@ -727,6 +775,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Run deterministic tabular queries over a structured table artifact produced by an earlier tool call in the same agent turn. Use this for exact row counts, top values, filters, rankings, and sample rows from generated tables without reading raw attachment text. This is generic generated-artifact infrastructure and is not specific to any provider.",
     userVisible: true,
     mutates: false,
+    group: "core",
     category: "memory",
     toolClass: "stats",
     outputContract: ["generated table metadata", "filters applied", "row count", "ranked rows or values", "sample rows when requested"],
@@ -791,6 +840,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Create or update a private database-backed Markdown skill. Use only when the user explicitly asks the agent to learn, remember, save, or update durable behavior/knowledge for next time.",
     userVisible: true,
     mutates: true,
+    group: "ops",
     parameters: {
       type: "object",
       properties: {
@@ -813,6 +863,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Start an isolated sandbox task for Discord AI Agent code, repository, GitHub PR, CI, deployment, or self-update work. The bot will update the same Discord reply with progress and the PR link when the task finishes. Use when the user asks the agent to update itself, add, build, implement, change behavior, debug or fix failing CI/checks/tests, inspect a PR/repo failure, or continue work from a previous code-update task. Prefer this over hosted web tools for GitHub, CI, PR, or repository debugging because the sandbox has repo checkout, shell, tests, and gh CLI access.",
     userVisible: true,
     mutates: true,
+    group: "codegen",
     parameters: {
       type: "object",
       properties: {
@@ -852,6 +903,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Look up quick status for the current or recent code-update task: progress events, sandbox command output snippets, PR link, and GitHub PR/CI check status when available. Use for read-only status questions like whether an update is done, what PR was opened, or what the latest task ID is. If the user asks to debug, investigate, explain, or fix a GitHub/CI/check/test/repo failure, call runCodingAgent so the sandbox can use gh CLI, logs, repo files, and tests.",
     userVisible: true,
     mutates: false,
+    group: "codegen",
     category: "coding",
     parameters: {
       type: "object",
@@ -874,6 +926,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "List recent visible code-update tasks with their statuses. Use when a user asks for task history, queued work, previous PR attempts, or what updates are in progress.",
     userVisible: true,
     mutates: false,
+    group: "codegen",
     category: "coding",
     parameters: {
       type: "object",
@@ -900,6 +953,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Retry a failed, no-change, or cancelled code-update task using the original request. Use when a user asks to retry, rerun, or try again after a code-update task did not complete.",
     userVisible: true,
     mutates: true,
+    group: "codegen",
     category: "coding",
     parameters: {
       type: "object",
@@ -918,6 +972,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Cancel an active queued or running code-update task. Use when a user asks to stop, cancel, abort, or kill an in-progress self-update.",
     userVisible: true,
     mutates: true,
+    group: "codegen",
     category: "coding",
     parameters: {
       type: "object",
@@ -940,10 +995,29 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Report the running deployment revision, uptime, database health, active or stale code-update tasks, agent task metrics, and recent tasks. Use after deploys or when users ask whether the deployed bot is healthy or whether codegen is stuck.",
     userVisible: true,
     mutates: false,
+    group: "ops",
     category: "ops",
     parameters: {
       type: "object",
       properties: {},
+      additionalProperties: false
+    }
+  },
+  {
+    name: "getSpendSummary",
+    description:
+      "Report estimated model/tool spend for this Discord guild from tool audit logs. Use when ops users ask how much the bot has spent today or this month, or which tools/users drove spend.",
+    userVisible: true,
+    mutates: false,
+    group: "ops",
+    category: "ops",
+    outputContract: ["total estimated spend", "top tools by spend", "top users by spend", "period"],
+    parameters: {
+      type: "object",
+      properties: {
+        period: { type: "string", enum: ["today", "month"], description: "Spend period. Defaults to today." },
+        limit: { type: "number", description: "Maximum rows per breakdown. Defaults to 10." }
+      },
       additionalProperties: false
     }
   },
@@ -953,6 +1027,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Undo the agent's most recent reply turns in the current Discord channel by removing them from persistent memory and, when possible, deleting the bot reply messages. Use when the user asks to undo, forget, delete, or remove the agent's previous response.",
     userVisible: true,
     mutates: true,
+    group: "core",
     parameters: {
       type: "object",
       properties: {
@@ -970,6 +1045,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Inspect Discord AI Agent's own normalized run diagnostics, trace events, task events, terminal command events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. Pass the originating Discord message link/message ID, run ID, or trace ID when available.",
     userVisible: true,
     mutates: false,
+    group: "ops",
     parameters: {
       type: "object",
       properties: {
@@ -990,6 +1066,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
     description: "Report local database, crawl, and tool status.",
     userVisible: true,
     mutates: false,
+    group: "ops",
     parameters: {
       type: "object",
       properties: {},
@@ -1002,6 +1079,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Fetch a Spotify playlist's track list with Spotify's Web API, using current playlist item pagination and attaching the full list as CSV and text by default when available. Use this for Spotify playlist URLs/URIs or playlist IDs, especially when the user asks for every track. The result also exposes a queryable generated table for exact follow-up counts, filters, and rankings. Do not use web_fetch on open.spotify.com for playlist track lists. If Spotify denies playlist item access, return the limitation clearly instead of guessing.",
     userVisible: true,
     mutates: false,
+    group: "spotify",
     category: "external",
     toolClass: "external",
     outputContract: ["playlist metadata", "track count returned", "attached full track list when available", "queryable table when available", "Spotify URLs", "explicit limitation on 403"],
@@ -1032,6 +1110,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Fetch a Spotify album's ordered track list with Spotify's Web API and attach the full list as CSV and text by default when available. Use this for Spotify album URLs/URIs or album IDs when the user asks what tracks are on an album, wants album duration, or wants an album tracklist. The result also exposes a queryable generated table for exact follow-up counts, filters, and rankings.",
     userVisible: true,
     mutates: false,
+    group: "spotify",
     category: "external",
     toolClass: "external",
     outputContract: ["album metadata", "track count returned", "attached full track list when available", "queryable table when available", "Spotify URLs"],
@@ -1062,6 +1141,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Fetch a Spotify artist's public discography: albums, singles, compilations, and appearances. Use this for artist URLs/URIs or artist IDs when the user asks for releases, discography, albums, singles, or where to start with an artist. The result attaches the release list as CSV and text by default and exposes a queryable generated table.",
     userVisible: true,
     mutates: false,
+    group: "spotify",
     category: "external",
     toolClass: "external",
     outputContract: ["artist metadata", "discography groups requested", "ranked release list", "attached release list when available", "queryable table when available", "Spotify URLs"],
@@ -1097,6 +1177,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Compute deterministic, fun stats from a Spotify playlist track list: total duration, explicit count, local/unavailable count, top artists, top albums, unique artists, and repeated artists. Use this for quick rating or summarizing a playlist without using deprecated audio features or recommendations. For custom filters/rankings over the full playlist rows, export a CSV with getSpotifyPlaylistTracks and query it with queryGeneratedCsv.",
     userVisible: true,
     mutates: false,
+    group: "spotify",
     category: "external",
     toolClass: "external",
     outputContract: ["playlist metadata", "track count analyzed", "duration", "top artists", "top albums", "explicit/local counts", "Spotify URL"],
@@ -1122,6 +1203,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Compare two Spotify playlists using public playlist item metadata: shared tracks, shared artists, unique tracks, and a track-overlap score. Use this when the user asks how similar two playlists are, what overlaps, or what one playlist has that the other does not.",
     userVisible: true,
     mutates: false,
+    group: "spotify",
     category: "external",
     toolClass: "external",
     outputContract: ["both playlist names", "track counts analyzed", "shared tracks", "shared artists", "unique counts", "overlap score"],
@@ -1151,6 +1233,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Search Spotify's public catalog for tracks, artists, albums, playlists, shows, episodes, or audiobooks using the Spotify Web API. Use this when the user asks to find music or podcasts/audiobooks on Spotify by name. Results are deterministic Spotify metadata and should be returned directly with Spotify links.",
     userVisible: true,
     mutates: false,
+    group: "spotify",
     category: "external",
     toolClass: "external",
     outputContract: ["search query", "result type", "ranked Spotify metadata", "Spotify URLs"],
@@ -1181,6 +1264,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Fetch deterministic public Spotify details for one track, artist, album, playlist, show, episode, audiobook, or chapter. Use this for Spotify item URLs/URIs, or for a bare Spotify ID when the type is known. For full playlist track lists, use getSpotifyPlaylistTracks; for album track lists, use getSpotifyAlbumTracks; for artist release lists, use getSpotifyArtistDiscography.",
     userVisible: true,
     mutates: false,
+    group: "spotify",
     category: "external",
     toolClass: "external",
     outputContract: ["item type", "Spotify metadata", "Spotify URL", "explicit limitation if unavailable"],
@@ -1207,6 +1291,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Create a native Discord poll in the current channel using Discord's poll message API (v10). Use this when the user asks to schedule, vote, pick a time, choose between options, run a straw poll, or create any poll-like question with multiple answers. Discord native polls render in the channel and let members click an answer. The bot must have Send Messages permission in the channel. Supports up to 10 answer options; duration defaults to 24 hours and is capped at 168 hours per Discord limits; allow_multiselect defaults to true since scheduling polls usually allow multiple answers.",
     userVisible: true,
     mutates: true,
+    group: "core",
     category: "discord",
     toolClass: "ops",
     outputContract: ["poll question", "answer options posted", "duration hours", "allow multiselect", "Discord message link", "failure reason when the bot lacks permission or input is invalid"],
@@ -1242,6 +1327,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Update the bot's own Discord profile avatar using an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Uses the Discord Modify Current User API (PATCH /users/@me with a base64 data-URI avatar). Requires the bot token from environment config. Use this when the user asks to change, set, or update the bot's avatar/profile picture. Discord accepts PNG, JPEG, WebP, or GIF avatars; large or unsupported images are rejected before the API call. Handle rate limits, permission errors, and invalid image URLs gracefully.",
     userVisible: true,
     mutates: true,
+    group: "ops",
     category: "discord",
     toolClass: "ops",
     outputContract: ["image source label", "Discord avatar update status", "new avatar URL when available", "failure reason when the image is invalid, rate-limited, or unauthorized"],
@@ -1270,6 +1356,7 @@ export type OpenRouterServerToolRegistryEntry = {
   type: OpenRouterServerToolDefinition["type"];
   description: string;
   toolClass: ToolClass;
+  group: ToolGroup;
   outputContract: string[];
   userVisible: boolean;
   parameters?: OpenRouterServerToolDefinition["parameters"];
@@ -1280,6 +1367,7 @@ export const openRouterServerToolRegistry: OpenRouterServerToolRegistryEntry[] =
     type: "openrouter:web_search",
     description: "Search the public web for current or external information.",
     toolClass: "external",
+    group: "external",
     outputContract: ["query", "current web result summaries", "source URLs when available"],
     userVisible: true
   },
@@ -1287,6 +1375,7 @@ export const openRouterServerToolRegistry: OpenRouterServerToolRegistryEntry[] =
     type: "openrouter:web_fetch",
     description: "Fetch and read a specific public URL when the user provides one or web search finds one worth opening.",
     toolClass: "external",
+    group: "external",
     outputContract: ["requested URL", "relevant fetched page content", "source URL"],
     userVisible: true
   },
@@ -1294,13 +1383,14 @@ export const openRouterServerToolRegistry: OpenRouterServerToolRegistryEntry[] =
     type: "openrouter:datetime",
     description: "Get the current date and time for time-sensitive questions.",
     toolClass: "external",
+    group: "external",
     outputContract: ["current date/time", "timezone or locale context when available"],
     userVisible: true
   }
 ];
 
-export function localToolDefinitionsForModel(): FunctionToolDefinition[] {
-  return toolRegistry.map((tool) => ({
+export function localToolDefinitionsForModel(tools = toolRegistry): FunctionToolDefinition[] {
+  return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
@@ -1310,15 +1400,15 @@ export function localToolDefinitionsForModel(): FunctionToolDefinition[] {
   }));
 }
 
-export function openRouterServerToolDefinitionsForModel(): OpenRouterServerToolDefinition[] {
-  return openRouterServerToolRegistry.map((tool) => ({
+export function openRouterServerToolDefinitionsForModel(tools = openRouterServerToolRegistry): OpenRouterServerToolDefinition[] {
+  return tools.map((tool) => ({
     type: tool.type,
     ...(tool.parameters ? { parameters: tool.parameters } : {})
   }));
 }
 
-export function toolDefinitionsForModel(): ToolDefinition[] {
-  return [...localToolDefinitionsForModel(), ...openRouterServerToolDefinitionsForModel()];
+export function toolDefinitionsForModel(options: { localTools?: ToolRegistryEntry[]; serverTools?: OpenRouterServerToolRegistryEntry[] } = {}): ToolDefinition[] {
+  return [...localToolDefinitionsForModel(options.localTools), ...openRouterServerToolDefinitionsForModel(options.serverTools)];
 }
 
 export function toolByName(name: string): ToolRegistryEntry | undefined {
@@ -1348,11 +1438,13 @@ export function toolContracts(): ToolContract[] {
   }));
 }
 
-export function renderToolList() {
+export function renderToolList(options: { localTools?: ToolRegistryEntry[]; serverTools?: OpenRouterServerToolRegistryEntry[] } = {}) {
+  const localTools = options.localTools ?? toolRegistry;
+  const serverTools = options.serverTools ?? openRouterServerToolRegistry;
   return [
     "Discord AI Agent tools:",
-    ...toolRegistry.filter((tool) => tool.userVisible).map((tool) => `- ${tool.name}: ${tool.description}`),
-    ...openRouterServerToolRegistry
+    ...localTools.filter((tool) => tool.userVisible).map((tool) => `- ${tool.name}: ${tool.description}`),
+    ...serverTools
       .filter((tool) => tool.userVisible)
       .map((tool) => `- ${tool.type.replace("openrouter:", "")}: ${tool.description}`)
   ].join("\n");
@@ -1380,7 +1472,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   ) {
     return "coding";
   }
-  if (name === "inspectAgentLogs" || name === "reportStatus" || name === "getDeploymentStatus" || name === "listTools") return "ops";
+  if (name === "inspectAgentLogs" || name === "reportStatus" || name === "getDeploymentStatus" || name === "getSpendSummary" || name === "listTools") return "ops";
   if (
     name === "getSpotifyPlaylistTracks" ||
     name === "getSpotifyAlbumTracks" ||
@@ -1397,6 +1489,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
 
 const toolClassByName: Record<ToolName, ToolClass> = {
   listTools: "ops",
+  requestAdditionalTools: "ops",
   findDiscordUsers: "resolver",
   findDiscordChannels: "resolver",
   searchDiscordHistory: "retrieval",
@@ -1422,6 +1515,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   retryAgentTask: "coding",
   cancelAgentTask: "coding",
   getDeploymentStatus: "ops",
+  getSpendSummary: "ops",
   inspectAgentLogs: "ops",
   undoConversationTurns: "memory",
   reportStatus: "ops",
@@ -1460,6 +1554,7 @@ function defaultOutputContract(name: ToolName): string[] {
 function defaultToolExamples(name: ToolName): string[] {
   const examples: Record<ToolName, string> = {
     listTools: "@ai tools",
+    requestAdditionalTools: "@ai I need another capability",
     findDiscordUsers: "@ai find user tyler",
     findDiscordChannels: "@ai find channel movies",
     searchDiscordHistory: "@ai what did we say about job hunting?",
@@ -1485,6 +1580,7 @@ function defaultToolExamples(name: ToolName): string[] {
     retryAgentTask: "@ai retry that update",
     cancelAgentTask: "@ai cancel the current update",
     getDeploymentStatus: "@ai deployment status",
+    getSpendSummary: "@ai how much have we spent today?",
     inspectAgentLogs: "@ai why did that last answer fail?",
     undoConversationTurns: "@ai undo that",
     reportStatus: "@ai status",

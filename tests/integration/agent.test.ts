@@ -3,6 +3,44 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("stops recovery calls at the per-turn model call ceiling", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ id: "call-1", name: "listTools", argumentsText: "{\"nonce\":1}" }] })
+      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ id: "call-2", name: "listTools", argumentsText: "{\"nonce\":2}" }] })
+      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ id: "call-3", name: "listTools", argumentsText: "{\"nonce\":3}" }] })
+      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ id: "call-4", name: "listTools", argumentsText: "{\"nonce\":4}" }] })
+      .mockResolvedValueOnce({
+        content: "<tool_call>openrouter_web_search<arg_key>query</arg_key><arg_value>test</arg_value></tool_call>",
+        model: "router-model",
+        raw: {},
+        toolCalls: []
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: false },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        })
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: []
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "keep going");
+
+    expect(chat).toHaveBeenCalledTimes(5);
+    expect(response.content).toContain("safety limit");
+    expect(traceEvents.some((event) => event.eventName === "agent.model_call_ceiling")).toBe(true);
+  });
+
   it("grounds first-person requests to the current Discord requester", async () => {
     const chat = vi.fn(async () => ({
       content: "ok",
@@ -19,13 +57,13 @@ describe("agent router", () => {
       guildId: "g",
       channelId: "c",
       userId: "requester-id",
-      userDisplayName: "Casey",
+      userDisplayName: "UserA",
       visibleChannelIds: ["c"],
       sessionMessages: [
         {
           role: "user",
           authorId: "someone-else",
-          authorDisplayName: "Luke",
+          authorDisplayName: "UserB",
           content: "something from earlier",
           metadata: {},
           createdAt: new Date()
@@ -40,7 +78,7 @@ describe("agent router", () => {
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "system",
-            content: expect.stringContaining("Current Discord requester: Casey (user ID requester-id)")
+            content: expect.stringContaining("Current Discord requester: UserA (user ID requester-id)")
           }),
           expect.objectContaining({
             role: "system",
@@ -162,7 +200,7 @@ describe("agent router", () => {
             channelId: "c",
             guildId: "g",
             authorId: "human",
-            authorDisplayName: "Luke",
+            authorDisplayName: "UserB",
             authorIsBot: false,
             content: "this occurred on mine and banandadars birthday, coincidence?",
             attachmentSummaries: [],
@@ -213,7 +251,7 @@ describe("agent router", () => {
       guildId: "g",
       channelId: "c",
       userId: "luke-id",
-      userDisplayName: "Luke",
+      userDisplayName: "UserB",
       visibleChannelIds: ["c"],
       sessionMessages: []
     } as unknown as ToolContext;
@@ -223,14 +261,14 @@ describe("agent router", () => {
     const calls = (chat as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     const messages = (calls[0]?.[0] as { messages?: { role: string; content: string }[] })?.messages ?? [];
     const requesterIndex = messages.findIndex(
-      (m) => m.role === "system" && m.content.includes("Current Discord requester: Luke (user ID luke-id)")
+      (m) => m.role === "system" && m.content.includes("Current Discord requester: UserB (user ID luke-id)")
     );
     expect(requesterIndex).toBeGreaterThanOrEqual(0);
 
     const requesterMessage = messages[requesterIndex];
     expect(requesterMessage.content).toContain("who am I");
     expect(requesterMessage.content).toContain("Do not use skill content");
-    expect(requesterMessage.content).toContain("name: Luke");
+    expect(requesterMessage.content).toContain("name: UserB");
 
     const skillIndex = messages.findIndex(
       (m) => m.role === "system" && m.content.startsWith("Loaded skills:")
@@ -297,7 +335,11 @@ describe("agent router", () => {
       toolCalls: []
     }));
     const ctx = {
-      config: { maxReplyChars: 1800 },
+      config: {
+        maxReplyChars: 1800,
+        github: { repository: "example/discord-ai-agent", token: "test-token" },
+        execution: { taskSigningSecret: "test-secret" }
+      },
       repo: {
         auditTool: vi.fn(async () => undefined)
       },
@@ -316,7 +358,7 @@ describe("agent router", () => {
         authorId: "bot",
         authorDisplayName: "Discord AI Agent",
         authorIsBot: true,
-        content: "Done: https://github.com/Slokh/discord-ai-agent/pull/111\nRun console: https://tasks.example/runs/task-1",
+        content: "Done: https://github.com/example/discord-ai-agent/pull/111\nRun console: https://tasks.example/runs/task-1",
         attachmentSummaries: [],
         attachments: [],
         createdAt: "2026-07-04T00:10:00.000Z",
@@ -337,7 +379,7 @@ describe("agent router", () => {
         }),
         expect.objectContaining({
           role: "system",
-          content: expect.stringContaining("Done: https://github.com/Slokh/discord-ai-agent/pull/111")
+          content: expect.stringContaining("Done: https://github.com/example/discord-ai-agent/pull/111")
         })
       ])
     );
@@ -896,7 +938,7 @@ describe("agent router", () => {
         channelId: "c",
         authorId: "u",
         authorUsername: "connor",
-        authorDisplayName: "Connor",
+        authorDisplayName: "Alex",
         content: "where she’s staying for the time being",
         normalizedContent: "where she’s staying for the time being",
         createdAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -940,7 +982,7 @@ describe("agent router", () => {
       guildId: "g",
       channelId: "c",
       userId: "u",
-      userDisplayName: "Connor",
+      userDisplayName: "Alex",
       visibleChannelIds: ["c"],
       requestId: "current-message"
     } as unknown as ToolContext;
@@ -1541,7 +1583,7 @@ describe("agent router", () => {
           {
             userId: "casey-id",
             username: "caseyuser",
-            globalName: "Casey",
+            globalName: "UserA",
             aliases: ["case"],
             terms: ["@user:casey-id", "caseyuser", "casey", "case"]
           }
@@ -1929,7 +1971,7 @@ describe("agent router", () => {
     const auditTool = vi.fn(async () => undefined);
     const storeProcessRunArtifact = vi.fn(async () => ({ artifactId: "artifact-leaked-hosted-tool" }));
     const leakedHostedToolMarkup =
-      "<tool_call>openrouter_web_fetch<arg_key>url</arg_key><arg_value>https://github.com/Slokh/discord-ai-agent/pull/111</arg_value></tool_call>";
+      "<tool_call>openrouter_web_fetch<arg_key>url</arg_key><arg_value>https://github.com/example/discord-ai-agent/pull/111</arg_value></tool_call>";
     const task = {
       taskId: "task-1",
       traceId: "trace-1",
@@ -1949,7 +1991,7 @@ describe("agent router", () => {
       currentStep: "done",
       statusMessage: "Opened pull request.",
       branchName: "ai/fix-ci-task",
-      prUrl: "https://github.com/Slokh/discord-ai-agent/pull/111",
+      prUrl: "https://github.com/example/discord-ai-agent/pull/111",
       draft: false,
       verifyPassed: null,
       error: null,
@@ -1983,10 +2025,10 @@ describe("agent router", () => {
         const recoveryContext = JSON.stringify(input.messages);
         expect(recoveryContext).toContain("The current user message is a Discord reply");
         expect(recoveryContext).toContain("Fresh local tool result from getAgentTaskStatus");
-        expect(recoveryContext).toContain("PR: https://github.com/Slokh/discord-ai-agent/pull/111");
+        expect(recoveryContext).toContain("PR: https://github.com/example/discord-ai-agent/pull/111");
         expect(recoveryContext).toContain("Using the conversation, reply context, and fresh local tool results above");
         expect(recoveryContext).toContain("openrouter:web_fetch");
-        expect(recoveryContext).toContain("https://github.com/Slokh/discord-ai-agent/pull/111");
+        expect(recoveryContext).toContain("https://github.com/example/discord-ai-agent/pull/111");
         expect(recoveryContext).toContain("call the matching hosted tool through the provided tool channel now");
         return {
           content: "PR #111 is the relevant PR; check its CI details there.",
@@ -1996,7 +2038,7 @@ describe("agent router", () => {
         };
       });
     const ctx = {
-      config: { maxReplyChars: 1800, github: {} },
+      config: codeUpdateTestConfig(),
       repo: {
         getAgentTask: vi.fn(async () => task),
         getTaskProgressEventsForTask: vi.fn(async () => []),
@@ -2020,7 +2062,7 @@ describe("agent router", () => {
         authorId: "bot",
         authorDisplayName: "Discord AI Agent",
         authorIsBot: true,
-        content: "Done: https://github.com/Slokh/discord-ai-agent/pull/111",
+        content: "Done: https://github.com/example/discord-ai-agent/pull/111",
         attachmentSummaries: [],
         attachments: [],
         createdAt: "2026-07-04T00:10:00.000Z",
@@ -2033,7 +2075,7 @@ describe("agent router", () => {
             authorId: "bot",
             authorDisplayName: "Discord AI Agent",
             authorIsBot: true,
-            content: "Done: https://github.com/Slokh/discord-ai-agent/pull/111",
+            content: "Done: https://github.com/example/discord-ai-agent/pull/111",
             attachmentSummaries: [],
             attachments: [],
             createdAt: "2026-07-04T00:10:00.000Z",
@@ -2060,7 +2102,7 @@ describe("agent router", () => {
           intendedHostedTools: [
             {
               type: "openrouter:web_fetch",
-              arguments: { url: "https://github.com/Slokh/discord-ai-agent/pull/111" }
+              arguments: { url: "https://github.com/example/discord-ai-agent/pull/111" }
             }
           ]
         })
@@ -2322,8 +2364,9 @@ describe("agent router", () => {
       taskId: "task-calendar-integration"
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, github: {} },
+      config: codeUpdateTestConfig(),
       repo: {
+        upsertAgentTaskQueued: vi.fn(async () => undefined),
         auditTool: vi.fn(async () => undefined)
       },
       openRouter: {
@@ -2352,6 +2395,7 @@ describe("agent router", () => {
       jobs: {
         enqueueAgentTask
       },
+      ...fakeAgentRuntimeContext(),
       guildId: "g",
       channelId: "c",
       userId: "u",
@@ -2365,8 +2409,8 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "how should we track events?");
 
-    expect(response.content).toBe(
-      "Working on it...\n\nI’ll update this message with progress and the PR link when it’s ready.\nTask ID: `task-calendar-integration`."
+    expect(response.content).toMatch(
+      /^Working on it\.\.\.\n\nI’ll update this message with progress and the PR link when it’s ready\.\nTask ID: `task-[^`]+`\.$/
     );
     expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2398,9 +2442,9 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        github: {},
+        github: { repository: "example/discord-ai-agent", token: "test-token" },
         openRouter: { codegenModel: "z-ai/glm-5.2" },
-        execution: { codegenBackend: "local-process", codegenHarness: "opencode" }
+        execution: { codegenBackend: "local-process", codegenHarness: "opencode", taskSigningSecret: "test-secret" }
       },
       repo: {
         upsertAgentTaskQueued,
@@ -2421,7 +2465,7 @@ describe("agent router", () => {
         harness: "in-process",
         model: null,
         provider: null,
-        codexThreadId: null,
+        harnessThreadId: null,
         metadata: {},
         createdAt: new Date(),
         startedAt: null,
@@ -2514,8 +2558,9 @@ describe("agent router", () => {
       taskId: "task-existing-pr"
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, github: {} },
+      config: codeUpdateTestConfig(),
       repo: {
+        upsertAgentTaskQueued: vi.fn(async () => undefined),
         auditTool: vi.fn(async () => undefined)
       },
       openRouter: {
@@ -2532,7 +2577,7 @@ describe("agent router", () => {
                 title: "Fix CI on PR #120",
                 targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
                 targetPullRequestNumber: 120,
-                targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+                targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
               })
             }
           ]
@@ -2542,6 +2587,7 @@ describe("agent router", () => {
       jobs: {
         enqueueAgentTask
       },
+      ...fakeAgentRuntimeContext(),
       guildId: "g",
       channelId: "c",
       userId: "u",
@@ -2562,7 +2608,7 @@ describe("agent router", () => {
         title: "Fix CI on PR #120",
         targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
         targetPullRequestNumber: 120,
-        targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+        targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
       })
     );
   });
@@ -2577,15 +2623,16 @@ describe("agent router", () => {
       agentSearchResult({
         messageId: "333333333333333333",
         channelId: "trivia",
-        normalizedContent: "The trivia-sucks channel should not be part of the bot knowledge base.",
+        normalizedContent: "The example-channel channel should not be part of the bot knowledge base.",
         link: "https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333"
       })
     ]);
     const ctx = {
-      config: { maxReplyChars: 1800, github: {} },
+      config: codeUpdateTestConfig(),
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         messageContext,
+        upsertAgentTaskQueued: vi.fn(async () => undefined),
         auditTool
       },
       openRouter: {
@@ -2615,8 +2662,8 @@ describe("agent router", () => {
                 name: "runCodingAgent",
                 argumentsText: JSON.stringify({
                   request:
-                    "Fully remove the trivia-sucks channel from current and future Discord knowledge, including storage, indexing, embeddings, retrieval, stats, summaries, and attachment search.",
-                  title: "Exclude trivia-sucks from knowledge"
+                    "Fully remove the example-channel channel from current and future Discord knowledge, including storage, indexing, embeddings, retrieval, stats, summaries, and attachment search.",
+                  title: "Exclude example-channel from knowledge"
                 })
               }
             ]
@@ -2626,6 +2673,7 @@ describe("agent router", () => {
       jobs: {
         enqueueAgentTask
       },
+      ...fakeAgentRuntimeContext(),
       guildId: "g",
       channelId: "c",
       userId: "u",
@@ -2639,15 +2687,15 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(
       ctx,
-      "open pr to fully remove trivia-sucks from your current and future knowledge https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333"
+      "open pr to fully remove example-channel from your current and future knowledge https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333"
     );
 
-    expect(response.content).toContain("Task ID: `task-exclude-channel`");
+    expect(response.content).toMatch(/Task ID: `task-[^`]+`/);
     expect(messageContext).toHaveBeenCalledWith(expect.objectContaining({ messageId: "333333333333333333" }));
     expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Exclude trivia-sucks from knowledge",
-        request: expect.stringContaining("Fully remove the trivia-sucks channel"),
+        title: "Exclude example-channel from knowledge",
+        request: expect.stringContaining("Fully remove the example-channel channel"),
         taskType: "code_update"
       })
     );
@@ -2662,8 +2710,9 @@ describe("agent router", () => {
       taskId: "task-lazy-status"
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, github: {} },
+      config: codeUpdateTestConfig(),
       repo: {
+        upsertAgentTaskQueued: vi.fn(async () => undefined),
         auditTool: vi.fn(async () => undefined)
       },
       openRouter: {
@@ -2684,6 +2733,7 @@ describe("agent router", () => {
       jobs: {
         enqueueAgentTask
       },
+      ...fakeAgentRuntimeContext(),
       guildId: "g",
       channelId: "c",
       userId: "u",
@@ -2700,7 +2750,7 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "update yourself to show better task progress");
 
-    expect(response.content).toContain("Task ID: `task-lazy-status`");
+    expect(response.content).toMatch(/Task ID: `task-[^`]+`/);
     expect(ctx.updateStatus).toHaveBeenCalledWith("Working on it...\n\nI’ll edit this message with progress and the PR link when it’s ready.");
     expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2718,8 +2768,9 @@ describe("agent router", () => {
       taskId: "task-warm-runtime"
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, github: {} },
+      config: codeUpdateTestConfig(),
       repo: {
+        upsertAgentTaskQueued: vi.fn(async () => undefined),
         auditTool: vi.fn(async () => undefined)
       },
       openRouter: {
@@ -2740,6 +2791,7 @@ describe("agent router", () => {
       jobs: {
         enqueueAgentTask
       },
+      ...fakeAgentRuntimeContext(),
       guildId: "g",
       channelId: "c",
       userId: "u",
@@ -2751,7 +2803,7 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "update yourself so warm runtime task updates work");
 
-    expect(response.content).toContain("Task ID: `task-warm-runtime`");
+    expect(response.content).toMatch(/Task ID: `task-[^`]+`/);
     expect(enqueueAgentTask).toHaveBeenCalledWith(
       expect.objectContaining({
         traceId: "prompt-message-1",
@@ -2794,6 +2846,49 @@ describe("agent router", () => {
     );
   });
 });
+
+function fakeAgentRuntimeContext() {
+  return {
+    agentRuntime: {
+      appendMessage: vi.fn(async () => undefined),
+      createExecution: vi.fn(async () => undefined),
+      recordEvent: vi.fn(async () => undefined),
+      updateExecution: vi.fn(async () => undefined)
+    },
+    agentRuntimeSession: {
+      sessionId: "agent-session-channel",
+      traceId: "prompt-message-1",
+      threadKey: "discord:g:c",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      title: "Channel session",
+      request: "test request",
+      requestedBy: "User",
+      status: "running",
+      harness: "in-process",
+      model: null,
+      provider: null,
+      harnessThreadId: null,
+      metadata: {},
+      createdAt: new Date(),
+      startedAt: null,
+      completedAt: null,
+      updatedAt: new Date()
+    },
+    agentRuntimeExecutionId: "agent-execution-prompt",
+    requestId: "prompt-message-1"
+  };
+}
+
+function codeUpdateTestConfig() {
+  return {
+    maxReplyChars: 1800,
+    github: { repository: "example/discord-ai-agent", token: "test-token" },
+    openRouter: { codegenModel: "z-ai/glm-5.2" },
+    execution: { codegenBackend: "local-process", codegenHarness: "opencode", taskSigningSecret: "test-secret" }
+  };
+}
 
 function channelTopicCandidate(content: string, embedding: number[]) {
   return {

@@ -113,7 +113,7 @@ describe("codegen smoke script helpers", () => {
           status: "succeeded",
           durationMs: 4000,
           summaryPath: ".discord-ai-agent/codegen-smoke/readme/summary.md",
-          prUrl: "https://github.com/Slokh/discord-ai-agent/pull/1"
+          prUrl: "https://github.com/example/discord-ai-agent/pull/1"
         },
         {
           id: "tool-schema",

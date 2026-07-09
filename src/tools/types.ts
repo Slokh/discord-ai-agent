@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
+import type { BudgetRepository } from "../db/budgetRepository.js";
 import type { ConversationMessage, DiscordAiAgentRepository } from "../db/repositories.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { JobRuntime } from "../jobs/queue.js";
@@ -7,6 +8,7 @@ import type { JobRuntime } from "../jobs/queue.js";
 export type ToolContext = {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
+  budgetRepo?: BudgetRepository;
   agentRuntime?: AgentRuntimeRepository;
   agentRuntimeSession?: AgentRuntimeSessionRecord | null;
   agentRuntimeExecutionId?: string | null;
@@ -41,6 +43,7 @@ export type ToolContext = {
     guildId: string;
     userId: string;
   }) => Promise<DiscordUserAvatarResult | null>;
+  noteProgress?: () => void;
 };
 
 export type DiscordUserAvatarResult = {
@@ -101,6 +104,10 @@ export type AgentTable = {
 
 export type AgentResponse = {
   content: string;
+  status?: "ok" | "error" | "partial";
+  errorCode?: string;
+  retryable?: boolean;
+  limitation?: string;
   files?: AgentFile[];
   tables?: AgentTable[];
   storedContent?: string;

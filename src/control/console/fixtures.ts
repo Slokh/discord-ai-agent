@@ -24,7 +24,7 @@ export const fixtureSnapshots: RunSnapshot[] = [
       durationMs: 18 * 60_000,
       currentStep: "done",
       bottleneck: { name: "codex", durationMs: 14 * 60_000 },
-      links: { pullRequest: "https://github.com/Slokh/discord-ai-agent/pull/42" },
+      links: { pullRequest: "https://github.com/example/discord-ai-agent/pull/42" },
       metadata: { backend: "kubernetes-sandbox", verifyPassed: true }
     },
     spans: [
@@ -60,16 +60,16 @@ export const fixtureSnapshots: RunSnapshot[] = [
   {
     run: {
       runId: "discord-fixture-timeout",
-      traceId: "1521541635580756031",
+      traceId: "1234567890123450031",
       kind: "discord",
       status: "failed",
-      title: "Discord mention from Luke",
+      title: "Discord mention from UserB",
       summary: "Discord AI Agent agent request timed out.",
-      requester: "Luke",
+      requester: "UserB",
       guildId: "guild",
       channelId: "general",
-      userId: "luke",
-      messageId: "1521541635580756031",
+      userId: "userb",
+      messageId: "1234567890123450031",
       source: "discord",
       startedAt: minutesAgo(17),
       completedAt: minutesAgo(2),
@@ -77,7 +77,7 @@ export const fixtureSnapshots: RunSnapshot[] = [
       durationMs: 15 * 60_000,
       currentStep: "agent.request",
       bottleneck: { name: "Run model-led agent", durationMs: 15 * 60_000 },
-      links: { discordMessage: "https://discord.com/channels/guild/general/1521541635580756031" },
+      links: { discordMessage: "https://discord.com/channels/guild/general/1234567890123450031" },
       metadata: { visibleChannelCount: 151 }
     },
     spans: [
@@ -97,15 +97,15 @@ export const fixtureSnapshots: RunSnapshot[] = [
     relatedRuns: [
       {
         runId: "task-fixture-child-running",
-        traceId: "1521541635580756031",
+        traceId: "1234567890123450031",
         kind: "codegen",
         status: "running",
         title: "Investigate Discord timeout",
         summary: "Waiting for the first code diff.",
-        requester: "Luke",
+        requester: "UserB",
         guildId: "guild",
         channelId: "general",
-        userId: "luke",
+        userId: "userb",
         messageId: null,
         source: "agent_task",
         startedAt: minutesAgo(15),

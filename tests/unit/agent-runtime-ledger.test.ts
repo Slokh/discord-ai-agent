@@ -20,7 +20,7 @@ describe("agent runtime ledger", () => {
       discordUrl: "https://discord.com/channels/guild/channel/message",
       status: "queued",
       source: "test",
-      executorName: "warm-sandbox"
+      executorName: "in-process"
     });
 
     expect(ref).toEqual(expect.objectContaining({ executionId: "agent-execution-message" }));
@@ -29,8 +29,8 @@ describe("agent runtime ledger", () => {
         sessionId: "agent-session-channel",
         threadKey: "discord:guild:channel",
         status: "queued",
-        harness: "warm-sandbox",
-        metadata: expect.objectContaining({ source: "test", executor: "warm-sandbox" })
+        harness: "in-process",
+        metadata: expect.objectContaining({ source: "test", executor: "in-process" })
       })
     );
     expect(agentRuntime.createExecution).toHaveBeenCalledWith(
@@ -38,8 +38,8 @@ describe("agent runtime ledger", () => {
         executionId: "agent-execution-message",
         sessionId: "agent-session-channel",
         status: "queued",
-        harness: "warm-sandbox",
-        metadata: expect.objectContaining({ executor: "warm-sandbox" })
+        harness: "in-process",
+        metadata: expect.objectContaining({ executor: "in-process" })
       })
     );
     expect(agentRuntime.appendMessage).toHaveBeenCalledWith(
@@ -55,7 +55,7 @@ describe("agent runtime ledger", () => {
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         eventName: "agent.execution.queued",
-        metadata: expect.objectContaining({ executor: "warm-sandbox" })
+        metadata: expect.objectContaining({ executor: "in-process" })
       })
     );
 
@@ -69,7 +69,7 @@ describe("agent runtime ledger", () => {
       replyUrl: "https://discord.com/channels/guild/channel/reply",
       responseContent: "hi",
       durationMs: 42,
-      executorName: "warm-sandbox"
+      executorName: "in-process"
     });
 
     expect(agentRuntime.appendMessage).toHaveBeenCalledWith(
@@ -87,7 +87,7 @@ describe("agent runtime ledger", () => {
       expect.objectContaining({
         executionId: "agent-execution-message",
         status: "succeeded",
-        metadata: expect.objectContaining({ replyMessageId: "reply", durationMs: 42, executor: "warm-sandbox" })
+        metadata: expect.objectContaining({ replyMessageId: "reply", durationMs: 42, executor: "in-process" })
       })
     );
     expect(agentRuntime.recordEvent).toHaveBeenCalledWith(
@@ -95,7 +95,7 @@ describe("agent runtime ledger", () => {
         eventName: "agent.execution.succeeded",
         traceId: "message",
         durationMs: 42,
-        metadata: expect.objectContaining({ executor: "warm-sandbox" })
+        metadata: expect.objectContaining({ executor: "in-process" })
       })
     );
   });
@@ -116,7 +116,7 @@ function fakeAgentRuntime() {
     harness: "in-process",
     model: null,
     provider: null,
-    codexThreadId: null,
+    harnessThreadId: null,
     metadata: {},
     createdAt: new Date("2026-07-01T12:00:00Z"),
     startedAt: null,

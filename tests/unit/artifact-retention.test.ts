@@ -9,14 +9,14 @@ afterEach(() => {
 describe("artifact retention maintenance", () => {
   it("cleans expired process-run and codegen artifacts in one pass", async () => {
     const repo = { cleanupExpiredProcessRunArtifacts: vi.fn(async () => 2) };
-    const codegenRepo = { cleanupExpiredArtifacts: vi.fn(async () => 3) };
+    const agentRuntimeRepo = { cleanupExpiredArtifacts: vi.fn(async () => 3) };
 
-    await expect(runArtifactRetentionCleanupOnce({ repo, codegenRepo, limit: 250 })).resolves.toEqual({
+    await expect(runArtifactRetentionCleanupOnce({ repo, agentRuntimeRepo, limit: 250 })).resolves.toEqual({
       processRunArtifacts: 2,
       codegenArtifacts: 3
     });
     expect(repo.cleanupExpiredProcessRunArtifacts).toHaveBeenCalledWith(250);
-    expect(codegenRepo.cleanupExpiredArtifacts).toHaveBeenCalledWith(250);
+    expect(agentRuntimeRepo.cleanupExpiredArtifacts).toHaveBeenCalledWith(250);
   });
 
   it("runs periodically and stops cleanly", async () => {

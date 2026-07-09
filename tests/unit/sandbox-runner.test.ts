@@ -6,33 +6,45 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
-  branchPushRef,
-  buildCodegenContextPack,
-  codeUpdateTargetFromInputs,
+  codeUpdatePrompt,
+  codeUpdateRecoveryPrompt,
+  renderCodegenContextPack,
+} from "../../src/execution/codegenPrompts.js";
+import {
+  diagnoseCodegenFailure,
+  renderCodegenFailureDiagnosis,
+} from "../../src/execution/codegenFailureDiagnosis.js";
+import { buildCodegenContextPack } from "../../src/execution/contextPack.js";
+import {
   codegenNpmInstallEnv,
   codegenNpmScriptEnv,
+  dependencyCacheKey,
+} from "../../src/execution/dependencyCache.js";
+import {
   codexConfigToml,
   codexExecArgs,
   codexHomePathForTask,
   codexResumeExecArgs,
-  codeUpdateBranchName,
-  codeUpdatePullRequestBody,
-  codeUpdatePullRequestTitle,
-  codeUpdatePrompt,
-  codeUpdateRecoveryPrompt,
-  diagnoseCodegenFailure,
-  dependencyCacheKey,
+} from "../../src/execution/harness/codex.js";
+import {
   fetchOpenCodeHealth,
   extractOpenCodeFinalText,
   openCodeConfigJson,
   openCodeModelId,
   openCodeRunArgs,
   openCodeServeArgs,
+} from "../../src/execution/harness/opencode.js";
+import {
+  codeUpdateBranchName,
+  codeUpdatePullRequestBody,
+  codeUpdatePullRequestTitle,
+} from "../../src/execution/prFormatting.js";
+import {
+  branchPushRef,
+  codeUpdateTargetFromInputs,
   readGitChangeState,
-  renderCodegenFailureDiagnosis,
-  renderCodegenContextPack,
   repairWorktreeRemoteForBranchPush
-} from "../../src/execution/sandboxRunner.js";
+} from "../../src/execution/repoWorkspace.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -183,14 +195,14 @@ describe("sandboxRunner", () => {
     expect(
       codexHomePathForTask({
         sandboxCacheDir: "/var/cache/discord-ai-agent",
-        workRoot: "/tmp/discord-ai-agent-workspaces/slokh-discord-ai-agent-156e554d18/task-PN8sBv"
+        workRoot: "/tmp/discord-ai-agent-workspaces/example-discord-ai-agent-156e554d18/task-PN8sBv"
       })
     ).toBe("/var/cache/discord-ai-agent/codex-home/task-PN8sBv");
   });
 
-  it("uses concise ai-prefixed branch names for code updates", () => {
+  it("uses concise agent-prefixed branch names for code updates", () => {
     expect(codeUpdateBranchName("Use loading reaction instead of Thinking reply", "task-demo-1234-abcd5678")).toBe(
-      "ai/use-loading-reaction-thinking-reply-5678"
+      "agent/use-loading-reaction-thinking-reply-5678"
     );
   });
 
@@ -204,7 +216,7 @@ describe("sandboxRunner", () => {
     const body = codeUpdatePullRequestBody({
       env: {
         taskRequest: "Use a loading reaction while the bot is working.",
-        requestedBy: "demo-user (100000000000000001)"
+        requestedBy: "demo-user (1234567890123450001)"
       }
     });
 
@@ -227,7 +239,7 @@ describe("sandboxRunner", () => {
         "",
         "---",
         "",
-        "Prompted by: demo-user (100000000000000001)"
+        "Prompted by: demo-user (1234567890123450001)"
       ].join("\n")
     );
     expect(body).not.toContain("## Context");
@@ -549,7 +561,7 @@ describe("sandboxRunner", () => {
 
   it("exposes durable knowledge owners through the stable project map without lifecycle classification", async () => {
     const taskRequest = [
-      "Fully exclude channel ID 1172353113471074314 (#trivia-sucks) from all current and future knowledge.",
+      "Fully exclude channel ID 123456789012345678 (#example-channel) from all current and future knowledge.",
       "Remove indexed messages, embeddings, message index, search index, stats, everything.",
       "Ensure searchDiscordHistory, getRecentDiscordMessages, getDiscordStats, summarizeDiscordHistory, getDiscordChannelTopics, searchDiscordAttachments, and any other retrieval tool filters out this channel."
     ].join(" ");
@@ -590,7 +602,7 @@ describe("sandboxRunner", () => {
       );
       await fs.writeFile(path.join(tempDir, "src", "tools", "coreTools.ts"), "export {}\n", "utf8");
       const taskRequest =
-        'Replace the "Thinking..." placeholder reply behavior with a loading reaction. When processing a prompt, instead of sending a "Thinking..." message, react to the user\'s original message with the animated loading emoji <a:loading:1521299407214084337>. Once the final response is ready, remove the loading reaction from the user\'s message and reply as normal.';
+        'Replace the "Thinking..." placeholder reply behavior with a loading reaction. When processing a prompt, instead of sending a "Thinking..." message, react to the user\'s original message with the animated loading emoji <a:loading:123456789012345678>. Once the final response is ready, remove the loading reaction from the user\'s message and reply as normal.';
 
       const contextPack = await buildCodegenContextPack(tempDir, taskRequest);
       const renderedContext = renderCodegenContextPack(contextPack);
@@ -748,13 +760,13 @@ describe("sandboxRunner", () => {
         generatedBranchName: "ai/generated-fix-1234",
         targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
         targetPullRequestNumber: 120,
-        targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+        targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
       })
     ).toEqual({
       generatedBranchName: "ai/generated-fix-1234",
       branchName: "ai/reuse-existing-pr-branch-follow-up-7ad0",
       pullRequestNumber: 120,
-      pullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120",
+      pullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120",
       updateExistingBranch: true
     });
   });
@@ -763,13 +775,13 @@ describe("sandboxRunner", () => {
     expect(
       codeUpdateTargetFromInputs({
         generatedBranchName: "ai/generated-fix-1234",
-        targetPullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120"
+        targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
       })
     ).toEqual({
       generatedBranchName: "ai/generated-fix-1234",
       branchName: "ai/generated-fix-1234",
       pullRequestNumber: 120,
-      pullRequestUrl: "https://github.com/Slokh/discord-ai-agent/pull/120",
+      pullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120",
       updateExistingBranch: true
     });
   });

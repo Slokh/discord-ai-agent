@@ -10,6 +10,20 @@ Owns sandboxed code-update execution from queued task to PR.
 - Codegen repository navigation context and exact request anchors.
 - Task progress callbacks, command artifacts, and terminal output capture.
 
+## Module Map
+
+- `sandboxRunner.ts`: sandbox entrypoint and compatibility facade; re-exports the public runner API.
+- `runnerPipeline.ts`: `main`/`runCodeUpdate` orchestration, timed phases, tool shims, harness selection.
+- `repoWorkspace.ts`: cached mirror/worktree, target branch/PR resolution, git state, push refs, git auth.
+- `dependencyCache.ts`: dependency cache key, node_modules restore/install, npm env scrubbing.
+- `contextPack.ts`: codegen request context (repo guide excerpt, anchors, project map, check commands).
+- `harness/types.ts`: `CodegenHarness`, `AgentAttemptSummary`, `AgentRunSummary`, `CodegenNoDiffError`, `CodegenHarnessRunInput`, `CodegenHarnessConfigInput`, and `CodegenHarnessAdapter`.
+- `harness/codex.ts` + `harness/opencode.ts`: harness adapters (config, run/recovery, output parsing).
+- `callbacks.ts`: control-plane progress/complete/command/artifact callbacks.
+- `commands.ts`: sandbox command execution with output capture and activity events.
+- `sandboxEnv.ts`: `SandboxEnv` loading and GitHub repository parsing.
+- `sandboxUtils.ts`: small shared helpers (hashing, tails, locks, ports, process waits).
+
 ## Change Routing
 
 - Codegen latency usually starts in repository navigation quality, first-edit latency, harness round count, cache hit/miss state, and repeated reads.
@@ -22,12 +36,16 @@ Owns sandboxed code-update execution from queued task to PR.
 - Kubernetes/local-process launch behavior belongs in `backend.ts` and the queue/reconciler callers.
 - Prompt changes should stay generic and architecture-driven; prefer clearer repo ownership over adding task-specific prompt instructions.
 
+## Sandbox launch and callbacks
+
+- Callback bearer tokens are HMAC tokens over `taskId`, `sandboxRunId`, and `issuedAt`. Every callback also sends `x-agent-task-timestamp` and `x-agent-task-signature`, where the signature is `HMAC(TASK_SIGNING_SECRET, timestamp + "." + rawBody)`. Progress, command, artifact, and terminal callback bodies must include the matching `sandboxRunId`.
+- The internal API rejects progress callbacks after a task is terminal. Terminal callbacks are accepted idempotently after a task is already terminal, but the repository status guards prevent duplicate state transitions/events.
+- Kubernetes job names are deterministic from `taskId`; the queue passes a `recordSandboxRun` hook so `backend.ts` records the sandbox run before creating Kubernetes Secrets, ConfigMaps, or Jobs. The worker skips launch when an active sandbox run already exists for the task.
+- The reconciler asks the Kubernetes backend to sweep sandbox Jobs, Secrets, and ConfigMaps labeled `discord-ai-agent/task-id`; resources whose task id is not present in known sandbox runs are deleted.
+- `githubAuth.ts` resolves the sandbox GitHub credential. Shared deployments should use GitHub App installation tokens scoped to `GITHUB_REPOSITORY`; local `GITHUB_TOKEN` fallback should be a fine-grained, single-repository PAT.
+
 ## Tests
 
 - Sandbox prompt/config/git/context behavior: `tests/unit/sandbox-runner.test.ts`.
 - Backend behavior: `tests/unit/kubernetes-backend.test.ts`.
 - Local smoke: `npm run smoke:codegen -- --harness opencode --close-pr`.
-
-## Migration Direction
-
-Keep `src/execution/sandboxRunner.ts` as a compatibility facade. New implementation should move into focused modules for context, prompts, harnesses, git/cache, artifacts, diagnostics, and PR packaging.

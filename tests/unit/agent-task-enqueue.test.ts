@@ -3,10 +3,9 @@ import { loadConfig } from "../../src/config/env.js";
 import { enqueueAgentTaskJob } from "../../src/jobs/agentTaskEnqueue.js";
 
 describe("agent task enqueue", () => {
-  it("persists task mirrors before enqueue and attaches pg-boss metadata after enqueue", async () => {
+  it("persists task projection and canonical runtime records before enqueue and attaches pg-boss metadata after enqueue", async () => {
     const boss = { send: vi.fn(async () => "pgboss-job-1") };
     const repo = fakeAgentTaskRepo();
-    const codegenRepo = fakeCodegenRepo();
     const agentRuntimeRepo = fakeAgentRuntimeRepo();
 
     const result = await enqueueAgentTaskJob({
@@ -14,7 +13,6 @@ describe("agent task enqueue", () => {
       queueName: "agent.task",
       config: loadConfig(),
       repo: repo as never,
-      codegenRepo: codegenRepo as never,
       agentRuntimeRepo: agentRuntimeRepo as never,
       backendName: "local-process-sandbox",
       job: {
@@ -41,7 +39,7 @@ describe("agent task enqueue", () => {
         taskId: "task-1",
         queueName: "agent.task",
         backendName: "local-process-sandbox",
-        codegenBackend: "kubernetes-job",
+        codegenBackend: "local-process",
         codegenHarness: "opencode",
         codegenModel: "z-ai/glm-5.2",
         codegenProvider: "openrouter"
@@ -82,29 +80,16 @@ describe("agent task enqueue", () => {
         parentAgentThreadKey: "discord:guild:channel"
       })
     );
-    expect(codegenRepo.createExecution).toHaveBeenCalledWith(
+    expect(agentRuntimeRepo.createExecution).toHaveBeenCalledTimes(1);
+    expect(agentRuntimeRepo.createExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ executionId: "agent-task-execution-task-1", status: "queued" })
+    );
+    expect(agentRuntimeRepo.updateExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        executionId: "codegen-execution-task-1",
-        status: "queued",
-        metadata: expect.objectContaining({
-          backend: "local-process-sandbox",
-          pgbossJobId: null,
-          parentAgentSessionId: "agent-session-parent",
-          parentAgentExecutionId: "agent-execution-parent"
-        })
+        executionId: "agent-task-execution-task-1",
+        metadata: expect.objectContaining({ pgbossJobId: "pgboss-job-1" })
       })
     );
-    expect(codegenRepo.updateExecution).toHaveBeenCalledWith({
-      executionId: "codegen-execution-task-1",
-      metadata: expect.objectContaining({
-        backend: "local-process-sandbox",
-        pgbossJobId: "pgboss-job-1",
-        parentAgentSessionId: "agent-session-parent",
-        parentAgentExecutionId: "agent-execution-parent",
-        codegenHarness: "opencode",
-        codegenModel: "z-ai/glm-5.2"
-      })
-    });
     expect(agentRuntimeRepo.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         eventName: "agent.task.queued",
@@ -176,16 +161,6 @@ function fakeAgentTaskRepo() {
   return {
     upsertAgentTaskQueued: vi.fn(async () => undefined),
     markAgentTaskFailed: vi.fn(async () => undefined)
-  };
-}
-
-function fakeCodegenRepo() {
-  return {
-    upsertSession: vi.fn(async () => ({ sessionId: "codegen-session-task-1" })),
-    appendMessage: vi.fn(async () => undefined),
-    recordEvent: vi.fn(async () => undefined),
-    createExecution: vi.fn(async () => undefined),
-    updateExecution: vi.fn(async () => ({ executionId: "codegen-execution-task-1", status: "queued" }))
   };
 }
 

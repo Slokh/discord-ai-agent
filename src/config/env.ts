@@ -12,8 +12,13 @@ const booleanFromEnv = z
     return ["1", "true", "yes", "on"].includes(value.toLowerCase());
   });
 
+// Treat empty env values ("KEY=" lines in .env) as unset so defaults apply.
+const emptyAsUndefined = (value: unknown) => (typeof value === "string" && value.trim() === "" ? undefined : value);
+function nonEmptyStringWithDefault(defaultValue: string) {
+  return z.preprocess(emptyAsUndefined, z.string().trim().min(1).default(defaultValue));
+}
+
 type ProcessRole = "all" | "api" | "bot" | "worker";
-type AgentRuntimeExecutionBackend = "in-process" | "warm-sandbox";
 type CodegenExecutionBackend = "kubernetes-job" | "local-process";
 type CodegenHarness = "codex" | "opencode";
 
@@ -42,7 +47,7 @@ const defaults = {
   discordClientId: "",
   discordGuildId: "",
   discordBotName: "ai",
-  discordLoadingReaction: "<a:loading:1521299407214084337>",
+  discordLoadingReaction: "⏳",
   databaseUrl: defaultDatabaseUrl(),
   embeddingDimensions: 1536,
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
@@ -62,12 +67,8 @@ const defaults = {
   controlUiPublicUrl: "",
   controlPlaneInternalUrl: "http://discord-ai-agent-api:8080",
   taskSigningSecret: "",
-  agentRuntimeExecutionBackend: "in-process" as AgentRuntimeExecutionBackend,
-  agentRuntimeWarmSandboxUrl: "",
-  agentRuntimeWarmSandboxHost: "0.0.0.0",
-  agentRuntimeWarmSandboxPort: 8090,
   codegenHarness: "opencode" as CodegenHarness,
-  codegenExecutionBackend: "kubernetes-job" as CodegenExecutionBackend,
+  codegenExecutionBackend: "local-process" as CodegenExecutionBackend,
   kubernetesNamespace: process.env.POD_NAMESPACE || "discord-ai-agent",
   sandboxImage: "discord-ai-agent-sandbox:latest",
   sandboxImagePullPolicy: "IfNotPresent",
@@ -88,6 +89,11 @@ const defaults = {
   workerEmbeddingEnabled: true,
   workerTaskEnabled: true,
   workerDiscordAgentEnabled: true,
+  retentionEventsDays: 60,
+  retentionAuditDays: 90,
+  retentionEmbeddingRunsDays: 14,
+  memoryCompactionThreshold: 100,
+  memoryCompactionKeepRecent: 30,
   crawlBatchSize: 100,
   crawlFetchRetries: 3,
   crawlRetryBaseMs: 1000,
@@ -96,8 +102,21 @@ const defaults = {
   maxThreadSummaryMessages: 80,
   maxReplyChars: 1800,
   discordAgentResponseTimeoutMs: 30 * 60 * 1000,
+  budgetUserTurnsPerDay: 50,
+  budgetUserImagesPerDay: 10,
+  budgetUserCodegenPerDay: 1,
+  budgetGuildDailyUsd: 10,
+  botOwnerUserId: "",
+  codegenAllowlistUserIds: "",
+  opsAllowlistUserIds: "",
+  imageToolsAllowlistOnly: false,
+  chatSilenceTimeoutMs: 120_000,
+  chatHardTimeoutMs: 600_000,
   spotifyClientId: "",
-  spotifyClientSecret: ""
+  spotifyClientSecret: "",
+  spotifyMarket: "US",
+  promptOverlayPath: ".discord-ai-agent/prompt-overlay.md",
+  toolsetScoping: true
 } as const;
 
 const envSchema = z.object({
@@ -110,7 +129,7 @@ const envSchema = z.object({
   DISCORD_CLIENT_ID: z.string().default(defaults.discordClientId),
   DISCORD_GUILD_ID: z.string().default(defaults.discordGuildId),
   BOT_NAME: z.string().default(defaults.discordBotName),
-  DISCORD_LOADING_REACTION: z.string().trim().min(1).default(defaults.discordLoadingReaction),
+  DISCORD_LOADING_REACTION: nonEmptyStringWithDefault(defaults.discordLoadingReaction),
 
   DATABASE_URL: z.string().default(defaults.databaseUrl),
   EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(defaults.embeddingDimensions),
@@ -121,6 +140,7 @@ const envSchema = z.object({
   OPENROUTER_HTTP_REFERER: z.string().default(defaults.openRouterHttpReferer),
   OPENROUTER_CHAT_MODEL: z.string().default(defaults.openRouterChatModel),
   OPENROUTER_CODEGEN_MODEL: z.string().optional(),
+  OPENROUTER_UTILITY_MODEL: z.string().optional(),
   OPENROUTER_EMBEDDING_MODEL: z.string().default(defaults.openRouterEmbeddingModel),
   OPENROUTER_IMAGE_MODEL: z.string().default(defaults.openRouterImageModel),
 
@@ -136,10 +156,6 @@ const envSchema = z.object({
   CONTROL_UI_PUBLIC_URL: z.string().default(defaults.controlUiPublicUrl),
   CONTROL_PLANE_INTERNAL_URL: z.string().url().default(defaults.controlPlaneInternalUrl),
   TASK_SIGNING_SECRET: z.string().default(defaults.taskSigningSecret),
-  AGENT_RUNTIME_EXECUTION_BACKEND: z.enum(["in-process", "warm-sandbox"]).default(defaults.agentRuntimeExecutionBackend),
-  AGENT_RUNTIME_WARM_SANDBOX_URL: z.string().default(defaults.agentRuntimeWarmSandboxUrl),
-  AGENT_RUNTIME_WARM_SANDBOX_HOST: z.string().default(defaults.agentRuntimeWarmSandboxHost),
-  AGENT_RUNTIME_WARM_SANDBOX_PORT: z.coerce.number().int().positive().default(defaults.agentRuntimeWarmSandboxPort),
   CODEGEN_HARNESS: z.enum(["codex", "opencode"]).default(defaults.codegenHarness),
   CODEGEN_EXECUTION_BACKEND: z.enum(["kubernetes-job", "local-process"]).default(defaults.codegenExecutionBackend),
 
@@ -165,6 +181,12 @@ const envSchema = z.object({
   WORKER_TASK_ENABLED: booleanFromEnv.default(defaults.workerTaskEnabled),
   WORKER_DISCORD_AGENT_ENABLED: booleanFromEnv.default(defaults.workerDiscordAgentEnabled),
 
+  RETENTION_EVENTS_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionEventsDays),
+  RETENTION_AUDIT_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionAuditDays),
+  RETENTION_EMBEDDING_RUNS_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionEmbeddingRunsDays),
+  MEMORY_COMPACTION_THRESHOLD: z.coerce.number().int().min(0).max(100_000).default(defaults.memoryCompactionThreshold),
+  MEMORY_COMPACTION_KEEP_RECENT: z.coerce.number().int().min(1).max(10_000).default(defaults.memoryCompactionKeepRecent),
+
   CRAWL_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(defaults.crawlBatchSize),
   CRAWL_FETCH_RETRIES: z.coerce.number().int().min(0).max(10).default(defaults.crawlFetchRetries),
   CRAWL_RETRY_BASE_MS: z.coerce.number().int().min(0).max(60_000).default(defaults.crawlRetryBaseMs),
@@ -178,9 +200,22 @@ const envSchema = z.object({
     .min(30_000)
     .max(60 * 60 * 1000)
     .default(defaults.discordAgentResponseTimeoutMs),
+  BUDGET_USER_TURNS_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserTurnsPerDay),
+  BUDGET_USER_IMAGES_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserImagesPerDay),
+  BUDGET_USER_CODEGEN_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserCodegenPerDay),
+  BUDGET_GUILD_DAILY_USD: z.coerce.number().min(-1).default(defaults.budgetGuildDailyUsd),
+  BOT_OWNER_USER_ID: z.string().default(defaults.botOwnerUserId),
+  CODEGEN_ALLOWLIST_USER_IDS: z.string().default(defaults.codegenAllowlistUserIds),
+  OPS_ALLOWLIST_USER_IDS: z.string().default(defaults.opsAllowlistUserIds),
+  IMAGE_TOOLS_ALLOWLIST_ONLY: booleanFromEnv.default(defaults.imageToolsAllowlistOnly),
+  CHAT_SILENCE_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(60 * 60 * 1000).default(defaults.chatSilenceTimeoutMs),
+  CHAT_HARD_TIMEOUT_MS: z.coerce.number().int().min(30_000).max(60 * 60 * 1000).default(defaults.chatHardTimeoutMs),
 
   SPOTIFY_CLIENT_ID: z.string().default(defaults.spotifyClientId),
-  SPOTIFY_CLIENT_SECRET: z.string().default(defaults.spotifyClientSecret)
+  SPOTIFY_CLIENT_SECRET: z.string().default(defaults.spotifyClientSecret),
+  SPOTIFY_MARKET: nonEmptyStringWithDefault(defaults.spotifyMarket),
+  PROMPT_OVERLAY_PATH: z.string().trim().default(defaults.promptOverlayPath),
+  TOOLSET_SCOPING: booleanFromEnv.default(defaults.toolsetScoping)
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -193,6 +228,7 @@ export function loadConfig() {
   }
   const chatModel = parsed.data.OPENROUTER_CHAT_MODEL;
   const codegenModel = parsed.data.OPENROUTER_CODEGEN_MODEL?.trim() || chatModel;
+  const utilityModel = parsed.data.OPENROUTER_UTILITY_MODEL?.trim() || chatModel;
 
   return {
     nodeEnv: parsed.data.NODE_ENV,
@@ -215,6 +251,7 @@ export function loadConfig() {
       httpReferer: parsed.data.OPENROUTER_HTTP_REFERER,
       chatModel,
       codegenModel,
+      utilityModel,
       embeddingModel: parsed.data.OPENROUTER_EMBEDDING_MODEL,
       imageModel: parsed.data.OPENROUTER_IMAGE_MODEL
     },
@@ -234,17 +271,15 @@ export function loadConfig() {
       authPassword: parsed.data.CONTROL_UI_AUTH_PASSWORD,
       publicUrl: parsed.data.CONTROL_UI_PUBLIC_URL.trim().replace(/\/$/, "") || null
     },
-    agentRuntime: {
-      executionBackend: parsed.data.AGENT_RUNTIME_EXECUTION_BACKEND,
-      warmSandboxUrl: parsed.data.AGENT_RUNTIME_WARM_SANDBOX_URL.trim().replace(/\/$/, "") || null,
-      warmSandboxHost: parsed.data.AGENT_RUNTIME_WARM_SANDBOX_HOST,
-      warmSandboxPort: parsed.data.AGENT_RUNTIME_WARM_SANDBOX_PORT
-    },
     execution: {
       controlPlaneInternalUrl: parsed.data.CONTROL_PLANE_INTERNAL_URL.replace(/\/$/, ""),
       taskSigningSecret: parsed.data.TASK_SIGNING_SECRET,
       codegenHarness: parsed.data.CODEGEN_HARNESS,
       codegenBackend: parsed.data.CODEGEN_EXECUTION_BACKEND,
+      sandbox: {
+        cacheDir: parsed.data.SANDBOX_CACHE_DIR,
+        taskTimeoutSeconds: parsed.data.SANDBOX_TASK_TIMEOUT_SECONDS
+      },
       kubernetes: {
         namespace: parsed.data.KUBERNETES_NAMESPACE,
         sandboxImage: parsed.data.SANDBOX_IMAGE,
@@ -254,9 +289,7 @@ export function loadConfig() {
         cpuLimit: parsed.data.SANDBOX_CPU_LIMIT,
         memoryRequest: parsed.data.SANDBOX_MEMORY_REQUEST,
         memoryLimit: parsed.data.SANDBOX_MEMORY_LIMIT,
-        taskTimeoutSeconds: parsed.data.SANDBOX_TASK_TIMEOUT_SECONDS,
         ttlSecondsAfterFinished: parsed.data.SANDBOX_TTL_SECONDS_AFTER_FINISHED,
-        cacheDir: parsed.data.SANDBOX_CACHE_DIR,
         cachePvcName: parsed.data.SANDBOX_CACHE_PVC_NAME.trim() || null
       },
       codegenLease: {
@@ -270,7 +303,16 @@ export function loadConfig() {
       crawlEnabled: parsed.data.WORKER_CRAWL_ENABLED ?? defaults.workerCrawlEnabled,
       embeddingEnabled: parsed.data.WORKER_EMBEDDING_ENABLED ?? defaults.workerEmbeddingEnabled,
       taskEnabled: parsed.data.WORKER_TASK_ENABLED ?? defaults.workerTaskEnabled,
-      discordAgentEnabled: parsed.data.WORKER_DISCORD_AGENT_ENABLED ?? defaults.workerDiscordAgentEnabled
+      discordAgentEnabled: parsed.data.WORKER_DISCORD_AGENT_ENABLED ?? defaults.workerDiscordAgentEnabled,
+      retention: {
+        eventsDays: parsed.data.RETENTION_EVENTS_DAYS,
+        auditDays: parsed.data.RETENTION_AUDIT_DAYS,
+        embeddingRunsDays: parsed.data.RETENTION_EMBEDDING_RUNS_DAYS
+      },
+      memoryCompaction: {
+        threshold: parsed.data.MEMORY_COMPACTION_THRESHOLD,
+        keepRecent: parsed.data.MEMORY_COMPACTION_KEEP_RECENT
+      }
     },
     crawlBatchSize: parsed.data.CRAWL_BATCH_SIZE,
     crawlFetchRetries: parsed.data.CRAWL_FETCH_RETRIES,
@@ -280,11 +322,37 @@ export function loadConfig() {
     maxThreadSummaryMessages: parsed.data.MAX_THREAD_SUMMARY_MESSAGES,
     maxReplyChars: parsed.data.MAX_REPLY_CHARS,
     discordAgentResponseTimeoutMs: parsed.data.DISCORD_AGENT_RESPONSE_TIMEOUT_MS,
+    budget: {
+      userTurnsPerDay: parsed.data.BUDGET_USER_TURNS_PER_DAY,
+      userImagesPerDay: parsed.data.BUDGET_USER_IMAGES_PER_DAY,
+      userCodegenPerDay: parsed.data.BUDGET_USER_CODEGEN_PER_DAY,
+      guildDailyUsd: parsed.data.BUDGET_GUILD_DAILY_USD
+    },
+    allowlists: {
+      ownerUserId: parsed.data.BOT_OWNER_USER_ID.trim() || null,
+      codegenUserIds: parseCsvIds(parsed.data.CODEGEN_ALLOWLIST_USER_IDS),
+      opsUserIds: parseCsvIds(parsed.data.OPS_ALLOWLIST_USER_IDS),
+      imageToolsAllowlistOnly: parsed.data.IMAGE_TOOLS_ALLOWLIST_ONLY ?? defaults.imageToolsAllowlistOnly
+    },
+    chatTimeouts: {
+      silenceMs: parsed.data.CHAT_SILENCE_TIMEOUT_MS,
+      hardMs: parsed.data.CHAT_HARD_TIMEOUT_MS
+    },
     spotify: {
       clientId: parsed.data.SPOTIFY_CLIENT_ID,
-      clientSecret: parsed.data.SPOTIFY_CLIENT_SECRET
-    }
+      clientSecret: parsed.data.SPOTIFY_CLIENT_SECRET,
+      market: parsed.data.SPOTIFY_MARKET
+    },
+    promptOverlayPath: parsed.data.PROMPT_OVERLAY_PATH,
+    toolsetScoping: parsed.data.TOOLSET_SCOPING ?? defaults.toolsetScoping
   };
+}
+
+function parseCsvIds(value: string) {
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 export function assertDiscordConfig(config: AppConfig): asserts config is AppConfig & {
@@ -337,9 +405,9 @@ export function assertExecutionConfig(config: AppConfig): asserts config is AppC
   parseGitHubRepository(config.github.repository);
 }
 
-function hasGitHubTaskCredential(config: AppConfig) {
+export function hasGitHubTaskCredential(config: AppConfig) {
   return Boolean(
-    config.github.token ||
-      (config.github.appId.trim() && config.github.appPrivateKey.trim() && config.github.appInstallationId.trim())
+    config.github?.token ||
+      (config.github?.appId?.trim() && config.github?.appPrivateKey?.trim() && config.github?.appInstallationId?.trim())
   );
 }

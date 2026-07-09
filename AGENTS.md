@@ -16,9 +16,9 @@ This repo is a TypeScript Discord AI agent with durable code-update tasks. Keep 
 - Discord mentions enter through `src/discord/client.ts`, then route through `src/agent/router.ts`.
 - Discord-visible acknowledgements, lazy status replies, final replies, files, and loading-reaction cleanup should go through `src/discord/responseSink.ts`.
 - Replayable Discord turn payloads for durable/sandbox execution are built in `src/agent/runtimeEnvelope.ts`.
-- Agent-runtime backend selection and prompt executor behavior live in `src/agent/runtimeRunner.ts` and `src/agent/runtimeExecutor.ts`; the warm prompt server is `src/agent/sandboxPromptServer.ts`, with `src/agent/sandboxPromptRunner.ts` as the local child-process fallback.
-- Model-selected tool contracts live in `src/tools/registry.ts`; `src/tools/coreTools.ts` is the compatibility facade for focused tool-family modules.
-- Durable agent sessions are exposed through `src/db/agentRuntimeRepository.ts` and `/api/agent/sessions/:threadKey`; code-update tasks are currently a compatibility path through `src/tools/agentTaskTools.ts`, `src/jobs/queue.ts`, `src/execution/backend.ts`, and `src/execution/sandboxRunner.ts`.
+- Agent-runtime prompt executor behavior lives in `src/agent/runtimeRunner.ts` and `src/agent/runtimeExecutor.ts`; Discord chat prompt execution runs in-process permanently, while sandboxes are only for code-update tasks.
+- Model-selected tool contracts live in `src/tools/registry.ts`; implementations live in focused tool-family modules under `src/tools/` (resolvers, retrieval, stats, image, skills, coding, ops).
+- Durable agent sessions are exposed through `src/db/agentRuntimeRepository.ts` (the `agent_runtime_*` tables) and `/api/agent/sessions/:threadKey`; code-update tasks flow through `src/tools/agentTaskTools.ts`, `src/jobs/queue.ts`, `src/execution/backend.ts`, and `src/execution/sandboxRunner.ts`.
 - Agent runtime sessions, task state, trace events, command events, artifacts, and run-console data are persisted through `src/db/agentRuntimeRepository.ts` and `src/db/repositories.ts`.
 - The run console API is in `src/control/internalApi.ts`; the React console lives under `src/control/console/`.
 - Read `docs/architecture.md`, `docs/improvement-plan.md`, `docs/tool-design.md`, and the closest `src/**/README.md` before broad codegen, retrieval, observability, or Discord-flow changes.

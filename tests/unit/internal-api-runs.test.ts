@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig, type AppConfig } from "../../src/config/env.js";
 import { startInternalApi, type InternalApiRuntime } from "../../src/control/internalApi.js";
+import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
 import type {
-  CodegenArtifactContent,
-  CodegenArtifactRecord,
-  CodegenEventRecord,
-  CodegenExecutionRecord,
-  CodegenMessageRecord,
-  CodegenSessionRecord
-} from "../../src/db/codegenRepository.js";
+  AgentRuntimeArtifactContent,
+  AgentRuntimeArtifactRecord,
+  AgentRuntimeEventRecord,
+  AgentRuntimeExecutionRecord,
+  AgentRuntimeMessageRecord,
+  AgentRuntimeSessionRecord
+} from "../../src/db/agentRuntimeRepository.js";
 import type {
   DiscordAiAgentRepository,
   ProcessRunArtifactContent,
@@ -45,14 +46,14 @@ describe("internal API run endpoints", () => {
     );
 
     const resolved = await fetch(
-      `${runtime.url}/api/runs/resolve?query=${encodeURIComponent("https://discord.com/channels/111111111111111111/222222222222222222/1521541635580756031")}`,
+      `${runtime.url}/api/runs/resolve?query=${encodeURIComponent("https://discord.com/channels/111111111111111111/222222222222222222/1234567890123450031")}`,
       {
         headers: auth
       }
     );
     expect(resolved.status).toBe(200);
     await expect(resolved.json()).resolves.toEqual(
-      expect.objectContaining({ messageId: "1521541635580756031", run: expect.objectContaining({ runId: "run-1" }) })
+      expect.objectContaining({ messageId: "1234567890123450031", run: expect.objectContaining({ runId: "run-1" }) })
     );
 
     const detail = await fetch(`${runtime.url}/api/runs/run-1`, { headers: auth });
@@ -107,10 +108,10 @@ describe("internal API run endpoints", () => {
   });
 
   it("serves codegen status snapshots for operator tooling", async () => {
-    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), db: fakeCodegenStatusPool() as never });
+    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), db: fakeAgentTaskStatusPool() as never });
     const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
 
-    const status = await fetch(`${runtime.url}/api/codegen/status?limit=2&staleMinutes=5`, { headers: auth });
+    const status = await fetch(`${runtime.url}/api/tasks/status?limit=2&staleMinutes=5`, { headers: auth });
 
     expect(status.status).toBe(200);
     await expect(status.json()).resolves.toEqual(
@@ -125,78 +126,13 @@ describe("internal API run endpoints", () => {
     );
   });
 
-  it("serves a Centaur-style codegen session control-plane API", async () => {
-    const codegenRepo = fakeCodegenRepo();
-    runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), codegenRepo: codegenRepo as never });
-    const auth = {
-      authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}`,
-      "content-type": "application/json"
-    };
-    const threadKey = "discord:111:222:333";
-    const encodedThreadKey = encodeURIComponent(threadKey);
-
-    const create = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}`, {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify({ request: "make codegen faster", requestedBy: "kartik", model: "z-ai/glm-5.2" })
-    });
-    expect(create.status).toBe(200);
-    await expect(create.json()).resolves.toEqual(
-      expect.objectContaining({
-        ok: true,
-        session: expect.objectContaining({ threadKey, request: "make codegen faster", model: "z-ai/glm-5.2" })
-      })
-    );
-
-    const append = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}/messages`, {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify({ role: "user", text: "please implement the runtime plan", clientMessageId: "discord-message-1" })
-    });
-    expect(append.status).toBe(200);
-    await expect(append.json()).resolves.toEqual(expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }));
-
-    const execute = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}/execute`, {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify({ reasoningEffort: "low" })
-    });
-    expect(execute.status).toBe(202);
-    await expect(execute.json()).resolves.toEqual(
-      expect.objectContaining({ execution: expect.objectContaining({ status: "queued", reasoningEffort: "low" }) })
-    );
-
-    const detail = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}`, { headers: auth });
-    expect(detail.status).toBe(200);
-    await expect(detail.json()).resolves.toEqual(
-      expect.objectContaining({
-        messages: [expect.objectContaining({ clientMessageId: "discord-message-1" })],
-        executions: [expect.objectContaining({ status: "queued" })],
-        events: expect.arrayContaining([expect.objectContaining({ eventName: "codegen.execution.queued" })])
-      })
-    );
-
-    const events = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}/events`, { headers: auth });
-    expect(events.status).toBe(200);
-    await expect(events.json()).resolves.toEqual(
-      expect.objectContaining({ events: expect.arrayContaining([expect.objectContaining({ eventName: "codegen.message.appended" })]) })
-    );
-
-    const stream = await fetch(`${runtime.url}/api/codegen/sessions/${encodedThreadKey}/stream`, { headers: auth });
-    expect(stream.status).toBe(200);
-    const reader = stream.body!.getReader();
-    const chunk = await reader.read();
-    await reader.cancel();
-    expect(Buffer.from(chunk.value ?? new Uint8Array()).toString("utf8")).toContain("event: codegen.event");
-  });
-
   it("serves a generic agent session control-plane API", async () => {
-    const codegenRepo = fakeCodegenRepo();
+    const agentRuntimeRepo = fakeAgentRuntimeRepo();
     const enqueuedJobs: unknown[] = [];
     runtime = await startInternalApi({
       config: testConfig(),
       repo: fakeRepo(),
-      codegenRepo: codegenRepo as never,
+      agentRuntimeRepo: agentRuntimeRepo as never,
       jobs: {
         enqueueAgentRuntimeExecution: async (job) => {
           enqueuedJobs.push(job);
@@ -304,7 +240,7 @@ describe("internal API run endpoints", () => {
     await expect(inputLinesArtifact.text()).resolves.toBe(
       '{"type":"user","message":{"content":[{"type":"text","text":"hello from Discord"}]}}\n'
     );
-    const envelopeArtifact = await codegenRepo.storeArtifact({
+    const envelopeArtifact = await agentRuntimeRepo.storeArtifact({
       sessionId: createBody.session.sessionId,
       executionId: executeBody.execution.executionId,
       kind: "turn_envelope",
@@ -371,7 +307,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     guildId: null,
     channelId: null,
     userId: null,
-    messageId: "1521541635580756031",
+    messageId: "1234567890123450031",
     requester: "test",
     source: "test",
     metadata: { agentExecutionId: "agent-execution-1" },
@@ -433,7 +369,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
       options.onListProcessRuns?.(input);
       return [run];
     },
-    findProcessRunByDiscordMessageId: async (messageId: string) => (messageId === "1521541635580756031" ? run : undefined),
+    findProcessRunByDiscordMessageId: async (messageId: string) => (messageId === "1234567890123450031" ? run : undefined),
     findAgentTaskByDiscordMessageId: async () => undefined,
     listRecentAgentTasks: async () => [],
     listProcessRunsForTrace: async () => [run],
@@ -458,7 +394,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
   } as unknown as DiscordAiAgentRepository;
 }
 
-function fakeCodegenStatusPool() {
+function fakeAgentTaskStatusPool() {
   return {
     query: async (sql: string) => {
       if (/SELECT status AS name, count\(\*\)::int AS count FROM agent_tasks/.test(sql)) {
@@ -516,12 +452,12 @@ function fakeCodegenStatusPool() {
       if (/FROM sandbox_runs sr\s+JOIN agent_tasks at ON at\.task_id = sr\.task_id\s+WHERE at\.status IN \('succeeded', 'failed', 'no_changes', 'cancelled'\)/.test(sql)) {
         return { rows: [] };
       }
-      if (/FROM codegen_sandbox_leases/.test(sql)) {
+      if (/FROM agent_runtime_sandbox_leases/.test(sql)) {
         return {
           rows: [
             {
               sandbox_id: "sandbox-1",
-              repo: "Slokh/discord-ai-agent",
+              repo: "example/discord-ai-agent",
               status: "leased",
               lease_owner: "worker-1",
               execution_id: "execution-1",
@@ -538,12 +474,12 @@ function fakeCodegenStatusPool() {
   };
 }
 
-function fakeCodegenRepo() {
-  const sessions = new Map<string, CodegenSessionRecord>();
-  const messages = new Map<string, CodegenMessageRecord[]>();
-  const executions = new Map<string, CodegenExecutionRecord[]>();
-  const events = new Map<string, CodegenEventRecord[]>();
-  const artifacts = new Map<string, CodegenArtifactContent>();
+function fakeAgentRuntimeRepo() {
+  const sessions = new Map<string, AgentRuntimeSessionRecord>();
+  const messages = new Map<string, AgentRuntimeMessageRecord[]>();
+  const executions = new Map<string, AgentRuntimeExecutionRecord[]>();
+  const events = new Map<string, AgentRuntimeEventRecord[]>();
+  const artifacts = new Map<string, AgentRuntimeArtifactContent>();
   let eventId = 1;
 
   return {
@@ -561,17 +497,18 @@ function fakeCodegenRepo() {
       title: string;
       request: string;
       requestedBy: string;
-      status?: CodegenSessionRecord["status"];
+      status?: AgentRuntimeSessionRecord["status"];
       harness?: string | null;
       model?: string | null;
       provider?: string | null;
-      codexThreadId?: string | null;
+      harnessThreadId?: string | null;
       metadata?: Record<string, unknown>;
     }) => {
       const now = new Date("2026-06-30T12:00:00Z");
-      const existing = sessions.get(input.sessionId);
-      const session: CodegenSessionRecord = {
-        sessionId: input.sessionId,
+      const sessionId = input.sessionId ?? agentRuntimeSessionId(input.threadKey ?? "agent-runtime:test");
+      const existing = sessions.get(sessionId);
+      const session: AgentRuntimeSessionRecord = {
+        sessionId,
         traceId: input.traceId ?? existing?.traceId ?? null,
         threadKey: input.threadKey ?? existing?.threadKey ?? null,
         guildId: input.guildId ?? existing?.guildId ?? null,
@@ -584,31 +521,31 @@ function fakeCodegenRepo() {
         harness: input.harness ?? existing?.harness ?? "codex",
         model: input.model ?? existing?.model ?? null,
         provider: input.provider ?? existing?.provider ?? null,
-        codexThreadId: input.codexThreadId ?? existing?.codexThreadId ?? null,
-        metadata: { ...(existing?.metadata ?? {}), ...(input.metadata ?? {}) },
+        harnessThreadId: input.harnessThreadId ?? existing?.harnessThreadId ?? null,
+        metadata: { runtime: "agent", ...(existing?.metadata ?? {}), ...(input.metadata ?? {}) },
         createdAt: existing?.createdAt ?? now,
         startedAt: existing?.startedAt ?? null,
         completedAt: existing?.completedAt ?? null,
         updatedAt: now
       };
-      sessions.set(input.sessionId, session);
+      sessions.set(sessionId, session);
       return session;
     },
     appendMessage: async (input: {
       messageId?: string | null;
       sessionId: string;
       clientMessageId?: string | null;
-      role: CodegenMessageRecord["role"];
+      role: AgentRuntimeMessageRecord["role"];
       parts: unknown[];
       metadata?: Record<string, unknown>;
     }) => {
-      const message: CodegenMessageRecord = {
+      const message: AgentRuntimeMessageRecord = {
         messageId: input.messageId ?? `message-${messages.size + 1}`,
         sessionId: input.sessionId,
         clientMessageId: input.clientMessageId ?? null,
         role: input.role,
         parts: input.parts,
-        metadata: input.metadata ?? {},
+        metadata: { runtime: "agent", ...(input.metadata ?? {}) },
         createdAt: new Date("2026-06-30T12:00:01Z")
       };
       messages.set(input.sessionId, [...(messages.get(input.sessionId) ?? []), message]);
@@ -621,7 +558,7 @@ function fakeCodegenRepo() {
       taskId?: string | null;
       traceId?: string | null;
       attempt?: number;
-      status?: CodegenExecutionRecord["status"];
+      status?: AgentRuntimeExecutionRecord["status"];
       harness?: string | null;
       model?: string | null;
       provider?: string | null;
@@ -630,7 +567,7 @@ function fakeCodegenRepo() {
       sandboxRunId?: string | null;
       metadata?: Record<string, unknown>;
     }) => {
-      const execution: CodegenExecutionRecord = {
+      const execution: AgentRuntimeExecutionRecord = {
         executionId: input.executionId,
         sessionId: input.sessionId,
         taskId: input.taskId ?? null,
@@ -648,7 +585,7 @@ function fakeCodegenRepo() {
         draft: null,
         verifyPassed: null,
         error: null,
-        metadata: input.metadata ?? {},
+        metadata: { runtime: "agent", ...(input.metadata ?? {}) },
         createdAt: new Date("2026-06-30T12:00:02Z"),
         startedAt: null,
         completedAt: null,
@@ -659,7 +596,7 @@ function fakeCodegenRepo() {
     },
     updateExecution: async (input: {
       executionId: string;
-      status?: CodegenExecutionRecord["status"];
+      status?: AgentRuntimeExecutionRecord["status"];
       branchName?: string | null;
       prUrl?: string | null;
       draft?: boolean | null;
@@ -667,14 +604,14 @@ function fakeCodegenRepo() {
       error?: string | null;
       sandboxId?: string | null;
       sandboxRunId?: string | null;
-      codexThreadId?: string | null;
+      harnessThreadId?: string | null;
       metadata?: Record<string, unknown>;
     }) => {
       for (const [sessionId, sessionExecutions] of executions.entries()) {
         const index = sessionExecutions.findIndex((execution) => execution.executionId === input.executionId);
         if (index < 0) continue;
         const existing = sessionExecutions[index]!;
-        const updated: CodegenExecutionRecord = {
+        const updated: AgentRuntimeExecutionRecord = {
           ...existing,
           status: input.status ?? existing.status,
           branchName: input.branchName ?? existing.branchName,
@@ -684,7 +621,7 @@ function fakeCodegenRepo() {
           error: input.error ?? existing.error,
           sandboxId: input.sandboxId ?? existing.sandboxId,
           sandboxRunId: input.sandboxRunId ?? existing.sandboxRunId,
-          metadata: { ...existing.metadata, ...(input.metadata ?? {}) },
+          metadata: { ...existing.metadata, runtime: "agent", ...(input.metadata ?? {}) },
           updatedAt: new Date("2026-06-30T12:00:02Z")
         };
         const nextExecutions = [...sessionExecutions];
@@ -699,14 +636,14 @@ function fakeCodegenRepo() {
       sessionId: string;
       executionId?: string | null;
       traceId?: string | null;
-      kind: CodegenEventRecord["kind"];
-      level?: CodegenEventRecord["level"];
+      kind: AgentRuntimeEventRecord["kind"];
+      level?: AgentRuntimeEventRecord["level"];
       eventName: string;
       summary?: string | null;
       metadata?: Record<string, unknown>;
       durationMs?: number | null;
     }) => {
-      const event: CodegenEventRecord = {
+      const event: AgentRuntimeEventRecord = {
         id: eventId++,
         sessionId: input.sessionId,
         executionId: input.executionId ?? null,
@@ -716,7 +653,7 @@ function fakeCodegenRepo() {
         level: input.level ?? "info",
         eventName: input.eventName,
         summary: input.summary ?? null,
-        metadata: input.metadata ?? {},
+        metadata: { runtime: "agent", ...(input.metadata ?? {}) },
         durationMs: input.durationMs ?? null,
         createdAt: new Date("2026-06-30T12:00:03Z")
       };
@@ -737,7 +674,7 @@ function fakeCodegenRepo() {
       contentType?: string | null;
       metadata?: Record<string, unknown>;
     }) => {
-      const artifact: CodegenArtifactContent = {
+      const artifact: AgentRuntimeArtifactContent = {
         artifactId: `artifact-${artifacts.size + 1}`,
         sessionId: input.sessionId,
         executionId: input.executionId ?? null,
@@ -753,7 +690,7 @@ function fakeCodegenRepo() {
         createdAt: new Date("2026-06-30T12:00:04Z")
       };
       artifacts.set(artifact.artifactId, artifact);
-      return artifact as CodegenArtifactRecord;
+      return artifact as AgentRuntimeArtifactRecord;
     },
     getArtifact: async (input: { artifactId: string }) => artifacts.get(input.artifactId)
   };

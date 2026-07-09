@@ -3,8 +3,9 @@ import type { Logger } from "pino";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
+import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
 
-export const DEFAULT_DISCORD_LOADING_REACTION = "<a:loading:1521299407214084337>";
+export const DEFAULT_DISCORD_LOADING_REACTION = "⏳";
 const ACKNOWLEDGEMENT_FALLBACK_CONTENT = "Working on it...";
 
 export type DiscordResponseResult = {
@@ -71,7 +72,9 @@ export class DiscordResponseSink {
     if (this.acknowledgementAttempted) return;
     this.acknowledgementAttempted = true;
     try {
-      this.loadingReaction = await this.sourceMessage.react(this.loadingReactionEmoji);
+      const reaction = await discordReact(this.sourceMessage, this.loadingReactionEmoji, { logger: this.logger });
+      if (!reaction.ok) throw reaction.error;
+      this.loadingReaction = reaction.value;
       this.logger.debug({ emoji: this.loadingReactionEmoji }, "Added Discord loading reaction");
     } catch (error) {
       this.logger.warn({ err: error, emoji: this.loadingReactionEmoji }, "Failed to add Discord loading reaction");
@@ -86,10 +89,18 @@ export class DiscordResponseSink {
   async updateStatus(content: string): Promise<Message> {
     const cleanContent = cleanResponse(content, this.maxReplyChars);
     if (this.statusMessage) {
-      this.statusMessage = await this.statusMessage.edit(cleanContent);
-      return this.statusMessage;
+      const edited = await discordEdit(this.statusMessage, cleanContent, { logger: this.logger });
+      if (edited.ok) {
+        this.statusMessage = edited.value;
+        return this.statusMessage;
+      }
+      if (edited.reason !== "unknown_message") throw edited.error;
+      this.logger.warn({ statusMessageId: this.statusMessage.id }, "Discord status message disappeared; creating a fresh reply");
+      this.statusMessage = null;
     }
-    this.statusMessage = await this.sourceMessage.reply(cleanContent);
+    const replied = await discordReply(this.sourceMessage, cleanContent, { logger: this.logger });
+    if (!replied.ok) throw replied.error;
+    this.statusMessage = replied.value;
     return this.statusMessage;
   }
 
@@ -103,7 +114,7 @@ export class DiscordResponseSink {
     if (singleMessageContent.length <= this.maxReplyChars) {
       const payload = files?.length ? { content: singleMessageContent, files } : { content: singleMessageContent };
       const usedStatusMessage = Boolean(this.statusMessage);
-      const message = this.statusMessage ? await this.statusMessage.edit(payload) : await this.sourceMessage.reply(payload);
+      const message = await this.editStatusOrReply(payload);
       this.statusMessage = message;
       await this.clearAcknowledgement();
       return { message, usedStatusMessage };
@@ -114,7 +125,7 @@ export class DiscordResponseSink {
     const chunks = splitForDiscord(body, chunkLimit);
     const usedStatusMessage = Boolean(this.statusMessage);
     const firstPayload = files?.length ? { content: chunks[0], files } : { content: chunks[0] };
-    const firstMessage = this.statusMessage ? await this.statusMessage.edit(firstPayload) : await this.sourceMessage.reply(firstPayload);
+    const firstMessage = await this.editStatusOrReply(firstPayload);
     this.statusMessage = firstMessage;
 
     const channel = this.sourceMessage.channel;
@@ -125,11 +136,15 @@ export class DiscordResponseSink {
       const content = isLast && footerLine ? `${chunks[i]}${separator}${footerLine}` : chunks[i];
       if (!sendable) continue;
       if (content.length <= this.maxReplyChars) {
-        const sent = await sendable.send(this.continuationPayload(content, previousMessageId));
+        const sentResult = await discordSend(sendable, this.continuationPayload(content, previousMessageId), { logger: this.logger });
+        if (!sentResult.ok) throw sentResult.error;
+        const sent = sentResult.value;
         previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
       } else {
         for (const overflow of splitForDiscord(content, this.maxReplyChars)) {
-          const sent = await sendable.send(this.continuationPayload(overflow, previousMessageId));
+          const sentResult = await discordSend(sendable, this.continuationPayload(overflow, previousMessageId), { logger: this.logger });
+          if (!sentResult.ok) throw sentResult.error;
+          const sent = sentResult.value;
           previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
         }
       }
@@ -159,7 +174,8 @@ export class DiscordResponseSink {
     }
     for (const emoji of emojis) {
       try {
-        await target.react(emoji);
+        const result = await discordReact(target, emoji, { logger: this.logger });
+        if (!result.ok) throw result.error;
         outcome.added.push(emoji);
         this.logger.debug({ emoji }, "Added Discord reaction");
       } catch (error) {
@@ -179,7 +195,8 @@ export class DiscordResponseSink {
       this.sourceMessage.reactions.cache.find((candidate) => reactionMatches(candidate, this.loadingReactionMatch));
     if (!reaction) return;
     try {
-      await reaction.users.remove(botUserId);
+      const result = await discordRemoveReaction(reaction, botUserId, { logger: this.logger });
+      if (!result.ok) throw result.error;
       this.logger.debug({ emoji: this.loadingReactionEmoji }, "Removed Discord loading reaction");
     } catch (error) {
       this.logger.warn({ err: error, emoji: this.loadingReactionEmoji }, "Failed to remove Discord loading reaction");
@@ -192,6 +209,19 @@ export class DiscordResponseSink {
       reply: { messageReference: referenceMessageId, failIfNotExists: false },
       allowedMentions: { parse: [], repliedUser: false }
     };
+  }
+
+  private async editStatusOrReply(payload: string | MessageCreateOptions): Promise<Message> {
+    if (this.statusMessage) {
+      const edited = await discordEdit(this.statusMessage, payload as Parameters<Message["edit"]>[0], { logger: this.logger });
+      if (edited.ok) return edited.value;
+      if (edited.reason !== "unknown_message") throw edited.error;
+      this.logger.warn({ statusMessageId: this.statusMessage.id }, "Discord status message disappeared; creating a fresh reply");
+      this.statusMessage = null;
+    }
+    const replied = await discordReply(this.sourceMessage, payload, { logger: this.logger });
+    if (!replied.ok) throw replied.error;
+    return replied.value;
   }
 }
 

@@ -1,24 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { agentUpdateTitleFromRequest, formatAgentTaskResult } from "../../src/tools/agentTaskFormatting.js";
 import {
-  answerFromHistory,
-  agentUpdateTitleFromRequest,
-  createSkillFromRequest,
-  extractHistorySearchSyntax,
-  findDiscordUsers,
-  formatAgentTaskResult,
-  generateImage,
+  createAgentUpdateFromRequest,
   getAgentTaskStatus,
   getDeploymentStatus,
-  getDiscordChannelTopics,
+} from "../../src/tools/agentTaskTools.js";
+import { extractHistorySearchSyntax } from "../../src/tools/discordHistoryFormatting.js";
+import { inspectAgentLogs, reportStatus } from "../../src/tools/discordOpsTools.js";
+import {
+  answerFromHistory,
   getDiscordStats,
-  getDiscordUserAvatar,
-  inspectDiscordImages,
-  inspectAgentLogs,
-  reportStatus,
+} from "../../src/tools/discordRetrievalTools.js";
+import {
+  getDiscordChannelTopics,
   summarizeDiscordHistory,
   summarizeCurrentThread,
-  undoConversationTurns
-} from "../../src/tools/coreTools.js";
+} from "../../src/tools/discordSummaryTools.js";
+import { findDiscordUsers } from "../../src/tools/discordResolverTools.js";
+import { undoConversationTurns } from "../../src/tools/agentMemoryTools.js";
+import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../src/tools/imageTools.js";
+import { createSkillFromRequest } from "../../src/tools/skillTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 afterEach(() => {
@@ -56,7 +57,7 @@ describe("model-led mutating tools", () => {
   it("builds concise human titles for code-update requests", () => {
     expect(
       agentUpdateTitleFromRequest(
-        'instead of replying "Thinking..." when prompted, can you just react with the <a:loading:1521299407214084337> emoji to the prompt. Then reply as normal. open a PR'
+        'instead of replying "Thinking..." when prompted, can you just react with the <a:loading:123456789012345678> emoji to the prompt. Then reply as normal. open a PR'
       )
     ).toBe("Replace Thinking reply with loading emoji");
     expect(agentUpdateTitleFromRequest("add a calendar integration")).toBe("Add a calendar integration");
@@ -123,6 +124,33 @@ describe("model-led mutating tools", () => {
     expect(response).toBe("Undid my last 2 turns in this channel and removed 4 memory rows from memory.");
     expect(ctx.repo.deleteMostRecentConversationTurns).toHaveBeenCalledWith({ threadKey: "discord:guild:channel", count: 2 });
     expect(deleteDiscordMessageIds).toHaveBeenCalledWith(["reply-1"]);
+  });
+
+  it("replies with a clear not-configured message instead of enqueueing code updates", async () => {
+    const enqueueAgentTask = vi.fn(async () => ({ jobId: "job-1" }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        github: {},
+        openRouter: { codegenModel: "z-ai/glm-5.2" },
+        execution: { codegenBackend: "local-process", codegenHarness: "opencode" }
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      jobs: { enqueueAgentTask },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      userDisplayName: "User",
+      visibleChannelIds: ["channel"],
+      threadKey: "discord:guild:channel"
+    } as unknown as ToolContext;
+
+    const response = await createAgentUpdateFromRequest(ctx, "add a calendar integration");
+
+    expect(response).toContain("Code-update tasks are not configured on this bot");
+    expect(response).toContain("GITHUB_REPOSITORY");
+    expect(response).toContain("TASK_SIGNING_SECRET");
+    expect(enqueueAgentTask).not.toHaveBeenCalled();
   });
 });
 
@@ -555,7 +583,7 @@ describe("summarizeDiscordHistory", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        openRouter: { apiKey: "test-key", embeddingModel: "test-embed" },
+        openRouter: { apiKey: "test-key", embeddingModel: "test-embed", utilityModel: "utility-summary" },
         embeddingDimensions: 2
       },
       repo: {
@@ -602,6 +630,7 @@ describe("summarizeDiscordHistory", () => {
     expect(ctx.repo.sampleMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"], limit: 20 }));
     expect(chat).toHaveBeenCalledWith(
       expect.objectContaining({
+        model: "utility-summary",
         messages: expect.arrayContaining([
           expect.objectContaining({ content: expect.stringContaining("Retrieval mix: semantic=1, keyword=1, recent=1, representative=1") }),
           expect.objectContaining({ content: expect.stringContaining("semantic job interview update") })
@@ -787,24 +816,24 @@ describe("answerFromHistory", () => {
   });
 
   it("uses about-user filters for subject requests instead of author filters", async () => {
-    const result = searchResult({ normalizedContent: "happy birthday casey" });
+    const result = searchResult({ normalizedContent: "happy birthday usera-aliasy" });
     const ctx = historyAnswerContext({
       keywordResults: [result],
-      userMatches: [{ id: "casey-id", username: "caseyuser", globalName: "Casey", aliases: ["case"], isBot: false, messageCount: 10, lastMessageAt: null, score: 90 }]
+      userMatches: [{ id: "user-a-id", username: "usera", globalName: "UserA", aliases: ["usera-alias"], isBot: false, messageCount: 10, lastMessageAt: null, score: 90 }]
     });
 
     const response = await answerFromHistory(ctx, "birthday", {
-      aboutUserQueries: ["casey"],
+      aboutUserQueries: ["usera-aliasy"],
       requestText: "when is my birthday"
     });
 
-    expect(response).toContain("happy birthday casey");
-    expect(ctx.repo.findDiscordUsers).toHaveBeenCalledWith(expect.objectContaining({ query: "casey" }));
-    expect(ctx.repo.getDiscordUserReferenceTerms).toHaveBeenCalledWith({ guildId: "guild", userIds: ["casey-id"] });
+    expect(response).toContain("happy birthday usera-aliasy");
+    expect(ctx.repo.findDiscordUsers).toHaveBeenCalledWith(expect.objectContaining({ query: "usera-aliasy" }));
+    expect(ctx.repo.getDiscordUserReferenceTerms).toHaveBeenCalledWith({ guildId: "guild", userIds: ["user-a-id"] });
     expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(
       expect.objectContaining({
         authorIds: [],
-        aboutUserTerms: ["@user:casey-id", "caseyuser", "casey", "case"]
+        aboutUserTerms: ["@user:user-a-id", "usera", "usera-aliasy", "usera-alias"]
       })
     );
   });
@@ -855,10 +884,10 @@ function historyAnswerContext(input: { keywordResults: any[]; recentResults?: an
       getDiscordUserReferenceTerms: vi.fn(async ({ userIds }: { userIds: string[] }) =>
         userIds.map((userId) => ({
           userId,
-          username: userId === "casey-id" ? "caseyuser" : userId,
-          globalName: userId === "casey-id" ? "Casey" : null,
-          aliases: userId === "casey-id" ? ["case"] : [],
-          terms: userId === "casey-id" ? ["@user:casey-id", "caseyuser", "casey", "case"] : [`@user:${userId}`, userId]
+          username: userId === "user-a-id" ? "usera" : userId,
+          globalName: userId === "user-a-id" ? "UserA" : null,
+          aliases: userId === "user-a-id" ? ["usera-alias"] : [],
+          terms: userId === "user-a-id" ? ["@user:user-a-id", "usera", "usera-aliasy", "usera-alias"] : [`@user:${userId}`, userId]
         }))
       ),
       keywordSearch: vi.fn(async () => input.keywordResults),
@@ -1136,10 +1165,10 @@ describe("getDiscordUserAvatar", () => {
       fetchDiscordUserAvatar
     } as unknown as ToolContext;
 
-    const result = await getDiscordUserAvatar(ctx, { query: "987654321098765432" });
+    const result = await getDiscordUserAvatar(ctx, { query: "1234567890123459876" });
 
     expect(findDiscordUsers).not.toHaveBeenCalled();
-    expect(fetchDiscordUserAvatar).toHaveBeenCalledWith({ guildId: "guild", userId: "987654321098765432" });
+    expect(fetchDiscordUserAvatar).toHaveBeenCalledWith({ guildId: "guild", userId: "1234567890123459876" });
     expect(result).toContain("default_avatar=true");
   });
 
@@ -1251,11 +1280,11 @@ describe("getDeploymentStatus", () => {
           tasksByStatus: [{ status: "running", count: 1 }],
           agentTaskBacklog: [{ backend: "local-process-sandbox", status: "running", count: 1, oldestAgeSeconds: 125 }],
           sandboxRunsByStatus: [],
-          codegenSandboxLeases: [
+          sandboxLeases: [
             { backend: "local-process-sandbox", status: "idle", count: 1 },
             { backend: "local-process-sandbox", status: "leased", count: 1 }
           ],
-          codegenPhaseDurations: [],
+          taskPhaseDurations: [],
           sandboxCacheEvents: []
         })),
         listAgentTasks: vi.fn(async () => []),
@@ -1265,7 +1294,7 @@ describe("getDeploymentStatus", () => {
       channelId: "channel",
       userId: "user",
       visibleChannelIds: ["channel"],
-      config: { github: { repository: "Slokh/discord-ai-agent", baseBranch: "main" } }
+      config: { github: { repository: "example/discord-ai-agent", baseBranch: "main" } }
     } as unknown as ToolContext;
 
     const response = await getDeploymentStatus(ctx);
@@ -1300,8 +1329,8 @@ describe("getDeploymentStatus", () => {
           tasksByStatus: [{ status: "running", count: 1 }],
           agentTaskBacklog: [],
           sandboxRunsByStatus: [],
-          codegenSandboxLeases: [],
-          codegenPhaseDurations: [],
+          sandboxLeases: [],
+          taskPhaseDurations: [],
           sandboxCacheEvents: []
         })),
         listAgentTasks,
@@ -1311,7 +1340,7 @@ describe("getDeploymentStatus", () => {
       channelId: "channel",
       userId: "user",
       visibleChannelIds: ["channel"],
-      config: { github: { repository: "Slokh/discord-ai-agent", baseBranch: "main" } }
+      config: { github: { repository: "example/discord-ai-agent", baseBranch: "main" } }
     } as unknown as ToolContext;
 
     const response = await getDeploymentStatus(ctx);
@@ -1424,7 +1453,7 @@ describe("getAgentTaskStatus", () => {
       currentStep: "done",
       statusMessage: "Opened pull request.",
       branchName: "ai/runtime-status",
-      prUrl: "https://github.com/Slokh/discord-ai-agent/pull/42",
+      prUrl: "https://github.com/example/discord-ai-agent/pull/42",
       draft: false,
       verifyPassed: null,
       error: null,
@@ -1441,7 +1470,7 @@ describe("getAgentTaskStatus", () => {
       updatedAt: new Date("2026-07-01T12:04:00.000Z")
     };
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith("/repos/Slokh/discord-ai-agent/pulls/42")) {
+      if (url.endsWith("/repos/example/discord-ai-agent/pulls/42")) {
         return jsonResponse({
           number: 42,
           title: "Improve runtime status",
@@ -1450,7 +1479,7 @@ describe("getAgentTaskStatus", () => {
           head: { ref: "ai/runtime-status", sha: "abcdef1234567890" }
         });
       }
-      if (url.endsWith("/repos/Slokh/discord-ai-agent/commits/abcdef1234567890/check-runs?per_page=50")) {
+      if (url.endsWith("/repos/example/discord-ai-agent/commits/abcdef1234567890/check-runs?per_page=50")) {
         return jsonResponse({
           total_count: 2,
           check_runs: [
@@ -1458,19 +1487,19 @@ describe("getAgentTaskStatus", () => {
               name: "test",
               status: "completed",
               conclusion: "failure",
-              html_url: "https://github.com/Slokh/discord-ai-agent/actions/runs/1",
+              html_url: "https://github.com/example/discord-ai-agent/actions/runs/1",
               output: { title: "Tests failed" }
             },
             {
               name: "lint",
               status: "completed",
               conclusion: "success",
-              html_url: "https://github.com/Slokh/discord-ai-agent/actions/runs/2"
+              html_url: "https://github.com/example/discord-ai-agent/actions/runs/2"
             }
           ]
         });
       }
-      if (url.endsWith("/repos/Slokh/discord-ai-agent/commits/abcdef1234567890/status")) {
+      if (url.endsWith("/repos/example/discord-ai-agent/commits/abcdef1234567890/status")) {
         return jsonResponse({
           state: "failure",
           statuses: [{ context: "ci/legacy", state: "failure", target_url: "https://ci.example/failure" }]
@@ -1493,7 +1522,7 @@ describe("getAgentTaskStatus", () => {
       config: {
         github: {
           token: "github-token",
-          repository: "Slokh/discord-ai-agent",
+          repository: "example/discord-ai-agent",
           baseBranch: "main"
         }
       }
@@ -1504,12 +1533,12 @@ describe("getAgentTaskStatus", () => {
     expect(response).toContain("GitHub PR status:");
     expect(response).toContain("PR #42: open head=abcdef1 branch=ai/runtime-status");
     expect(response).toContain("Checks: failure=1, success=1");
-    expect(response).toContain("test (failure) https://github.com/Slokh/discord-ai-agent/actions/runs/1 - Tests failed");
+    expect(response).toContain("test (failure) https://github.com/example/discord-ai-agent/actions/runs/1 - Tests failed");
     expect(response).toContain("Next action: for debugging or fixing, call runCodingAgent so the sandbox can inspect logs with gh CLI");
     expect(response).toContain("Commit status: failure");
     expect(response).toContain("ci/legacy (failure) https://ci.example/failure");
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.github.com/repos/Slokh/discord-ai-agent/pulls/42",
+      "https://api.github.com/repos/example/discord-ai-agent/pulls/42",
       expect.objectContaining({
         headers: expect.objectContaining({
           authorization: "Bearer github-token"
@@ -1656,7 +1685,7 @@ describe("inspectAgentLogs", () => {
     const auditTool = vi.fn(async () => undefined);
     const run = {
       runId: "run-1",
-      traceId: "1521541635580756031",
+      traceId: "1234567890123450031",
       kind: "codegen",
       status: "failed",
       title: "Investigate timeout",
@@ -1664,7 +1693,7 @@ describe("inspectAgentLogs", () => {
       guildId: "guild",
       channelId: "channel",
       userId: "user",
-      messageId: "1521541635580756031",
+      messageId: "1234567890123450031",
       requester: "kartik",
       source: "agent_task",
       metadata: {
@@ -1688,7 +1717,7 @@ describe("inspectAgentLogs", () => {
           taskId === "run-1"
             ? {
                 taskId: "run-1",
-                traceId: "1521541635580756031",
+                traceId: "1234567890123450031",
                 guildId: "guild",
                 channelId: "channel",
                 userId: "user",
@@ -1732,7 +1761,7 @@ describe("inspectAgentLogs", () => {
           {
             id: 1,
             runId: "run-1",
-            traceId: "1521541635580756031",
+            traceId: "1234567890123450031",
             level: "error",
             eventName: "task.failed",
             summary: "verification failed",
@@ -1744,7 +1773,6 @@ describe("inspectAgentLogs", () => {
         getProcessRunArtifacts: vi.fn(async () => []),
         getProcessRunArtifact: vi.fn(async () => undefined),
         getTaskProgressEventsForTask: vi.fn(async () => []),
-        getTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => [
           {
             id: 1,
@@ -1768,7 +1796,6 @@ describe("inspectAgentLogs", () => {
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
         getTaskProgressEvents: vi.fn(async () => []),
-        getTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
         auditTool
@@ -1780,7 +1807,7 @@ describe("inspectAgentLogs", () => {
     } as unknown as ToolContext;
 
     const response = await inspectAgentLogs(ctx, {
-      traceId: "https://discord.com/channels/guild/channel/1521541635580756031",
+      traceId: "https://discord.com/channels/guild/channel/1234567890123450031",
       limit: 10
     });
 
@@ -1789,7 +1816,7 @@ describe("inspectAgentLogs", () => {
     expect(response).toContain("Most time was spent in opencode_attempt_1");
     expect(response).toContain("Terminal tail");
     expect(response).toContain("npm run verify");
-    expect(ctx.repo.findProcessRunByDiscordMessageId).toHaveBeenCalledWith("1521541635580756031");
+    expect(ctx.repo.findProcessRunByDiscordMessageId).toHaveBeenCalledWith("1234567890123450031");
     expect(auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
         resultSummary: expect.stringContaining("\"normalizedRun\":\"run-1\"")
@@ -1801,7 +1828,7 @@ describe("inspectAgentLogs", () => {
     const auditTool = vi.fn(async () => undefined);
     const hiddenRun = {
       runId: "run-hidden",
-      traceId: "1521541635580756032",
+      traceId: "1234567890123450032",
       kind: "discord",
       status: "failed",
       title: "Private channel prompt",
@@ -1809,7 +1836,7 @@ describe("inspectAgentLogs", () => {
       guildId: "guild",
       channelId: "private-channel",
       userId: "user",
-      messageId: "1521541635580756032",
+      messageId: "1234567890123450032",
       requester: "kartik",
       source: "discord",
       metadata: {},
@@ -1828,7 +1855,6 @@ describe("inspectAgentLogs", () => {
         getProcessRunEvents: vi.fn(async () => []),
         getProcessRunArtifacts: vi.fn(async () => []),
         getTaskProgressEventsForTask: vi.fn(async () => []),
-        getTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => []),
         getSandboxRunsForTask: vi.fn(async () => []),
         getTraceEventsForTrace: vi.fn(async () => []),
@@ -1839,7 +1865,6 @@ describe("inspectAgentLogs", () => {
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
         getTaskProgressEvents: vi.fn(async () => []),
-        getTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
         auditTool
@@ -1850,9 +1875,9 @@ describe("inspectAgentLogs", () => {
       visibleChannelIds: ["channel"]
     } as unknown as ToolContext;
 
-    const response = await inspectAgentLogs(ctx, { traceId: "1521541635580756032" });
+    const response = await inspectAgentLogs(ctx, { traceId: "1234567890123450032" });
 
-    expect(response).toBe("No Discord AI Agent trace or tool logs matched traceId=1521541635580756032.");
+    expect(response).toBe("No Discord AI Agent trace or tool logs matched traceId=1234567890123450032.");
     expect(response).not.toContain("Private channel prompt");
     expect(auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1913,7 +1938,7 @@ describe("summarizeCurrentThread", () => {
       channelId: "channel",
       userId: "user",
       visibleChannelIds: ["channel"],
-      config: { maxThreadSummaryMessages: 80 }
+      config: { maxThreadSummaryMessages: 80, openRouter: { utilityModel: "main-chat-fallback" } }
     } as unknown as ToolContext;
 
     await expect(summarizeCurrentThread(ctx)).resolves.toBe("Nachos won.");
@@ -1924,6 +1949,7 @@ describe("summarizeCurrentThread", () => {
     });
     expect(ctx.openRouter.chat).toHaveBeenCalledWith(
       expect.objectContaining({
+        model: "main-chat-fallback",
         messages: expect.arrayContaining([expect.objectContaining({ role: "user", content: expect.stringContaining("we picked nachos") })])
       })
     );

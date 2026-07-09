@@ -5,10 +5,9 @@ Owns pg-boss setup, queue handoff helpers, and worker dispatch.
 ## Files
 
 - `queue.ts`: wires queues, worker consumers, and queue runtime methods. Keep this as orchestration glue.
-- `agentTaskEnqueue.ts`: owns the code-update task enqueue transaction: durable task row, codegen mirror, generic runtime fallback mirror, pg-boss send, and queue metadata adoption.
-- `agentTaskCodegenMirror.ts`: mirrors code-update task requests into the legacy codegen session/execution ledger.
-- `agentTaskRuntimeMirror.ts`: mirrors code-update task requests into the generic agent-runtime ledger when the caller did not already create a runtime execution.
-- `codegenLeaseScheduler.ts`: coordinates warm codegen worker leases.
+- `agentTaskEnqueue.ts`: owns the code-update task enqueue transaction: durable task projection row, canonical runtime session/execution write, pg-boss send, and queue metadata adoption.
+- `agentTaskRuntimeWrite.ts`: writes code-update task requests into the generic agent-runtime ledger when the caller did not already create a runtime execution.
+- `sandboxLeaseScheduler.ts`: coordinates warm codegen worker leases.
 
 ## Change Guidance
 

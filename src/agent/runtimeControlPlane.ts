@@ -5,7 +5,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { codegenExecutionSelection } from "../execution/codegenSelection.js";
 import type { AgentTaskJob } from "../execution/types.js";
 import type { AgentRuntimeExecutionJob, JobRuntime } from "../jobs/queue.js";
-import { promptTextFromAgentRuntimeInputLines } from "./sandboxPromptProtocol.js";
+import { promptTextFromAgentRuntimeInputLines } from "./runtimeEnvelope.js";
 
 export type AgentRuntimeExecutionQueueInput = {
   runId?: string | null;

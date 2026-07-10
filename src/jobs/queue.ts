@@ -267,6 +267,17 @@ export async function startJobs(input: {
       logger.info("Running crawl.guild job");
       await input.crawler.crawlConfiguredGuild();
     });
+    const crawlScheduleCron = input.config.crawlScheduleCron?.trim() ?? "";
+    if (crawlScheduleCron) {
+      await boss.schedule(CRAWL_GUILD_JOB, crawlScheduleCron);
+      logger.info(
+        { queue: CRAWL_GUILD_JOB, cron: crawlScheduleCron },
+        "Registered reconciliation crawl schedule"
+      );
+    } else {
+      await boss.unschedule(CRAWL_GUILD_JOB);
+      logger.info({ queue: CRAWL_GUILD_JOB }, "Reconciliation crawl schedule disabled");
+    }
   }
 
   if (embeddingWorkerEnabled && input.embedding) {

@@ -1837,6 +1837,47 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(results[0]?.authorId).toBe(userB);
   });
 
+  it("matches multiword keyword queries when only some terms appear in a message", async () => {
+    // Regression: plainto_tsquery ANDed every term, so model-generated queries
+    // like "Luke fake ID paper certificate" never matched a message containing
+    // only a couple of the terms.
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.upsertMessage({
+      id: `message-${randomUUID()}`,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "hes always walking around with his birth certificate in hand",
+      normalizedContent: "hes always walking around with his birth certificate in hand",
+      createdAt: new Date("2025-01-01T00:00:00Z")
+    });
+    await repo.upsertMessage({
+      id: `message-${randomUUID()}`,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "fake certificate paper for the ID",
+      normalizedContent: "fake certificate paper for the ID",
+      createdAt: new Date("2025-01-02T00:00:00Z")
+    });
+
+    const results = await repo.keywordSearch({
+      guildId,
+      visibleChannelIds: [channelId],
+      query: "fake ID paper certificate",
+      limit: 10
+    });
+
+    expect(results).toHaveLength(2);
+    // The message matching more query terms ranks first.
+    expect(results[0]?.content).toBe("fake certificate paper for the ID");
+  });
+
   it("does not return bot-authored messages from history search", async () => {
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;

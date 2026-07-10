@@ -1,7 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
-import { buildHistoryRetrievalQuery, formatSearchResults, mergeResults, resolveSearchChannelIds, searchDiscordHistory } from "../../src/memory/search.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildHistoryRetrievalQuery,
+  formatSearchResults,
+  mergeResults,
+  resetQueryEmbeddingCacheForTests,
+  resolveSearchChannelIds,
+  searchDiscordHistory
+} from "../../src/memory/search.js";
 import type { RankedSearchResult } from "../../src/memory/search.js";
 import type { SearchResult } from "../../src/db/repositories.js";
+import { orTsQuery } from "../../src/db/shared.js";
 
 function result(id: string, score: number): SearchResult {
   return {
@@ -36,6 +44,10 @@ describe("mergeResults", () => {
 });
 
 describe("searchDiscordHistory", () => {
+  beforeEach(() => {
+    resetQueryEmbeddingCacheForTests();
+  });
+
   it("normalizes query text and forwards author/date filters", async () => {
     const calls: any[] = [];
     const repo = {
@@ -123,7 +135,7 @@ describe("searchDiscordHistory", () => {
           query: "pizza"
         }
       })
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ results: [], semanticDegraded: false });
   });
 
   it("treats recency words as normal model-provided search text", async () => {
@@ -137,7 +149,7 @@ describe("searchDiscordHistory", () => {
       vectorSearch: async () => []
     };
 
-    const results = await searchDiscordHistory({
+    const { results } = await searchDiscordHistory({
       repo: repo as any,
       openRouter: {} as any,
       config: { maxHistoryResults: 10, openRouter: {} } as any,
@@ -161,7 +173,7 @@ describe("searchDiscordHistory", () => {
     );
   });
 
-  it("falls back to keyword-only results when the query embedding fails", async () => {
+  it("marks the outcome degraded and retries once when the query embedding fails", async () => {
     const keywordResults = [result("a", 1), result("b", 0.9)];
     const repo = {
       getVisibleIndexedChannelIds: async () => ["c"],
@@ -174,7 +186,7 @@ describe("searchDiscordHistory", () => {
       })
     };
 
-    const results = await searchDiscordHistory({
+    const { results, semanticDegraded } = await searchDiscordHistory({
       repo: repo as any,
       openRouter: openRouter as any,
       config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
@@ -187,7 +199,71 @@ describe("searchDiscordHistory", () => {
 
     expect(results.map((item) => item.messageId)).toEqual(["a", "b"]);
     expect(results.every((item) => item.matchSources?.includes("keyword"))).toBe(true);
+    expect(semanticDegraded).toBe(true);
+    expect(openRouter.embed).toHaveBeenCalledTimes(2);
     expect(repo.vectorSearch).not.toHaveBeenCalled();
+  });
+
+  it("recovers on retry when the vector query times out once", async () => {
+    const vectorResults = [result("vector", 0.8)];
+    let vectorCalls = 0;
+    const repo = {
+      getVisibleIndexedChannelIds: async () => ["c"],
+      keywordSearch: vi.fn(async () => []),
+      vectorSearch: vi.fn(async () => {
+        vectorCalls += 1;
+        if (vectorCalls === 1) throw new Error("canceling statement due to statement timeout");
+        return vectorResults;
+      })
+    };
+    const openRouter = {
+      embed: vi.fn(async () => [[0.1, 0.2]])
+    };
+
+    const { results, semanticDegraded } = await searchDiscordHistory({
+      repo: repo as any,
+      openRouter: openRouter as any,
+      config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      search: {
+        guildId: "g",
+        userVisibleChannelIds: ["c"],
+        query: "birthday"
+      }
+    });
+
+    expect(results.map((item) => item.messageId)).toEqual(["vector"]);
+    expect(semanticDegraded).toBe(false);
+    expect(repo.vectorSearch).toHaveBeenCalledTimes(2);
+    // The embedding from the first attempt is cached, so the retry reuses it.
+    expect(openRouter.embed).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses cached query embeddings across searches for the same query", async () => {
+    const repo = {
+      getVisibleIndexedChannelIds: async () => ["c"],
+      keywordSearch: vi.fn(async () => []),
+      vectorSearch: vi.fn(async () => [result("vector", 0.8)])
+    };
+    const openRouter = {
+      embed: vi.fn(async () => [[0.1, 0.2]])
+    };
+    const run = () =>
+      searchDiscordHistory({
+        repo: repo as any,
+        openRouter: openRouter as any,
+        config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+        search: {
+          guildId: "g",
+          userVisibleChannelIds: ["c"],
+          query: "birthday"
+        }
+      });
+
+    await run();
+    await run();
+
+    expect(openRouter.embed).toHaveBeenCalledTimes(1);
+    expect(repo.vectorSearch).toHaveBeenCalledTimes(2);
   });
 
   it("allows vector search for narrowed queries even when keyword fills the requested limit", async () => {
@@ -201,7 +277,7 @@ describe("searchDiscordHistory", () => {
       embed: vi.fn(async () => [[0.1, 0.2]])
     };
 
-    const results = await searchDiscordHistory({
+    const { results } = await searchDiscordHistory({
       repo: repo as any,
       openRouter: openRouter as any,
       config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
@@ -230,7 +306,7 @@ describe("searchDiscordHistory", () => {
       embed: vi.fn(async () => [[0.1, 0.2]])
     };
 
-    const results = await searchDiscordHistory({
+    const { results } = await searchDiscordHistory({
       repo: repo as any,
       openRouter: openRouter as any,
       config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
@@ -267,7 +343,7 @@ describe("searchDiscordHistory", () => {
       embed: vi.fn(async () => [[0.1, 0.2]])
     };
 
-    const results = await searchDiscordHistory({
+    const { results } = await searchDiscordHistory({
       repo: repo as any,
       openRouter: openRouter as any,
       config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
@@ -327,6 +403,26 @@ describe("searchDiscordHistory", () => {
     });
 
     expect(repo.recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ aboutUserTerms: ["casey"] }));
+  });
+});
+
+describe("orTsQuery", () => {
+  it("ORs terms so multiword queries match messages containing any term", () => {
+    expect(orTsQuery("Luke fake ID paper certificate")).toBe("Luke | fake | ID | paper | certificate");
+  });
+
+  it("strips tsquery operator characters that would break to_tsquery", () => {
+    expect(orTsQuery("pizza & (party) | !fun:*")).toBe("pizza | party | fun");
+  });
+
+  it("returns an empty string when no usable terms remain", () => {
+    expect(orTsQuery("&&& !!! :::")).toBe("");
+    expect(orTsQuery("   ")).toBe("");
+  });
+
+  it("caps the number of terms", () => {
+    const query = Array.from({ length: 30 }, (_, index) => `term${index}`).join(" ");
+    expect(orTsQuery(query).split(" | ")).toHaveLength(12);
   });
 });
 

@@ -1,9 +1,6 @@
 import type { Logger } from "pino";
 import type { ChatMessage, ChatResult } from "../models/openrouter.js";
-import {
-  openRouterServerToolDefinitionsForModel,
-  toolByName,
-} from "../tools/registry.js";
+import { toolByName } from "../tools/registry.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type {
   AgentFile,
@@ -87,9 +84,11 @@ export async function synthesizeFinalAnswerWithoutTools(
   if (!(await reserveModelCall(ctx, input.modelCallBudget, "final_synthesis", { reason: input.reason }))) {
     return modelCallCeilingFallback(ctx, input);
   }
+  // Deliberately tool-free: forced synthesis happens after the tool loop has
+  // ended, and offering hosted tools here is what caused models (z-ai/glm) to
+  // emit raw <tool_call> markup into the final user-visible answer.
   const response = await ctx.openRouter.chat({
     messages: finalSynthesisMessages(input.text, input.memoryEvents),
-    tools: openRouterServerToolDefinitionsForModel(),
     temperature: 0.2,
     maxTokens: 4096,
     retryPolicy: "expensive",
@@ -402,7 +401,7 @@ function finalSynthesisMessages(
         DISCORD_RESPONSE_STYLE_GUIDANCE +
         BEST_EFFORT_RESPONSE_GUIDANCE +
         CONTEXT_DISCIPLINE_GUIDANCE +
-        "For Discord history claims, use only the provided Discord tool evidence. If that evidence does not answer the user's question and the question is about public/current/external/how-to information, use hosted web tools instead of stopping at Discord evidence. " +
+        "For Discord history claims, use only the provided Discord tool evidence. You have no tools in this step: if the evidence does not answer the question, say plainly what you found and what is missing; never invent facts or pretend to look something up. " +
         "Do not print XML-like tool-call markup, raw tool names, or skipped redundant tool calls in the final answer. Use dates sparingly: show dates only when the user asks about timing, links, sources, proof, or exact messages, " +
         "or when a date is needed to avoid making old evidence sound current. Do not add a Sources section unless asked. " +
         "If the user asks for links, sources, receipts, proof, or exact messages, include exact Discord message URLs from the evidence. " +

@@ -55,7 +55,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
   const query = (syntaxFilters.query || (hasSyntaxFilters ? "" : question)).trim();
   const effectiveQuery = buildHistoryRetrievalQuery(query);
   const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
-  const results = await searchDiscordHistory({
+  const { results, semanticDegraded } = await searchDiscordHistory({
     repo: ctx.repo,
     openRouter: ctx.openRouter,
     config: ctx.config,
@@ -87,15 +87,15 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
       dateFrom: historyFilters.dateFrom?.toISOString(),
       dateTo: historyFilters.dateTo?.toISOString()
     }),
-    resultSummary: summarizeForAudit({ resultCount: results.length })
+    resultSummary: summarizeForAudit({ resultCount: results.length, semanticDegraded })
   });
 
   const context = formatSearchResults(results);
   if (results.length === 0) {
-    return noHistoryResultsMessage(await ctx.repo.getCrawlStatus(ctx.guildId));
+    return noHistoryResultsMessage(await ctx.repo.getCrawlStatus(ctx.guildId), { semanticDegraded });
   }
 
-  return formatHistoryEvidence({
+  const evidence = formatHistoryEvidence({
     question: requestText,
     query: effectiveQuery,
     results,
@@ -103,6 +103,11 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     dateFrom: historyFilters.dateFrom,
     dateTo: historyFilters.dateTo
   });
+  if (!semanticDegraded) return evidence;
+  return [
+    "Note: semantic search was unavailable for this query (timeout); these are exact-keyword matches only and may be incomplete.",
+    evidence
+  ].join("\n");
 }
 
 export async function getRecentDiscordMessages(

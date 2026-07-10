@@ -1,5 +1,5 @@
 import type { DbPool } from "./pool.js";
-import { VECTOR_SEARCH_STATEMENT_TIMEOUT_MS, VECTOR_SEARCH_MAX_CANDIDATES, FILTERED_VECTOR_SEARCH_MAX_CANDIDATES, rowToSearchResult, rowToDiscordUserLookupResult, rowToDiscordUserReferenceTerms, rowToDiscordChannelLookupResult, rowToDiscordAttachmentSearchResult, normalizeFilterIds, normalizeAboutUserTerms, normalizeLookupQuery, normalizeAttachmentQuery, vectorLiteral } from "./shared.js";
+import { VECTOR_SEARCH_STATEMENT_TIMEOUT_MS, VECTOR_SEARCH_MAX_CANDIDATES, FILTERED_VECTOR_SEARCH_MAX_CANDIDATES, EMBEDDING_INDEX_DIMENSIONS, VECTOR_SEARCH_HNSW_EF_SEARCH, orTsQuery, rowToSearchResult, rowToDiscordUserLookupResult, rowToDiscordUserReferenceTerms, rowToDiscordChannelLookupResult, rowToDiscordAttachmentSearchResult, normalizeFilterIds, normalizeAboutUserTerms, normalizeLookupQuery, normalizeAttachmentQuery, vectorLiteral } from "./shared.js";
 import type { SearchResult, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult } from "./shared.js";
 
 export async function getVisibleIndexedChannelIds(pool: DbPool, guildId: string, visibleChannelIds: string[]) {
@@ -36,6 +36,8 @@ export async function keywordSearch(pool: DbPool, input: {
     dateTo?: Date;
   }): Promise<SearchResult[]> {
     if (input.visibleChannelIds.length === 0 || !input.query.trim()) return [];
+    const tsQuery = orTsQuery(input.query);
+    if (!tsQuery) return [];
     const authorIds = normalizeFilterIds(input.authorIds, input.authorId);
     const channelIds = normalizeFilterIds(input.channelIds);
     const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
@@ -50,7 +52,7 @@ export async function keywordSearch(pool: DbPool, input: {
           m.content,
           m.normalized_content,
           m.created_at,
-          ts_rank_cd(to_tsvector('english', m.normalized_content), plainto_tsquery('english', $3)) AS score
+          ts_rank_cd(to_tsvector('english', m.normalized_content), to_tsquery('english', $3)) AS score
         FROM messages m
         JOIN discord_users u ON u.id = m.author_id
         JOIN channels c ON c.id = m.channel_id
@@ -79,14 +81,14 @@ export async function keywordSearch(pool: DbPool, input: {
           AND ($6::timestamptz IS NULL OR m.created_at >= $6)
           AND ($7::timestamptz IS NULL OR m.created_at <= $7)
           AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
-          AND to_tsvector('english', m.normalized_content) @@ plainto_tsquery('english', $3)
+          AND to_tsvector('english', m.normalized_content) @@ to_tsquery('english', $3)
         ORDER BY score DESC, m.created_at DESC
         LIMIT $4
       `,
       [
         input.guildId,
         input.visibleChannelIds,
-        input.query,
+        tsQuery,
         input.limit,
         authorIds,
         input.dateFrom ?? null,
@@ -123,6 +125,11 @@ export async function vectorSearch(pool: DbPool, input: {
     try {
       await client.query("BEGIN");
       await client.query("SELECT set_config('statement_timeout', $1, true)", [`${VECTOR_SEARCH_STATEMENT_TIMEOUT_MS}ms`]);
+      if (!hasResultFilters) {
+        // Unfiltered path scans the HNSW halfvec index; iterative scan (pgvector >= 0.8) keeps traversing when post-filters reject candidates.
+        await client.query("SELECT set_config('hnsw.ef_search', $1, true)", [String(VECTOR_SEARCH_HNSW_EF_SEARCH)]);
+        await client.query("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)");
+      }
       const result = hasResultFilters
         ? await client.query(
             `
@@ -197,9 +204,9 @@ export async function vectorSearch(pool: DbPool, input: {
           WITH nearest AS MATERIALIZED (
             SELECT
               message_id,
-              embedding <=> $3::vector AS distance
+              embedding::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) <=> $3::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) AS distance
             FROM message_embeddings
-            ORDER BY embedding <=> $3::vector
+            ORDER BY embedding::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) <=> $3::halfvec(${EMBEDDING_INDEX_DIMENSIONS})
             LIMIT $9
           )
           SELECT

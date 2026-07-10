@@ -143,7 +143,7 @@ function fakeContext(overrides: Partial<ToolContext> = {}): { ctx: ToolContext; 
     visibleChannelIds: ["channel"],
     threadKey: "guild:channel",
     requestId: "req-1",
-    requestMessageId: "1524900000000000001",
+    requestMessageId: "1234567890000000001",
     footerLines,
     ...overrides
   } as unknown as ToolContext;
@@ -176,10 +176,10 @@ describe("drawRandom", () => {
     expect(rngRepo.draws).toHaveLength(1);
     expect(rngRepo.draws[0].kind).toBe("dice");
     expect(rngRepo.draws[0].reason).toBe("opening roll");
-    expect(rngRepo.draws[0].messageId).toBe("1524900000000000001");
+    expect(rngRepo.draws[0].messageId).toBe("1234567890000000001");
 
     const session = [...rngRepo.sessions.values()][0];
-    expect(session.clientSeed).toBe("1524900000000000001");
+    expect(session.clientSeed).toBe("1234567890000000001");
     expect(session.clientSeedSource).toBe("discord_message_id");
     expect(verifyRngCommitment(session.serverSeed, session.commitment)).toBe(true);
     await verifyAllDraws(rngRepo, session.id);
@@ -188,7 +188,7 @@ describe("drawRandom", () => {
     expect(footerLines[0]).toContain("🎲 dice 2d6 (opening roll) →");
     expect(footerLines[0]).toContain(`session ${session.id}`);
     expect(footerLines[1]).toContain(`fair-play commit sha256:${session.commitment}`);
-    expect(footerLines[1]).toContain("client seed 1524900000000000001");
+    expect(footerLines[1]).toContain("client seed 1234567890000000001");
   });
 
   it("reuses the session and increments nonces without repeating the commit line", async () => {
@@ -347,11 +347,11 @@ describe("revealRandomness", () => {
     const successor = await rngRepo.getActiveSession("guild:channel");
 
     // simulate a later turn in the same thread with a different triggering message
-    const ctx2 = { ...ctx, requestMessageId: "1524900000000000999" } as ToolContext;
+    const ctx2 = { ...ctx, requestMessageId: "1234567890000000999" } as ToolContext;
     await drawRandom(ctx2, { kind: "coin" });
 
     const seeded = await rngRepo.getSession(successor?.id ?? "");
-    expect(seeded?.clientSeed).toBe("1524900000000000999");
+    expect(seeded?.clientSeed).toBe("1234567890000000999");
     expect(seeded?.nonceCounter).toBe(1);
     await verifyAllDraws(rngRepo, seeded?.id ?? "");
   });

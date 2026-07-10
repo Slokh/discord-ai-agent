@@ -400,6 +400,64 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
+  it("registers the reconciliation crawl schedule when a cron is configured", async () => {
+    const config = { ...testConfig(), crawlScheduleCron: "30 5 * * *" };
+    const runtime = await startJobs({
+      config,
+      pgBossSchema: "pgboss_test",
+      crawler: {
+        crawlConfiguredGuild: async () => undefined
+      }
+    });
+    runtimes.push(runtime);
+
+    const pool = createPool(config);
+    try {
+      const scheduled = await pool.query(
+        "SELECT cron FROM pgboss_test.schedule WHERE name = $1",
+        [CRAWL_GUILD_JOB]
+      );
+      expect(scheduled.rows).toEqual([{ cron: "30 5 * * *" }]);
+    } finally {
+      await pool.end();
+    }
+    await runtime.stop();
+  });
+
+  it("removes the reconciliation crawl schedule when the cron is empty", async () => {
+    const withCron = await startJobs({
+      config: { ...testConfig(), crawlScheduleCron: "30 5 * * *" },
+      pgBossSchema: "pgboss_test",
+      crawler: {
+        crawlConfiguredGuild: async () => undefined
+      }
+    });
+    runtimes.push(withCron);
+    await withCron.stop();
+
+    const config = { ...testConfig(), crawlScheduleCron: "" };
+    const runtime = await startJobs({
+      config,
+      pgBossSchema: "pgboss_test",
+      crawler: {
+        crawlConfiguredGuild: async () => undefined
+      }
+    });
+    runtimes.push(runtime);
+
+    const pool = createPool(config);
+    try {
+      const scheduled = await pool.query(
+        "SELECT cron FROM pgboss_test.schedule WHERE name = $1",
+        [CRAWL_GUILD_JOB]
+      );
+      expect(scheduled.rows).toEqual([]);
+    } finally {
+      await pool.end();
+    }
+    await runtime.stop();
+  });
+
   it("deduplicates repeated crawl enqueue requests for the configured guild", async () => {
     const config = testConfig();
     const runtime = await startJobs({

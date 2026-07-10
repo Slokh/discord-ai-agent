@@ -5,21 +5,40 @@ import type { ToolContext } from "../../src/tools/types.js";
 describe("agent router", () => {
   it("stops recovery calls at the per-turn model call ceiling", async () => {
     const traceEvents: any[] = [];
+    const searchCall = (round: number) => ({
+      content: "",
+      model: "router-model",
+      raw: {},
+      toolCalls: [
+        { id: `call-${round}`, name: "searchDiscordHistory", argumentsText: JSON.stringify({ query: `topic ${round}` }) }
+      ]
+    });
     const chat = vi
       .fn()
-      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ id: "call-1", name: "listTools", argumentsText: "{\"nonce\":1}" }] })
-      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ id: "call-2", name: "listTools", argumentsText: "{\"nonce\":2}" }] })
-      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ id: "call-3", name: "listTools", argumentsText: "{\"nonce\":3}" }] })
-      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ id: "call-4", name: "listTools", argumentsText: "{\"nonce\":4}" }] })
+      .mockResolvedValueOnce(searchCall(1))
+      .mockResolvedValueOnce(searchCall(2))
+      .mockResolvedValueOnce(searchCall(3))
+      .mockResolvedValueOnce(searchCall(4))
       .mockResolvedValueOnce({
         content: "<tool_call>openrouter_web_search<arg_key>query</arg_key><arg_value>test</arg_value></tool_call>",
         model: "router-model",
         raw: {},
         toolCalls: []
       });
+    const keywordSearch = vi.fn(async (input: { query: string }) => [
+      agentSearchResult({
+        messageId: `m-${input.query}`,
+        content: `Evidence about ${input.query}`,
+        normalizedContent: `Evidence about ${input.query}`
+      })
+    ]);
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: false },
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: false, openRouter: {} },
       repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        keywordSearch,
+        vectorSearch: vi.fn(async () => []),
+        getCrawlStatus: vi.fn(async () => []),
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
           traceEvents.push(event);
@@ -1283,7 +1302,17 @@ describe("agent router", () => {
 
   it("allows the model to refine history searches within a turn", async () => {
     const auditTool = vi.fn(async () => undefined);
-    const keywordSearch = vi.fn(async () => [agentSearchResult()]);
+    const keywordSearch = vi
+      .fn()
+      .mockResolvedValueOnce([agentSearchResult()])
+      .mockResolvedValueOnce([
+        agentSearchResult({
+          messageId: "m2",
+          normalizedContent: "The interview went great",
+          content: "The interview went great",
+          link: "https://discord.com/channels/g/c/m2"
+        })
+      ]);
     const ctx = {
       config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
       repo: {
@@ -1340,6 +1369,114 @@ describe("agent router", () => {
     );
     expect(JSON.stringify((ctx.openRouter.chat as any).mock.calls[2][0].messages)).not.toContain("Skipped redundant history search");
     expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
+  });
+
+  it("nudges the model to answer when a rephrased search returns the same evidence", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const keywordSearch = vi.fn(async () => [agentSearchResult()]);
+    const ctx = {
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        keywordSearch,
+        vectorSearch: vi.fn(async () => []),
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: [{ id: "call-1", name: "searchDiscordHistory", argumentsText: JSON.stringify({ query: "job hunting" }) }]
+          })
+          .mockResolvedValueOnce({
+            content: "",
+            model: "retry-model",
+            raw: {},
+            toolCalls: [{ id: "call-2", name: "searchDiscordHistory", argumentsText: JSON.stringify({ query: "job hunt" }) }]
+          })
+          .mockResolvedValueOnce({
+            content: "Alice mentioned a job interview coming up.",
+            model: "final-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what have people said about job hunting?");
+
+    expect(response.content).toBe("Alice mentioned a job interview coming up.");
+    expect(keywordSearch).toHaveBeenCalledTimes(2);
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
+    const finalMessages = JSON.stringify((ctx.openRouter.chat as any).mock.calls[2][0].messages);
+    expect(finalMessages).toContain("Effective query: job hunting");
+    expect(finalMessages).toContain("returned the same evidence as an earlier searchDiscordHistory call");
+  });
+
+  it("forces final synthesis after a second same-evidence search", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const keywordSearch = vi.fn(async () => [agentSearchResult()]);
+    const searchCall = (round: number, query: string) => ({
+      content: "",
+      model: `router-model-${round}`,
+      raw: {},
+      toolCalls: [{ id: `call-${round}`, name: "searchDiscordHistory", argumentsText: JSON.stringify({ query }) }]
+    });
+    const ctx = {
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        keywordSearch,
+        vectorSearch: vi.fn(async () => []),
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce(searchCall(1, "job hunting"))
+          .mockResolvedValueOnce(searchCall(2, "job hunt"))
+          .mockResolvedValueOnce(searchCall(3, "hunting for jobs"))
+          .mockResolvedValueOnce({
+            content: "Alice has a job interview tomorrow; that is the only job talk.",
+            model: "final-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what have people said about job hunting?");
+
+    expect(response.content).toBe("Alice has a job interview tomorrow; that is the only job talk.");
+    expect(keywordSearch).toHaveBeenCalledTimes(3);
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(4);
+    const repeatGuardAudits = (auditTool.mock.calls as any[]).filter(
+      (call) => call[0]?.toolName === "agentToolRepeatGuard"
+    );
+    expect(repeatGuardAudits).toHaveLength(2);
+    expect((ctx.openRouter.chat as any).mock.calls[3][0].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "system", content: expect.stringContaining("Write one natural Discord reply") })
+      ])
+    );
   });
 
   it("lets the model answer after message context evidence", async () => {
@@ -1709,7 +1846,17 @@ describe("agent router", () => {
 
   it("synthesizes a final answer instead of dumping raw tool output at the tool round limit", async () => {
     const auditTool = vi.fn(async () => undefined);
-    const recentMessagesFromChannels = vi.fn(async () => [agentSearchResult()]);
+    let recentCall = 0;
+    const recentMessagesFromChannels = vi.fn(async () => {
+      recentCall += 1;
+      return [
+        agentSearchResult({
+          messageId: `m-${recentCall}`,
+          content: `Update number ${recentCall} about jobs`,
+          normalizedContent: `Update number ${recentCall} about jobs`
+        })
+      ];
+    });
     const toolCallForRound = (round: number) => ({
       content: "",
       model: `tool-model-${round}`,

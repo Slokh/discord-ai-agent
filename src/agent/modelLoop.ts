@@ -88,6 +88,8 @@ export async function runAgentModelLoop(
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
   const successfulToolCallKeys = new Set<string>();
+  const toolResultSignatures = new Map<ToolName, Set<string>>();
+  let repeatedToolResultCount = 0;
   const recoveryState = { emptyNoToolRecoveryAttempted: false };
   const modelCallBudget: ModelCallBudget = {
     used: 0,
@@ -325,7 +327,7 @@ export async function runAgentModelLoop(
       })),
     });
 
-    let skippedRedundantToolThisRound = false;
+    let redundantToolReason: string | null = null;
     for (const route of modelRoutes) {
       ctx.noteProgress?.();
       const toolUseCount = (toolUseCounts.get(route.name) ?? 0) + 1;
@@ -348,12 +350,28 @@ export async function runAgentModelLoop(
         },
       });
       const isRepeatedExactToolCall = successfulToolCallKeys.has(routeKey);
-      const isRedundantToolCall = isRepeatedExactToolCall;
       const result = isRepeatedExactToolCall
         ? await skippedRedundantToolResult(ctx, { text, route, toolUseCount })
         : route.name === "requestAdditionalTools"
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text);
+      const isRepeatedToolResult =
+        !isRepeatedExactToolCall &&
+        route.name !== "requestAdditionalTools" &&
+        (toolResultSignatures.get(route.name)?.has(toolResultSignature(result.content)) ?? false);
+      const isRedundantToolCall = isRepeatedExactToolCall || isRepeatedToolResult;
+      if (isRepeatedToolResult) {
+        await recordAgentEvent(ctx, {
+          audit: {
+            guildId: ctx.guildId,
+            channelId: ctx.channelId,
+            userId: ctx.userId,
+            toolName: "agentToolRepeatGuard",
+            argumentsSummary: text,
+            resultSummary: `repeated ${route.name} result on call ${toolUseCount}: ${previewText(route.argumentsText, 200)}`,
+          },
+        });
+      }
       if (route.name === "requestAdditionalTools") {
         toolsetState = { groups: new Set([...toolsetState.groups, ...parseRequestedToolGroups(route.arguments)]), expandedAll: !stringArrayArgument(route.arguments, "groups")?.length };
       }
@@ -365,6 +383,7 @@ export async function runAgentModelLoop(
           fileCount: result.files?.length ?? 0,
           tableCount: result.tables?.length ?? 0,
           skippedRedundantToolCall: isRedundantToolCall || undefined,
+          repeatedToolResult: isRepeatedToolResult || undefined,
         },
         "Local tool execution complete",
       );
@@ -377,6 +396,7 @@ export async function runAgentModelLoop(
           fileCount: result.files?.length ?? 0,
           tableCount: result.tables?.length ?? 0,
           skippedRedundantToolCall: isRedundantToolCall || undefined,
+          repeatedToolResult: isRepeatedToolResult || undefined,
         },
         durationMs: durationMs(toolStartedAt),
       });
@@ -389,10 +409,24 @@ export async function runAgentModelLoop(
           skippedRedundantToolCall: isRedundantToolCall,
         });
       }
-      if (isRedundantToolCall) {
-        skippedRedundantToolThisRound = true;
+      if (isRepeatedExactToolCall) {
+        redundantToolReason = "redundant tool call";
+      } else if (isRepeatedToolResult) {
+        // The first repeated result only nudges the model, so it can still
+        // pivot to a different tool. A second one means it is stuck: stop
+        // calling tools and answer from the evidence already gathered.
+        repeatedToolResultCount += 1;
+        if (repeatedToolResultCount >= 2) {
+          redundantToolReason = "repeated tool result";
+        }
       } else {
         successfulToolCallKeys.add(routeKey);
+        if (route.name !== "requestAdditionalTools") {
+          const signatures =
+            toolResultSignatures.get(route.name) ?? new Set<string>();
+          signatures.add(toolResultSignature(result.content));
+          toolResultSignatures.set(route.name, signatures);
+        }
       }
       if (result.files?.length) files.push(...result.files);
       if (result.tables?.length) tables.push(...result.tables);
@@ -418,11 +452,17 @@ export async function runAgentModelLoop(
           },
         });
       }
+      const repeatNudge =
+        !isRedundantToolCall && toolUseCount >= 3
+          ? `\n\nNote: this was ${route.name} call ${toolUseCount} this turn (max ${MAX_TOOL_ROUNDS} tool rounds). If the evidence gathered so far is sufficient, answer now instead of calling more tools.`
+          : "";
       messages.push({
         role: "tool",
         tool_call_id: route.id,
         name: route.name,
-        content: toolResultContentForPrompt(route.name, result),
+        content: isRepeatedToolResult
+          ? `The latest ${route.name} call returned the same evidence as an earlier ${route.name} call this turn. No new results are available from this tool. Answer now using the evidence already provided.`
+          : toolResultContentForPrompt(route.name, result) + repeatNudge,
       });
 
       if (route.name === "runCodingAgent") {
@@ -438,9 +478,9 @@ export async function runAgentModelLoop(
       }
     }
 
-    if (skippedRedundantToolThisRound) {
+    if (redundantToolReason) {
       return await synthesizeFinalAnswerWithoutTools(ctx, {
-        reason: "redundant tool call",
+        reason: redundantToolReason,
         text,
         messages,
         files,
@@ -674,6 +714,19 @@ function traceToolRequestMetadata(call: {
 
 function toolRouteKey(route: AgentToolRoute): string {
   return `${route.name}:${JSON.stringify(canonicalToolArguments(route.arguments ?? {}))}`;
+}
+
+/**
+ * Signature for detecting repeated tool results. Strips lines that echo the
+ * model's arguments (question/query headers) so a rephrased search that
+ * returns identical evidence still counts as a repeat.
+ */
+function toolResultSignature(content: string): string {
+  return content
+    .split("\n")
+    .filter((line) => !/^(Question|Effective query):/.test(line))
+    .join("\n")
+    .trim();
 }
 
 function canonicalToolArguments(value: unknown): unknown {

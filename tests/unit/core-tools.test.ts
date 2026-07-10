@@ -623,7 +623,9 @@ describe("summarizeDiscordHistory", () => {
     expect(response).toContain("Sample count: 4/20");
     expect(response).toContain("Coverage: representative sample, not exhaustive");
     expect(response).toContain("Summary:");
-    expect(ctx.openRouter.embed).toHaveBeenCalledWith(["what have people said about job hunting?"], "test-embed", 2);
+    expect(ctx.openRouter.embed).toHaveBeenCalledWith(["what have people said about job hunting?"], "test-embed", 2, {
+      profile: "interactive"
+    });
     expect(ctx.repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"], authorIds: [], limit: 10 }));
     expect(ctx.repo.keywordSearch).toHaveBeenCalledWith(expect.objectContaining({ query: "what have people said about job hunting?", channelIds: ["jobs"] }));
     expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({ channelIds: ["jobs"] }));

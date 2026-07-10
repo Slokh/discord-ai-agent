@@ -1,4 +1,5 @@
 import { buildHistoryRetrievalQuery, formatSearchResults } from "../memory/search.js";
+import { logger } from "../util/logger.js";
 import { summarizeForAudit } from "../util/text.js";
 import type { ToolContext } from "./types.js";
 import type { SearchResult } from "../db/repositories.js";
@@ -337,7 +338,8 @@ async function semanticDiscordSummarySamples(
     const [embedding] = await ctx.openRouter.embed(
       [input.retrievalQuery],
       ctx.config.openRouter.embeddingModel,
-      ctx.config.embeddingDimensions
+      ctx.config.embeddingDimensions,
+      { profile: "interactive" }
     );
     if (!embedding) return [];
     return await ctx.repo.vectorSearch({
@@ -351,7 +353,15 @@ async function semanticDiscordSummarySamples(
       dateTo: input.dateTo,
       limit: input.limit
     });
-  } catch {
+  } catch (error) {
+    logger.warn(
+      {
+        guildId: ctx.guildId,
+        retrievalQuery: input.retrievalQuery.slice(0, 120),
+        error: error instanceof Error ? error.message : String(error)
+      },
+      "Semantic summary sampling failed; continuing without semantic samples"
+    );
     return [];
   }
 }

@@ -185,6 +185,7 @@ export async function executeDiscordAgentRequest(
       config: input.config,
       repo: input.repo,
       budgetRepo: input.budgetRepo,
+      rngRepo: input.rngRepo,
       agentRuntime: input.agentRuntime,
       agentRuntimeSession: agentRuntimeExecution?.session ?? null,
       agentRuntimeExecutionId: agentRuntimeExecution?.executionId ?? null,
@@ -202,6 +203,7 @@ export async function executeDiscordAgentRequest(
       replyContext,
       requestAttachments,
       requestId: request.requestId,
+      requestMessageId: message.id,
       statusChannelId: responseSink.statusChannelId,
       statusMessageId: responseSink.statusMessageId,
       noteProgress: () => undefined,
@@ -270,11 +272,12 @@ export async function executeDiscordAgentRequest(
         memoryEventCount: response.memoryEvents?.length ?? 0
       }
     });
+    const traceFooter = discordTraceFooter(input.config, request.requestId, request.messageStartedAt);
     const finalReply = (
       await responseSink.sendFinal({
         content: response.content,
         files: response.files,
-        footer: discordTraceFooter(input.config, request.requestId, request.messageStartedAt)
+        footer: response.footerLines?.length ? { ...traceFooter, extraLines: response.footerLines } : traceFooter
       })
     ).message;
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);

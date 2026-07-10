@@ -40,7 +40,9 @@ export type ToolName =
   | "searchSpotify"
   | "getSpotifyItem"
   | "createDiscordPoll"
-  | "updateBotAvatar";
+  | "updateBotAvatar"
+  | "drawRandom"
+  | "revealRandomness";
 
 export type ToolGroup = "core" | "discord-retrieval" | "image" | "spotify" | "codegen" | "ops" | "external";
 
@@ -1349,6 +1351,85 @@ export const toolRegistry: ToolRegistryEntry[] = [
       },
       additionalProperties: false
     }
+  },
+  {
+    name: "drawRandom",
+    description:
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. Card draws (kind cards) come from a persistent per-conversation shoe and are dealt without replacement until the shoe is exhausted or reshuffled; use one call per hand segment (e.g. reason 'player hand', 'dealer upcard'). A proof footer is appended to your reply automatically; report the drawn results exactly and do not fabricate or alter them.",
+    userVisible: true,
+    mutates: true,
+    group: "core",
+    category: "generation",
+    toolClass: "generation",
+    outputContract: [
+      "drawn outcome values computed in code (never model-invented)",
+      "session id, nonce, and commitment for verification",
+      "automatic proof footer on the Discord reply",
+      "failure reason when parameters are invalid"
+    ],
+    examples: [
+      "@ai deal me a blackjack hand",
+      "@ai roll 2d6",
+      "@ai flip a coin",
+      "@ai pick someone from alice, bob, carol"
+    ],
+    permissionRequirements: ["tool_audit_log"],
+    parameters: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          enum: ["integers", "dice", "coin", "pick", "shuffle", "cards"],
+          description:
+            "What to draw: integers (uniform in [min, max]), dice (count dice with sides), coin (heads/tails), pick (choose count winners from options), shuffle (reorder options), cards (deal count cards from the conversation's shoe without replacement)."
+        },
+        count: {
+          type: "number",
+          description: "How many values to draw: integers, dice, coins, picks, or cards. Defaults to 1. Max 100."
+        },
+        min: { type: "number", description: "Smallest integer, inclusive. Required for kind integers." },
+        max: { type: "number", description: "Largest integer, inclusive. Required for kind integers." },
+        sides: { type: "number", description: "Number of die faces for kind dice. Defaults to 6." },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description: "Candidate items for kind pick or shuffle. Between 2 and 100 non-empty strings."
+        },
+        deckCount: {
+          type: "number",
+          description: "Number of 52-card decks in the shoe for kind cards (1-8). Changing it mid-session reshuffles a new shoe. Defaults to the current shoe or 1."
+        },
+        reason: {
+          type: "string",
+          description: "Short label for what this draw decides (e.g. 'player hand', 'dealer upcard', 'raffle winner'). Shown in the proof footer and stored for verification."
+        }
+      },
+      required: ["kind"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "revealRandomness",
+    description:
+      "Reveal the secret server seed of this conversation's provably fair RNG session so anyone can verify that every draw matched the published SHA-256 commitment. Use when a user asks to verify fairness, reveal the seed, check the RNG, or finish a game session. Ends the current session and automatically publishes a fresh commitment for future draws. Report the revealed values exactly; the proof footer repeats them verbatim.",
+    userVisible: true,
+    mutates: true,
+    group: "core",
+    category: "generation",
+    toolClass: "generation",
+    outputContract: [
+      "revealed server seed and its verified commitment",
+      "client seed and per-draw outcomes",
+      "verifier instructions",
+      "next session commitment"
+    ],
+    examples: ["@ai reveal randomness", "@ai prove the blackjack deals were fair"],
+    permissionRequirements: ["tool_audit_log"],
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
   }
 ];
 
@@ -1527,7 +1608,9 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   searchSpotify: "external",
   getSpotifyItem: "external",
   createDiscordPoll: "ops",
-  updateBotAvatar: "ops"
+  updateBotAvatar: "ops",
+  drawRandom: "generation",
+  revealRandomness: "generation"
 };
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
@@ -1592,7 +1675,9 @@ function defaultToolExamples(name: ToolName): string[] {
     searchSpotify: "@ai search Spotify for Running Up That Hill",
     getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123",
     createDiscordPoll: "@ai make a poll: what day should we play, Friday or Saturday?",
-    updateBotAvatar: "@ai change your avatar to this image: https://example.com/avatar.png"
+    updateBotAvatar: "@ai change your avatar to this image: https://example.com/avatar.png",
+    drawRandom: "@ai deal me a blackjack hand",
+    revealRandomness: "@ai reveal randomness"
   };
   return [examples[name]];
 }

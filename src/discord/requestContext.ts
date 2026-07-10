@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { BudgetRepository } from "../db/budgetRepository.js";
+import type { RngRepository } from "../db/rngRepository.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { ConversationMessage, DiscordAiAgentRepository } from "../db/repositories.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
@@ -18,6 +19,7 @@ export type DiscordAgentRequestInput = {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   budgetRepo?: BudgetRepository;
+  rngRepo?: RngRepository;
   agentRuntime?: AgentRuntimeRepository;
   deliveryObligations?: DeliveryObligationsRepository;
   agentExecutor?: AgentRuntimePromptExecutor;

@@ -7,7 +7,9 @@ export async function handleAgentRequest(
   userText: string,
 ): Promise<AgentResponse> {
   try {
-    return await runAgentModelLoop(ctx, userText);
+    const footerLines = (ctx.footerLines = ctx.footerLines ?? []);
+    const response = await runAgentModelLoop(ctx, userText);
+    return footerLines.length > 0 ? { ...response, footerLines: [...footerLines] } : response;
   } catch (error) {
     await recordAgentEvent(ctx, {
       eventName: "agent.request.failed",

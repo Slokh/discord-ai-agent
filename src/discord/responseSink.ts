@@ -16,6 +16,8 @@ export type DiscordResponseResult = {
 export type DiscordResponseFooter = {
   traceUrl?: string | null;
   durationMs?: number | null;
+  /** Extra subtext lines (e.g. RNG fairness proofs), each rendered as its own `-#` line. */
+  extraLines?: string[];
 };
 
 export type DiscordReactionOutcome = {
@@ -226,13 +228,20 @@ export class DiscordResponseSink {
 }
 
 export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | null) {
-  const traceUrl = footer?.traceUrl?.trim();
-  if (!traceUrl) return null;
-  const parts = [`[trace](${traceUrl})`];
-  if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
-    parts.push(formatFooterDuration(footer.durationMs));
+  const lines: string[] = [];
+  for (const extraLine of footer?.extraLines ?? []) {
+    const trimmed = extraLine.trim();
+    if (trimmed) lines.push(`-# ${trimmed}`);
   }
-  return `-# ${parts.join(" · ")}`;
+  const traceUrl = footer?.traceUrl?.trim();
+  if (traceUrl) {
+    const parts = [`[trace](${traceUrl})`];
+    if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
+      parts.push(formatFooterDuration(footer.durationMs));
+    }
+    lines.push(`-# ${parts.join(" · ")}`);
+  }
+  return lines.length > 0 ? lines.join("\n") : null;
 }
 
 function formatFooterDuration(ms: number) {

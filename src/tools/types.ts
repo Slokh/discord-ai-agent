@@ -2,6 +2,7 @@ import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { BudgetRepository } from "../db/budgetRepository.js";
 import type { ConversationMessage, DiscordAiAgentRepository } from "../db/repositories.js";
+import type { RngRepository } from "../db/rngRepository.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { JobRuntime } from "../jobs/queue.js";
 
@@ -9,6 +10,7 @@ export type ToolContext = {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   budgetRepo?: BudgetRepository;
+  rngRepo?: RngRepository;
   agentRuntime?: AgentRuntimeRepository;
   agentRuntimeSession?: AgentRuntimeSessionRecord | null;
   agentRuntimeExecutionId?: string | null;
@@ -27,7 +29,11 @@ export type ToolContext = {
   requestAttachments?: DiscordAttachmentContext[];
   generatedFiles?: AgentFile[];
   generatedTables?: AgentTable[];
+  /** Non-model footer lines appended verbatim to the final Discord reply (e.g. RNG fairness proofs). */
+  footerLines?: string[];
   requestId?: string;
+  /** Discord id of the message that triggered this request; assigned by Discord, not the bot. */
+  requestMessageId?: string;
   statusChannelId?: string;
   statusMessageId?: string;
   visibleIndexedChannelIds?: string[];
@@ -110,6 +116,8 @@ export type AgentResponse = {
   limitation?: string;
   files?: AgentFile[];
   tables?: AgentTable[];
+  /** Non-model footer lines rendered as Discord subtext under the reply. */
+  footerLines?: string[];
   storedContent?: string;
   memoryEvents?: Array<{
     role: "tool";

@@ -50,7 +50,9 @@ describe("toolRegistry", () => {
       "searchSpotify",
       "getSpotifyItem",
       "createDiscordPoll",
-      "updateBotAvatar"
+      "updateBotAvatar",
+      "drawRandom",
+      "revealRandomness"
     ]);
   });
 

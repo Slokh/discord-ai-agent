@@ -18,6 +18,24 @@ const evalPromptSchema = z.object({
   expectedRequestedTools: z.array(z.string().min(1)).default([]),
   mustContain: z.array(z.string().min(1)).default([]),
   mustNotContain: z.array(z.string().min(1)).default([]),
+  auditMustNotMatch: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .refine(
+          (pattern) => {
+            try {
+              new RegExp(pattern, "iu");
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          { message: "must be a valid regular expression" }
+        )
+    )
+    .default([]),
   maxLatencyMs: z.number().int().positive().optional(),
   promptArgs: z.array(z.string().min(1)).default([]),
   noMemory: z.boolean().default(true),
@@ -67,6 +85,8 @@ export type EvalTraceEvidence = {
   requestedTools: string[];
   selectedTools: string[];
   auditedTools: string[];
+  /** One line per tool audit: "toolName argumentsSummary resultSummary", for auditMustNotMatch assertions. */
+  toolAuditLines: string[];
   traceEventCount: number;
   toolAuditCount: number;
 };
@@ -131,6 +151,8 @@ type TraceEventLike = {
 
 type ToolAuditLike = {
   toolName?: string;
+  argumentsSummary?: string | null;
+  resultSummary?: string | null;
 };
 
 async function main() {
@@ -401,6 +423,11 @@ export function evaluatePromptAssertions(
   for (const text of prompt.mustNotContain) {
     if (normalizedAnswer.includes(text.toLowerCase())) failures.push(`answer contained forbidden text: ${text}`);
   }
+  for (const pattern of prompt.auditMustNotMatch) {
+    const regex = new RegExp(pattern, "iu");
+    const match = output.evidence.toolAuditLines.find((line) => regex.test(line));
+    if (match !== undefined) failures.push(`tool audit matched forbidden pattern ${pattern}: ${match}`);
+  }
   if (prompt.maxLatencyMs != null && output.durationMs > prompt.maxLatencyMs) {
     failures.push(`latency ${output.durationMs}ms exceeded ${prompt.maxLatencyMs}ms`);
   }
@@ -452,6 +479,9 @@ export function evidenceFromTrace(traceEvents: TraceEventLike[], toolAudits: Too
     requestedTools: uniqueStrings(requestedTools),
     selectedTools: uniqueStrings(selectedTools),
     auditedTools: uniqueStrings(toolAudits.map((audit) => audit.toolName).filter((tool): tool is string => Boolean(tool))),
+    toolAuditLines: toolAudits.map((audit) =>
+      [audit.toolName, audit.argumentsSummary, audit.resultSummary].filter(Boolean).join(" ")
+    ),
     traceEventCount: traceEvents.length,
     toolAuditCount: toolAudits.length
   };
@@ -674,6 +704,7 @@ function emptyEvidence(): EvalTraceEvidence {
     requestedTools: [],
     selectedTools: [],
     auditedTools: [],
+    toolAuditLines: [],
     traceEventCount: 0,
     toolAuditCount: 0
   };

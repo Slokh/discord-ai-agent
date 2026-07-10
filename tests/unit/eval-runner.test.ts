@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   buildPromptCommand,
@@ -21,6 +22,7 @@ const basePrompt: EvalPrompt = {
   expectedRequestedTools: [],
   mustContain: [],
   mustNotContain: [],
+  auditMustNotMatch: [],
   promptArgs: [],
   noMemory: true,
   useDiscordMemory: false,
@@ -80,12 +82,16 @@ describe("eval runner", () => {
             }
           }
         ],
-        [{ toolName: "findDiscordUsers" }, { toolName: "summarizeDiscordHistory" }]
+        [
+          { toolName: "findDiscordUsers" },
+          { toolName: "summarizeDiscordHistory", argumentsSummary: '{"query":"jobs"}', resultSummary: "3 messages" }
+        ]
       )
     ).toEqual({
       requestedTools: ["findDiscordUsers", "summarizeDiscordHistory", "openrouter:web_search"],
       selectedTools: ["findDiscordUsers", "summarizeDiscordHistory"],
       auditedTools: ["findDiscordUsers", "summarizeDiscordHistory"],
+      toolAuditLines: ["findDiscordUsers", 'summarizeDiscordHistory {"query":"jobs"} 3 messages'],
       traceEventCount: 1,
       toolAuditCount: 2
     });
@@ -109,6 +115,7 @@ describe("eval runner", () => {
             requestedTools: ["searchDiscordHistory", "openrouter:web_search"],
             selectedTools: ["searchDiscordHistory"],
             auditedTools: [],
+            toolAuditLines: [],
             traceEventCount: 1,
             toolAuditCount: 0
           }
@@ -133,6 +140,7 @@ describe("eval runner", () => {
             requestedTools: [],
             selectedTools: ["searchDiscordHistory"],
             auditedTools: [],
+            toolAuditLines: [],
             traceEventCount: 1,
             toolAuditCount: 0
           }
@@ -145,6 +153,58 @@ describe("eval runner", () => {
       "answer contained forbidden text: Sources:",
       "latency 20ms exceeded 10ms"
     ]);
+  });
+
+  it("fails auditMustNotMatch when the blackjack deal pre-draws the dealer's hole card", async () => {
+    const core = JSON.parse(await fs.readFile("evals/prompts/core.json", "utf8")) as {
+      prompts: Array<{ id: string; auditMustNotMatch?: string[] }>;
+    };
+    const patterns = core.prompts.find((prompt) => prompt.id === "random-blackjack-deal")?.auditMustNotMatch ?? [];
+    expect(patterns.length).toBeGreaterThan(0);
+    const prompt = { ...basePrompt, auditMustNotMatch: patterns };
+    const output = (toolAuditLines: string[]) => ({
+      answer: "Your hand: K♣ 9♠ = 19. Dealer shows 10♥.",
+      durationMs: 50,
+      evidence: {
+        requestedTools: [],
+        selectedTools: ["drawRandom"],
+        auditedTools: ["drawRandom"],
+        toolAuditLines,
+        traceEventCount: 1,
+        toolAuditCount: toolAuditLines.length
+      }
+    });
+
+    // Correct deal: player hand plus a single dealer upcard.
+    expect(
+      evaluatePromptAssertions(
+        prompt,
+        output([
+          'drawRandom {"kind":"cards","count":2,"reason":"player hand"} session rng_a nonce 1: cards (player hand) → K♣ 9♠ · shoe cards 1–2 of 52',
+          'drawRandom {"kind":"cards","count":1,"reason":"dealer upcard"} session rng_a nonce 1: cards (dealer upcard) → 10♥ · shoe cards 3–3 of 52'
+        ])
+      )
+    ).toEqual([]);
+
+    // Leaky deal: the dealer draw exposes the hole card in the audit/footer.
+    const dealerLeak = evaluatePromptAssertions(
+      prompt,
+      output([
+        'drawRandom {"kind":"cards","count":2,"reason":"dealer hand"} session rng_a nonce 1: cards (dealer hand) → 6♠ 10♥ · shoe cards 3–4 of 52'
+      ])
+    );
+    expect(dealerLeak).toHaveLength(1);
+    expect(dealerLeak[0]).toContain("tool audit matched forbidden pattern");
+
+    // Leaky deal: one combined draw for player and dealer.
+    expect(
+      evaluatePromptAssertions(
+        prompt,
+        output([
+          'drawRandom {"kind":"cards","count":4,"reason":"initial deal"} session rng_a nonce 1: cards (initial deal) → K♣ 9♠ 6♠ 10♥ · shoe cards 1–4 of 52'
+        ])
+      )
+    ).toHaveLength(1);
   });
 
   it("formats actionable eval summaries with requested, local, and audited tool evidence", () => {
@@ -166,6 +226,7 @@ describe("eval runner", () => {
             requestedTools: ["searchDiscordHistory"],
             selectedTools: ["searchDiscordHistory"],
             auditedTools: ["searchDiscordHistory"],
+            toolAuditLines: [],
             traceEventCount: 2,
             toolAuditCount: 1
           },
@@ -202,6 +263,7 @@ describe("eval runner", () => {
             requestedTools: ["openrouter:web_search"],
             selectedTools: [],
             auditedTools: [],
+            toolAuditLines: [],
             traceEventCount: 1,
             toolAuditCount: 0
           },
@@ -220,6 +282,7 @@ describe("eval runner", () => {
             requestedTools: ["searchDiscordHistory"],
             selectedTools: ["searchDiscordHistory"],
             auditedTools: ["searchDiscordHistory"],
+            toolAuditLines: [],
             traceEventCount: 1,
             toolAuditCount: 1
           },
@@ -240,6 +303,7 @@ describe("eval runner", () => {
             requestedTools: ["searchDiscordHistory"],
             selectedTools: ["searchDiscordHistory"],
             auditedTools: ["searchDiscordHistory"],
+            toolAuditLines: [],
             traceEventCount: 1,
             toolAuditCount: 1
           },
@@ -254,6 +318,7 @@ describe("eval runner", () => {
             requestedTools: ["getDiscordStats"],
             selectedTools: ["getDiscordStats"],
             auditedTools: ["getDiscordStats"],
+            toolAuditLines: [],
             traceEventCount: 1,
             toolAuditCount: 1
           },

@@ -136,16 +136,32 @@ export function historyEvidenceDateSummary(results: SearchResult[]) {
   return `${oldestDate} to ${newestDate} (${spanDays.toLocaleString("en-US")} days)`;
 }
 
-export function noHistoryResultsMessage(crawl: Array<{ status: string; channels: number; messages: number }>) {
+export function noHistoryResultsMessage(
+  crawl: Array<{ status: string; channels: number; messages: number }>,
+  options: { semanticDegraded?: boolean } = {}
+) {
+  const lines: string[] = [];
   const active = crawl.filter((row) => ["pending", "running", "error"].includes(row.status));
+  if (options.semanticDegraded) {
+    lines.push(
+      "Semantic search was unavailable for this query (timeout), so only exact-keyword matching ran and this result is incomplete.",
+      "Do not conclude the information is absent. Retry this same search once; if it degrades again, tell the user semantic search is temporarily unavailable instead of retrying more."
+    );
+  }
   if (active.length === 0) {
-    return "I did not find matching indexed Discord messages that you can access.";
+    lines.push(
+      options.semanticDegraded
+        ? "No keyword matches found."
+        : "I did not find matching indexed Discord messages that you can access."
+    );
+    return lines.join("\n");
   }
 
-  return [
+  lines.push(
     "I did not find matching indexed Discord messages that you can access yet.",
     `Crawl status: ${active.map((row) => `${row.status}=${row.channels} channels/${row.messages} messages`).join(", ")}.`
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 export function extractHistorySearchSyntax(message: string) {

@@ -3,6 +3,29 @@ export const LARGE_ARTIFACT_RETENTION_DAYS = 14;
 export const VECTOR_SEARCH_STATEMENT_TIMEOUT_MS = 8_000;
 export const VECTOR_SEARCH_MAX_CANDIDATES = 1_000;
 export const FILTERED_VECTOR_SEARCH_MAX_CANDIDATES = 2_000;
+// Must match the vector(...) column and halfvec(...) index expression in migrations.
+export const EMBEDDING_INDEX_DIMENSIONS = 1536;
+// hnsw.ef_search for unfiltered nearest-neighbor scans; iterative scans keep
+// going past this when post-filters reject candidates (pgvector >= 0.8).
+export const VECTOR_SEARCH_HNSW_EF_SEARCH = 120;
+const KEYWORD_SEARCH_MAX_TERMS = 12;
+
+/**
+ * Build an OR-semantics tsquery string from a free-text query.
+ * plainto_tsquery ANDs every term, so model-generated multi-word queries
+ * ("Luke fake ID paper certificate") almost never match a single Discord
+ * message. OR the terms instead and let ts_rank_cd rank messages that match
+ * more terms higher. Returns "" when no usable terms remain; callers must
+ * skip the query in that case because to_tsquery('') raises a syntax error.
+ */
+export function orTsQuery(query: string): string {
+  return query
+    .split(/\s+/)
+    .map((term) => term.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter(Boolean)
+    .slice(0, KEYWORD_SEARCH_MAX_TERMS)
+    .join(" | ");
+}
 
 import type { SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, MessageForEmbedding, InteractionBlock, DatabaseSkill, AgentTaskStatus, AgentTaskRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
 export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";

@@ -24,12 +24,53 @@ export type HistorySearchInput = {
   dateTo?: Date;
 };
 
+export type HistorySearchOutcome = {
+  results: RankedSearchResult[];
+  /**
+   * True when the semantic leg failed (embedding call or vector query), so
+   * results are keyword-only and likely incomplete. Callers must surface this
+   * to the model so it does not treat an empty result as authoritative and
+   * spiral into retrying near-identical queries.
+   */
+  semanticDegraded: boolean;
+};
+
+const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
+const queryEmbeddingCache = new Map<string, number[]>();
+
+export function resetQueryEmbeddingCacheForTests() {
+  queryEmbeddingCache.clear();
+}
+
+async function embedQueryCached(input: {
+  openRouter: OpenRouterClient;
+  config: AppConfig;
+  query: string;
+}): Promise<number[] | undefined> {
+  const key = `${input.config.openRouter.embeddingModel}:${input.config.embeddingDimensions}:${input.query}`;
+  const cached = queryEmbeddingCache.get(key);
+  if (cached) return cached;
+  const [embedding] = await input.openRouter.embed(
+    [input.query],
+    input.config.openRouter.embeddingModel,
+    input.config.embeddingDimensions,
+    { profile: "interactive" }
+  );
+  if (!embedding) return undefined;
+  if (queryEmbeddingCache.size >= QUERY_EMBEDDING_CACHE_MAX_ENTRIES) {
+    const oldest = queryEmbeddingCache.keys().next().value;
+    if (oldest != null) queryEmbeddingCache.delete(oldest);
+  }
+  queryEmbeddingCache.set(key, embedding);
+  return embedding;
+}
+
 export async function searchDiscordHistory(input: {
   repo: DiscordAiAgentRepository;
   openRouter: OpenRouterClient;
   config: AppConfig;
   search: HistorySearchInput;
-}): Promise<RankedSearchResult[]> {
+}): Promise<HistorySearchOutcome> {
   const limit = input.search.limit ?? input.config.maxHistoryResults;
   const normalizedQuery = buildHistoryRetrievalQuery(input.search.query);
   const visibleIndexedChannels =
@@ -41,12 +82,12 @@ export async function searchDiscordHistory(input: {
     visibleIndexedChannelIds: visibleIndexedChannels,
     requestedChannelIds: input.search.channelIds
   });
-  if (searchChannelIds.length === 0) return [];
+  if (searchChannelIds.length === 0) return { results: [], semanticDegraded: false };
   const authorIds = [...new Set([...(input.search.authorIds ?? []), input.search.authorId ?? ""].filter(Boolean))];
   const aboutUserTerms = [...new Set((input.search.aboutUserTerms ?? []).map((term) => term.trim().toLowerCase()).filter(Boolean))];
 
   if (!normalizedQuery.trim()) {
-    return input.repo.recentMessagesFromChannels({
+    const recent = await input.repo.recentMessagesFromChannels({
       guildId: input.search.guildId,
       visibleChannelIds: searchChannelIds,
       limit,
@@ -55,6 +96,7 @@ export async function searchDiscordHistory(input: {
       dateFrom: input.search.dateFrom,
       dateTo: input.search.dateTo
     });
+    return { results: recent, semanticDegraded: false };
   }
 
   const keyword = await input.repo.keywordSearch({
@@ -69,28 +111,37 @@ export async function searchDiscordHistory(input: {
   });
 
   let vector: SearchResult[] = [];
+  let semanticDegraded = false;
   if (input.config.openRouter.apiKey) {
+    const semanticLeg = async () => {
+      const embedding = await embedQueryCached({
+        openRouter: input.openRouter,
+        config: input.config,
+        query: normalizedQuery
+      });
+      if (!embedding) throw new Error("query embedding unavailable");
+      return input.repo.vectorSearch({
+        guildId: input.search.guildId,
+        visibleChannelIds: searchChannelIds,
+        embedding,
+        limit,
+        authorIds,
+        aboutUserTerms,
+        dateFrom: input.search.dateFrom,
+        dateTo: input.search.dateTo
+      });
+    };
     const semanticStartedAt = Date.now();
     try {
-      const [embedding] = await input.openRouter.embed(
-        [normalizedQuery],
-        input.config.openRouter.embeddingModel,
-        input.config.embeddingDimensions,
-        { profile: "interactive" }
-      );
-      if (embedding) {
-        vector = await input.repo.vectorSearch({
-          guildId: input.search.guildId,
-          visibleChannelIds: searchChannelIds,
-          embedding,
-          limit,
-          authorIds,
-          aboutUserTerms,
-          dateFrom: input.search.dateFrom,
-          dateTo: input.search.dateTo
-        });
+      try {
+        vector = await semanticLeg();
+      } catch {
+        // One retry: the embedding is cached from the first attempt and a
+        // timed-out vector query often succeeds warm.
+        vector = await semanticLeg();
       }
     } catch (error) {
+      semanticDegraded = true;
       logger.warn(
         {
           guildId: input.search.guildId,
@@ -98,13 +149,13 @@ export async function searchDiscordHistory(input: {
           durationMs: durationMs(semanticStartedAt),
           error: error instanceof Error ? error.message : String(error)
         },
-        "Semantic history search failed; returning keyword-only results"
+        "Semantic history search failed after retry; returning keyword-only results"
       );
       vector = [];
     }
   }
 
-  return mergeResults(keyword, vector).slice(0, limit);
+  return { results: mergeResults(keyword, vector).slice(0, limit), semanticDegraded };
 }
 
 export function buildHistoryRetrievalQuery(query: string): string {

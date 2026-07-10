@@ -1619,7 +1619,8 @@ describe("agent router", () => {
     expect(response.content).toBe("@taylorplays has mostly been posting Wordle updates recently.");
     expect(recentMessagesFromChannels).toHaveBeenCalledTimes(1);
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
-    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
+    // Forced final synthesis is deliberately tool-free so models cannot leak tool-call markup.
+    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
@@ -1903,7 +1904,8 @@ describe("agent router", () => {
 
     expect(response.content).toBe("The useful summary is that people mentioned job changes in 2025.");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(5);
-    expect((ctx.openRouter.chat as any).mock.calls[4][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
+    // Forced final synthesis is deliberately tool-free so models cannot leak tool-call markup.
+    expect((ctx.openRouter.chat as any).mock.calls[4][0].tools).toBeUndefined();
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       5,
       expect.objectContaining({
@@ -1962,7 +1964,8 @@ describe("agent router", () => {
 
     expect(response.content).toBe("People mentioned job changes in 2025.");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
-    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_search" })]));
+    // Forced final synthesis is deliberately tool-free so models cannot leak tool-call markup.
+    expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
   });
 
   it("falls back to compact evidence bullets when forced final synthesis is empty", async () => {
@@ -2072,6 +2075,48 @@ describe("agent router", () => {
     expect(response.content).toBe("Check your rank from the game's ranked mode screen.");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
     expect((ctx.openRouter.chat as any).mock.calls[1][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_fetch" })]));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
+  });
+
+  it("recovers when leaked tool markup uses a mutated tool name", async () => {
+    // Regression for prod message 1525193688094081085: the model leaked
+    // "<tool_call>openserver_web_search</tool_call>" (note: not openrouter_),
+    // which the old name-based guard let straight through to Discord.
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "<tool_call>openserver_web_search</tool_call>",
+            model: "tool-leak-model",
+            raw: {},
+            toolCalls: []
+          })
+          .mockResolvedValueOnce({
+            content: "Nobody in this server was drafted, sorry.",
+            model: "recovery-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "who got drafted?");
+
+    expect(response.content).toBe("Nobody in this server was drafted, sorry.");
+    expect(response.content).not.toContain("tool_call");
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
   });
 

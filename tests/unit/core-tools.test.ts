@@ -5,7 +5,7 @@ import {
   getAgentTaskStatus,
   getDeploymentStatus,
 } from "../../src/tools/agentTaskTools.js";
-import { extractHistorySearchSyntax } from "../../src/tools/discordHistoryFormatting.js";
+import { extractHistorySearchSyntax, noHistoryResultsMessage } from "../../src/tools/discordHistoryFormatting.js";
 import { inspectAgentLogs, reportStatus } from "../../src/tools/discordOpsTools.js";
 import {
   answerFromHistory,
@@ -50,6 +50,28 @@ describe("extractHistorySearchSyntax", () => {
     expect(filters.channelQueries).toEqual(["general chat"]);
     expect(filters.dateFrom?.toISOString()).toBe("2024-01-01T00:00:00.000Z");
     expect(filters.dateTo?.toISOString()).toBe("2024-02-01T23:59:59.999Z");
+  });
+});
+
+describe("noHistoryResultsMessage", () => {
+  it("says nothing matched when search ran fully", () => {
+    expect(noHistoryResultsMessage([])).toBe("I did not find matching indexed Discord messages that you can access.");
+  });
+
+  it("reports semantic degradation honestly instead of claiming nothing exists", () => {
+    const message = noHistoryResultsMessage([], { semanticDegraded: true });
+    expect(message).toContain("Semantic search was unavailable");
+    expect(message).toContain("Do not conclude the information is absent");
+    expect(message).toContain("No keyword matches found.");
+    expect(message).not.toContain("I did not find matching indexed Discord messages");
+  });
+
+  it("still reports crawl progress alongside degradation", () => {
+    const message = noHistoryResultsMessage([{ status: "running", channels: 3, messages: 100 }], {
+      semanticDegraded: true
+    });
+    expect(message).toContain("Semantic search was unavailable");
+    expect(message).toContain("Crawl status: running=3 channels/100 messages.");
   });
 });
 

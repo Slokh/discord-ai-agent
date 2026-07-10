@@ -268,8 +268,12 @@ function hostedToolMarkupRecoveryMessages(
 
 function parseLeakedHostedToolCalls(content: string): LeakedHostedToolCall[] {
   const calls: LeakedHostedToolCall[] = [];
+  // Models mutate the tool name when leaking markup (observed in prod:
+  // "openserver_web_search" instead of "openrouter_web_search"), so match any
+  // snake_case name ending in a known hosted tool suffix, not just the exact
+  // registered names.
   const callPattern =
-    /(?:<tool_call>\s*)?(openrouter_(?:web_search|web_fetch|datetime))\b([\s\S]*?)(?:<\/tool_call>|$)/gi;
+    /(?:<tool_call>\s*)?([a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:web_search|web_fetch|datetime))\b([\s\S]*?)(?:<\/tool_call>|$)/gi;
   let match: RegExpExecArray | null;
   while ((match = callPattern.exec(content)) != null) {
     const toolName = match[1] ?? "";
@@ -287,9 +291,9 @@ function parseLeakedHostedToolCalls(content: string): LeakedHostedToolCall[] {
 function hostedToolTypeFromMarkupName(
   name: string,
 ): LeakedHostedToolCall["type"] | undefined {
-  if (name === "openrouter_web_search") return "openrouter:web_search";
-  if (name === "openrouter_web_fetch") return "openrouter:web_fetch";
-  if (name === "openrouter_datetime") return "openrouter:datetime";
+  if (name.endsWith("web_search")) return "openrouter:web_search";
+  if (name.endsWith("web_fetch")) return "openrouter:web_fetch";
+  if (name.endsWith("datetime")) return "openrouter:datetime";
   return undefined;
 }
 
@@ -359,32 +363,38 @@ function stringChatContent(content: ChatMessage["content"]) {
     .join("\n");
 }
 
+// Detection and stripping are format-based, not name-based: models mutate tool
+// names when leaking markup (prod incident: "<tool_call>openserver_web_search
+// </tool_call>"), so any name-list check will eventually miss a variant. Any
+// <tool_call> tag or <arg_key>/<arg_value> pair is markup the user must never
+// see, regardless of what name appears inside it.
+const TOOL_CALL_BLOCK_PATTERN = /<tool_call>[\s\S]*?(?:<\/tool_call>|$)/gi;
+const STRAY_TOOL_CALL_TAG_PATTERN = /<\/?tool_call>/gi;
+const ARG_MARKUP_PATTERN =
+  /<arg_key>[\s\S]*?<\/arg_key>\s*(?:<arg_value>[\s\S]*?(?:<\/arg_value>|$))?/gi;
+const STRAY_ARG_TAG_PATTERN = /<\/?arg_(?:key|value)>/gi;
+const BARE_HOSTED_TOOL_NAME_PATTERN =
+  /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/i;
+
 export function isLeakedHostedToolMarkup(content: string) {
   const trimmed = content.trim();
   return (
-    /<tool_call>\s*openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/i.test(
-      trimmed,
-    ) ||
-    /^openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/i.test(
-      trimmed,
-    )
+    /<tool_call>/i.test(trimmed) ||
+    /<\/tool_call>/i.test(trimmed) ||
+    /<arg_key>[\s\S]*?<\/arg_key>/i.test(trimmed) ||
+    BARE_HOSTED_TOOL_NAME_PATTERN.test(trimmed)
   );
 }
 
 export function stripLeakedHostedToolMarkup(content: string) {
-  const stripped = content
+  return content
+    .replace(TOOL_CALL_BLOCK_PATTERN, "")
+    .replace(ARG_MARKUP_PATTERN, "")
+    .replace(STRAY_TOOL_CALL_TAG_PATTERN, "")
+    .replace(STRAY_ARG_TAG_PATTERN, "")
     .replace(
-      /<tool_call>\s*openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/gi,
-      "",
-    )
-    .replace(
-      /^openrouter_(?:web_search|web_fetch|datetime)\b[\s\S]*?(?:<\/tool_call>|$)/gi,
-      "",
-    )
-    .replace(
-      /<arg_key>[\s\S]*?<\/arg_key>\s*<arg_value>[\s\S]*?<\/arg_value>/gi,
+      new RegExp(BARE_HOSTED_TOOL_NAME_PATTERN.source, "gi"),
       "",
     )
     .trim();
-  return stripped;
 }

@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import type pg from "pg";
+import { CARDS_PER_DECK } from "../rng/provable.js";
 import type { DbPool } from "./pool.js";
 
 export type RngSessionRecord = {
@@ -35,6 +37,40 @@ export type RngDrawRecord = {
   createdAt: Date;
 };
 
+export type RngDrawInput = {
+  nonce: number;
+  kind: string;
+  params: Record<string, unknown>;
+  outcome: Record<string, unknown>;
+  reason?: string | null;
+  requestId?: string | null;
+  messageId?: string | null;
+  requestedByUserId?: string | null;
+};
+
+/**
+ * Transaction-scoped operations on one locked active session. All methods run
+ * on the transaction's connection while a `FOR UPDATE` row lock is held, so
+ * nothing else can draw from, reshuffle, or reveal the session concurrently.
+ * `session` is a live view of the locked row: operations update it in place.
+ */
+export type RngSessionTx = {
+  session: RngSessionRecord;
+  /** Set the client seed if unset; returns the session's authoritative seed either way. */
+  setClientSeed(clientSeed: string, source: string): Promise<{ clientSeed: string; justSet: boolean }>;
+  /** Reserve the next nonce (0-based) for an entropy-consuming draw. */
+  takeNonce(): Promise<number>;
+  recordDraw(input: RngDrawInput): Promise<void>;
+  setShoe(input: { deckCount: number; shuffleNonce: number }): Promise<void>;
+  /** Claim `count` cards from the current shoe; returns the slice start, or null when the shoe cannot cover it. */
+  claimDeckCards(count: number): Promise<number | null>;
+};
+
+export type RngRevealOutcome =
+  | { status: "no_session" }
+  | { status: "no_draws"; session: RngSessionRecord }
+  | { status: "revealed"; revealed: RngSessionRecord; draws: RngDrawRecord[]; successor: RngSessionRecord };
+
 const SESSION_COLUMNS = `
   id, thread_key, guild_id, channel_id, created_by_user_id,
   server_seed, commitment, client_seed, client_seed_source,
@@ -42,9 +78,17 @@ const SESSION_COLUMNS = `
   status, prev_session_id, created_at, revealed_at
 `;
 
+const DRAW_COLUMNS = `id, session_id, nonce, kind, params, outcome, reason, request_id, message_id, requested_by_user_id, created_at`;
+
 export class RngRepository {
   constructor(private readonly pool: DbPool) {}
 
+  async getSession(id: string): Promise<RngSessionRecord | null> {
+    const result = await this.pool.query(`SELECT ${SESSION_COLUMNS} FROM rng_sessions WHERE id = $1`, [id]);
+    return result.rows[0] ? mapSession(result.rows[0]) : null;
+  }
+
+  /** Read-only view; may be stale. All writes go through withActiveSession/revealAndRollover. */
   async getActiveSession(threadKey: string): Promise<RngSessionRecord | null> {
     const result = await this.pool.query(
       `SELECT ${SESSION_COLUMNS} FROM rng_sessions WHERE thread_key = $1 AND status = 'active'`,
@@ -53,150 +97,226 @@ export class RngRepository {
     return result.rows[0] ? mapSession(result.rows[0]) : null;
   }
 
-  async getSession(id: string): Promise<RngSessionRecord | null> {
-    const result = await this.pool.query(`SELECT ${SESSION_COLUMNS} FROM rng_sessions WHERE id = $1`, [id]);
-    return result.rows[0] ? mapSession(result.rows[0]) : null;
+  async listDraws(sessionId: string): Promise<RngDrawRecord[]> {
+    const result = await this.pool.query(
+      `SELECT ${DRAW_COLUMNS} FROM rng_draws WHERE session_id = $1 ORDER BY id ASC`,
+      [sessionId]
+    );
+    return result.rows.map(mapDraw);
   }
 
   /**
-   * Create the active session for a thread, or return the existing one if a
-   * concurrent request created it first (unique partial index on thread_key).
+   * Run `fn` against the thread's active session inside one transaction while
+   * holding a row lock on it, creating the session first when none exists (the
+   * provided seed/commitment are used only in that case and are otherwise
+   * discarded unpublished). This is the only write path for draws, so draws
+   * cannot interleave with each other or with reveals.
    */
-  async createSession(input: {
+  async withActiveSession<T>(
+    input: {
+      threadKey: string;
+      guildId: string;
+      channelId: string;
+      createdByUserId: string;
+      serverSeed: string;
+      commitment: string;
+    },
+    fn: (tx: RngSessionTx, sessionCreated: boolean) => Promise<T>
+  ): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      let sessionCreated = false;
+      let session = await lockActiveSession(client, input.threadKey);
+      if (!session) {
+        session = await insertSession(client, { ...input, prevSessionId: null });
+        if (session) {
+          sessionCreated = true;
+        } else {
+          // A concurrent transaction created the session first; lock its row.
+          session = await lockActiveSession(client, input.threadKey);
+        }
+        if (!session) throw new Error(`could not create or lock an active RNG session for thread ${input.threadKey}`);
+      }
+      const result = await fn(makeSessionTx(client, session), sessionCreated);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Atomically reveal the thread's active session and create its committed
+   * successor. The draw list is read after the status flip while the row lock
+   * is still held, so it is complete: no draw can land on the session after
+   * the list is taken.
+   */
+  async revealAndRollover(input: {
+    threadKey: string;
+    guildId: string;
+    channelId: string;
+    createdByUserId: string;
+    successorServerSeed: string;
+    successorCommitment: string;
+  }): Promise<RngRevealOutcome> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const session = await lockActiveSession(client, input.threadKey);
+      if (!session) {
+        await client.query("COMMIT");
+        return { status: "no_session" };
+      }
+      const countResult = await client.query(`SELECT count(*)::int AS count FROM rng_draws WHERE session_id = $1`, [
+        session.id
+      ]);
+      if (Number(countResult.rows[0]?.count ?? 0) === 0) {
+        await client.query("COMMIT");
+        return { status: "no_draws", session };
+      }
+      const revealedResult = await client.query(
+        `UPDATE rng_sessions SET status = 'revealed', revealed_at = now() WHERE id = $1 RETURNING ${SESSION_COLUMNS}`,
+        [session.id]
+      );
+      const revealed = mapSession(revealedResult.rows[0]);
+      const successor = await insertSession(client, {
+        threadKey: input.threadKey,
+        guildId: input.guildId,
+        channelId: input.channelId,
+        createdByUserId: input.createdByUserId,
+        serverSeed: input.successorServerSeed,
+        commitment: input.successorCommitment,
+        prevSessionId: revealed.id
+      });
+      if (!successor) throw new Error(`could not create successor RNG session for thread ${input.threadKey}`);
+      const drawsResult = await client.query(
+        `SELECT ${DRAW_COLUMNS} FROM rng_draws WHERE session_id = $1 ORDER BY id ASC`,
+        [session.id]
+      );
+      await client.query("COMMIT");
+      return { status: "revealed", revealed, draws: drawsResult.rows.map(mapDraw), successor };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+async function lockActiveSession(client: pg.PoolClient, threadKey: string): Promise<RngSessionRecord | null> {
+  const result = await client.query(
+    `SELECT ${SESSION_COLUMNS} FROM rng_sessions WHERE thread_key = $1 AND status = 'active' FOR UPDATE`,
+    [threadKey]
+  );
+  return result.rows[0] ? mapSession(result.rows[0]) : null;
+}
+
+async function insertSession(
+  client: pg.PoolClient,
+  input: {
     threadKey: string;
     guildId: string;
     channelId: string;
     createdByUserId: string;
     serverSeed: string;
     commitment: string;
-    prevSessionId?: string | null;
-  }): Promise<{ session: RngSessionRecord; created: boolean }> {
-    const id = `rng_${randomBytes(6).toString("hex")}`;
-    const result = await this.pool.query(
-      `
-        INSERT INTO rng_sessions (id, thread_key, guild_id, channel_id, created_by_user_id, server_seed, commitment, prev_session_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (thread_key) WHERE status = 'active' DO NOTHING
-        RETURNING ${SESSION_COLUMNS}
-      `,
-      [id, input.threadKey, input.guildId, input.channelId, input.createdByUserId, input.serverSeed, input.commitment, input.prevSessionId ?? null]
-    );
-    if (result.rows[0]) return { session: mapSession(result.rows[0]), created: true };
-    const existing = await this.getActiveSession(input.threadKey);
-    if (!existing) throw new Error(`RNG session insert for thread ${input.threadKey} conflicted but no active session found`);
-    return { session: existing, created: false };
+    prevSessionId: string | null;
   }
+): Promise<RngSessionRecord | null> {
+  const id = `rng_${randomBytes(6).toString("hex")}`;
+  const result = await client.query(
+    `
+      INSERT INTO rng_sessions (id, thread_key, guild_id, channel_id, created_by_user_id, server_seed, commitment, prev_session_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (thread_key) WHERE status = 'active' DO NOTHING
+      RETURNING ${SESSION_COLUMNS}
+    `,
+    [
+      id,
+      input.threadKey,
+      input.guildId,
+      input.channelId,
+      input.createdByUserId,
+      input.serverSeed,
+      input.commitment,
+      input.prevSessionId
+    ]
+  );
+  return result.rows[0] ? mapSession(result.rows[0]) : null;
+}
 
-  /** Set the client seed once; returns the session's authoritative seed either way. */
-  async setClientSeed(sessionId: string, clientSeed: string, source: string): Promise<{ clientSeed: string; clientSeedSource: string | null; justSet: boolean }> {
-    const result = await this.pool.query(
-      `
-        UPDATE rng_sessions
-        SET client_seed = $2, client_seed_source = $3
-        WHERE id = $1 AND client_seed IS NULL
-        RETURNING client_seed, client_seed_source
-      `,
-      [sessionId, clientSeed, source]
-    );
-    if (result.rows[0]) {
-      return { clientSeed: result.rows[0].client_seed, clientSeedSource: result.rows[0].client_seed_source, justSet: true };
+function makeSessionTx(client: pg.PoolClient, session: RngSessionRecord): RngSessionTx {
+  return {
+    session,
+    async setClientSeed(clientSeed, source) {
+      if (session.clientSeed) return { clientSeed: session.clientSeed, justSet: false };
+      const result = await client.query(
+        `UPDATE rng_sessions SET client_seed = $2, client_seed_source = $3 WHERE id = $1 AND status = 'active' AND client_seed IS NULL`,
+        [session.id, clientSeed, source]
+      );
+      if (result.rowCount !== 1) throw new Error(`RNG session ${session.id} client seed update failed`);
+      session.clientSeed = clientSeed;
+      session.clientSeedSource = source;
+      return { clientSeed, justSet: true };
+    },
+    async takeNonce() {
+      const nonce = session.nonceCounter;
+      const result = await client.query(
+        `UPDATE rng_sessions SET nonce_counter = $2 WHERE id = $1 AND status = 'active' AND nonce_counter = $3`,
+        [session.id, nonce + 1, nonce]
+      );
+      if (result.rowCount !== 1) throw new Error(`RNG session ${session.id} nonce advance failed`);
+      session.nonceCounter = nonce + 1;
+      return nonce;
+    },
+    async recordDraw(input) {
+      await client.query(
+        `
+          INSERT INTO rng_draws (session_id, nonce, kind, params, outcome, reason, request_id, message_id, requested_by_user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [
+          session.id,
+          input.nonce,
+          input.kind,
+          JSON.stringify(input.params),
+          JSON.stringify(input.outcome),
+          input.reason ?? null,
+          input.requestId ?? null,
+          input.messageId ?? null,
+          input.requestedByUserId ?? null
+        ]
+      );
+    },
+    async setShoe(input) {
+      const result = await client.query(
+        `UPDATE rng_sessions SET deck_count = $2, shuffle_nonce = $3, deck_position = 0 WHERE id = $1 AND status = 'active'`,
+        [session.id, input.deckCount, input.shuffleNonce]
+      );
+      if (result.rowCount !== 1) throw new Error(`RNG session ${session.id} shoe update failed`);
+      session.deckCount = input.deckCount;
+      session.shuffleNonce = input.shuffleNonce;
+      session.deckPosition = 0;
+    },
+    async claimDeckCards(count) {
+      if (session.deckCount == null || session.deckPosition == null || session.shuffleNonce == null) return null;
+      const size = session.deckCount * CARDS_PER_DECK;
+      if (session.deckPosition + count > size) return null;
+      const start = session.deckPosition;
+      const result = await client.query(
+        `UPDATE rng_sessions SET deck_position = $2 WHERE id = $1 AND status = 'active' AND deck_position = $3`,
+        [session.id, start + count, start]
+      );
+      if (result.rowCount !== 1) throw new Error(`RNG session ${session.id} shoe position advance failed`);
+      session.deckPosition = start + count;
+      return start;
     }
-    const existing = await this.pool.query(`SELECT client_seed, client_seed_source FROM rng_sessions WHERE id = $1`, [sessionId]);
-    if (!existing.rows[0]?.client_seed) throw new Error(`RNG session ${sessionId} has no client seed after set attempt`);
-    return { clientSeed: existing.rows[0].client_seed, clientSeedSource: existing.rows[0].client_seed_source, justSet: false };
-  }
-
-  /** Atomically assign the next nonce (0-based) for an entropy-consuming draw. */
-  async takeNonce(sessionId: string): Promise<number> {
-    const result = await this.pool.query(
-      `UPDATE rng_sessions SET nonce_counter = nonce_counter + 1 WHERE id = $1 AND status = 'active' RETURNING nonce_counter`,
-      [sessionId]
-    );
-    if (!result.rows[0]) throw new Error(`RNG session ${sessionId} is not active`);
-    return Number(result.rows[0].nonce_counter) - 1;
-  }
-
-  async setShoe(sessionId: string, input: { deckCount: number; shuffleNonce: number }): Promise<void> {
-    await this.pool.query(
-      `UPDATE rng_sessions SET deck_count = $2, shuffle_nonce = $3, deck_position = 0 WHERE id = $1`,
-      [sessionId, input.deckCount, input.shuffleNonce]
-    );
-  }
-
-  /**
-   * Atomically claim `count` cards from the current shoe. Returns the start
-   * position of the claimed slice, or null when the shoe cannot cover the
-   * request (exhausted or replaced concurrently).
-   */
-  async claimDeckCards(sessionId: string, input: { count: number; shuffleNonce: number; size: number }): Promise<number | null> {
-    const result = await this.pool.query(
-      `
-        UPDATE rng_sessions
-        SET deck_position = deck_position + $2
-        WHERE id = $1 AND shuffle_nonce = $3 AND deck_position IS NOT NULL AND deck_position + $2 <= $4
-        RETURNING deck_position
-      `,
-      [sessionId, input.count, input.shuffleNonce, input.size]
-    );
-    if (!result.rows[0]) return null;
-    return Number(result.rows[0].deck_position) - input.count;
-  }
-
-  async recordDraw(input: {
-    sessionId: string;
-    nonce: number;
-    kind: string;
-    params: Record<string, unknown>;
-    outcome: Record<string, unknown>;
-    reason?: string | null;
-    requestId?: string | null;
-    messageId?: string | null;
-    requestedByUserId?: string | null;
-  }): Promise<void> {
-    await this.pool.query(
-      `
-        INSERT INTO rng_draws (session_id, nonce, kind, params, outcome, reason, request_id, message_id, requested_by_user_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      `,
-      [
-        input.sessionId,
-        input.nonce,
-        input.kind,
-        JSON.stringify(input.params),
-        JSON.stringify(input.outcome),
-        input.reason ?? null,
-        input.requestId ?? null,
-        input.messageId ?? null,
-        input.requestedByUserId ?? null
-      ]
-    );
-  }
-
-  async revealSession(sessionId: string): Promise<RngSessionRecord | null> {
-    const result = await this.pool.query(
-      `UPDATE rng_sessions SET status = 'revealed', revealed_at = now() WHERE id = $1 AND status = 'active' RETURNING ${SESSION_COLUMNS}`,
-      [sessionId]
-    );
-    return result.rows[0] ? mapSession(result.rows[0]) : null;
-  }
-
-  async listDraws(sessionId: string): Promise<RngDrawRecord[]> {
-    const result = await this.pool.query(
-      `
-        SELECT id, session_id, nonce, kind, params, outcome, reason, request_id, message_id, requested_by_user_id, created_at
-        FROM rng_draws
-        WHERE session_id = $1
-        ORDER BY id ASC
-      `,
-      [sessionId]
-    );
-    return result.rows.map(mapDraw);
-  }
-
-  async countDraws(sessionId: string): Promise<number> {
-    const result = await this.pool.query(`SELECT count(*)::int AS count FROM rng_draws WHERE session_id = $1`, [sessionId]);
-    return Number(result.rows[0]?.count ?? 0);
-  }
+  };
 }
 
 function mapSession(row: Record<string, unknown>): RngSessionRecord {

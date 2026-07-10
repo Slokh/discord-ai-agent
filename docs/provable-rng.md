@@ -60,10 +60,17 @@ Or independently, with any tooling: check `SHA-256(serverSeed) == commitment`, t
 - `rng_sessions` — one active session per `thread_key` (enforced by a partial unique index), holding the server seed, commitment, client seed, nonce counter, shoe state (`deck_count`, `shuffle_nonce`, `deck_position`), and reveal status. Sessions link to their predecessor via `prev_session_id`.
 - `rng_draws` — one row per recorded draw with `nonce`, `kind`, `params`, and the exact `outcome` that was reported, plus the request/message/user that triggered it.
 
-Nonce assignment and shoe-position advancement are single atomic `UPDATE ... RETURNING` statements, so concurrent draws in one thread cannot reuse entropy or deal the same card twice.
+All writes go through two serialized paths in [`src/db/rngRepository.ts`](../src/db/rngRepository.ts): draws run inside a transaction that holds a `FOR UPDATE` row lock on the thread's active session, and `revealAndRollover` flips the session to `revealed`, snapshots its draws, and inserts the committed successor under the same lock. Concurrent draws in one thread therefore cannot reuse a nonce or deal the same card twice, and no draw can slip into a session after its reveal listed the draws.
+
+Beyond recomputing each stored outcome, `npm run verify:rng -- --session <id>` checks transcript-level invariants: every nonce in `[0, nonce_counter)` was consumed by exactly one entropy draw, every card row references a recorded shoe shuffle with a matching deck count, and card slices per shoe are contiguous from position 0 with no overlaps or gaps.
 
 ## Design notes
 
 - **Generic, not blackjack-specific.** The tool exposes draw kinds (`integers`, `dice`, `coin`, `pick`, `shuffle`, `cards`); game rules stay with the model. The provable part is exactly the part the model must not control: the entropy and its mapping to outcomes.
 - **The model reports, code decides.** `drawRandom` returns computed outcomes and instructs the model to report them exactly; the proof footer repeats the values from code so any model tampering is visible by comparison.
 - **Reveal is rollover, not shutdown.** Revealing a seed would let future draws be predicted, so `revealRandomness` always starts a new committed session in the same thread.
+
+## Known limitations
+
+- **First-draw grinding window.** A thread's very first draw publishes the commitment, the client seed, and the first outcome in the same reply — the session is created lazily when that draw runs, after the triggering message (and thus the client seed) exists. A malicious operator could regenerate server seeds until the first outcome favored them, for that one draw only; every later draw is bound by the already-published commitment. Rolled-over sessions don't have this window either: their commitment appears in the reveal reply, before any of their draws. Closing it entirely would need a commitment published before the first request (e.g. an explicit "start session" step), which isn't worth the friction for this bot's private-server threat model. If you care, say "reveal randomness" once before playing: everything after that is fully covered.
+- **Footer truncation.** Proof footers truncate long outcomes (many cards, large picks) for readability. The stored transcript is the source of truth; `npm run verify:rng` always verifies the full outcome.

@@ -11,6 +11,8 @@
  * Card draws in standalone mode take the shoe's shuffle nonce plus deck slice:
  *   npm run verify:rng -- --server-seed <hex> --client-seed <id> --nonce 1 --kind cards --deck-count 1 --start 0 --count 2
  */
+import { fileURLToPath } from "node:url";
+
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { RngRepository } from "../src/db/rngRepository.js";
@@ -94,11 +96,78 @@ async function verifySessionFromDb(sessionId: string): Promise<boolean> {
         ok = false;
       }
     }
+    for (const problem of checkProtocolInvariants(session.nonceCounter, draws)) {
+      console.error(`  ✗ protocol: ${problem}`);
+      ok = false;
+    }
+    if (ok) console.log("  ✓ protocol invariants hold (nonce coverage, shoe accounting)");
     console.log(ok ? "All draws verified." : "VERIFICATION FAILED.");
     return ok;
   } finally {
     await pool.end();
   }
+}
+
+/**
+ * Check that the session's stored transcript obeys the protocol, beyond each
+ * row recomputing correctly:
+ * - entropy-consuming draws (everything except `cards`) use each nonce in
+ *   [0, nonceCounter) exactly once — no duplicated, skipped, or extra entropy;
+ * - every `cards` row references a recorded shoe shuffle with matching deck
+ *   count and size;
+ * - card slices from each shoe are contiguous from position 0 and in-bounds,
+ *   i.e. dealt without replacement with no overlaps or gaps.
+ */
+export function checkProtocolInvariants(
+  nonceCounter: number,
+  draws: Array<{ id: number; nonce: number; kind: string; params: Record<string, unknown> }>
+): string[] {
+  const problems: string[] = [];
+
+  const entropyNonces = draws.filter((draw) => draw.kind !== "cards").map((draw) => draw.nonce);
+  const expected = Array.from({ length: nonceCounter }, (_, index) => index);
+  if (!deepEqual([...entropyNonces].sort((a, b) => a - b), expected)) {
+    problems.push(
+      `entropy draws used nonces [${entropyNonces.join(", ")}] but the session consumed nonces 0..${nonceCounter - 1}`
+    );
+  }
+
+  const shoesByNonce = new Map<number, { deckCount: number; size: number }>();
+  for (const draw of draws) {
+    if (draw.kind === "shuffle" && draw.params.shoe === true) {
+      shoesByNonce.set(draw.nonce, {
+        deckCount: Number(draw.params.deckCount),
+        size: Number(draw.params.size)
+      });
+    }
+  }
+
+  const positionByShoe = new Map<number, number>();
+  for (const draw of draws) {
+    if (draw.kind !== "cards") continue;
+    const label = `cards row ${draw.id} (shuffle nonce ${draw.nonce})`;
+    const shoe = shoesByNonce.get(draw.nonce);
+    if (!shoe) {
+      problems.push(`${label} references a shoe shuffle that was never recorded`);
+      continue;
+    }
+    const deckCount = Number(draw.params.deckCount);
+    const start = Number(draw.params.start);
+    const count = Number(draw.params.count);
+    if (deckCount !== shoe.deckCount || deckCount * 52 !== shoe.size) {
+      problems.push(`${label} deck count ${deckCount} does not match the recorded ${shoe.deckCount}-deck shoe`);
+    }
+    const position = positionByShoe.get(draw.nonce) ?? 0;
+    if (start !== position) {
+      problems.push(`${label} deals cards ${start + 1}–${start + count} but the shoe was at position ${position}`);
+    }
+    if (start + count > shoe.size) {
+      problems.push(`${label} deals past the end of the ${shoe.size}-card shoe`);
+    }
+    positionByShoe.set(draw.nonce, start + count);
+  }
+
+  return problems;
 }
 
 function verifyStandalone(): boolean {
@@ -165,7 +234,9 @@ async function main() {
   process.exit(ok ? 0 : 1);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

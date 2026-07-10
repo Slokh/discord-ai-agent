@@ -1,4 +1,4 @@
-import type { RngRepository, RngSessionRecord } from "../db/rngRepository.js";
+import type { RngRepository, RngSessionTx } from "../db/rngRepository.js";
 import {
   CARDS_PER_DECK,
   MAX_DECK_COUNT,
@@ -49,40 +49,71 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     return validationError;
   }
 
-  const { session, sessionCreated } = await getOrCreateSession(rngRepo, ctx, threadKey);
   const clientSeedValue = ctx.requestMessageId ?? ctx.requestId ?? generateServerSeed();
   const clientSeedSource = ctx.requestMessageId ? "discord_message_id" : ctx.requestId ? "request_id" : "random";
-  const seed = session.clientSeed
-    ? { clientSeed: session.clientSeed, justSet: false }
-    : await rngRepo.setClientSeed(session.id, clientSeedValue, clientSeedSource);
-  const clientSeed = seed.clientSeed;
-
   const reason = normalizeReason(input.reason);
-  const draw =
-    kind === "cards"
-      ? await drawCards(rngRepo, ctx, session, clientSeed, input, reason)
-      : await drawBasic(rngRepo, ctx, session, clientSeed, kind as RngDrawKind, input, reason);
-  if (typeof draw === "string") {
-    await auditRng(ctx, "drawRandom", input, draw);
-    return draw;
+  // Candidate seed for a new session; discarded unpublished when one already exists.
+  const candidateServerSeed = generateServerSeed();
+
+  const result = await rngRepo.withActiveSession<DrawTxResult>(
+    {
+      threadKey,
+      guildId: ctx.guildId,
+      channelId: ctx.channelId,
+      createdByUserId: ctx.userId,
+      serverSeed: candidateServerSeed,
+      commitment: rngCommitment(candidateServerSeed)
+    },
+    async (tx, sessionCreated) => {
+      // Validate against session state before consuming the client seed or entropy.
+      if (kind === "cards") {
+        const deckCount = input.deckCount ?? tx.session.deckCount ?? 1;
+        const maxSize = deckCount * CARDS_PER_DECK;
+        if ((input.count ?? 1) > maxSize) {
+          return {
+            ok: false,
+            error: `Cannot draw ${input.count} cards from a ${deckCount}-deck shoe of ${maxSize} cards. Use a larger deckCount (up to ${MAX_DECK_COUNT}).`
+          };
+        }
+      }
+      const seed = await tx.setClientSeed(clientSeedValue, clientSeedSource);
+      const draw =
+        kind === "cards"
+          ? await drawCards(tx, ctx, seed.clientSeed, input, reason)
+          : await drawBasic(tx, ctx, seed.clientSeed, kind as RngDrawKind, input, reason);
+      return {
+        ok: true,
+        draw,
+        sessionId: tx.session.id,
+        commitment: tx.session.commitment,
+        clientSeed: seed.clientSeed,
+        showCommit: sessionCreated || seed.justSet
+      };
+    }
+  );
+
+  if (!result.ok) {
+    await auditRng(ctx, "drawRandom", input, result.error);
+    return result.error;
   }
+  const { draw, sessionId, commitment, clientSeed, showCommit } = result;
 
   const footerLines: string[] = [];
   if (draw.shuffleFooter) footerLines.push(draw.shuffleFooter);
   footerLines.push(draw.footerLine);
-  if (sessionCreated || seed.justSet) {
+  if (showCommit) {
     footerLines.push(
-      `🎲 fair-play commit sha256:${session.commitment} · client seed ${clientSeed} · say "reveal randomness" to verify`
+      `🎲 fair-play commit sha256:${commitment} · client seed ${clientSeed} · say "reveal randomness" to verify`
     );
   }
   ctx.footerLines?.push(...footerLines);
 
-  await auditRng(ctx, "drawRandom", input, `session ${session.id} nonce ${draw.nonce}: ${draw.summary}`);
+  await auditRng(ctx, "drawRandom", input, `session ${sessionId} nonce ${draw.nonce}: ${draw.summary}`);
 
   return [
     `Provably fair draw complete.`,
     `Result: ${draw.summary}`,
-    `Session ${session.id} · nonce ${draw.nonce} · commitment sha256:${session.commitment}`,
+    `Session ${sessionId} · nonce ${draw.nonce} · commitment sha256:${commitment}`,
     `Report this result exactly as shown. A proof footer is appended to your reply automatically; do not restate or alter the proof details.`
   ].join("\n");
 }
@@ -92,36 +123,30 @@ export async function revealRandomness(ctx: ToolContext): Promise<string> {
   if (typeof setup === "string") return setup;
   const { rngRepo, threadKey } = setup;
 
-  const session = await rngRepo.getActiveSession(threadKey);
-  if (!session) {
-    await auditRng(ctx, "revealRandomness", {}, "no active session");
-    return "There is no active provably fair randomness session in this thread. Draws create one automatically.";
-  }
-  const draws = await rngRepo.listDraws(session.id);
-  if (draws.length === 0) {
-    await auditRng(ctx, "revealRandomness", {}, `session ${session.id} has no draws`);
-    return [
-      `The current session ${session.id} has no draws yet, so there is nothing to reveal.`,
-      `Its commitment is sha256:${session.commitment}; the server seed stays secret until a draw has used it.`
-    ].join("\n");
-  }
-
-  const revealed = await rngRepo.revealSession(session.id);
-  if (!revealed) {
-    await auditRng(ctx, "revealRandomness", {}, `session ${session.id} was already revealed`);
-    return `Session ${session.id} was already revealed.`;
-  }
-  const commitmentOk = verifyRngCommitment(revealed.serverSeed, revealed.commitment);
   const nextServerSeed = generateServerSeed();
-  const successor = await rngRepo.createSession({
+  const result = await rngRepo.revealAndRollover({
     threadKey,
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     createdByUserId: ctx.userId,
-    serverSeed: nextServerSeed,
-    commitment: rngCommitment(nextServerSeed),
-    prevSessionId: revealed.id
+    successorServerSeed: nextServerSeed,
+    successorCommitment: rngCommitment(nextServerSeed)
   });
+
+  if (result.status === "no_session") {
+    await auditRng(ctx, "revealRandomness", {}, "no active session");
+    return "There is no active provably fair randomness session in this thread. Draws create one automatically.";
+  }
+  if (result.status === "no_draws") {
+    await auditRng(ctx, "revealRandomness", {}, `session ${result.session.id} has no draws`);
+    return [
+      `The current session ${result.session.id} has no draws yet, so there is nothing to reveal.`,
+      `Its commitment is sha256:${result.session.commitment}; the server seed stays secret until a draw has used it.`
+    ].join("\n");
+  }
+
+  const { revealed, draws, successor } = result;
+  const commitmentOk = verifyRngCommitment(revealed.serverSeed, revealed.commitment);
 
   const drawLines = draws
     .slice(0, MAX_REVEAL_DRAW_LINES)
@@ -130,10 +155,10 @@ export async function revealRandomness(ctx: ToolContext): Promise<string> {
 
   ctx.footerLines?.push(
     `🎲 revealed session ${revealed.id} · server seed ${revealed.serverSeed} · client seed ${revealed.clientSeed ?? "unset"}`,
-    `🎲 next fair-play commit sha256:${successor.session.commitment}`
+    `🎲 next fair-play commit sha256:${successor.commitment}`
   );
 
-  await auditRng(ctx, "revealRandomness", {}, `revealed session ${revealed.id} with ${draws.length} draws; next session ${successor.session.id}`);
+  await auditRng(ctx, "revealRandomness", {}, `revealed session ${revealed.id} with ${draws.length} draws; next session ${successor.id}`);
 
   return [
     `Revealed session ${revealed.id}.`,
@@ -145,7 +170,7 @@ export async function revealRandomness(ctx: ToolContext): Promise<string> {
     ``,
     `Anyone can verify with: npm run verify:rng -- --session ${revealed.id}`,
     `Or without database access: recompute sha256(serverSeed) and each draw from HMAC-SHA256(serverSeed, "clientSeed:nonce:block"); see docs/provable-rng.md.`,
-    `A fresh commitment (${shortHash(successor.session.commitment)}…) now covers future draws in this thread; the proof footer on this reply carries the full values.`,
+    `A fresh commitment (${shortHash(successor.commitment)}…) now covers future draws in this thread; the proof footer on this reply carries the full values.`,
     `Report the seed and commitment values exactly as shown; the proof footer repeats them verbatim.`
   ].join("\n");
 }
@@ -157,20 +182,29 @@ type DrawResult = {
   shuffleFooter?: string;
 };
 
+type DrawTxResult =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      draw: DrawResult;
+      sessionId: string;
+      commitment: string;
+      clientSeed: string;
+      showCommit: boolean;
+    };
+
 async function drawBasic(
-  rngRepo: RngRepository,
+  tx: RngSessionTx,
   ctx: ToolContext,
-  session: RngSessionRecord,
   clientSeed: string,
   kind: RngDrawKind,
   input: DrawRandomInput,
   reason: string | null
-): Promise<DrawResult | string> {
+): Promise<DrawResult> {
   const params = drawParamsFor(kind, input);
-  const nonce = await rngRepo.takeNonce(session.id);
-  const outcome = computeRngOutcome({ serverSeed: session.serverSeed, clientSeed, nonce, kind, params });
-  await rngRepo.recordDraw({
-    sessionId: session.id,
+  const nonce = await tx.takeNonce();
+  const outcome = computeRngOutcome({ serverSeed: tx.session.serverSeed, clientSeed, nonce, kind, params });
+  await tx.recordDraw({
     nonce,
     kind,
     params: params as Record<string, unknown>,
@@ -190,43 +224,44 @@ async function drawBasic(
   return {
     nonce,
     summary: `${label} → ${summary}`,
-    footerLine: `🎲 ${label} → ${truncate(summary, MAX_FOOTER_OUTCOME_CHARS)} · nonce ${nonce} · session ${session.id}`
+    footerLine: `🎲 ${label} → ${truncate(summary, MAX_FOOTER_OUTCOME_CHARS)} · nonce ${nonce} · session ${tx.session.id}`
   };
 }
 
 async function drawCards(
-  rngRepo: RngRepository,
+  tx: RngSessionTx,
   ctx: ToolContext,
-  session: RngSessionRecord,
   clientSeed: string,
   input: DrawRandomInput,
   reason: string | null
-): Promise<DrawResult | string> {
+): Promise<DrawResult> {
   const count = input.count ?? 1;
   const requestedDeckCount = input.deckCount;
-  const deckCount = requestedDeckCount ?? session.deckCount ?? 1;
-  const maxSize = deckCount * CARDS_PER_DECK;
-  if (count > maxSize) {
-    return `Cannot draw ${count} cards from a ${deckCount}-deck shoe of ${maxSize} cards. Use a larger deckCount (up to ${MAX_DECK_COUNT}).`;
-  }
+  const deckCount = requestedDeckCount ?? tx.session.deckCount ?? 1;
+  const size = deckCount * CARDS_PER_DECK;
 
-  let shuffleNonce = session.shuffleNonce;
   let shuffleFooter: string | undefined;
   const remaining =
-    session.deckPosition == null || session.deckCount == null ? 0 : session.deckCount * CARDS_PER_DECK - session.deckPosition;
+    tx.session.deckPosition == null || tx.session.deckCount == null
+      ? 0
+      : tx.session.deckCount * CARDS_PER_DECK - tx.session.deckPosition;
   const needNewShoe =
-    shuffleNonce == null ||
-    session.deckPosition == null ||
-    session.deckCount == null ||
-    (requestedDeckCount != null && requestedDeckCount !== session.deckCount) ||
+    tx.session.shuffleNonce == null ||
+    tx.session.deckPosition == null ||
+    tx.session.deckCount == null ||
+    (requestedDeckCount != null && requestedDeckCount !== tx.session.deckCount) ||
     count > remaining;
 
-  const reshuffle = async (): Promise<number> => {
-    const nonce = await rngRepo.takeNonce(session.id);
-    const size = deckCount * CARDS_PER_DECK;
-    const outcome = computeRngOutcome({ serverSeed: session.serverSeed, clientSeed, nonce, kind: "shuffle", params: { size } });
-    await rngRepo.recordDraw({
-      sessionId: session.id,
+  if (needNewShoe) {
+    const nonce = await tx.takeNonce();
+    const outcome = computeRngOutcome({
+      serverSeed: tx.session.serverSeed,
+      clientSeed,
+      nonce,
+      kind: "shuffle",
+      params: { size }
+    });
+    await tx.recordDraw({
       nonce,
       kind: "shuffle",
       params: { size, deckCount, shoe: true },
@@ -236,31 +271,26 @@ async function drawCards(
       messageId: ctx.requestMessageId ?? null,
       requestedByUserId: ctx.userId
     });
-    await rngRepo.setShoe(session.id, { deckCount, shuffleNonce: nonce });
-    shuffleFooter = `🎲 shuffled a new ${deckCount * CARDS_PER_DECK}-card shoe (${deckCount} deck${deckCount > 1 ? "s" : ""}) · nonce ${nonce} · session ${session.id}`;
-    return nonce;
-  };
-
-  if (needNewShoe) shuffleNonce = await reshuffle();
-  const size = deckCount * CARDS_PER_DECK;
-  let start = await rngRepo.claimDeckCards(session.id, { count, shuffleNonce: shuffleNonce as number, size });
-  if (start == null) {
-    shuffleNonce = await reshuffle();
-    start = await rngRepo.claimDeckCards(session.id, { count, shuffleNonce, size });
-    if (start == null) return `Could not draw ${count} cards: the shoe was exhausted. Try again or use a larger deckCount.`;
+    await tx.setShoe({ deckCount, shuffleNonce: nonce });
+    shuffleFooter = `🎲 shuffled a new ${size}-card shoe (${deckCount} deck${deckCount > 1 ? "s" : ""}) · nonce ${nonce} · session ${tx.session.id}`;
   }
 
+  const shuffleNonce = tx.session.shuffleNonce;
+  if (shuffleNonce == null) throw new Error(`RNG session ${tx.session.id} has no shoe after shuffle`);
+  const start = await tx.claimDeckCards(count);
+  // Unreachable: the shoe was validated/reshuffled above while the session row is locked.
+  if (start == null) throw new Error(`RNG session ${tx.session.id} shoe accounting failed`);
+
   const cards = deckCardsAt({
-    serverSeed: session.serverSeed,
+    serverSeed: tx.session.serverSeed,
     clientSeed,
-    shuffleNonce: shuffleNonce as number,
+    shuffleNonce,
     deckCount,
     start,
     count
   });
-  await rngRepo.recordDraw({
-    sessionId: session.id,
-    nonce: shuffleNonce as number,
+  await tx.recordDraw({
+    nonce: shuffleNonce,
     kind: "cards",
     params: { deckCount, start, count },
     outcome: { kind: "cards", cards, deckCount, start, count },
@@ -273,30 +303,11 @@ async function drawCards(
   const label = reason ? `cards (${reason})` : "cards";
   const summary = cards.join(" ");
   return {
-    nonce: shuffleNonce as number,
+    nonce: shuffleNonce,
     summary: `${label} → ${summary} · shoe cards ${start + 1}–${start + count} of ${size}`,
-    footerLine: `🎲 ${label} → ${truncate(summary, MAX_FOOTER_OUTCOME_CHARS)} · shoe ${start + 1}–${start + count}/${size} · session ${session.id}`,
+    footerLine: `🎲 ${label} → ${truncate(summary, MAX_FOOTER_OUTCOME_CHARS)} · nonce ${shuffleNonce} · shoe ${start + 1}–${start + count}/${size} · session ${tx.session.id}`,
     shuffleFooter
   };
-}
-
-async function getOrCreateSession(
-  rngRepo: RngRepository,
-  ctx: ToolContext,
-  threadKey: string
-): Promise<{ session: RngSessionRecord; sessionCreated: boolean }> {
-  const existing = await rngRepo.getActiveSession(threadKey);
-  if (existing) return { session: existing, sessionCreated: false };
-  const serverSeed = generateServerSeed();
-  const created = await rngRepo.createSession({
-    threadKey,
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    createdByUserId: ctx.userId,
-    serverSeed,
-    commitment: rngCommitment(serverSeed)
-  });
-  return { session: created.session, sessionCreated: created.created };
 }
 
 async function ensureRngSetup(

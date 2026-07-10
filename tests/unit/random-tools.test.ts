@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RngDrawRecord, RngRepository, RngSessionRecord } from "../../src/db/rngRepository.js";
+import type {
+  RngDrawInput,
+  RngDrawRecord,
+  RngRepository,
+  RngRevealOutcome,
+  RngSessionRecord,
+  RngSessionTx
+} from "../../src/db/rngRepository.js";
 import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } from "../../src/rng/provable.js";
 import { drawRandom, revealRandomness } from "../../src/tools/randomTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
+/** In-memory mirror of RngRepository's transactional interface (single-threaded, no locking needed). */
 class FakeRngRepository {
   sessions = new Map<string, RngSessionRecord>();
   draws: RngDrawRecord[] = [];
@@ -11,10 +19,8 @@ class FakeRngRepository {
   private nextDrawId = 1;
 
   async getActiveSession(threadKey: string): Promise<RngSessionRecord | null> {
-    for (const session of this.sessions.values()) {
-      if (session.threadKey === threadKey && session.status === "active") return { ...session };
-    }
-    return null;
+    const session = this.findActive(threadKey);
+    return session ? { ...session } : null;
   }
 
   async getSession(id: string): Promise<RngSessionRecord | null> {
@@ -22,17 +28,77 @@ class FakeRngRepository {
     return session ? { ...session } : null;
   }
 
-  async createSession(input: {
+  async listDraws(sessionId: string): Promise<RngDrawRecord[]> {
+    return this.draws.filter((draw) => draw.sessionId === sessionId).map((draw) => ({ ...draw }));
+  }
+
+  async withActiveSession<T>(
+    input: {
+      threadKey: string;
+      guildId: string;
+      channelId: string;
+      createdByUserId: string;
+      serverSeed: string;
+      commitment: string;
+    },
+    fn: (tx: RngSessionTx, sessionCreated: boolean) => Promise<T>
+  ): Promise<T> {
+    let session = this.findActive(input.threadKey);
+    let created = false;
+    if (!session) {
+      session = this.insertSession({ ...input, prevSessionId: null });
+      created = true;
+    }
+    return fn(this.makeTx(session), created);
+  }
+
+  async revealAndRollover(input: {
+    threadKey: string;
+    guildId: string;
+    channelId: string;
+    createdByUserId: string;
+    successorServerSeed: string;
+    successorCommitment: string;
+  }): Promise<RngRevealOutcome> {
+    const session = this.findActive(input.threadKey);
+    if (!session) return { status: "no_session" };
+    const draws = this.draws.filter((draw) => draw.sessionId === session.id);
+    if (draws.length === 0) return { status: "no_draws", session: { ...session } };
+    session.status = "revealed";
+    session.revealedAt = new Date();
+    const successor = this.insertSession({
+      threadKey: input.threadKey,
+      guildId: input.guildId,
+      channelId: input.channelId,
+      createdByUserId: input.createdByUserId,
+      serverSeed: input.successorServerSeed,
+      commitment: input.successorCommitment,
+      prevSessionId: session.id
+    });
+    return {
+      status: "revealed",
+      revealed: { ...session },
+      draws: draws.map((draw) => ({ ...draw })),
+      successor: { ...successor }
+    };
+  }
+
+  private findActive(threadKey: string): RngSessionRecord | null {
+    for (const session of this.sessions.values()) {
+      if (session.threadKey === threadKey && session.status === "active") return session;
+    }
+    return null;
+  }
+
+  private insertSession(input: {
     threadKey: string;
     guildId: string;
     channelId: string;
     createdByUserId: string;
     serverSeed: string;
     commitment: string;
-    prevSessionId?: string | null;
-  }): Promise<{ session: RngSessionRecord; created: boolean }> {
-    const existing = await this.getActiveSession(input.threadKey);
-    if (existing) return { session: existing, created: false };
+    prevSessionId: string | null;
+  }): RngSessionRecord {
     const session: RngSessionRecord = {
       id: `rng_test${this.nextSessionIndex++}`,
       threadKey: input.threadKey,
@@ -48,84 +114,58 @@ class FakeRngRepository {
       shuffleNonce: null,
       deckPosition: null,
       status: "active",
-      prevSessionId: input.prevSessionId ?? null,
+      prevSessionId: input.prevSessionId,
       createdAt: new Date(),
       revealedAt: null
     };
     this.sessions.set(session.id, session);
-    return { session: { ...session }, created: true };
-  }
-
-  async setClientSeed(sessionId: string, clientSeed: string, source: string) {
-    const session = this.mustGet(sessionId);
-    if (session.clientSeed) {
-      return { clientSeed: session.clientSeed, clientSeedSource: session.clientSeedSource, justSet: false };
-    }
-    session.clientSeed = clientSeed;
-    session.clientSeedSource = source;
-    return { clientSeed, clientSeedSource: source, justSet: true };
-  }
-
-  async takeNonce(sessionId: string): Promise<number> {
-    const session = this.mustGet(sessionId);
-    if (session.status !== "active") throw new Error("not active");
-    const nonce = session.nonceCounter;
-    session.nonceCounter += 1;
-    return nonce;
-  }
-
-  async setShoe(sessionId: string, input: { deckCount: number; shuffleNonce: number }) {
-    const session = this.mustGet(sessionId);
-    session.deckCount = input.deckCount;
-    session.shuffleNonce = input.shuffleNonce;
-    session.deckPosition = 0;
-  }
-
-  async claimDeckCards(sessionId: string, input: { count: number; shuffleNonce: number; size: number }): Promise<number | null> {
-    const session = this.mustGet(sessionId);
-    if (session.shuffleNonce !== input.shuffleNonce || session.deckPosition == null) return null;
-    if (session.deckPosition + input.count > input.size) return null;
-    const start = session.deckPosition;
-    session.deckPosition += input.count;
-    return start;
-  }
-
-  async recordDraw(input: Omit<RngDrawRecord, "id" | "createdAt" | "reason" | "requestId" | "messageId" | "requestedByUserId"> & Partial<RngDrawRecord>) {
-    this.draws.push({
-      id: this.nextDrawId++,
-      sessionId: input.sessionId,
-      nonce: input.nonce,
-      kind: input.kind,
-      params: input.params,
-      outcome: input.outcome,
-      reason: input.reason ?? null,
-      requestId: input.requestId ?? null,
-      messageId: input.messageId ?? null,
-      requestedByUserId: input.requestedByUserId ?? null,
-      createdAt: new Date()
-    });
-  }
-
-  async revealSession(sessionId: string): Promise<RngSessionRecord | null> {
-    const session = this.mustGet(sessionId);
-    if (session.status !== "active") return null;
-    session.status = "revealed";
-    session.revealedAt = new Date();
-    return { ...session };
-  }
-
-  async listDraws(sessionId: string): Promise<RngDrawRecord[]> {
-    return this.draws.filter((draw) => draw.sessionId === sessionId).map((draw) => ({ ...draw }));
-  }
-
-  async countDraws(sessionId: string): Promise<number> {
-    return this.draws.filter((draw) => draw.sessionId === sessionId).length;
-  }
-
-  private mustGet(sessionId: string): RngSessionRecord {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`unknown session ${sessionId}`);
     return session;
+  }
+
+  private makeTx(session: RngSessionRecord): RngSessionTx {
+    const draws = this.draws;
+    const nextDrawId = () => this.nextDrawId++;
+    return {
+      session,
+      async setClientSeed(clientSeed: string, source: string) {
+        if (session.clientSeed) return { clientSeed: session.clientSeed, justSet: false };
+        session.clientSeed = clientSeed;
+        session.clientSeedSource = source;
+        return { clientSeed, justSet: true };
+      },
+      async takeNonce() {
+        if (session.status !== "active") throw new Error("not active");
+        return session.nonceCounter++;
+      },
+      async recordDraw(input: RngDrawInput) {
+        draws.push({
+          id: nextDrawId(),
+          sessionId: session.id,
+          nonce: input.nonce,
+          kind: input.kind,
+          params: input.params,
+          outcome: input.outcome,
+          reason: input.reason ?? null,
+          requestId: input.requestId ?? null,
+          messageId: input.messageId ?? null,
+          requestedByUserId: input.requestedByUserId ?? null,
+          createdAt: new Date()
+        });
+      },
+      async setShoe(input: { deckCount: number; shuffleNonce: number }) {
+        session.deckCount = input.deckCount;
+        session.shuffleNonce = input.shuffleNonce;
+        session.deckPosition = 0;
+      },
+      async claimDeckCards(count: number) {
+        if (session.deckCount == null || session.deckPosition == null || session.shuffleNonce == null) return null;
+        const size = session.deckCount * 52;
+        if (session.deckPosition + count > size) return null;
+        const start = session.deckPosition;
+        session.deckPosition += count;
+        return start;
+      }
+    };
   }
 }
 
@@ -278,6 +318,32 @@ describe("drawRandom", () => {
     expect(await drawRandom(ctx, { kind: "banana" })).toContain("Unknown draw kind");
     expect(rngRepo.draws).toHaveLength(0);
     for (const session of rngRepo.sessions.values()) expect(session.nonceCounter).toBe(0);
+  });
+
+  it("includes the shuffle nonce in card proof footers", async () => {
+    const { ctx, footerLines } = fakeContext();
+
+    await drawRandom(ctx, { kind: "cards", count: 2 });
+    await drawRandom(ctx, { kind: "cards", count: 1 });
+
+    const cardFooters = footerLines.filter((line) => line.includes("🎲 cards"));
+    expect(cardFooters).toHaveLength(2);
+    for (const line of cardFooters) expect(line).toContain("nonce 0");
+  });
+
+  it("still publishes the commit footer after an oversized cards request", async () => {
+    const { ctx, rngRepo, footerLines } = fakeContext();
+
+    const error = await drawRandom(ctx, { kind: "cards", count: 60 });
+    expect(error).toContain("Cannot draw 60 cards");
+    // The failed request must not consume the client seed or entropy.
+    const session = [...rngRepo.sessions.values()][0];
+    expect(session.clientSeed).toBeNull();
+    expect(session.nonceCounter).toBe(0);
+    expect(footerLines).toHaveLength(0);
+
+    await drawRandom(ctx, { kind: "cards", count: 2 });
+    expect(footerLines.some((line) => line.includes("fair-play commit"))).toBe(true);
   });
 
   it("falls back to the request id when no Discord message id is available", async () => {

@@ -69,6 +69,7 @@ Beyond recomputing each stored outcome, `npm run verify:rng -- --session <id>` c
 - **Generic, not blackjack-specific.** The tool exposes draw kinds (`integers`, `dice`, `coin`, `pick`, `shuffle`, `cards`); game rules stay with the model. The provable part is exactly the part the model must not control: the entropy and its mapping to outcomes.
 - **The model reports, code decides.** `drawRandom` returns computed outcomes and instructs the model to report them exactly; the proof footer repeats the values from code so any model tampering is visible by comparison.
 - **Reveal is rollover, not shutdown.** Revealing a seed would let future draws be predicted, so `revealRandomness` always starts a new committed session in the same thread.
+- **Outcomes are public at draw time.** The proof footer publishes every drawn outcome immediately — that is the anti-tampering mechanism, and it cannot be suppressed. Games with hidden information (a blackjack dealer's hole card, face-down cards) must therefore defer those draws until play reveals them. The shoe order is committed by the shuffle nonce, so a card drawn later is exactly as fair as one drawn earlier — and deferring also keeps the card out of the model's context, so it cannot leak *or* inform the model's play. The tool description instructs the model to deal this way, and the `random-blackjack-deal` eval asserts no dealer draw of 2+ cards sneaks into the audit trail.
 
 ## Known limitations
 

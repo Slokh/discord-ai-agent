@@ -261,7 +261,11 @@
       "expectedTools": [
         "drawRandom"
       ],
-      "notes": "Card game requests must use the provably fair RNG tool instead of inventing cards."
+      "auditMustNotMatch": [
+        "dealer[^→]*→\\s*(?:10|[2-9AJQK])[♠♥♦♣]\\s+(?:10|[2-9AJQK])[♠♥♦♣]",
+        "→\\s*(?:(?:10|[2-9AJQK])[♠♥♦♣]\\s+){2}(?:10|[2-9AJQK])[♠♥♦♣]"
+      ],
+      "notes": "Card game requests must use the provably fair RNG tool instead of inventing cards. The proof footer publishes every draw immediately, so the deal must not pre-draw the dealer's hole card: no dealer draw of 2+ cards and no single draw of 3+ cards."
     },
     {
       "id": "random-dice-roll",

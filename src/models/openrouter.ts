@@ -84,6 +84,13 @@ export type ImageOptions = {
 
 export type OpenRouterRetryPolicy = "cheap" | "expensive";
 
+/**
+ * "batch" (default) tolerates slow providers with a long timeout and transient retries.
+ * "interactive" fails fast (short timeout, single attempt) so a degraded embedding
+ * provider cannot stall a live agent turn; callers fall back to keyword-only search.
+ */
+export type EmbedRequestProfile = "batch" | "interactive";
+
 export type ImageReference = {
   type: "image_url";
   image_url: { url: string };
@@ -91,6 +98,7 @@ export type ImageReference = {
 
 const OPENROUTER_CHAT_TIMEOUT_MS = 45_000;
 const OPENROUTER_EMBEDDING_TIMEOUT_MS = 20_000;
+const OPENROUTER_INTERACTIVE_EMBEDDING_TIMEOUT_MS = 4_000;
 const OPENROUTER_IMAGE_TIMEOUT_MS = 120_000;
 const OPENROUTER_TRANSIENT_RETRY_DELAYS_MS = [500, 1_500];
 
@@ -185,14 +193,22 @@ export class OpenRouterClient {
     return result;
   }
 
-  async embed(texts: string[], model = this.config.embeddingModel, dimensions?: number): Promise<number[][]> {
+  async embed(
+    texts: string[],
+    model = this.config.embeddingModel,
+    dimensions?: number,
+    options: { profile?: EmbedRequestProfile } = {}
+  ): Promise<number[][]> {
     if (texts.length === 0) return [];
+    const profile = options.profile ?? "batch";
+    const interactive = profile === "interactive";
     const startedAt = Date.now();
     logger.debug(
       {
         provider: "openrouter",
         operation: "embed",
         model,
+        profile,
         textCount: texts.length,
         dimensions
       },
@@ -205,7 +221,8 @@ export class OpenRouterClient {
         input: texts,
         dimensions
       },
-      OPENROUTER_EMBEDDING_TIMEOUT_MS
+      interactive ? OPENROUTER_INTERACTIVE_EMBEDDING_TIMEOUT_MS : OPENROUTER_EMBEDDING_TIMEOUT_MS,
+      interactive ? { maxAttempts: 1 } : {}
     );
 
     const data = Array.isArray(json.data) ? json.data : [];
@@ -222,6 +239,7 @@ export class OpenRouterClient {
         provider: "openrouter",
         operation: "embed",
         model,
+        profile,
         durationMs: durationMs(startedAt),
         vectorCount: embeddings.length,
         dimensions: embeddings[0]?.length
@@ -288,14 +306,14 @@ export class OpenRouterClient {
     path: string,
     body: Record<string, unknown>,
     timeoutMs: number,
-    options: { retryPolicy?: OpenRouterRetryPolicy } = {}
+    options: { retryPolicy?: OpenRouterRetryPolicy; maxAttempts?: number } = {}
   ): Promise<any> {
     if (!this.config.apiKey) {
       throw new Error("OPENROUTER_API_KEY is required for this operation.");
     }
 
     const totalStartedAt = Date.now();
-    const maxAttempts = OPENROUTER_TRANSIENT_RETRY_DELAYS_MS.length + 1;
+    const maxAttempts = options.maxAttempts ?? OPENROUTER_TRANSIENT_RETRY_DELAYS_MS.length + 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = Date.now();

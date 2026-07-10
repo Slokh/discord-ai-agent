@@ -1,6 +1,7 @@
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository, SearchResult } from "../db/repositories.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
+import { durationMs, logger } from "../util/logger.js";
 import { normalizeMessageContent } from "./normalize.js";
 
 export type RetrievalMatchSource = "keyword" | "semantic";
@@ -69,11 +70,13 @@ export async function searchDiscordHistory(input: {
 
   let vector: SearchResult[] = [];
   if (input.config.openRouter.apiKey) {
+    const semanticStartedAt = Date.now();
     try {
       const [embedding] = await input.openRouter.embed(
         [normalizedQuery],
         input.config.openRouter.embeddingModel,
-        input.config.embeddingDimensions
+        input.config.embeddingDimensions,
+        { profile: "interactive" }
       );
       if (embedding) {
         vector = await input.repo.vectorSearch({
@@ -87,7 +90,16 @@ export async function searchDiscordHistory(input: {
           dateTo: input.search.dateTo
         });
       }
-    } catch {
+    } catch (error) {
+      logger.warn(
+        {
+          guildId: input.search.guildId,
+          query: normalizedQuery.slice(0, 120),
+          durationMs: durationMs(semanticStartedAt),
+          error: error instanceof Error ? error.message : String(error)
+        },
+        "Semantic history search failed; returning keyword-only results"
+      );
       vector = [];
     }
   }

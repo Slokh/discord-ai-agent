@@ -161,6 +161,35 @@ describe("searchDiscordHistory", () => {
     );
   });
 
+  it("falls back to keyword-only results when the query embedding fails", async () => {
+    const keywordResults = [result("a", 1), result("b", 0.9)];
+    const repo = {
+      getVisibleIndexedChannelIds: async () => ["c"],
+      keywordSearch: vi.fn(async () => keywordResults),
+      vectorSearch: vi.fn(async () => [result("vector", 0.8)])
+    };
+    const openRouter = {
+      embed: vi.fn(async () => {
+        throw new Error("OpenRouter request timed out after 4000ms (/embeddings).");
+      })
+    };
+
+    const results = await searchDiscordHistory({
+      repo: repo as any,
+      openRouter: openRouter as any,
+      config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      search: {
+        guildId: "g",
+        userVisibleChannelIds: ["c"],
+        query: "birthday"
+      }
+    });
+
+    expect(results.map((item) => item.messageId)).toEqual(["a", "b"]);
+    expect(results.every((item) => item.matchSources?.includes("keyword"))).toBe(true);
+    expect(repo.vectorSearch).not.toHaveBeenCalled();
+  });
+
   it("allows vector search for narrowed queries even when keyword fills the requested limit", async () => {
     const keywordResults = [result("a", 1), result("b", 0.9)];
     const repo = {
@@ -186,7 +215,7 @@ describe("searchDiscordHistory", () => {
     });
 
     expect(results.map((item) => item.messageId)).toEqual(["a", "b"]);
-    expect(openRouter.embed).toHaveBeenCalledWith(["birthday"], "embed", undefined);
+    expect(openRouter.embed).toHaveBeenCalledWith(["birthday"], "embed", undefined, { profile: "interactive" });
     expect(repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ authorIds: ["user-id"] }));
   });
 
@@ -215,7 +244,7 @@ describe("searchDiscordHistory", () => {
 
     expect(results.map((item) => item.messageId)).toEqual(vectorResults.map((item) => item.messageId));
     expect(results[0]?.matchSources).toEqual(["semantic"]);
-    expect(openRouter.embed).toHaveBeenCalledWith(["sampleuser birthday"], "embed", undefined);
+    expect(openRouter.embed).toHaveBeenCalledWith(["sampleuser birthday"], "embed", undefined, { profile: "interactive" });
     expect(repo.vectorSearch).toHaveBeenCalledWith(
       expect.objectContaining({
         guildId: "g",
@@ -252,7 +281,7 @@ describe("searchDiscordHistory", () => {
     });
 
     expect(results.map((item) => item.messageId)).toEqual(["semantic"]);
-    expect(openRouter.embed).toHaveBeenCalledWith(["life update"], "embed", undefined);
+    expect(openRouter.embed).toHaveBeenCalledWith(["life update"], "embed", undefined, { profile: "interactive" });
     expect(repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ authorIds: ["user-id"] }));
   });
 

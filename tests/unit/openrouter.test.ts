@@ -34,6 +34,35 @@ describe("OpenRouterClient", () => {
     );
   });
 
+  it("does not retry transient failures for interactive embeds", async () => {
+    const fetchMock = vi.fn(async () => htmlResponse(503, cloudflareWorkerLimitHtml()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    await expect(client.embed(["hello"], "test/embed", 2, { profile: "interactive" })).rejects.toThrow(
+      "OpenRouter request failed (503)"
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries transient failures for batch embeds", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(htmlResponse(503, cloudflareWorkerLimitHtml()))
+      .mockResolvedValueOnce(jsonResponse({ data: [{ index: 0, embedding: [0.1, 0.2] }] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    const request = client.embed(["hello"], "test/embed", 2);
+
+    await vi.runAllTimersAsync();
+
+    await expect(request).resolves.toEqual([[0.1, 0.2]]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("uses the OpenRouter image endpoint and parses cost estimates", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({

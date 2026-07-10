@@ -334,8 +334,18 @@ function validateDrawInput(kind: string, input: DrawRandomInput): string | null 
   }
   switch (kind) {
     case "integers": {
+      const missing = [input.min == null ? "min" : null, input.max == null ? "max" : null].filter(
+        (name): name is string => name !== null
+      );
+      if (missing.length > 0) {
+        const sidesHint =
+          input.max == null && typeof input.sides === "number" && Number.isSafeInteger(input.sides)
+            ? ` You passed sides=${input.sides}, which belongs to kind "dice", not "integers". For a range of ${input.sides} values starting at ${input.min ?? 0}, use min ${input.min ?? 0} and max ${(input.min ?? 0) + input.sides - 1}; for dice, use {"kind": "dice", "sides": ${input.sides}}.`
+            : "";
+        return `integers draws require both min and max (inclusive bounds). Missing: ${missing.join(" and ")}. Example: {"kind": "integers", "min": 0, "max": 36} for a roulette wheel.${sidesHint} Do not ask the user to fix this; retry drawRandom now with corrected arguments.`;
+      }
       if (!Number.isSafeInteger(input.min) || !Number.isSafeInteger(input.max)) {
-        return "integers draws need integer min and max values.";
+        return `min and max must be whole numbers, but got min=${JSON.stringify(input.min)} and max=${JSON.stringify(input.max)}. Do not ask the user to fix this; retry drawRandom now with integer min and max.`;
       }
       const min = input.min as number;
       const max = input.max as number;

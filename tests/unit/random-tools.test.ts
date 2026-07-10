@@ -311,11 +311,33 @@ describe("drawRandom", () => {
   it("rejects invalid input without consuming entropy", async () => {
     const { ctx, rngRepo } = fakeContext();
 
-    expect(await drawRandom(ctx, { kind: "integers" })).toContain("integer min and max");
+    expect(await drawRandom(ctx, { kind: "integers" })).toContain("require both min and max");
     expect(await drawRandom(ctx, { kind: "pick", options: ["only-one"] })).toContain("at least 2");
     expect(await drawRandom(ctx, { kind: "dice", count: 0 })).toContain("between 1 and");
     expect(await drawRandom(ctx, { kind: "cards", deckCount: 9 })).toContain("between 1 and 8");
     expect(await drawRandom(ctx, { kind: "banana" })).toContain("Unknown draw kind");
+    expect(rngRepo.draws).toHaveLength(0);
+    for (const session of rngRepo.sessions.values()) expect(session.nonceCounter).toBe(0);
+  });
+
+  it("explains the dice/integers conflation and how to self-correct", async () => {
+    // Regression: a roulette spin request produced {kind: "integers", min: 0, sides: 37}
+    // and the old "need integer min and max" error made the model punt to the user
+    // instead of retrying with corrected arguments.
+    const { ctx, rngRepo } = fakeContext();
+
+    const conflated = await drawRandom(ctx, { kind: "integers", min: 0, sides: 37 });
+    expect(conflated).toContain("Missing: max");
+    expect(conflated).toContain('belongs to kind "dice"');
+    expect(conflated).toContain("min 0 and max 36");
+    expect(conflated).toContain("retry drawRandom now");
+    expect(conflated).toContain("Do not ask the user");
+
+    const fractional = await drawRandom(ctx, { kind: "integers", min: 0.5, max: 36 });
+    expect(fractional).toContain("whole numbers");
+    expect(fractional).toContain("min=0.5");
+    expect(fractional).toContain("retry drawRandom now");
+
     expect(rngRepo.draws).toHaveLength(0);
     for (const session of rngRepo.sessions.values()) expect(session.nonceCounter).toBe(0);
   });

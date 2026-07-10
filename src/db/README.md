@@ -11,7 +11,7 @@ Owns durable Postgres state and query contracts.
 - Agent task lifecycle writes live in `agentTaskRepository.ts`; task/status/timeline readers live in `agentTaskReadRepository.ts`; runtime task/event projection readers live in `agentTaskRuntimeReadRepository.ts`.
 - Process runs, spans, run events, artifacts, and cleanup live in `processRunRepository.ts`.
 - Trace events and tool audit logs live in `auditRepository.ts`.
-- Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `agent_runtime_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters.
+- Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `agent_runtime_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters. Per-user turn-limit overrides (`user_budget_overrides`, managed by the `setUserTurnLimit` tool) are the one piece of stored budget state.
 - Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history.
 - DB-backed skills, server overlays, and health checks live in `skillsRepository.ts`.
 - `repositories.ts` is a compatibility facade that delegates to the focused modules; shared types live in `types.ts`, with only cross-domain helpers left in `shared.ts`.

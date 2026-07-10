@@ -17,7 +17,7 @@ Owns model-facing local tool contracts and implementations.
 - `spendTools.ts`: ops spend summaries from `tool_audit_logs.estimated_cost_usd`, including today/month totals and top tool/user breakdowns.
 - `toolContext.ts`: shared tool-context helpers such as requester-visible indexed channels and Discord message-id parsing.
 - Discord resolvers, history/retrieval, stats/topics, images/vision, skills, code-update tasks, task status, logs, deployment status, and response cleanup.
-- Restricted expensive/mutating tools are gated in the router before dispatch: codegen defaults to owner-only when `BOT_OWNER_USER_ID` is set, avatar updates use the ops allowlist, and image generation can opt into the ops allowlist.
+- Restricted expensive/mutating tools are gated in the router before dispatch: codegen defaults to owner-only when `BOT_OWNER_USER_ID` is set, avatar updates and per-user turn limits (`setUserTurnLimit`) use the ops allowlist, and image generation can opt into the ops allowlist.
 
 ## Change Routing
 

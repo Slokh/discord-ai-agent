@@ -24,6 +24,15 @@
       "notes": "Deployment questions should use the ops status tool instead of Discord history."
     },
     {
+      "id": "ops-user-turn-limit",
+      "category": "ops",
+      "prompt": "limit tyler to 5 posts per day, he's spamming every channel",
+      "expectedTools": [
+        "setUserTurnLimit"
+      ],
+      "notes": "Per-user rate-limit requests should route through setUserTurnLimit (after resolving the user), not through Discord history or freeform replies."
+    },
+    {
       "id": "ops-debug-recent-failure",
       "category": "ops",
       "prompt": "why did the last answer fail?",

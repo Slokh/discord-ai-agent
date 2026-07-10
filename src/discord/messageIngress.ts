@@ -320,20 +320,20 @@ export function queueIncomingMessageEmbedding(
     });
 }
 
-type IngressBudgetDecision =
+export type IngressBudgetDecision =
   | { allowed: true }
   | { allowed: false; reason: string; message: string; metadata: Record<string, unknown> };
 
-async function checkIngressBudget(
-  input: DiscordAgentRequestInput,
+export async function checkIngressBudget(
+  input: Pick<DiscordAgentRequestInput, "budgetRepo" | "config">,
   request: { guildId: string; channelId: string; userId: string; requestId: string; text: string }
 ): Promise<IngressBudgetDecision> {
   const budgetRepo = input.budgetRepo;
   if (!budgetRepo) return { allowed: true };
   const dayStart = startOfUtcDay(new Date());
   const { budget } = input.config;
-  const [turns, spend] = await Promise.all([
-    budget.userTurnsPerDay >= 0 ? budgetRepo.countUserChatTurnsSince({ guildId: request.guildId, userId: request.userId, since: dayStart }) : Promise.resolve(0),
+  const [turnLimitOverride, spend] = await Promise.all([
+    budgetRepo.getUserTurnLimitOverride({ guildId: request.guildId, userId: request.userId }),
     budget.guildDailyUsd >= 0 ? budgetRepo.sumGuildEstimatedCostSince({ guildId: request.guildId, since: dayStart }) : Promise.resolve(0)
   ]);
   if (budget.guildDailyUsd >= 0 && spend >= budget.guildDailyUsd) {
@@ -344,13 +344,23 @@ async function checkIngressBudget(
       metadata: { guildId: request.guildId, spend, limit: budget.guildDailyUsd }
     };
   }
-  if (budget.userTurnsPerDay >= 0 && turns >= budget.userTurnsPerDay) {
-    return {
-      allowed: false,
-      reason: "user_daily_turn_limit_exhausted",
-      message: "You've hit today's AI turn limit. Try again tomorrow.",
-      metadata: { guildId: request.guildId, userId: request.userId, turns, limit: budget.userTurnsPerDay }
-    };
+  const turnLimit = turnLimitOverride ?? budget.userTurnsPerDay;
+  if (turnLimit >= 0) {
+    const turns = await budgetRepo.countUserChatTurnsSince({ guildId: request.guildId, userId: request.userId, since: dayStart });
+    if (turns >= turnLimit) {
+      return {
+        allowed: false,
+        reason: "user_daily_turn_limit_exhausted",
+        message: `You've hit today's AI turn limit (${turnLimit} per day). Try again tomorrow.`,
+        metadata: {
+          guildId: request.guildId,
+          userId: request.userId,
+          turns,
+          limit: turnLimit,
+          limitSource: turnLimitOverride === undefined ? "default" : "override"
+        }
+      };
+    }
   }
   return { allowed: true };
 }

@@ -48,6 +48,24 @@ kubectl -n discord-ai-agent create secret generic discord-ai-agent-env \
 For production, prefer creating the Secret from your normal secret manager rather than shell literals.
 For local/dev you can use `GITHUB_TOKEN` instead of the GitHub App fields.
 
+Optional permission keys (strongly recommended): the chart maps these into every
+pod when present in the same Secret. Without them, restricted tools (code-update
+tasks, avatar updates, per-user turn limits, allowlist-only image generation)
+are open to every guild member.
+
+```bash
+kubectl -n discord-ai-agent patch secret discord-ai-agent-env --type merge -p \
+  '{"stringData":{"BOT_OWNER_USER_ID":"<your discord user id>"}}'
+```
+
+Also supported: `OPS_ALLOWLIST_USER_IDS`, `CODEGEN_ALLOWLIST_USER_IDS`
+(comma-separated user IDs), and `IMAGE_TOOLS_ALLOWLIST_ONLY` (`true`/`false`).
+Pods read the Secret at startup, so restart deployments after changing keys:
+
+```bash
+kubectl -n discord-ai-agent rollout restart deployment
+```
+
 ## Build Images
 
 Build and push the app image:

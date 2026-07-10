@@ -17,7 +17,8 @@ Owns the model loop for one user prompt.
 - `router.ts`: thin compatibility entrypoint; `handleAgentRequest` plus re-exports of `chatMessages`/`toolResultContentForPrompt`.
 - `modelLoop.ts`: model round loop, toolset scoping state, route selection, redundant-call guard, direct tool completion.
 - `promptBuilder.ts`: system prompt, requester/skills/overlay/session/reply/image prompt sections, tool-result prompt truncation.
-- `toolDispatcher.ts`: local tool dispatch, restricted-tool gate and per-day budget checks, tool-argument coercion.
+- `toolDispatcher.ts`: local tool dispatch and tool-argument coercion.
+- `toolGate.ts`: restricted-tool permission gate (owner/ops/codegen allowlists) and per-day budget checks applied before dispatch.
 - `finalSynthesis.ts`: forced final synthesis, empty-response recovery, model-call-ceiling fallback, tool-evidence fallback rendering.
 - `modelRecovery.ts`: leaked hosted-tool markup detection, stripping, recovery calls, and malformed-output artifacts.
 - `routerShared.ts`: `AgentToolRoute`/`ModelCallBudget` types, round/call ceilings, `reserveModelCall`.

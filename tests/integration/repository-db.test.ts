@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
+import { BudgetRepository } from "../../src/db/budgetRepository.js";
 import { DeliveryObligationsRepository } from "../../src/db/deliveryObligationsRepository.js";
 import { createPool, type DbPool } from "../../src/db/pool.js";
 import { runConversationCompactionOnce } from "../../src/db/conversationCompaction.js";
@@ -2691,6 +2692,37 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(result.rows).toHaveLength(2);
     expect(result.rows.map((row) => row.model)).toEqual(["test/embed", "test/embed"]);
   });
+
+  it("stores, reads, lists, and clears per-user turn-limit overrides", async () => {
+    const budgetRepo = new BudgetRepository(pool);
+    const guildId = `guild-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const otherUserId = `user-${randomUUID()}`;
+
+    await expect(budgetRepo.getUserTurnLimitOverride({ guildId, userId })).resolves.toBeUndefined();
+
+    await budgetRepo.setUserTurnLimitOverride({ guildId, userId, chatTurnsPerDay: 5, reason: "spamming", createdBy: otherUserId });
+    await expect(budgetRepo.getUserTurnLimitOverride({ guildId, userId })).resolves.toBe(5);
+
+    await budgetRepo.setUserTurnLimitOverride({ guildId, userId, chatTurnsPerDay: -1 });
+    await expect(budgetRepo.getUserTurnLimitOverride({ guildId, userId })).resolves.toBe(-1);
+
+    await budgetRepo.setUserTurnLimitOverride({ guildId, userId: otherUserId, chatTurnsPerDay: 0 });
+    const overrides = await budgetRepo.listUserTurnLimitOverrides({ guildId });
+    expect(overrides.map((row) => row.userId).sort()).toEqual([userId, otherUserId].sort());
+
+    await expect(budgetRepo.clearUserTurnLimitOverride({ guildId, userId })).resolves.toBe(true);
+    await expect(budgetRepo.clearUserTurnLimitOverride({ guildId, userId })).resolves.toBe(false);
+    await expect(budgetRepo.getUserTurnLimitOverride({ guildId, userId })).resolves.toBeUndefined();
+  });
+
+  it("rejects turn-limit overrides below -1", async () => {
+    const budgetRepo = new BudgetRepository(pool);
+    const guildId = `guild-${randomUUID()}`;
+    await expect(
+      budgetRepo.setUserTurnLimitOverride({ guildId, userId: `user-${randomUUID()}`, chatTurnsPerDay: -2 })
+    ).rejects.toThrow();
+  });
 });
 
 async function cleanupTestRows(pool: DbPool) {
@@ -2738,6 +2770,7 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM agent_tasks WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%' OR task_id LIKE 'task-%'");
   await pool.query("DELETE FROM server_overlays WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM interaction_blocks WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
+  await pool.query("DELETE FROM user_budget_overrides WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
   await pool.query("DELETE FROM discord_user_aliases WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
   await pool.query("DELETE FROM privacy_deletions WHERE user_id LIKE 'user-%'");
   await pool.query("DELETE FROM attachments WHERE message_id LIKE 'message-%'");

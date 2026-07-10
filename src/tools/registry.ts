@@ -41,6 +41,7 @@ export type ToolName =
   | "getSpotifyItem"
   | "createDiscordPoll"
   | "updateBotAvatar"
+  | "setUserTurnLimit"
   | "drawRandom"
   | "revealRandomness";
 
@@ -1353,6 +1354,40 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "setUserTurnLimit",
+    description:
+      "Set, clear, or list per-user daily AI turn limits. Use this when the requester asks to limit, throttle, rate-limit, or unlimit how many times a specific user can use the AI per day, or to review the current limits. A set limit overrides the global default and is enforced at Discord ingress before any model call, counted across all channels, and resets at midnight UTC. turnsPerDay accepts a positive daily cap (like 5), 0 to reject every turn, or -1 for unlimited. Pass the target's Discord user ID or mention; use findDiscordUsers to resolve a name to an ID first. Restricted to the bot owner or ops allowlist.",
+    userVisible: true,
+    mutates: true,
+    group: "ops",
+    category: "ops",
+    toolClass: "ops",
+    outputContract: ["action taken (set, clear, or list)", "target user ID and effective limit", "reset window", "failure reason when the user or limit is invalid"],
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["set", "clear", "list"],
+          description: "set applies a daily limit to a user, clear removes their override, list shows all current overrides. Defaults to set."
+        },
+        userId: {
+          type: "string",
+          description: "Discord user ID or <@id> mention of the user to limit. Required for set and clear."
+        },
+        turnsPerDay: {
+          type: "number",
+          description: "Daily AI turn cap for the user. Required for set: a positive whole number like 5, 0 to reject every turn, or -1 for unlimited."
+        },
+        reason: {
+          type: "string",
+          description: "Optional short note recorded with the limit, like 'spamming every channel'."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
     name: "drawRandom",
     description:
       "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. Card draws (kind cards) come from a persistent per-conversation shoe and are dealt without replacement until the shoe is exhausted or reshuffled; use one call per hand segment (e.g. reason 'player hand', 'dealer upcard'). Every outcome is published immediately in a public proof footer that all players can read, so drawing a card reveals it to everyone — including you. NEVER draw cards that must stay hidden (a blackjack dealer's hole card, face-down cards) before the moment play reveals them; deal each hidden card with a separate call at the moment it is turned face up. The shoe order is committed up front, so a deferred draw is exactly as fair as an early one. A proof footer is appended to your reply automatically; report the drawn results exactly and do not fabricate or alter them.",
@@ -1609,6 +1644,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   getSpotifyItem: "external",
   createDiscordPoll: "ops",
   updateBotAvatar: "ops",
+  setUserTurnLimit: "ops",
   drawRandom: "generation",
   revealRandomness: "generation"
 };
@@ -1676,6 +1712,7 @@ function defaultToolExamples(name: ToolName): string[] {
     getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123",
     createDiscordPoll: "@ai make a poll: what day should we play, Friday or Saturday?",
     updateBotAvatar: "@ai change your avatar to this image: https://example.com/avatar.png",
+    setUserTurnLimit: "@ai limit tyler to 5 posts per day",
     drawRandom: "@ai deal me a blackjack hand",
     revealRandomness: "@ai reveal randomness"
   };

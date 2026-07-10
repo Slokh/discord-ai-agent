@@ -60,6 +60,30 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- end }}
 - name: CODEGEN_HARNESS
   value: {{ .Values.codegen.harness | quote }}
+- name: BOT_OWNER_USER_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.botOwnerUserIdSecretKey }}
+      optional: true
+- name: OPS_ALLOWLIST_USER_IDS
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.opsAllowlistUserIdsSecretKey }}
+      optional: true
+- name: CODEGEN_ALLOWLIST_USER_IDS
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.codegenAllowlistUserIdsSecretKey }}
+      optional: true
+- name: IMAGE_TOOLS_ALLOWLIST_ONLY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.imageToolsAllowlistOnlySecretKey }}
+      optional: true
 {{- end -}}
 
 {{- define "discord-ai-agent.controlUiPublicEnv" -}}

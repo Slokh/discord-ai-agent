@@ -120,4 +120,6 @@ const OPS_KEYWORDS = [
   /\b(status|health|logs?|trace|why.*(failed|slow|hung)|deployment|config|admin|ops)\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
   /\bwhat can you do\b/,
+  /\b(rate.?limit|turn limit|post limit|unlimit)\b/,
+  /\blimit\b.*\b(per day|daily|posts?|turns?|messages?|uses?)\b/,
 ];

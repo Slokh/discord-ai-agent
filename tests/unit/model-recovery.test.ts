@@ -3,7 +3,7 @@ import { isLeakedHostedToolMarkup, stripLeakedHostedToolMarkup } from "../../src
 
 describe("isLeakedHostedToolMarkup", () => {
   it("detects the exact markup leaked in prod with a mutated tool name", () => {
-    // Prod incident: message 1525193688094081085 posted this verbatim.
+    // A prod incident posted this string verbatim to Discord.
     expect(isLeakedHostedToolMarkup("<tool_call>openserver_web_search</tool_call>")).toBe(true);
   });
 

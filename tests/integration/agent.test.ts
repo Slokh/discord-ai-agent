@@ -2079,7 +2079,7 @@ describe("agent router", () => {
   });
 
   it("recovers when leaked tool markup uses a mutated tool name", async () => {
-    // Regression for prod message 1525193688094081085: the model leaked
+    // Regression for a prod incident: the model leaked
     // "<tool_call>openserver_web_search</tool_call>" (note: not openrouter_),
     // which the old name-based guard let straight through to Discord.
     const auditTool = vi.fn(async () => undefined);

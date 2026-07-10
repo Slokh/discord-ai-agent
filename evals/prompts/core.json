@@ -253,6 +253,51 @@
       ],
       "skip": true,
       "skipReason": "Image generation spends credits; this covers scoped tool selection without the literal word image."
+    },
+    {
+      "id": "random-blackjack-deal",
+      "category": "random",
+      "prompt": "deal me a blackjack hand",
+      "expectedTools": [
+        "drawRandom"
+      ],
+      "notes": "Card game requests must use the provably fair RNG tool instead of inventing cards."
+    },
+    {
+      "id": "random-dice-roll",
+      "category": "random",
+      "prompt": "roll 2d6 for me",
+      "expectedTools": [
+        "drawRandom"
+      ],
+      "notes": "Dice rolls must come from drawRandom, never model-invented numbers."
+    },
+    {
+      "id": "random-coin-flip",
+      "category": "random",
+      "prompt": "flip a coin",
+      "expectedTools": [
+        "drawRandom"
+      ],
+      "notes": "Coin flips must route through the provably fair RNG tool."
+    },
+    {
+      "id": "random-raffle-pick",
+      "category": "random",
+      "prompt": "pick a random winner from alice, bob, and carol",
+      "expectedTools": [
+        "drawRandom"
+      ],
+      "notes": "Random selection among options must use drawRandom kind pick."
+    },
+    {
+      "id": "random-reveal-fairness",
+      "category": "random",
+      "prompt": "reveal the randomness so I can verify the deals were fair",
+      "expectedTools": [
+        "revealRandomness"
+      ],
+      "notes": "Fairness verification requests must use revealRandomness to publish the server seed."
     }
   ]
 }

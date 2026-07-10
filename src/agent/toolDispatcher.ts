@@ -8,6 +8,7 @@ import {
 } from "../tools/agentTaskTools.js";
 import { updateBotAvatar } from "../tools/botProfileTools.js";
 import { createDiscordPoll } from "../tools/discordPollTools.js";
+import { drawRandom, revealRandomness } from "../tools/randomTools.js";
 import { findDiscordChannels, findDiscordUsers } from "../tools/discordResolverTools.js";
 import {
   answerFromHistory,
@@ -604,6 +605,33 @@ export async function executeLocalToolRoute(
           messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
           useContextImage: booleanArgument(route.arguments, "useContextImage"),
         }),
+        ctx.config.maxReplyChars,
+      ),
+    };
+  }
+
+  if (route.name === "drawRandom") {
+    return {
+      content: cleanResponse(
+        await drawRandom(ctx, {
+          kind: stringArgument(route.arguments, "kind"),
+          count: numberArgument(route.arguments, "count"),
+          min: numberArgument(route.arguments, "min"),
+          max: numberArgument(route.arguments, "max"),
+          sides: numberArgument(route.arguments, "sides"),
+          options: stringArrayArgument(route.arguments, "options"),
+          deckCount: numberArgument(route.arguments, "deckCount"),
+          reason: stringArgument(route.arguments, "reason"),
+        }),
+        ctx.config.maxReplyChars,
+      ),
+    };
+  }
+
+  if (route.name === "revealRandomness") {
+    return {
+      content: cleanResponse(
+        await revealRandomness(ctx),
         ctx.config.maxReplyChars,
       ),
     };

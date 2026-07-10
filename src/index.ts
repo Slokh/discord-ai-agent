@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
 import { startInternalApi } from "./control/internalApi.js";
 import { BudgetRepository } from "./db/budgetRepository.js";
+import { RngRepository } from "./db/rngRepository.js";
 import { DeliveryObligationsRepository } from "./db/deliveryObligationsRepository.js";
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
@@ -76,6 +77,7 @@ async function main() {
   const repo = new DiscordAiAgentRepository(pool);
   const agentRuntimeRepo = new AgentRuntimeRepository(pool);
   const budgetRepo = new BudgetRepository(pool);
+  const rngRepo = new RngRepository(pool);
   const deliveryObligationsRepo = new DeliveryObligationsRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const executionBackend = startsTaskWorker ? createExecutionBackend(config) : undefined;
@@ -132,7 +134,7 @@ async function main() {
         await embedStoredMessage({ repo, openRouter, config, messageId });
       }
     },
-    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, budgetRepo, agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, client }) : undefined,
+    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, budgetRepo, rngRepo, agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, client }) : undefined,
     crawlWorker: startsCrawlWorker,
     embeddingWorker: startsEmbeddingWorker,
     taskWorker: startsTaskWorker,
@@ -157,7 +159,7 @@ async function main() {
   const sandboxReconciler = startsTaskWorker && executionBackend ? startSandboxReconciler({ repo, backend: executionBackend }) : null;
   const runtime =
     startsBot && client && crawler instanceof DiscordCrawler
-      ? createDiscordAiAgentBot({ config, repo, budgetRepo, agentRuntime: agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, crawler, jobs, client })
+      ? createDiscordAiAgentBot({ config, repo, budgetRepo, rngRepo, agentRuntime: agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, crawler, jobs, client })
       : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
 

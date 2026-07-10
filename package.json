@@ -35,6 +35,7 @@
     "verify": "npm run lint && npm run typecheck && npm test && npm audit --omit=dev",
     "verify:db": "npm run migrate && npm run test:db",
     "migrate": "tsx src/db/migrate.ts",
+    "verify:rng": "tsx scripts/verify-rng.ts",
     "crawl": "tsx scripts/crawl.ts",
     "reindex": "tsx scripts/crawl.ts --reindex",
     "aliases": "tsx scripts/userAliases.ts",

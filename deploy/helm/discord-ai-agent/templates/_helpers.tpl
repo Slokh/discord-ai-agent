@@ -22,6 +22,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: production
 - name: RUN_MIGRATIONS
   value: "false"
+- name: APP_REVISION
+  value: {{ .Values.config.appRevision | quote }}
 - name: BOT_NAME
   value: {{ .Values.config.botName | quote }}
 - name: GITHUB_REPOSITORY
@@ -30,6 +32,10 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.githubBaseBranch | quote }}
 - name: OPENROUTER_CHAT_MODEL
   value: {{ .Values.config.openRouterChatModel | quote }}
+{{- if .Values.config.openRouterUtilityModel }}
+- name: OPENROUTER_UTILITY_MODEL
+  value: {{ .Values.config.openRouterUtilityModel | quote }}
+{{- end }}
 {{- if .Values.config.openRouterCodegenModel }}
 - name: OPENROUTER_CODEGEN_MODEL
   value: {{ .Values.config.openRouterCodegenModel | quote }}
@@ -42,6 +48,26 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.embeddingDimensions | quote }}
 - name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS
   value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
+- name: CHAT_SILENCE_TIMEOUT_MS
+  value: {{ .Values.config.chatSilenceTimeoutMs | quote }}
+- name: CHAT_HARD_TIMEOUT_MS
+  value: {{ .Values.config.chatHardTimeoutMs | quote }}
+- name: RETENTION_EVENTS_DAYS
+  value: {{ .Values.config.retentionEventsDays | quote }}
+- name: RETENTION_AUDIT_DAYS
+  value: {{ .Values.config.retentionAuditDays | quote }}
+- name: RETENTION_EMBEDDING_RUNS_DAYS
+  value: {{ .Values.config.retentionEmbeddingRunsDays | quote }}
+- name: RETENTION_RUNTIME_DAYS
+  value: {{ .Values.config.retentionRuntimeDays | quote }}
+- name: MEMORY_COMPACTION_THRESHOLD
+  value: {{ .Values.config.memoryCompactionThreshold | quote }}
+- name: MEMORY_COMPACTION_KEEP_RECENT
+  value: {{ .Values.config.memoryCompactionKeepRecent | quote }}
+- name: CRAWL_SCHEDULE_CRON
+  value: {{ .Values.config.crawlScheduleCron | quote }}
+- name: TOOLSET_SCOPING
+  value: {{ .Values.config.toolsetScoping | quote }}
 {{- if .Values.config.budgetUserTurnsPerDay }}
 - name: BUDGET_USER_TURNS_PER_DAY
   value: {{ .Values.config.budgetUserTurnsPerDay | quote }}

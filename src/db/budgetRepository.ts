@@ -87,6 +87,88 @@ export class BudgetRepository {
     return Number(result.rows[0]?.count ?? 0);
   }
 
+  async reserveUserChatTurn(input: {
+    guildId: string;
+    userId: string;
+    requestId: string;
+    since: Date;
+    defaultLimit: number;
+  }): Promise<{ allowed: boolean; turns: number; limit: number; limitSource: "default" | "override" }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        `${input.guildId}:${input.userId}:${input.since.toISOString()}`,
+      ]);
+      const override = await client.query(
+        "SELECT chat_turns_per_day FROM user_budget_overrides WHERE guild_id = $1 AND user_id = $2",
+        [input.guildId, input.userId],
+      );
+      const overrideValue = override.rows[0]?.chat_turns_per_day;
+      const hasOverride = overrideValue !== undefined && overrideValue !== null;
+      const limit = hasOverride ? Number(overrideValue) : input.defaultLimit;
+      if (limit < 0) {
+        await client.query("COMMIT");
+        return { allowed: true, turns: 0, limit, limitSource: hasOverride ? "override" : "default" };
+      }
+      const count = await client.query(
+        `
+          SELECT count(DISTINCT request_id)::int AS count
+          FROM (
+            SELECT coalesce(cex.trace_id, cex.execution_id) AS request_id
+            FROM agent_runtime_executions cex
+            JOIN agent_runtime_sessions cs ON cs.session_id = cex.session_id
+            WHERE cex.task_id IS NULL
+              AND cs.guild_id = $1
+              AND cs.user_id = $2
+              AND cex.created_at >= $3
+              AND coalesce(cex.metadata->>'runtime', cs.metadata->>'runtime') = 'agent'
+            UNION
+            SELECT request_id
+            FROM budget_turn_reservations
+            WHERE guild_id = $1 AND user_id = $2 AND created_at >= $3
+          ) turns
+        `,
+        [input.guildId, input.userId, input.since],
+      );
+      const turns = Number(count.rows[0]?.count ?? 0);
+      const existingReservation = await client.query(
+        `SELECT guild_id, user_id FROM budget_turn_reservations WHERE request_id = $1`,
+        [input.requestId],
+      );
+      if (existingReservation.rows.length > 0) {
+        const existing = existingReservation.rows[0];
+        if (existing.guild_id !== input.guildId || existing.user_id !== input.userId) {
+          throw new Error("Budget turn reservation request ID is already owned by another user.");
+        }
+        await client.query("COMMIT");
+        return {
+          allowed: true,
+          turns: Math.max(0, turns - 1),
+          limit,
+          limitSource: hasOverride ? "override" : "default",
+        };
+      }
+      if (turns >= limit) {
+        await client.query("COMMIT");
+        return { allowed: false, turns, limit, limitSource: hasOverride ? "override" : "default" };
+      }
+      await client.query(
+        `INSERT INTO budget_turn_reservations(request_id, guild_id, user_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT(request_id) DO NOTHING`,
+        [input.requestId, input.guildId, input.userId],
+      );
+      await client.query("COMMIT");
+      return { allowed: true, turns, limit, limitSource: hasOverride ? "override" : "default" };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async countUserToolCallsSince(input: { guildId: string; userId: string; toolName: string; since: Date }): Promise<number> {
     const result = await this.pool.query(
       `

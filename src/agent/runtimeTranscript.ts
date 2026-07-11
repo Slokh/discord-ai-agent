@@ -41,11 +41,12 @@ export async function recordAgentEvent(
   const span =
     input.span ?? (input.spanId ? spanFromTopLevel(input) : undefined);
 
-  await Promise.all([
-    recordTraceEvent(ctx, trace),
-    recordProcessRunSpan(ctx, span),
-    recordToolAudit(ctx, input.audit),
-  ]);
+  // Runtime events share a monotonically increasing per-execution sequence.
+  // Keep writes ordered so a trace event and its span cannot race for the same
+  // sequence value under the canonical runtime ledger.
+  await recordTraceEvent(ctx, trace);
+  await recordProcessRunSpan(ctx, span);
+  await recordToolAudit(ctx, input.audit);
 }
 
 async function recordTraceEvent(
@@ -53,6 +54,25 @@ async function recordTraceEvent(
   input: TraceInput | undefined,
 ) {
   if (!input) return;
+  if (ctx.agentRuntime && ctx.agentRuntimeSession && ctx.agentRuntimeExecutionId && typeof ctx.agentRuntime.recordEvent === "function") {
+    await ctx.agentRuntime.recordEvent({
+      sessionId: ctx.agentRuntimeSession.sessionId,
+      executionId: ctx.agentRuntimeExecutionId,
+      traceId: input.traceId ?? ctx.requestId ?? ctx.agentRuntimeSession.traceId,
+      kind: input.level === "error" ? "error" : "status",
+      level: input.level ?? "info",
+      eventName: input.eventName,
+      summary: input.summary,
+      metadata: input.metadata,
+      durationMs: input.durationMs,
+    }).catch((error) => {
+      logger.warn(
+        { err: error, executionId: ctx.agentRuntimeExecutionId, eventName: input.eventName },
+        "Failed to record canonical agent runtime event",
+      );
+    });
+    return;
+  }
   const recorder = (
     ctx.repo as unknown as {
       recordTraceEvent?: (event: TraceInput) => Promise<void>;

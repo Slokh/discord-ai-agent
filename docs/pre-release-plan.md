@@ -116,7 +116,7 @@ Goal: cut typical per-turn input tokens by 50–80%. Today every model round car
 
 ### Scoped toolsets
 
-- [x] Add tool groups to `src/tools/registry.ts` (chat/hosted, discord-memory, image, spotify, codegen, ops) and a per-turn toolset selector (cheap classifier call or deterministic gating) so common turns send 5–12 schemas instead of 41.
+- [x] Add tool groups to `src/tools/registry.ts` and deterministic per-turn selection. Follow-up hardening split the former 11-tool `core` group into minimal core, generated-data, and Discord-action groups so ordinary chat starts with two local schemas rather than 21 core/retrieval schemas.
 - [x] Register Spotify tools only when `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` are configured (deployment-level allowlist, mirroring Centaur's `TOOL_ALLOWLIST` behavior).
 - [x] Add eval prompts covering toolset-selection misses before enabling by default (`docs/evals.md` flow).
 

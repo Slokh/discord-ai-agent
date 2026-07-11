@@ -1,4 +1,5 @@
 import type { ChatContentPart, ImageReference } from "../models/openrouter.js";
+import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
@@ -115,7 +116,7 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
     return "I do not have any visible Discord image attachments or image URLs to inspect for that request.";
   }
 
-  const response = await ctx.openRouter.chat({
+  const response = await runObservedModelCall(ctx, { purpose: "discord_image_inspection", chat: {
     model: DEFAULT_VISION_MODEL,
     messages: [
       {
@@ -139,7 +140,7 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
     ],
     temperature: 0.2,
     maxTokens: 4096
-  });
+  } });
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,

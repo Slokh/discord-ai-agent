@@ -135,7 +135,8 @@ export async function executeDiscordAgentRequest(
     discordUrl: message.url,
     status: "running",
     source: "discord.worker",
-    executorName: agentExecutor.name
+    executorName: agentExecutor.name,
+    appRevision: input.config.appRevision
   }).catch((error) => {
     requestLogger.warn({ err: error }, "Failed to mark agent runtime execution running");
     return null;

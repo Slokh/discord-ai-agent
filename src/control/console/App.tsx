@@ -21,6 +21,7 @@ import { Button, Copy, Status, Tabs, Tag } from "regen-ui";
 import { parseOpenCodeTranscript, type ParsedOpenCodeTranscript } from "../../observability/openCodeTranscript.js";
 import { fetchArtifact, fetchRunList, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
 import { parseCodexTranscript } from "./codexTranscript.js";
+import { ModelCalls } from "./modelCalls.js";
 import {
   formatToolArgumentValue,
   isModelRoundTimelineStep,
@@ -50,7 +51,7 @@ import type {
 export { timelineStepSummaryText, timelineSummaryText, timelineTitleText, timelineToolRequests } from "./timelineText.js";
 
 type StatusFilter = "all" | "active" | "done" | "attention" | RunStatus;
-type DetailTab = "overview" | "timeline" | "terminal" | "artifacts" | "raw";
+type DetailTab = "overview" | "timeline" | "models" | "terminal" | "artifacts" | "raw";
 type TerminalStream = TerminalEntry["stream"];
 type HistoryMode = "push" | "replace";
 type LatencyRow = RunSnapshot["spans"][number] & { durationMs: number };
@@ -111,6 +112,7 @@ type ConsoleUrlState = {
 const detailTabs = [
   { id: "overview", label: "Overview", icon: <Activity /> },
   { id: "timeline", label: "Timeline", icon: <Clock3 /> },
+  { id: "models", label: "Models", icon: <Bot /> },
   { id: "terminal", label: "Terminal", icon: <TerminalSquare /> },
   { id: "artifacts", label: "Artifacts", icon: <FileText /> },
   { id: "raw", label: "Raw", icon: <FileText /> }
@@ -427,6 +429,7 @@ export function App() {
                 </div>
                 {tab === "overview" && <Overview snapshot={snapshot} />}
                 {tab === "timeline" && <Timeline snapshot={snapshot} />}
+                {tab === "models" && <ModelCalls snapshot={snapshot} />}
                 {tab === "terminal" && <TerminalView terminal={snapshot.terminal} query={terminalQuery} onQueryChange={setTerminalQuery} />}
                 {tab === "artifacts" && <Artifacts runId={snapshot.run.runId} artifacts={snapshot.artifacts} />}
                 {tab === "raw" && <Raw snapshot={snapshot} />}
@@ -2544,9 +2547,23 @@ function isRedundantTimelineStep(step: TimelineStep, steps: TimelineStep[]) {
   if (/\bagent request started\b/.test(text) && hasModelRoundStep(steps)) return true;
   if (/\bagent response ready\b/.test(text) && hasFinalResponseStep(steps)) return true;
   if (/\bagent final synthesis started\b/.test(text) && hasFinalResponseStep(steps)) return true;
+  if (/\bagent model call started\b/.test(text) && hasObservedModelCallStep(steps)) return true;
+  if (/\bagent model call completed\b/.test(text) && hasMatchingModelCallSpan(step, steps)) return true;
+  if (/\bagent model round complete\b/.test(text) && hasObservedModelCallStep(steps)) return true;
+  if (/\bllm round\b/.test(text) && hasObservedModelCallStep(steps)) return true;
   if (/\bmodel tool router\b/.test(text) && hasModelRoundStep(steps)) return true;
   if (/\bagent tool started\b/.test(text) && hasCompletedToolStep(step, steps)) return true;
   return false;
+}
+
+function hasMatchingModelCallSpan(step: TimelineStep, steps: TimelineStep[]) {
+  const callId = stringMetadata(step.metadata.callId);
+  if (!callId) return false;
+  return steps.some((candidate) => candidate.kind === "span" && stringMetadata(candidate.metadata.callId) === callId);
+}
+
+function hasObservedModelCallStep(steps: TimelineStep[]) {
+  return steps.some((step) => /\bagent model call completed\b/.test(normalizedTimelineName(step.title)));
 }
 
 function isPromptArtifactDuplicate(step: TimelineStep, steps: TimelineStep[]) {

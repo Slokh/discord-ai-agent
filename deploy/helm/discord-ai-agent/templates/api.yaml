@@ -24,9 +24,13 @@ spec:
         {{- include "discord-ai-agent.labels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-app
       containers:
         - name: api
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["node", "dist/src/index.js", "api"]

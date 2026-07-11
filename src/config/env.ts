@@ -41,6 +41,7 @@ function defaultLogLevel(nodeEnv = process.env.NODE_ENV) {
 
 const defaults = {
   nodeEnv: "development",
+  appRevision: "unknown",
   logLevel: defaultLogLevel(),
   processRole: defaultProcessRole(),
   runMigrations: true,
@@ -92,6 +93,7 @@ const defaults = {
   retentionEventsDays: 60,
   retentionAuditDays: 90,
   retentionEmbeddingRunsDays: 14,
+  retentionRuntimeDays: 90,
   memoryCompactionThreshold: 100,
   memoryCompactionKeepRecent: 30,
   crawlBatchSize: 100,
@@ -122,6 +124,7 @@ const defaults = {
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default(defaults.nodeEnv),
+  APP_REVISION: z.string().trim().default(defaults.appRevision),
   LOG_LEVEL: z.string().default(defaults.logLevel),
   DISCORD_AI_AGENT_PROCESS_ROLE: z.enum(["all", "api", "bot", "worker"]).default(defaults.processRole),
   RUN_MIGRATIONS: booleanFromEnv.default(defaults.runMigrations),
@@ -133,7 +136,9 @@ const envSchema = z.object({
   DISCORD_LOADING_REACTION: nonEmptyStringWithDefault(defaults.discordLoadingReaction),
 
   DATABASE_URL: z.string().default(defaults.databaseUrl),
-  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(defaults.embeddingDimensions),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().refine((value) => value === 1536, {
+    message: "EMBEDDING_DIMENSIONS must remain 1536 unless the vector column and HNSW index are migrated together."
+  }).default(defaults.embeddingDimensions),
 
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().default(defaults.openRouterBaseUrl),
@@ -185,6 +190,7 @@ const envSchema = z.object({
   RETENTION_EVENTS_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionEventsDays),
   RETENTION_AUDIT_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionAuditDays),
   RETENTION_EMBEDDING_RUNS_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionEmbeddingRunsDays),
+  RETENTION_RUNTIME_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionRuntimeDays),
   MEMORY_COMPACTION_THRESHOLD: z.coerce.number().int().min(0).max(100_000).default(defaults.memoryCompactionThreshold),
   MEMORY_COMPACTION_KEEP_RECENT: z.coerce.number().int().min(1).max(10_000).default(defaults.memoryCompactionKeepRecent),
 
@@ -234,6 +240,7 @@ export function loadConfig() {
 
   return {
     nodeEnv: parsed.data.NODE_ENV,
+    appRevision: parsed.data.APP_REVISION || defaults.appRevision,
     logLevel: parsed.data.LOG_LEVEL,
     processRole: parsed.data.DISCORD_AI_AGENT_PROCESS_ROLE,
     runMigrations: parsed.data.RUN_MIGRATIONS,
@@ -309,7 +316,8 @@ export function loadConfig() {
       retention: {
         eventsDays: parsed.data.RETENTION_EVENTS_DAYS,
         auditDays: parsed.data.RETENTION_AUDIT_DAYS,
-        embeddingRunsDays: parsed.data.RETENTION_EMBEDDING_RUNS_DAYS
+        embeddingRunsDays: parsed.data.RETENTION_EMBEDDING_RUNS_DAYS,
+        runtimeDays: parsed.data.RETENTION_RUNTIME_DAYS
       },
       memoryCompaction: {
         threshold: parsed.data.MEMORY_COMPACTION_THRESHOLD,

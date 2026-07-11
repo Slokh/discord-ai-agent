@@ -1,4 +1,5 @@
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
+import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import { validateSkillMarkdown } from "../skills/policy.js";
 import { slugify, summarizeForAudit } from "../util/text.js";
 import type { ToolContext } from "./types.js";
@@ -20,7 +21,7 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
 
   let markdown: string;
   if (ctx.config.openRouter.apiKey) {
-    const response = await ctx.openRouter.chat({
+    const response = await runObservedModelCall(ctx, { purpose: "skill_draft", chat: {
       messages: [
         {
           role: "system",
@@ -42,7 +43,7 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
       ],
       temperature: 0.2,
       maxTokens: 4096
-    });
+    } });
     markdown = response.content.trim();
   } else {
     markdown = existingSkill

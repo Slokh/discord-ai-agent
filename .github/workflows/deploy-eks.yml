@@ -57,9 +57,9 @@ jobs:
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
+          docker build --target final -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
+          docker build --target codegen -t "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" .
           docker push "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
       - name: Deploy Helm chart
         env:
@@ -72,6 +72,7 @@ jobs:
             --set "image.repository=$REGISTRY/$ECR_REPOSITORY"
             --set "image.tag=$IMAGE_TAG"
             --set "sandbox.image=$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
+            --set-string "config.appRevision=$IMAGE_TAG"
             --set "config.githubRepository=$CODE_UPDATE_REPOSITORY"
           )
           if [ -n "${API_SERVICE_TYPE:-}" ]; then

@@ -23,8 +23,9 @@ Postgres is the durable source of truth for Discord messages, embeddings, skills
    The first chat message is the large static system prompt so provider prefix caching can reuse it; requester identity, loaded skills, overlays, session memory, reply context, attachments, and the current user request are appended after that stable prefix. `src/models/openrouter.ts` leaves implicit-cache providers alone and adds an Anthropic-only `cache_control` marker to that first system message; `runs:inspect` surfaces `cached_input` from provider usage metadata.
 5. The model selects local tools from `src/tools/registry.ts` or OpenRouter-hosted tools.
 6. Local tools execute through focused tool-family modules registered in `src/tools/registry.ts`; use `src/tools/README.md` to find the owning module before editing.
-7. The router records trace events/tool audit rows and returns the final response/files.
-8. `src/discord/responseSink.ts` renders the loading reaction, status message, final reply, attachments, or errors, then the agent-runtime execution is marked terminal.
+7. Every provider call records a versioned `agent.model.call.*` runtime event with purpose, deployed revision, prompt/schema fingerprints and sizes, model, token/cache use, estimated cost, latency, tool selection, and outcome. Tool actions remain separately audited.
+8. The router returns the final response/files.
+9. `src/discord/responseSink.ts` renders the loading reaction, status message, final reply, attachments, or errors, then the agent-runtime execution is marked terminal.
 
 End state: the canonical execution ledger is the agent-runtime session event stream. Chat turns execute in-process against that ledger; sandboxes are reserved for code-update tasks; Discord-specific code owns delivery obligations (acknowledgements, status edits, final replies, files, and cleanup), not execution state.
 
@@ -53,7 +54,7 @@ Code-update tasks live in the generic agent runtime. New control-plane work shou
 
 1. `src/observability/runs.ts` normalizes process runs, agent-runtime executions/messages/events/artifacts, trace events, tool audits, terminal logs, and task projections. Chat-run console views are derived from runtime executions/events/messages/artifacts; process runs remain for crawler, embedding, and task infrastructure.
 2. `src/control/internalApi.ts` exposes `/api/runs`, `/api/runs/:id`, artifact fetch, and streams.
-3. `src/control/console/` renders the React run console.
+3. `src/control/console/` renders the React run console, including a dedicated Models view for provider usage, cost, prompt/tool-schema weight, and model decisions per call.
 4. `scripts/inspectRun.ts`, `scripts/agentTaskStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths.
 5. `inspectAgentLogs` accepts Discord message links, message IDs, run IDs, or trace IDs and includes the same normalized run diagnostics as the console when the referenced run is visible to the requester.
 6. Worker processes run `src/observability/artifactRetention.ts` periodically to delete expired large process-run and agent-runtime artifacts and their chunks.

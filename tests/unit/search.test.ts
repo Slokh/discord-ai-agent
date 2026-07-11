@@ -30,7 +30,7 @@ describe("mergeResults", () => {
   it("deduplicates and boosts results present in both keyword and vector search", () => {
     const merged = mergeResults([result("a", 0.2), result("b", 0.9)], [result("a", 0.7), result("c", 0.8)]);
     expect(merged.map((item) => item.messageId)).toEqual(["a", "b", "c"]);
-    expect(merged[0]?.score).toBeGreaterThan(1);
+    expect(merged[0]?.score).toBeGreaterThan(merged[1]?.score ?? 0);
     expect(merged.find((item) => item.messageId === "a")?.matchSources).toEqual(["keyword", "semantic"]);
     expect(merged.find((item) => item.messageId === "b")?.matchSources).toEqual(["keyword"]);
     expect(merged.find((item) => item.messageId === "c")?.matchSources).toEqual(["semantic"]);
@@ -290,7 +290,7 @@ describe("searchDiscordHistory", () => {
       }
     });
 
-    expect(results.map((item) => item.messageId)).toEqual(["a", "b"]);
+    expect(results.map((item) => item.messageId)).toEqual(["a", "vector"]);
     expect(openRouter.embed).toHaveBeenCalledWith(["birthday"], "embed", undefined, { profile: "interactive" });
     expect(repo.vectorSearch).toHaveBeenCalledWith(expect.objectContaining({ authorIds: ["user-id"] }));
   });

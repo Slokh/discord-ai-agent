@@ -115,6 +115,20 @@ describe("checkIngressBudget user turn limits", () => {
     const decision = await checkIngressBudget(ingressInput(budgetRepo, { userTurnsPerDay: -1, guildDailyUsd: 10 }), REQUEST);
     expect(decision).toMatchObject({ allowed: false, reason: "guild_daily_spend_exhausted" });
   });
+
+  it("uses an atomic reservation when the repository supports it", async () => {
+    const reserveUserChatTurn = vi.fn(async () => ({ allowed: false, turns: 5, limit: 5, limitSource: "override" as const }));
+    const budgetRepo = fakeBudgetRepo({ reserveUserChatTurn });
+    const decision = await checkIngressBudget(ingressInput(budgetRepo, { userTurnsPerDay: 50, guildDailyUsd: -1 }), REQUEST);
+
+    expect(reserveUserChatTurn).toHaveBeenCalledWith(expect.objectContaining({
+      guildId: GUILD_ID,
+      userId: SPAMMER_ID,
+      requestId: REQUEST.requestId,
+      defaultLimit: 50,
+    }));
+    expect(decision).toMatchObject({ allowed: false, metadata: { turns: 5, limit: 5, limitSource: "override" } });
+  });
 });
 
 function fakeToolContext(budgetRepo: BudgetRepository | undefined, overrides: Partial<ToolContext> = {}): ToolContext {

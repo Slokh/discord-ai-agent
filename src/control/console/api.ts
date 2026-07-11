@@ -60,15 +60,57 @@ export async function resolveRunReference(query: string): Promise<{ run: RunSumm
 
 export function subscribeToRun(runId: string, onSnapshot: (snapshot: RunSnapshot) => void, onError: (error: Error) => void) {
   if (useFixtures) return () => undefined;
-  const events = new EventSource(`/api/runs/${encodeURIComponent(runId)}/stream`, { withCredentials: true });
-  events.addEventListener("snapshot", (event) => {
-    onSnapshot(JSON.parse((event as MessageEvent).data) as RunSnapshot);
-  });
-  events.onerror = () => {
-    onError(new Error("Run stream disconnected; polling will continue."));
-    events.close();
+  let stopped = false;
+  let events: EventSource | null = null;
+  let reconnectTimer: number | null = null;
+  let pollTimer: number | null = null;
+  let reconnectAttempts = 0;
+
+  const stopPolling = () => {
+    if (pollTimer != null) window.clearInterval(pollTimer);
+    pollTimer = null;
   };
-  return () => events.close();
+  const poll = async () => {
+    try {
+      onSnapshot(await fetchRunSnapshot(runId));
+    } catch (error) {
+      onError(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+  const startPolling = () => {
+    if (pollTimer != null || stopped) return;
+    void poll();
+    pollTimer = window.setInterval(() => void poll(), 5_000);
+  };
+  const connect = () => {
+    if (stopped) return;
+    events = new EventSource(`/api/runs/${encodeURIComponent(runId)}/stream`, { withCredentials: true });
+    events.addEventListener("open", () => {
+      reconnectAttempts = 0;
+      stopPolling();
+    });
+    events.addEventListener("snapshot", (event) => {
+      onSnapshot(JSON.parse((event as MessageEvent).data) as RunSnapshot);
+    });
+    events.onerror = () => {
+      events?.close();
+      events = null;
+      if (stopped) return;
+      startPolling();
+      reconnectAttempts += 1;
+      const retryMs = Math.min(30_000, 1_000 * 2 ** Math.min(reconnectAttempts, 5));
+      onError(new Error(`Run stream disconnected; polling every 5s while reconnecting in ${Math.round(retryMs / 1000)}s.`));
+      reconnectTimer = window.setTimeout(connect, retryMs);
+    };
+  };
+
+  connect();
+  return () => {
+    stopped = true;
+    events?.close();
+    if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+    stopPolling();
+  };
 }
 
 function extractDiscordMessageId(input: string): string | null {

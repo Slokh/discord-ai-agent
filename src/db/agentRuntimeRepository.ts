@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DbPool } from "./pool.js";
 import { redactSensitiveText } from "../observability/redaction.js";
+import { assertVersionedRuntimeEventMetadata } from "../observability/runtimeEventSchema.js";
 import { currentTraceContext } from "../util/trace.js";
 
 const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
@@ -441,11 +442,16 @@ export class AgentRuntimeRepository {
     durationMs?: number | null;
   }): Promise<AgentRuntimeEventRecord> {
     const trace = currentTraceContext();
+    assertVersionedRuntimeEventMetadata(input.eventName, input.metadata);
     const result = await this.pool.query(
       `
-        WITH next_sequence AS (
+        WITH event_lock AS MATERIALIZED (
+          SELECT pg_advisory_xact_lock(hashtextextended(coalesce($2::text, $1::text), 0))
+        ),
+        next_sequence AS (
           SELECT coalesce($4::int, coalesce(max(sequence), 0) + 1) AS sequence
           FROM agent_runtime_events
+          CROSS JOIN event_lock
           WHERE ($2::text IS NOT NULL AND execution_id = $2)
              OR ($2::text IS NULL AND session_id = $1)
         )

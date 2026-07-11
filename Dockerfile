@@ -15,6 +15,21 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /var/cache/discord-ai-agent \
+  && chown -R node:node /app /var/cache/discord-ai-agent
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+COPY --chown=node:node --from=build /app/dist ./dist
+COPY --chown=node:node migrations ./migrations
+COPY --chown=node:node skills ./skills
+USER node
+CMD ["node", "dist/src/index.js"]
+
+FROM runtime AS codegen
+USER root
+RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \
   && mkdir -p -m 755 /etc/apt/keyrings \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -23,9 +38,7 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev && npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13
-COPY --from=build /app/dist ./dist
-COPY migrations ./migrations
-COPY skills ./skills
-CMD ["node", "dist/src/index.js"]
+RUN npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13
+USER node
+
+FROM runtime AS final

@@ -19,12 +19,16 @@ spec:
         {{- include "discord-ai-agent.labels" . | nindent 8 }}
         app.kubernetes.io/component: codegen-worker
     spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       terminationGracePeriodSeconds: {{ .Values.codegenWorker.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-worker
       containers:
         - name: codegen-worker
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          image: "{{ .Values.sandbox.image }}"
+          imagePullPolicy: {{ .Values.sandbox.imagePullPolicy }}
           command: ["node", "dist/src/index.js", "worker"]
           env:
             - name: DISCORD_AI_AGENT_PROCESS_ROLE

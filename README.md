@@ -243,6 +243,7 @@ Common optional settings:
 | `CONTROL_UI_PUBLIC_URL` | unset | Public console origin, for example `https://tasks.example.com`; when set, Discord replies include a trace footer and code-update progress messages include a run-console link |
 | `CONTROL_PLANE_INTERNAL_URL` | `http://discord-ai-agent-api:8080` | Sandbox callback URL |
 | `DISCORD_AGENT_RESPONSE_TIMEOUT_MS` | `1800000` | Max time a Discord request can run before returning an error; code-update PR work continues through background task rendering |
+| `AGENT_PROMPT_MAX_CONCURRENCY` | `4` | Parallel prompt capacity across distinct thread keys; prompts sharing a Discord thread remain serialized |
 | `CHAT_SILENCE_TIMEOUT_MS` / `CHAT_HARD_TIMEOUT_MS` | `120000` / `600000` | Chat-only per-execution silence and hard wall-clock timeouts; code-update task timeouts remain controlled by sandbox settings |
 | `BUDGET_USER_TURNS_PER_DAY` / `BUDGET_USER_IMAGES_PER_DAY` / `BUDGET_USER_CODEGEN_PER_DAY` | `50` / `10` / `1` | Per-user daily limits; set to `-1` for unlimited. Chat turn and guild-spend checks happen at Discord ingress before model calls; image/codegen limits are enforced before those expensive tools run. The owner (or ops allowlist) can override the chat-turn limit for a specific user at runtime by asking the bot, e.g. `@ai limit @user to 5 posts per day` (the `setUserTurnLimit` tool; stored in `user_budget_overrides`) |
 | `BUDGET_GUILD_DAILY_USD` | `10` | Per-guild daily cap over `tool_audit_logs.estimated_cost_usd`; set to `-1` for unlimited |

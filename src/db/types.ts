@@ -420,6 +420,8 @@ export type AgentRuntimeEvent = {
   sessionId: string;
   executionId: string | null;
   traceId: string | null;
+  spanId?: string | null;
+  parentSpanId?: string | null;
   kind: string;
   level: TraceEventLevel;
   eventName: string;
@@ -427,6 +429,16 @@ export type AgentRuntimeEvent = {
   metadata: Record<string, unknown>;
   durationMs: number | null;
   createdAt: Date;
+};
+
+export type AgentRunFeedback = {
+  runId: string;
+  rating: "good" | "bad";
+  note: string | null;
+  expectedBehavior: string | null;
+  captureEval: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type AgentRuntimeMessage = {
@@ -517,4 +529,3 @@ export type ServerOverlay = {
   createdAt: Date;
   updatedAt: Date;
 };
-

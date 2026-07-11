@@ -1,4 +1,6 @@
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord, AgentRuntimeStatus } from "../db/agentRuntimeRepository.js";
+import type { AppConfig } from "../config/env.js";
+import { runtimeVersionMetadata } from "../observability/runtimeVersions.js";
 
 export type AgentPromptExecutionRef = {
   session: AgentRuntimeSessionRecord;
@@ -22,9 +24,12 @@ export async function ensureAgentRuntimePromptExecution(input: {
   source: string;
   executorName?: string | null;
   appRevision?: string | null;
+  config?: AppConfig | null;
 }): Promise<AgentPromptExecutionRef | null> {
   if (!input.agentRuntime) return null;
   const executorName = input.executorName?.trim() || "in-process";
+  const versions = runtimeVersionMetadata(input.config);
+  if (input.appRevision) versions.appRevision = input.appRevision;
   const executionId = input.agentExecutionId ?? `agent-execution-${input.requestId}`;
   const session = await input.agentRuntime.upsertSession({
     sessionId: input.agentSessionId,
@@ -44,7 +49,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
       executor: executorName,
       currentMessageId: input.requestId,
       discordUrl: input.discordUrl,
-      appRevision: input.appRevision?.trim() || "unknown"
+      ...versions
     }
   });
   await input.agentRuntime.appendMessage({
@@ -72,7 +77,8 @@ export async function ensureAgentRuntimePromptExecution(input: {
       source: input.source,
       executor: executorName,
       discordMessageId: input.requestId,
-      discordUrl: input.discordUrl
+      discordUrl: input.discordUrl,
+      ...versions
     }
   });
   await input.agentRuntime.recordEvent({

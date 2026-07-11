@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS deps
+FROM node:22-trixie-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
@@ -11,7 +11,7 @@ COPY migrations ./migrations
 COPY skills ./skills
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-trixie-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apt-get update \
@@ -20,7 +20,8 @@ RUN apt-get update \
   && mkdir -p /var/cache/discord-ai-agent \
   && chown -R node:node /app /var/cache/discord-ai-agent
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev \
+  && rm -f package-lock.json
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --chown=node:node migrations ./migrations
 COPY --chown=node:node skills ./skills
@@ -38,7 +39,13 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13
+RUN npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13 \
+  && rm -rf /usr/local/lib/node_modules/npm \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx
 USER node
 
 FROM runtime AS final
+USER root
+RUN rm -rf /usr/local/lib/node_modules/npm \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx
+USER node

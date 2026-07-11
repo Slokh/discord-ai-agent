@@ -198,18 +198,50 @@ export async function upsertServerOverlay(pool: DbPool, input: {
   }
 
 export async function health(pool: DbPool, ) {
-    const [messages, embeddings, tools, estimatedCost, sessions] = await Promise.all([
+    const [messages, embeddings, tools, estimatedCost, sessions, runtimeTelemetry] = await Promise.all([
       pool.query("SELECT count(*)::int AS count FROM messages WHERE deleted_at IS NULL"),
       pool.query("SELECT count(*)::int AS count FROM message_embeddings"),
       pool.query("SELECT count(*)::int AS count FROM tool_audit_logs"),
       pool.query("SELECT coalesce(sum(estimated_cost_usd), 0)::float AS cost FROM tool_audit_logs"),
-      pool.query("SELECT count(*)::int AS count FROM conversation_sessions")
+      pool.query("SELECT count(*)::int AS count FROM conversation_sessions"),
+      pool.query(`
+        SELECT category,
+          count(*)::int AS calls,
+          count(*) FILTER (WHERE phase = 'failed' OR event_name LIKE '%.failed')::int AS errors,
+          coalesce(sum(duration_ms), 0)::float AS duration_sum_ms,
+          count(duration_ms)::int AS duration_count,
+          count(*) FILTER (WHERE duration_ms <= 100)::int AS le_100,
+          count(*) FILTER (WHERE duration_ms <= 500)::int AS le_500,
+          count(*) FILTER (WHERE duration_ms <= 1000)::int AS le_1000,
+          count(*) FILTER (WHERE duration_ms <= 5000)::int AS le_5000,
+          count(*) FILTER (WHERE duration_ms <= 30000)::int AS le_30000,
+          coalesce(sum(estimated_cost_usd), 0)::float AS cost,
+          coalesce(sum(input_tokens), 0)::bigint AS input_tokens,
+          coalesce(sum(output_tokens), 0)::bigint AS output_tokens,
+          coalesce(sum(cached_input_tokens), 0)::bigint AS cached_input_tokens
+        FROM agent_runtime_metric_projection
+        WHERE created_at >= now() - interval '24 hours'
+        GROUP BY category
+        ORDER BY category
+      `)
     ]);
     return {
       messages: Number(messages.rows[0]?.count ?? 0),
       embeddings: Number(embeddings.rows[0]?.count ?? 0),
       toolCalls: Number(tools.rows[0]?.count ?? 0),
       conversationSessions: Number(sessions.rows[0]?.count ?? 0),
-      estimatedCostUsd: Number(estimatedCost.rows[0]?.cost ?? 0)
+      estimatedCostUsd: Number(estimatedCost.rows[0]?.cost ?? 0),
+      runtimeTelemetry: runtimeTelemetry.rows.map((row) => ({
+        category: String(row.category ?? "system"),
+        calls: Number(row.calls ?? 0),
+        errors: Number(row.errors ?? 0),
+        durationSumMs: Number(row.duration_sum_ms ?? 0),
+        durationCount: Number(row.duration_count ?? 0),
+        buckets: [100, 500, 1000, 5000, 30000].map((le) => ({ le, count: Number(row[`le_${le}`] ?? 0) })),
+        estimatedCostUsd: Number(row.cost ?? 0),
+        inputTokens: Number(row.input_tokens ?? 0),
+        outputTokens: Number(row.output_tokens ?? 0),
+        cachedInputTokens: Number(row.cached_input_tokens ?? 0),
+      }))
     };
   }

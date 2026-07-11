@@ -5,7 +5,6 @@ import {
   AlertCircle,
   Bot,
   Clock3,
-  Download,
   FileText,
   Filter,
   Link2,
@@ -22,6 +21,24 @@ import { parseOpenCodeTranscript, type ParsedOpenCodeTranscript } from "../../ob
 import { fetchArtifact, fetchRunList, fetchRunSnapshot, resolveRunReference, subscribeToRun } from "./api.js";
 import { parseCodexTranscript } from "./codexTranscript.js";
 import { ModelCalls } from "./modelCalls.js";
+import { Overview } from "./overviewView.js";
+import { RunComparison } from "./runComparison.js";
+import { RunDashboard } from "./runDashboard.js";
+import { RunListBreakdown, RunListItem, StatusTag, type StatusFilter } from "./runInbox.js";
+import { ArtifactsView, RawView, TerminalView } from "./detailViews.js";
+import {
+  durationStartedAtForCompletedStep,
+  groupTimelineSteps,
+  phaseStatus,
+  summedStepDuration,
+  timelineStepOrder,
+  timelineStepStartMs,
+  withStepGaps,
+  type FlowItemKind,
+  type TimelineStep,
+  type TimelineStepGroup,
+  type TimelineStepKind
+} from "./timelineModel.js";
 import {
   formatToolArgumentValue,
   isModelRoundTimelineStep,
@@ -44,40 +61,14 @@ import type {
   RunSnapshot,
   RunSpan,
   RunStatus,
-  RunSummary,
-  TerminalEntry
+  RunSummary
 } from "./types.js";
 
 export { timelineStepSummaryText, timelineSummaryText, timelineTitleText, timelineToolRequests } from "./timelineText.js";
 
-type StatusFilter = "all" | "active" | "done" | "attention" | RunStatus;
-type DetailTab = "overview" | "timeline" | "models" | "terminal" | "artifacts" | "raw";
-type TerminalStream = TerminalEntry["stream"];
+type DetailTab = "overview" | "timeline" | "models" | "compare" | "terminal" | "artifacts" | "raw";
 type HistoryMode = "push" | "replace";
-type LatencyRow = RunSnapshot["spans"][number] & { durationMs: number };
 type TimedRunEvent = { event: RunEvent; gapMs: number | null; offset: string };
-type TimelineStepKind = FlowItemKind | "span" | "event" | "run";
-export type TimelineStep = {
-  id: string;
-  kind: TimelineStepKind;
-  title: string;
-  summary: string;
-  createdAt: string;
-  durationMs: number | null;
-  durationStartedAt: string | null;
-  gapMs: number | null;
-  offset: string;
-  source: string;
-  status: RunStatus | null;
-  level: EventLevel | null;
-  metadata: Record<string, unknown>;
-  artifact?: RunArtifact;
-};
-export type TimelineStepGroup = {
-  id: string;
-  parent: TimelineStep;
-  children: TimelineStep[];
-};
 type TimelineTrace = {
   steps: TimelineStep[];
   groups: TimelineStepGroup[];
@@ -85,7 +76,6 @@ type TimelineTrace = {
   status: RunStatus;
   slowest: { name: string; durationMs: number } | null;
 };
-type FlowItemKind = "input" | "model" | "tool" | "artifact" | "response" | "error";
 type FlowItem = {
   id: string;
   kind: FlowItemKind;
@@ -100,6 +90,9 @@ type FlowItem = {
 };
 type OpenCodeTranscriptItem = ParsedOpenCodeTranscript["items"][number];
 
+export type { TimelineStep, TimelineStepGroup } from "./timelineModel.js";
+export { compactTimelineSteps, enrichModelRoundToolRequests, groupTimelineSteps, summedStepDuration } from "./timelineModel.js";
+
 type ConsoleUrlState = {
   runId: string;
   tab: DetailTab;
@@ -113,6 +106,7 @@ const detailTabs = [
   { id: "overview", label: "Overview", icon: <Activity /> },
   { id: "timeline", label: "Timeline", icon: <Clock3 /> },
   { id: "models", label: "Models", icon: <Bot /> },
+  { id: "compare", label: "Compare", icon: <SlidersHorizontal /> },
   { id: "terminal", label: "Terminal", icon: <TerminalSquare /> },
   { id: "artifacts", label: "Artifacts", icon: <FileText /> },
   { id: "raw", label: "Raw", icon: <FileText /> }
@@ -121,13 +115,6 @@ const detailTabs = [
 const statusFilters = ["all", "active", "attention", "queued", "running", "failed", "no_changes", "cancelled", "succeeded", "done"] as const;
 const runKinds = ["all", "codegen", "discord", "crawl", "embedding", "prompt", "workflow", "ops"] as const;
 const managedSearchParams = new Set(["tab", "status", "filter", "kind", "q", "embeddings", "includeEmbeddings"]);
-
-const terminalStreamLabels: Record<TerminalStream, string> = {
-  command: "Commands",
-  stdout: "stdout",
-  stderr: "stderr",
-  exit: "Exits"
-};
 
 export function App() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -355,6 +342,7 @@ export function App() {
           <Metric label="Attention" value={summary.attention} tone={summary.attention > 0 ? "bad" : "normal"} />
           <Metric label="Code" value={summary.codegen} tone={summary.codegen > 0 ? "good" : "normal"} />
         </section>
+        <RunDashboard runs={filteredRuns} />
 
         <label className="search-field">
           <Search />
@@ -430,9 +418,10 @@ export function App() {
                 {tab === "overview" && <Overview snapshot={snapshot} />}
                 {tab === "timeline" && <Timeline snapshot={snapshot} />}
                 {tab === "models" && <ModelCalls snapshot={snapshot} />}
+                {tab === "compare" && <RunComparison current={snapshot} runs={runs} />}
                 {tab === "terminal" && <TerminalView terminal={snapshot.terminal} query={terminalQuery} onQueryChange={setTerminalQuery} />}
-                {tab === "artifacts" && <Artifacts runId={snapshot.run.runId} artifacts={snapshot.artifacts} />}
-                {tab === "raw" && <Raw snapshot={snapshot} />}
+                {tab === "artifacts" && <ArtifactsView runId={snapshot.run.runId} artifacts={snapshot.artifacts} />}
+                {tab === "raw" && <RawView snapshot={snapshot} />}
               </>
             ) : (
               <Loading label="Loading run snapshot" />
@@ -530,165 +519,6 @@ function RunJumpPalette({
           </div>
         )}
       </section>
-    </div>
-  );
-}
-
-function Overview({ snapshot }: { snapshot: RunSnapshot }) {
-  const latencyRows = latencyBreakdown(snapshot);
-  const totalDuration = latencyTotal(snapshot);
-  const slowest = latencyRows[0] ?? null;
-  const signalEvents = snapshot.events.filter((event) => event.level === "error" || event.level === "warn").slice(-4).reverse();
-  const relatedRuns = snapshot.relatedRuns ?? [];
-  const agentTranscript = snapshot.agentTranscript ?? [];
-  const activeRelatedRuns = relatedRuns.filter((run) => !isTerminal(run.status));
-  return (
-    <div className="overview-grid">
-      <section className="panel insight-panel">
-        <div className="panel-title">
-          <Activity />
-          <h3>Summary</h3>
-        </div>
-        <div className="diagnostics">
-          {snapshot.diagnostics.length ? snapshot.diagnostics.map((item) => <p key={item}>{item}</p>) : <p>No diagnostics recorded yet.</p>}
-        </div>
-      </section>
-      <section className="panel metrics-panel">
-        <Metric label="Status" value={snapshot.run.status} tone={snapshot.run.status === "failed" ? "bad" : snapshot.run.status === "succeeded" ? "good" : "normal"} />
-        <Metric label="Duration" value={formatDuration(snapshot.run.durationMs)} />
-        <Metric label="Slowest" value={slowest ? `${slowest.name} (${formatDuration(slowest.durationMs)})` : "none"} tone={slowest ? "info" : "normal"} />
-        <Metric label="Events" value={snapshot.events.length} />
-        {agentTranscript.length > 0 && <Metric label="Transcript" value={agentTranscript.length} tone="info" />}
-        {relatedRuns.length > 0 && <Metric label="Related" value={relatedRuns.length} tone={activeRelatedRuns.length > 0 ? "info" : "normal"} />}
-      </section>
-      {agentTranscript.length > 0 && (
-        <section className="panel wide">
-          <div className="panel-title">
-            <MessageSquare />
-            <h3>Agent Transcript</h3>
-          </div>
-          <AgentTranscriptPreview messages={agentTranscript} />
-        </section>
-      )}
-      {relatedRuns.length > 0 && (
-        <section className="panel wide">
-          <div className="panel-title">
-            <Link2 />
-            <h3>Related Runs</h3>
-          </div>
-          <RelatedRunList runs={relatedRuns} generatedAt={snapshot.generatedAt} />
-        </section>
-      )}
-      <section className="panel wide">
-        <div className="panel-title">
-          <Clock3 />
-          <h3>Latency</h3>
-        </div>
-        <LatencyBreakdown rows={latencyRows} totalDuration={totalDuration} />
-      </section>
-      <section className="panel">
-        <div className="panel-title">
-          <AlertCircle />
-          <h3>Signals</h3>
-        </div>
-        {signalEvents.length === 0 ? (
-          <Empty label="No warnings or errors" />
-        ) : (
-          <div className="signal-list">
-            {signalEvents.map((event) => (
-              <div key={event.id} className={`signal-item ${event.level}`}>
-                <strong>{humanizeEventName(event.name)}</strong>
-                <span>{event.summary ?? event.source}</span>
-                <small>{formatOffset(snapshot.run.startedAt, event.createdAt)}</small>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-      <section className="panel">
-        <div className="panel-title">
-          <SlidersHorizontal />
-          <h3>Details</h3>
-        </div>
-        <dl className="facts">
-          <Fact label="Current step" value={snapshot.run.currentStep ?? "none"} />
-          <Fact label="Source" value={snapshot.run.source} />
-          <Fact label="Run id" value={snapshot.run.runId} copy />
-          {snapshot.run.messageId && <Fact label="Message id" value={snapshot.run.messageId} copy />}
-          <Fact label="Artifacts" value={String(snapshot.artifacts.length)} />
-          <Fact label="Terminal" value={`${snapshot.terminal.lineCount} lines`} />
-        </dl>
-      </section>
-    </div>
-  );
-}
-
-function AgentTranscriptPreview({ messages }: { messages: AgentTranscriptMessage[] }) {
-  const visible = messages.slice(-6);
-  return (
-    <div className="agent-transcript-preview">
-      {visible.map((message) => (
-        <article key={message.id} className={`agent-transcript-row ${agentTranscriptKind(message)}`}>
-          <div>
-            <strong>{agentTranscriptTitle(message)}</strong>
-            <span>{[message.role, stringMetadata(message.metadata.source), formatDate(message.createdAt)].filter(Boolean).join(" · ")}</span>
-          </div>
-          <p>{agentTranscriptSummary(message)}</p>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function LatencyBreakdown({ rows, totalDuration }: { rows: LatencyRow[]; totalDuration: number }) {
-  if (rows.length === 0) return <Empty label="No timed spans recorded yet" />;
-  const maxDuration = Math.max(1, ...rows.map((row) => row.durationMs));
-  return (
-    <div className="latency-table" role="table" aria-label="Latency by run phase">
-      <div className="latency-row latency-head" role="row">
-        <span>Step</span>
-        <span>Duration</span>
-        <span>Share</span>
-      </div>
-      {rows.map((row) => {
-        const share = totalDuration > 0 ? row.durationMs / totalDuration : 0;
-        return (
-          <div className="latency-row" role="row" key={row.id}>
-            <div className="latency-step">
-              <strong>{row.name}</strong>
-              <small>{row.source}</small>
-            </div>
-            <strong>{formatDuration(row.durationMs)}</strong>
-            <div className="latency-share">
-              <span>{formatPercent(share)}</span>
-              <div className="latency-track">
-                <div className={`latency-bar ${row.status}`} style={{ width: `${Math.max(3, (row.durationMs / maxDuration) * 100)}%` }} />
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function RelatedRunList({ runs, generatedAt }: { runs: RunSummary[]; generatedAt: string }) {
-  return (
-    <div className="related-run-list">
-      {runs.map((run) => {
-        const durationMs = relatedRunDurationMs(run, generatedAt);
-        return (
-          <a className={`related-run-card ${run.status}`} href={runHref(run.runId, "timeline")} key={run.runId}>
-            <div className="related-run-card-top">
-              <StatusTag status={run.status} />
-              <Tag intent="neutral">{run.kind}</Tag>
-              <span>{formatDuration(durationMs)}</span>
-            </div>
-            <strong>{run.title}</strong>
-            <p>{relatedRunSummary(run, { includeTitle: false }) || run.runId}</p>
-          </a>
-        );
-      })}
     </div>
   );
 }
@@ -1263,260 +1093,6 @@ function CodexTranscript({ content }: { content: string }) {
   );
 }
 
-function TerminalView({
-  terminal,
-  query,
-  onQueryChange
-}: {
-  terminal: RunSnapshot["terminal"];
-  query: string;
-  onQueryChange: (value: string) => void;
-}) {
-  const entries = terminal.entries;
-  const [step, setStep] = useState("all");
-  const [streams, setStreams] = useState<Record<TerminalStream, boolean>>({
-    command: true,
-    stdout: true,
-    stderr: true,
-    exit: true
-  });
-  const steps = useMemo(() => uniqueStrings(entries.map((entry) => entry.step)).sort(), [entries]);
-
-  useEffect(() => {
-    if (step !== "all" && !steps.includes(step)) setStep("all");
-  }, [step, steps]);
-
-  const normalizedQuery = query.trim().toLowerCase();
-  const visible = entries.filter((entry) => {
-    if (!streams[entry.stream]) return false;
-    if (step !== "all" && entry.step !== step) return false;
-    if (!normalizedQuery) return true;
-    return [entry.content, entry.step, entry.command, entry.stream].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalizedQuery));
-  });
-  const content = visible.map((entry) => entry.content).join("\n\n");
-  const download = () => downloadText("run-terminal.log", content);
-
-  return (
-    <section className="panel terminal-panel detail-panel">
-      <div className="panel-heading">
-        <div className="panel-title">
-          <TerminalSquare />
-          <h3>Terminal</h3>
-        </div>
-        <div className="terminal-actions">
-          <Copy value={content} title="Copy visible terminal output" />
-          <Button.Icon title="Download visible terminal output" variant="surface" onClick={download}>
-            <Download />
-          </Button.Icon>
-        </div>
-      </div>
-      <div className="terminal-controls">
-        <label className="terminal-search">
-          <Search />
-          <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Search terminal output" />
-        </label>
-        <select className="terminal-source" value={step} onChange={(event) => setStep(event.target.value)} aria-label="Terminal command filter">
-          <option value="all">All commands</option>
-          {steps.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-        <div className="stream-toggle-row" aria-label="Terminal stream filters">
-          {(Object.keys(terminalStreamLabels) as TerminalStream[]).map((stream) => (
-            <label key={stream} className={streams[stream] ? "stream-toggle active" : "stream-toggle"}>
-              <input
-                type="checkbox"
-                checked={streams[stream]}
-                onChange={(event) => setStreams((current) => ({ ...current, [stream]: event.target.checked }))}
-              />
-              {terminalStreamLabels[stream]}
-            </label>
-          ))}
-        </div>
-      </div>
-      {content ? <pre className="terminal-output">{content}</pre> : <Empty label="No terminal output matches these filters" />}
-    </section>
-  );
-}
-
-function Artifacts({ runId, artifacts }: { runId: string; artifacts: RunArtifact[] }) {
-  const [selectedId, setSelectedId] = useState(artifacts[0]?.artifactId ?? "");
-  const [content, setContent] = useState("");
-  const [loading, setLoading] = useState(false);
-  const selected = artifacts.find((artifact) => artifact.artifactId === selectedId) ?? artifacts[0] ?? null;
-
-  useEffect(() => {
-    if (selectedId && artifacts.some((artifact) => artifact.artifactId === selectedId)) return;
-    setSelectedId(artifacts[0]?.artifactId ?? "");
-  }, [artifacts, selectedId]);
-
-  useEffect(() => {
-    if (!selected) {
-      setContent("");
-      return;
-    }
-    setLoading(true);
-    fetchArtifact(runId, selected.artifactId)
-      .then(setContent)
-      .catch((error) => setContent(error instanceof Error ? error.message : String(error)))
-      .finally(() => setLoading(false));
-  }, [runId, selected]);
-
-  return (
-    <section className="artifact-layout">
-      <aside className="panel artifact-list">
-        <div className="panel-title">
-          <FileText />
-          <h3>Artifacts</h3>
-        </div>
-        {artifacts.length === 0 ? (
-          <Empty label="No artifacts yet" />
-        ) : (
-          artifacts.map((artifact) => (
-            <button
-              key={artifact.artifactId}
-              className={selected?.artifactId === artifact.artifactId ? "artifact-item active" : "artifact-item"}
-              onClick={() => setSelectedId(artifact.artifactId)}
-              type="button"
-            >
-              <span>{artifact.name}</span>
-              <small>
-                {artifact.kind} - {formatBytes(artifact.sizeBytes)}
-              </small>
-            </button>
-          ))
-        )}
-      </aside>
-      <section className="panel artifact-content">
-        <div className="panel-heading">
-          <div className="panel-title">
-            <FileText />
-            <h3>{selected?.name ?? "Artifact"}</h3>
-          </div>
-          {selected && <Copy value={content || selected.preview} title="Copy artifact" />}
-        </div>
-        {loading ? <Loading label="Loading artifact" /> : <pre>{content || selected?.preview || ""}</pre>}
-      </section>
-    </section>
-  );
-}
-
-function Raw({ snapshot }: { snapshot: RunSnapshot }) {
-  return (
-    <section className="panel terminal-panel detail-panel">
-      <div className="panel-title">
-        <FileText />
-        <h3>Raw Snapshot</h3>
-      </div>
-      <pre className="terminal-output">{JSON.stringify(snapshot, null, 2)}</pre>
-    </section>
-  );
-}
-
-function RunListItem({ run, selected, onSelect }: { run: RunSummary; selected: boolean; onSelect: () => void }) {
-  return (
-    <button className={`run-item status-${run.status} kind-${run.kind}${selected ? " selected" : ""}`} onClick={onSelect} type="button">
-      <div className="run-item-top">
-        <StatusTag status={run.status} />
-        <span>{run.kind}</span>
-        <small>{formatRelative(run.updatedAt)}</small>
-      </div>
-      <strong>{run.title}</strong>
-      <p>{run.summary ?? run.currentStep ?? run.runId}</p>
-      <div className="run-item-bottom">
-        <span>{run.requester ?? run.source}</span>
-        {run.bottleneck ? <span>{run.bottleneck.name} - {formatDuration(run.bottleneck.durationMs)}</span> : <span>{formatDuration(run.durationMs)}</span>}
-      </div>
-    </button>
-  );
-}
-
-function StatusTag({ status }: { status: RunStatus }) {
-  const intent = status === "succeeded" ? "positive" : status === "failed" || status === "cancelled" ? "negative" : status === "no_changes" ? "warning" : "accent";
-  return (
-    <Tag dot intent={intent}>
-      {status}
-    </Tag>
-  );
-}
-
-function RunListBreakdown({
-  aggregate,
-  selectedStatus,
-  selectedKind,
-  onStatus,
-  onKind
-}: {
-  aggregate: RunListAggregate;
-  selectedStatus: StatusFilter;
-  selectedKind: RunKind | "all";
-  onStatus: (status: StatusFilter) => void;
-  onKind: (kind: RunKind | "all") => void;
-}) {
-  return (
-    <section className="run-breakdown" aria-label="Visible run breakdown">
-      <div className="run-breakdown-header">
-        <span>Visible</span>
-        <strong>{aggregate.total}</strong>
-      </div>
-      <CountChips
-        label="Status"
-        counts={aggregate.byStatus}
-        selected={selectedStatus}
-        onSelect={(name) => onStatus(isRunStatus(name) ? name : "all")}
-      />
-      <CountChips
-        label="Kind"
-        counts={aggregate.byKind}
-        selected={selectedKind}
-        onSelect={(name) => onKind(isRunKind(name) ? name : "all")}
-      />
-      {aggregate.codegenDiagnoses.length > 0 && <CountChips label="Codegen diagnosis" counts={aggregate.codegenDiagnoses} selected="" />}
-    </section>
-  );
-}
-
-function CountChips({
-  label,
-  counts,
-  selected,
-  onSelect
-}: {
-  label: string;
-  counts: RunCount[];
-  selected: string;
-  onSelect?: (name: string) => void;
-}) {
-  if (counts.length === 0) return null;
-  return (
-    <div className="count-chip-group">
-      <span>{label}</span>
-      <div>
-        {counts.slice(0, 6).map((item) => {
-          const active = selected === item.name;
-          const content = (
-            <>
-              <span>{formatCountName(item.name)}</span>
-              <strong>{item.count}</strong>
-            </>
-          );
-          return onSelect ? (
-            <button key={item.name} className={active ? "count-chip active" : "count-chip"} type="button" onClick={() => onSelect(item.name)}>
-              {content}
-            </button>
-          ) : (
-            <span key={item.name} className="count-chip">
-              {content}
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function Metric({ label, value, tone = "normal" }: { label: string; value: string | number; tone?: "normal" | "bad" | "good" | "info" }) {
   return (
     <div className={`metric ${tone}`}>
@@ -1534,18 +1110,6 @@ function MetaPill({ icon, label, value, copyValue }: { icon: ReactNode; label: s
       <strong>{value}</strong>
       {copyValue && <Copy value={copyValue} title={`Copy ${label}`} />}
     </span>
-  );
-}
-
-function Fact({ label, value, copy = false }: { label: string; value: string; copy?: boolean }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>
-        <span>{value}</span>
-        {copy && <Copy value={value} title={`Copy ${label}`} />}
-      </dd>
-    </div>
   );
 }
 
@@ -1635,18 +1199,6 @@ function uniqueStrings(values: string[]) {
   return [...new Set(values.filter(Boolean))];
 }
 
-function downloadText(filename: string, content: string) {
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
 function readConsoleUrlState(): ConsoleUrlState {
   const search = new URLSearchParams(window.location.search);
   const kind = parseKind(search.get("kind"));
@@ -1719,10 +1271,6 @@ function isExactRunStatusFilter(value: StatusFilter): value is RunStatus {
 
 function isRunStatus(value: string): value is RunStatus {
   return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "no_changes" || value === "cancelled";
-}
-
-function isRunKind(value: string): value is RunKind {
-  return value === "codegen" || value === "discord" || value === "crawl" || value === "embedding" || value === "prompt" || value === "workflow" || value === "ops";
 }
 
 function isTerminal(status: RunStatus) {
@@ -2451,319 +1999,6 @@ function timelineEventTitle(name: string) {
   return humanizeEventName(name);
 }
 
-function withStepGaps(steps: TimelineStep[]) {
-  const sortedSteps = [...steps].sort((left, right) => {
-      const timeDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
-      if (Number.isFinite(timeDelta) && timeDelta !== 0) return timeDelta;
-      return timelineStepOrder(left.kind) - timelineStepOrder(right.kind);
-    });
-  const enrichedSteps = enrichModelRoundToolRequests(sortedSteps);
-  return compactTimelineSteps(enrichedSteps)
-    .map((step, index, sortedSteps) => {
-      const previous = index > 0 ? sortedSteps[index - 1] : null;
-      const gapMs = previous ? new Date(step.createdAt).getTime() - new Date(previous.createdAt).getTime() : null;
-      return {
-        ...step,
-        gapMs: gapMs != null && Number.isFinite(gapMs) && gapMs >= 0 ? gapMs : null
-      };
-    });
-}
-
-export function enrichModelRoundToolRequests(steps: TimelineStep[]) {
-  const modelSteps = steps.filter(isModelRoundTimelineStep);
-  if (modelSteps.length === 0) return steps;
-  return steps.map((step) => {
-    if (!isModelRoundTimelineStep(step) || timelineToolRequests(step).some((request) => request.argumentsText?.trim())) return step;
-    const toolRequests = toolStartRequestsForModelRound(step, steps, modelSteps);
-    if (toolRequests.length === 0) return step;
-    return {
-      ...step,
-      metadata: {
-        ...step.metadata,
-        timelineToolRequests: toolRequests
-      }
-    };
-  });
-}
-
-function toolStartRequestsForModelRound(modelStep: TimelineStep, steps: TimelineStep[], modelSteps: TimelineStep[]) {
-  const modelCompletedAt = new Date(modelStep.createdAt).getTime();
-  if (!Number.isFinite(modelCompletedAt)) return [];
-  const nextModel = modelSteps.find((candidate) => {
-    if (candidate.id === modelStep.id) return false;
-    return timelineStepStartMs(candidate) > modelCompletedAt;
-  });
-  const nextModelStartedAt = nextModel ? timelineStepStartMs(nextModel) : Number.POSITIVE_INFINITY;
-  return steps
-    .filter((step) => {
-      if (!isToolStartedTimelineStep(step)) return false;
-      const startedAt = new Date(step.createdAt).getTime();
-      return Number.isFinite(startedAt) && startedAt >= modelCompletedAt && startedAt < nextModelStartedAt;
-    })
-    .map(toolRequestFromStartedStep)
-    .filter((request): request is TimelineToolRequest => request != null);
-}
-
-function isToolStartedTimelineStep(step: TimelineStep) {
-  return /\bagent tool started\b/.test(normalizedTimelineName(step.title));
-}
-
-function toolRequestFromStartedStep(step: TimelineStep): TimelineToolRequest | null {
-  const metadataName = typeof step.metadata.toolName === "string" ? step.metadata.toolName.trim() : "";
-  const name = metadataName || step.summary.trim();
-  if (!name) return null;
-  const argumentsText = typeof step.metadata.argumentsPreview === "string" ? step.metadata.argumentsPreview : toolRequestArgumentsText(step.metadata);
-  return {
-    name,
-    argumentsText
-  };
-}
-
-export function compactTimelineSteps(steps: TimelineStep[]) {
-  return steps.filter((step) => {
-    if (isEnvelopeTimelineStep(step)) return false;
-    if (isRedundantTimelineStep(step, steps)) return false;
-    if (isDuplicateTimedStep(step, steps)) return false;
-    if (step.kind !== "span") return true;
-    if (step.source !== "command") return true;
-    const stepName = normalizedTimelineName(step.title);
-    const stepStartedAt = new Date(step.createdAt).getTime();
-    return !steps.some((candidate) => {
-      if (candidate.id === step.id || candidate.kind !== "span" || candidate.source !== "task") return false;
-      if (normalizedTimelineName(candidate.title) !== stepName) return false;
-      const candidateStartedAt = new Date(candidate.createdAt).getTime();
-      if (!Number.isFinite(stepStartedAt) || !Number.isFinite(candidateStartedAt)) return false;
-      if (Math.abs(candidateStartedAt - stepStartedAt) > 1_500) return false;
-      return (candidate.durationMs ?? 0) >= (step.durationMs ?? 0);
-    });
-  });
-}
-
-function isRedundantTimelineStep(step: TimelineStep, steps: TimelineStep[]) {
-  if (step.level === "error") return false;
-  const text = normalizedTimelineName(`${step.title} ${step.source}`);
-  if (isPromptArtifactDuplicate(step, steps)) return true;
-  if (isFinalResponseDuplicate(step, steps)) return true;
-  if (/\bagent request started\b/.test(text) && hasModelRoundStep(steps)) return true;
-  if (/\bagent response ready\b/.test(text) && hasFinalResponseStep(steps)) return true;
-  if (/\bagent final synthesis started\b/.test(text) && hasFinalResponseStep(steps)) return true;
-  if (/\bagent model call started\b/.test(text) && hasObservedModelCallStep(steps)) return true;
-  if (/\bagent model call completed\b/.test(text) && hasMatchingModelCallSpan(step, steps)) return true;
-  if (/\bagent model round complete\b/.test(text) && hasObservedModelCallStep(steps)) return true;
-  if (/\bllm round\b/.test(text) && hasObservedModelCallStep(steps)) return true;
-  if (/\bmodel tool router\b/.test(text) && hasModelRoundStep(steps)) return true;
-  if (/\bagent tool started\b/.test(text) && hasCompletedToolStep(step, steps)) return true;
-  return false;
-}
-
-function hasMatchingModelCallSpan(step: TimelineStep, steps: TimelineStep[]) {
-  const callId = stringMetadata(step.metadata.callId);
-  if (!callId) return false;
-  return steps.some((candidate) => candidate.kind === "span" && stringMetadata(candidate.metadata.callId) === callId);
-}
-
-function hasObservedModelCallStep(steps: TimelineStep[]) {
-  return steps.some((step) => /\bagent model call completed\b/.test(normalizedTimelineName(step.title)));
-}
-
-function isPromptArtifactDuplicate(step: TimelineStep, steps: TimelineStep[]) {
-  const text = normalizedTimelineName(`${step.title} ${step.source}`);
-  if (step.kind !== "artifact" || !/\b(discord user prompt|user prompt)\b/.test(text)) return false;
-  const summary = normalizedTimelineName(step.summary);
-  return steps.some((candidate) => {
-    if (candidate.id === step.id) return false;
-    const candidateText = normalizedTimelineName(candidate.title);
-    if (!/\b(discord mention received|user prompt|message received)\b/.test(candidateText)) return false;
-    return summariesMatch(summary, normalizedTimelineName(candidate.summary));
-  });
-}
-
-function isFinalResponseDuplicate(step: TimelineStep, steps: TimelineStep[]) {
-  const text = normalizedTimelineName(`${step.title} ${step.source}`);
-  if (!/\bchat\b/.test(text)) return false;
-  const summary = normalizedTimelineName(step.summary);
-  return steps.some((candidate) => {
-    if (candidate.id === step.id) return false;
-    const candidateText = normalizedTimelineName(candidate.title);
-    if (!/\b(discord final response|final response)\b/.test(candidateText)) return false;
-    return summariesMatch(summary, normalizedTimelineName(candidate.summary));
-  });
-}
-
-function hasFinalResponseStep(steps: TimelineStep[]) {
-  return steps.some((step) => /\b(discord final response|final response)\b/.test(normalizedTimelineName(step.title)));
-}
-
-function hasModelRoundStep(steps: TimelineStep[]) {
-  return steps.some((step) => /\bagent model round complete\b/.test(normalizedTimelineName(step.title)) && (step.durationMs ?? 0) > 0);
-}
-
-function hasCompletedToolStep(step: TimelineStep, steps: TimelineStep[]) {
-  const toolName = normalizedTimelineName(step.summary);
-  return steps.some((candidate) => {
-    if (candidate.id === step.id || (candidate.durationMs ?? 0) <= 0) return false;
-    const candidateText = normalizedTimelineName(candidate.title);
-    if (!/\bagent tool complete\b/.test(candidateText)) return false;
-    if (!toolName) return true;
-    return normalizedTimelineName(candidate.summary).includes(toolName);
-  });
-}
-
-function summariesMatch(left: string, right: string) {
-  if (!left || !right) return false;
-  return left === right || left.includes(right) || right.includes(left);
-}
-
-export function groupTimelineSteps(steps: TimelineStep[]): TimelineStepGroup[] {
-  const parentSteps = steps.filter(isTimelineParentStep);
-  const childrenByParent = new Map<string, TimelineStep[]>();
-  const assignedChildren = new Set<string>();
-
-  for (const child of steps) {
-    if (isTimelineParentStep(child)) continue;
-    const parent = bestTimelineParent(child, parentSteps);
-    if (!parent) continue;
-    assignedChildren.add(child.id);
-    const children = childrenByParent.get(parent.id) ?? [];
-    children.push(child);
-    childrenByParent.set(parent.id, children);
-  }
-
-  const groups: TimelineStepGroup[] = parentSteps.map((parent) => ({
-    id: parent.id,
-    parent,
-    children: childrenByParent.get(parent.id) ?? []
-  }));
-
-  for (const step of steps) {
-    if (assignedChildren.has(step.id) || parentSteps.some((parent) => parent.id === step.id)) continue;
-    groups.push({ id: step.id, parent: step, children: [] });
-  }
-
-  return groups.sort((left, right) => timelineStepStartMs(left.parent) - timelineStepStartMs(right.parent));
-}
-
-function isTimelineParentStep(step: TimelineStep) {
-  return (step.durationMs ?? 0) > 0;
-}
-
-function bestTimelineParent(child: TimelineStep, parents: TimelineStep[]) {
-  const childAt = new Date(child.createdAt).getTime();
-  if (!Number.isFinite(childAt)) return null;
-  const toleranceMs = 1_000;
-  const candidates = parents
-    .map((parent) => {
-      if (!shouldNestTimelineChild(child, parent)) return null;
-      const interval = stepTimingInterval(parent);
-      if (!interval) return null;
-      const exact = childAt >= interval.startedAt && childAt <= interval.endedAt;
-      const nearby = childAt >= interval.startedAt - toleranceMs && childAt <= interval.endedAt + toleranceMs;
-      if (!exact && !nearby) return null;
-      return {
-        parent,
-        exact,
-        durationMs: interval.endedAt - interval.startedAt,
-        distanceMs: exact ? 0 : Math.min(Math.abs(childAt - interval.startedAt), Math.abs(childAt - interval.endedAt))
-      };
-    })
-    .filter((candidate): candidate is { parent: TimelineStep; exact: boolean; durationMs: number; distanceMs: number } => candidate != null)
-    .sort((left, right) => {
-      if (left.exact !== right.exact) return left.exact ? -1 : 1;
-      if (left.durationMs !== right.durationMs) return left.durationMs - right.durationMs;
-      return left.distanceMs - right.distanceMs;
-    });
-  return candidates[0]?.parent ?? null;
-}
-
-function shouldNestTimelineChild(child: TimelineStep, parent: TimelineStep) {
-  if (isTopLevelTimelineMarker(child)) return false;
-  if (child.kind === "input" || child.kind === "response" || child.kind === "artifact" || child.kind === "run") return false;
-  const childText = normalizedTimelineName(`${child.title} ${child.source}`);
-  const parentText = normalizedTimelineName(`${parent.title} ${parent.source}`);
-  const parentIsTool = /\btool\b/.test(parentText);
-  const parentIsModel = /\b(model|chat|completion|synthesis)\b/.test(parentText);
-  if (child.kind === "tool") return parentIsTool;
-  if (child.kind === "model") return parentIsModel;
-  if (/\b(model|chat|completion|synthesis)\b/.test(childText)) return parentIsModel;
-  if (/\btool\b/.test(childText)) return parentIsTool;
-  if (child.source === parent.source) return true;
-  return /\b(context|permission|resolve|reply)\b/.test(childText) && /\b(context|permission|resolve|reply)\b/.test(parentText);
-}
-
-function isTopLevelTimelineMarker(step: TimelineStep) {
-  const text = normalizedTimelineName(step.title);
-  return /\b(discord mention received|discord user prompt|discord thinking sent|agent request started|agent response ready|discord final response|final response|response ready)\b/.test(text);
-}
-
-function timelineStepStartMs(step: TimelineStep) {
-  const interval = stepTimingInterval(step);
-  if (interval) return interval.startedAt;
-  const createdAt = new Date(step.createdAt).getTime();
-  return Number.isFinite(createdAt) ? createdAt : Number.MAX_SAFE_INTEGER;
-}
-
-function isEnvelopeTimelineStep(step: TimelineStep) {
-  if (step.level === "error") return false;
-  const text = normalizedTimelineName(`${step.title} ${step.source} ${metadataValue(step.metadata.spanId)}`);
-  if (step.kind === "span" && /\b(run model led agent|agent request|sandbox command|run total|task total|sandbox lifetime)\b/.test(text)) return true;
-  return (step.durationMs ?? 0) > 0 && /\b(agent request complete|discord mention handled)\b/.test(text);
-}
-
-function isDuplicateTimedStep(step: TimelineStep, steps: TimelineStep[]) {
-  if (step.kind === "span" || step.level === "error" || (step.durationMs ?? 0) <= 0) return false;
-  const stepInterval = stepTimingInterval(step);
-  if (!stepInterval) return false;
-  return steps.some((candidate) => {
-    if (candidate.id === step.id || candidate.kind !== "span" || candidate.source !== "process" || (candidate.durationMs ?? 0) <= 0) return false;
-    const candidateInterval = stepTimingInterval(candidate);
-    if (!candidateInterval) return false;
-    const overlap = Math.max(0, Math.min(stepInterval.endedAt, candidateInterval.endedAt) - Math.max(stepInterval.startedAt, candidateInterval.startedAt));
-    const shorterDuration = Math.min(stepInterval.endedAt - stepInterval.startedAt, candidateInterval.endedAt - candidateInterval.startedAt);
-    if (shorterDuration <= 0 || overlap / shorterDuration < 0.8) return false;
-    return Math.abs((step.durationMs ?? 0) - (candidate.durationMs ?? 0)) < 1_000;
-  });
-}
-
-function timelineStepOrder(kind: TimelineStepKind) {
-  const order: Record<TimelineStepKind, number> = {
-    input: 0,
-    event: 1,
-    model: 2,
-    tool: 3,
-    span: 4,
-    run: 5,
-    artifact: 6,
-    response: 7,
-    error: 8
-  };
-  return order[kind];
-}
-
-function phaseStatus(steps: TimelineStep[]): RunStatus {
-  if (steps.some((step) => step.status === "failed" || step.status === "cancelled" || step.level === "error" || step.kind === "error")) return "failed";
-  if (steps.some((step) => step.status === "running")) return "running";
-  if (steps.some((step) => step.status === "queued")) return "queued";
-  if (steps.some((step) => step.status === "no_changes")) return "no_changes";
-  return "succeeded";
-}
-
-export function summedStepDuration(steps: Array<{ durationMs: number | null | undefined }>) {
-  return steps.reduce((total, step) => total + Math.max(0, step.durationMs ?? 0), 0);
-}
-
-function durationStartedAtForCompletedStep(createdAt: string, durationMs: number | null | undefined) {
-  const completedAt = new Date(createdAt).getTime();
-  if (!Number.isFinite(completedAt) || durationMs == null || durationMs <= 0) return null;
-  return new Date(completedAt - durationMs).toISOString();
-}
-
-function stepTimingInterval(step: { createdAt: string; durationMs: number | null | undefined; durationStartedAt?: string | null }) {
-  const startedAt = new Date(step.durationStartedAt ?? step.createdAt).getTime();
-  const durationMs = step.durationMs ?? 0;
-  if (!Number.isFinite(startedAt) || !Number.isFinite(durationMs) || durationMs <= 0) return null;
-  return { startedAt, endedAt: startedAt + durationMs };
-}
-
 function spanSummary(span: RunSpan) {
   const explicitSummary = typeof span.metadata.summary === "string" ? span.metadata.summary : null;
   if (explicitSummary) return explicitSummary;
@@ -2953,6 +2188,7 @@ function agentTranscriptToolRequests(step: TimelineStep): TimelineToolRequest[] 
 function isFlowEvent(event: RunEvent) {
   if (event.level === "error") return true;
   if (isLowSignalTimelineEvent(event)) return false;
+  if (event.category) return ["ingress", "model", "tool", "retrieval", "delivery"].includes(event.category);
   const kind = callKind(event);
   if (kind === "model" || kind === "tool") return true;
   return /\b(prompt|input|mention|message|reply|respond|response|completed|failed|final answer)\b/i.test(`${event.name} ${event.summary ?? ""}`);
@@ -2965,6 +2201,8 @@ function isFlowArtifact(artifact: RunArtifact) {
 function eventKind(event: RunEvent, callType: ReturnType<typeof callKind>): FlowItemKind {
   if (callType === "model") return "model";
   if (callType === "tool") return "tool";
+  if (event.category === "delivery") return "response";
+  if (event.category === "ingress" || event.category === "context" || event.category === "retrieval") return "input";
   if (/\b(reply|respond|response|completed|final answer)\b/i.test(`${event.name} ${event.summary ?? ""}`)) return "response";
   return "input";
 }
@@ -2993,6 +2231,9 @@ function timelineStepLabel(kind: TimelineStepKind) {
 }
 
 function callKind(event: RunEvent) {
+  if (event.category === "model") return "model";
+  if (event.category === "tool" || event.category === "retrieval") return "tool";
+  if (event.category) return "process";
   if (event.source === "tool" || /tool|discordhistory|discordstats|generateimage|inspect|fetch|search/i.test(event.name)) return "tool";
   if (/model|openrouter|chat|embed|image|completion/i.test(event.name)) return "model";
   return "process";
@@ -3025,30 +2266,12 @@ function shortId(value: string) {
   return value.length > 14 ? `${value.slice(0, 6)}...${value.slice(-6)}` : value;
 }
 
-function latencyBreakdown(snapshot: RunSnapshot): LatencyRow[] {
-  return snapshot.spans
-    .filter((span): span is LatencyRow => typeof span.durationMs === "number" && Number.isFinite(span.durationMs))
-    .sort((left, right) => right.durationMs - left.durationMs);
-}
-
-function latencyTotal(snapshot: RunSnapshot) {
-  if (typeof snapshot.run.durationMs === "number" && Number.isFinite(snapshot.run.durationMs) && snapshot.run.durationMs > 0) {
-    return snapshot.run.durationMs;
-  }
-  return snapshot.spans.reduce((total, span) => total + (span.durationMs ?? 0), 0);
-}
-
 function formatDuration(value: number | null | undefined) {
   if (value == null) return "live";
   const seconds = value / 1000;
   if (seconds < 60) return `${seconds.toFixed(3)}s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${Math.round(seconds % 60)}s`;
-}
-
-function formatPercent(value: number) {
-  if (!Number.isFinite(value)) return "0%";
-  return `${Math.round(value * 100)}%`;
 }
 
 function formatRelative(value: string) {

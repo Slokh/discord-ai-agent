@@ -125,89 +125,20 @@ export async function vectorSearch(pool: DbPool, input: {
     try {
       await client.query("BEGIN");
       await client.query("SELECT set_config('statement_timeout', $1, true)", [`${VECTOR_SEARCH_STATEMENT_TIMEOUT_MS}ms`]);
-      if (!hasResultFilters) {
-        // Unfiltered path scans the HNSW halfvec index; iterative scan (pgvector >= 0.8) keeps traversing when post-filters reject candidates.
-        await client.query("SELECT set_config('hnsw.ef_search', $1, true)", [String(VECTOR_SEARCH_HNSW_EF_SEARCH)]);
-        await client.query("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)");
-      }
-      const result = hasResultFilters
-        ? await client.query(
-            `
-          WITH filtered_messages AS MATERIALIZED (
-            SELECT
-              m.id AS message_id,
-              m.guild_id,
-              m.channel_id,
-              m.author_id,
-              u.username AS author_username,
-              m.content,
-              m.normalized_content,
-              m.created_at
-            FROM messages m
-            JOIN discord_users u ON u.id = m.author_id
-            JOIN channels c ON c.id = m.channel_id
-            LEFT JOIN channels parent ON parent.id = c.parent_id
-            WHERE m.guild_id = $1
-              AND m.channel_id = ANY($2::text[])
-              AND m.deleted_at IS NULL
-              AND m.normalized_content <> ''
-              AND coalesce(u.is_bot, false) = false
-              AND c.is_excluded = false
-              AND coalesce(parent.is_excluded, false) = false
-              AND (cardinality($5::text[]) = 0 OR m.author_id = ANY($5::text[]))
-              AND (
-                cardinality($9::text[]) = 0
-                OR EXISTS (
-                  SELECT 1
-                  FROM unnest($9::text[]) AS about(term)
-                  WHERE position(about.term in lower(m.normalized_content)) > 0
-                )
-              )
-              AND (
-                cardinality($8::text[]) = 0
-                OR m.channel_id = ANY($8::text[])
-                OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
-              )
-              AND ($6::timestamptz IS NULL OR m.created_at >= $6)
-              AND ($7::timestamptz IS NULL OR m.created_at <= $7)
-              AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
-          )
-          SELECT
-            fm.message_id,
-            fm.guild_id,
-            fm.channel_id,
-            fm.author_id,
-            fm.author_username,
-            fm.content,
-            fm.normalized_content,
-            fm.created_at,
-            1 - (e.embedding <=> $3::vector) AS score
-          FROM filtered_messages fm
-          JOIN message_embeddings e ON e.message_id = fm.message_id
-          ORDER BY e.embedding <=> $3::vector, fm.created_at DESC
-          LIMIT $4
-        `,
-            [
-              input.guildId,
-              input.visibleChannelIds,
-              vectorLiteral(input.embedding),
-              input.limit,
-              authorIds,
-              input.dateFrom ?? null,
-              input.dateTo ?? null,
-              channelIds,
-              aboutUserTerms
-            ]
-          )
-        : await client.query(
-            `
+      // Always start from the permission-agnostic HNSW candidate set and apply
+      // guild/channel/privacy filters afterwards. This keeps filtered queries
+      // on ANN rather than degrading into an exact scan over visible history.
+      await client.query("SELECT set_config('hnsw.ef_search', $1, true)", [String(VECTOR_SEARCH_HNSW_EF_SEARCH)]);
+      await client.query("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)");
+      const queryCandidates = (annCandidateLimit: number) => client.query(
+        `
           WITH nearest AS MATERIALIZED (
             SELECT
               message_id,
               embedding::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) <=> $3::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) AS distance
             FROM message_embeddings
             ORDER BY embedding::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) <=> $3::halfvec(${EMBEDDING_INDEX_DIMENSIONS})
-            LIMIT $9
+            LIMIT $10
           )
           SELECT
             m.id AS message_id,
@@ -233,6 +164,14 @@ export async function vectorSearch(pool: DbPool, input: {
             AND coalesce(parent.is_excluded, false) = false
             AND (cardinality($5::text[]) = 0 OR m.author_id = ANY($5::text[]))
             AND (
+              cardinality($9::text[]) = 0
+              OR EXISTS (
+                SELECT 1
+                FROM unnest($9::text[]) AS about(term)
+                WHERE position(about.term in lower(m.normalized_content)) > 0
+              )
+            )
+            AND (
               cardinality($8::text[]) = 0
               OR m.channel_id = ANY($8::text[])
               OR (c.parent_id = ANY($8::text[]) AND c.type IN (10, 11))
@@ -252,9 +191,14 @@ export async function vectorSearch(pool: DbPool, input: {
           input.dateFrom ?? null,
           input.dateTo ?? null,
           channelIds,
-          candidateLimit
+          aboutUserTerms,
+          annCandidateLimit
         ]
-          );
+      );
+      let result = await queryCandidates(candidateLimit);
+      if (hasResultFilters && result.rows.length < input.limit && candidateLimit < FILTERED_VECTOR_SEARCH_MAX_CANDIDATES) {
+        result = await queryCandidates(FILTERED_VECTOR_SEARCH_MAX_CANDIDATES);
+      }
       await client.query("COMMIT");
       return result.rows.map(rowToSearchResult);
     } catch (error) {

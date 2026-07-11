@@ -445,6 +445,21 @@ async function handleRequest(input: {
     return;
   }
 
+  const runFeedbackMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/feedback$/);
+  if ((method === "GET" || method === "POST") && runFeedbackMatch) {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    const runId = decodeURIComponent(runFeedbackMatch[1] ?? "");
+    if (method === "GET") {
+      const feedback = await input.repo.getRunFeedback(runId);
+      sendJson(input.response, 200, { feedback: feedback ?? null });
+      return;
+    }
+    const body = parseRunFeedbackBody(await readJsonBody(input.request));
+    const feedback = await input.repo.upsertRunFeedback({ runId, ...body });
+    sendJson(input.response, 200, { feedback });
+    return;
+  }
+
   const runArtifactMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/);
   if (method === "GET" && runArtifactMatch) {
     if (!authorizedUi(input.config, input.request, input.response, url)) return;
@@ -1046,6 +1061,15 @@ function parseBooleanLike(value: unknown) {
   return false;
 }
 
+function parseRunFeedbackBody(value: unknown) {
+  if (!value || typeof value !== "object") throw new Error("Run feedback body must be an object.");
+  const body = value as Record<string, unknown>;
+  if (body.rating !== "good" && body.rating !== "bad") throw new Error("Run feedback rating must be good or bad.");
+  const note = typeof body.note === "string" ? body.note.trim().slice(0, 4000) : null;
+  const expectedBehavior = typeof body.expectedBehavior === "string" ? body.expectedBehavior.trim().slice(0, 4000) : null;
+  return { rating: body.rating as "good" | "bad", note: note || null, expectedBehavior: expectedBehavior || null, captureEval: parseBooleanLike(body.captureEval) };
+}
+
 function sendJson(response: http.ServerResponse, status: number, body: Record<string, unknown>) {
   if (response.headersSent) return;
   response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...securityHeaders() });
@@ -1108,6 +1132,7 @@ async function streamRunSnapshots(input: {
 
   let closed = false;
   let lastSignature = "";
+  let previousSnapshot: Awaited<ReturnType<typeof getRunSnapshot>> | null = null;
   input.request.on("close", () => {
     closed = true;
   });
@@ -1127,7 +1152,14 @@ async function streamRunSnapshots(input: {
       return;
     }
     lastSignature = signature;
-    input.response.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    if (!previousSnapshot) {
+      previousSnapshot = snapshot;
+      input.response.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+      return;
+    }
+    const delta = runSnapshotDelta(previousSnapshot, snapshot);
+    previousSnapshot = snapshot;
+    input.response.write(`event: delta\ndata: ${JSON.stringify(delta)}\n\n`);
   };
 
   await sendSnapshot();
@@ -1143,6 +1175,26 @@ async function streamRunSnapshots(input: {
     input.response.on("close", resolve);
   });
   clearInterval(interval);
+}
+
+function runSnapshotDelta(previous: NonNullable<Awaited<ReturnType<typeof getRunSnapshot>>>, next: NonNullable<Awaited<ReturnType<typeof getRunSnapshot>>>) {
+  const previousSpanIds = new Set(previous.spans.map((item) => item.id));
+  const previousEventIds = new Set(previous.events.map((item) => item.id));
+  const previousArtifactIds = new Set(previous.artifacts.map((item) => item.artifactId));
+  const previousTranscriptIds = new Set((previous.agentTranscript ?? []).map((item) => item.id));
+  return {
+    version: next.run.updatedAt,
+    run: next.run,
+    spans: next.spans.filter((item) => !previousSpanIds.has(item.id)),
+    events: next.events.filter((item) => !previousEventIds.has(item.id)),
+    artifacts: next.artifacts.filter((item) => !previousArtifactIds.has(item.artifactId)),
+    agentTranscript: (next.agentTranscript ?? []).filter((item) => !previousTranscriptIds.has(item.id)),
+    terminal: next.terminal.lineCount === previous.terminal.lineCount ? null : next.terminal,
+    diagnostics: next.diagnostics,
+    raw: next.raw,
+    relatedRuns: next.relatedRuns,
+    generatedAt: next.generatedAt,
+  };
 }
 
 function runSnapshotSignature(snapshot: Awaited<ReturnType<typeof getRunSnapshot>>) {
@@ -1256,6 +1308,7 @@ async function streamAgentEvents(input: {
 
 export async function renderMetrics(repo: DiscordAiAgentRepository) {
   const [health, taskMetrics] = await Promise.all([repo.health(), repo.getAgentTaskMetrics()]);
+  const runtimeTelemetry = health.runtimeTelemetry ?? [];
   const lines = [
     "# HELP discord_ai_agent_messages_indexed Indexed non-deleted Discord messages.",
     "# TYPE discord_ai_agent_messages_indexed gauge",
@@ -1272,6 +1325,30 @@ export async function renderMetrics(repo: DiscordAiAgentRepository) {
     "# HELP discord_ai_agent_estimated_cost_usd_total Estimated audited model and tool cost in US dollars.",
     "# TYPE discord_ai_agent_estimated_cost_usd_total counter",
     `discord_ai_agent_estimated_cost_usd_total ${health.estimatedCostUsd}`,
+    "# HELP discord_ai_agent_runtime_events_total Runtime events in the last 24 hours by category.",
+    "# TYPE discord_ai_agent_runtime_events_total gauge",
+    ...runtimeTelemetry.map((row) => `discord_ai_agent_runtime_events_total{category=${quoteMetricLabel(row.category)}} ${row.calls}`),
+    "# HELP discord_ai_agent_runtime_errors_total Failed runtime events in the last 24 hours by category.",
+    "# TYPE discord_ai_agent_runtime_errors_total gauge",
+    ...runtimeTelemetry.map((row) => `discord_ai_agent_runtime_errors_total{category=${quoteMetricLabel(row.category)}} ${row.errors}`),
+    "# HELP discord_ai_agent_runtime_duration_ms Runtime event latency in milliseconds over the last 24 hours.",
+    "# TYPE discord_ai_agent_runtime_duration_ms histogram",
+    ...runtimeTelemetry.flatMap((row) => [
+      ...row.buckets.map((bucket) => `discord_ai_agent_runtime_duration_ms_bucket{category=${quoteMetricLabel(row.category)},le=${quoteMetricLabel(String(bucket.le))}} ${bucket.count}`),
+      `discord_ai_agent_runtime_duration_ms_bucket{category=${quoteMetricLabel(row.category)},le="+Inf"} ${row.durationCount}`,
+      `discord_ai_agent_runtime_duration_ms_sum{category=${quoteMetricLabel(row.category)}} ${row.durationSumMs}`,
+      `discord_ai_agent_runtime_duration_ms_count{category=${quoteMetricLabel(row.category)}} ${row.durationCount}`,
+    ]),
+    "# HELP discord_ai_agent_runtime_cost_usd Estimated runtime model/tool cost in the last 24 hours.",
+    "# TYPE discord_ai_agent_runtime_cost_usd gauge",
+    ...runtimeTelemetry.map((row) => `discord_ai_agent_runtime_cost_usd{category=${quoteMetricLabel(row.category)}} ${row.estimatedCostUsd}`),
+    "# HELP discord_ai_agent_runtime_tokens Runtime model tokens in the last 24 hours by cache disposition.",
+    "# TYPE discord_ai_agent_runtime_tokens gauge",
+    ...runtimeTelemetry.flatMap((row) => [
+      `discord_ai_agent_runtime_tokens{category=${quoteMetricLabel(row.category)},type="input"} ${row.inputTokens}`,
+      `discord_ai_agent_runtime_tokens{category=${quoteMetricLabel(row.category)},type="cached_input"} ${row.cachedInputTokens}`,
+      `discord_ai_agent_runtime_tokens{category=${quoteMetricLabel(row.category)},type="output"} ${row.outputTokens}`,
+    ]),
     "# HELP discord_ai_agent_agent_tasks_total Agent tasks by status.",
     "# TYPE discord_ai_agent_agent_tasks_total gauge",
     ...taskMetrics.tasksByStatus.map((row) => `discord_ai_agent_agent_tasks_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),

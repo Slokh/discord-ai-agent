@@ -42,7 +42,14 @@ describe("internal API UI authorization", () => {
 describe("internal API metrics", () => {
   it("renders codegen sandbox lease metrics", async () => {
     const repo = {
-      health: async () => ({ messages: 2, embeddings: 1, toolCalls: 3 }),
+      health: async () => ({
+        messages: 2,
+        embeddings: 1,
+        toolCalls: 3,
+        conversationSessions: 1,
+        estimatedCostUsd: 0.25,
+        runtimeTelemetry: [{ category: "model", calls: 2, errors: 1, durationSumMs: 1500, durationCount: 2, buckets: [{ le: 100, count: 0 }, { le: 500, count: 1 }], estimatedCostUsd: 0.02, inputTokens: 100, outputTokens: 20, cachedInputTokens: 40 }]
+      }),
       getAgentTaskMetrics: async () => ({
         tasksByStatus: [],
         agentTaskBacklog: [{ backend: "local-process-sandbox", status: "queued", count: 2, oldestAgeSeconds: 42 }],
@@ -61,5 +68,7 @@ describe("internal API metrics", () => {
     expect(metrics).toContain("# HELP discord_ai_agent_agent_task_backlog_oldest_age_seconds Oldest active queued/running agent task age by backend and status.");
     expect(metrics).toContain('discord_ai_agent_agent_task_backlog_total{backend="local-process-sandbox",status="queued"} 2');
     expect(metrics).toContain('discord_ai_agent_agent_task_backlog_oldest_age_seconds{backend="local-process-sandbox",status="queued"} 42');
+    expect(metrics).toContain('discord_ai_agent_runtime_duration_ms_bucket{category="model",le="500"} 1');
+    expect(metrics).toContain('discord_ai_agent_runtime_tokens{category="model",type="cached_input"} 40');
   });
 });

@@ -2786,9 +2786,18 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       budgetRepo.reserveUserChatTurn({ guildId, userId, requestId: acceptedRequestId, since, defaultLimit: 1 }),
     ).resolves.toEqual(expect.objectContaining({ allowed: true, limit: 1 }));
   });
+
+  it("stores review feedback and marks private eval captures", async () => {
+    const runId = `run-${randomUUID()}`;
+    await expect(repo.upsertRunFeedback({ runId, rating: "bad", note: "Missed the source", expectedBehavior: "Search first", captureEval: true })).resolves.toEqual(
+      expect.objectContaining({ runId, rating: "bad", captureEval: true })
+    );
+    await expect(repo.getRunFeedback(runId)).resolves.toEqual(expect.objectContaining({ note: "Missed the source", expectedBehavior: "Search first" }));
+  });
 });
 
 async function cleanupTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");
   await pool.query(
     `
       DELETE FROM tool_audit_logs

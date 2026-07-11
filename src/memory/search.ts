@@ -99,7 +99,7 @@ export async function searchDiscordHistory(input: {
     return { results: recent, semanticDegraded: false };
   }
 
-  const keyword = await input.repo.keywordSearch({
+  const keywordPromise = input.repo.keywordSearch({
     guildId: input.search.guildId,
     visibleChannelIds: searchChannelIds,
     query: normalizedQuery,
@@ -110,9 +110,8 @@ export async function searchDiscordHistory(input: {
     dateTo: input.search.dateTo
   });
 
-  let vector: SearchResult[] = [];
-  let semanticDegraded = false;
-  if (input.config.openRouter.apiKey) {
+  const semanticPromise = input.config.openRouter.apiKey
+    ? (async (): Promise<{ vector: SearchResult[]; semanticDegraded: boolean }> => {
     const semanticLeg = async () => {
       const embedding = await embedQueryCached({
         openRouter: input.openRouter,
@@ -134,14 +133,13 @@ export async function searchDiscordHistory(input: {
     const semanticStartedAt = Date.now();
     try {
       try {
-        vector = await semanticLeg();
+        return { vector: await semanticLeg(), semanticDegraded: false };
       } catch {
         // One retry: the embedding is cached from the first attempt and a
         // timed-out vector query often succeeds warm.
-        vector = await semanticLeg();
+        return { vector: await semanticLeg(), semanticDegraded: false };
       }
     } catch (error) {
-      semanticDegraded = true;
       logger.warn(
         {
           guildId: input.search.guildId,
@@ -151,11 +149,17 @@ export async function searchDiscordHistory(input: {
         },
         "Semantic history search failed after retry; returning keyword-only results"
       );
-      vector = [];
+      return { vector: [], semanticDegraded: true };
     }
-  }
+      })()
+    : Promise.resolve({ vector: [], semanticDegraded: false });
 
-  return { results: mergeResults(keyword, vector).slice(0, limit), semanticDegraded };
+  const [keyword, semantic] = await Promise.all([keywordPromise, semanticPromise]);
+
+  return {
+    results: mergeResults(keyword, semantic.vector).slice(0, limit),
+    semanticDegraded: semantic.semanticDegraded,
+  };
 }
 
 export function buildHistoryRetrievalQuery(query: string): string {
@@ -184,25 +188,30 @@ export async function resolveSearchChannelIds(input: {
 
 export function mergeResults(keyword: SearchResult[], vector: SearchResult[]): RankedSearchResult[] {
   const byId = new Map<string, RankedSearchResult>();
+  const reciprocalRank = new Map<string, number>();
+  const RRF_K = 60;
 
-  for (const result of keyword) {
-    byId.set(result.messageId, { ...result, score: result.score + 0.25, matchSources: ["keyword"] });
+  for (const [index, result] of keyword.entries()) {
+    byId.set(result.messageId, { ...result, matchSources: ["keyword"] });
+    reciprocalRank.set(result.messageId, (reciprocalRank.get(result.messageId) ?? 0) + 1 / (RRF_K + index + 1));
   }
 
-  for (const result of vector) {
+  for (const [index, result] of vector.entries()) {
     const existing = byId.get(result.messageId);
     if (existing) {
       byId.set(result.messageId, {
         ...existing,
-        score: existing.score + result.score + 0.5,
         matchSources: mergeMatchSources(existing.matchSources, ["semantic"])
       });
     } else {
       byId.set(result.messageId, { ...result, matchSources: ["semantic"] });
     }
+    reciprocalRank.set(result.messageId, (reciprocalRank.get(result.messageId) ?? 0) + 1 / (RRF_K + index + 1));
   }
 
-  return [...byId.values()].sort((a, b) => b.score - a.score || b.createdAt.getTime() - a.createdAt.getTime());
+  return [...byId.values()]
+    .map((result) => ({ ...result, score: reciprocalRank.get(result.messageId) ?? 0 }))
+    .sort((a, b) => b.score - a.score || b.createdAt.getTime() - a.createdAt.getTime());
 }
 
 export function formatSearchResults(results: SearchResult[]): string {

@@ -167,7 +167,8 @@ export async function handleMessageCreate(
     discordUrl: message.url,
     status: "queued",
     source: "discord.ingress",
-    executorName: input.agentExecutor?.name ?? "in-process"
+    executorName: input.agentExecutor?.name ?? "in-process",
+    appRevision: input.config.appRevision
   }).catch((error) => {
     requestLogger.warn({ err: error }, "Failed to record agent runtime prompt session");
     return null;
@@ -332,6 +333,41 @@ export async function checkIngressBudget(
   if (!budgetRepo) return { allowed: true };
   const dayStart = startOfUtcDay(new Date());
   const { budget } = input.config;
+  if (typeof budgetRepo.reserveUserChatTurn === "function") {
+    const spend = budget.guildDailyUsd >= 0
+      ? await budgetRepo.sumGuildEstimatedCostSince({ guildId: request.guildId, since: dayStart })
+      : 0;
+    if (budget.guildDailyUsd >= 0 && spend >= budget.guildDailyUsd) {
+      return {
+        allowed: false,
+        reason: "guild_daily_spend_exhausted",
+        message: "Budget exhausted for today. Try again tomorrow.",
+        metadata: { guildId: request.guildId, spend, limit: budget.guildDailyUsd },
+      };
+    }
+    const reservation = await budgetRepo.reserveUserChatTurn({
+      guildId: request.guildId,
+      userId: request.userId,
+      requestId: request.requestId,
+      since: dayStart,
+      defaultLimit: budget.userTurnsPerDay,
+    });
+    if (!reservation.allowed) {
+      return {
+        allowed: false,
+        reason: "user_daily_turn_limit_exhausted",
+        message: `You've hit today's AI turn limit (${reservation.limit} per day). Try again tomorrow.`,
+        metadata: {
+          guildId: request.guildId,
+          userId: request.userId,
+          turns: reservation.turns,
+          limit: reservation.limit,
+          limitSource: reservation.limitSource,
+        },
+      };
+    }
+    return { allowed: true };
+  }
   const [turnLimitOverride, spend] = await Promise.all([
     budgetRepo.getUserTurnLimitOverride({ guildId: request.guildId, userId: request.userId }),
     budget.guildDailyUsd >= 0 ? budgetRepo.sumGuildEstimatedCostSince({ guildId: request.guildId, since: dayStart }) : Promise.resolve(0)

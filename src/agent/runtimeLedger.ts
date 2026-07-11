@@ -21,6 +21,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
   status: Extract<AgentRuntimeStatus, "queued" | "running">;
   source: string;
   executorName?: string | null;
+  appRevision?: string | null;
 }): Promise<AgentPromptExecutionRef | null> {
   if (!input.agentRuntime) return null;
   const executorName = input.executorName?.trim() || "in-process";
@@ -42,7 +43,8 @@ export async function ensureAgentRuntimePromptExecution(input: {
       source: input.source,
       executor: executorName,
       currentMessageId: input.requestId,
-      discordUrl: input.discordUrl
+      discordUrl: input.discordUrl,
+      appRevision: input.appRevision?.trim() || "unknown"
     }
   });
   await input.agentRuntime.appendMessage({

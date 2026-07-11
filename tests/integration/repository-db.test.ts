@@ -198,7 +198,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     const result = await runDataRetentionOnce({
       db: pool,
-      config: { eventsDays: 30, auditDays: 30, embeddingRunsDays: 7 },
+      config: { eventsDays: 30, auditDays: 30, embeddingRunsDays: 7, runtimeDays: 45 },
       now: new Date("2026-03-01T00:00:00Z"),
       limit: 10
     });
@@ -206,6 +206,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(result.processRunEvents).toBeGreaterThanOrEqual(1);
     expect(result.processRuns).toBeGreaterThanOrEqual(1);
     expect(result.embeddingProcessRuns).toBeGreaterThanOrEqual(1);
+    expect(result.agentRuntimeSessions).toBeGreaterThanOrEqual(1);
     await expect(repo.getProcessRun(oldRunId)).resolves.toBeUndefined();
     await expect(repo.getProcessRun(newRunId)).resolves.toEqual(expect.objectContaining({ runId: newRunId }));
     await expect(repo.getProcessRun(embeddingRunId)).resolves.toBeUndefined();
@@ -213,6 +214,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const doneEvents = await pool.query("SELECT count(*)::int AS count FROM agent_runtime_events WHERE session_id = $1", [doneSessionId]);
     expect(activeEvents.rows[0]?.count).toBe(1);
     expect(doneEvents.rows[0]?.count).toBe(0);
+    await expect(agentRuntimeRepo.getSession({ sessionId: doneSessionId })).resolves.toBeUndefined();
   });
 
   it("stores durable codegen sessions, executions, events, artifacts, and sandbox leases", async () => {
@@ -2764,6 +2766,26 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       budgetRepo.setUserTurnLimitOverride({ guildId, userId: `user-${randomUUID()}`, chatTurnsPerDay: -2 })
     ).rejects.toThrow();
   });
+
+  it("atomically reserves limited chat turns and treats retries as idempotent", async () => {
+    const budgetRepo = new BudgetRepository(pool);
+    const guildId = `guild-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const since = new Date(Date.now() - 60_000);
+    const firstRequestId = `request-${randomUUID()}`;
+    const secondRequestId = `request-${randomUUID()}`;
+    const attempts = await Promise.all([
+      budgetRepo.reserveUserChatTurn({ guildId, userId, requestId: firstRequestId, since, defaultLimit: 1 }),
+      budgetRepo.reserveUserChatTurn({ guildId, userId, requestId: secondRequestId, since, defaultLimit: 1 }),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.allowed)).toHaveLength(1);
+    expect(attempts.filter((attempt) => !attempt.allowed)).toHaveLength(1);
+    const acceptedRequestId = attempts[0].allowed ? firstRequestId : secondRequestId;
+    await expect(
+      budgetRepo.reserveUserChatTurn({ guildId, userId, requestId: acceptedRequestId, since, defaultLimit: 1 }),
+    ).resolves.toEqual(expect.objectContaining({ allowed: true, limit: 1 }));
+  });
 });
 
 async function cleanupTestRows(pool: DbPool) {
@@ -2812,6 +2834,7 @@ async function cleanupTestRows(pool: DbPool) {
   await pool.query("DELETE FROM server_overlays WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM interaction_blocks WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
   await pool.query("DELETE FROM user_budget_overrides WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
+  await pool.query("DELETE FROM budget_turn_reservations WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%' OR request_id LIKE 'request-%'");
   await pool.query("DELETE FROM discord_user_aliases WHERE guild_id LIKE 'guild-%' OR user_id LIKE 'user-%'");
   await pool.query("DELETE FROM privacy_deletions WHERE user_id LIKE 'user-%'");
   await pool.query("DELETE FROM attachments WHERE message_id LIKE 'message-%'");

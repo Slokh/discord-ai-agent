@@ -20,12 +20,25 @@ export type ScopedToolset = {
   serverTools: OpenRouterServerToolRegistryEntry[];
 };
 
-const ALL_GROUPS: ToolGroup[] = ["core", "discord-retrieval", "image", "spotify", "codegen", "ops", "external"];
+const ALL_GROUPS: ToolGroup[] = [
+  "core",
+  "discord-retrieval",
+  "generated-data",
+  "discord-action",
+  "image",
+  "spotify",
+  "codegen",
+  "ops",
+  "external",
+];
 
 export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   const text = input.text.toLowerCase();
-  const groups = new Set<ToolGroup>(["core", "discord-retrieval", "external"]);
+  const groups = new Set<ToolGroup>(["core", "external"]);
 
+  if (hasAny(text, DISCORD_RETRIEVAL_KEYWORDS)) groups.add("discord-retrieval");
+  if (hasAny(text, GENERATED_DATA_KEYWORDS)) groups.add("generated-data");
+  if (hasAny(text, DISCORD_ACTION_KEYWORDS)) groups.add("discord-action");
   if (input.hasImageAttachments || hasAny(text, IMAGE_KEYWORDS)) groups.add("image");
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
   if (isCodegenConfigured(input.config) && hasAny(text, CODEGEN_KEYWORDS)) groups.add("codegen");
@@ -74,7 +87,6 @@ export function missingCodegenConfig(config: AppConfig): string[] {
 function normalizeGroups(groups: Set<ToolGroup>, config: AppConfig) {
   const next = new Set(groups);
   next.add("core");
-  next.add("discord-retrieval");
   next.add("external");
   if (!isSpotifyConfigured(config)) next.delete("spotify");
   if (!isCodegenConfigured(config)) next.delete("codegen");
@@ -101,6 +113,25 @@ const IMAGE_KEYWORDS = [
   /\b(draw|paint|sketch|illustrate)\b/,
   /\bwhat('| i)?s (in|on|shown)\b/,
   /\blook at this\b/,
+];
+
+const DISCORD_RETRIEVAL_KEYWORDS = [
+  /\b(discord|server|channel|thread|message|messages|history|recent|recap|summary|summarize|stats|ranking|reactions?|attachments?)\b/,
+  /\b(who|what)\b.*\b(said|posted|mentioned|talked|happened|did)\b/,
+  /\b(yesterday|today|this week|last week|past month|recently)\b/,
+  /discord(?:app)?\.com\/channels\//,
+  /<[@#][!&]?\d+>/,
+];
+
+const GENERATED_DATA_KEYWORDS = [
+  /\b(csv|table|spreadsheet|generated file|generated result|download|rows?|columns?)\b/,
+  /\b(that|the|previous|earlier)\b.*\b(file|list|result|table|csv)\b/,
+];
+
+const DISCORD_ACTION_KEYWORDS = [
+  /\b(poll|vote|undo|delete your|remove your|forget your)\b/,
+  /\b(random|randomly|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
+  /\b(reveal)\b.*\b(random|seed|proof|commitment)\b/,
 ];
 
 const SPOTIFY_KEYWORDS = [

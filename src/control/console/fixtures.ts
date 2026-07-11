@@ -87,6 +87,31 @@ export const fixtureSnapshots: RunSnapshot[] = [
     ],
     events: [
       event("discord.mention.received", "info", "over the past 3 months who is the best at little phone games", 17, "trace"),
+      {
+        id: "runtime-model-call-1",
+        source: "runtime",
+        level: "info",
+        name: "agent.model.call.completed",
+        summary: "tool_selection",
+        createdAt: minutesAgo(16.2),
+        durationMs: 18_400,
+        metadata: {
+          callId: "model-call-fixture-1",
+          appRevision: "a1b2c3d",
+          purpose: "tool_selection",
+          round: 1,
+          requestedModel: "z-ai/glm-5.2",
+          model: "z-ai/glm-5.2",
+          promptBytes: 21_840,
+          toolSchemaBytes: 9_240,
+          toolCount: 8,
+          outputChars: 182,
+          finishReason: "tool_calls",
+          estimatedCostUsd: 0.0042,
+          requestedToolCalls: ["searchDiscordHistory"],
+          usage: { inputTokens: 5_420, outputTokens: 91, totalTokens: 5_511, cachedInputTokens: 2_810 }
+        }
+      },
       event("searchDiscordHistory", "info", "searched indexed messages", 16, "tool"),
       event("discord.mention.failed", "error", "Discord AI Agent agent request timed out.", 2, "trace")
     ],

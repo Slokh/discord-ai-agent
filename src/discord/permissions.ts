@@ -16,6 +16,8 @@ const readableTypes = new Set<number>([
   ChannelType.GuildForum,
   ChannelType.GuildMedia
 ]);
+const CHANNEL_CACHE_REFRESH_MS = 60_000;
+const channelCacheRefreshedAt = new WeakMap<Guild, number>();
 
 export function canMemberReadChannel(member: GuildMember, channel: { permissionsFor?: (member: GuildMember) => any }) {
   const permissions = channel.permissionsFor?.(member);
@@ -30,7 +32,11 @@ export async function visibleChannelIdsForMember(
   member: GuildMember,
   extraChannelIds: string[] = []
 ): Promise<string[]> {
-  await guild.channels.fetch();
+  const lastRefresh = channelCacheRefreshedAt.get(guild) ?? 0;
+  if (Date.now() - lastRefresh >= CHANNEL_CACHE_REFRESH_MS) {
+    await guild.channels.fetch();
+    channelCacheRefreshedAt.set(guild, Date.now());
+  }
   const visible = new Set<string>();
 
   for (const channel of guild.channels.cache.values()) {

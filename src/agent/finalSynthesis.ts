@@ -26,6 +26,7 @@ import {
   type ModelCallBudget,
 } from "./routerShared.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
+import { runObservedModelCall } from "./modelCallTelemetry.js";
 
 export function modelCallCeilingFallback(
   ctx: ToolContext,
@@ -87,11 +88,15 @@ export async function synthesizeFinalAnswerWithoutTools(
   // Deliberately tool-free: forced synthesis happens after the tool loop has
   // ended, and offering hosted tools here is what caused models (z-ai/glm) to
   // emit raw <tool_call> markup into the final user-visible answer.
-  const response = await ctx.openRouter.chat({
-    messages: finalSynthesisMessages(input.text, input.memoryEvents),
-    temperature: 0.2,
-    maxTokens: 4096,
-    retryPolicy: "expensive",
+  const response = await runObservedModelCall(ctx, {
+    purpose: "final_synthesis",
+    metadata: { reason: input.reason },
+    chat: {
+      messages: finalSynthesisMessages(input.text, input.memoryEvents),
+      temperature: 0.2,
+      maxTokens: 4096,
+      retryPolicy: "expensive",
+    },
   });
 
   if (response.finishReason === "length") {
@@ -267,11 +272,15 @@ export async function finalizeModelRoundWithoutTools(
       if (!(await reserveModelCall(ctx, modelCallBudget, "empty_response_recovery", { round }))) {
         return modelCallCeilingFallback(ctx, { text, files, tables, memoryEvents });
       }
-      const recovery = await ctx.openRouter.chat({
-        messages: emptyNoToolRecoveryMessages(text),
-        temperature: 0.2,
-        maxTokens: 1024,
-        retryPolicy: "expensive",
+      const recovery = await runObservedModelCall(ctx, {
+        purpose: "empty_response_recovery",
+        metadata: { round },
+        chat: {
+          messages: emptyNoToolRecoveryMessages(text),
+          temperature: 0.2,
+          maxTokens: 1024,
+          retryPolicy: "expensive",
+        },
       });
       const recoveryContent = stripLeakedHostedToolMarkup(
         recovery.content,

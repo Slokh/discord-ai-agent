@@ -20,7 +20,8 @@ describe("agent runtime ledger", () => {
       discordUrl: "https://discord.com/channels/guild/channel/message",
       status: "queued",
       source: "test",
-      executorName: "in-process"
+      executorName: "in-process",
+      appRevision: "abc123"
     });
 
     expect(ref).toEqual(expect.objectContaining({ executionId: "agent-execution-message" }));
@@ -30,7 +31,7 @@ describe("agent runtime ledger", () => {
         threadKey: "discord:guild:channel",
         status: "queued",
         harness: "in-process",
-        metadata: expect.objectContaining({ source: "test", executor: "in-process" })
+        metadata: expect.objectContaining({ source: "test", executor: "in-process", appRevision: "abc123" })
       })
     );
     expect(agentRuntime.createExecution).toHaveBeenCalledWith(

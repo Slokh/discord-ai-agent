@@ -48,6 +48,7 @@ import {
   appendAgentRuntimeToolResult,
   recordAgentEvent,
 } from "./runtimeTranscript.js";
+import { runObservedModelCall } from "./modelCallTelemetry.js";
 import {
   executeLocalToolRoute,
   parseToolArguments,
@@ -193,15 +194,19 @@ export async function runAgentModelLoop(
         });
       }
       ctx.noteProgress?.();
-      response = await ctx.openRouter.chat({
-        messages,
-        tools: toolDefinitionsForModel({
-          localTools: currentToolset.localTools,
-          serverTools: currentToolset.serverTools,
-        }),
-        temperature: 0.2,
-        maxTokens: 4096,
-        retryPolicy: "expensive",
+      response = await runObservedModelCall(ctx, {
+        purpose: "tool_selection",
+        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort() },
+        chat: {
+          messages,
+          tools: toolDefinitionsForModel({
+            localTools: currentToolset.localTools,
+            serverTools: currentToolset.serverTools,
+          }),
+          temperature: 0.2,
+          maxTokens: 4096,
+          retryPolicy: "expensive",
+        },
       });
       ctx.noteProgress?.();
     } catch (error) {
@@ -327,34 +332,38 @@ export async function runAgentModelLoop(
       })),
     });
 
+    const parallelToolResults = await executeIndependentToolRoutesInParallel(ctx, modelRoutes, successfulToolCallKeys, text);
     let redundantToolReason: string | null = null;
     for (const route of modelRoutes) {
       ctx.noteProgress?.();
       const toolUseCount = (toolUseCounts.get(route.name) ?? 0) + 1;
       toolUseCounts.set(route.name, toolUseCount);
       const routeKey = toolRouteKey(route);
-      const toolStartedAt = Date.now();
-      requestLogger.info(
-        {
-          toolName: route.name,
-          argumentsPreview: previewText(route.argumentsText, 300),
-        },
-        "Local tool execution starting",
-      );
-      await recordAgentEvent(ctx, {
-        eventName: "agent.tool.started",
-        summary: route.name,
-        metadata: {
-          toolName: route.name,
-          argumentsPreview: previewText(route.argumentsText, 300),
-        },
-      });
+      const parallelResult = parallelToolResults.get(route.id);
+      const toolStartedAt = parallelResult?.startedAt ?? Date.now();
+      if (!parallelResult) {
+        requestLogger.info(
+          {
+            toolName: route.name,
+            argumentsPreview: previewText(route.argumentsText, 300),
+          },
+          "Local tool execution starting",
+        );
+        await recordAgentEvent(ctx, {
+          eventName: "agent.tool.started",
+          summary: route.name,
+          metadata: {
+            toolName: route.name,
+            argumentsPreview: previewText(route.argumentsText, 300),
+          },
+        });
+      }
       const isRepeatedExactToolCall = successfulToolCallKeys.has(routeKey);
-      const result = isRepeatedExactToolCall
+      const result = parallelResult?.result ?? (isRepeatedExactToolCall
         ? await skippedRedundantToolResult(ctx, { text, route, toolUseCount })
         : route.name === "requestAdditionalTools"
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
-          : await executeLocalToolRoute(ctx, route, text);
+          : await executeLocalToolRoute(ctx, route, text));
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
         route.name !== "requestAdditionalTools" &&
@@ -546,6 +555,40 @@ export async function runAgentModelLoop(
   };
 }
 
+async function executeIndependentToolRoutesInParallel(
+  ctx: ToolContext,
+  routes: AgentToolRoute[],
+  successfulToolCallKeys: Set<string>,
+  originalText: string,
+) {
+  const results = new Map<string, { result: AgentResponse; startedAt: number }>();
+  const names = new Set<ToolName>();
+  const eligible = routes.length > 1 && routes.every((route) => {
+    const tool = toolByName(route.name);
+    if (!tool || tool.mutates || tool.group === "generated-data" || route.name === "requestAdditionalTools") return false;
+    if (names.has(route.name) || successfulToolCallKeys.has(toolRouteKey(route))) return false;
+    names.add(route.name);
+    return true;
+  });
+  if (!eligible) return results;
+
+  await Promise.all(routes.map(async (route) => {
+    const startedAt = Date.now();
+    await recordAgentEvent(ctx, {
+      eventName: "agent.tool.started",
+      summary: route.name,
+      metadata: {
+        toolName: route.name,
+        argumentsPreview: previewText(route.argumentsText, 300),
+        parallel: true,
+      },
+    });
+    const result = await executeLocalToolRoute(ctx, route, originalText);
+    results.set(route.id, { result, startedAt });
+  }));
+  return results;
+}
+
 type ToolsetState = {
   groups: Set<ToolGroup>;
   expandedAll: boolean;
@@ -588,8 +631,9 @@ function handleAdditionalToolsRequest(ctx: ToolContext, route: AgentToolRoute, s
 
 function parseRequestedToolGroups(args: Record<string, unknown> | undefined): ToolGroup[] {
   const groups = stringArrayArgument(args, "groups");
-  if (!groups?.length) return ["core", "discord-retrieval", "image", "spotify", "codegen", "ops", "external"];
-  return groups.filter((group): group is ToolGroup => ["core", "discord-retrieval", "image", "spotify", "codegen", "ops", "external"].includes(group));
+  const allGroups: ToolGroup[] = ["core", "discord-retrieval", "generated-data", "discord-action", "image", "spotify", "codegen", "ops", "external"];
+  if (!groups?.length) return allGroups;
+  return groups.filter((group): group is ToolGroup => allGroups.includes(group as ToolGroup));
 }
 
 function hasImageContext(attachments: DiscordAttachmentContext[] = [], replyContext?: DiscordReplyContext) {

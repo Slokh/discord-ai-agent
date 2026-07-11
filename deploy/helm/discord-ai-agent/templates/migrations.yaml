@@ -19,10 +19,16 @@ spec:
         {{- include "discord-ai-agent.labels" . | nindent 8 }}
         app.kubernetes.io/component: migrations
     spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       restartPolicy: Never
-      serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-app
+      # Pre-install hooks run before normal chart resources, including the app
+      # service account. Migrations need database access only, not Kubernetes API access.
+      automountServiceAccountToken: false
       containers:
         - name: migrate
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["node", "dist/src/db/migrate.js"]

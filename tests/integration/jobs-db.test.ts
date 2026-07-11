@@ -20,6 +20,7 @@ const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
   const bosses: PgBoss[] = [];
   const runtimes: JobRuntime[] = [];
+  const createdTaskIds = new Set<string>();
 
   afterAll(async () => {
     await Promise.all(runtimes.map((runtime) => runtime.stop().catch(() => undefined)));
@@ -27,6 +28,14 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     const pool = createPool(loadConfig());
     try {
       await pool.query("DROP SCHEMA IF EXISTS pgboss_test CASCADE");
+      const taskIds = [...createdTaskIds];
+      if (taskIds.length > 0) {
+        await pool.query("DELETE FROM agent_runtime_sessions WHERE thread_key = ANY($1::text[])", [
+          taskIds.map((taskId) => `agent-task:${taskId}`)
+        ]);
+        await pool.query("DELETE FROM process_runs WHERE run_id = ANY($1::text[])", [taskIds]);
+        await pool.query("DELETE FROM agent_tasks WHERE task_id = ANY($1::text[])", [taskIds]);
+      }
     } finally {
       await pool.end();
     }
@@ -210,6 +219,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       });
       expect(jobId).toEqual(expect.any(String));
       expect(taskId).toEqual(expect.any(String));
+      createdTaskIds.add(taskId);
 
       await waitFor(() => processedRequests.includes("add a calendar integration"), 10_000);
       expect(processedJobs).toEqual([
@@ -300,12 +310,13 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     });
     runtimes.push(runtime);
 
-    const { jobId } = await runtime.enqueueAgentTask({
+    const { jobId, taskId } = await runtime.enqueueAgentTask({
       request: "add a calendar integration",
       title: "calendar integration",
       requestedBy: "test"
     });
     expect(jobId).toEqual(expect.any(String));
+    createdTaskIds.add(taskId);
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     await runtime.boss.deleteJob(AGENT_TASK_JOB, jobId!);

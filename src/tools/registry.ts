@@ -45,7 +45,16 @@ export type ToolName =
   | "drawRandom"
   | "revealRandomness";
 
-export type ToolGroup = "core" | "discord-retrieval" | "image" | "spotify" | "codegen" | "ops" | "external";
+export type ToolGroup =
+  | "core"
+  | "discord-retrieval"
+  | "generated-data"
+  | "discord-action"
+  | "image"
+  | "spotify"
+  | "codegen"
+  | "ops"
+  | "external";
 
 export type ToolClass =
   | "resolver"
@@ -240,7 +249,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Get recent Discord AI Agent conversation memory from the current channel. Use for questions about what the agent previously said, did, generated, linked, opened, or needs to continue. Do not use for factual claims about server history; use Discord history/stat tools for that.",
     userVisible: true,
     mutates: false,
-    group: "core",
+    group: "discord-retrieval",
     category: "memory",
     parameters: {
       type: "object",
@@ -263,7 +272,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Count or inspect Discord AI Agent's completed assistant turns in the current channel. Use for questions like how many turns/replies/actions the bot completed, especially since a specific Discord message, message link, or anchor phrase. This queries agent memory and indexed channel messages; do not approximate this with Discord history search.",
     userVisible: true,
     mutates: false,
-    group: "core",
+    group: "discord-retrieval",
     category: "memory",
     parameters: {
       type: "object",
@@ -680,7 +689,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Read a bounded text chunk from a file produced by an earlier tool call in the same agent turn. Use this for generated text or CSV files when the user asks to inspect file contents, see examples, or when a small preview is enough. For exact counts, filters, or rankings over CSV files, use queryGeneratedCsv instead of reading the whole file.",
     userVisible: true,
     mutates: false,
-    group: "core",
+    group: "generated-data",
     category: "memory",
     toolClass: "retrieval",
     outputContract: ["generated file metadata", "byte range", "bounded content excerpt", "truncation status"],
@@ -713,7 +722,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Run deterministic tabular queries over a CSV file produced by an earlier tool call in the same agent turn. Use this for exact row counts, top values, filters, rankings, and sample rows from generated CSVs instead of asking the model to count or parse raw CSV text. This is generic generated-file infrastructure and is not specific to any provider.",
     userVisible: true,
     mutates: false,
-    group: "core",
+    group: "generated-data",
     category: "memory",
     toolClass: "stats",
     outputContract: ["generated CSV metadata", "filters applied", "row count", "ranked rows or values", "sample rows when requested"],
@@ -778,7 +787,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Run deterministic tabular queries over a structured table artifact produced by an earlier tool call in the same agent turn. Use this for exact row counts, top values, filters, rankings, and sample rows from generated tables without reading raw attachment text. This is generic generated-artifact infrastructure and is not specific to any provider.",
     userVisible: true,
     mutates: false,
-    group: "core",
+    group: "generated-data",
     category: "memory",
     toolClass: "stats",
     outputContract: ["generated table metadata", "filters applied", "row count", "ranked rows or values", "sample rows when requested"],
@@ -1030,7 +1039,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Undo the agent's most recent reply turns in the current Discord channel by removing them from persistent memory and, when possible, deleting the bot reply messages. Use when the user asks to undo, forget, delete, or remove the agent's previous response.",
     userVisible: true,
     mutates: true,
-    group: "core",
+    group: "discord-action",
     parameters: {
       type: "object",
       properties: {
@@ -1294,7 +1303,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Create a native Discord poll in the current channel using Discord's poll message API (v10). Use this when the user asks to schedule, vote, pick a time, choose between options, run a straw poll, or create any poll-like question with multiple answers. Discord native polls render in the channel and let members click an answer. The bot must have Send Messages permission in the channel. Supports up to 10 answer options; duration defaults to 24 hours and is capped at 168 hours per Discord limits; allow_multiselect defaults to true since scheduling polls usually allow multiple answers.",
     userVisible: true,
     mutates: true,
-    group: "core",
+    group: "discord-action",
     category: "discord",
     toolClass: "ops",
     outputContract: ["poll question", "answer options posted", "duration hours", "allow multiselect", "Discord message link", "failure reason when the bot lacks permission or input is invalid"],
@@ -1393,7 +1402,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. Card draws (kind cards) come from a persistent per-conversation shoe and are dealt without replacement until the shoe is exhausted or reshuffled; use one call per hand segment (e.g. reason 'player hand', 'dealer upcard'). Every outcome is published immediately in a public proof footer that all players can read, so drawing a card reveals it to everyone — including you. NEVER draw cards that must stay hidden (a blackjack dealer's hole card, face-down cards) before the moment play reveals them; deal each hidden card with a separate call at the moment it is turned face up. The shoe order is committed up front, so a deferred draw is exactly as fair as an early one. A proof footer is appended to your reply automatically; report the drawn results exactly and do not fabricate or alter them.",
     userVisible: true,
     mutates: true,
-    group: "core",
+    group: "discord-action",
     category: "generation",
     toolClass: "generation",
     outputContract: [
@@ -1449,7 +1458,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Reveal the secret server seed of this conversation's provably fair RNG session so anyone can verify that every draw matched the published SHA-256 commitment. Use when a user asks to verify fairness, reveal the seed, check the RNG, or finish a game session. Ends the current session and automatically publishes a fresh commitment for future draws. Report the revealed values exactly; the proof footer repeats them verbatim.",
     userVisible: true,
     mutates: true,
-    group: "core",
+    group: "discord-action",
     category: "generation",
     toolClass: "generation",
     outputContract: [

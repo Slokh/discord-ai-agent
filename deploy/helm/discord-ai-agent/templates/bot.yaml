@@ -23,10 +23,14 @@ spec:
         {{- include "discord-ai-agent.labels" . | nindent 8 }}
         app.kubernetes.io/component: bot
     spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       terminationGracePeriodSeconds: {{ .Values.bot.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "discord-ai-agent.fullname" . }}-app
       containers:
         - name: bot
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["node", "dist/src/index.js", "bot"]

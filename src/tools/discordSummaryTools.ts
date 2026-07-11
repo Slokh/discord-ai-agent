@@ -1,4 +1,5 @@
 import { buildHistoryRetrievalQuery, formatSearchResults } from "../memory/search.js";
+import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import { logger } from "../util/logger.js";
 import { summarizeForAudit } from "../util/text.js";
 import type { ToolContext } from "./types.js";
@@ -68,7 +69,7 @@ export async function getDiscordChannelTopics(
     return "I did not find enough indexed, substantive messages in visible channels to infer recurring topics.";
   }
 
-  const response = await ctx.openRouter.chat({
+  const response = await runObservedModelCall(ctx, { purpose: "channel_topic_summary", chat: {
     model: utilityOpenRouterModel(ctx),
     messages: [
       {
@@ -88,7 +89,7 @@ export async function getDiscordChannelTopics(
     ],
     temperature: 0.2,
     maxTokens: 4096
-  });
+  } });
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -173,7 +174,7 @@ export async function summarizeDiscordHistory(
     return "I did not find enough indexed Discord messages that you can access to summarize that history.";
   }
 
-  const response = await ctx.openRouter.chat({
+  const response = await runObservedModelCall(ctx, { purpose: "discord_history_summary", chat: {
     model: utilityOpenRouterModel(ctx),
     messages: [
       {
@@ -198,7 +199,7 @@ export async function summarizeDiscordHistory(
     ],
     temperature: 0.2,
     maxTokens: 4096
-  });
+  } });
 
   const summary = response.content.trim() || fallbackDiscordHistorySummary({ question, samples, dateFrom, dateTo: explicitDateTo });
 
@@ -442,7 +443,7 @@ export async function summarizeCurrentThread(ctx: ToolContext, input: { question
   const transcript = question
     ? `Question: ${question}\n\n${formatSearchResults(messages)}`
     : messages.map((message) => `${message.authorUsername ?? message.authorId}: ${message.normalizedContent}`).join("\n");
-  const response = await ctx.openRouter.chat({
+  const response = await runObservedModelCall(ctx, { purpose: "discord_thread_summary", chat: {
     model: utilityOpenRouterModel(ctx),
     messages: [
       {
@@ -455,7 +456,7 @@ export async function summarizeCurrentThread(ctx: ToolContext, input: { question
     ],
     temperature: 0.2,
     maxTokens: 4096
-  });
+  } });
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -474,4 +475,3 @@ export async function summarizeCurrentThread(ctx: ToolContext, input: { question
 function utilityOpenRouterModel(ctx: ToolContext) {
   return ctx.config?.openRouter?.utilityModel;
 }
-

@@ -9,6 +9,9 @@ import {
   sessionContextMessageLimitForReplyContext,
 } from "../../src/discord/client.js";
 import type { ConversationMessage } from "../../src/db/repositories.js";
+import { loadConfig } from "../../src/config/env.js";
+import { toolDefinitionsForModel } from "../../src/tools/registry.js";
+import { scopedToolset, selectToolGroups } from "../../src/tools/toolScope.js";
 
 function conversationMessage(overrides: Partial<ConversationMessage>): ConversationMessage {
   return {
@@ -85,5 +88,22 @@ describe("prompt context cost controls", () => {
     expect(promptContent.length).toBeLessThan(content.length);
     expect(promptContent).toContain("result truncated before re-entering the model prompt");
     expect(promptContent).toContain("agent runtime transcript");
+  });
+
+  it("keeps ordinary-chat static context within a strict schema budget", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "hello there", hasImageAttachments: false, config });
+    const tools = scopedToolset({ config, groups });
+    const definitions = toolDefinitionsForModel({ localTools: tools.localTools, serverTools: tools.serverTools });
+    const systemBytes = Buffer.byteLength(String(chatMessages("hello there", "")[0]?.content), "utf8");
+    const localSchemaBytes = Buffer.byteLength(
+      JSON.stringify(toolDefinitionsForModel({ localTools: tools.localTools, serverTools: [] })),
+      "utf8",
+    );
+
+    expect(tools.localTools.map((tool) => tool.name)).toEqual(["listTools", "requestAdditionalTools"]);
+    expect(systemBytes).toBeLessThan(12_000);
+    expect(localSchemaBytes).toBeLessThan(2_000);
+    expect(Buffer.byteLength(JSON.stringify(definitions), "utf8")).toBeLessThan(2_500);
   });
 });

@@ -181,6 +181,7 @@ For the durable agent runtime, code-update task ledger, and sandbox lease model,
 For a concise coding-agent map of the repo, see [docs/architecture.md](docs/architecture.md).
 For source ownership maps used by coding agents, start with [src/README.md](src/README.md) and the nearest folder README.
 For the current improvement roadmap, see [docs/improvement-plan.md](docs/improvement-plan.md).
+For the post-hardening engineering targets and active foundation work, see [docs/continuation-plan.md](docs/continuation-plan.md).
 
 ## Advanced Deployment
 
@@ -231,6 +232,7 @@ Common optional settings:
 | `RETENTION_EVENTS_DAYS` | `60` | Worker-side age cutoff for trace, process-run, agent-runtime, and sandbox command event cleanup; `0` disables event retention cleanup |
 | `RETENTION_AUDIT_DAYS` | `90` | Worker-side age cutoff for `tool_audit_logs`; `0` disables audit cleanup |
 | `RETENTION_EMBEDDING_RUNS_DAYS` | `14` | Worker-side age cutoff for terminal embedding `process_runs` and cascading artifacts/events; `0` disables embedding-run cleanup |
+| `RETENTION_RUNTIME_DAYS` | `90` | Age cutoff for terminal agent-runtime sessions and their executions, messages, events, and artifacts; `0` disables cleanup |
 | `MEMORY_COMPACTION_THRESHOLD` | `100` | Raw `conversation_messages` per thread key before worker compaction runs; `0` disables compaction |
 | `MEMORY_COMPACTION_KEEP_RECENT` | `30` | Recent raw conversation messages to keep when older rows are summarized into `conversation_snapshots` |
 | `SANDBOX_CACHE_DIR` | `/var/cache/discord-ai-agent` | Sandbox repo/npm/dependency cache path (both codegen backends) |

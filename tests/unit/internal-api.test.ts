@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderMetrics, verifyUiAuthorization } from "../../src/control/internalApi.js";
+import { renderMetrics, uiAuthSessionToken, verifyUiAuthorization } from "../../src/control/internalApi.js";
 
 describe("internal API UI authorization", () => {
   it("allows UI access when no password is configured", () => {
@@ -20,7 +20,7 @@ describe("internal API UI authorization", () => {
     expect(
       verifyUiAuthorization({
         password: "secret-password",
-        cookie: "other=value; discord_ai_agent_ui_auth=secret-password"
+        cookie: `other=value; discord_ai_agent_ui_auth=${uiAuthSessionToken("secret-password")}`
       })
     ).toBe(true);
   });

@@ -7,7 +7,7 @@ Owns internal HTTP APIs, sandbox callbacks, metrics, and debugging surfaces.
 - Authenticated run-console APIs under `/api/runs`.
 - Sandbox task callbacks and artifact ingestion.
 - Generic agent session APIs under `/api/agent/sessions` and agent-task status under `/api/tasks/status`.
-- Metrics and lightweight HTML fallback pages.
+- Metrics, model-call cost/latency accounting, and lightweight HTML fallback pages.
 - React run console source under `console/`.
 
 ## Change Routing
@@ -21,7 +21,7 @@ Owns internal HTTP APIs, sandbox callbacks, metrics, and debugging surfaces.
 
 - API behavior: `tests/unit/internal-api.test.ts`.
 - Run API snapshots: `tests/unit/internal-api-runs.test.ts`.
-- Console derivation/render helpers: `tests/unit/run-console-timeline.test.ts`.
+- Console derivation/render helpers: `tests/unit/run-console-timeline.test.ts` and `tests/unit/console-model-calls.test.ts`.
 
 ## Migration Direction
 

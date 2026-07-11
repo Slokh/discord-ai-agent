@@ -11,6 +11,7 @@ Owns the React debugging UI for runs, traces, artifacts, terminal output, and co
 - `timelineText.ts`: pure timeline display names, summary suppression, and requested-tool argument formatting.
 - OpenCode transcript formatting currently uses `src/observability/openCodeTranscript.ts`.
 - Terminal and artifact viewers.
+- A Models view for each observed provider call: purpose, revision, token/cache use, estimated cost, prompt/schema size, offered/requested tools, latency, and outcome.
 - Fixture and live-proxy local development.
 
 ## Change Routing
@@ -23,6 +24,7 @@ Owns the React debugging UI for runs, traces, artifacts, terminal output, and co
 
 - Timeline and transcript helpers: `tests/unit/run-console-timeline.test.ts`.
 - API data contracts: `tests/unit/internal-api-runs.test.ts`.
+- Model-call projection: `tests/unit/console-model-calls.test.ts`.
 
 ## Migration Direction
 

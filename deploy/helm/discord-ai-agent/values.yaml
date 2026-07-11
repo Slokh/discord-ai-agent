@@ -3,6 +3,19 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+
 sandbox:
   image: ghcr.io/owner/discord-ai-agent-sandbox:latest
   imagePullPolicy: IfNotPresent
@@ -37,16 +50,29 @@ secret:
   existingSecretName: discord-ai-agent-env
 
 config:
+  # Deployed commit SHA included in runtime and model-call telemetry.
+  appRevision: unknown
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
   openRouterChatModel: z-ai/glm-5.2
+  openRouterUtilityModel: ""
   # Optional. Defaults to openRouterChatModel when empty.
   openRouterCodegenModel: z-ai/glm-5.2
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
   embeddingDimensions: "1536"
   discordAgentResponseTimeoutMs: "1800000"
+  chatSilenceTimeoutMs: "120000"
+  chatHardTimeoutMs: "600000"
+  retentionEventsDays: "60"
+  retentionAuditDays: "90"
+  retentionEmbeddingRunsDays: "14"
+  retentionRuntimeDays: "90"
+  memoryCompactionThreshold: "100"
+  memoryCompactionKeepRecent: "30"
+  crawlScheduleCron: "0 6 * * *"
+  toolsetScoping: "true"
   # Optional daily budget overrides. Leave empty to use the application
   # defaults (50 turns, 10 images, 1 code-update task per user; $10/day
   # guild spend). Use "-1" to disable a limit entirely.
@@ -85,12 +111,16 @@ api:
     port: 443
   metrics:
     scrapeAnnotations: true
-  resources: {}
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
 
 bot:
   replicas: 1
   terminationGracePeriodSeconds: 120
-  resources: {}
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
 
 worker:
   # Keep this at 1 with the default ReadWriteOnce sandbox cache PVC. Use RWX
@@ -102,7 +132,9 @@ worker:
     embedding: true
     task: true
     discordAgent: true
-  resources: {}
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
 
 codegenWorker:
   # Optional dedicated warm codegen worker pool. When enabled, this Deployment
@@ -117,7 +149,9 @@ codegenWorker:
     staleSeconds: 120
     acquireTimeoutSeconds: 1800
     acquirePollSeconds: 5
-  resources: {}
+  resources:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
 
 migrations:
   enabled: true

@@ -16,7 +16,9 @@ services:
       retries: 20
 
   app:
-    build: .
+    build:
+      context: .
+      target: final
     depends_on:
       postgres:
         condition: service_healthy
@@ -28,7 +30,9 @@ services:
     command: ["node", "dist/src/index.js", "bot"]
 
   api:
-    build: .
+    build:
+      context: .
+      target: final
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,7 +46,9 @@ services:
     command: ["node", "dist/src/index.js", "api"]
 
   bot:
-    build: .
+    build:
+      context: .
+      target: final
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,7 +60,9 @@ services:
     command: ["node", "dist/src/index.js", "bot"]
 
   worker:
-    build: .
+    build:
+      context: .
+      target: codegen
     depends_on:
       postgres:
         condition: service_healthy

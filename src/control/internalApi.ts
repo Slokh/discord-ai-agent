@@ -674,7 +674,7 @@ export function verifyUiAuthorization(input: { password: string; authorization?:
   const authorization = Array.isArray(input.authorization) ? input.authorization[0] : input.authorization;
   const cookie = Array.isArray(input.cookie) ? input.cookie[0] : input.cookie;
   const cookieValue = parseCookie(cookie ?? "")[UI_AUTH_COOKIE_NAME];
-  if (cookieValue && safeEqual(cookieValue, input.password)) return true;
+  if (cookieValue && safeEqual(cookieValue, uiAuthSessionToken(input.password))) return true;
   if (!authorization) return false;
 
   if (authorization.startsWith("Bearer ")) {
@@ -1048,19 +1048,24 @@ function parseBooleanLike(value: unknown) {
 
 function sendJson(response: http.ServerResponse, status: number, body: Record<string, unknown>) {
   if (response.headersSent) return;
-  response.writeHead(status, { "content-type": "application/json" });
+  response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...securityHeaders() });
   response.end(JSON.stringify(body));
 }
 
 function sendHtml(response: http.ServerResponse, status: number, body: string) {
   if (response.headersSent) return;
-  response.writeHead(status, { "content-type": "text/html; charset=utf-8" });
+  response.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "content-security-policy": "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    ...securityHeaders(),
+  });
   response.end(body);
 }
 
 function sendText(response: http.ServerResponse, status: number, body: string, contentType = "text/plain; version=0.0.4") {
   if (response.headersSent) return;
-  response.writeHead(status, { "content-type": contentType });
+  response.writeHead(status, { "content-type": contentType, "cache-control": "no-store", ...securityHeaders() });
   response.end(body);
 }
 
@@ -1068,9 +1073,19 @@ function sendBuffer(response: http.ServerResponse, status: number, body: Buffer,
   if (response.headersSent) return;
   response.writeHead(status, {
     "content-type": contentType,
-    "cache-control": "public, max-age=31536000, immutable"
+    "cache-control": "public, max-age=31536000, immutable",
+    ...securityHeaders(),
   });
   response.end(body);
+}
+
+function securityHeaders() {
+  return {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  };
 }
 
 function sendRedirect(response: http.ServerResponse, location: string) {
@@ -1092,6 +1107,7 @@ async function streamRunSnapshots(input: {
   });
 
   let closed = false;
+  let lastSignature = "";
   input.request.on("close", () => {
     closed = true;
   });
@@ -1105,6 +1121,12 @@ async function streamRunSnapshots(input: {
       closed = true;
       return;
     }
+    const signature = runSnapshotSignature(snapshot);
+    if (signature === lastSignature) {
+      input.response.write(`event: heartbeat\ndata: ${JSON.stringify({ generatedAt: snapshot.generatedAt })}\n\n`);
+      return;
+    }
+    lastSignature = signature;
     input.response.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
   };
 
@@ -1123,12 +1145,30 @@ async function streamRunSnapshots(input: {
   clearInterval(interval);
 }
 
+function runSnapshotSignature(snapshot: Awaited<ReturnType<typeof getRunSnapshot>>) {
+  if (!snapshot) return "missing";
+  return JSON.stringify({
+    updatedAt: snapshot.run.updatedAt,
+    status: snapshot.run.status,
+    spans: [snapshot.spans.length, snapshot.spans.at(-1)?.id, snapshot.spans.at(-1)?.status],
+    events: [snapshot.events.length, snapshot.events.at(-1)?.id],
+    artifacts: [snapshot.artifacts.length, snapshot.artifacts.at(-1)?.artifactId],
+    transcript: [snapshot.agentTranscript?.length ?? 0, snapshot.agentTranscript?.at(-1)?.id],
+    terminalLines: snapshot.terminal.lineCount,
+    relatedRuns: snapshot.relatedRuns.map((run) => [run.runId, run.status, run.updatedAt]),
+  });
+}
+
 function setUiAuthCookie(response: http.ServerResponse, password: string, request: http.IncomingMessage) {
   const secure = isLocalhostRequest(request) ? "" : "; Secure";
   response.setHeader(
     "set-cookie",
-    `${UI_AUTH_COOKIE_NAME}=${encodeURIComponent(password)}; Path=/; Max-Age=${UI_AUTH_COOKIE_MAX_AGE_SECONDS}; HttpOnly${secure}; SameSite=Lax`
+    `${UI_AUTH_COOKIE_NAME}=${encodeURIComponent(uiAuthSessionToken(password))}; Path=/; Max-Age=${UI_AUTH_COOKIE_MAX_AGE_SECONDS}; HttpOnly${secure}; SameSite=Lax`
   );
+}
+
+export function uiAuthSessionToken(password: string) {
+  return createHash("sha256").update("discord-ai-agent-ui-session\0").update(password).digest("base64url");
 }
 
 function clearUiAuthCookie(response: http.ServerResponse, request?: http.IncomingMessage) {
@@ -1226,6 +1266,12 @@ export async function renderMetrics(repo: DiscordAiAgentRepository) {
     "# HELP discord_ai_agent_tool_calls_logged Logged tool calls.",
     "# TYPE discord_ai_agent_tool_calls_logged counter",
     `discord_ai_agent_tool_calls_logged ${health.toolCalls}`,
+    "# HELP discord_ai_agent_conversation_sessions Stored conversation sessions.",
+    "# TYPE discord_ai_agent_conversation_sessions gauge",
+    `discord_ai_agent_conversation_sessions ${health.conversationSessions}`,
+    "# HELP discord_ai_agent_estimated_cost_usd_total Estimated audited model and tool cost in US dollars.",
+    "# TYPE discord_ai_agent_estimated_cost_usd_total counter",
+    `discord_ai_agent_estimated_cost_usd_total ${health.estimatedCostUsd}`,
     "# HELP discord_ai_agent_agent_tasks_total Agent tasks by status.",
     "# TYPE discord_ai_agent_agent_tasks_total gauge",
     ...taskMetrics.tasksByStatus.map((row) => `discord_ai_agent_agent_tasks_total{status=${quoteMetricLabel(row.status)}} ${row.count}`),

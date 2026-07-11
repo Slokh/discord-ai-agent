@@ -20,9 +20,11 @@ function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
 }
 
 describe("tool scoping", () => {
-  it("always includes core, retrieval, and external tools", () => {
+  it("keeps the default scope minimal and adds retrieval only for Discord-history intent", () => {
     withEnv({ SPOTIFY_CLIENT_ID: "", SPOTIFY_CLIENT_SECRET: "", GITHUB_REPOSITORY: "owner/repo" }, () => {
-      const groups = selectToolGroups({ text: "what happened yesterday", hasImageAttachments: false, config: loadConfig() });
+      const config = loadConfig();
+      expect([...selectToolGroups({ text: "hello there", hasImageAttachments: false, config })].sort()).toEqual(["core", "external"]);
+      const groups = selectToolGroups({ text: "what happened in the server yesterday", hasImageAttachments: false, config });
       expect([...groups].sort()).toEqual(["core", "discord-retrieval", "external"]);
     });
   });
@@ -85,12 +87,12 @@ describe("tool scoping", () => {
       },
       () => {
       const config = loadConfig();
-      const requested = requestAdditionalToolGroups({ requestedGroups: ["spotify"], currentGroups: new Set(["core", "discord-retrieval", "external"]), config });
+      const requested = requestAdditionalToolGroups({ requestedGroups: ["spotify"], currentGroups: new Set(["core", "external"]), config });
       expect(requested.groups.has("spotify")).toBe(true);
       expect(requested.localTools.some((tool) => tool.name === "searchSpotify")).toBe(true);
 
-      const all = requestAdditionalToolGroups({ currentGroups: new Set(["core", "discord-retrieval", "external"]), config });
-      expect(all.groups).toEqual(new Set(["core", "discord-retrieval", "external", "image", "spotify", "codegen", "ops"]));
+      const all = requestAdditionalToolGroups({ currentGroups: new Set(["core", "external"]), config });
+      expect(all.groups).toEqual(new Set(["core", "external", "discord-retrieval", "generated-data", "discord-action", "image", "spotify", "codegen", "ops"]));
       expect(all.localTools.some((tool) => tool.name === "runCodingAgent")).toBe(true);
     });
   });

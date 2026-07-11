@@ -38,6 +38,6 @@ Implementation lives directly in focused modules by tool family: Discord resolve
 
 ## Tool Groups and Scoped Toolsets
 
-`registry.ts` assigns each model-facing tool to a coarse `group`: `core`, `discord-retrieval`, `image`, `spotify`, `codegen`, `ops`, or `external`. `toolScope.ts` deterministically selects groups per turn so ordinary Discord-history and chat turns can send a compact tool schema set while still including hosted web/date tools.
+`registry.ts` assigns each model-facing tool to a coarse `group`: `core`, `discord-retrieval`, `generated-data`, `discord-action`, `image`, `spotify`, `codegen`, `ops`, or `external`. `toolScope.ts` deterministically selects groups per turn. Ordinary chat begins with only the two core escalation/help tools plus hosted web/date tools; Discord retrieval, generated-data, and action schemas are added only when the request indicates those capabilities.
 
 Scoping is controlled by `TOOLSET_SCOPING` (default `true`). Spotify tools are deployment-gated and only appear when `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` are configured; codegen tools are similarly hidden unless a real GitHub repository is configured. The hidden `requestAdditionalTools` core tool is an escalation valve: if the model notices a missing capability, it can request specific groups (or all groups), and the next model round in the same turn is recomputed with the expanded toolset.

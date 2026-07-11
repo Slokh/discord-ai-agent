@@ -7,6 +7,7 @@ describe("config", () => {
       [
         "DISCORD_CLIENT_ID",
         "DISCORD_GUILD_ID",
+        "APP_REVISION",
         "BOT_NAME",
         "DISCORD_LOADING_REACTION",
         "RUN_MIGRATIONS",
@@ -42,6 +43,7 @@ describe("config", () => {
       () => {
         const config = loadConfig();
         expect(config.processRole).toBe("bot");
+        expect(config.appRevision).toBe("unknown");
         expect(config.discord.clientId).toBe("");
         expect(config.discord.guildId).toBe("");
         expect(config.discord.botName).toBe("ai");
@@ -79,7 +81,8 @@ describe("config", () => {
           retention: {
             eventsDays: 60,
             auditDays: 90,
-            embeddingRunsDays: 14
+            embeddingRunsDays: 14,
+            runtimeDays: 90
           },
           memoryCompaction: {
             threshold: 100,
@@ -115,6 +118,18 @@ describe("config", () => {
   it("allows configuring the Discord response timeout", () => {
     withEnv({ DISCORD_AGENT_RESPONSE_TIMEOUT_MS: "900000" }, () => {
       expect(loadConfig().discordAgentResponseTimeoutMs).toBe(900_000);
+    });
+  });
+
+  it("includes the deployed application revision", () => {
+    withEnv({ APP_REVISION: "abc123" }, () => {
+      expect(loadConfig().appRevision).toBe("abc123");
+    });
+  });
+
+  it("rejects embedding dimensions that do not match the migrated vector index", () => {
+    withEnv({ EMBEDDING_DIMENSIONS: "3072" }, () => {
+      expect(() => loadConfig()).toThrow(/must remain 1536/);
     });
   });
 
@@ -202,7 +217,8 @@ describe("config", () => {
           retention: {
             eventsDays: 60,
             auditDays: 90,
-            embeddingRunsDays: 14
+            embeddingRunsDays: 14,
+            runtimeDays: 90
           },
           memoryCompaction: {
             threshold: 100,

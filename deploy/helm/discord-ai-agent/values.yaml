@@ -63,6 +63,7 @@ config:
   openRouterImageModel: google/gemini-3.1-flash-image
   embeddingDimensions: "1536"
   discordAgentResponseTimeoutMs: "1800000"
+  agentPromptMaxConcurrency: "4"
   chatSilenceTimeoutMs: "120000"
   chatHardTimeoutMs: "600000"
   retentionEventsDays: "60"

@@ -519,8 +519,9 @@ export async function startJobs(input: {
 
   const agentRuntimeRunner = input.agentRuntime ?? input.discordAgent;
   if (discordAgentWorkerEnabled && agentRuntimeRunner) {
-    await boss.work<AgentRuntimeExecutionJob>(DISCORD_AGENT_REQUEST_JOB, { batchSize: 1, pollingIntervalSeconds: 1 }, async (jobs) => {
-      for (const job of jobs) {
+    const threadExecutions = new KeyedSerialQueue();
+    await boss.work<AgentRuntimeExecutionJob>(DISCORD_AGENT_REQUEST_JOB, { batchSize: input.config.agentPromptMaxConcurrency, pollingIntervalSeconds: 1 }, async (jobs) => {
+      await Promise.all(jobs.map((job) => threadExecutions.run(job.data.agentThreadKey ?? job.data.channelId, async () => {
         const startedAt = Date.now();
         await runWithTrace(
           {
@@ -605,13 +606,31 @@ export async function startJobs(input: {
             }
           }
         );
-      }
+      })));
     });
   } else if (discordAgentWorkerEnabled) {
     logger.warn({ queue: DISCORD_AGENT_REQUEST_JOB }, "Agent runtime execution worker requested without a runner");
   }
 
   return runtime;
+}
+
+export class KeyedSerialQueue {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.tails.set(key, current);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.tails.get(key) === current) this.tails.delete(key);
+    }
+  }
 }
 
 async function acquireLeaseForAgentTask(input: {

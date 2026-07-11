@@ -43,6 +43,8 @@ export function rowToAgentRuntimeEvent(row: any): AgentRuntimeEvent {
     sessionId: String(row.session_id),
     executionId: row.execution_id == null ? null : String(row.execution_id),
     traceId: row.trace_id == null ? null : String(row.trace_id),
+    spanId: row.span_id == null ? null : String(row.span_id),
+    parentSpanId: row.parent_span_id == null ? null : String(row.parent_span_id),
     kind: String(row.kind ?? "status"),
     level: String(row.level ?? "info") as TraceEventLevel,
     eventName: String(row.event_name),
@@ -217,4 +219,3 @@ export function rowToSandboxRun(row: any): SandboxRunRecord {
     updatedAt: new Date(row.updated_at)
   };
 }
-

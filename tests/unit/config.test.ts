@@ -95,6 +95,7 @@ describe("config", () => {
           market: "US"
         });
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
+        expect(config.agentPromptMaxConcurrency).toBe(4);
         expect(config.toolsetScoping).toBe(true);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);

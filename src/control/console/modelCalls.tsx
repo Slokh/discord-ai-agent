@@ -9,7 +9,7 @@ type ModelUsage = {
   cachedInputTokens: number;
 };
 
-type ModelCallView = {
+export type ModelCallView = {
   id: string;
   appRevision: string;
   purpose: string;

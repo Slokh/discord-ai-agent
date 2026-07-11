@@ -1,0 +1,8 @@
+.feedback-panel { grid-column: 1 / -1; display: grid; gap: 12px; }
+.feedback-panel label { color: var(--muted); display: grid; gap: 6px; }
+.feedback-panel textarea { background: var(--pane-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); min-height: 72px; padding: 10px; resize: vertical; }
+.feedback-rating, .feedback-actions { align-items: center; display: flex; gap: 8px; }
+.feedback-rating button, .feedback-actions button { background: var(--pane-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 8px 12px; }
+.feedback-rating button.active { border-color: var(--good); }
+.feedback-rating button.active.bad { border-color: var(--bad); }
+.feedback-actions span { color: var(--muted); }

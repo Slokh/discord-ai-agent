@@ -3,6 +3,7 @@ import type { OpenRouterClient } from "../models/openrouter.js";
 import type { ToolContext } from "../tools/types.js";
 import { durationMs } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
+import { runtimeVersionMetadata } from "../observability/runtimeVersions.js";
 
 type ChatInput = Parameters<OpenRouterClient["chat"]>[0];
 
@@ -18,8 +19,9 @@ export async function runObservedModelCall(
   const toolSchemaFingerprint = sha256(JSON.stringify(input.chat.tools ?? []));
   const common = {
     schemaVersion: 1,
-    appRevision: ctx.config?.appRevision || "unknown",
     callId,
+    spanId: callId,
+    parentSpanId: typeof input.metadata?.parentSpanId === "string" ? input.metadata.parentSpanId : "agent.request",
     purpose: input.purpose,
     requestedModel: input.chat.model ?? "default",
     messageCount: input.chat.messages.length,
@@ -34,6 +36,7 @@ export async function runObservedModelCall(
     toolSchemaFingerprint,
     offeredTools: (input.chat.tools ?? []).map((tool) => tool.type === "function" ? tool.function.name : tool.type),
     maxTokens: input.chat.maxTokens ?? 4096,
+    ...runtimeVersionMetadata(ctx.config),
     ...input.metadata,
   };
 

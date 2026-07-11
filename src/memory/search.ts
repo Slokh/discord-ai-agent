@@ -35,6 +35,17 @@ export type HistorySearchOutcome = {
   semanticDegraded: boolean;
 };
 
+export type RetrievalSpan = {
+  spanId: string;
+  parentSpanId?: string | null;
+  name: string;
+  startedAt: Date;
+  completedAt: Date;
+  durationMs: number;
+  status: "succeeded" | "failed";
+  metadata?: Record<string, unknown>;
+};
+
 const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
 const queryEmbeddingCache = new Map<string, number[]>();
 
@@ -46,23 +57,23 @@ async function embedQueryCached(input: {
   openRouter: OpenRouterClient;
   config: AppConfig;
   query: string;
-}): Promise<number[] | undefined> {
+}): Promise<{ embedding: number[] | undefined; cached: boolean }> {
   const key = `${input.config.openRouter.embeddingModel}:${input.config.embeddingDimensions}:${input.query}`;
   const cached = queryEmbeddingCache.get(key);
-  if (cached) return cached;
+  if (cached) return { embedding: cached, cached: true };
   const [embedding] = await input.openRouter.embed(
     [input.query],
     input.config.openRouter.embeddingModel,
     input.config.embeddingDimensions,
     { profile: "interactive" }
   );
-  if (!embedding) return undefined;
+  if (!embedding) return { embedding: undefined, cached: false };
   if (queryEmbeddingCache.size >= QUERY_EMBEDDING_CACHE_MAX_ENTRIES) {
     const oldest = queryEmbeddingCache.keys().next().value;
     if (oldest != null) queryEmbeddingCache.delete(oldest);
   }
   queryEmbeddingCache.set(key, embedding);
-  return embedding;
+  return { embedding, cached: false };
 }
 
 export async function searchDiscordHistory(input: {
@@ -70,6 +81,8 @@ export async function searchDiscordHistory(input: {
   openRouter: OpenRouterClient;
   config: AppConfig;
   search: HistorySearchInput;
+  observeSpan?: (span: RetrievalSpan) => Promise<void>;
+  parentSpanId?: string | null;
 }): Promise<HistorySearchOutcome> {
   const limit = input.search.limit ?? input.config.maxHistoryResults;
   const normalizedQuery = buildHistoryRetrievalQuery(input.search.query);
@@ -99,36 +112,39 @@ export async function searchDiscordHistory(input: {
     return { results: recent, semanticDegraded: false };
   }
 
-  const keywordPromise = input.repo.keywordSearch({
+  const difficultQuery = normalizedQuery.split(/\s+/).filter(Boolean).length >= 6;
+  const candidateLimit = Math.min(75, difficultQuery ? Math.max(limit * 3, limit) : limit);
+  const keywordPromise = observeRetrievalStep(input, "retrieval.keyword_sql", async () => input.repo.keywordSearch({
     guildId: input.search.guildId,
     visibleChannelIds: searchChannelIds,
     query: normalizedQuery,
-    limit,
+    limit: candidateLimit,
     authorIds,
     aboutUserTerms,
     dateFrom: input.search.dateFrom,
     dateTo: input.search.dateTo
-  });
+  }), { queryChars: normalizedQuery.length, candidateLimit });
 
   const semanticPromise = input.config.openRouter.apiKey
     ? (async (): Promise<{ vector: SearchResult[]; semanticDegraded: boolean }> => {
     const semanticLeg = async () => {
-      const embedding = await embedQueryCached({
+      const embedded = await observeRetrievalStep(input, "retrieval.query_embedding", () => embedQueryCached({
         openRouter: input.openRouter,
         config: input.config,
         query: normalizedQuery
-      });
+      }), { queryChars: normalizedQuery.length });
+      const embedding = embedded.embedding;
       if (!embedding) throw new Error("query embedding unavailable");
-      return input.repo.vectorSearch({
+      return observeRetrievalStep(input, "retrieval.vector_sql", () => input.repo.vectorSearch({
         guildId: input.search.guildId,
         visibleChannelIds: searchChannelIds,
         embedding,
-        limit,
+        limit: candidateLimit,
         authorIds,
         aboutUserTerms,
         dateFrom: input.search.dateFrom,
         dateTo: input.search.dateTo
-      });
+      }), { cachedEmbedding: embedded.cached, candidateLimit });
     };
     const semanticStartedAt = Date.now();
     try {
@@ -156,10 +172,35 @@ export async function searchDiscordHistory(input: {
 
   const [keyword, semantic] = await Promise.all([keywordPromise, semanticPromise]);
 
+  const merged = await observeRetrievalStep(input, "retrieval.merge_rank", async () => {
+    const fused = mergeResults(keyword, semantic.vector);
+    const reranked = difficultQuery ? rerankResults(fused, normalizedQuery) : fused;
+    return diversifyResults(reranked, limit);
+  }, { keywordCount: keyword.length, semanticCount: semantic.vector.length, difficultQuery });
   return {
-    results: mergeResults(keyword, semantic.vector).slice(0, limit),
+    results: merged,
     semanticDegraded: semantic.semanticDegraded,
   };
+}
+
+async function observeRetrievalStep<T>(
+  input: { observeSpan?: (span: RetrievalSpan) => Promise<void>; parentSpanId?: string | null },
+  name: string,
+  operation: () => Promise<T>,
+  metadata?: Record<string, unknown>,
+): Promise<T> {
+  const startedAt = new Date();
+  const spanId = `${name}-${startedAt.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
+  try {
+    const result = await operation();
+    const completedAt = new Date();
+    await input.observeSpan?.({ spanId, parentSpanId: input.parentSpanId, name, startedAt, completedAt, durationMs: completedAt.getTime() - startedAt.getTime(), status: "succeeded", metadata });
+    return result;
+  } catch (error) {
+    const completedAt = new Date();
+    await input.observeSpan?.({ spanId, parentSpanId: input.parentSpanId, name, startedAt, completedAt, durationMs: completedAt.getTime() - startedAt.getTime(), status: "failed", metadata: { ...metadata, error: error instanceof Error ? error.message : String(error) } });
+    throw error;
+  }
 }
 
 export function buildHistoryRetrievalQuery(query: string): string {
@@ -212,6 +253,39 @@ export function mergeResults(keyword: SearchResult[], vector: SearchResult[]): R
   return [...byId.values()]
     .map((result) => ({ ...result, score: reciprocalRank.get(result.messageId) ?? 0 }))
     .sort((a, b) => b.score - a.score || b.createdAt.getTime() - a.createdAt.getTime());
+}
+
+export function rerankResults(results: RankedSearchResult[], query: string): RankedSearchResult[] {
+  const terms = new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length > 2));
+  if (terms.size === 0) return results;
+  return results
+    .map((result) => {
+      const contentTerms = new Set(result.normalizedContent.toLowerCase().split(/[^a-z0-9]+/));
+      const overlap = [...terms].filter((term) => contentTerms.has(term)).length / terms.size;
+      return { ...result, score: result.score + overlap * 0.01 };
+    })
+    .sort((a, b) => b.score - a.score || b.createdAt.getTime() - a.createdAt.getTime());
+}
+
+export function diversifyResults(results: RankedSearchResult[], limit: number): RankedSearchResult[] {
+  const selected: RankedSearchResult[] = [];
+  const authorCounts = new Map<string, number>();
+  const channelCounts = new Map<string, number>();
+  for (const result of results) {
+    if ((authorCounts.get(result.authorId) ?? 0) >= 3 || (channelCounts.get(result.channelId) ?? 0) >= 5) continue;
+    selected.push(result);
+    authorCounts.set(result.authorId, (authorCounts.get(result.authorId) ?? 0) + 1);
+    channelCounts.set(result.channelId, (channelCounts.get(result.channelId) ?? 0) + 1);
+    if (selected.length >= limit) break;
+  }
+  if (selected.length < limit) {
+    for (const result of results) {
+      if (selected.some((item) => item.messageId === result.messageId)) continue;
+      selected.push(result);
+      if (selected.length >= limit) break;
+    }
+  }
+  return selected;
 }
 
 export function formatSearchResults(results: SearchResult[]): string {

@@ -65,6 +65,8 @@ async function recordTraceEvent(
       summary: input.summary,
       metadata: input.metadata,
       durationMs: input.durationMs,
+      spanId: stringMetadata(input.metadata?.spanId),
+      parentSpanId: stringMetadata(input.metadata?.parentSpanId),
     }).catch((error) => {
       logger.warn(
         { err: error, executionId: ctx.agentRuntimeExecutionId, eventName: input.eventName },
@@ -87,6 +89,10 @@ async function recordTraceEvent(
   });
 }
 
+function stringMetadata(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 async function recordProcessRunSpan(
   ctx: ToolContext,
   input: SpanInput | undefined,
@@ -103,6 +109,8 @@ async function recordProcessRunSpan(
         eventName: "agent.span",
         summary: input.name,
         durationMs: input.durationMs,
+        spanId: input.spanId,
+        parentSpanId: input.parentSpanId,
         metadata: {
           span: {
             spanId: input.spanId,

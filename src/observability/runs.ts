@@ -17,6 +17,7 @@ import type {
   ToolAuditLog,
   TraceEvent
 } from "../db/repositories.js";
+import { runtimeEventCategory, runtimeEventPhase, type RuntimeEventCategory, type RuntimeEventPhase } from "./runtimeEventSchema.js";
 
 export type RunSummary = {
   runId: string;
@@ -60,6 +61,10 @@ export type RunEvent = {
   summary: string | null;
   createdAt: Date;
   durationMs: number | null;
+  category?: RuntimeEventCategory;
+  phase?: RuntimeEventPhase;
+  spanId?: string | null;
+  parentSpanId?: string | null;
   metadata: Record<string, unknown>;
 };
 
@@ -550,6 +555,18 @@ function spanFromCommand(command: SandboxCommandEvent): RunSpan {
 
 function spanFromRuntimeEvent(event: AgentRuntimeEvent): RunSpan[] {
   const span = event.metadata.span;
+  if ((!span || typeof span !== "object") && event.spanId && event.durationMs != null && event.metadata.category === "model" && event.metadata.phase !== "started") {
+    return [{
+      id: `runtime-model-${event.id}`,
+      source: "runtime",
+      name: typeof event.metadata.purpose === "string" ? `model.${event.metadata.purpose}` : event.eventName,
+      status: event.level === "error" ? "failed" : "succeeded",
+      startedAt: new Date(event.createdAt.getTime() - event.durationMs),
+      completedAt: event.createdAt,
+      durationMs: event.durationMs,
+      metadata: { ...event.metadata, executionId: event.executionId, spanId: event.spanId, parentSpanId: event.parentSpanId }
+    }];
+  }
   if (!span || typeof span !== "object") return [];
   const data = span as Record<string, unknown>;
   const startedAt = typeof data.startedAt === "string" ? new Date(data.startedAt) : event.createdAt;
@@ -563,7 +580,12 @@ function spanFromRuntimeEvent(event: AgentRuntimeEvent): RunSpan[] {
       startedAt,
       completedAt,
       durationMs: typeof data.durationMs === "number" ? data.durationMs : event.durationMs,
-      metadata: { executionId: event.executionId, spanId: data.spanId, parentSpanId: data.parentSpanId, ...(typeof data.metadata === "object" && data.metadata ? (data.metadata as Record<string, unknown>) : {}) }
+      metadata: {
+        executionId: event.executionId,
+        spanId: event.spanId ?? data.spanId,
+        parentSpanId: event.parentSpanId ?? data.parentSpanId,
+        ...(typeof data.metadata === "object" && data.metadata ? (data.metadata as Record<string, unknown>) : {})
+      }
     }
   ];
 }
@@ -586,6 +608,7 @@ function artifactFromRuntime(artifact: AgentRuntimeArtifactRecord): ProcessRunAr
 
 function eventFromProcess(event: ProcessRunEventRecord): RunEvent {
   return {
+    ...eventDimensions(event.eventName, event.metadata),
     id: `process-${event.id}`,
     source: "process",
     level: event.level,
@@ -599,6 +622,7 @@ function eventFromProcess(event: ProcessRunEventRecord): RunEvent {
 
 function eventFromTrace(event: TraceEvent): RunEvent {
   return {
+    ...eventDimensions(event.eventName, event.metadata),
     id: `trace-${event.id}`,
     source: "trace",
     level: event.level,
@@ -612,6 +636,7 @@ function eventFromTrace(event: TraceEvent): RunEvent {
 
 function eventFromRuntime(event: AgentRuntimeEvent): RunEvent {
   return {
+    ...eventDimensions(event.eventName, event.metadata, event.kind, event.spanId, event.parentSpanId),
     id: `runtime-${event.id}`,
     source: "runtime",
     level: event.level,
@@ -630,6 +655,7 @@ function eventFromRuntime(event: AgentRuntimeEvent): RunEvent {
 
 function eventFromTask(event: TaskEvent): RunEvent {
   return {
+    ...eventDimensions(event.eventName, event.metadata, "task"),
     id: `task-${event.id}`,
     source: "task",
     level: event.level,
@@ -643,6 +669,7 @@ function eventFromTask(event: TaskEvent): RunEvent {
 
 function eventFromTool(log: ToolAuditLog): RunEvent {
   return {
+    ...eventDimensions(log.toolName, {}, "tool"),
     id: `tool-${log.id}`,
     source: "tool",
     level: log.error ? "error" : "info",
@@ -662,6 +689,7 @@ function eventFromTool(log: ToolAuditLog): RunEvent {
 
 function eventFromCommand(command: SandboxCommandEvent): RunEvent {
   return {
+    ...eventDimensions(command.step, {}, "command"),
     id: `command-${command.id}`,
     source: "command",
     level: command.exitCode === 0 || command.exitCode == null ? "info" : "error",
@@ -676,6 +704,24 @@ function eventFromCommand(command: SandboxCommandEvent): RunEvent {
       stderrTail: command.errorTail
     }
   };
+}
+
+function eventDimensions(
+  eventName: string,
+  metadata: Record<string, unknown>,
+  kind?: string | null,
+  spanId?: string | null,
+  parentSpanId?: string | null,
+) {
+  const metadataCategory = metadata.category;
+  const category = typeof metadataCategory === "string"
+    ? metadataCategory as RuntimeEventCategory
+    : runtimeEventCategory(eventName, kind);
+  const metadataPhase = metadata.phase;
+  const phase = typeof metadataPhase === "string"
+    ? metadataPhase as RuntimeEventPhase
+    : runtimeEventPhase(eventName, metadata);
+  return { category, phase, spanId: spanId ?? null, parentSpanId: parentSpanId ?? null };
 }
 
 function terminalFromCommands(commands: SandboxCommandEvent[]) {

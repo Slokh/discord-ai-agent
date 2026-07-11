@@ -1,5 +1,5 @@
 import { fixtureArtifact, fixtureRuns, fixtureSnapshots } from "./fixtures.js";
-import type { RunListAggregate, RunListResponse, RunSnapshot, RunSummary } from "./types.js";
+import type { RunFeedback, RunListAggregate, RunListResponse, RunSnapshot, RunSummary } from "./types.js";
 
 const useFixtures = import.meta.env.MODE === "fixture";
 
@@ -44,6 +44,25 @@ export async function fetchArtifact(runId: string, artifactId: string): Promise<
   return response.text();
 }
 
+export async function fetchRunFeedback(runId: string): Promise<RunFeedback | null> {
+  if (useFixtures) return null;
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/feedback`, { credentials: "include" });
+  if (!response.ok) throw new Error(`Failed to load feedback (${response.status})`);
+  return ((await response.json()) as { feedback: RunFeedback | null }).feedback;
+}
+
+export async function saveRunFeedback(input: { runId: string; rating: "good" | "bad"; note: string; expectedBehavior: string; captureEval: boolean }): Promise<RunFeedback> {
+  if (useFixtures) return { ...input, note: input.note || null, expectedBehavior: input.expectedBehavior || null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const response = await fetch(`/api/runs/${encodeURIComponent(input.runId)}/feedback`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(`Failed to save feedback (${response.status})`);
+  return ((await response.json()) as { feedback: RunFeedback }).feedback;
+}
+
 export async function resolveRunReference(query: string): Promise<{ run: RunSummary; messageId: string }> {
   if (useFixtures) {
     const messageId = extractDiscordMessageId(query);
@@ -65,6 +84,7 @@ export function subscribeToRun(runId: string, onSnapshot: (snapshot: RunSnapshot
   let reconnectTimer: number | null = null;
   let pollTimer: number | null = null;
   let reconnectAttempts = 0;
+  let currentSnapshot: RunSnapshot | null = null;
 
   const stopPolling = () => {
     if (pollTimer != null) window.clearInterval(pollTimer);
@@ -72,7 +92,8 @@ export function subscribeToRun(runId: string, onSnapshot: (snapshot: RunSnapshot
   };
   const poll = async () => {
     try {
-      onSnapshot(await fetchRunSnapshot(runId));
+      currentSnapshot = await fetchRunSnapshot(runId);
+      onSnapshot(currentSnapshot);
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));
     }
@@ -90,7 +111,17 @@ export function subscribeToRun(runId: string, onSnapshot: (snapshot: RunSnapshot
       stopPolling();
     });
     events.addEventListener("snapshot", (event) => {
-      onSnapshot(JSON.parse((event as MessageEvent).data) as RunSnapshot);
+      currentSnapshot = JSON.parse((event as MessageEvent).data) as RunSnapshot;
+      onSnapshot(currentSnapshot);
+    });
+    events.addEventListener("delta", (event) => {
+      const delta = JSON.parse((event as MessageEvent).data) as RunSnapshotDelta;
+      if (!currentSnapshot) {
+        void poll();
+        return;
+      }
+      currentSnapshot = applyRunSnapshotDelta(currentSnapshot, delta);
+      onSnapshot(currentSnapshot);
     });
     events.onerror = () => {
       events?.close();
@@ -111,6 +142,40 @@ export function subscribeToRun(runId: string, onSnapshot: (snapshot: RunSnapshot
     if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
     stopPolling();
   };
+}
+
+export type RunSnapshotDelta = {
+  run: RunSnapshot["run"];
+  spans: RunSnapshot["spans"];
+  events: RunSnapshot["events"];
+  artifacts: RunSnapshot["artifacts"];
+  agentTranscript: NonNullable<RunSnapshot["agentTranscript"]>;
+  terminal: RunSnapshot["terminal"] | null;
+  diagnostics: string[];
+  raw: Record<string, unknown>;
+  relatedRuns: RunSnapshot["relatedRuns"];
+  generatedAt: string;
+};
+
+export function applyRunSnapshotDelta(current: RunSnapshot, delta: RunSnapshotDelta): RunSnapshot {
+  return {
+    ...current,
+    run: delta.run,
+    spans: appendUnique(current.spans, delta.spans, (item) => item.id),
+    events: appendUnique(current.events, delta.events, (item) => item.id),
+    artifacts: appendUnique(current.artifacts, delta.artifacts, (item) => item.artifactId),
+    agentTranscript: appendUnique(current.agentTranscript ?? [], delta.agentTranscript, (item) => item.id),
+    terminal: delta.terminal ?? current.terminal,
+    diagnostics: delta.diagnostics,
+    raw: delta.raw,
+    relatedRuns: delta.relatedRuns,
+    generatedAt: delta.generatedAt,
+  };
+}
+
+function appendUnique<T>(current: T[], added: T[], id: (item: T) => string) {
+  const existing = new Set(current.map(id));
+  return [...current, ...added.filter((item) => !existing.has(id(item)))];
 }
 
 function extractDiscordMessageId(input: string): string | null {

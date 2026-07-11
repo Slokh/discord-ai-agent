@@ -1,0 +1,16 @@
+.model-calls-panel, .model-call-list, .model-call-card { display: grid; gap: 12px; }
+.model-call-count, .model-call-card header span, .model-call-tools > span { color: var(--faint); font-size: 12px; }
+.model-call-summary { display: grid; gap: 8px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.model-call-summary > div, .model-call-facts > div { background: var(--pane-2); border: 1px solid var(--border); border-radius: 8px; display: grid; gap: 3px; min-width: 0; padding: 10px; }
+.model-call-summary span, .model-call-facts dt { color: var(--faint); font-size: 11px; text-transform: uppercase; }
+.model-call-card { background: var(--pane-2); border: 1px solid var(--border); border-left: 3px solid var(--info); border-radius: 8px; padding: 12px; }
+.model-call-card.failed { border-left-color: var(--bad); }
+.model-call-card header { align-items: start; display: flex; gap: 12px; justify-content: space-between; }
+.model-call-card header > div, .model-call-timing { display: grid; gap: 3px; }
+.model-call-timing { justify-items: end; }
+.model-call-facts { display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.model-call-facts dd { margin: 0; overflow-wrap: anywhere; }
+.model-call-tools { display: grid; gap: 5px; }
+.model-call-tools code, .model-call-card details pre { background: var(--terminal); border: 1px solid var(--border); border-radius: 8px; margin: 0; overflow: auto; padding: 10px; white-space: pre-wrap; }
+@media (max-width: 900px) { .model-call-summary, .model-call-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .model-call-summary, .model-call-facts { grid-template-columns: 1fr; } }

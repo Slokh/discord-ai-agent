@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -22,8 +24,11 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npx vitest run --coverage
+      - run: npm run test:coverage:changed
       - run: npm audit --omit=dev
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - run: npm run scan:release
       - uses: actions/upload-artifact@v7
         with:
@@ -67,4 +72,50 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run verify:db
+      - run: npm run migrate
+      - run: npm run test:db:coverage
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-db
+          path: coverage-db/
+
+  container-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build runtime and codegen images
+        run: |
+          docker build --target final -t discord-ai-agent:ci-runtime .
+          docker build --target codegen -t discord-ai-agent:ci-codegen .
+      - name: Generate runtime SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: discord-ai-agent:ci-runtime
+          format: cyclonedx-json
+          output-file: sbom-runtime.cdx.json
+          upload-artifact: false
+      - name: Generate codegen SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: discord-ai-agent:ci-codegen
+          format: cyclonedx-json
+          output-file: sbom-codegen.cdx.json
+          upload-artifact: false
+      - uses: actions/upload-artifact@v7
+        with:
+          name: container-sboms
+          path: sbom-*.cdx.json
+      - name: Scan runtime image
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: discord-ai-agent:ci-runtime
+          fail-build: true
+          severity-cutoff: high
+          only-fixed: true
+      - name: Scan codegen image
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: discord-ai-agent:ci-codegen
+          fail-build: true
+          severity-cutoff: high
+          only-fixed: true

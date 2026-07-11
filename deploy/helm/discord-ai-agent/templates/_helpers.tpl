@@ -48,6 +48,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.embeddingDimensions | quote }}
 - name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS
   value: {{ .Values.config.discordAgentResponseTimeoutMs | quote }}
+- name: AGENT_PROMPT_MAX_CONCURRENCY
+  value: {{ .Values.config.agentPromptMaxConcurrency | quote }}
 - name: CHAT_SILENCE_TIMEOUT_MS
   value: {{ .Values.config.chatSilenceTimeoutMs | quote }}
 - name: CHAT_HARD_TIMEOUT_MS

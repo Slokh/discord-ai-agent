@@ -59,6 +59,8 @@ Exit criteria: a normal `@ai update yourself to ...` request usually produces a 
 
 Exit criteria: any Discord message or task run can be debugged from the console without manual database spelunking.
 
+The foundation now includes typed runtime events and spans, incremental stream deltas, model/tool/cost telemetry, aggregate dashboards, side-by-side comparison, run feedback, and private-eval export. Future console work should build on those contracts instead of parsing event names or adding another snapshot projection.
+
 ## Phase 6: Production Hardening
 
 - Keep deployment, queue, crawl, embedding, and sandbox health observable.

@@ -112,6 +112,31 @@ export const fixtureSnapshots: RunSnapshot[] = [
           usage: { inputTokens: 5_420, outputTokens: 91, totalTokens: 5_511, cachedInputTokens: 2_810 }
         }
       },
+      {
+        id: "runtime-model-call-recovery",
+        source: "runtime",
+        level: "info",
+        name: "agent.model.call.completed",
+        summary: "empty_response_recovery",
+        createdAt: minutesAgo(15.8),
+        durationMs: 2_100,
+        category: "model",
+        phase: "completed",
+        metadata: {
+          callId: "model-call-fixture-recovery",
+          appRevision: "a1b2c3d",
+          purpose: "empty_response_recovery",
+          requestedModel: "z-ai/glm-5.2",
+          model: "z-ai/glm-5.2",
+          promptBytes: 2_400,
+          toolSchemaBytes: 2,
+          toolCount: 0,
+          outputChars: 96,
+          finishReason: "stop",
+          estimatedCostUsd: 0.0007,
+          usage: { inputTokens: 600, outputTokens: 48, totalTokens: 648, cachedInputTokens: 400 }
+        }
+      },
       event("searchDiscordHistory", "info", "searched indexed messages", 16, "tool"),
       event("discord.mention.failed", "error", "Discord AI Agent agent request timed out.", 2, "trace")
     ],

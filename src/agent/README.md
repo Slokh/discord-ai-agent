@@ -30,6 +30,7 @@ Owns the model loop for one user prompt.
 - Prompt composition and memory/reply/image context problems start here.
 - Agent session/execution state transitions start in `runtimeLedger.ts`; execution input payloads start in `runtimeEnvelope.ts`; both are called by Discord ingress/delivery or the sandbox executor caller.
 - Agent session execution queue handoffs start in `runtimeControlPlane.ts`; Discord ingress and `/api/agent/sessions/:threadKey/execute` should share this path so durable execution metadata and events stay consistent.
+- Worker prompt concurrency is configurable, but `KeyedSerialQueue` preserves strict ordering within each Discord thread key.
 - Prompt executor behavior starts in `runtimeExecutor.ts` and `inProcessRuntimeExecutor.ts` before touching `router.ts`; do not add chat prompt sandbox transports.
 - Discord rendering problems belong in `src/discord/responseSink.ts`, not the model loop.
 - Discord formatting knowledge belongs in prompt guidance, not response-specific branches. Teach the model what Discord markdown supports, then let it choose formatting when it improves chat clarity. The renderer owns automatic trace footers.

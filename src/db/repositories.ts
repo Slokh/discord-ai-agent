@@ -7,8 +7,8 @@ import * as processRunRepository from "./processRunRepository.js";
 import * as agentTaskRepository from "./agentTaskRepository.js";
 import * as discordArchiveRepository from "./discordArchiveRepository.js";
 import * as retrievalRepository from "./retrievalRepository.js";
-import type { PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
-export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
+import type { PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
+export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
 // for repository-permissions.test.ts import-compatibility coverage:
@@ -43,6 +43,21 @@ export class DiscordAiAgentRepository {
     updatedBy?: string | null;
   }): Promise<ServerOverlay> { return skillsRepository.upsertServerOverlay(this.pool, input); }
   health() { return skillsRepository.health(this.pool); }
+  async getRunFeedback(runId: string): Promise<AgentRunFeedback | undefined> {
+    const result = await this.pool.query("SELECT * FROM agent_run_feedback WHERE run_id = $1", [runId]);
+    return result.rows[0] ? rowToRunFeedback(result.rows[0]) : undefined;
+  }
+  async upsertRunFeedback(input: { runId: string; rating: "good" | "bad"; note?: string | null; expectedBehavior?: string | null; captureEval?: boolean }): Promise<AgentRunFeedback> {
+    const result = await this.pool.query(
+      `INSERT INTO agent_run_feedback(run_id, rating, note, expected_behavior, capture_eval)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT(run_id) DO UPDATE SET rating = EXCLUDED.rating, note = EXCLUDED.note,
+         expected_behavior = EXCLUDED.expected_behavior, capture_eval = EXCLUDED.capture_eval, updated_at = now()
+       RETURNING *`,
+      [input.runId, input.rating, input.note ?? null, input.expectedBehavior ?? null, Boolean(input.captureEval)]
+    );
+    return rowToRunFeedback(result.rows[0]);
+  }
   storeMessageEmbedding(input: {
     messageId: string;
     embedding: number[];
@@ -549,4 +564,16 @@ export class DiscordAiAgentRepository {
     minMessageChars: number;
     includeBots?: boolean;
   }): Promise<DiscordChannelTopicCandidate[]> { return retrievalRepository.discordChannelTopicCandidates(this.pool, input); }
+}
+
+function rowToRunFeedback(row: any): AgentRunFeedback {
+  return {
+    runId: String(row.run_id),
+    rating: String(row.rating) as AgentRunFeedback["rating"],
+    note: row.note == null ? null : String(row.note),
+    expectedBehavior: row.expected_behavior == null ? null : String(row.expected_behavior),
+    captureEval: Boolean(row.capture_eval),
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
 }

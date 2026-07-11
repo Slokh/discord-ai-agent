@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildHistoryRetrievalQuery,
   formatSearchResults,
+  diversifyResults,
   mergeResults,
+  rerankResults,
   resetQueryEmbeddingCacheForTests,
   resolveSearchChannelIds,
   searchDiscordHistory
@@ -446,6 +448,21 @@ describe("buildHistoryRetrievalQuery", () => {
     expect(buildHistoryRetrievalQuery("recent")).toBe("recent");
     expect(buildHistoryRetrievalQuery("recently")).toBe("recently");
     expect(buildHistoryRetrievalQuery('"')).toBe('"');
+  });
+});
+
+describe("hybrid result post-processing", () => {
+  it("reranks difficult queries by lexical overlap without discarding fusion score", () => {
+    const weak = { ...result("weak", 0.02), normalizedContent: "unrelated chatter" };
+    const strong = { ...result("strong", 0.019), normalizedContent: "deployment decision for the database migration" };
+    expect(rerankResults([weak, strong], "database migration deployment decision")[0]?.messageId).toBe("strong");
+  });
+
+  it("adds author diversity before filling remaining capacity", () => {
+    const rows = Array.from({ length: 6 }, (_, index) => ({ ...result(`m${index}`, 1 - index / 10), authorId: index < 5 ? "same" : "different" }));
+    const selected = diversifyResults(rows, 4);
+    expect(selected.map((row) => row.authorId)).toContain("different");
+    expect(selected).toHaveLength(4);
   });
 });
 

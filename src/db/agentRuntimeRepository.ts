@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DbPool } from "./pool.js";
 import { redactSensitiveText } from "../observability/redaction.js";
-import { assertVersionedRuntimeEventMetadata } from "../observability/runtimeEventSchema.js";
+import { assertVersionedRuntimeEventMetadata, normalizeRuntimeEventMetadata } from "../observability/runtimeEventSchema.js";
 import { currentTraceContext } from "../util/trace.js";
 
 const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
@@ -76,6 +76,8 @@ export type AgentRuntimeEventRecord = {
   sessionId: string;
   executionId: string | null;
   traceId: string | null;
+  spanId?: string | null;
+  parentSpanId?: string | null;
   sequence: number;
   kind: AgentRuntimeEventKind;
   level: "debug" | "info" | "warn" | "error";
@@ -440,9 +442,12 @@ export class AgentRuntimeRepository {
     summary?: string | null;
     metadata?: Record<string, unknown>;
     durationMs?: number | null;
+    spanId?: string | null;
+    parentSpanId?: string | null;
   }): Promise<AgentRuntimeEventRecord> {
     const trace = currentTraceContext();
-    assertVersionedRuntimeEventMetadata(input.eventName, input.metadata);
+    const metadata = normalizeRuntimeEventMetadata({ eventName: input.eventName, kind: input.kind, metadata: input.metadata });
+    assertVersionedRuntimeEventMetadata(input.eventName, metadata);
     const result = await this.pool.query(
       `
         WITH event_lock AS MATERIALIZED (
@@ -457,9 +462,9 @@ export class AgentRuntimeRepository {
         )
         INSERT INTO agent_runtime_events(
           session_id, execution_id, trace_id, sequence, kind, level,
-          event_name, summary, metadata, duration_ms
+          event_name, summary, metadata, duration_ms, span_id, parent_span_id
         )
-        SELECT $1, $2, $3, sequence, $5, coalesce($6, 'info'), $7, $8, $9::jsonb, $10
+        SELECT $1, $2, $3, sequence, $5, coalesce($6, 'info'), $7, $8, $9::jsonb, $10, $11, $12
         FROM next_sequence
         RETURNING *
       `,
@@ -472,8 +477,10 @@ export class AgentRuntimeRepository {
         input.level ?? null,
         input.eventName,
         input.summary ?? null,
-        JSON.stringify(stampAgentRuntimeMetadata(input.metadata)),
-        input.durationMs == null ? null : Math.trunc(input.durationMs)
+        JSON.stringify(stampAgentRuntimeMetadata(metadata)),
+        input.durationMs == null ? null : Math.trunc(input.durationMs),
+        input.spanId ?? null,
+        input.parentSpanId ?? null
       ]
     );
     return rowToAgentRuntimeEvent(result.rows[0]);
@@ -828,6 +835,8 @@ function rowToAgentRuntimeEvent(row: any): AgentRuntimeEventRecord {
     sessionId: String(row.session_id),
     executionId: row.execution_id == null ? null : String(row.execution_id),
     traceId: row.trace_id == null ? null : String(row.trace_id),
+    spanId: row.span_id == null ? null : String(row.span_id),
+    parentSpanId: row.parent_span_id == null ? null : String(row.parent_span_id),
     sequence: Number(row.sequence),
     kind: String(row.kind) as AgentRuntimeEventKind,
     level: String(row.level ?? "info") as AgentRuntimeEventRecord["level"],

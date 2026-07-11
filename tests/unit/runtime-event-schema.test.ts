@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { assertVersionedRuntimeEventMetadata } from "../../src/observability/runtimeEventSchema.js";
+import { assertVersionedRuntimeEventMetadata, normalizeRuntimeEventMetadata } from "../../src/observability/runtimeEventSchema.js";
 
 const valid = {
   schemaVersion: 1,
+  category: "model",
+  phase: "started",
   appRevision: "test-revision",
   callId: "call-1",
   purpose: "tool_selection",
@@ -27,7 +29,12 @@ describe("versioned runtime event metadata", () => {
     expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.completed", { ...valid, promptBytes: -1 })).toThrow();
   });
 
-  it("allows legacy unversioned events during migration", () => {
-    expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.completed", { purpose: "legacy" })).not.toThrow();
+  it("rejects unversioned runtime events at the write boundary", () => {
+    expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.completed", { purpose: "legacy" })).toThrow();
+  });
+
+  it("adds controlled category and phase dimensions", () => {
+    expect(normalizeRuntimeEventMetadata({ eventName: "discord.mention.received" })).toEqual(expect.objectContaining({ schemaVersion: 1, category: "ingress", phase: "started" }));
+    expect(normalizeRuntimeEventMetadata({ eventName: "retrieval.vector_sql.completed" })).toEqual(expect.objectContaining({ category: "retrieval", phase: "completed" }));
   });
 });

@@ -1,4 +1,5 @@
 import { buildHistoryRetrievalQuery, searchDiscordHistory, formatSearchResults } from "../memory/search.js";
+import { recordAgentEvent } from "../agent/runtimeTranscript.js";
 import { summarizeForAudit } from "../util/text.js";
 import type { ToolContext } from "./types.js";
 import { extractHistorySearchSyntax, formatHistoryEvidence, noHistoryResultsMessage, coerceDateStart, coerceDateEnd } from "./discordHistoryFormatting.js";
@@ -59,6 +60,15 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     repo: ctx.repo,
     openRouter: ctx.openRouter,
     config: ctx.config,
+    parentSpanId: "agent.request",
+    observeSpan: async (span) => recordAgentEvent(ctx, {
+      eventName: `${span.name}.${span.status === "failed" ? "failed" : "completed"}`,
+      level: span.status === "failed" ? "error" : "info",
+      summary: span.name,
+      durationMs: span.durationMs,
+      metadata: { ...span.metadata, spanId: span.spanId, parentSpanId: span.parentSpanId },
+      span,
+    }),
     search: {
       guildId: ctx.guildId,
       userVisibleChannelIds: ctx.visibleChannelIds,
@@ -254,4 +264,3 @@ export async function getDiscordStats(
     limit: resolvedLimit
   });
 }
-

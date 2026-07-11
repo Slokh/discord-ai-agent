@@ -59,6 +59,10 @@ export type RunEvent = {
   summary: string | null;
   createdAt: string;
   durationMs: number | null;
+  category?: "ingress" | "context" | "model" | "tool" | "retrieval" | "delivery" | "task" | "system";
+  phase?: "started" | "progress" | "completed" | "failed";
+  spanId?: string | null;
+  parentSpanId?: string | null;
   metadata: Record<string, unknown>;
 };
 
@@ -113,4 +117,14 @@ export type RunListResponse = {
   runs: RunSummary[];
   aggregate: RunListAggregate;
   generatedAt: string;
+};
+
+export type RunFeedback = {
+  runId: string;
+  rating: "good" | "bad";
+  note: string | null;
+  expectedBehavior: string | null;
+  captureEval: boolean;
+  createdAt: string;
+  updatedAt: string;
 };

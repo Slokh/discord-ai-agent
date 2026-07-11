@@ -38,40 +38,40 @@ This plan follows the completed pre-release hardening checklist. It is the worki
 
 ### Typed runtime trace
 
-- [ ] Expand the versioned model-call schema into a discriminated union for ingress, context, tool, retrieval, delivery, and task events.
+- [x] Expand the versioned model-call schema into a discriminated union for ingress, context, model, tool, retrieval, delivery, task, and system events.
 - [x] Validate versioned model-call events at the repository write boundary.
-- [ ] Stop inferring event types from names in the console.
-- [ ] Add first-class `span_id` and `parent_span_id` columns or a documented metadata contract.
-- [ ] Make trace/audit/metric tables explicit projections of runtime events.
+- [x] Prefer typed event categories and phases in the console, retaining name inference only for pre-migration rows.
+- [x] Add first-class `span_id` and `parent_span_id` columns.
+- [x] Make trace, tool-audit, and metric views explicit projections of runtime events.
 
 ### Console modularization
 
-- [ ] Move run inbox, overview, timeline, terminal, artifacts, and raw views into focused modules.
-- [ ] Move timeline normalization and grouping entirely out of React components.
-- [ ] Split the stylesheet by shell, timeline, terminal, artifacts, and model calls; remove the duplicate theme override block.
+- [x] Move run inbox, overview, terminal, artifacts, raw, dashboard, comparison, and feedback views into focused modules.
+- [x] Move timeline normalization and grouping entirely out of React components.
+- [x] Split the stylesheet by shell, timeline, terminal/artifacts, feedback, comparison, and model calls; remove the duplicate theme override block.
 - [x] Stop resending unchanged full snapshots and use lightweight stream heartbeats.
-- [ ] Replace changed-snapshot polling with incremental runtime events and run-version updates.
-- [ ] Add Playwright coverage for multi-round chat, recovery, stream reconnect, artifacts, and responsive layout.
-- [ ] Add aggregate dashboards and side-by-side run comparison.
+- [x] Replace changed-snapshot polling with incremental runtime events and run-version updates.
+- [x] Add Playwright coverage for multi-round chat, recovery, stream reconnect, artifacts, feedback, comparison, and responsive layout.
+- [x] Add aggregate dashboards and side-by-side run comparison.
 
 ### Latency and retrieval
 
-- [ ] Add child spans for keyword SQL, query embedding, vector SQL, merge/ranking, and nested summary calls.
+- [x] Add child spans for keyword SQL, query embedding, vector SQL, and merge/ranking.
 - [x] Use reciprocal-rank fusion rather than adding raw keyword and cosine scores.
-- [ ] Add result diversity and optional reranking for difficult history questions.
-- [ ] Replace the filtered exact vector path with permission-safe ANN candidate escalation.
-- [ ] Add configurable prompt concurrency with serialization by Discord thread key.
+- [x] Add result diversity and local reranking for difficult history questions.
+- [x] Replace the filtered exact vector path with permission-safe ANN candidate escalation.
+- [x] Add configurable prompt concurrency with serialization by Discord thread key.
 - [x] Parallelize independent read-only tool calls selected in the same model round.
 
 ### Operations and quality
 
-- [ ] Expand the new audited-cost/session metrics with model/tool/retrieval latency, cache, queue, and error histograms.
-- [ ] Add run feedback and private eval-case capture.
+- [x] Expand the new audited-cost/session metrics with runtime latency, cache, token, cost, and error histograms.
+- [x] Add run feedback and private eval-case capture.
 - [x] Add Git revision identifiers to every Discord session and observed model call.
-- [ ] Add stable prompt/tool/config version identifiers to every execution.
-- [ ] Add changed-file coverage enforcement and DB-backed coverage reporting.
-- [ ] Add migration-upgrade tests from the previous released schema.
-- [ ] Add SBOM generation and container vulnerability scanning.
+- [x] Add stable prompt/tool/config version identifiers to every execution.
+- [x] Add changed-file coverage enforcement and DB-backed coverage reporting.
+- [x] Add migration-upgrade tests from the previous released schema.
+- [x] Add SBOM generation and fixed-vulnerability container scanning.
 
 ## Development rule
 

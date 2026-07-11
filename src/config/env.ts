@@ -105,6 +105,7 @@ const defaults = {
   maxThreadSummaryMessages: 80,
   maxReplyChars: 1800,
   discordAgentResponseTimeoutMs: 30 * 60 * 1000,
+  agentPromptMaxConcurrency: 4,
   budgetUserTurnsPerDay: 50,
   budgetUserImagesPerDay: 10,
   budgetUserCodegenPerDay: 1,
@@ -208,6 +209,7 @@ const envSchema = z.object({
     .min(30_000)
     .max(60 * 60 * 1000)
     .default(defaults.discordAgentResponseTimeoutMs),
+  AGENT_PROMPT_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(defaults.agentPromptMaxConcurrency),
   BUDGET_USER_TURNS_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserTurnsPerDay),
   BUDGET_USER_IMAGES_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserImagesPerDay),
   BUDGET_USER_CODEGEN_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserCodegenPerDay),
@@ -333,6 +335,7 @@ export function loadConfig() {
     maxThreadSummaryMessages: parsed.data.MAX_THREAD_SUMMARY_MESSAGES,
     maxReplyChars: parsed.data.MAX_REPLY_CHARS,
     discordAgentResponseTimeoutMs: parsed.data.DISCORD_AGENT_RESPONSE_TIMEOUT_MS,
+    agentPromptMaxConcurrency: parsed.data.AGENT_PROMPT_MAX_CONCURRENCY,
     budget: {
       userTurnsPerDay: parsed.data.BUDGET_USER_TURNS_PER_DAY,
       userImagesPerDay: parsed.data.BUDGET_USER_IMAGES_PER_DAY,

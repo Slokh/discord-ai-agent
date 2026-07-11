@@ -168,7 +168,8 @@ export async function handleMessageCreate(
     status: "queued",
     source: "discord.ingress",
     executorName: input.agentExecutor?.name ?? "in-process",
-    appRevision: input.config.appRevision
+    appRevision: input.config.appRevision,
+    config: input.config
   }).catch((error) => {
     requestLogger.warn({ err: error }, "Failed to record agent runtime prompt session");
     return null;

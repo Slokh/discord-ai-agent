@@ -78,6 +78,46 @@ describe("Discord response formatting", () => {
     );
   });
 
+  it("converts compact multi-column bullet tables into padded code blocks", () => {
+    expect(
+      formatDiscordMarkdownTables(
+        [
+          "10 spins at $5 each ($50 total wagered):",
+          "",
+          "**# · Reels · Result · Payout**",
+          "- 1 · 🍋⭐🍊 · — · -$5",
+          "- 2 · 🍒🍒🍒 · **TRIPLE 🍒 5x** · +$25 🎉",
+          "- 10 · ⭐7️⃣7️⃣ · — · -$5",
+          "",
+          "**Net:** -$25",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "10 spins at $5 each ($50 total wagered):",
+        "",
+        "```text",
+        "#   Reels   Result        Payout",
+        "1   🍋⭐🍊  —             -$5",
+        "2   🍒🍒🍒  TRIPLE 🍒 5x  +$25 🎉",
+        "10  ⭐7️⃣7️⃣  —             -$5",
+        "```",
+        "",
+        "**Net:** -$25",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves ordinary middle-dot bullet lists alone", () => {
+    const content = [
+      "**Choices · Notes · Owner**",
+      "- only one structured row · so this is · still prose",
+      "- ordinary bullet without columns",
+    ].join("\n");
+
+    expect(formatDiscordMarkdownTables(content)).toBe(content);
+  });
+
   it("falls back to labeled bullets when a table is too wide for Discord", () => {
     const wideValue = "x".repeat(80);
 

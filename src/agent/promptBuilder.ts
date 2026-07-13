@@ -10,7 +10,7 @@ import type {
 export const DISCORD_RESPONSE_STYLE_GUIDANCE =
   "Discord supports markdown formatting such as bold/italics, short headings, bullets, numbered lists, masked links like [text](url), code blocks, inline code, blockquotes, spoilers, and subtext (-# ...). " +
   "Choose formatting only when it makes the answer clearer in chat; plain text is fine when that is clearest. " +
-  "Discord does not reliably render markdown tables, so use compact lists for tabular/ranking information. " +
+  "For genuinely tabular multi-column information, use a standard Markdown pipe table; the Discord renderer converts it into an aligned code block. Use compact lists for simple rankings or one-value-per-item information. " +
   "Do not add your own trace/runtime footer; the Discord renderer appends that automatically when available. ";
 export const BEST_EFFORT_RESPONSE_GUIDANCE =
   "Default to helping. For harmless jokes, roasts, rankings, predictions, brainstorming, creative requests, and server fun, do not refuse just because the answer is subjective, evidence is incomplete, or certainty is impossible. " +

@@ -35,6 +35,12 @@ export function formatDiscordMarkdownTables(content: string) {
     const header = markdownTableRow(line);
     const separator = markdownTableRow(lines[index + 1] ?? "");
     if (!isMarkdownTableHeader(header, separator)) {
+      const compactTable = compactBulletTable(lines, index);
+      if (compactTable) {
+        output.push(discordCodeTable(compactTable.header, compactTable.rows) ?? discordTableList(compactTable.header, compactTable.rows));
+        index = compactTable.nextIndex;
+        continue;
+      }
       output.push(line);
       index += 1;
       continue;
@@ -141,6 +147,37 @@ function markdownTableRow(line: string): string[] | null {
   }
   cells.push(cell.trim());
   return cells.length >= 2 ? cells : null;
+}
+
+function compactBulletTable(lines: string[], startIndex: number) {
+  const header = compactTableHeader(lines[startIndex] ?? "");
+  if (!header) return null;
+
+  const rows: string[][] = [];
+  let index = startIndex + 1;
+  while (index < lines.length) {
+    const row = compactTableBulletRow(lines[index] ?? "");
+    if (!row || row.length !== header.length) break;
+    rows.push(row);
+    index += 1;
+  }
+
+  return rows.length >= 2 ? { header, rows, nextIndex: index } : null;
+}
+
+function compactTableHeader(line: string) {
+  const match = /^\s*\*\*(.+)\*\*\s*$/.exec(line);
+  return match ? compactTableCells(match[1] ?? "") : null;
+}
+
+function compactTableBulletRow(line: string) {
+  const match = /^\s*[-*+]\s+(.+?)\s*$/.exec(line);
+  return match ? compactTableCells(match[1] ?? "") : null;
+}
+
+function compactTableCells(value: string) {
+  const cells = value.split(/\s+·\s+/).map((cell) => cell.trim());
+  return cells.length >= 3 && cells.every(Boolean) ? cells : null;
 }
 
 function isMarkdownTableHeader(

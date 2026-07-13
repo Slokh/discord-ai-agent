@@ -47,6 +47,14 @@ describe("prompt context cost controls", () => {
     expect(first.findIndex((message) => String(message.content).includes("Current Discord requester"))).toBeGreaterThan(0);
   });
 
+  it("routes genuinely tabular output through Markdown table normalization", () => {
+    const systemPrompt = String(chatMessages("compare these", "")[0]?.content);
+
+    expect(systemPrompt).toContain("use a standard Markdown pipe table");
+    expect(systemPrompt).toContain("Discord renderer converts it into an aligned code block");
+    expect(systemPrompt).not.toContain("use compact lists for tabular/ranking information");
+  });
+
   it("omits prior tool-result bodies from default memory but includes them for reply follow-ups", () => {
     const toolMessage = conversationMessage({
       role: "tool",

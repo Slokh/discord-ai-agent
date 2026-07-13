@@ -31,6 +31,9 @@ export async function ensureAgentRuntimePromptExecution(input: {
   const versions = runtimeVersionMetadata(input.config);
   if (input.appRevision) versions.appRevision = input.appRevision;
   const executionId = input.agentExecutionId ?? `agent-execution-${input.requestId}`;
+  const title = titleFromPrompt(input.text);
+  const request = previewFromPrompt(input.text);
+  const requestedBy = `${input.userDisplayName} (${input.userId})`;
   const session = await input.agentRuntime.upsertSession({
     sessionId: input.agentSessionId,
     threadKey: input.threadKey,
@@ -38,9 +41,9 @@ export async function ensureAgentRuntimePromptExecution(input: {
     guildId: input.guildId,
     channelId: input.channelId,
     userId: input.userId,
-    title: titleFromPrompt(input.text),
-    request: previewFromPrompt(input.text),
-    requestedBy: `${input.userDisplayName} (${input.userId})`,
+    title,
+    request,
+    requestedBy,
     status: input.status,
     harness: executorName,
     metadata: {
@@ -64,7 +67,14 @@ export async function ensureAgentRuntimePromptExecution(input: {
       executionId,
       source: input.source,
       discordUrl: input.discordUrl,
-      rawContent: input.rawContent
+      rawContent: input.rawContent,
+      title,
+      request,
+      requestedBy,
+      guildId: input.guildId,
+      channelId: input.channelId,
+      userId: input.userId,
+      userDisplayName: input.userDisplayName
     }
   });
   await input.agentRuntime.createExecution({
@@ -78,6 +88,13 @@ export async function ensureAgentRuntimePromptExecution(input: {
       executor: executorName,
       discordMessageId: input.requestId,
       discordUrl: input.discordUrl,
+      title,
+      request,
+      requestedBy,
+      guildId: input.guildId,
+      channelId: input.channelId,
+      userId: input.userId,
+      userDisplayName: input.userDisplayName,
       ...versions
     }
   });

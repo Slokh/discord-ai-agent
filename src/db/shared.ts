@@ -51,19 +51,46 @@ export const AGENT_RUNTIME_CHAT_EXECUTION_COLUMNS = `
   cex.trace_id,
   cs.trace_id AS session_trace_id,
   cex.status,
-  cs.title,
-  cs.request,
-  cs.requested_by,
+  coalesce(nullif(cex.metadata->>'title', ''), nullif(left(runtime_prompt.request, 200), ''), cs.title) AS title,
+  coalesce(nullif(cex.metadata->>'request', ''), nullif(runtime_prompt.request, ''), cs.request) AS request,
+  coalesce(
+    nullif(cex.metadata->>'requestedBy', ''),
+    CASE
+      WHEN discord_prompt.author_id IS NOT NULL THEN
+        concat(coalesce(discord_author.global_name, discord_author.username, 'Discord user'), ' (', discord_prompt.author_id, ')')
+      ELSE NULL
+    END,
+    cs.requested_by
+  ) AS requested_by,
   cex.error,
-  cs.guild_id,
-  cs.channel_id,
-  cs.user_id,
+  coalesce(nullif(cex.metadata->>'guildId', ''), discord_prompt.guild_id, cs.guild_id) AS guild_id,
+  coalesce(nullif(cex.metadata->>'channelId', ''), discord_prompt.channel_id, cs.channel_id) AS channel_id,
+  coalesce(nullif(cex.metadata->>'userId', ''), discord_prompt.author_id, cs.user_id) AS user_id,
   cex.metadata,
   cs.metadata AS session_metadata,
   cex.created_at,
   cex.started_at,
   cex.completed_at,
   cex.updated_at
+`;
+
+export const AGENT_RUNTIME_CHAT_EXECUTION_JOINS = `
+  LEFT JOIN LATERAL (
+    SELECT cm.parts #>> '{0,text}' AS request
+    FROM agent_runtime_messages cm
+    WHERE cm.session_id = cex.session_id
+      AND cm.role = 'user'
+      AND (
+        cm.metadata->>'executionId' = cex.execution_id
+        OR cm.client_message_id = coalesce(cex.metadata->>'discordMessageId', cex.trace_id)
+      )
+    ORDER BY cm.created_at ASC, cm.message_id ASC
+    LIMIT 1
+  ) runtime_prompt ON true
+  LEFT JOIN messages discord_prompt
+    ON discord_prompt.id = coalesce(cex.metadata->>'discordMessageId', cex.trace_id)
+  LEFT JOIN discord_users discord_author
+    ON discord_author.id = discord_prompt.author_id
 `;
 
 export function buildDiscordStatsBaseQuery(input: {

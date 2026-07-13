@@ -331,15 +331,42 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const replyMessageId = `reply-${randomUUID()}`;
     const sessionId = `agent-session-${randomUUID()}`;
     const executionId = `agent-execution-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "Trace Test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.upsertMessage({
+      id: traceId,
+      guildId,
+      channelId,
+      authorId: userId,
+      authorUsername: "slokh",
+      authorGlobalName: "Kartik",
+      content: "10 more, win this time",
+      normalizedContent: "10 more win this time",
+      createdAt: new Date("2026-07-13T18:55:06.000Z")
+    });
 
     await agentRuntimeRepo.upsertSession({
       sessionId,
       traceId,
-      threadKey: `discord:guild-${randomUUID()}:channel-${randomUUID()}`,
-      title: "Discord chat turn",
-      request: "show a table",
-      requestedBy: "test",
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      title: "10 more, win this time",
+      request: "10 more, win this time",
+      requestedBy: `Kartik (${userId})`,
       metadata: { kind: "discord_channel", runtime: "agent" }
+    });
+    await agentRuntimeRepo.appendMessage({
+      sessionId,
+      clientMessageId: traceId,
+      role: "user",
+      parts: [{ type: "text", text: "10 more, win this time" }],
+      metadata: { executionId, traceId, promptMessageId: traceId }
     });
     await agentRuntimeRepo.createExecution({
       executionId,
@@ -353,10 +380,29 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         replyUrl: `https://discord.com/channels/guild/channel/${replyMessageId}`
       }
     });
+    await agentRuntimeRepo.upsertSession({
+      sessionId,
+      traceId: `new-trace-${randomUUID()}`,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId: `other-${randomUUID()}`,
+      title: "Unrelated later request",
+      request: "Is there a way to fix your brain",
+      requestedBy: "hunt er (other-user)",
+      metadata: { kind: "discord_channel", runtime: "agent" }
+    });
 
-    await expect(repo.findAgentRuntimeChatExecutionByTraceId(replyMessageId)).resolves.toEqual(
-      expect.objectContaining({ executionId, traceId })
-    );
+    await expect(repo.findAgentRuntimeChatExecutionByTraceId(replyMessageId)).resolves.toEqual(expect.objectContaining({
+      executionId,
+      traceId,
+      title: "10 more, win this time",
+      request: "10 more, win this time",
+      requestedBy: `Kartik (${userId})`,
+      guildId,
+      channelId,
+      userId
+    }));
   });
 
   it("mirrors agent task callbacks into durable codegen executions", async () => {

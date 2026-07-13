@@ -276,7 +276,7 @@ export async function finalizeModelRoundWithoutTools(
         purpose: "empty_response_recovery",
         metadata: { round },
         chat: {
-          messages: emptyNoToolRecoveryMessages(text),
+          messages: emptyNoToolRecoveryMessages(messages),
           temperature: 0.2,
           maxTokens: 1024,
           retryPolicy: "expensive",
@@ -440,16 +440,14 @@ function renderMemoryEventsForFinalSynthesis(
     .join("\n\n");
 }
 
-function emptyNoToolRecoveryMessages(userText: string): ChatMessage[] {
+function emptyNoToolRecoveryMessages(messages: ChatMessage[]): ChatMessage[] {
   return [
+    ...messages,
     {
       role: "system",
       content:
-        "The previous model call returned an empty answer. Reply directly and concisely to the user. Do not call tools.",
-    },
-    {
-      role: "user",
-      content: userText,
+        "The previous model call returned an empty answer. Reply directly and concisely to the latest user using the complete conversation and reply context above. " +
+        "No tools are available in this recovery call, so do not invent tool results. Do not claim context is missing when it is present above.",
     },
   ];
 }

@@ -3,6 +3,98 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("retries malformed tool calls with the original reply context and toolset", async () => {
+    const traceEvents: any[] = [];
+    const auditTool = vi.fn(async () => undefined);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "malformed-call",
+          name: "drawRandom(kind</arg_key><arg_value>integers</arg_value>",
+          argumentsText: "{}",
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "valid-call",
+          name: "drawRandom",
+          argumentsText: JSON.stringify({
+            kind: "integers",
+            count: 30,
+            min: 1,
+            max: 8,
+            reason: "10 slot spins × 3 reels",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "I couldn't complete verified spins because the RNG store is unavailable.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool,
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      threadKey: "discord:g:c",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        messageId: "previous-reply",
+        channelId: "c",
+        guildId: "g",
+        rootMessageId: "original-request",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "10 spins at $5 each with slot results",
+        createdAt: "2026-07-13T18:49:13.000Z",
+        url: null,
+        attachmentSummaries: [],
+        attachments: [],
+        chain: [],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "10 more, win this time");
+
+    expect(response.content).toContain("RNG store is unavailable");
+    expect(chat).toHaveBeenCalledTimes(3);
+    const recoveryRequest = chat.mock.calls[1]?.[0] as {
+      messages?: Array<{ role: string; content: string }>;
+      tools?: Array<{ function?: { name?: string } }>;
+    };
+    expect(recoveryRequest.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
+    expect(recoveryRequest.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "system", content: expect.stringContaining("10 spins at $5 each with slot results") }),
+      expect.objectContaining({ role: "system", content: expect.stringContaining("Do not claim that context is missing") }),
+      expect.objectContaining({ role: "user", content: "10 more, win this time" }),
+    ]));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "agentError",
+      error: "invalid_model_tool_call",
+    }));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "drawRandom" }));
+    expect(traceEvents.some((event) => event.eventName === "agent.invalid_tool_call_recovery.started")).toBe(true);
+  });
+
   it("rejects a fabricated chance outcome and retries with drawRandom available", async () => {
     const traceEvents: any[] = [];
     const chat = vi

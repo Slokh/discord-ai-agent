@@ -41,6 +41,10 @@ import {
 } from "./runtimeTranscript.js";
 import { runObservedModelCall } from "./modelCallTelemetry.js";
 import {
+  invalidToolCallNames,
+  invalidToolCallRecoveryMessage,
+} from "./invalidToolCallRecovery.js";
+import {
   executeLocalToolRoute,
   parseToolArguments,
 } from "./toolDispatcher.js";
@@ -101,7 +105,10 @@ async function runAgentModelLoopInternal(
   const successfulToolCallKeys = new Set<string>();
   const toolResultSignatures = new Map<ToolName, Set<string>>();
   let repeatedToolResultCount = 0;
-  const recoveryState = { emptyNoToolRecoveryAttempted: false };
+  const recoveryState = {
+    emptyNoToolRecoveryAttempted: false,
+    invalidToolCallRecoveryAttempted: false,
+  };
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -291,6 +298,25 @@ async function runAgentModelLoopInternal(
       },
       durationMs: durationMs(roundStartedAt),
     });
+    const invalidToolCalls = invalidToolCallNames(response.toolCalls);
+    if (
+      modelRoutes.length === 0 &&
+      !response.content.trim() &&
+      invalidToolCalls.length > 0 &&
+      !recoveryState.invalidToolCallRecoveryAttempted
+    ) {
+      recoveryState.invalidToolCallRecoveryAttempted = true;
+      messages.push(await invalidToolCallRecoveryMessage(ctx, {
+        round: round + 1,
+        roundStartedAt,
+        text,
+        invalidToolCalls,
+        model: response.model,
+        estimatedCostUsd: response.estimatedCostUsd,
+        requestLogger,
+      }));
+      continue;
+    }
     if (modelRoutes.length === 0) {
       const randomOutcomeDecision = await randomOutcomeGuard.inspectDraft(response.content);
       if (randomOutcomeDecision !== "allow") {

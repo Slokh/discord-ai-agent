@@ -21,6 +21,7 @@ Owns the model loop for one user prompt.
 - `toolGate.ts`: restricted-tool permission gate (owner/ops/codegen allowlists) and per-day budget checks applied before dispatch.
 - `finalSynthesis.ts`: forced final synthesis, empty-response recovery, model-call-ceiling fallback, tool-evidence fallback rendering.
 - `modelRecovery.ts`: leaked hosted-tool markup detection, stripping, recovery calls, and malformed-output artifacts.
+- `invalidToolCallRecovery.ts`: one-shot full-context recovery when a model emits malformed or unavailable function names.
 - `modelToolset.ts`: initial scoped tool selection, same-turn tool-group expansion, and image-context checks used by the model loop.
 - `randomOutcomeGuard.ts`: detects fresh chance outcomes that lack a successful `drawRandom` result, drives one in-turn retry, and provides the fail-closed response used by the model loop.
 - `routerShared.ts`: `AgentToolRoute`/`ModelCallBudget` types, round/call ceilings, `reserveModelCall`.

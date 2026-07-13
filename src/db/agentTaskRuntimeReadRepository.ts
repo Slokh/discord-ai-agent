@@ -1,5 +1,5 @@
 import type { DbPool } from "./pool.js";
-import { rowToAgentRuntimeEvent, AGENT_RUNTIME_CHAT_EXECUTION_COLUMNS, rowToAgentRuntimeChatExecution, rowToAgentRuntimeArtifact, rowToAgentRuntimeMessage, rowToTaskEvent } from "./shared.js";
+import { rowToAgentRuntimeEvent, AGENT_RUNTIME_CHAT_EXECUTION_COLUMNS, AGENT_RUNTIME_CHAT_EXECUTION_JOINS, rowToAgentRuntimeChatExecution, rowToAgentRuntimeArtifact, rowToAgentRuntimeMessage, rowToTaskEvent } from "./shared.js";
 import type { TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent } from "./shared.js";
 
 export async function getAgentRuntimeEventsForTrace(pool: DbPool, input: { traceId: string; limit?: number }): Promise<AgentRuntimeEvent[]> {
@@ -120,6 +120,7 @@ export async function listAgentRuntimeChatExecutions(pool: DbPool, input: { limi
         SELECT ${AGENT_RUNTIME_CHAT_EXECUTION_COLUMNS}
         FROM agent_runtime_executions cex
         JOIN agent_runtime_sessions cs ON cs.session_id = cex.session_id
+        ${AGENT_RUNTIME_CHAT_EXECUTION_JOINS}
         WHERE cex.task_id IS NULL
           AND cs.metadata->>'kind' = 'discord_channel'
         ORDER BY cex.updated_at DESC
@@ -138,6 +139,7 @@ export async function findAgentRuntimeChatExecutionByTraceId(pool: DbPool, trace
         SELECT ${AGENT_RUNTIME_CHAT_EXECUTION_COLUMNS}
         FROM agent_runtime_executions cex
         JOIN agent_runtime_sessions cs ON cs.session_id = cex.session_id
+        ${AGENT_RUNTIME_CHAT_EXECUTION_JOINS}
         WHERE cex.task_id IS NULL
           AND cs.metadata->>'kind' = 'discord_channel'
           AND (

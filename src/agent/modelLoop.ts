@@ -4,22 +4,13 @@ import {
   toolByName,
   toolDefinitionsForModel,
   toolSupportsCsvFormat,
-  type ToolGroup,
   type ToolName,
 } from "../tools/registry.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
-import {
-  requestAdditionalToolGroups,
-  scopedToolset,
-  selectToolGroups,
-  type ScopedToolset,
-} from "../tools/toolScope.js";
 import type {
   AgentFile,
   AgentResponse,
   AgentTable,
-  DiscordAttachmentContext,
-  DiscordReplyContext,
   ToolContext,
 } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
@@ -52,13 +43,32 @@ import { runObservedModelCall } from "./modelCallTelemetry.js";
 import {
   executeLocalToolRoute,
   parseToolArguments,
-  stringArgument,
-  stringArrayArgument,
 } from "./toolDispatcher.js";
+import {
+  RANDOM_OUTCOME_RETRY_GUIDANCE,
+  RandomOutcomeGuard,
+} from "./randomOutcomeGuard.js";
+import {
+  currentScopedToolset,
+  expandToolsetState,
+  handleAdditionalToolsRequest,
+  initialToolsetState,
+} from "./modelToolset.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
+): Promise<AgentResponse> {
+  const randomOutcomeGuard = new RandomOutcomeGuard(ctx, userText);
+  return await randomOutcomeGuard.enforce(
+    await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard),
+  );
+}
+
+async function runAgentModelLoopInternal(
+  ctx: ToolContext,
+  userText: string,
+  randomOutcomeGuard: RandomOutcomeGuard,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
   const text = userText.trim();
@@ -282,6 +292,22 @@ export async function runAgentModelLoop(
       durationMs: durationMs(roundStartedAt),
     });
     if (modelRoutes.length === 0) {
+      const randomOutcomeDecision = await randomOutcomeGuard.inspectDraft(response.content);
+      if (randomOutcomeDecision !== "allow") {
+        if (randomOutcomeDecision === "retry") {
+          messages.push({ role: "assistant", content: response.content });
+          messages.push({
+            role: "system",
+            content: RANDOM_OUTCOME_RETRY_GUIDANCE,
+          });
+          continue;
+        }
+        return randomOutcomeGuard.blockedResponse({
+          files: files.length > 0 ? files : undefined,
+          tables: tables.length > 0 ? tables : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
+        });
+      }
       return await finalizeModelRoundWithoutTools(ctx, {
         round: round + 1,
         roundStartedAt,
@@ -364,6 +390,7 @@ export async function runAgentModelLoop(
         : route.name === "requestAdditionalTools"
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
+      randomOutcomeGuard.noteToolResult(route.name, result.content);
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
         route.name !== "requestAdditionalTools" &&
@@ -382,7 +409,7 @@ export async function runAgentModelLoop(
         });
       }
       if (route.name === "requestAdditionalTools") {
-        toolsetState = { groups: new Set([...toolsetState.groups, ...parseRequestedToolGroups(route.arguments)]), expandedAll: !stringArrayArgument(route.arguments, "groups")?.length };
+        toolsetState = expandToolsetState(toolsetState, route.arguments);
       }
       requestLogger.info(
         {
@@ -587,61 +614,6 @@ async function executeIndependentToolRoutesInParallel(
     results.set(route.id, { result, startedAt });
   }));
   return results;
-}
-
-type ToolsetState = {
-  groups: Set<ToolGroup>;
-  expandedAll: boolean;
-};
-
-function initialToolsetState(ctx: ToolContext, text: string): ToolsetState {
-  if (!ctx.config.toolsetScoping) {
-    return { groups: new Set(["core", "discord-retrieval", "image", "spotify", "codegen", "ops", "external"]), expandedAll: true };
-  }
-  return {
-    groups: selectToolGroups({
-      text,
-      hasImageAttachments: hasImageContext(ctx.requestAttachments, ctx.replyContext),
-      replyContext: Boolean(ctx.replyContext),
-      config: ctx.config,
-    }),
-    expandedAll: false,
-  };
-}
-
-function currentScopedToolset(ctx: ToolContext, state: ToolsetState): ScopedToolset {
-  return scopedToolset({ config: ctx.config, groups: state.groups });
-}
-
-function handleAdditionalToolsRequest(ctx: ToolContext, route: AgentToolRoute, state: ToolsetState): AgentResponse {
-  const requestedGroups = stringArrayArgument(route.arguments, "groups");
-  const scoped = requestAdditionalToolGroups({ requestedGroups, currentGroups: state.groups, config: ctx.config });
-  const reason = stringArgument(route.arguments, "reason") ?? "No reason provided.";
-  return {
-    content: cleanResponse(
-      [
-        `Additional tool groups enabled: ${[...scoped.groups].sort().join(", ")}.`,
-        `Available tools now: ${scoped.localTools.map((tool) => tool.name).join(", ")}; ${scoped.serverTools.map((tool) => tool.type).join(", ")}.`,
-        `Reason: ${reason}`,
-      ].join("\n"),
-      ctx.config.maxReplyChars,
-    ),
-  };
-}
-
-function parseRequestedToolGroups(args: Record<string, unknown> | undefined): ToolGroup[] {
-  const groups = stringArrayArgument(args, "groups");
-  const allGroups: ToolGroup[] = ["core", "discord-retrieval", "generated-data", "discord-action", "image", "spotify", "codegen", "ops", "external"];
-  if (!groups?.length) return allGroups;
-  return groups.filter((group): group is ToolGroup => allGroups.includes(group as ToolGroup));
-}
-
-function hasImageContext(attachments: DiscordAttachmentContext[] = [], replyContext?: DiscordReplyContext) {
-  return attachments.some(isImageAttachment) || replyContextAttachmentCount(replyContext) > 0;
-}
-
-function isImageAttachment(attachment: DiscordAttachmentContext) {
-  return attachment.contentType?.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(attachment.url ?? attachment.filename ?? "");
 }
 
 async function completeDirectToolResponse(

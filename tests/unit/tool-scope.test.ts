@@ -29,6 +29,16 @@ describe("tool scoping", () => {
     });
   });
 
+  it("always offers provably fair randomness even for vague follow-ups", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "20 more", hasImageAttachments: false, config });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("discord-action")).toBe(false);
+    expect(tools.localTools.some((tool) => tool.name === "drawRandom")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
+  });
+
   it("adds image tools for visual intent even without the word image", () => {
     const groups = selectToolGroups({ text: "draw a wizard eating nachos", hasImageAttachments: false, config: loadConfig() });
     expect(groups.has("image")).toBe(true);

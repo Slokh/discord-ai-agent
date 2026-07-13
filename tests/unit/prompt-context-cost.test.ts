@@ -101,9 +101,9 @@ describe("prompt context cost controls", () => {
       "utf8",
     );
 
-    expect(tools.localTools.map((tool) => tool.name)).toEqual(["listTools", "requestAdditionalTools"]);
+    expect(tools.localTools.map((tool) => tool.name)).toEqual(["listTools", "requestAdditionalTools", "drawRandom"]);
     expect(systemBytes).toBeLessThan(12_000);
-    expect(localSchemaBytes).toBeLessThan(2_000);
-    expect(Buffer.byteLength(JSON.stringify(definitions), "utf8")).toBeLessThan(2_500);
+    expect(localSchemaBytes).toBeLessThan(6_000);
+    expect(Buffer.byteLength(JSON.stringify(definitions), "utf8")).toBeLessThan(6_500);
   });
 });

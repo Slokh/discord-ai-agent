@@ -3,6 +3,15 @@
   "name": "core-regressions",
   "prompts": [
     {
+      "id": "randomness-slots-must-use-rng",
+      "category": "generation",
+      "prompt": "run 20 weighted slot-machine spins for me",
+      "expectedTools": [
+        "drawRandom"
+      ],
+      "notes": "Every fresh game-of-chance outcome must come from the provably fair RNG rather than model-invented symbols."
+    },
+    {
       "id": "ops-tools-natural-language",
       "category": "ops",
       "prompt": "what can you do?",

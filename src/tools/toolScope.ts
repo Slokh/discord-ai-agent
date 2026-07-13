@@ -51,7 +51,10 @@ export function scopedToolset(input: { config: AppConfig; groups: Set<ToolGroup>
   const groups = normalizeGroups(input.groups, input.config);
   return {
     groups,
-    localTools: toolRegistry.filter((tool) => groups.has(tool.group) && isToolDeploymentAvailable(tool, input.config)),
+    localTools: toolRegistry.filter((tool) =>
+      (groups.has(tool.group) || tool.name === "drawRandom") &&
+      isToolDeploymentAvailable(tool, input.config)
+    ),
     serverTools: openRouterServerToolRegistry.filter((tool) => groups.has(tool.group)),
   };
 }

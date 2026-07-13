@@ -282,6 +282,7 @@ export async function executeLocalToolRoute(
         messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
         attachmentIdOrName: stringArgument(route.arguments, "attachmentIdOrName"),
         useContextFiles: booleanArgument(route.arguments, "useContextFiles"),
+        batchMode: enumArgument(route.arguments, "batchMode", ["inspect", "list"]),
       }),
     };
   }

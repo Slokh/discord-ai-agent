@@ -404,7 +404,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "inspectDiscordFile",
     description:
-      "Download and inspect one permission-visible Discord file attachment from the current request, reply chain, or an explicit Discord message link/ID. Use this for requests to read, open, parse, identify, summarize, or inspect files and documents. It fetches a fresh Discord CDN URL, applies strict download/extraction limits, detects the real format, and extracts bounded untrusted content. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, image identification, generic binary metadata/strings, and iRacing .sto setup headers plus embedded notes. If a message contains multiple files, call once to list them and retry with attachmentIdOrName. Never claim Discord files are inaccessible before trying this tool.",
+      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. Use this for requests to read, open, parse, identify, summarize, compare, or inspect files and documents. It fetches fresh Discord CDN URLs, applies strict aggregate download/extraction limits, detects real formats, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact garage values from iRacing simulator HTML setup exports. Multiple files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim Discord files are inaccessible before trying this tool.",
     userVisible: true,
     mutates: false,
     group: "discord-retrieval",
@@ -441,6 +441,11 @@ export const toolRegistry: ToolRegistryEntry[] = [
         useContextFiles: {
           type: "boolean",
           description: "Use files from the current request or Discord reply chain when messageIdOrUrl is omitted. Defaults to true."
+        },
+        batchMode: {
+          type: "string",
+          enum: ["inspect", "list"],
+          description: "For multiple matches, inspect a safely bounded batch (default) or only list candidates."
         }
       },
       additionalProperties: false

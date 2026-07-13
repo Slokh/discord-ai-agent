@@ -12,7 +12,6 @@ import type {
   DiscordReplyContext,
   ToolContext,
 } from "../tools/types.js";
-import { replyContextAttachmentCount } from "./promptBuilder.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { stringArgument, stringArrayArgument } from "./toolDispatcher.js";
 
@@ -29,6 +28,7 @@ export function initialToolsetState(ctx: ToolContext, text: string): ToolsetStat
     groups: selectToolGroups({
       text,
       hasImageAttachments: hasImageContext(ctx.requestAttachments, ctx.replyContext),
+      hasFileAttachments: hasFileContext(ctx.requestAttachments, ctx.replyContext),
       replyContext: Boolean(ctx.replyContext),
       config: ctx.config,
     }),
@@ -80,7 +80,24 @@ function hasImageContext(
   attachments: DiscordAttachmentContext[] = [],
   replyContext?: DiscordReplyContext,
 ) {
-  return attachments.some(isImageAttachment) || replyContextAttachmentCount(replyContext) > 0;
+  return contextAttachments(attachments, replyContext).some(isImageAttachment);
+}
+
+function hasFileContext(
+  attachments: DiscordAttachmentContext[] = [],
+  replyContext?: DiscordReplyContext,
+) {
+  return contextAttachments(attachments, replyContext).some((attachment) => !isImageAttachment(attachment));
+}
+
+function contextAttachments(
+  attachments: DiscordAttachmentContext[],
+  replyContext?: DiscordReplyContext,
+) {
+  return [
+    ...attachments,
+    ...(replyContext?.chain.flatMap((message) => message.attachments) ?? []),
+  ];
 }
 
 function isImageAttachment(attachment: DiscordAttachmentContext) {

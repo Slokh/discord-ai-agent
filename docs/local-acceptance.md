@@ -61,6 +61,8 @@ Then verify in Discord:
 @ai read the attached JSON file and summarize it
 @ai what does this file contain? (as a reply to a message with one attachment)
 @ai inspect setup.sto and explain the embedded setup notes
+@ai compare all of these iRacing setup files
+@ai decode the exact values in this iRacing Garage HTML setup export
 @ai learn this for next time: movie night votes are decided by the poll
 @ai update skill movie night: ties are settled by whoever hosted last
 @ai add a tool to check the Minecraft server status
@@ -87,6 +89,8 @@ Expected:
 - Same-channel follow-ups can use Discord AI Agent's previous replies and tool results without forcing a history search.
 - Current-message and replied-to files are selected without requiring a message link; explicit historical links remain permission-filtered.
 - Text, JSON, Office Open XML, ZIP, and supported binary formats return bounded extracted evidence and an honest parser limitation. `.sto` files expose embedded setup notes without inventing opaque garage values.
+- Safely bounded multi-file replies are inspected in one tool call, with identical notes/content and common metadata emitted once.
+- iRacing Garage HTML exports expose exact simulator-decoded values; `.sto` files explain that users must export HTML from the Garage when exact pressures, cambers, springs, damping, aero, or other garage values are required.
 - File fetch and parser activity appears in the run trace as `discord.file.*` events, without raw attachment contents in audit summaries.
 - Skill requests create or update a private database skill after policy validation.
 - Tool requests run through a sandbox task and finish with a human-review PR link, or a clear no-change/failure response.

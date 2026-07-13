@@ -46,7 +46,7 @@ Scoping is controlled by `TOOLSET_SCOPING` (default `true`). Spotify tools are d
 
 ## Discord File Inspection
 
-`inspectDiscordFile` accepts a Discord message link/ID or uses attachments from the current request and reply chain. Explicit historical messages are resolved through permission-filtered indexed attachment metadata, then refreshed through the Discord API before download so expired CDN URLs do not become permanent failures.
+`inspectDiscordFile` accepts a Discord message link/ID or uses attachments from the current request and reply chain. Explicit historical messages are resolved through permission-filtered indexed attachment metadata, then refreshed through the Discord API before download so expired CDN URLs do not become permanent failures. Up to eight matches totaling 20 MiB are inspected in one bounded batch by default. Identical extracted content and common metadata are emitted once so related setup/document collections do not multiply prompt tokens.
 
 Inspection is bounded and non-executing: downloads are limited to 20 MiB, archive entry names and expansion sizes are validated, extracted text is capped, and file content is marked as untrusted model evidence. The parser registry currently provides:
 
@@ -55,6 +55,9 @@ Inspection is bounded and non-executing: downloads are limited to 20 MiB, archiv
 - Image detection that directs visual questions to `inspectDiscordImages`.
 - PDF container metadata and explicit notice that semantic PDF text extraction is not yet available.
 - Bounded printable-string fallback for unknown binary formats.
-- iRacing `.sto` container metadata and embedded UTF-16 setup notes. Garage values remain an opaque proprietary payload and must never be inferred from the notes.
+- iRacing `.sto` opaque-container metadata, high-entropy payload identity, filename-derived qualifying/race/wet hints, and structured embedded UTF-16 setup notes. Garage values remain opaque and must never be inferred from the notes.
+- iRacing Garage HTML exports, including exact simulator-decoded setup sections and values such as pressures, temperatures, ride heights, springs, damping, camber, toe, brake bias, fuel, aero, differential, and in-car controls when present for that car.
+
+For exact iRacing values, load the `.sto` in the simulator Garage and export the setup as HTML, then attach that HTML export. The offline `.sto` parser remains useful for file identity, purpose/weather filename hints, opaque-payload comparison, and setup guidance, while the simulator export is the supported semantic decoder boundary.
 
 Successful fetches and inspections record `discord.file.fetched` and `discord.file.inspected` runtime events with byte count, parser, type, latency, and extracted-character count. Failures record `discord.file.fetch_failed`. Raw extracted content is not written to audit summaries or event metadata.

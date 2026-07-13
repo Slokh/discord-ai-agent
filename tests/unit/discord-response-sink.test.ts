@@ -40,6 +40,33 @@ describe("DiscordResponseSink", () => {
     });
   });
 
+  it("normalizes Markdown tables at the final Discord delivery boundary", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    await sink.sendFinal({
+      content: [
+        "| Spin | Reel 1 | Reel 2 | Result |",
+        "| --- | --- | --- | --- |",
+        "| 1 | 🍒 | 🍋 | ❌ Loss |",
+        "| 2 | 🍀 | 🍀 | **85x — +$420** |"
+      ].join("\n")
+    });
+
+    expect(sourceMessage.reply).toHaveBeenCalledWith({
+      content: [
+        "**Spin · Reel 1 · Reel 2 · Result**",
+        "- 1 · 🍒 · 🍋 · ❌ Loss",
+        "- 2 · 🍀 · 🍀 · **85x — +$420**"
+      ].join("\n")
+    });
+  });
+
   it("splits long final content into replied messages and keeps the trace footer on the last chunk", async () => {
     const channel = {
       send: vi.fn(async (_options: { content: string }) => fakeMessage({ id: "followup-1" }))

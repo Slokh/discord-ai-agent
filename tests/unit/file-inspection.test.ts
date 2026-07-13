@@ -44,6 +44,70 @@ describe("inspectFileBytes", () => {
     expect(result.summary).toContain("individual garage values are not decoded");
   });
 
+  it("extracts exact loaded setup values from iRacing SDK telemetry", () => {
+    const sessionInfo = `WeekendInfo:
+ TrackDisplayName: Daytona International Speedway
+ TrackConfigName: Road Course
+ TrackAirTemp: 26.1 C
+ TrackSurfaceTemp: 34.8 C
+ Category: SportsCar
+DriverInfo:
+ DriverSetupName: race
+ DriverSetupLoadTypeName: user
+ DriverSetupIsModified: 0
+ DriverSetupPassedTech: 1
+CarSetup:
+ UpdateCount: 7
+ Tires:
+  LeftFront:
+   ColdPressure: 145 kPa
+ Chassis:
+  Front:
+   BrakeBias: 54.2 %
+SessionInfo:
+ Sessions: []
+`;
+
+    const result = inspectFileBytes({ data: iracingIbt(sessionInfo), filename: "daytona.ibt" });
+
+    expect(result.parser).toBe("iracing-ibt-v2");
+    expect(result.detectedType).toBe("application/vnd.iracing.telemetry");
+    expect(result.summary).toContain("3 exact loaded-setup values");
+    expect(result.extractedText).toContain("Track: Daytona International Speedway");
+    expect(result.extractedText).toContain("Setup name: race");
+    expect(result.extractedText).toContain("ColdPressure: 145 kPa");
+    expect(result.extractedText).toContain("BrakeBias: 54.2 %");
+    expect(result.metadata).toMatchObject({
+      sdkVersion: 2,
+      tickRate: 60,
+      hasCarSetup: true,
+      setupProperties: 3,
+      semanticSetupValuesDecoded: true,
+      exactValuesSource: "iRacing SDK CarSetup session data"
+    });
+  });
+
+  it("explains how to record setup values when iRacing telemetry omits CarSetup", () => {
+    const sessionInfo = `WeekendInfo:
+ TrackDisplayName: Daytona International Speedway
+DriverInfo:
+ DriverSetupName: race
+SessionInfo:
+ Sessions: []
+`;
+
+    const result = inspectFileBytes({ data: iracingIbt(sessionInfo), filename: "daytona.ibt" });
+
+    expect(result.parser).toBe("iracing-ibt-v2");
+    expect(result.summary).toContain("does not include a CarSetup section");
+    expect(result.extractedText).toContain("irsdkLogSetup=1");
+    expect(result.metadata).toMatchObject({
+      hasCarSetup: false,
+      setupProperties: 0,
+      semanticSetupValuesDecoded: false
+    });
+  });
+
   it("decodes exact garage values from an iRacing simulator HTML export", () => {
     const html = `<!doctype html>
       <html><head>
@@ -113,6 +177,24 @@ describe("inspectFileBytes", () => {
     expect(result.extractedText).toContain("Brake bias: &#999999999999;");
   });
 });
+
+function iracingIbt(sessionInfo: string): Buffer {
+  const session = Buffer.from(`${sessionInfo}\0`, "utf8");
+  const sessionInfoOffset = 144;
+  const data = Buffer.alloc(sessionInfoOffset + session.length);
+  data.writeInt32LE(2, 0);
+  data.writeInt32LE(1, 4);
+  data.writeInt32LE(60, 8);
+  data.writeInt32LE(1, 12);
+  data.writeInt32LE(session.length, 16);
+  data.writeInt32LE(sessionInfoOffset, 20);
+  data.writeInt32LE(42, 24);
+  data.writeInt32LE(data.length, 28);
+  data.writeInt32LE(4, 32);
+  data.writeInt32LE(256, 36);
+  session.copy(data, sessionInfoOffset);
+  return data;
+}
 
 function storedZip(name: string, contents: Buffer): Buffer {
   const filename = Buffer.from(name);

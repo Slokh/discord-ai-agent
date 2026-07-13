@@ -153,6 +153,18 @@
       "notes": "Questions about the agent's previous outputs should use agent memory."
     },
     {
+      "id": "discord-read-file-attachment",
+      "category": "retrieval",
+      "prompt": "read and summarize the Discord file attachment in this message",
+      "expectedTools": [
+        "inspectDiscordFile"
+      ],
+      "mustNotContain": [
+        "can't access attachments"
+      ],
+      "notes": "Discord file questions should attempt generic permission-aware inspection before claiming the attachment is inaccessible."
+    },
+    {
       "id": "web-current-external-fact",
       "category": "web",
       "prompt": "what is the next world cup match?",

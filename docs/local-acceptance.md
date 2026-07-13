@@ -58,6 +58,9 @@ Then verify in Discord:
 @ai summarize this thread
 @ai make an image of a wizard eating nachos
 @ai what image did we generate earlier?
+@ai read the attached JSON file and summarize it
+@ai what does this file contain? (as a reply to a message with one attachment)
+@ai inspect setup.sto and explain the embedded setup notes
 @ai learn this for next time: movie night votes are decided by the poll
 @ai update skill movie night: ties are settled by whoever hosted last
 @ai add a tool to check the Minecraft server status
@@ -82,6 +85,9 @@ Expected:
 - Thread summaries respect current channel visibility and deleted content.
 - Image requests return an image or image URL.
 - Same-channel follow-ups can use Discord AI Agent's previous replies and tool results without forcing a history search.
+- Current-message and replied-to files are selected without requiring a message link; explicit historical links remain permission-filtered.
+- Text, JSON, Office Open XML, ZIP, and supported binary formats return bounded extracted evidence and an honest parser limitation. `.sto` files expose embedded setup notes without inventing opaque garage values.
+- File fetch and parser activity appears in the run trace as `discord.file.*` events, without raw attachment contents in audit summaries.
 - Skill requests create or update a private database skill after policy validation.
 - Tool requests run through a sandbox task and finish with a human-review PR link, or a clear no-change/failure response.
 

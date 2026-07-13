@@ -44,6 +44,20 @@ describe("tool scoping", () => {
     expect(groups.has("image")).toBe(true);
   });
 
+  it("adds Discord file inspection for vague file follow-ups", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "can you read the file itself or no?",
+      hasImageAttachments: false,
+      replyContext: true,
+      config
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("discord-retrieval")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
+  });
+
   it("adds spotify only when credentials and music intent are present", () => {
     withEnv({ SPOTIFY_CLIENT_ID: "id", SPOTIFY_CLIENT_SECRET: "secret" }, () => {
       const config = loadConfig();
@@ -104,6 +118,14 @@ describe("tool scoping", () => {
       const all = requestAdditionalToolGroups({ currentGroups: new Set(["core", "external"]), config });
       expect(all.groups).toEqual(new Set(["core", "external", "discord-retrieval", "generated-data", "discord-action", "image", "spotify", "codegen", "ops"]));
       expect(all.localTools.some((tool) => tool.name === "runCodingAgent")).toBe(true);
+
+      const invalid = requestAdditionalToolGroups({
+        requestedGroups: ["discord-attachments", "discord-context"],
+        currentGroups: new Set(["core", "external"]),
+        config
+      });
+      expect(invalid.groups).toEqual(all.groups);
+      expect(invalid.localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
     });
   });
 });

@@ -11,6 +11,7 @@ export type ToolName =
   | "getRecentDiscordMessages"
   | "getDiscordMessageContext"
   | "searchDiscordAttachments"
+  | "inspectDiscordFile"
   | "inspectDiscordImages"
   | "getDiscordUserAvatar"
   | "getDiscordStats"
@@ -55,6 +56,18 @@ export type ToolGroup =
   | "codegen"
   | "ops"
   | "external";
+
+export const TOOL_GROUPS: ToolGroup[] = [
+  "core",
+  "discord-retrieval",
+  "generated-data",
+  "discord-action",
+  "image",
+  "spotify",
+  "codegen",
+  "ops",
+  "external"
+];
 
 export type ToolClass =
   | "resolver"
@@ -127,8 +140,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         groups: {
           type: "array",
-          items: { type: "string" },
-          description: "Optional tool groups to add; omit to request all groups."
+          items: { type: "string", enum: TOOL_GROUPS },
+          description: `Optional tool groups to add; omit to request all groups. Valid groups: ${TOOL_GROUPS.join(", ")}.`
         },
         reason: { type: "string", description: "Why more tools are needed." }
       },
@@ -383,6 +396,51 @@ export const toolRegistry: ToolRegistryEntry[] = [
         limit: {
           type: "number",
           description: "Maximum attachments. Defaults to 10."
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "inspectDiscordFile",
+    description:
+      "Download and inspect one permission-visible Discord file attachment from the current request, reply chain, or an explicit Discord message link/ID. Use this for requests to read, open, parse, identify, summarize, or inspect files and documents. It fetches a fresh Discord CDN URL, applies strict download/extraction limits, detects the real format, and extracts bounded untrusted content. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, image identification, generic binary metadata/strings, and iRacing .sto setup headers plus embedded notes. If a message contains multiple files, call once to list them and retry with attachmentIdOrName. Never claim Discord files are inaccessible before trying this tool.",
+    userVisible: true,
+    mutates: false,
+    group: "discord-retrieval",
+    category: "discord",
+    toolClass: "retrieval",
+    outputContract: [
+      "permission-checked attachment identity and source message",
+      "detected file type, parser, size, and SHA-256",
+      "bounded extracted content labeled as untrusted data",
+      "explicit parser limitations or safe failure reason"
+    ],
+    examples: [
+      "@ai read the file I replied to",
+      "@ai inspect the .sto file in this message",
+      "@ai summarize the attached DOCX"
+    ],
+    permissionRequirements: ["requester_visible_discord_channels"],
+    auditEvents: ["tool_audit_logs", "discord.file.fetched", "discord.file.inspected"],
+    parameters: {
+      type: "object",
+      properties: {
+        messageIdOrUrl: {
+          type: "string",
+          description: "Optional Discord message ID or message URL containing the file. Omit to use current/replied attachments."
+        },
+        attachmentIdOrName: {
+          type: "string",
+          description: "Attachment ID or filename to select when the message contains multiple files."
+        },
+        question: {
+          type: "string",
+          description: "What the user wants to learn from the file; carried into the inspection evidence."
+        },
+        useContextFiles: {
+          type: "boolean",
+          description: "Use files from the current request or Discord reply chain when messageIdOrUrl is omitted. Defaults to true."
         }
       },
       additionalProperties: false
@@ -1623,6 +1681,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   getRecentDiscordMessages: "retrieval",
   getDiscordMessageContext: "retrieval",
   searchDiscordAttachments: "retrieval",
+  inspectDiscordFile: "retrieval",
   inspectDiscordImages: "image",
   getDiscordUserAvatar: "resolver",
   getDiscordStats: "stats",
@@ -1691,6 +1750,7 @@ function defaultToolExamples(name: ToolName): string[] {
     getRecentDiscordMessages: "@ai what just happened in here?",
     getDiscordMessageContext: "@ai show the context around this message link",
     searchDiscordAttachments: "@ai find the image of nachos",
+    inspectDiscordFile: "@ai read the file I replied to",
     inspectDiscordImages: "@ai what is in this screenshot?",
     getDiscordUserAvatar: "@ai enhance my profile picture",
     getDiscordStats: "@ai rank channels by messages per day",

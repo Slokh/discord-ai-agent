@@ -33,7 +33,7 @@ function requestAdditionalToolsRoute(
 }
 
 describe("model toolset", () => {
-  it("starts with every legacy group when scoping is disabled", () => {
+  it("starts with every group when scoping is disabled", () => {
     const state = initialToolsetState(
       context({
         config: {
@@ -50,6 +50,8 @@ describe("model toolset", () => {
       new Set([
         "core",
         "discord-retrieval",
+        "generated-data",
+        "discord-action",
         "image",
         "spotify",
         "codegen",
@@ -155,7 +157,7 @@ describe("model toolset", () => {
     expect(response.content).toContain("discord-retrieval");
   });
 
-  it("expands selectively while ignoring unknown groups", () => {
+  it("expands all groups when a request contains unknown groups", () => {
     const initial: ToolsetState = {
       groups: new Set(["core", "external"]),
       expandedAll: false,
@@ -166,10 +168,40 @@ describe("model toolset", () => {
         groups: ["image", "discord-action", "not-a-group"],
       }),
     ).toEqual({
-      groups: new Set(["core", "external", "image", "discord-action"]),
-      expandedAll: false,
+      groups: new Set([
+        "core",
+        "external",
+        "discord-retrieval",
+        "generated-data",
+        "discord-action",
+        "image",
+        "spotify",
+        "codegen",
+        "ops",
+      ]),
+      expandedAll: true,
     });
     expect(initial.groups).toEqual(new Set(["core", "external"]));
+  });
+
+  it("reports invalid-only requests and exposes Discord file inspection", () => {
+    const ctx = context();
+    const route = requestAdditionalToolsRoute({
+      groups: ["discord-attachments", "discord-context"],
+      reason: "Need to read the replied-to file.",
+    });
+    const initial: ToolsetState = {
+      groups: new Set(["core", "external"]),
+      expandedAll: false,
+    };
+
+    const response = handleAdditionalToolsRequest(ctx, route, initial);
+    const expanded = expandToolsetState(initial, route.arguments);
+
+    expect(response.content).toContain("Unrecognized groups (discord-attachments, discord-context)");
+    expect(response.content).toContain("inspectDiscordFile");
+    expect(expanded.groups.has("discord-retrieval")).toBe(true);
+    expect(expanded.expandedAll).toBe(true);
   });
 
   it("expands to all groups when no specific group is requested", () => {

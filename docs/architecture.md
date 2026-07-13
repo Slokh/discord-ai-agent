@@ -34,7 +34,8 @@ End state: the canonical execution ledger is the agent-runtime session event str
 1. `src/discord/crawler.ts` and incremental message handlers store bot-visible messages and attachment metadata.
 2. Embedding workers fill vector data for stored messages.
 3. Repository retrieval queries and retrieval tools apply requester-visible channel filters before returning evidence.
-4. The agent should prefer broad primitives: exact/semantic history search, recent context, stats, attachment search, image inspection, and summarization.
+4. The agent should prefer broad primitives: exact/semantic history search, recent context, stats, attachment search, generic file inspection, image inspection, and summarization.
+5. Generic file inspection permission-checks explicit historical messages against requester-visible indexed channels, refreshes attachment URLs from Discord, performs bounded in-memory parsing without executing content, and records fetch/parser latency as runtime events.
 
 For durable knowledge changes such as excluding a channel, deleting indexed history, changing crawl behavior, embedding eligibility, stats, summaries, or attachment search, start with `src/db/README.md`, `src/discord/README.md`, and `src/memory/` before changing tool descriptions.
 

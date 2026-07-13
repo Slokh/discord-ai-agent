@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { isTypeOnlyTypescriptSource } from "./coverageSource.js";
 
 const reportPath = path.resolve(process.argv[2] ?? "coverage/coverage-final.json");
 const minimum = Number(process.env.CHANGED_FILE_COVERAGE_MIN ?? 50);
@@ -15,6 +16,11 @@ for (const file of files) {
   const absolute = path.resolve(file);
   const coverage = report[absolute];
   if (!coverage) {
+    const source = await readFile(absolute, "utf8");
+    if (isTypeOnlyTypescriptSource(source, file)) {
+      process.stdout.write(`${file}: skipped type-only module\n`);
+      continue;
+    }
     failures.push(`${file}: no coverage data`);
     continue;
   }

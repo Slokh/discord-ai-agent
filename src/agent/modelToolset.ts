@@ -1,4 +1,4 @@
-import type { ToolGroup } from "../tools/registry.js";
+import { TOOL_GROUPS, type ToolGroup } from "../tools/registry.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import {
   requestAdditionalToolGroups,
@@ -23,7 +23,7 @@ export type ToolsetState = {
 
 export function initialToolsetState(ctx: ToolContext, text: string): ToolsetState {
   if (!ctx.config.toolsetScoping) {
-    return { groups: new Set(["core", "discord-retrieval", "image", "spotify", "codegen", "ops", "external"]), expandedAll: true };
+    return { groups: new Set(TOOL_GROUPS), expandedAll: true };
   }
   return {
     groups: selectToolGroups({
@@ -48,13 +48,15 @@ export function handleAdditionalToolsRequest(
   const requestedGroups = stringArrayArgument(route.arguments, "groups");
   const scoped = requestAdditionalToolGroups({ requestedGroups, currentGroups: state.groups, config: ctx.config });
   const reason = stringArgument(route.arguments, "reason") ?? "No reason provided.";
+  const invalidGroups = (requestedGroups ?? []).filter((group) => !TOOL_GROUPS.includes(group as ToolGroup));
   return {
     content: cleanResponse(
       [
         `Additional tool groups enabled: ${[...scoped.groups].sort().join(", ")}.`,
+        invalidGroups.length > 0 ? `Unrecognized groups (${invalidGroups.join(", ")}) were replaced by all available groups.` : null,
         `Available tools now: ${scoped.localTools.map((tool) => tool.name).join(", ")}; ${scoped.serverTools.map((tool) => tool.type).join(", ")}.`,
         `Reason: ${reason}`,
-      ].join("\n"),
+      ].filter(Boolean).join("\n"),
       ctx.config.maxReplyChars,
     ),
   };
@@ -65,13 +67,12 @@ export function expandToolsetState(
   args: Record<string, unknown> | undefined,
 ): ToolsetState {
   const requestedGroups = stringArrayArgument(args, "groups");
-  const allGroups: ToolGroup[] = ["core", "discord-retrieval", "generated-data", "discord-action", "image", "spotify", "codegen", "ops", "external"];
-  const groups = requestedGroups?.length
-    ? requestedGroups.filter((group): group is ToolGroup => allGroups.includes(group as ToolGroup))
-    : allGroups;
+  const validRequestedGroups = requestedGroups?.filter((group): group is ToolGroup => TOOL_GROUPS.includes(group as ToolGroup)) ?? [];
+  const hasInvalidRequestedGroup = requestedGroups?.some((group) => !TOOL_GROUPS.includes(group as ToolGroup)) ?? false;
+  const groups = validRequestedGroups.length > 0 && !hasInvalidRequestedGroup ? validRequestedGroups : TOOL_GROUPS;
   return {
     groups: new Set([...state.groups, ...groups]),
-    expandedAll: !requestedGroups?.length,
+    expandedAll: validRequestedGroups.length === 0 || hasInvalidRequestedGroup,
   };
 }
 

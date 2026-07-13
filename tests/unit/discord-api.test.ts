@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { classifyDiscordWriteError, discordWrite } from "../../src/discord/api.js";
+import { classifyDiscordWriteError, discordWrite, fetchDiscordAttachment } from "../../src/discord/api.js";
 
 const logger = { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as any;
 
@@ -26,5 +26,42 @@ describe("Discord write API", () => {
 
   it("returns success", async () => {
     await expect(discordWrite(async () => 42, { logger })).resolves.toEqual({ ok: true, value: 42 });
+  });
+
+  it("refreshes attachment metadata from the Discord message", async () => {
+    const attachment = {
+      id: "attachment-1",
+      url: "https://cdn.discordapp.com/fresh.sto",
+      proxyURL: "https://media.discordapp.net/fresh.sto",
+      name: "setup.sto",
+      contentType: "application/octet-stream",
+      size: 13_442,
+      width: null,
+      height: null,
+      description: "race setup"
+    };
+    const fetchMessage = vi.fn(async () => ({ attachments: new Map([[attachment.id, attachment]]) }));
+    const client = {
+      channels: { fetch: vi.fn(async () => ({ messages: { fetch: fetchMessage } })) }
+    } as any;
+
+    await expect(
+      fetchDiscordAttachment(client, {
+        channelId: "channel",
+        messageId: "message",
+        attachmentId: "attachment-1"
+      })
+    ).resolves.toEqual({
+      id: "attachment-1",
+      url: attachment.url,
+      proxyUrl: attachment.proxyURL,
+      filename: "setup.sto",
+      contentType: "application/octet-stream",
+      sizeBytes: 13_442,
+      width: null,
+      height: null,
+      description: "race setup"
+    });
+    expect(fetchMessage).toHaveBeenCalledWith("message");
   });
 });

@@ -8,7 +8,7 @@ import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } 
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
-import { deleteDiscordMessageById, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
+import { deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
 import { discordChannelThreadKey } from "./mentionParsing.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { loadAgentRuntimeInputLines, prepareDiscordAgentTurn, replayPreparedDiscordAgentTurn } from "./turnPreparation.js";
@@ -223,7 +223,9 @@ export async function executeDiscordAgentRequest(
         return deleted;
       },
       sendDiscordPoll: async (pollInput) => sendDiscordPollMessage(message, pollInput),
-      fetchDiscordUserAvatar: async ({ userId }) => fetchDiscordUserAvatar(client, turnEnvelope.guildId, userId)
+      fetchDiscordUserAvatar: async ({ userId }) => fetchDiscordUserAvatar(client, turnEnvelope.guildId, userId),
+      fetchDiscordAttachment: async ({ channelId, messageId, attachmentId }) =>
+        fetchDiscordAttachment(client, { channelId, messageId, attachmentId })
     };
     const response = await agentExecutor.execute({
       toolContext,

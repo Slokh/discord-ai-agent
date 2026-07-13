@@ -26,12 +26,15 @@ Use classes to audit whether a new user problem is missing a real primitive or w
 Each local tool contract includes an `outputContract`. This is the model-facing promise for the shape of useful output. Tool implementations should keep outputs compact but include the fields needed for the model to answer directly:
 
 - Retrieval tools should use hybrid keyword/vector search where useful and include applied filters, ranked evidence snippets, match sources when available, message links when available, and result counts.
+- File-retrieval tools should identify the selected attachment and source, report the detected type and parser, return bounded extracted content as untrusted evidence, and state semantic/parser limitations explicitly.
 - Stats tools should include metric, grouping, filters, ranked rows, and result counts.
 - Summary tools should include focus/question, sample window, grounded summary, and coverage limits.
 - Coding tools should include task status, run-console link when available, progress summary, and PR link or failure reason.
 - Ops/debug tools should include requested diagnostic, current status, recent failures, and a next action when one is clear.
 
 If a tool cannot satisfy its output contract, return an explicit limitation instead of forcing the model to infer missing context.
+
+File inspection should be format-led rather than prompt-led. Add parsers behind the generic `inspectDiscordFile` contract, use signatures and container structure when possible, keep extraction bounded and non-executing, and preserve Discord permission filtering before any fetch. Proprietary binary formats may expose verifiable metadata and embedded text without claiming to decode opaque semantic fields.
 
 Local tools that return structured `AgentResponse` may include an additive status envelope: `status` (`ok`, `error`, or `partial`), stable snake_case `errorCode`, `retryable`, and `limitation`. These fields are metadata only; human-readable `content` remains the primary model-facing text. Omitted `status` means success/ok. Use `limitation` for truncated or partial results.
 

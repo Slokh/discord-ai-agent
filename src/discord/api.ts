@@ -1,6 +1,6 @@
 import type { Client, GuildMember, Message, MessageCreateOptions, MessageEditOptions, MessagePayload, MessageReaction } from "discord.js";
 import type { Logger } from "pino";
-import type { DiscordUserAvatarResult } from "../tools/types.js";
+import type { DiscordAttachmentContext, DiscordUserAvatarResult } from "../tools/types.js";
 import { logger as defaultLogger } from "../util/logger.js";
 import { discordRetryDelayMs, retryAfterMsFromDiscordError } from "./crawler.js";
 
@@ -144,6 +144,37 @@ export async function fetchDiscordUserAvatar(
     };
   } catch (error) {
     defaultLogger.warn({ err: error, userId }, "Failed to fetch Discord user avatar");
+    return null;
+  }
+}
+
+export async function fetchDiscordAttachment(
+  client: Client,
+  input: { channelId: string; messageId: string; attachmentId: string }
+): Promise<DiscordAttachmentContext | null> {
+  try {
+    const channel = await client.channels.fetch(input.channelId);
+    const messages = (channel as { messages?: { fetch?: (messageId: string) => Promise<Message> } } | null)?.messages;
+    if (!messages?.fetch) return null;
+    const message = await messages.fetch(input.messageId);
+    const attachment = message.attachments.get(input.attachmentId);
+    if (!attachment) return null;
+    return {
+      id: attachment.id,
+      url: attachment.url,
+      proxyUrl: attachment.proxyURL,
+      filename: attachment.name,
+      contentType: attachment.contentType,
+      sizeBytes: attachment.size,
+      width: attachment.width,
+      height: attachment.height,
+      description: attachment.description
+    };
+  } catch (error) {
+    defaultLogger.warn(
+      { err: error, channelId: input.channelId, messageId: input.messageId, attachmentId: input.attachmentId },
+      "Failed to fetch Discord attachment metadata"
+    );
     return null;
   }
 }

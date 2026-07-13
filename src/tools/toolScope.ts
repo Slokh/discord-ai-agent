@@ -1,6 +1,7 @@
 import { hasGitHubTaskCredential, type AppConfig } from "../config/env.js";
 import {
   openRouterServerToolRegistry,
+  TOOL_GROUPS,
   toolRegistry,
   type OpenRouterServerToolRegistryEntry,
   type ToolGroup,
@@ -20,23 +21,12 @@ export type ScopedToolset = {
   serverTools: OpenRouterServerToolRegistryEntry[];
 };
 
-const ALL_GROUPS: ToolGroup[] = [
-  "core",
-  "discord-retrieval",
-  "generated-data",
-  "discord-action",
-  "image",
-  "spotify",
-  "codegen",
-  "ops",
-  "external",
-];
-
 export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   const text = input.text.toLowerCase();
   const groups = new Set<ToolGroup>(["core", "external"]);
 
   if (hasAny(text, DISCORD_RETRIEVAL_KEYWORDS)) groups.add("discord-retrieval");
+  if (input.replyContext && hasAny(text, REPLY_FILE_KEYWORDS)) groups.add("discord-retrieval");
   if (hasAny(text, GENERATED_DATA_KEYWORDS)) groups.add("generated-data");
   if (hasAny(text, DISCORD_ACTION_KEYWORDS)) groups.add("discord-action");
   if (input.hasImageAttachments || hasAny(text, IMAGE_KEYWORDS)) groups.add("image");
@@ -64,9 +54,11 @@ export function requestAdditionalToolGroups(input: {
   currentGroups: Set<ToolGroup>;
   config: AppConfig;
 }): ScopedToolset {
-  const requested = input.requestedGroups?.length
-    ? normalizeGroups(new Set(input.requestedGroups.filter(isToolGroup)), input.config)
-    : normalizeGroups(new Set(ALL_GROUPS), input.config);
+  const validRequestedGroups = input.requestedGroups?.filter(isToolGroup) ?? [];
+  const hasInvalidRequestedGroup = input.requestedGroups?.some((group) => !isToolGroup(group)) ?? false;
+  const requested = validRequestedGroups.length > 0 && !hasInvalidRequestedGroup
+    ? normalizeGroups(new Set(validRequestedGroups), input.config)
+    : normalizeGroups(new Set(TOOL_GROUPS), input.config);
   return scopedToolset({ config: input.config, groups: new Set([...input.currentGroups, ...requested]) });
 }
 
@@ -103,7 +95,7 @@ function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
 }
 
 function isToolGroup(value: string): value is ToolGroup {
-  return (ALL_GROUPS as string[]).includes(value);
+  return (TOOL_GROUPS as string[]).includes(value);
 }
 
 function hasAny(text: string, keywords: RegExp[]) {
@@ -124,6 +116,11 @@ const DISCORD_RETRIEVAL_KEYWORDS = [
   /\b(yesterday|today|this week|last week|past month|recently)\b/,
   /discord(?:app)?\.com\/channels\//,
   /<[@#][!&]?\d+>/,
+];
+
+const REPLY_FILE_KEYWORDS = [
+  /\b(file|document|attachment|download|contents?|bytes?|open|read|parse|inspect)\b/,
+  /\.(?:sto|txt|log|json|ya?ml|xml|csv|pdf|docx|xlsx|pptx|zip)\b/
 ];
 
 const GENERATED_DATA_KEYWORDS = [

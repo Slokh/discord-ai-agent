@@ -49,6 +49,11 @@ export type ToolContext = {
     guildId: string;
     userId: string;
   }) => Promise<DiscordUserAvatarResult | null>;
+  fetchDiscordAttachment?: (input: {
+    channelId: string;
+    messageId: string;
+    attachmentId: string;
+  }) => Promise<DiscordAttachmentContext | null>;
   noteProgress?: () => void;
 };
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   openRouterServerToolRegistry,
   renderToolList,
+  TOOL_GROUPS,
   toolContracts,
   toolDefinitionsForModel,
   toolRegistry,
@@ -21,6 +22,7 @@ describe("toolRegistry", () => {
       "getRecentDiscordMessages",
       "getDiscordMessageContext",
       "searchDiscordAttachments",
+      "inspectDiscordFile",
       "inspectDiscordImages",
       "getDiscordUserAvatar",
       "getDiscordStats",
@@ -61,6 +63,7 @@ describe("toolRegistry", () => {
     expect(renderToolList()).toContain("searchDiscordHistory");
     expect(renderToolList()).not.toContain("requestAdditionalTools");
     expect(renderToolList()).toContain("inspectDiscordImages");
+    expect(renderToolList()).toContain("inspectDiscordFile");
     expect(renderToolList()).toContain("Generate an image");
     expect(renderToolList()).toContain("web_search");
   });
@@ -87,6 +90,17 @@ describe("toolRegistry", () => {
           outputContract: expect.arrayContaining(["ranked evidence snippets", "Discord message links when available"]),
           permissionRequirements: expect.arrayContaining(["requester_visible_discord_channels"]),
           examples: expect.arrayContaining(["@ai what did we say about job hunting?"])
+        }),
+        expect.objectContaining({
+          name: "inspectDiscordFile",
+          category: "discord",
+          toolClass: "retrieval",
+          outputContract: expect.arrayContaining([
+            "bounded extracted content labeled as untrusted data",
+            "explicit parser limitations or safe failure reason"
+          ]),
+          permissionRequirements: ["requester_visible_discord_channels"],
+          auditEvents: expect.arrayContaining(["discord.file.fetched", "discord.file.inspected"])
         })
       ])
     );
@@ -96,6 +110,19 @@ describe("toolRegistry", () => {
           tool.examples.length > 0 && tool.permissionRequirements.length > 0 && tool.auditEvents.length > 0 && tool.outputContract.length > 0
       )
     ).toBe(true);
+  });
+
+  it("enumerates valid tool escalation groups in the model schema", () => {
+    const definition = toolDefinitionsForModel().find(
+      (tool) => "function" in tool && tool.function.name === "requestAdditionalTools"
+    );
+    if (!definition || !("function" in definition)) throw new Error("requestAdditionalTools definition not found");
+    const properties = definition.function.parameters.properties as Record<
+      string,
+      { items?: { enum?: string[] } }
+    >;
+
+    expect(properties.groups.items?.enum).toEqual(TOOL_GROUPS);
   });
 
   it("tells the model to preserve code-update action intent", () => {

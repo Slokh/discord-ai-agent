@@ -8,6 +8,7 @@ import {
 } from "../tools/agentTaskTools.js";
 import { updateBotAvatar } from "../tools/botProfileTools.js";
 import { createDiscordPoll } from "../tools/discordPollTools.js";
+import { inspectDiscordFile } from "../tools/discordFileTools.js";
 import { drawRandom, revealRandomness } from "../tools/randomTools.js";
 import { findDiscordChannels, findDiscordUsers } from "../tools/discordResolverTools.js";
 import {
@@ -271,6 +272,17 @@ export async function executeLocalToolRoute(
         }),
         ctx.config.maxReplyChars,
       ),
+    };
+  }
+
+  if (route.name === "inspectDiscordFile") {
+    return {
+      content: await inspectDiscordFile(ctx, {
+        question: stringArgument(route.arguments, "question") ?? originalText,
+        messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
+        attachmentIdOrName: stringArgument(route.arguments, "attachmentIdOrName"),
+        useContextFiles: booleanArgument(route.arguments, "useContextFiles"),
+      }),
     };
   }
 

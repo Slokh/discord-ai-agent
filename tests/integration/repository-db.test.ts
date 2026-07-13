@@ -342,8 +342,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       guildId,
       channelId,
       authorId: userId,
-      authorUsername: "slokh",
-      authorGlobalName: "Kartik",
+      authorUsername: "trace-user",
+      authorGlobalName: "Trace User",
       content: "10 more, win this time",
       normalizedContent: "10 more win this time",
       createdAt: new Date("2026-07-13T18:55:06.000Z")
@@ -358,7 +358,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       userId,
       title: "10 more, win this time",
       request: "10 more, win this time",
-      requestedBy: `Kartik (${userId})`,
+      requestedBy: `Trace User (${userId})`,
       metadata: { kind: "discord_channel", runtime: "agent" }
     });
     await agentRuntimeRepo.appendMessage({
@@ -398,7 +398,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       traceId,
       title: "10 more, win this time",
       request: "10 more, win this time",
-      requestedBy: `Kartik (${userId})`,
+      requestedBy: `Trace User (${userId})`,
       guildId,
       channelId,
       userId

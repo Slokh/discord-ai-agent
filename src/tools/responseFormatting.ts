@@ -1,4 +1,9 @@
+import stringWidth from "string-width";
 import { truncateForDiscord } from "../util/text.js";
+
+const DISCORD_CODE_TABLE_COLUMN_GAP = "  ";
+const MAX_DISCORD_CODE_TABLE_WIDTH = 72;
+const MAX_DISCORD_CODE_TABLE_CHARS = 1_600;
 
 export function cleanResponse(content: string, maxChars: number) {
   const normalized = formatDiscordMarkdownTables(content.trim() || "Done.");
@@ -35,17 +40,63 @@ export function formatDiscordMarkdownTables(content: string) {
       continue;
     }
 
-    output.push(`**${header.map(stripOuterBold).join(" · ")}**`);
     index += 2;
+    const rows: string[][] = [];
     while (index < lines.length) {
       const row = markdownTableRow(lines[index] ?? "");
       if (!row || row.length !== header.length) break;
-      output.push(`- ${row.join(" · ")}`);
+      rows.push(row);
       index += 1;
     }
+    output.push(discordCodeTable(header, rows) ?? discordTableList(header, rows));
   }
 
   return output.join("\n");
+}
+
+function discordCodeTable(header: string[], rows: string[][]) {
+  const sourceCells = [header, ...rows].flat();
+  if (sourceCells.some(requiresRenderedMarkdown)) return null;
+  const plainRows = [header, ...rows].map((row) => row.map(plainTextTableCell));
+  const columnWidths = header.map((_, columnIndex) =>
+    Math.max(...plainRows.map((row) => stringWidth(row[columnIndex] ?? ""))),
+  );
+  const tableWidth = columnWidths.reduce((total, width) => total + width, 0) +
+    DISCORD_CODE_TABLE_COLUMN_GAP.length * Math.max(0, columnWidths.length - 1);
+  if (tableWidth > MAX_DISCORD_CODE_TABLE_WIDTH) return null;
+
+  const lines = plainRows.map((row) =>
+    row.map((cell, columnIndex) => {
+      if (columnIndex === row.length - 1) return cell;
+      return cell + " ".repeat(Math.max(0, (columnWidths[columnIndex] ?? 0) - stringWidth(cell)));
+    }).join(DISCORD_CODE_TABLE_COLUMN_GAP).trimEnd(),
+  );
+  const block = ["```text", ...lines, "```"].join("\n");
+  return block.length <= MAX_DISCORD_CODE_TABLE_CHARS ? block : null;
+}
+
+function discordTableList(header: string[], rows: string[][]) {
+  return [
+    `**Columns:** ${header.map(stripOuterBold).join(" · ")}`,
+    ...rows.map((row) => `- ${row.join(" · ")}`),
+  ].join("\n");
+}
+
+function plainTextTableCell(value: string) {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
+    .replace(/(\*\*|__|~~)(.*?)\1/g, "$2")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "$1")
+    .replace(/(?<!_)_([^_]+)_(?!_)/g, "$1")
+    .replace(/\\([\\`*_[\]{}()#+\-.!|>~])/g, "$1")
+    .replace(/\t/g, "  ")
+    .trim();
+}
+
+function requiresRenderedMarkdown(value: string) {
+  return /```|<br\s*\/?\s*>|\[[^\]]+\]\([^)]+\)|<a?:[^:>]+:\d+>|<[@#][!&]?\d+>|\|\|/i.test(value);
 }
 
 type MarkdownFence = {

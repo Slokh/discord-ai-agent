@@ -1,6 +1,6 @@
 import { AttachmentBuilder, type Client, type Message, type MessageCreateOptions } from "discord.js";
 import type { Logger } from "pino";
-import { cleanResponse } from "../tools/responseFormatting.js";
+import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
 import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
@@ -109,7 +109,14 @@ export class DiscordResponseSink {
   async sendFinal(input: { content: string; files?: AgentFile[]; footer?: DiscordResponseFooter | null }): Promise<DiscordResponseResult> {
     const files = input.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }));
     const footerLine = formatDiscordResponseFooter(input.footer);
-    const body = (input.content.trim() || "Done.");
+    const rawBody = input.content.trim() || "Done.";
+    const body = formatDiscordMarkdownTables(rawBody);
+    if (body !== rawBody) {
+      this.logger.debug(
+        { inputChars: rawBody.length, outputChars: body.length },
+        "Normalized Markdown table formatting for Discord",
+      );
+    }
     const separator = "\n\n";
     const singleMessageContent = footerLine ? `${body}${separator}${footerLine}` : body;
 

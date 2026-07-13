@@ -97,6 +97,41 @@ export class RngRepository {
     return result.rows[0] ? mapSession(result.rows[0]) : null;
   }
 
+  /**
+   * Resolve a standalone reveal request to the most recent active session in
+   * this channel that the requester actually drew from. The legacy exact key
+   * keeps pre-reply-scope sessions revealable during the cutover.
+   */
+  async findLatestDrawnActiveSessionThreadKey(input: {
+    channelId: string;
+    requestedByUserId: string;
+    legacyThreadKey: string;
+    threadKeyPrefix: string;
+  }): Promise<string | null> {
+    const result = await this.pool.query(
+      `
+        SELECT rng_session.thread_key
+        FROM rng_sessions rng_session
+        JOIN LATERAL (
+          SELECT max(rng_draw.id) AS latest_draw_id
+          FROM rng_draws rng_draw
+          WHERE rng_draw.session_id = rng_session.id
+            AND rng_draw.requested_by_user_id = $2
+        ) requester_draw ON requester_draw.latest_draw_id IS NOT NULL
+        WHERE rng_session.status = 'active'
+          AND rng_session.channel_id = $1
+          AND (
+            rng_session.thread_key = $3
+            OR strpos(rng_session.thread_key, $4) = 1
+          )
+        ORDER BY requester_draw.latest_draw_id DESC, rng_session.created_at DESC
+        LIMIT 1
+      `,
+      [input.channelId, input.requestedByUserId, input.legacyThreadKey, input.threadKeyPrefix]
+    );
+    return typeof result.rows[0]?.thread_key === "string" ? result.rows[0].thread_key : null;
+  }
+
   async listDraws(sessionId: string): Promise<RngDrawRecord[]> {
     const result = await this.pool.query(
       `SELECT ${DRAW_COLUMNS} FROM rng_draws WHERE session_id = $1 ORDER BY id ASC`,

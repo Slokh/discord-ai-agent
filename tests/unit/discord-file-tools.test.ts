@@ -62,7 +62,37 @@ describe("inspectDiscordFile", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectDiscordFile" }));
   });
 
-  it("lists visible candidates instead of guessing when a message has multiple files", async () => {
+  it("inspects a bounded file batch and deduplicates identical extracted content", async () => {
+    const fetchMock = vi.fn(async () => new Response("shared setup notes", { headers: { "content-type": "text/plain" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ctx = {
+      repo: {
+        messageAttachments: vi.fn(async () => [
+          attachmentRow("a1", "qualifying.txt"),
+          attachmentRow("a2", "race.txt")
+        ]),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      visibleIndexedChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const result = await inspectDiscordFile(ctx, { messageIdOrUrl: "123456789012345678" });
+
+    expect(result).toContain("Discord batch file inspection: 2 inspected, 0 failed");
+    expect(result).toContain("qualifying.txt");
+    expect(result).toContain("race.txt");
+    expect(result).toContain("applies to: qualifying.txt, race.txt");
+    expect(result.match(/shared setup notes/g)).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("can list multiple candidates without downloading them", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
     const ctx = {
       repo: {
         messageAttachments: vi.fn(async () => [
@@ -78,11 +108,13 @@ describe("inspectDiscordFile", () => {
       visibleIndexedChannelIds: ["channel"]
     } as unknown as ToolContext;
 
-    const result = await inspectDiscordFile(ctx, { messageIdOrUrl: "123456789012345678" });
+    const result = await inspectDiscordFile(ctx, {
+      messageIdOrUrl: "123456789012345678",
+      batchMode: "list"
+    });
 
-    expect(result).toContain("Multiple visible Discord files matched");
-    expect(result).toContain("qualifying.sto");
-    expect(result).toContain("race.sto");
+    expect(result).toContain("Multiple visible Discord files matched (2)");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("uses a replied-to attachment without requiring a message link", async () => {

@@ -75,7 +75,7 @@ describe("model toolset", () => {
     );
   });
 
-  it("adds image tools for request and reply attachment context", () => {
+  it("distinguishes image attachments from generic replied files", () => {
     const requestState = initialToolsetState(
       context({
         requestAttachments: [
@@ -129,7 +129,9 @@ describe("model toolset", () => {
     );
 
     expect(requestState.groups.has("image")).toBe(true);
-    expect(replyState.groups.has("image")).toBe(true);
+    expect(replyState.groups.has("image")).toBe(false);
+    expect(replyState.groups.has("discord-retrieval")).toBe(true);
+    expect(currentScopedToolset(context(), replyState).localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
   });
 
   it("describes requested additional tools and supplies a default reason", () => {

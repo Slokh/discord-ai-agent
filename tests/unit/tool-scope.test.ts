@@ -58,6 +58,22 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
   });
 
+  it("adds Discord file inspection for a generic reply with non-image attachments", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "what is this",
+      hasImageAttachments: false,
+      hasFileAttachments: true,
+      replyContext: true,
+      config
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("discord-retrieval")).toBe(true);
+    expect(groups.has("image")).toBe(false);
+    expect(tools.localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
+  });
+
   it("adds spotify only when credentials and music intent are present", () => {
     withEnv({ SPOTIFY_CLIENT_ID: "id", SPOTIFY_CLIENT_SECRET: "secret" }, () => {
       const config = loadConfig();

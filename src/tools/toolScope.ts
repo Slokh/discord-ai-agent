@@ -11,6 +11,7 @@ import {
 export type ToolScopeInput = {
   text: string;
   hasImageAttachments: boolean;
+  hasFileAttachments?: boolean;
   config: AppConfig;
   replyContext?: boolean;
 };
@@ -26,6 +27,7 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   const groups = new Set<ToolGroup>(["core", "external"]);
 
   if (hasAny(text, DISCORD_RETRIEVAL_KEYWORDS)) groups.add("discord-retrieval");
+  if (input.hasFileAttachments) groups.add("discord-retrieval");
   if (input.replyContext && hasAny(text, REPLY_FILE_KEYWORDS)) groups.add("discord-retrieval");
   if (hasAny(text, GENERATED_DATA_KEYWORDS)) groups.add("generated-data");
   if (hasAny(text, DISCORD_ACTION_KEYWORDS)) groups.add("discord-action");

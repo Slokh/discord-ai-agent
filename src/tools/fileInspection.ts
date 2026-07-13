@@ -25,8 +25,9 @@ export function inspectFileBytes(input: {
   const extension = filenameExtension(filename);
   const sha256 = createHash("sha256").update(input.data).digest("hex");
 
-  if (extension === "sto") return inspectIracingSetup(input.data, sha256);
+  if (extension === "sto") return inspectIracingSetup(input.data, filename, sha256);
   if (looksLikeZip(input.data)) return inspectZipFile(input.data, sha256);
+  if (looksLikeIracingSetupExport(input.data, extension)) return inspectIracingSetupExport(input.data, sha256);
 
   const imageType = detectImageType(input.data, extension, input.declaredContentType, input.responseContentType);
   if (imageType) {
@@ -82,19 +83,19 @@ export function inspectFileBytes(input: {
   };
 }
 
-function inspectIracingSetup(data: Buffer, sha256: string): FileInspection {
+function inspectIracingSetup(data: Buffer, filename: string, sha256: string): FileInspection {
   if (data.length < 48) return unsupportedSto(data, sha256, "The file is too small to contain a recognized iRacing setup container.");
 
   const version = data.readUInt32LE(0);
   const declaredPayloadBytes = data.readUInt32LE(4);
   const opaqueSetupBytes = data.readUInt32LE(8);
   const notesBytes = data.readUInt32LE(12);
-  const integrityBytes = 32;
-  const notesOffset = 16 + opaqueSetupBytes + integrityBytes;
+  const opaqueMetadataBytes = 32;
+  const notesOffset = 16 + opaqueSetupBytes + opaqueMetadataBytes;
   const notesEnd = notesOffset + notesBytes;
   const structurallyValid =
     declaredPayloadBytes === data.length - 16 &&
-    opaqueSetupBytes <= data.length - 16 - integrityBytes &&
+    opaqueSetupBytes <= data.length - 16 - opaqueMetadataBytes &&
     notesOffset <= data.length &&
     notesEnd <= data.length;
   if (!structurallyValid) {
@@ -102,9 +103,13 @@ function inspectIracingSetup(data: Buffer, sha256: string): FileInspection {
   }
 
   const opaquePayload = data.subarray(16, 16 + opaqueSetupBytes);
+  const opaqueMetadata = data.subarray(16 + opaqueSetupBytes, notesOffset);
   const rawNotes = data.subarray(notesOffset, notesEnd);
   const notes = rawNotes.toString("utf16le").replace(/\0+$/g, "").trim();
-  const normalized = normalizeExtractedText(notes || extractUtf16Strings(data));
+  const structuredNotes = structureIracingSetupNotes(notes || extractUtf16Strings(data));
+  const normalized = normalizeExtractedText(structuredNotes.text);
+  const filenameDetails = inferIracingSetupFilename(filename);
+  const payloadEntropy = byteEntropy(opaquePayload);
 
   return {
     parser: `iracing-sto-v${version}`,
@@ -116,14 +121,184 @@ function inspectIracingSetup(data: Buffer, sha256: string): FileInspection {
     metadata: {
       bytes: data.length,
       containerVersion: version,
+      headerDeclaredPayloadBytes: declaredPayloadBytes,
       opaqueSetupBytes,
       opaqueSetupSha256: createHash("sha256").update(opaquePayload).digest("hex"),
+      opaqueSetupPayloadEntropy: Number(payloadEntropy.toFixed(3)),
+      opaqueSetupPayloadHighEntropy: payloadEntropy >= 7.5,
+      opaqueContainerMetadataBytes: opaqueMetadata.length,
+      opaqueContainerMetadataSha256: createHash("sha256").update(opaqueMetadata).digest("hex"),
       notesBytes,
+      notesSha256: createHash("sha256").update(rawNotes).digest("hex"),
+      notesSectionCount: structuredNotes.sections.length,
+      notesSections: structuredNotes.sections.join(", ") || null,
       notesTruncated: normalized.truncated,
-      semanticSetupValuesDecoded: false
+      trailingBytes: data.length - notesEnd,
+      setupPurposeFromFilename: filenameDetails.purpose,
+      weatherFromFilename: filenameDetails.weather,
+      semanticSetupValuesDecoded: false,
+      exactValuesDecoder: "Load the .sto in iRacing Garage, export the setup as HTML, then inspect that HTML export."
     },
     sha256
   };
+}
+
+function looksLikeIracingSetupExport(data: Buffer, extension: string): boolean {
+  if (extension !== "htm" && extension !== "html") return false;
+  const head = data.subarray(0, Math.min(data.length, 2_048)).toString("latin1").toLowerCase();
+  return head.includes("iracing.com motorsport simulations car setup") &&
+    head.includes("iracing.com simulator");
+}
+
+function inspectIracingSetupExport(data: Buffer, sha256: string): FileInspection {
+  const html = data.toString("latin1");
+  const headerMatch = /<h2\b[^>]*align\s*=\s*["']?center["']?[^>]*>([\s\S]*?)<\/h2>/i.exec(html);
+  const headerLines = headerMatch ? htmlLines(headerMatch[1]) : [];
+  const setupLine = headerLines.find((line) => /\ssetup:\s/i.test(line)) ?? "";
+  const setupMatch = /^(.*?)\s+setup:\s*(.*)$/i.exec(setupLine);
+  const trackLine = headerLines.find((line) => /^track:\s*/i.test(line)) ?? "";
+  const car = setupMatch?.[1]?.trim() || "unknown";
+  const setupName = setupMatch?.[2]?.trim().replace(/^<|>$/g, "") || "unknown";
+  const track = trackLine.replace(/^track:\s*/i, "").trim() || "unknown";
+
+  const headingPattern = /<h2\b(?![^>]*align\s*=)[^>]*>([\s\S]*?)<\/h2>/gi;
+  const headings = [...html.matchAll(headingPattern)];
+  const sections: Array<{ name: string; properties: Array<{ name: string; values: string[] }> }> = [];
+  let notes = "";
+  for (let index = 0; index < headings.length; index += 1) {
+    const match = headings[index];
+    const name = htmlText(match[1]).replace(/:$/, "").trim();
+    const start = (match.index ?? 0) + match[0].length;
+    const end = headings[index + 1]?.index ?? html.length;
+    const body = html.slice(start, end);
+    if (/^notes$/i.test(name)) {
+      notes = htmlLines(body).join("\n");
+      break;
+    }
+    if (/^driver aids$/i.test(name)) continue;
+    const properties = parseIracingHtmlProperties(body);
+    if (properties.length === 0) continue;
+    const tireSection = properties.some((property) => /^tread remaining$/i.test(property.name)) &&
+      !properties.some((property) => /^(camber|caster|ride height|corner weight|spring)/i.test(property.name));
+    sections.push({ name: tireSection && !/tire$/i.test(name) ? `${name} TIRE` : name, properties });
+  }
+
+  const propertyCount = sections.reduce((total, section) => total + section.properties.length, 0);
+  const decoded = [
+    "iRacing Garage setup export (exact simulator-decoded values)",
+    `Car: ${car}`,
+    `Track: ${track}`,
+    `Setup: ${setupName}`,
+    "",
+    ...sections.flatMap((section) => [
+      `[${section.name}]`,
+      ...section.properties.map((property) => `${property.name}: ${property.values.join(" | ")}`),
+      ""
+    ]),
+    notes ? "[NOTES]" : "",
+    notes
+  ].filter(Boolean).join("\n");
+  const normalized = normalizeExtractedText(decoded);
+  return {
+    parser: "iracing-garage-html",
+    detectedType: "application/vnd.iracing.setup-export+html",
+    summary: `Decoded ${propertyCount} exact garage properties across ${sections.length} setup sections from an iRacing simulator HTML export.`,
+    extractedText: normalized.text || null,
+    metadata: {
+      bytes: data.length,
+      car,
+      track,
+      setupName,
+      setupSections: sections.length,
+      setupProperties: propertyCount,
+      hasSetupNotes: Boolean(notes),
+      truncated: normalized.truncated,
+      semanticSetupValuesDecoded: true
+    },
+    sha256
+  };
+}
+
+function parseIracingHtmlProperties(html: string): Array<{ name: string; values: string[] }> {
+  const properties: Array<{ name: string; values: string[] }> = [];
+  let current: { name: string; values: string[] } | null = null;
+  for (const fragment of html.split(/<br\s*\/?\s*>/i)) {
+    const value = htmlText(fragment).trim();
+    if (!value) continue;
+    const separator = value.indexOf(":");
+    if (separator >= 0) {
+      current = { name: value.slice(0, separator).trim(), values: [] };
+      const firstValue = value.slice(separator + 1).trim();
+      if (firstValue) current.values.push(firstValue);
+      properties.push(current);
+    } else if (current) {
+      current.values.push(value);
+    }
+  }
+  return properties.filter((property) => property.name && property.values.length > 0);
+}
+
+function htmlLines(html: string): string[] {
+  return html
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/h\d>/gi, "\n")
+    .split("\n")
+    .map((line) => htmlText(line).trim())
+    .filter(Boolean);
+}
+
+function htmlText(html: string): string {
+  return decodeXml(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+function structureIracingSetupNotes(notes: string): { text: string; sections: string[] } {
+  const lines = notes.replace(/\r\n?/g, "\n").split("\n");
+  const sections: string[] = [];
+  const output: string[] = [];
+  let addedPreambleHeading = false;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const heading = /^=+\s*(.*?)\s*=+$/.exec(line)?.[1]?.trim();
+    if (heading) {
+      sections.push(heading);
+      output.push("", `[${heading.toUpperCase()}]`);
+      continue;
+    }
+    if (line && sections.length === 0 && !addedPreambleHeading) {
+      output.push("[SETUP SELECTION AND USAGE]");
+      addedPreambleHeading = true;
+    }
+    output.push(rawLine.replace(/\s+$/g, ""));
+  }
+  return { text: output.join("\n").replace(/\n{3,}/g, "\n\n").trim(), sections };
+}
+
+function inferIracingSetupFilename(filename: string): { purpose: string | null; weather: string | null } {
+  const tokens = filename.replace(/\.sto$/i, "").toLowerCase().split(/[_\s-]+/);
+  const purpose = tokens.includes("qualifying") || tokens.at(-1) === "q"
+    ? "qualifying (inferred from filename)"
+    : tokens.includes("race") || tokens.at(-1) === "r"
+      ? "race (inferred from filename)"
+      : tokens.includes("endurance")
+        ? "endurance (inferred from filename)"
+        : tokens.includes("sprint")
+          ? "sprint (inferred from filename)"
+          : null;
+  const weather = tokens.includes("wet") ? "wet (inferred from filename)" : null;
+  return { purpose, weather };
+}
+
+function byteEntropy(data: Buffer): number {
+  if (data.length === 0) return 0;
+  const counts = new Array<number>(256).fill(0);
+  for (const byte of data) counts[byte] += 1;
+  let entropy = 0;
+  for (const count of counts) {
+    if (count === 0) continue;
+    const probability = count / data.length;
+    entropy -= probability * Math.log2(probability);
+  }
+  return entropy;
 }
 
 function unsupportedSto(data: Buffer, sha256: string, reason: string, version: number | null = null): FileInspection {
@@ -309,13 +484,19 @@ function xmlText(xml: string, breakTags: string[]): string {
 
 function decodeXml(value: string): string {
   return value
-    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (match, code) => decodeCharacterReference(match, code, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (match, code) => decodeCharacterReference(match, code, 16))
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&amp;/g, "&");
+}
+
+function decodeCharacterReference(match: string, code: string, radix: number): string {
+  const point = Number.parseInt(code, radix);
+  if (!Number.isInteger(point) || point < 0 || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)) return match;
+  return String.fromCodePoint(point);
 }
 
 function decodeText(data: Buffer, declaredContentType?: string | null, responseContentType?: string | null) {

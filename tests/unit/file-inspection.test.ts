@@ -26,18 +26,58 @@ describe("inspectFileBytes", () => {
     header.writeUInt32LE(opaquePayload.length, 8);
     header.writeUInt32LE(notes.length, 12);
 
-    const result = inspectFileBytes({ data: Buffer.concat([header, body]), filename: "mustang.sto" });
+    const result = inspectFileBytes({ data: Buffer.concat([header, body]), filename: "mustang_wet_q.sto" });
 
     expect(result.parser).toBe("iracing-sto-v3");
     expect(result.detectedType).toBe("application/vnd.iracing.setup");
-    expect(result.extractedText).toContain("===Brake Bias===");
+    expect(result.extractedText).toContain("[BRAKE BIAS]");
     expect(result.metadata).toMatchObject({
       containerVersion: 3,
       opaqueSetupBytes: 16,
       notesBytes: notes.length,
+      notesSectionCount: 1,
+      notesSections: "Brake Bias",
+      setupPurposeFromFilename: "qualifying (inferred from filename)",
+      weatherFromFilename: "wet (inferred from filename)",
       semanticSetupValuesDecoded: false
     });
     expect(result.summary).toContain("individual garage values are not decoded");
+  });
+
+  it("decodes exact garage values from an iRacing simulator HTML export", () => {
+    const html = `<!doctype html>
+      <html><head>
+        <title>iRacing.com Motorsport Simulations Car Setup</title>
+        <meta name="GENERATOR" content="iRacing.com Simulator">
+      </head><body>
+        <h2 align="center">iRacing.com Motorsport Simulations<br>
+        ford mustang gt4 setup: &lt;race&gt;<br>track: daytona road</h2><br>
+        <h2><u>LEFT FRONT:</u></h2>
+        Starting pressure: <u>21.0 psi</u><br>
+        Last temps O M I: <u>120F</u><br><u>122F</u><br><u>124F</u><br>
+        Tread remaining: <u>99%</u><br><u>98%</u><br><u>97%</u><br><br>
+        <h2><u>FRONT:</u></h2>
+        Brake pressure bias: <u>54.2%</u><br>ARB setting: <u>3</u><br><br>
+        <h2><u>NOTES:</u></h2>Race setup notes<br>Keep an eye on tire temperatures.<br>
+      </body></html>`;
+
+    const result = inspectFileBytes({ data: Buffer.from(html, "latin1"), filename: "mustang-race.html" });
+
+    expect(result.parser).toBe("iracing-garage-html");
+    expect(result.detectedType).toBe("application/vnd.iracing.setup-export+html");
+    expect(result.summary).toContain("5 exact garage properties");
+    expect(result.extractedText).toContain("Car: ford mustang gt4");
+    expect(result.extractedText).toContain("[LEFT FRONT TIRE]");
+    expect(result.extractedText).toContain("Last temps O M I: 120F | 122F | 124F");
+    expect(result.extractedText).toContain("Brake pressure bias: 54.2%");
+    expect(result.extractedText).toContain("[NOTES]");
+    expect(result.metadata).toMatchObject({
+      track: "daytona road",
+      setupName: "race",
+      setupSections: 2,
+      setupProperties: 5,
+      semanticSetupValuesDecoded: true
+    });
   });
 
   it("extracts text from a bounded DOCX-compatible ZIP container", () => {
@@ -59,6 +99,18 @@ describe("inspectFileBytes", () => {
     expect(result.parser).toBe("binary-metadata");
     expect(result.extractedText).toBeNull();
     expect(result.metadata.first32Hex).toBe("ff008102fe039004");
+  });
+
+  it("keeps invalid numeric HTML entities inert", () => {
+    const html = `<!doctype html><title>iRacing.com Motorsport Simulations Car Setup</title>
+      <meta name="GENERATOR" content="iRacing.com Simulator">
+      <h2 align="center">iRacing.com Motorsport Simulations<br>car setup: test<br>track: test</h2>
+      <h2><u>FRONT:</u></h2>Brake bias: <u>&#999999999999;</u><br><br>`;
+
+    const result = inspectFileBytes({ data: Buffer.from(html), filename: "invalid-entity.html" });
+
+    expect(result.parser).toBe("iracing-garage-html");
+    expect(result.extractedText).toContain("Brake bias: &#999999999999;");
   });
 });
 

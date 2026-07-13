@@ -134,6 +134,21 @@ describe("toolRegistry", () => {
     expect(properties.title.description).toContain("Name the intended change");
   });
 
+  it("exposes bounded batch controls for Discord file inspection", () => {
+    const definition = toolDefinitionsForModel().find(
+      (tool) => "function" in tool && tool.function.name === "inspectDiscordFile"
+    );
+    if (!definition || !("function" in definition)) throw new Error("inspectDiscordFile definition not found");
+    const properties = definition.function.parameters.properties as Record<
+      string,
+      { enum?: string[]; description?: string }
+    >;
+
+    expect(properties.batchMode.enum).toEqual(["inspect", "list"]);
+    expect(definition.function.description).toContain("exact garage values");
+    expect(definition.function.description).toContain("deduplicates identical extracted content");
+  });
+
   it("classifies local tools into the model-facing taxonomy", () => {
     const contracts = toolContracts();
     expect(new Set(contracts.map((tool) => tool.toolClass))).toEqual(

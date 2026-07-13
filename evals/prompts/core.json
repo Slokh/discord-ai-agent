@@ -165,6 +165,18 @@
       "notes": "Discord file questions should attempt generic permission-aware inspection before claiming the attachment is inaccessible."
     },
     {
+      "id": "discord-compare-iracing-setup-exports",
+      "category": "retrieval",
+      "prompt": "compare all of the attached iRacing setup files and decode any exact values that are available",
+      "expectedTools": [
+        "inspectDiscordFile"
+      ],
+      "mustNotContain": [
+        "can't access attachments"
+      ],
+      "notes": "Related setup files should use bounded batch inspection; opaque .sto fields must remain distinct from exact simulator-exported HTML values."
+    },
+    {
       "id": "web-current-external-fact",
       "category": "web",
       "prompt": "what is the next world cup match?",

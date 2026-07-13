@@ -144,6 +144,8 @@ export async function findAgentRuntimeChatExecutionByTraceId(pool: DbPool, trace
             cex.trace_id = $1
             OR cex.metadata->>'discordMessageId' = $1
             OR cex.metadata->>'promptMessageId' = $1
+            OR cex.metadata->>'replyMessageId' = $1
+            OR cex.metadata->>'replyUrl' LIKE '%' || $1
           )
         ORDER BY cex.updated_at DESC
         LIMIT 1

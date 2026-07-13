@@ -326,6 +326,39 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ).resolves.toEqual(expect.objectContaining({ status: "succeeded", prUrl: "https://github.com/example/discord-ai-agent/pull/1" }));
   });
 
+  it("resolves a Discord chat execution from its bot reply message", async () => {
+    const traceId = `message-${randomUUID()}`;
+    const replyMessageId = `reply-${randomUUID()}`;
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+
+    await agentRuntimeRepo.upsertSession({
+      sessionId,
+      traceId,
+      threadKey: `discord:guild-${randomUUID()}:channel-${randomUUID()}`,
+      title: "Discord chat turn",
+      request: "show a table",
+      requestedBy: "test",
+      metadata: { kind: "discord_channel", runtime: "agent" }
+    });
+    await agentRuntimeRepo.createExecution({
+      executionId,
+      sessionId,
+      traceId,
+      status: "succeeded",
+      metadata: {
+        runtime: "agent",
+        discordMessageId: traceId,
+        replyMessageId,
+        replyUrl: `https://discord.com/channels/guild/channel/${replyMessageId}`
+      }
+    });
+
+    await expect(repo.findAgentRuntimeChatExecutionByTraceId(replyMessageId)).resolves.toEqual(
+      expect.objectContaining({ executionId, traceId })
+    );
+  });
+
   it("mirrors agent task callbacks into durable codegen executions", async () => {
     const taskId = `task-${randomUUID()}`;
     const sessionId = `codegen-session-${taskId}`;

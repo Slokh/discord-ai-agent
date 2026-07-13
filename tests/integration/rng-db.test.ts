@@ -90,6 +90,62 @@ describe.skipIf(!runDbTests)("RngRepository database behavior", () => {
     expect(draws[0]!.outcome).toEqual({ kind: "dice", values: [4], total: 4 });
   });
 
+  it("finds the requester's latest drawn active reply-chain session", async () => {
+    const common = sessionInput();
+    const baseThreadKey = common.threadKey;
+    const first = { ...common, threadKey: `${baseThreadKey}:rng-root:message-1` };
+    const secondSeed = generateServerSeed();
+    const second = {
+      ...common,
+      threadKey: `${baseThreadKey}:rng-root:message-2`,
+      serverSeed: secondSeed,
+      commitment: rngCommitment(secondSeed)
+    };
+
+    await rngRepo.withActiveSession(first, async (tx) => {
+      await tx.recordDraw({
+        nonce: await tx.takeNonce(),
+        kind: "coin",
+        params: {},
+        outcome: { kind: "coin", values: ["heads"] },
+        requestedByUserId: common.createdByUserId
+      });
+    });
+    await rngRepo.withActiveSession(second, async (tx) => {
+      await tx.recordDraw({
+        nonce: await tx.takeNonce(),
+        kind: "dice",
+        params: { count: 1, sides: 20 },
+        outcome: { kind: "dice", values: [8], total: 8 },
+        requestedByUserId: "someone-else"
+      });
+      await tx.recordDraw({
+        nonce: await tx.takeNonce(),
+        kind: "dice",
+        params: { count: 1, sides: 20 },
+        outcome: { kind: "dice", values: [12], total: 12 },
+        requestedByUserId: common.createdByUserId
+      });
+    });
+
+    await expect(
+      rngRepo.findLatestDrawnActiveSessionThreadKey({
+        channelId: common.channelId,
+        requestedByUserId: common.createdByUserId,
+        legacyThreadKey: baseThreadKey,
+        threadKeyPrefix: `${baseThreadKey}:rng-root:`
+      })
+    ).resolves.toBe(second.threadKey);
+    await expect(
+      rngRepo.findLatestDrawnActiveSessionThreadKey({
+        channelId: common.channelId,
+        requestedByUserId: "never-drew",
+        legacyThreadKey: baseThreadKey,
+        threadKeyPrefix: `${baseThreadKey}:rng-root:`
+      })
+    ).resolves.toBeNull();
+  });
+
   it("tracks shoe state and refuses to deal past the end", async () => {
     const input = sessionInput();
     await rngRepo.withActiveSession(input, async (tx) => {

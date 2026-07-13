@@ -9,7 +9,7 @@ import type {
 } from "../../src/db/rngRepository.js";
 import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } from "../../src/rng/provable.js";
 import { drawRandom, revealRandomness } from "../../src/tools/randomTools.js";
-import type { ToolContext } from "../../src/tools/types.js";
+import type { DiscordReplyContext, ToolContext } from "../../src/tools/types.js";
 
 /** In-memory mirror of RngRepository's transactional interface (single-threaded, no locking needed). */
 class FakeRngRepository {
@@ -30,6 +30,30 @@ class FakeRngRepository {
 
   async listDraws(sessionId: string): Promise<RngDrawRecord[]> {
     return this.draws.filter((draw) => draw.sessionId === sessionId).map((draw) => ({ ...draw }));
+  }
+
+  async findLatestDrawnActiveSessionThreadKey(input: {
+    channelId: string;
+    requestedByUserId: string;
+    legacyThreadKey: string;
+    threadKeyPrefix: string;
+  }): Promise<string | null> {
+    const candidates = [...this.sessions.values()]
+      .filter(
+        (session) =>
+          session.status === "active" &&
+          session.channelId === input.channelId &&
+          (session.threadKey === input.legacyThreadKey || session.threadKey.startsWith(input.threadKeyPrefix))
+      )
+      .map((session) => ({
+        session,
+        latestDraw: this.draws
+          .filter((draw) => draw.sessionId === session.id && draw.requestedByUserId === input.requestedByUserId)
+          .at(-1)
+      }))
+      .filter((candidate) => candidate.latestDraw !== undefined)
+      .sort((a, b) => b.latestDraw!.id - a.latestDraw!.id);
+    return candidates[0]?.session.threadKey ?? null;
   }
 
   async withActiveSession<T>(
@@ -190,6 +214,28 @@ function fakeContext(overrides: Partial<ToolContext> = {}): { ctx: ToolContext; 
   return { ctx, rngRepo, footerLines };
 }
 
+function discordRngThreadKey(messageId = "1234567890000000001"): string {
+  return `guild:channel:rng-root:${messageId}`;
+}
+
+function fakeReplyContext(rootMessageId: string): DiscordReplyContext {
+  return {
+    messageId: "bot-result-1",
+    rootMessageId,
+    channelId: "channel",
+    guildId: "guild",
+    authorId: "bot",
+    authorDisplayName: "Bot",
+    authorIsBot: true,
+    content: "first result",
+    attachmentSummaries: [],
+    attachments: [],
+    createdAt: null,
+    url: null,
+    chain: []
+  };
+}
+
 async function verifyAllDraws(rngRepo: FakeRngRepository, sessionId: string) {
   const session = await rngRepo.getSession(sessionId);
   if (!session?.clientSeed) throw new Error("session missing client seed");
@@ -241,6 +287,31 @@ describe("drawRandom", () => {
     expect(rngRepo.draws.map((draw) => draw.nonce)).toEqual([0, 1]);
     const commitLines = footerLines.filter((line) => line.includes("fair-play commit"));
     expect(commitLines).toHaveLength(1);
+  });
+
+  it("isolates fresh Discord prompts while reusing a reply chain's RNG session", async () => {
+    const { ctx, rngRepo } = fakeContext();
+
+    await drawRandom(ctx, { kind: "dice", sides: 20 });
+    const firstSession = [...rngRepo.sessions.values()][0];
+
+    const followUp = {
+      ...ctx,
+      requestMessageId: "1234567890000000002",
+      replyContext: fakeReplyContext("1234567890000000001")
+    } as ToolContext;
+    await drawRandom(followUp, { kind: "dice", sides: 20 });
+
+    const freshPrompt = { ...ctx, requestMessageId: "1234567890000000003" } as ToolContext;
+    await drawRandom(freshPrompt, { kind: "dice", sides: 20 });
+
+    expect(rngRepo.sessions.size).toBe(2);
+    const secondSession = [...rngRepo.sessions.values()][1];
+    expect(rngRepo.draws.map((draw) => [draw.sessionId, draw.nonce])).toEqual([
+      [firstSession.id, 0],
+      [firstSession.id, 1],
+      [secondSession.id, 0]
+    ]);
   });
 
   it("deals cards without replacement from a persistent shoe", async () => {
@@ -400,7 +471,7 @@ describe("revealRandomness", () => {
     const revealed = await rngRepo.getSession(originalSession.id);
     expect(revealed?.status).toBe("revealed");
 
-    const successor = await rngRepo.getActiveSession("guild:channel");
+    const successor = await rngRepo.getActiveSession(discordRngThreadKey());
     expect(successor).not.toBeNull();
     expect(successor?.prevSessionId).toBe(originalSession.id);
     expect(successor?.clientSeed).toBeNull();
@@ -415,7 +486,7 @@ describe("revealRandomness", () => {
 
     await drawRandom(ctx, { kind: "coin" });
     await revealRandomness(ctx);
-    const freshSession = await rngRepo.getActiveSession("guild:channel");
+    const freshSession = await rngRepo.getActiveSession(discordRngThreadKey());
     const response = await revealRandomness(ctx);
 
     expect(response).toContain("no draws yet");
@@ -432,15 +503,36 @@ describe("revealRandomness", () => {
 
     await drawRandom(ctx, { kind: "coin" });
     await revealRandomness(ctx);
-    const successor = await rngRepo.getActiveSession("guild:channel");
+    const successor = await rngRepo.getActiveSession(discordRngThreadKey());
 
-    // simulate a later turn in the same thread with a different triggering message
-    const ctx2 = { ...ctx, requestMessageId: "1234567890000000999" } as ToolContext;
+    // Simulate a later turn in the same reply chain with a different triggering message.
+    const ctx2 = {
+      ...ctx,
+      requestMessageId: "1234567890000000999",
+      replyContext: fakeReplyContext("1234567890000000001")
+    } as ToolContext;
     await drawRandom(ctx2, { kind: "coin" });
 
     const seeded = await rngRepo.getSession(successor?.id ?? "");
     expect(seeded?.clientSeed).toBe("1234567890000000999");
     expect(seeded?.nonceCounter).toBe(1);
     await verifyAllDraws(rngRepo, seeded?.id ?? "");
+  });
+
+  it("reveals the requester's most recently drawn session from a standalone Discord prompt", async () => {
+    const { ctx, rngRepo } = fakeContext();
+
+    await drawRandom(ctx, { kind: "coin" });
+    const firstSession = [...rngRepo.sessions.values()][0];
+    const secondPrompt = { ...ctx, requestMessageId: "1234567890000000002" } as ToolContext;
+    await drawRandom(secondPrompt, { kind: "dice", sides: 20 });
+    const secondSession = [...rngRepo.sessions.values()].at(-1)!;
+
+    const revealPrompt = { ...ctx, requestMessageId: "1234567890000000003" } as ToolContext;
+    const response = await revealRandomness(revealPrompt);
+
+    expect(response).toContain(`Revealed session ${secondSession.id}`);
+    expect((await rngRepo.getSession(firstSession.id))?.status).toBe("active");
+    expect((await rngRepo.getSession(secondSession.id))?.status).toBe("revealed");
   });
 });

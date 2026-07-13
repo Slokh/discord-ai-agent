@@ -30,6 +30,7 @@ const MAX_OPTIONS = 100;
 const MAX_SIDES = 1_000_000;
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
+const RNG_ROOT_SCOPE_SEGMENT = "rng-root";
 
 const DRAW_KINDS = new Set(["integers", "dice", "coin", "pick", "shuffle", "cards"]);
 
@@ -103,7 +104,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   footerLines.push(draw.footerLine);
   if (showCommit) {
     footerLines.push(
-      `🎲 fair-play commit sha256:${commitment} · client seed ${clientSeed} · say "reveal randomness" to verify`
+      `🎲 fair-play commit sha256:${commitment} · client seed ${clientSeed} · reply "reveal randomness" to verify`
     );
   }
   ctx.footerLines?.push(...footerLines);
@@ -135,7 +136,7 @@ export async function revealRandomness(ctx: ToolContext): Promise<string> {
 
   if (result.status === "no_session") {
     await auditRng(ctx, "revealRandomness", {}, "no active session");
-    return "There is no active provably fair randomness session in this thread. Draws create one automatically.";
+    return 'There is no active provably fair randomness session for this request. Reply "reveal randomness" to a random result, or make a draw to start a session.';
   }
   if (result.status === "no_draws") {
     await auditRng(ctx, "revealRandomness", {}, `session ${result.session.id} has no draws`);
@@ -324,7 +325,22 @@ async function ensureRngSetup(
     await auditRng(ctx, toolName, input, "missing thread key");
     return "Provably fair RNG is unavailable for this request because it has no conversation thread key.";
   }
-  return { rngRepo: ctx.rngRepo, threadKey };
+  const replyRootMessageId = ctx.replyContext?.rootMessageId?.trim();
+  const requestMessageId = ctx.requestMessageId?.trim();
+  const rootMessageId = replyRootMessageId || requestMessageId;
+  if (!rootMessageId) return { rngRepo: ctx.rngRepo, threadKey };
+
+  const threadKeyPrefix = `${threadKey}:${RNG_ROOT_SCOPE_SEGMENT}:`;
+  if (toolName === "revealRandomness" && !replyRootMessageId) {
+    const latestThreadKey = await ctx.rngRepo.findLatestDrawnActiveSessionThreadKey({
+      channelId: ctx.channelId,
+      requestedByUserId: ctx.userId,
+      legacyThreadKey: threadKey,
+      threadKeyPrefix
+    });
+    if (latestThreadKey) return { rngRepo: ctx.rngRepo, threadKey: latestThreadKey };
+  }
+  return { rngRepo: ctx.rngRepo, threadKey: `${threadKeyPrefix}${rootMessageId}` };
 }
 
 function validateDrawInput(kind: string, input: DrawRandomInput): string | null {

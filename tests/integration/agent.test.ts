@@ -3,6 +3,55 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("rejects a fabricated chance outcome and retries with drawRandom available", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "The wheel spins... 21 red. You lose.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "I need to use the provably fair draw before reporting a result.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "500 on roulette black");
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(response.content).toContain("need to use the provably fair draw");
+    const retryRequest = (chat.mock.calls[1]?.[0] ?? {}) as {
+      messages?: Array<{ role: string; content: string }>;
+      tools?: Array<{ function?: { name?: string } }>;
+    };
+    expect(retryRequest.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
+    expect(retryRequest.messages?.some((message) =>
+      message.role === "system" && message.content.includes("rejected because it claimed a fresh random outcome")
+    )).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
+      .toBe(true);
+  });
+
   it("stops recovery calls at the per-turn model call ceiling", async () => {
     const traceEvents: any[] = [];
     const searchCall = (round: number) => ({

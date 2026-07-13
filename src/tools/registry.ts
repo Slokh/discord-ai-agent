@@ -404,7 +404,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "inspectDiscordFile",
     description:
-      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. Use this for requests to read, open, parse, identify, summarize, compare, or inspect files and documents. It fetches fresh Discord CDN URLs, applies strict aggregate download/extraction limits, detects real formats, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact garage values from iRacing simulator HTML setup exports. Multiple files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim Discord files are inaccessible before trying this tool.",
+      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. Use this for requests to read, open, parse, identify, summarize, compare, or inspect files and documents. It fetches fresh Discord CDN URLs, applies strict aggregate download/extraction limits, detects real formats, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact iRacing setup values from simulator Garage HTML exports or SDK .ibt telemetry containing CarSetup data. Multiple files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim Discord files are inaccessible before trying this tool.",
     userVisible: true,
     mutates: false,
     group: "discord-retrieval",
@@ -419,6 +419,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
     examples: [
       "@ai read the file I replied to",
       "@ai inspect the .sto file in this message",
+      "@ai analyze the loaded setup in this iRacing .ibt telemetry file",
       "@ai summarize the attached DOCX"
     ],
     permissionRequirements: ["requester_visible_discord_channels"],

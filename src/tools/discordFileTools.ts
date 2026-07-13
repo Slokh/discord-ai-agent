@@ -27,6 +27,17 @@ const MAX_CONTEXT_CANDIDATES = 20;
 const MAX_BATCH_FILES = 8;
 const MAX_BATCH_BYTES = 20 * 1024 * 1024;
 const MAX_BATCH_EXTRACTED_CHARS = 20_000;
+const IRACING_IBT_HEADER_BYTES = 144;
+const MAX_IRACING_SESSION_INFO_BYTES = 2 * 1024 * 1024;
+const MAX_IRACING_SESSION_INFO_OFFSET = 4 * 1024 * 1024;
+
+type FetchedAttachmentBytes = {
+  data: Buffer;
+  contentType: string | null;
+  complete: boolean;
+  downloadedBytes: number;
+  sourceBytes: number | null;
+};
 
 type InspectedCandidate = {
   candidate: AttachmentCandidate;
@@ -89,7 +100,7 @@ function renderSingleInspection(result: InspectedCandidate, question?: string): 
     `Source: ${result.candidate.messageUrl ?? `message ${result.candidate.messageId}`}`,
     `Detected type: ${result.inspection.detectedType}`,
     `Parser: ${result.inspection.parser}`,
-    `SHA-256: ${result.inspection.sha256}`,
+    `${inspectionHashLabel(result.inspection)}: ${result.inspection.sha256}`,
     `Summary: ${result.inspection.summary}`,
     question?.trim() ? `User question: ${question.trim()}` : null,
     metadata ? `Metadata:\n${metadata}` : null,
@@ -134,15 +145,19 @@ async function inspectCandidate(
   maxBytes: number
 ): Promise<InspectedCandidate | string> {
   if (maxBytes <= 0) return `The ${MAX_BATCH_BYTES}-byte batch inspection limit was reached.`;
-  if (candidate.sizeBytes != null && candidate.sizeBytes > Math.min(MAX_ATTACHMENT_BYTES, maxBytes)) {
+  const rangeInspectableIbt = isIracingTelemetryFilename(candidate.filename) &&
+    candidate.sizeBytes != null && candidate.sizeBytes > Math.min(MAX_ATTACHMENT_BYTES, maxBytes);
+  if (candidate.sizeBytes != null && candidate.sizeBytes > Math.min(MAX_ATTACHMENT_BYTES, maxBytes) && !rangeInspectableIbt) {
     return `${candidate.filename ?? candidate.id} is ${candidate.sizeBytes} bytes, above the remaining inspection limit.`;
   }
   const fresh = await refreshAttachment(ctx, candidate);
   const attachment = fresh ?? candidate;
   const fetchStartedAt = Date.now();
-  let fetched: { data: Buffer; contentType: string | null };
+  let fetched: FetchedAttachmentBytes;
   try {
-    fetched = await fetchDiscordAttachmentBytes(attachment.url, Math.min(MAX_ATTACHMENT_BYTES, maxBytes));
+    fetched = rangeInspectableIbt
+      ? await fetchDiscordIracingTelemetrySession(attachment.url)
+      : await fetchDiscordAttachmentBytes(attachment.url, Math.min(MAX_ATTACHMENT_BYTES, maxBytes));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await recordFileEvent(ctx, "discord.file.fetch_failed", message, {
@@ -156,7 +171,9 @@ async function inspectCandidate(
   await recordFileEvent(ctx, "discord.file.fetched", "Downloaded Discord attachment for inspection", {
     attachmentId: attachment.id,
     messageId: candidate.messageId,
-    bytes: fetched.data.length,
+    bytes: fetched.downloadedBytes,
+    sourceBytes: fetched.sourceBytes,
+    partialRead: !fetched.complete,
     durationMs: fetchDurationMs
   });
   const parseStartedAt = Date.now();
@@ -166,17 +183,25 @@ async function inspectCandidate(
     declaredContentType: attachment.contentType,
     responseContentType: fetched.contentType
   });
+  if (!fetched.complete) {
+    inspection.metadata.sourceFileBytes = fetched.sourceBytes;
+    inspection.metadata.inspectionBytes = fetched.data.length;
+    inspection.metadata.partialRead = true;
+    inspection.metadata.sha256Scope = "iRacing header and session-info bytes; not the complete .ibt file";
+  }
   const parseDurationMs = durationMs(parseStartedAt);
   await recordFileEvent(ctx, "discord.file.inspected", inspection.summary, {
     attachmentId: attachment.id,
     messageId: candidate.messageId,
-    bytes: fetched.data.length,
+    bytes: fetched.downloadedBytes,
+    sourceBytes: fetched.sourceBytes,
+    partialRead: !fetched.complete,
     parser: inspection.parser,
     detectedType: inspection.detectedType,
     extractedChars: inspection.extractedText?.length ?? 0,
     durationMs: parseDurationMs
   });
-  return { candidate, attachment, inspection, bytes: fetched.data.length, fetchDurationMs, parseDurationMs };
+  return { candidate, attachment, inspection, bytes: fetched.downloadedBytes, fetchDurationMs, parseDurationMs };
 }
 
 function renderBatchInspection(
@@ -213,7 +238,7 @@ function renderBatchInspection(
     `- detectedType: ${result.inspection.detectedType}`,
     `- parser: ${result.inspection.parser}`,
     `- bytes: ${result.bytes}`,
-    `- sha256: ${result.inspection.sha256}`,
+    `- ${inspectionHashLabel(result.inspection)}: ${result.inspection.sha256}`,
     `- summary: ${result.inspection.summary}`,
     ...Object.entries(result.inspection.metadata)
       .filter(([key]) => !commonMetadata.has(key))
@@ -365,7 +390,13 @@ async function fetchDiscordAttachmentBytes(urlValue: string, maxBytes = MAX_ATTA
     if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
       throw new Error(`attachment exceeds the ${maxBytes}-byte inspection limit`);
     }
-    if (!response.body) return { data: Buffer.alloc(0), contentType: response.headers.get("content-type") };
+    if (!response.body) return {
+      data: Buffer.alloc(0),
+      contentType: response.headers.get("content-type"),
+      complete: true,
+      downloadedBytes: 0,
+      sourceBytes: Number.isFinite(declaredBytes) ? declaredBytes : null
+    };
     const chunks: Buffer[] = [];
     let total = 0;
     const reader = response.body.getReader();
@@ -380,13 +411,94 @@ async function fetchDiscordAttachmentBytes(urlValue: string, maxBytes = MAX_ATTA
       }
       chunks.push(buffer);
     }
-    return { data: Buffer.concat(chunks, total), contentType: response.headers.get("content-type") };
+    return {
+      data: Buffer.concat(chunks, total),
+      contentType: response.headers.get("content-type"),
+      complete: true,
+      downloadedBytes: total,
+      sourceBytes: Number.isFinite(declaredBytes) ? declaredBytes : total
+    };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw new Error(`attachment download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`);
     throw error;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function fetchDiscordIracingTelemetrySession(urlValue: string): Promise<FetchedAttachmentBytes> {
+  const header = await fetchDiscordAttachmentRange(urlValue, 0, IRACING_IBT_HEADER_BYTES - 1, IRACING_IBT_HEADER_BYTES);
+  if (header.data.length !== IRACING_IBT_HEADER_BYTES) throw new Error("could not read the complete iRacing telemetry header");
+  const sessionInfoBytes = header.data.readInt32LE(16);
+  const sessionInfoOffset = header.data.readInt32LE(20);
+  if (sessionInfoBytes <= 0 || sessionInfoBytes > MAX_IRACING_SESSION_INFO_BYTES) {
+    throw new Error("iRacing telemetry session info exceeds the bounded extraction limit");
+  }
+  if (sessionInfoOffset < IRACING_IBT_HEADER_BYTES || sessionInfoOffset > MAX_IRACING_SESSION_INFO_OFFSET) {
+    throw new Error("iRacing telemetry session-info offset is outside the supported range");
+  }
+  const sessionEnd = sessionInfoOffset + sessionInfoBytes;
+  if (!Number.isSafeInteger(sessionEnd) || (header.sourceBytes != null && sessionEnd > header.sourceBytes)) {
+    throw new Error("iRacing telemetry session-info range is outside the attachment");
+  }
+  const session = await fetchDiscordAttachmentRange(urlValue, sessionInfoOffset, sessionEnd - 1, sessionInfoBytes);
+  const data = Buffer.alloc(sessionEnd);
+  header.data.copy(data, 0);
+  session.data.copy(data, sessionInfoOffset);
+  return {
+    data,
+    contentType: session.contentType ?? header.contentType,
+    complete: false,
+    downloadedBytes: header.downloadedBytes + session.downloadedBytes,
+    sourceBytes: session.sourceBytes ?? header.sourceBytes
+  };
+}
+
+async function fetchDiscordAttachmentRange(
+  urlValue: string,
+  start: number,
+  end: number,
+  maxBytes: number
+): Promise<FetchedAttachmentBytes> {
+  const url = new URL(urlValue);
+  if (url.protocol !== "https:" || !isDiscordCdnHostname(url.hostname)) throw new Error("attachment URL is not on an allowed Discord CDN host");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  timeout.unref?.();
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: "error",
+      headers: { Range: `bytes=${start}-${end}` }
+    });
+    if (response.status !== 206) throw new Error(`Discord CDN did not honor the bounded byte-range request (HTTP ${response.status})`);
+    const contentRange = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(response.headers.get("content-range") ?? "");
+    if (!contentRange || Number(contentRange[1]) !== start || Number(contentRange[2]) !== end) {
+      throw new Error("Discord CDN returned an invalid byte range");
+    }
+    const data = Buffer.from(await response.arrayBuffer());
+    if (data.length > maxBytes || data.length !== end - start + 1) throw new Error("Discord CDN returned an unexpected byte-range length");
+    return {
+      data,
+      contentType: response.headers.get("content-type"),
+      complete: false,
+      downloadedBytes: data.length,
+      sourceBytes: contentRange[3] === "*" ? null : Number(contentRange[3])
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error(`attachment download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isIracingTelemetryFilename(filename?: string | null) {
+  return /\.ibt$/i.test(filename ?? "");
+}
+
+function inspectionHashLabel(inspection: FileInspection) {
+  return inspection.metadata.partialRead ? "Inspected-byte SHA-256" : "SHA-256";
 }
 
 function isDiscordCdnHostname(hostname: string) {

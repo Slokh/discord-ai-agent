@@ -63,6 +63,7 @@ Then verify in Discord:
 @ai inspect setup.sto and explain the embedded setup notes
 @ai compare all of these iRacing setup files
 @ai decode the exact values in this iRacing Garage HTML setup export
+@ai analyze the exact loaded setup in this iRacing .ibt telemetry file
 @ai learn this for next time: movie night votes are decided by the poll
 @ai update skill movie night: ties are settled by whoever hosted last
 @ai add a tool to check the Minecraft server status
@@ -90,7 +91,7 @@ Expected:
 - Current-message and replied-to files are selected without requiring a message link; explicit historical links remain permission-filtered.
 - Text, JSON, Office Open XML, ZIP, and supported binary formats return bounded extracted evidence and an honest parser limitation. `.sto` files expose embedded setup notes without inventing opaque garage values.
 - Safely bounded multi-file replies are inspected in one tool call, with identical notes/content and common metadata emitted once.
-- iRacing Garage HTML exports expose exact simulator-decoded values; `.sto` files explain that users must export HTML from the Garage when exact pressures, cambers, springs, damping, aero, or other garage values are required.
+- iRacing Garage HTML exports and SDK `.ibt` files containing `CarSetup` expose exact simulator-reported values; `.sto` files direct users to HTML, `.ibt`, or Garage screenshots when exact pressures, cambers, springs, damping, aero, or other garage values are required.
 - File fetch and parser activity appears in the run trace as `discord.file.*` events, without raw attachment contents in audit summaries.
 - Skill requests create or update a private database skill after policy validation.
 - Tool requests run through a sandbox task and finish with a human-review PR link, or a clear no-change/failure response.

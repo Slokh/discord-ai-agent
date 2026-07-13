@@ -55,9 +55,10 @@ Inspection is bounded and non-executing: downloads are limited to 20 MiB, archiv
 - Image detection that directs visual questions to `inspectDiscordImages`.
 - PDF container metadata and explicit notice that semantic PDF text extraction is not yet available.
 - Bounded printable-string fallback for unknown binary formats.
-- iRacing `.sto` opaque-container metadata, high-entropy payload identity, filename-derived qualifying/race/wet hints, and structured embedded UTF-16 setup notes. Garage values remain opaque and must never be inferred from the notes.
+- iRacing `.sto` opaque-container metadata, high-entropy payload identity, filename-derived qualifying/race/wet hints, and structured embedded UTF-16 setup notes. Garage values remain opaque and must never be inferred from the notes or characterized as compressed, encoded, or encrypted without verified evidence.
 - iRacing Garage HTML exports, including exact simulator-decoded setup sections and values such as pressures, temperatures, ride heights, springs, damping, camber, toe, brake bias, fuel, aero, differential, and in-car controls when present for that car.
+- iRacing SDK `.ibt` telemetry session data, including exact loaded `CarSetup` values and bounded track, weather, and setup context when `irsdkLogSetup=1` recorded the setup.
 
-For exact iRacing values, load the `.sto` in the simulator Garage and export the setup as HTML, then attach that HTML export. The offline `.sto` parser remains useful for file identity, purpose/weather filename hints, opaque-payload comparison, and setup guidance, while the simulator export is the supported semantic decoder boundary.
+For exact iRacing values, load the `.sto` in the simulator and attach either a Garage HTML export, an `.ibt` telemetry recording containing SDK `CarSetup` data, or clear Garage screenshots. HTML is the smallest deterministic interchange format; `.ibt` adds session context; screenshots use the existing image-inspection path. The offline `.sto` parser remains useful for file identity, purpose/weather filename hints, opaque-payload comparison, and embedded notes, but it is not presented as setup analysis.
 
 Successful fetches and inspections record `discord.file.fetched` and `discord.file.inspected` runtime events with byte count, parser, type, latency, and extracted-character count. Failures record `discord.file.fetch_failed`. Raw extracted content is not written to audit summaries or event metadata.

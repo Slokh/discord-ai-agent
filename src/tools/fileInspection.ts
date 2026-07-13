@@ -26,6 +26,7 @@ export function inspectFileBytes(input: {
   const sha256 = createHash("sha256").update(input.data).digest("hex");
 
   if (extension === "sto") return inspectIracingSetup(input.data, filename, sha256);
+  if (extension === "ibt") return inspectIracingTelemetry(input.data, sha256);
   if (looksLikeZip(input.data)) return inspectZipFile(input.data, sha256);
   if (looksLikeIracingSetupExport(input.data, extension)) return inspectIracingSetupExport(input.data, sha256);
 
@@ -83,6 +84,140 @@ export function inspectFileBytes(input: {
   };
 }
 
+function inspectIracingTelemetry(data: Buffer, sha256: string): FileInspection {
+  const headerBytes = 112;
+  const diskSubHeaderBytes = 32;
+  if (data.length < headerBytes + diskSubHeaderBytes) {
+    return unsupportedIracingTelemetry(data, sha256, "The file is too small to contain an iRacing telemetry header.");
+  }
+
+  const version = data.readInt32LE(0);
+  const tickRate = data.readInt32LE(8);
+  const sessionInfoBytes = data.readInt32LE(16);
+  const sessionInfoOffset = data.readInt32LE(20);
+  const variableCount = data.readInt32LE(24);
+  const bufferBytes = data.readInt32LE(36);
+  const structurallyValid =
+    version > 0 && version <= 16 &&
+    tickRate > 0 && tickRate <= 1_000 &&
+    sessionInfoBytes > 0 && sessionInfoBytes <= data.length &&
+    sessionInfoOffset >= headerBytes + diskSubHeaderBytes &&
+    sessionInfoOffset <= data.length - sessionInfoBytes &&
+    variableCount >= 0 && variableCount <= 100_000 &&
+    bufferBytes >= 0 && bufferBytes <= data.length;
+  if (!structurallyValid) {
+    return unsupportedIracingTelemetry(data, sha256, "The .ibt header did not match the supported iRacing SDK telemetry layout.", version);
+  }
+
+  const sessionInfo = data
+    .subarray(sessionInfoOffset, sessionInfoOffset + sessionInfoBytes)
+    .toString("utf8")
+    .replace(/\0+$/g, "")
+    .replace(/\r\n?/g, "\n");
+  if (!/^WeekendInfo:\s*$/m.test(sessionInfo) && !/^DriverInfo:\s*$/m.test(sessionInfo)) {
+    return unsupportedIracingTelemetry(data, sha256, "The telemetry session-info block was present but did not contain recognizable iRacing SDK YAML.", version);
+  }
+
+  const carSetup = extractTopLevelYamlSection(sessionInfo, "CarSetup");
+  const weekendInfo = extractTopLevelYamlSection(sessionInfo, "WeekendInfo");
+  const driverInfo = extractTopLevelYamlSection(sessionInfo, "DriverInfo");
+  const context = [
+    ["Track", yamlScalar(weekendInfo, "TrackDisplayName") ?? yamlScalar(weekendInfo, "TrackName")],
+    ["Track configuration", yamlScalar(weekendInfo, "TrackConfigName")],
+    ["Category", yamlScalar(weekendInfo, "Category")],
+    ["Air temperature", yamlScalar(weekendInfo, "TrackAirTemp")],
+    ["Surface temperature", yamlScalar(weekendInfo, "TrackSurfaceTemp")],
+    ["Weather", yamlScalar(weekendInfo, "TrackWeatherType")],
+    ["Skies", yamlScalar(weekendInfo, "TrackSkies")],
+    ["Setup name", yamlScalar(driverInfo, "DriverSetupName")],
+    ["Setup load type", yamlScalar(driverInfo, "DriverSetupLoadTypeName")],
+    ["Setup modified", yamlScalar(driverInfo, "DriverSetupIsModified")],
+    ["Setup passed tech", yamlScalar(driverInfo, "DriverSetupPassedTech")]
+  ]
+    .filter((entry): entry is [string, string] => Boolean(entry[1]))
+    .map(([key, value]) => `${key}: ${value}`);
+  const setupPropertyCount = carSetup ? countYamlLeafValues(carSetup) : 0;
+  const extracted = carSetup
+    ? [
+        "iRacing SDK telemetry setup (exact simulator-reported values)",
+        ...context,
+        "",
+        carSetup
+      ].join("\n")
+    : [
+        "iRacing SDK telemetry context",
+        ...context,
+        "",
+        "No CarSetup section was recorded in this telemetry file. Enable irsdkLogSetup=1 in Documents\\iRacing\\app.ini, record telemetry again, and attach the new .ibt file."
+      ].join("\n");
+  const normalized = normalizeExtractedText(extracted);
+
+  return {
+    parser: `iracing-ibt-v${version}`,
+    detectedType: "application/vnd.iracing.telemetry",
+    summary: carSetup
+      ? `Extracted ${setupPropertyCount} exact loaded-setup values from iRacing SDK telemetry session data.`
+      : "Recognized iRacing SDK telemetry, but this recording does not include a CarSetup section.",
+    extractedText: normalized.text || null,
+    metadata: {
+      bytes: data.length,
+      sdkVersion: version,
+      tickRate,
+      sessionInfoBytes,
+      variableCount,
+      telemetryBufferBytes: bufferBytes,
+      hasCarSetup: Boolean(carSetup),
+      setupProperties: setupPropertyCount,
+      semanticSetupValuesDecoded: Boolean(carSetup),
+      truncated: normalized.truncated,
+      exactValuesSource: carSetup ? "iRacing SDK CarSetup session data" : null
+    },
+    sha256
+  };
+}
+
+function unsupportedIracingTelemetry(data: Buffer, sha256: string, reason: string, version?: number): FileInspection {
+  return {
+    parser: "iracing-ibt-fallback",
+    detectedType: "application/vnd.iracing.telemetry",
+    summary: reason,
+    extractedText: null,
+    metadata: {
+      bytes: data.length,
+      sdkVersion: version ?? null,
+      semanticSetupValuesDecoded: false
+    },
+    sha256
+  };
+}
+
+function extractTopLevelYamlSection(yaml: string, name: string): string | null {
+  const lines = yaml.split("\n");
+  const start = lines.findIndex((line) => line.trimEnd() === `${name}:` && !/^\s/.test(line));
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\S[^:]*:\s*/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  const section = lines.slice(start, end).join("\n").trimEnd();
+  return section === `${name}:` ? null : section;
+}
+
+function yamlScalar(section: string | null, key: string): string | null {
+  if (!section) return null;
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`^\\s+${escapedKey}:\\s*(.+?)\\s*$`, "m").exec(section);
+  const value = match?.[1]?.trim().replace(/^(["'])(.*)\1$/, "$2");
+  return value || null;
+}
+
+function countYamlLeafValues(section: string): number {
+  return section.split("\n").filter((line) => /^\s+[^#\s][^:]*:\s+\S/.test(line)).length;
+}
+
 function inspectIracingSetup(data: Buffer, filename: string, sha256: string): FileInspection {
   if (data.length < 48) return unsupportedSto(data, sha256, "The file is too small to contain a recognized iRacing setup container.");
 
@@ -137,7 +272,7 @@ function inspectIracingSetup(data: Buffer, filename: string, sha256: string): Fi
       setupPurposeFromFilename: filenameDetails.purpose,
       weatherFromFilename: filenameDetails.weather,
       semanticSetupValuesDecoded: false,
-      exactValuesDecoder: "Load the .sto in iRacing Garage, export the setup as HTML, then inspect that HTML export."
+      exactValuesDecoder: "Load the .sto in iRacing, then attach either a Garage HTML export or an .ibt telemetry recording containing SDK CarSetup data (irsdkLogSetup=1). Garage screenshots are also usable through image inspection."
     },
     sha256
   };

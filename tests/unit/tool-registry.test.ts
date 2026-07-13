@@ -145,7 +145,8 @@ describe("toolRegistry", () => {
     >;
 
     expect(properties.batchMode.enum).toEqual(["inspect", "list"]);
-    expect(definition.function.description).toContain("exact garage values");
+    expect(definition.function.description).toContain("exact iRacing setup values");
+    expect(definition.function.description).toContain("SDK .ibt telemetry containing CarSetup data");
     expect(definition.function.description).toContain("deduplicates identical extracted content");
   });
 

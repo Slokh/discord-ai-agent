@@ -5,7 +5,7 @@ import {
 } from "../../src/tools/responseFormatting.js";
 
 describe("Discord response formatting", () => {
-  it("converts Markdown tables into compact Discord-readable lists", () => {
+  it("converts Markdown tables into padded Discord code blocks", () => {
     const content = [
       "**20 spins at $5 each. Here we go:**",
       "",
@@ -23,10 +23,12 @@ describe("Discord response formatting", () => {
       [
         "**20 spins at $5 each. Here we go:**",
         "",
-        "**Spin · Reel 1 · Reel 2 · Reel 3 · Result**",
-        "- 1 · 🍒 · 🍋 · 🔔 · ❌ Loss",
-        "- 2 · ⭐ · 🍒 · 🍒 · 🍒🍒🍒 Break even",
-        "- 13 · 🍀 · 🍀 · 🍀 · **85x — +$420!!** 🎉",
+        "```text",
+        "Spin  Reel 1  Reel 2  Reel 3  Result",
+        "1     🍒      🍋      🔔      ❌ Loss",
+        "2     ⭐      🍒      🍒      🍒🍒🍒 Break even",
+        "13    🍀      🍀      🍀      85x — +$420!! 🎉",
+        "```",
         "",
         "**Summary:**",
         "- Net: **+$380**",
@@ -46,9 +48,68 @@ describe("Discord response formatting", () => {
       ),
     ).toBe(
       [
-        "**Name · Score**",
-        "- Ada · 10",
-        "- Grace · 9",
+        "```text",
+        "Name   Score",
+        "Ada    10",
+        "Grace  9",
+        "```",
+      ].join("\n"),
+    );
+  });
+
+  it("pads emoji graphemes and keeps Markdown control characters literal", () => {
+    expect(
+      formatDiscordMarkdownTables(
+        [
+          "| # | Reels | Result | Payout |",
+          "| --- | --- | --- | --- |",
+          "| 1 | 🍊🍋🍇 | — | -$5 |",
+          "| 8 | 🍋🍒🍒 | **2x🍒** | +$0 |",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "```text",
+        "#  Reels   Result  Payout",
+        "1  🍊🍋🍇  —       -$5",
+        "8  🍋🍒🍒  2x🍒    +$0",
+        "```",
+      ].join("\n"),
+    );
+  });
+
+  it("falls back to labeled bullets when a table is too wide for Discord", () => {
+    const wideValue = "x".repeat(80);
+
+    expect(
+      formatDiscordMarkdownTables(
+        [
+          "| Name | Detail |",
+          "| --- | --- |",
+          `| Ada | ${wideValue} |`,
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "**Columns:** Name · Detail",
+        `- Ada · ${wideValue}`,
+      ].join("\n"),
+    );
+  });
+
+  it("keeps rendered links in the bullet fallback", () => {
+    expect(
+      formatDiscordMarkdownTables(
+        [
+          "| Name | Source |",
+          "| --- | --- |",
+          "| Ada | [profile](https://example.test/ada) |",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "**Columns:** Name · Source",
+        "- Ada · [profile](https://example.test/ada)",
       ].join("\n"),
     );
   });
@@ -75,7 +136,12 @@ describe("Discord response formatting", () => {
     ].join("\n");
 
     expect(cleanResponse(content, 2_000)).toBe(
-      "**A · B**\n- one · two",
+      [
+        "```text",
+        "A    B",
+        "one  two",
+        "```",
+      ].join("\n"),
     );
   });
 });

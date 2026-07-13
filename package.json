@@ -84,6 +84,7 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "regen-ui": "^0.5.0",
+    "string-width": "^8.2.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {

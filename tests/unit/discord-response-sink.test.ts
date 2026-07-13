@@ -60,9 +60,11 @@ describe("DiscordResponseSink", () => {
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
       content: [
-        "**Spin · Reel 1 · Reel 2 · Result**",
-        "- 1 · 🍒 · 🍋 · ❌ Loss",
-        "- 2 · 🍀 · 🍀 · **85x — +$420**"
+        "```text",
+        "Spin  Reel 1  Reel 2  Result",
+        "1     🍒      🍋      ❌ Loss",
+        "2     🍀      🍀      85x — +$420",
+        "```"
       ].join("\n")
     });
   });

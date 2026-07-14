@@ -188,7 +188,7 @@ function isMarkdownTableHeader(
     header &&
     separator &&
     header.length === separator.length &&
-    header.every(Boolean) &&
+    header.some(Boolean) &&
     separator.every((cell) => /^:?-{3,}:?$/.test(cell)),
   );
 }

@@ -34,37 +34,48 @@ export function formatDiscordMarkdownTables(content: string) {
 
     const header = markdownTableRow(line);
     const separator = markdownTableRow(lines[index + 1] ?? "");
-    if (!isMarkdownTableHeader(header, separator)) {
-      const compactTable = compactBulletTable(lines, index);
-      if (compactTable) {
-        output.push(discordCodeTable(compactTable.header, compactTable.rows) ?? discordTableList(compactTable.header, compactTable.rows));
-        index = compactTable.nextIndex;
+    if (isMarkdownTableShape(header, separator)) {
+      let nextIndex = index + 2;
+      const rows: string[][] = [];
+      while (nextIndex < lines.length) {
+        const row = markdownTableRow(lines[nextIndex] ?? "");
+        if (!row || row.length !== header.length) break;
+        rows.push(row);
+        nextIndex += 1;
+      }
+
+      const renderedHeader = header.some(Boolean)
+        ? header
+        : isHeaderlessMarkdownGrid(header, rows)
+          ? null
+          : undefined;
+      if (renderedHeader !== undefined) {
+        output.push(discordCodeTable(renderedHeader, rows) ?? discordTableList(renderedHeader, rows));
+        index = nextIndex;
         continue;
       }
-      output.push(line);
-      index += 1;
-      continue;
     }
 
-    index += 2;
-    const rows: string[][] = [];
-    while (index < lines.length) {
-      const row = markdownTableRow(lines[index] ?? "");
-      if (!row || row.length !== header.length) break;
-      rows.push(row);
-      index += 1;
+    const compactTable = compactBulletTable(lines, index);
+    if (compactTable) {
+      output.push(discordCodeTable(compactTable.header, compactTable.rows) ?? discordTableList(compactTable.header, compactTable.rows));
+      index = compactTable.nextIndex;
+      continue;
     }
-    output.push(discordCodeTable(header, rows) ?? discordTableList(header, rows));
+    output.push(line);
+    index += 1;
   }
 
   return output.join("\n");
 }
 
-function discordCodeTable(header: string[], rows: string[][]) {
-  const sourceCells = [header, ...rows].flat();
+function discordCodeTable(header: string[] | null, rows: string[][]) {
+  const sourceRows = header ? [header, ...rows] : rows;
+  const sourceCells = sourceRows.flat();
   if (sourceCells.some(requiresRenderedMarkdown)) return null;
-  const plainRows = [header, ...rows].map((row) => row.map(plainTextTableCell));
-  const columnWidths = header.map((_, columnIndex) =>
+  const plainRows = sourceRows.map((row) => row.map(plainTextTableCell));
+  const columnCount = header?.length ?? rows[0]?.length ?? 0;
+  const columnWidths = Array.from({ length: columnCount }, (_, columnIndex) =>
     Math.max(...plainRows.map((row) => stringWidth(row[columnIndex] ?? ""))),
   );
   const tableWidth = columnWidths.reduce((total, width) => total + width, 0) +
@@ -81,9 +92,9 @@ function discordCodeTable(header: string[], rows: string[][]) {
   return block.length <= MAX_DISCORD_CODE_TABLE_CHARS ? block : null;
 }
 
-function discordTableList(header: string[], rows: string[][]) {
+function discordTableList(header: string[] | null, rows: string[][]) {
   return [
-    `**Columns:** ${header.map(stripOuterBold).join(" · ")}`,
+    ...(header ? [`**Columns:** ${header.map(stripOuterBold).join(" · ")}`] : []),
     ...rows.map((row) => `- ${row.join(" · ")}`),
   ].join("\n");
 }
@@ -180,7 +191,7 @@ function compactTableCells(value: string) {
   return cells.length >= 3 && cells.every(Boolean) ? cells : null;
 }
 
-function isMarkdownTableHeader(
+function isMarkdownTableShape(
   header: string[] | null,
   separator: string[] | null,
 ): header is string[] {
@@ -188,9 +199,15 @@ function isMarkdownTableHeader(
     header &&
     separator &&
     header.length === separator.length &&
-    header.some(Boolean) &&
     separator.every((cell) => /^:?-{3,}:?$/.test(cell)),
   );
+}
+
+function isHeaderlessMarkdownGrid(header: string[], rows: string[][]) {
+  return header.length >= 3 &&
+    header.every((cell) => !cell) &&
+    rows.length >= 2 &&
+    rows.every((row) => row.some(Boolean));
 }
 
 function stripOuterBold(value: string) {

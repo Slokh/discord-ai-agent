@@ -88,6 +88,26 @@ describe("Discord response formatting", () => {
     expect(formatDiscordMarkdownTables(content)).toBe(content);
   });
 
+  it("converts multi-row headerless grids into padded code blocks", () => {
+    expect(
+      formatDiscordMarkdownTables(
+        [
+          "| | | |",
+          "| --- | --- | --- |",
+          "| TORNADO | CASTLE | LANTERN |",
+          "| 🔵 TORNADO | ⬜ CASTLE | 🔴 LANTERN |",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "```text",
+        "TORNADO     CASTLE     LANTERN",
+        "🔵 TORNADO  ⬜ CASTLE  🔴 LANTERN",
+        "```",
+      ].join("\n"),
+    );
+  });
+
   it("pads emoji graphemes and keeps Markdown control characters literal", () => {
     expect(
       formatDiscordMarkdownTables(

@@ -35,6 +35,7 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
   if (isCodegenConfigured(input.config) && hasAny(text, CODEGEN_KEYWORDS)) groups.add("codegen");
   if (hasAny(text, OPS_KEYWORDS)) groups.add("ops");
+  if (input.replyContext && hasAny(text, REPLY_OPS_KEYWORDS)) groups.add("ops");
 
   return groups;
 }
@@ -155,4 +156,10 @@ const OPS_KEYWORDS = [
   /\bwhat can you do\b/,
   /\b(rate.?limit|turn limit|post limit|unlimit)\b/,
   /\blimit\b.*\b(per day|daily|posts?|turns?|messages?|uses?)\b/,
+];
+
+const REPLY_OPS_KEYWORDS = [
+  /\b(debug|diagnose|troubleshoot)\b/,
+  /\b(why|how) did (you|the bot|this|that)\b/,
+  /\bwhat (failed|hung|timed out|went wrong)\b/,
 ];

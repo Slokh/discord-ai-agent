@@ -1707,6 +1707,10 @@ describe("inspectAgentLogs", () => {
 
   it("includes normalized run diagnostics when a visible run is referenced", async () => {
     const auditTool = vi.fn(async () => undefined);
+    const getAgentRuntimeArtifact = vi.fn(async ({ artifactId }: { artifactId: string }) => ({
+      artifactId,
+      content: artifactId === "prompt-capture" ? `prompt with sk-or-v1-${"a".repeat(30)}` : "model response body",
+    }));
     const run = {
       runId: "run-1",
       traceId: "1234567890123450031",
@@ -1794,8 +1798,12 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:15:00Z")
           }
         ]),
-        getProcessRunArtifacts: vi.fn(async () => []),
+        getProcessRunArtifacts: vi.fn(async () => [
+          { artifactId: "prompt-capture", runId: "run-1", kind: "model_prompt", name: "Model prompt", contentType: "application/json", sizeBytes: 100, preview: "prompt", redacted: true, expiresAt: null, metadata: {}, createdAt: new Date("2026-01-01T00:10:00Z") },
+          { artifactId: "response-capture", runId: "run-1", kind: "model_response", name: "Model response", contentType: "application/json", sizeBytes: 100, preview: "response", redacted: true, expiresAt: null, metadata: {}, createdAt: new Date("2026-01-01T00:11:00Z") },
+        ]),
         getProcessRunArtifact: vi.fn(async () => undefined),
+        getAgentRuntimeArtifact,
         getTaskProgressEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => [
           {
@@ -1827,22 +1835,32 @@ describe("inspectAgentLogs", () => {
       guildId: "guild",
       channelId: "channel",
       userId: "user",
-      visibleChannelIds: ["channel"]
+      visibleChannelIds: ["channel"],
+      replyContext: {
+        rootMessageId: "1234567890123450031",
+        messageId: "bot-response-message",
+        chain: [],
+      },
     } as unknown as ToolContext;
 
-    const response = await inspectAgentLogs(ctx, {
-      traceId: "https://discord.com/channels/guild/channel/1234567890123450031",
-      limit: 10
-    });
+    const response = await inspectAgentLogs(ctx, { limit: 10, detail: "model_io" });
 
+    expect(response).toContain("Discord AI Agent logs for trace 1234567890123450031");
     expect(response).toContain("codegen run run-1");
+    expect(response).toContain("Model debugger: no observed model-call telemetry");
+    expect(response).toContain("Observed model I/O");
+    expect(response).toContain("model response body");
+    expect(response).toContain("[REDACTED]");
+    expect(response).not.toContain("sk-or-v1-");
     expect(response).toContain("Failure diagnosis: The verification command failed.");
     expect(response).toContain("Most time was spent in opencode_attempt_1");
     expect(response).toContain("Terminal tail");
     expect(response).toContain("npm run verify");
     expect(ctx.repo.findProcessRunByDiscordMessageId).toHaveBeenCalledWith("1234567890123450031");
+    expect(getAgentRuntimeArtifact).toHaveBeenCalledTimes(2);
     expect(auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
+        argumentsSummary: expect.stringContaining("reply_root"),
         resultSummary: expect.stringContaining("\"normalizedRun\":\"run-1\"")
       })
     );
@@ -1850,6 +1868,7 @@ describe("inspectAgentLogs", () => {
 
   it("does not include normalized run diagnostics for an invisible run", async () => {
     const auditTool = vi.fn(async () => undefined);
+    const getAgentRuntimeArtifact = vi.fn();
     const hiddenRun = {
       runId: "run-hidden",
       traceId: "1234567890123450032",
@@ -1891,6 +1910,7 @@ describe("inspectAgentLogs", () => {
         getTaskProgressEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
+        getAgentRuntimeArtifact,
         auditTool
       },
       guildId: "guild",
@@ -1899,10 +1919,11 @@ describe("inspectAgentLogs", () => {
       visibleChannelIds: ["channel"]
     } as unknown as ToolContext;
 
-    const response = await inspectAgentLogs(ctx, { traceId: "1234567890123450032" });
+    const response = await inspectAgentLogs(ctx, { traceId: "1234567890123450032", detail: "model_io" });
 
     expect(response).toBe("No Discord AI Agent trace or tool logs matched traceId=1234567890123450032.");
     expect(response).not.toContain("Private channel prompt");
+    expect(getAgentRuntimeArtifact).not.toHaveBeenCalled();
     expect(auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
         resultSummary: expect.not.stringContaining("run-hidden")

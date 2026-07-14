@@ -118,8 +118,9 @@ export async function executeLocalToolRoute(
         await inspectAgentLogs(ctx, {
           traceId: stringArgument(route.arguments, "traceId"),
           limit: numberArgument(route.arguments, "limit"),
+          detail: stringArgument(route.arguments, "detail") === "model_io" ? "model_io" : "summary",
         }),
-        ctx.config.maxReplyChars,
+        Math.max(ctx.config.maxReplyChars, 6_000),
       ),
     };
   }

@@ -150,6 +150,18 @@ describe("toolRegistry", () => {
     expect(definition.function.description).toContain("deduplicates identical extracted content");
   });
 
+  it("exposes reply-aware bounded model I/O controls for agent debugging", () => {
+    const definition = toolDefinitionsForModel().find(
+      (tool) => "function" in tool && tool.function.name === "inspectAgentLogs"
+    );
+    if (!definition || !("function" in definition)) throw new Error("inspectAgentLogs definition not found");
+    const properties = definition.function.parameters.properties as Record<string, { enum?: string[]; description?: string }>;
+
+    expect(properties.detail.enum).toEqual(["summary", "model_io"]);
+    expect(definition.function.description).toContain("omit traceId to resolve the reply chain automatically");
+    expect(definition.function.description).toContain("secret-redacted");
+  });
+
   it("classifies local tools into the model-facing taxonomy", () => {
     const contracts = toolContracts();
     expect(new Set(contracts.map((tool) => tool.toolClass))).toEqual(

@@ -25,14 +25,20 @@ async function mockConsoleApi(page: Page, options: { failStream?: boolean; mutat
 
 test.beforeEach(async ({ page }) => { await mockConsoleApi(page); });
 
-test("shows multi-round model telemetry and recovery details", async ({ page }) => {
+test("debugs model rounds, prompt composition, artifacts, and critical-path latency", async ({ page }) => {
   await page.goto("/console/");
   await page.getByText("Discord mention from UserB", { exact: true }).click();
-  await page.getByRole("tab", { name: "Models" }).click();
-  await expect(page.getByRole("heading", { name: "Model calls" })).toBeVisible();
+  await page.getByRole("tab", { name: "Debugger" }).click();
+  await expect(page.getByRole("heading", { name: "Prompt debugger" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Critical path" })).toBeVisible();
   await expect(page.getByText("Tool Selection", { exact: true })).toBeVisible();
   await expect(page.getByText("Empty Response Recovery", { exact: true })).toBeVisible();
   await expect(page.getByText("Revision", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Base System Prompt", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Load prompt" }).first().click();
+  await expect(page.getByText("over the past 3 months who is the best at little phone games", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Load response" }).first().click();
+  await expect(page.getByText("Tool calls (1)")).toBeVisible();
 });
 
 test("renders timeline, artifacts, and full artifact content", async ({ page }) => {
@@ -48,6 +54,8 @@ test("compares runs and captures feedback", async ({ page }) => {
   await page.goto("/console/");
   await page.getByRole("tab", { name: "Compare" }).click();
   await expect(page.getByRole("heading", { name: "Compare runs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Performance deltas" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Model calls by purpose" })).toBeVisible();
   await page.getByRole("tab", { name: "Overview" }).click();
   await expect(page.getByRole("region", { name: "Run feedback" })).toBeVisible();
 });

@@ -103,12 +103,23 @@ export const fixtureSnapshots: RunSnapshot[] = [
           requestedModel: "z-ai/glm-5.2",
           model: "z-ai/glm-5.2",
           promptBytes: 21_840,
+          promptSections: [
+            { name: "base_system_prompt", bytes: 12_400, characters: 11_900, messageCount: 1, estimatedTokens: 2_975, roles: ["system"] },
+            { name: "session_memory", bytes: 5_100, characters: 4_800, messageCount: 6, estimatedTokens: 1_200, roles: ["system", "user", "assistant"] },
+            { name: "current_user_request", bytes: 220, characters: 168, messageCount: 1, estimatedTokens: 42, roles: ["user"] }
+          ],
           toolSchemaBytes: 9_240,
+          toolSchemas: [
+            { name: "searchDiscordHistory", type: "local", bytes: 2_810 },
+            { name: "web_search", type: "hosted", bytes: 860 }
+          ],
           toolCount: 8,
           outputChars: 182,
           finishReason: "tool_calls",
           estimatedCostUsd: 0.0042,
           requestedToolCalls: ["searchDiscordHistory"],
+          promptArtifactId: "artifact-model-prompt-1",
+          responseArtifactId: "artifact-model-response-1",
           usage: { inputTokens: 5_420, outputTokens: 91, totalTokens: 5_511, cachedInputTokens: 2_810 }
         }
       },
@@ -129,7 +140,9 @@ export const fixtureSnapshots: RunSnapshot[] = [
           requestedModel: "z-ai/glm-5.2",
           model: "z-ai/glm-5.2",
           promptBytes: 2_400,
+          promptSections: [{ name: "recovery_context", bytes: 2_400, characters: 2_100, messageCount: 2, estimatedTokens: 525, roles: ["system", "user"] }],
           toolSchemaBytes: 2,
+          toolSchemas: [],
           toolCount: 0,
           outputChars: 96,
           finishReason: "stop",
@@ -140,10 +153,35 @@ export const fixtureSnapshots: RunSnapshot[] = [
       event("searchDiscordHistory", "info", "searched indexed messages", 16, "tool"),
       event("discord.mention.failed", "error", "Discord AI Agent agent request timed out.", 2, "trace")
     ],
-    artifacts: [artifact("artifact-discord-prompt", "prompt", "Discord user prompt", 82), artifact("artifact-error", "response", "Discord error response", 97)],
+    artifacts: [
+      artifact("artifact-discord-prompt", "prompt", "Discord user prompt", 82),
+      artifact("artifact-error", "response", "Discord error response", 97),
+      artifact("artifact-model-prompt-1", "model_prompt", "Model prompt · tool_selection", 21_840, { callId: "model-call-fixture-1" }, "application/json"),
+      artifact("artifact-model-response-1", "model_response", "Model response · tool_selection", 680, { callId: "model-call-fixture-1" }, "application/json")
+    ],
     terminal: terminal([]),
     diagnostics: ["Most time was spent in Run model-led agent: 15m 0s.", "Latest failure signal: Discord AI Agent agent request timed out."],
     raw: {},
+    agentTranscript: [
+      {
+        id: "fixture-assistant-tool-call",
+        sessionId: "session-fixture",
+        clientMessageId: "fixture:assistant",
+        role: "assistant",
+        parts: [{ type: "assistant_tool_calls", text: "", toolCalls: [{ id: "call-1", name: "searchDiscordHistory", arguments: { query: "little phone games" } }] }],
+        metadata: { round: 1, source: "agent.router" },
+        createdAt: minutesAgo(16.15)
+      },
+      {
+        id: "fixture-tool-result",
+        sessionId: "session-fixture",
+        clientMessageId: "fixture:tool",
+        role: "tool",
+        parts: [{ type: "tool_result", toolName: "searchDiscordHistory", content: "Found 12 relevant messages." }],
+        metadata: { round: 1, toolName: "searchDiscordHistory", durationMs: 820, outputChars: 27, source: "agent.router" },
+        createdAt: minutesAgo(16)
+      }
+    ],
     relatedRuns: [
       {
         runId: "task-fixture-child-running",
@@ -211,6 +249,28 @@ export const fixtureSnapshots: RunSnapshot[] = [
 export const fixtureRuns: RunSummary[] = fixtureSnapshots.map((snapshot) => snapshot.run);
 
 export function fixtureArtifact(runId: string, artifactId: string) {
+  if (artifactId === "artifact-model-prompt-1") return JSON.stringify({
+    schemaVersion: 1,
+    callId: "model-call-fixture-1",
+    purpose: "tool_selection",
+    requestedModel: "z-ai/glm-5.2",
+    messages: [
+      { index: 0, section: "base_system_prompt", role: "system", content: "You are Discord AI Agent. Use tools when they help." },
+      { index: 1, section: "session_memory", role: "system", content: "Recent completed Discord AI Agent turns follow." },
+      { index: 2, section: "current_user_request", role: "user", content: "over the past 3 months who is the best at little phone games" }
+    ],
+    tools: [{ type: "function", function: { name: "searchDiscordHistory", parameters: { type: "object" } } }]
+  }, null, 2);
+  if (artifactId === "artifact-model-response-1") return JSON.stringify({
+    schemaVersion: 1,
+    callId: "model-call-fixture-1",
+    purpose: "tool_selection",
+    model: "z-ai/glm-5.2",
+    finishReason: "tool_calls",
+    content: "",
+    toolCalls: [{ id: "call-1", name: "searchDiscordHistory", argumentsText: "{\"query\":\"little phone games\"}" }],
+    usage: { inputTokens: 5_420, outputTokens: 91, cachedInputTokens: 2_810 }
+  }, null, 2);
   return `Fixture artifact ${artifactId} for ${runId}\n\nThis is the full artifact body that would come from Postgres in live mode.`;
 }
 
@@ -240,18 +300,18 @@ function event(name: string, level: RunSnapshot["events"][number]["level"], summ
   };
 }
 
-function artifact(artifactId: string, kind: string, name: string, sizeBytes: number) {
+function artifact(artifactId: string, kind: string, name: string, sizeBytes: number, metadata: Record<string, unknown> = {}, contentType = "text/plain") {
   return {
     artifactId,
     runId: "",
     kind,
     name,
-    contentType: "text/plain",
+    contentType,
     sizeBytes,
     preview: `${name} preview...`,
     redacted: true,
     expiresAt: null,
-    metadata: {},
+    metadata,
     createdAt: minutesAgo(1)
   };
 }

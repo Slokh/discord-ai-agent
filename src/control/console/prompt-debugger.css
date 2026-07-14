@@ -1,0 +1,70 @@
+.prompt-debugger { display: grid; gap: 14px; }
+.debugger-intro { align-items: start; display: grid; gap: 18px; grid-template-columns: minmax(0, 1.5fr) minmax(360px, 1fr); }
+.debugger-intro h3 { font-size: 22px; margin: 3px 0 8px; }
+.debugger-intro p { color: var(--muted); line-height: 1.5; margin: 0; max-width: 780px; }
+.eyebrow { color: var(--info); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.debugger-summary { display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.debugger-summary > div { background: var(--pane-2); border: 1px solid var(--border); border-radius: 8px; display: grid; gap: 4px; min-width: 0; padding: 10px; }
+.debugger-summary span { color: var(--faint); font-size: 10px; text-transform: uppercase; }
+.debugger-summary strong { overflow-wrap: anywhere; }
+
+.critical-verdict { font-size: 15px; margin: 0; }
+.critical-path-grid { align-items: start; display: grid; gap: 20px; grid-template-columns: minmax(0, 1.6fr) minmax(280px, .8fr); }
+.critical-bars { display: grid; gap: 12px; }
+.critical-row { display: grid; gap: 7px; grid-template-columns: minmax(0, 1fr) auto; }
+.critical-row > div:first-child { display: grid; gap: 2px; }
+.critical-row small { color: var(--faint); overflow-wrap: anywhere; }
+.critical-duration { align-items: end; display: grid; justify-items: end; }
+.critical-duration span { color: var(--faint); font-size: 11px; }
+.critical-track { background: var(--pane-2); border-radius: 999px; grid-column: 1 / -1; height: 6px; overflow: hidden; }
+.critical-track span { background: var(--info); border-radius: inherit; display: block; height: 100%; }
+.critical-row.tool .critical-track span { background: var(--accent); }
+.critical-row.other .critical-track span { background: var(--faint); }
+.critical-recommendations { background: var(--pane-2); border: 1px solid var(--border); border-radius: 9px; padding: 13px; }
+.critical-recommendations ul { color: var(--muted); display: grid; gap: 9px; line-height: 1.4; margin: 10px 0 0; padding-left: 18px; }
+
+.debugger-call { gap: 14px; }
+.debugger-call-grid { align-items: start; display: grid; gap: 14px; grid-template-columns: minmax(360px, 1fr) minmax(360px, 1.15fr); }
+.prompt-sections { background: var(--pane-1); border: 1px solid var(--border); border-radius: 9px; display: grid; gap: 7px; padding: 11px; }
+.prompt-sections > div:first-child { display: flex; justify-content: space-between; }
+.prompt-sections > div:first-child span, .empty-sections span { color: var(--faint); font-size: 11px; }
+.prompt-section-row { align-items: center; display: grid; gap: 8px; grid-template-columns: minmax(110px, .9fr) minmax(100px, 1.5fr) 54px 62px; }
+.prompt-section-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-section-row > div { background: var(--pane-2); border-radius: 999px; height: 5px; overflow: hidden; }
+.prompt-section-row i { background: var(--info); border-radius: inherit; display: block; height: 100%; }
+.prompt-section-row strong, .prompt-section-row small { font-size: 11px; text-align: right; }
+.prompt-section-row small { color: var(--faint); }
+
+.debugger-tool-schemas > div { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); margin-top: 8px; }
+.debugger-tool-schemas > div > span { background: var(--pane-1); border: 1px solid var(--border); border-radius: 7px; display: flex; gap: 8px; justify-content: space-between; min-width: 0; padding: 7px 9px; }
+.debugger-tool-schemas code { overflow: hidden; text-overflow: ellipsis; }
+.debugger-tool-schemas small { color: var(--faint); white-space: nowrap; }
+.round-activity > div { display: grid; gap: 8px; margin-top: 8px; }
+.round-activity article { background: var(--pane-1); border: 1px solid var(--border); border-radius: 8px; padding: 9px; }
+.round-activity article > div { align-items: center; display: flex; gap: 8px; }
+.round-activity article > div span:last-child { color: var(--faint); margin-left: auto; }
+.round-activity pre, .debugger-artifact pre { background: var(--terminal); border: 1px solid var(--border); border-radius: 8px; margin: 8px 0 0; max-height: 460px; overflow: auto; padding: 10px; white-space: pre-wrap; }
+
+.debugger-artifact-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.debugger-artifact { background: var(--pane-1); border: 1px solid var(--border); border-radius: 9px; min-width: 0; padding: 11px; }
+.debugger-artifact > div:first-child { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
+.debugger-artifact > p { color: var(--faint); margin: 9px 0 0; }
+.debugger-artifact > button { margin-top: 10px; }
+.debugger-artifact-actions { align-items: center; color: var(--faint); display: flex; font-size: 11px; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.captured-messages { display: grid; gap: 8px; margin-top: 9px; }
+.captured-messages article { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.captured-messages article > div { align-items: center; background: var(--pane-2); display: flex; gap: 8px; padding: 7px 9px; }
+.captured-messages article > div span:last-child { color: var(--faint); margin-left: auto; }
+.captured-messages article pre { border: 0; border-radius: 0; margin: 0; max-height: 340px; }
+.captured-response { margin-top: 9px; }
+
+@media (max-width: 1100px) {
+  .debugger-intro, .critical-path-grid, .debugger-call-grid { grid-template-columns: 1fr; }
+  .debugger-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .debugger-artifact-grid { grid-template-columns: 1fr; }
+  .debugger-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .prompt-section-row { grid-template-columns: minmax(100px, 1fr) minmax(80px, 1fr) 48px; }
+  .prompt-section-row small { display: none; }
+}

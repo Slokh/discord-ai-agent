@@ -1118,10 +1118,20 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "inspectAgentLogs",
     description:
-      "Inspect Discord AI Agent's own normalized run diagnostics, trace events, task events, terminal command events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. Pass the originating Discord message link/message ID, run ID, or trace ID when available.",
+      "Inspect Discord AI Agent's own normalized run diagnostics, model rounds, prompt composition, critical path, trace events, task events, terminal command events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. When the user is replying to the run or bot response, omit traceId to resolve the reply chain automatically. Use detail=model_io only when the user explicitly asks to inspect the exact model input, output, or prompt; returned excerpts are permission-filtered, secret-redacted, and bounded.",
     userVisible: true,
     mutates: false,
     group: "ops",
+    category: "ops",
+    outputContract: [
+      "resolved requester-visible run reference",
+      "model-round, prompt-composition, and critical-path diagnosis",
+      "bounded secret-redacted model input/output when explicitly requested",
+      "recent trace, task, command, and tool evidence",
+    ],
+    permissionRequirements: ["owner_or_authorized_debugger", "requester_visible_discord_channels", "tool_audit_log"],
+    auditEvents: ["tool_audit_logs", "trace_events"],
+    examples: ["@ai why did that last answer fail?", "@ai debug this", "@ai show me the exact prompt you received"],
     parameters: {
       type: "object",
       properties: {
@@ -1132,6 +1142,11 @@ export const toolRegistry: ToolRegistryEntry[] = [
         limit: {
           type: "number",
           description: "Maximum trace events and tool logs to return. Defaults to 20."
+        },
+        detail: {
+          type: "string",
+          enum: ["summary", "model_io"],
+          description: "Use summary for normal debugging. Use model_io only for an explicit request to inspect bounded redacted model input/output."
         }
       },
       additionalProperties: false

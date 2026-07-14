@@ -12,12 +12,15 @@ const valid = {
   messageCount: 2,
   promptBytes: 100,
   promptFingerprint: "a".repeat(64),
+  promptSections: [{ name: "base_system_prompt", bytes: 80, characters: 70, messageCount: 1, estimatedTokens: 18, roles: ["system"] }],
   messageBytesByRole: { system: 80, user: 20 },
   toolCount: 1,
   toolSchemaBytes: 50,
   toolSchemaFingerprint: "b".repeat(64),
+  toolSchemas: [{ name: "searchDiscordHistory", type: "local", bytes: 50 }],
   offeredTools: ["searchDiscordHistory"],
   maxTokens: 4096,
+  promptArtifactId: "prompt-1",
 };
 
 describe("versioned runtime event metadata", () => {

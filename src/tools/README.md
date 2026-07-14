@@ -17,6 +17,7 @@ Owns model-facing local tool contracts and implementations.
 - `skillTools.ts`: private skill draft/update generation, policy validation, database persistence, and skill audit logging.
 - `spotifyTools.ts`: Spotify Web API client-credentials integration for public catalog search, item details, playlist/album track attachments, artist discographies, playlist stats, and playlist comparisons with current API limits and sanitized stored output.
 - `spendTools.ts`: ops spend summaries from `tool_audit_logs.estimated_cost_usd`, including today/month totals and top tool/user breakdowns.
+- `discordOpsTools.ts`: reply-aware, permission-filtered self-debugging through `inspectAgentLogs`, including normalized run evidence and optional bounded redacted model I/O.
 - `toolContext.ts`: shared tool-context helpers such as requester-visible indexed channels and Discord message-id parsing.
 - Discord resolvers, history/retrieval, stats/topics, images/vision, skills, code-update tasks, task status, logs, deployment status, and response cleanup.
 - Restricted expensive/mutating tools are gated in the router before dispatch: codegen defaults to owner-only when `BOT_OWNER_USER_ID` is set, avatar updates and per-user turn limits (`setUserTurnLimit`) use the ops allowlist, and image generation can opt into the ops allowlist.
@@ -62,3 +63,7 @@ Inspection is bounded and non-executing: downloads are limited to 20 MiB, archiv
 For exact iRacing values, load the `.sto` in the simulator and attach either a Garage HTML export, an `.ibt` telemetry recording containing SDK `CarSetup` data, or clear Garage screenshots. HTML is the smallest deterministic interchange format; `.ibt` adds session context; screenshots use the existing image-inspection path. The offline `.sto` parser remains useful for file identity, purpose/weather filename hints, opaque-payload comparison, and embedded notes, but it is not presented as setup analysis.
 
 Successful fetches and inspections record `discord.file.fetched` and `discord.file.inspected` runtime events with byte count, parser, type, latency, and extracted-character count. Failures record `discord.file.fetch_failed`. Raw extracted content is not written to audit summaries or event metadata.
+
+## Discord Self-Debugging
+
+Authorized operators can reply to a request or bot response with prompts such as `debug this` or `why did you do that?`. The ops toolset is enabled for terse debugging replies, and `inspectAgentLogs` resolves the reply root/direct parent to a requester-visible run when no explicit identifier is supplied. Its summary prioritizes model rounds, prompt-section weight, token/cache use, requested tools, and critical-path gaps before normalized trace/task/command evidence. `detail=model_io` is reserved for explicit prompt/input/output inspection and loads only artifacts belonging to the already-authorized run; contents are redacted again and truncated before entering the model context.

@@ -1,5 +1,6 @@
 import type { UserTurnLimitOverride } from "../db/budgetRepository.js";
 import { MESSAGE_EMBEDDING_INPUT_VERSION } from "../memory/embedding.js";
+import { formatModelDebuggerInspection, formatModelIoCaptures } from "../observability/modelDebuggerInspection.js";
 import { formatRunInspection } from "../observability/runInspector.js";
 import { getRunSnapshot, resolveRunReference, type RunSnapshot } from "../observability/runs.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
@@ -140,11 +141,17 @@ function normalizeDiscordUserId(raw: string | undefined): string | undefined {
   return /^\d{5,25}$/.test(stripped) ? stripped : undefined;
 }
 
-export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: string; limit?: number } = {}): Promise<string> {
+export async function inspectAgentLogs(
+  ctx: ToolContext,
+  input: { traceId?: string; limit?: number; detail?: "summary" | "model_io" } = {},
+): Promise<string> {
   const limit = boundedLimit(input.limit, 20, 1, 50);
-  const traceId = input.traceId?.trim() || undefined;
-  const [runSnapshot, events, taskEvents, commandEvents, toolLogs] = await Promise.all([
-    traceId ? resolveVisibleRunSnapshot(ctx, traceId) : Promise.resolve(undefined),
+  const requestedReference = input.traceId?.trim() || undefined;
+  const detail = input.detail === "model_io" ? "model_io" : "summary";
+  const resolved = await resolveVisibleRunFromRequest(ctx, requestedReference);
+  const runSnapshot = resolved.snapshot;
+  const traceId = runSnapshot?.run.traceId ?? requestedReference ?? resolved.reference;
+  const [events, taskEvents, commandEvents, toolLogs, modelIo] = await Promise.all([
     ctx.repo.getTraceEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
@@ -168,7 +175,8 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
       visibleChannelIds: ctx.visibleChannelIds,
       traceId,
       limit
-    })
+    }),
+    detail === "model_io" && runSnapshot ? loadVisibleModelIo(ctx, runSnapshot) : Promise.resolve({ content: "", artifactCount: 0 })
   ]);
 
   await ctx.repo.auditTool({
@@ -176,13 +184,14 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "inspectAgentLogs",
-    argumentsSummary: summarizeForAudit({ traceId, limit }),
+    argumentsSummary: summarizeForAudit({ requestedReference, resolvedReference: resolved.reference, referenceSource: resolved.source, traceId, limit, detail }),
     resultSummary: summarizeForAudit({
       normalizedRun: runSnapshot?.run.runId,
       traceEvents: events.length,
       taskEvents: taskEvents.length,
       commandEvents: commandEvents.length,
-      toolLogs: toolLogs.length
+      toolLogs: toolLogs.length,
+      modelIoArtifacts: modelIo.artifactCount,
     })
   });
 
@@ -192,6 +201,8 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
 
   return [
     traceId ? `Discord AI Agent logs for trace ${traceId}:` : "Recent Discord AI Agent logs:",
+    runSnapshot ? `\n${formatModelDebuggerInspection(runSnapshot)}` : "",
+    modelIo.content ? `\n${modelIo.content}` : "",
     runSnapshot ? `\n${formatVisibleRunInspection(runSnapshot)}` : "",
     "",
     formatTraceEvents(events),
@@ -206,14 +217,20 @@ export async function inspectAgentLogs(ctx: ToolContext, input: { traceId?: stri
     .join("\n");
 }
 
-
-async function resolveVisibleRunSnapshot(ctx: ToolContext, reference: string): Promise<RunSnapshot | undefined> {
-  const resolved = await resolveRunReference(ctx.repo, reference);
-  const runId = resolved?.run.runId ?? reference.trim();
-  if (!runId) return undefined;
-  const snapshot = await getRunSnapshot(ctx.repo, runId);
-  if (!snapshot || !isRunSnapshotVisibleToRequester(ctx, snapshot)) return undefined;
-  return snapshot;
+async function resolveVisibleRunFromRequest(ctx: ToolContext, requestedReference?: string) {
+  const candidates = requestedReference
+    ? [{ reference: requestedReference, source: "explicit" as const }]
+    : uniqueRunReferences([
+      { reference: ctx.replyContext?.rootMessageId, source: "reply_root" as const },
+      { reference: ctx.replyContext?.messageId, source: "reply_parent" as const },
+    ]);
+  for (const candidate of candidates) {
+    const resolved = await resolveRunReference(ctx.repo, candidate.reference);
+    const runId = resolved?.run.runId ?? candidate.reference;
+    const snapshot = await getRunSnapshot(ctx.repo, runId);
+    if (snapshot && isRunSnapshotVisibleToRequester(ctx, snapshot)) return { snapshot, reference: candidate.reference, source: candidate.source };
+  }
+  return { snapshot: undefined, reference: candidates[0]?.reference, source: candidates[0]?.source ?? "recent" as const };
 }
 
 function isRunSnapshotVisibleToRequester(ctx: ToolContext, snapshot: RunSnapshot) {
@@ -232,4 +249,40 @@ function formatVisibleRunInspection(snapshot: RunSnapshot) {
     }),
     6000
   );
+}
+
+async function loadVisibleModelIo(ctx: ToolContext, snapshot: RunSnapshot) {
+  if (typeof ctx.repo.getAgentRuntimeArtifact !== "function") return { content: "Observed model I/O: artifact loading is unavailable in this runtime.", artifactCount: 0 };
+  const artifacts = snapshot.artifacts.filter((artifact) => String(artifact.kind) === "model_prompt" || String(artifact.kind) === "model_response");
+  if (artifacts.length === 0) return { content: "Observed model I/O: this run has no prompt/response captures (it may predate capture support).", artifactCount: 0 };
+  const selected = latestModelIoArtifacts(artifacts);
+  const loaded = await Promise.all(selected.map(async (artifact) => ({
+    artifact,
+    content: await ctx.repo.getAgentRuntimeArtifact!({ artifactId: artifact.artifactId }),
+  })));
+  return {
+    content: formatModelIoCaptures(loaded.map((item) => ({
+      kind: String(item.artifact.kind),
+      name: item.artifact.name,
+      content: item.content?.content ?? null,
+    }))),
+    artifactCount: loaded.filter((item) => Boolean(item.content)).length,
+  };
+}
+
+function latestModelIoArtifacts(artifacts: RunSnapshot["artifacts"]) {
+  return [...artifacts]
+    .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+    .slice(0, 4)
+    .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+}
+
+function uniqueRunReferences<T extends { reference?: string; source: string }>(candidates: T[]): Array<{ reference: string; source: T["source"] }> {
+  const seen = new Set<string>();
+  return candidates.flatMap((candidate) => {
+    const reference = candidate.reference?.trim();
+    if (!reference || seen.has(reference)) return [];
+    seen.add(reference);
+    return [{ reference, source: candidate.source }];
+  });
 }

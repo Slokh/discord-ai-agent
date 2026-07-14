@@ -55,9 +55,9 @@ Code-update tasks live in the generic agent runtime. New control-plane work shou
 
 1. `src/observability/runs.ts` normalizes process runs, agent-runtime executions/messages/events/artifacts, trace events, tool audits, terminal logs, and task projections. Chat-run console views are derived from runtime executions/events/messages/artifacts; process runs remain for crawler, embedding, and task infrastructure.
 2. `src/control/internalApi.ts` exposes `/api/runs`, `/api/runs/:id`, artifact fetch, and streams.
-3. `src/control/console/` renders the React run console, including a dedicated Models view for provider usage, cost, prompt/tool-schema weight, and model decisions per call.
+3. `src/control/console/` renders the React run console, including a dedicated Prompt Debugger for provider usage, cost, prompt/tool-schema composition, exact observed request/response captures, tool-round transcripts, and critical-path recommendations per call. Captures use the authenticated artifact API, pass through repository secret redaction, follow runtime artifact retention, and intentionally do not expose private chain-of-thought.
 4. `scripts/inspectRun.ts`, `scripts/agentTaskStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths.
-5. `inspectAgentLogs` accepts Discord message links, message IDs, run IDs, or trace IDs and includes the same normalized run diagnostics as the console when the referenced run is visible to the requester.
+5. `inspectAgentLogs` accepts Discord message links, message IDs, run IDs, or trace IDs, and automatically resolves the reply root/direct parent when invoked from a Discord reply. For requester-visible runs it prioritizes model-round, prompt-composition, cache/cost, and critical-path diagnosis before normalized trace evidence; explicit `detail=model_io` requests may load bounded, secret-redacted prompt/response excerpts.
 6. Worker processes run `src/observability/artifactRetention.ts` periodically to delete expired large process-run and agent-runtime artifacts and their chunks.
 
 Useful terminal entrypoints:

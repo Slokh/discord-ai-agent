@@ -19,6 +19,21 @@ const tokenUsageSchema = z.object({
   cachedInputTokens: z.number().nonnegative().optional(),
 }).passthrough();
 
+const promptSectionSchema = z.object({
+  name: z.string().min(1),
+  bytes: z.number().int().nonnegative(),
+  characters: z.number().int().nonnegative(),
+  messageCount: z.number().int().nonnegative(),
+  estimatedTokens: z.number().int().nonnegative(),
+  roles: z.array(z.string()),
+});
+
+const toolSchemaTelemetrySchema = z.object({
+  name: z.string().min(1),
+  type: z.string().min(1),
+  bytes: z.number().int().nonnegative(),
+});
+
 const modelCallMetadataSchema = z.object({
   ...runtimeEnvelope,
   category: z.literal("model"),
@@ -29,10 +44,12 @@ const modelCallMetadataSchema = z.object({
   messageCount: z.number().int().nonnegative(),
   promptBytes: z.number().int().nonnegative(),
   promptFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  promptSections: z.array(promptSectionSchema).optional(),
   messageBytesByRole: z.record(z.string(), z.number().int().nonnegative()),
   toolCount: z.number().int().nonnegative(),
   toolSchemaBytes: z.number().int().nonnegative(),
   toolSchemaFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  toolSchemas: z.array(toolSchemaTelemetrySchema).optional(),
   offeredTools: z.array(z.string()),
   maxTokens: z.number().int().positive(),
   model: z.string().optional(),
@@ -41,6 +58,8 @@ const modelCallMetadataSchema = z.object({
   estimatedCostUsd: z.number().nonnegative().optional(),
   outputChars: z.number().int().nonnegative().optional(),
   requestedToolCalls: z.array(z.string()).optional(),
+  promptArtifactId: z.string().nullable().optional(),
+  responseArtifactId: z.string().nullable().optional(),
   error: z.string().optional(),
 }).passthrough();
 

@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import type { RunEvent, RunSnapshot } from "./types.js";
 
 type ModelUsage = {
@@ -9,8 +8,25 @@ type ModelUsage = {
   cachedInputTokens: number;
 };
 
+export type PromptSectionView = {
+  name: string;
+  bytes: number;
+  characters: number;
+  messageCount: number;
+  estimatedTokens: number;
+  roles: string[];
+};
+
+export type ToolSchemaView = {
+  name: string;
+  type: string;
+  bytes: number;
+};
+
 export type ModelCallView = {
   id: string;
+  callId: string;
+  round: number | null;
   appRevision: string;
   purpose: string;
   model: string;
@@ -25,82 +41,12 @@ export type ModelCallView = {
   usage: ModelUsage;
   requestedTools: string[];
   offeredTools: string[];
+  promptSections: PromptSectionView[];
+  toolSchemas: ToolSchemaView[];
+  promptArtifactId: string | null;
+  responseArtifactId: string | null;
   error: string | null;
 };
-
-export function ModelCalls({ snapshot }: { snapshot: RunSnapshot }) {
-  const calls = useMemo(() => modelCallsFromSnapshot(snapshot), [snapshot]);
-  const totals = calls.reduce(
-    (sum, call) => ({
-      durationMs: sum.durationMs + (call.durationMs ?? 0),
-      inputTokens: sum.inputTokens + call.usage.inputTokens,
-      outputTokens: sum.outputTokens + call.usage.outputTokens,
-      cachedInputTokens: sum.cachedInputTokens + call.usage.cachedInputTokens,
-      costUsd: sum.costUsd + call.costUsd,
-    }),
-    { durationMs: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 },
-  );
-
-  if (calls.length === 0) {
-    return <section className="panel"><p className="notice">No model-call telemetry was recorded for this run.</p></section>;
-  }
-
-  return (
-    <section className="panel model-calls-panel">
-      <div className="panel-heading">
-        <div className="panel-title"><h3>Model calls</h3></div>
-        <span className="model-call-count">{calls.length} calls</span>
-      </div>
-      <div className="model-call-summary" aria-label="Model call totals">
-        <Summary label="Input" value={formatNumber(totals.inputTokens)} />
-        <Summary label="Cached" value={formatNumber(totals.cachedInputTokens)} />
-        <Summary label="Output" value={formatNumber(totals.outputTokens)} />
-        <Summary label="Model time" value={formatDuration(totals.durationMs)} />
-        <Summary label="Cost" value={totals.costUsd > 0 ? `$${totals.costUsd.toFixed(5)}` : "unknown"} />
-      </div>
-      <div className="model-call-list">
-        {calls.map((call, index) => (
-          <article className={`model-call-card ${call.status}`} key={call.id}>
-            <header>
-              <div>
-                <span>Call {index + 1}</span>
-                <strong>{humanize(call.purpose)}</strong>
-              </div>
-              <div className="model-call-timing">
-                <strong>{formatDuration(call.durationMs)}</strong>
-                <span>{call.status}</span>
-              </div>
-            </header>
-            <dl className="model-call-facts">
-              <Fact label="Model" value={call.model} />
-              <Fact label="Revision" value={call.appRevision} />
-              <Fact label="Finish" value={call.finishReason} />
-              <Fact label="Prompt" value={`${formatBytes(call.promptBytes)} + ${formatBytes(call.toolSchemaBytes)} tools`} />
-              <Fact label="Tools offered" value={`${call.toolCount} (${formatBytes(call.toolSchemaBytes)})`} />
-              <Fact label="Tokens" value={`${formatNumber(call.usage.inputTokens)} in · ${formatNumber(call.usage.outputTokens)} out · ${formatNumber(call.usage.cachedInputTokens)} cached`} />
-              <Fact label="Output" value={`${formatNumber(call.outputChars)} chars`} />
-              <Fact label="Cost" value={call.costUsd > 0 ? `$${call.costUsd.toFixed(6)}` : "unknown"} />
-            </dl>
-            {call.requestedTools.length > 0 && (
-              <div className="model-call-tools"><span>Requested tools</span><code>{call.requestedTools.join(", ")}</code></div>
-            )}
-            {call.offeredTools.length > 0 && (
-              <details>
-                <summary>Tools offered ({call.offeredTools.length})</summary>
-                <code>{call.offeredTools.join(", ")}</code>
-              </details>
-            )}
-            {call.error && <p className="notice bad">{call.error}</p>}
-            <details>
-              <summary>Raw telemetry</summary>
-              <pre>{JSON.stringify(snapshot.events.find((event) => event.id === call.id)?.metadata ?? {}, null, 2)}</pre>
-            </details>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
 
 export function modelCallsFromSnapshot(snapshot: Pick<RunSnapshot, "events">): ModelCallView[] {
   const observed = snapshot.events.filter((event) => event.name === "agent.model.call.completed" || event.name === "agent.model.call.failed");
@@ -113,6 +59,8 @@ function modelCallFromEvent(event: RunEvent): ModelCallView {
   const usage = record(metadata.usage);
   return {
     id: event.id,
+    callId: stringValue(metadata.callId) ?? event.id,
+    round: nullableNumber(metadata.round),
     appRevision: stringValue(metadata.appRevision) ?? "unknown",
     purpose: stringValue(metadata.purpose) ?? (metadata.round ? `tool_selection_round_${metadata.round}` : "model_call"),
     model: stringValue(metadata.model) ?? stringValue(metadata.requestedModel) ?? "unknown",
@@ -133,16 +81,12 @@ function modelCallFromEvent(event: RunEvent): ModelCallView {
     },
     requestedTools: stringArray(metadata.requestedToolCalls),
     offeredTools: stringArray(metadata.offeredTools),
+    promptSections: promptSections(metadata.promptSections),
+    toolSchemas: toolSchemas(metadata.toolSchemas),
+    promptArtifactId: stringValue(metadata.promptArtifactId),
+    responseArtifactId: stringValue(metadata.responseArtifactId),
     error: stringValue(metadata.error),
   };
-}
-
-function Summary({ label, value }: { label: string; value: string }) {
-  return <div><span>{label}</span><strong>{value}</strong></div>;
-}
-
-function Fact({ label, value }: { label: string; value: string }) {
-  return <div><dt>{label}</dt><dd>{value}</dd></div>;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -154,6 +98,11 @@ function numberValue(value: unknown) {
   return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : 0;
 }
 
+function nullableNumber(value: unknown) {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : null;
+}
+
 function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
 }
@@ -162,20 +111,29 @@ function stringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function formatNumber(value: number) {
-  return value > 0 ? new Intl.NumberFormat().format(value) : "0";
+function promptSections(value: unknown): PromptSectionView[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const data = record(item);
+    const name = stringValue(data.name);
+    if (!name) return [];
+    return [{
+      name,
+      bytes: numberValue(data.bytes),
+      characters: numberValue(data.characters),
+      messageCount: numberValue(data.messageCount),
+      estimatedTokens: numberValue(data.estimatedTokens),
+      roles: stringArray(data.roles),
+    }];
+  });
 }
 
-function formatBytes(value: number) {
-  if (value <= 0) return "unknown";
-  return value >= 1024 ? `${(value / 1024).toFixed(1)} KB` : `${value} B`;
-}
-
-function formatDuration(value: number | null) {
-  if (value == null) return "unknown";
-  return value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${Math.round(value)}ms`;
-}
-
-function humanize(value: string) {
-  return value.replace(/[._-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+function toolSchemas(value: unknown): ToolSchemaView[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const data = record(item);
+    const name = stringValue(data.name);
+    if (!name) return [];
+    return [{ name, type: stringValue(data.type) ?? "unknown", bytes: numberValue(data.bytes) }];
+  });
 }

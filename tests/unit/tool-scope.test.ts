@@ -116,6 +116,15 @@ describe("tool scoping", () => {
     expect(groups.has("ops")).toBe(true);
   });
 
+  it("offers direct run debugging for terse Discord replies", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "debug this", hasImageAttachments: false, replyContext: true, config });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("ops")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "inspectAgentLogs")).toBe(true);
+  });
+
   it("requestAdditionalTools expands to requested or all groups", () => {
     withEnv(
       {

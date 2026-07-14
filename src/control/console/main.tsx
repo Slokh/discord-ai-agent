@@ -5,6 +5,7 @@ import "./styles.css";
 import "./feedback.css";
 import "./comparison.css";
 import "./model-calls.css";
+import "./prompt-debugger.css";
 import "./timeline.css";
 import "./detail-views.css";
 import { App } from "./App.js";

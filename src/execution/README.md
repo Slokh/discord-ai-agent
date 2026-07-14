@@ -38,7 +38,7 @@ Owns sandboxed code-update execution from queued task to PR.
 
 ## Sandbox launch and callbacks
 
-- Callback bearer tokens are HMAC tokens over `taskId`, `sandboxRunId`, and `issuedAt`. Every callback also sends `x-agent-task-timestamp` and `x-agent-task-signature`, where the signature is `HMAC(TASK_SIGNING_SECRET, timestamp + "." + rawBody)`. Progress, command, artifact, and terminal callback bodies must include the matching `sandboxRunId`.
+- Callback bearer tokens are HMAC tokens over `taskId`, `sandboxRunId`, and `issuedAt`. Every callback also sends `x-agent-task-timestamp` and `x-agent-task-signature`, where the signature is `HMAC(AGENT_TASK_SIGNATURE_SECRET, timestamp + "." + rawBody)`. Progress, command, artifact, and terminal callback bodies must include the matching `sandboxRunId`.
 - The internal API rejects progress callbacks after a task is terminal. Terminal callbacks are accepted idempotently after a task is already terminal, but the repository status guards prevent duplicate state transitions/events.
 - Kubernetes job names are deterministic from `taskId`; the queue passes a `recordSandboxRun` hook so `backend.ts` records the sandbox run before creating Kubernetes Secrets, ConfigMaps, or Jobs. The worker skips launch when an active sandbox run already exists for the task.
 - The reconciler asks the Kubernetes backend to sweep sandbox Jobs, Secrets, and ConfigMaps labeled `discord-ai-agent/task-id`; resources whose task id is not present in known sandbox runs are deleted.

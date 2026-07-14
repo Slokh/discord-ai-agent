@@ -14,6 +14,7 @@ export type SandboxEnv = {
   targetPullRequestUrl: string | null;
   controlPlaneInternalUrl: string;
   taskToken: string;
+  taskSigningSecret: string;
   githubToken: string;
   githubRepository: string;
   githubBaseBranch: string;
@@ -40,6 +41,7 @@ export function loadSandboxEnv(): SandboxEnv {
     targetPullRequestUrl: optionalEnv("TARGET_PULL_REQUEST_URL"),
     controlPlaneInternalUrl: requiredEnv("CONTROL_PLANE_INTERNAL_URL").replace(/\/$/, ""),
     taskToken: requiredEnv("AGENT_TASK_TOKEN"),
+    taskSigningSecret: requiredEnv("AGENT_TASK_SIGNATURE_SECRET"),
     githubToken: requiredEnv("GITHUB_TOKEN"),
     githubRepository: requiredEnv("GITHUB_REPOSITORY"),
     githubBaseBranch: requiredEnv("GITHUB_BASE_BRANCH"),

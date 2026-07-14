@@ -1,26 +1,35 @@
 import type { SandboxEnv } from "./sandboxEnv.js";
+import { callbackBodySignature } from "./token.js";
 
 export async function progress(env: SandboxEnv, step: string, message: string, metadata: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ event: "task.progress", taskId: env.taskId, step, message, metadata }));
-  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/events`, { step, message, metadata });
+  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/events`, {
+    step,
+    message,
+    metadata: { ...metadata, sandboxRunId: env.sandboxRunId }
+  });
 }
 
 export async function complete(env: SandboxEnv, body: Record<string, unknown>) {
   const metadata = body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {};
   await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/complete`, {
     ...body,
-    metadata: { sandboxRunId: env.sandboxRunId, ...metadata }
+    metadata: { ...metadata, sandboxRunId: env.sandboxRunId }
   });
 }
 
 export async function postJson(env: SandboxEnv, pathName: string, body: Record<string, unknown>) {
+  const rawBody = JSON.stringify(body);
+  const timestamp = String(Date.now());
   const response = await fetch(`${env.controlPlaneInternalUrl}${pathName}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${env.taskToken}`
+      authorization: `Bearer ${env.taskToken}`,
+      "x-agent-task-timestamp": timestamp,
+      "x-agent-task-signature": callbackBodySignature({ secret: env.taskSigningSecret, timestamp, rawBody })
     },
-    body: JSON.stringify(body)
+    body: rawBody
   });
   if (!response.ok) {
     throw new Error(`Control-plane callback failed (${response.status}): ${await response.text()}`);
@@ -41,8 +50,8 @@ export async function recordCommand(
 ) {
   if (!env) return;
   await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/commands`, {
-    sandboxRunId: env.sandboxRunId,
-    ...body
+    ...body,
+    sandboxRunId: env.sandboxRunId
   }).catch((error) => {
     console.error("Failed to post sandbox command event", error);
   });
@@ -72,7 +81,10 @@ export async function recordArtifact(
   }
 ) {
   if (!env) return;
-  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/artifacts`, body).catch((error) => {
+  await postJson(env, `/internal/tasks/${encodeURIComponent(env.taskId)}/artifacts`, {
+    ...body,
+    metadata: { ...(body.metadata ?? {}), sandboxRunId: env.sandboxRunId }
+  }).catch((error) => {
     console.error("Failed to post sandbox artifact", error);
   });
 }

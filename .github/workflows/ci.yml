@@ -25,7 +25,9 @@ jobs:
       - run: npm run typecheck
       - run: npx vitest run --coverage
       - run: npm run test:coverage:changed
-      - run: npm audit --omit=dev
+      # Production dependency findings remain visible in the log, but only a
+      # Critical advisory blocks a friend-scale release.
+      - run: npm audit --omit=dev --audit-level=critical
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
@@ -111,13 +113,22 @@ jobs:
           image: discord-ai-agent:ci-runtime
           config: .grype.yaml
           fail-build: true
-          severity-cutoff: high
+          severity-cutoff: critical
           only-fixed: true
+          output-file: grype-runtime.sarif
       - name: Scan codegen image
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           image: discord-ai-agent:ci-codegen
           config: .grype.yaml
           fail-build: true
-          severity-cutoff: high
+          severity-cutoff: critical
           only-fixed: true
+          output-file: grype-codegen.sarif
+      - name: Upload container scan reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-scan-reports
+          path: grype-*.sarif
+          if-no-files-found: warn

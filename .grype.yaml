@@ -1,9 +1,15 @@
 ignore:
-  # gh 2.96.0 is the latest upstream release and embeds Go 1.26.4. Grype marks
-  # GO-2026-4970 fixable at the Go toolchain level even though no patched gh
-  # binary exists yet. Remove this exact-version exception when gh ships a
-  # build using Go 1.26.5 or newer.
+  # gh 2.96.0 is the latest upstream release and embeds Go 1.26.4. Grype emits
+  # the same os.Root advisory under both GO-2026-4970 and CVE-2026-39822, and
+  # marks it fixable at the Go toolchain level even though no patched gh binary
+  # exists yet. Remove both exact-version exceptions when gh ships a build
+  # using Go 1.26.5 or newer.
   - vulnerability: GO-2026-4970
+    package:
+      name: stdlib
+      version: go1.26.4
+      location: /usr/bin/gh
+  - vulnerability: CVE-2026-39822
     package:
       name: stdlib
       version: go1.26.4

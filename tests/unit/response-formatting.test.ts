@@ -57,6 +57,37 @@ describe("Discord response formatting", () => {
     );
   });
 
+  it("supports a blank header for the row-label column", () => {
+    expect(
+      formatDiscordMarkdownTables(
+        [
+          "| | Cards | Total |",
+          "| --- | --- | --- |",
+          "| **You** | 2♣ 10♠ | **12** |",
+          "| **Dealer** | K♣ ? | ? |",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "```text",
+        "        Cards   Total",
+        "You     2♣ 10♠  12",
+        "Dealer  K♣ ?    ?",
+        "```",
+      ].join("\n"),
+    );
+  });
+
+  it("does not treat an all-empty header as a table", () => {
+    const content = [
+      "| | |",
+      "| --- | --- |",
+      "| one | two |",
+    ].join("\n");
+
+    expect(formatDiscordMarkdownTables(content)).toBe(content);
+  });
+
   it("pads emoji graphemes and keeps Markdown control characters literal", () => {
     expect(
       formatDiscordMarkdownTables(

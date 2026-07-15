@@ -63,6 +63,69 @@ describe("agent router", () => {
     expect(walletResult).not.toContain("USDC.e");
   });
 
+  it("binds 'your balance' to the bot wallet even when the model requests the requester wallet", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "wallet-call",
+          name: "getWalletBalance",
+          argumentsText: JSON.stringify({ owner: "requester" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "I have $5.95 USD.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const getBotWalletSummary = vi.fn(async () => ({
+      wallet: { address: `0x${"2".repeat(40)}` },
+      balance: { formatted: "5.95", token: { symbol: "USDC.e" } },
+    }));
+    const getUserWalletSummary = vi.fn();
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { getBotWalletSummary, getUserWalletSummary },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "message-2",
+      requestMessageId: "message-2",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what's your balance?");
+
+    expect(response.content).toBe("I have $5.95 USD.");
+    expect(getBotWalletSummary).toHaveBeenCalledWith("g", expect.any(Function));
+    expect(getUserWalletSummary).not.toHaveBeenCalled();
+    const executedToolCall = (chat.mock.calls[1]?.[0] as {
+      messages?: Array<{ role: string; tool_calls?: Array<{ function: { arguments: string } }> }>;
+    }).messages?.find((message) => message.role === "assistant")?.tool_calls?.[0];
+    expect(JSON.parse(executedToolCall?.function.arguments ?? "{}")).toEqual({ owner: "bot" });
+  });
+
   it("retries malformed tool calls with the original reply context and toolset", async () => {
     const traceEvents: any[] = [];
     const auditTool = vi.fn(async () => undefined);

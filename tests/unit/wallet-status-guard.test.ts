@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldForceWalletBalance } from "../../src/agent/walletStatusGuard.js";
+import { shouldForceWalletBalance, walletBalanceOwnerForPrompt } from "../../src/agent/walletStatusGuard.js";
 import { loadConfig } from "../../src/config/env.js";
 
 function configuredWallets() {
@@ -37,5 +37,17 @@ describe("wallet balance guard", () => {
     config.payments.walletEnabled = false;
 
     expect(shouldForceWalletBalance(config, "balance")).toBe(false);
+  });
+
+  it.each([
+    ["balance", "requester"],
+    ["what's my bankroll?", "requester"],
+    ["can you check my wallet balance?", "requester"],
+    ["your balance", "bot"],
+    ["what's your wallet balance?", "bot"],
+    ["show the bot's balance", "bot"],
+    ["how much balance do you have?", "bot"],
+  ] as const)("binds wallet ownership for %s", (text, owner) => {
+    expect(walletBalanceOwnerForPrompt(configuredWallets(), text)).toBe(owner);
   });
 });

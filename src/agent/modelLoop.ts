@@ -45,6 +45,7 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import {
+  bindForcedWalletBalanceOwner,
   coerceGeneratedCsvProducerRoutes,
   selectModelToolRoutes,
   traceToolRequestMetadata,
@@ -63,7 +64,7 @@ import {
   handleAdditionalToolsRequest,
   initialToolsetState,
 } from "./modelToolset.js";
-import { shouldForceWalletBalance } from "./walletStatusGuard.js";
+import { walletBalanceOwnerForPrompt } from "./walletStatusGuard.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -121,7 +122,8 @@ async function runAgentModelLoopInternal(
     invalidToolCallRecoveryAttempted: false,
   };
   let forceToolUseNextRound = false;
-  let forcedToolNameNextRound: ToolName | null = shouldForceWalletBalance(ctx.config, text) ? "getWalletBalance" : null;
+  let forcedWalletBalanceOwnerNextRound = walletBalanceOwnerForPrompt(ctx.config, text);
+  let forcedToolNameNextRound: ToolName | null = forcedWalletBalanceOwnerNextRound ? "getWalletBalance" : null;
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -213,6 +215,9 @@ async function runAgentModelLoopInternal(
       },
     });
     const currentToolset = currentScopedToolset(ctx, toolsetState);
+    const forcedWalletBalanceOwnerThisRound = forcedToolNameNextRound === "getWalletBalance"
+      ? forcedWalletBalanceOwnerNextRound
+      : null;
     let response;
     try {
       if (!(await reserveModelCall(ctx, modelCallBudget, "round", { round: round + 1 }))) {
@@ -231,6 +236,7 @@ async function runAgentModelLoopInternal(
           : undefined;
       forceToolUseNextRound = false;
       forcedToolNameNextRound = null;
+      forcedWalletBalanceOwnerNextRound = null;
       response = await runObservedModelCall(ctx, {
         purpose: "tool_selection",
         metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort() },
@@ -262,8 +268,9 @@ async function runAgentModelLoopInternal(
       throw error;
     }
 
-    const modelRoutes = coerceGeneratedCsvProducerRoutes(
-      selectModelToolRoutes(response.toolCalls),
+    const modelRoutes = bindForcedWalletBalanceOwner(
+      coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls)),
+      forcedWalletBalanceOwnerThisRound,
     );
     freshExternalDataGuard.noteRequestedTools(response.toolCalls.map((call) => call.name));
     const requestedToolRequests = response.toolCalls.map(

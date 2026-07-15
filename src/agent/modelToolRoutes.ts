@@ -5,6 +5,7 @@ import {
 import { previewText } from "../util/logger.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { parseToolArguments } from "./toolArguments.js";
+import type { ForcedWalletBalanceOwner } from "./walletStatusGuard.js";
 
 export function selectModelToolRoutes(
   toolCalls: Array<{ id: string; name: string; argumentsText: string }>,
@@ -34,6 +35,18 @@ export function coerceGeneratedCsvProducerRoutes(
       : "";
     if (existingFormat) return route;
     const args = { ...(route.arguments ?? {}), format: "csv" };
+    return { ...route, arguments: args, argumentsText: JSON.stringify(args) };
+  });
+}
+
+export function bindForcedWalletBalanceOwner(
+  routes: AgentToolRoute[],
+  owner: ForcedWalletBalanceOwner | null,
+): AgentToolRoute[] {
+  if (!owner) return routes;
+  return routes.map((route) => {
+    if (route.name !== "getWalletBalance") return route;
+    const args = { owner };
     return { ...route, arguments: args, argumentsText: JSON.stringify(args) };
   });
 }

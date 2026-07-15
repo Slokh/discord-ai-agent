@@ -34,6 +34,7 @@ export type ToolName =
   | "undoConversationTurns"
   | "reportStatus"
   | "getWalletBalance"
+  | "listWalletBalances"
   | "transferWalletFunds"
   | "adminTransferWalletFunds"
   | "reconcileWalletTransfers"
@@ -1172,7 +1173,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getWalletBalance",
     description:
-      "Read a verified current onchain USD wallet balance. Use owner=requester for 'my/mine' and unqualified balance requests; use owner=bot for 'your/yours', the bot, or the bot treasury. Only payment admins may pass owner=user to inspect another Discord user's wallet. ALWAYS call this instead of answering from memory whenever the user asks about a wallet, balance, bankroll, casino funds, or available money. Wallets are provisioned automatically and every displayed dollar is backed by USDC.e; present it simply as $ or USD.",
+      "Read a current USD wallet balance. Use owner=requester for 'my/mine' and unqualified balance requests; use owner=bot for 'your/yours', the bot, or the bot treasury. Use owner=user with a resolved userId for another member; owner/ops can always do this, and every member can when WALLET_BALANCES_PUBLIC=true. Another member without a wallet is reported as $0 without creating one. ALWAYS call this instead of answering from memory whenever the user asks about a wallet, balance, bankroll, casino funds, or available money. Existing wallet balances are verified live onchain against USDC.e and presented simply as $ or USD.",
     userVisible: true,
     mutates: false,
     group: "external",
@@ -1180,7 +1181,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
     toolClass: "external",
     outputContract: ["verified current USD balance", "public managed-wallet address", "Tempo network", "onchain verification timestamp"],
     examples: ["@ai balance", "@ai what's my bankroll?", "@ai what's your balance?"],
-    permissionRequirements: ["configured_wallet_runtime", "requester_scope", "owner_or_ops_for_other_users"],
+    permissionRequirements: ["configured_wallet_runtime", "requester_scope", "public_balance_directory_or_owner_ops_for_other_users"],
     auditEvents: ["tool_audit_logs", "wallet.provision.*"],
     parameters: {
       type: "object",
@@ -1188,13 +1189,32 @@ export const toolRegistry: ToolRegistryEntry[] = [
         owner: {
           type: "string",
           enum: ["requester", "bot", "user"],
-          description: "Whose wallet to read. Defaults to the requester when user wallets are enabled, otherwise the bot. Use bot for your/the bot's balance. user requires payment-admin permission and userId."
+          description: "Whose wallet to read. Defaults to the requester when user wallets are enabled, otherwise the bot. Use bot for your/the bot's balance. user requires userId and public balance visibility or payment-admin permission."
         },
         userId: {
           type: "string",
           description: "Discord user ID or mention when owner=user. Resolve names with findDiscordUsers first."
         }
       },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "listWalletBalances",
+    description:
+      "List the real USD wallet balance of every current non-bot member in this Discord server. ALWAYS use this for plural or server-wide requests such as 'every user's balance', 'all wallet balances', or 'who has money?'. It joins the live Discord member roster to existing managed wallets, reads every existing balance live onchain, and reports $0 USD for members without a wallet without creating one. This directory is available to owner/ops, or to every member when WALLET_BALANCES_PUBLIC=true.",
+    userVisible: true,
+    mutates: false,
+    group: "external",
+    category: "external",
+    toolClass: "external",
+    outputContract: ["every current non-bot server member", "verified current USD balances", "$0 for members without wallets", "wallet addresses in attached CSV when needed"],
+    examples: ["@ai what's the balance of every user in this server?"],
+    permissionRequirements: ["configured_user_wallet_runtime", "live_discord_member_roster", "public_balance_directory_or_owner_ops"],
+    auditEvents: ["tool_audit_logs", "wallet.directory.read"],
+    parameters: {
+      type: "object",
+      properties: {},
       additionalProperties: false
     }
   },
@@ -1823,7 +1843,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   ) {
     return "external";
   }
-  if (name === "getWalletBalance" || name === "transferWalletFunds") return "external";
+  if (name === "getWalletBalance" || name === "listWalletBalances" || name === "transferWalletFunds") return "external";
   return "discord";
 }
 
@@ -1861,6 +1881,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   undoConversationTurns: "memory",
   reportStatus: "ops",
   getWalletBalance: "external",
+  listWalletBalances: "external",
   transferWalletFunds: "external",
   adminTransferWalletFunds: "ops",
   reconcileWalletTransfers: "ops",
@@ -1935,6 +1956,7 @@ function defaultToolExamples(name: ToolName): string[] {
     undoConversationTurns: "@ai undo that",
     reportStatus: "@ai status",
     getWalletBalance: "@ai what's my bankroll?",
+    listWalletBalances: "@ai what's the balance of every user in this server?",
     transferWalletFunds: "@ai send $2 to @friend",
     adminTransferWalletFunds: "@ai move $5 from the bot wallet to @friend because their payout failed",
     reconcileWalletTransfers: "@ai reconcile pending wallet transfers",

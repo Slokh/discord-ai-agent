@@ -1,6 +1,7 @@
 import {
   adminTransferWalletFunds,
   getWalletBalance,
+  listWalletBalances,
   reconcileWalletTransfers,
   transferWalletFunds
 } from "../tools/walletTools.js";
@@ -16,6 +17,9 @@ export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolR
         userId: stringArgument(route.arguments, "userId")
       }), ctx.config.maxReplyChars)
     };
+  }
+  if (route.name === "listWalletBalances") {
+    return listWalletBalances(ctx);
   }
   if (route.name === "transferWalletFunds") {
     return {

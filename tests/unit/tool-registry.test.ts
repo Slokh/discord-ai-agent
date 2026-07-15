@@ -45,6 +45,7 @@ describe("toolRegistry", () => {
       "inspectAgentLogs",
       "reportStatus",
       "getWalletBalance",
+      "listWalletBalances",
       "transferWalletFunds",
       "adminTransferWalletFunds",
       "reconcileWalletTransfers",
@@ -80,6 +81,8 @@ describe("toolRegistry", () => {
     expect(tool?.description).toContain("USDC.e");
     expect(tool?.description).not.toContain("PathUSD");
     expect(tool?.outputContract).toContain("verified current USD balance");
+    expect(toolRegistry.find((entry) => entry.name === "listWalletBalances")?.outputContract)
+      .toContain("$0 for members without wallets");
   });
 
   it("exports a self-documenting contract for every local tool", () => {

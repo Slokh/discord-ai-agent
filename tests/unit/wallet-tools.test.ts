@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   adminTransferWalletFunds,
   getWalletBalance,
+  listWalletBalances,
   transferWalletFunds
 } from "../../src/tools/walletTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
@@ -36,6 +37,64 @@ describe("managed wallet tools", () => {
 
     await expect(getWalletBalance(ctx)).resolves.toContain("Bot wallet: $9.5 USD");
     expect(getBotWalletSummary).toHaveBeenCalledWith("guild", expect.any(Function));
+  });
+
+  it("lists every human server member and reports zero without provisioning missing wallets", async () => {
+    const listExistingUserWalletSummaries = vi.fn(async () => [{
+      userId: "alice",
+      wallet: { address: `0x${"2".repeat(40)}` },
+      balance: { formatted: "2.5" },
+      error: null
+    }]);
+    const fetchDiscordGuildMembers = vi.fn(async () => [
+      { userId: "alice", username: "alice", displayName: "Alice", isBot: false },
+      { userId: "bob", username: "bob", displayName: "Bob", isBot: false },
+      { userId: "build-bot", username: "build", displayName: "Build Bot", isBot: true }
+    ]);
+    const ctx = context({
+      walletBalancesPublic: true,
+      walletService: { listExistingUserWalletSummaries },
+      fetchDiscordGuildMembers
+    });
+
+    const result = await listWalletBalances(ctx);
+
+    expect(result.content).toContain("2 members, 1 wallet, 1 without wallets");
+    expect(result.content).toContain("Alice (alice): $2.5 USD — verified onchain");
+    expect(result.content).toContain("Bob (bob): $0 USD — no wallet");
+    expect(result.content).not.toContain("Build Bot");
+    expect(result.content).toContain("no wallet was created by this lookup");
+    expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "guild", userIds: ["alice", "bob"] });
+  });
+
+  it("keeps the member-to-wallet directory private unless configured public or requested by an admin", async () => {
+    const fetchDiscordGuildMembers = vi.fn();
+    const ctx = context({ fetchDiscordGuildMembers, walletService: {} });
+
+    await expect(listWalletBalances(ctx)).resolves.toEqual(expect.objectContaining({ content: expect.stringMatching(/restricted/) }));
+    expect(fetchDiscordGuildMembers).not.toHaveBeenCalled();
+  });
+
+  it("returns zero for another member without provisioning a wallet when balances are public", async () => {
+    const listExistingUserWalletSummaries = vi.fn(async () => []);
+    const getUserWalletSummary = vi.fn();
+    const ctx = context({
+      walletBalancesPublic: true,
+      repo: {
+        getDiscordUserReferenceTerms: vi.fn(async () => [{
+          userId: "bob", username: "bob", globalName: "Bob", aliases: [], terms: []
+        }])
+      },
+      walletService: { listExistingUserWalletSummaries, getUserWalletSummary }
+    });
+
+    const result = await getWalletBalance(ctx, { owner: "user", userId: "bob" });
+
+    expect(result).toContain("Bob's wallet: $0 USD");
+    expect(result).toContain("Address: no wallet");
+    expect(result).toContain("no wallet was created by this lookup");
+    expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "guild", userIds: ["bob"] });
+    expect(getUserWalletSummary).not.toHaveBeenCalled();
   });
 
   it("binds a normal transfer source to the immutable requester and verifies the managed destination", async () => {
@@ -116,8 +175,10 @@ describe("managed wallet tools", () => {
 
 function context(input: {
   ownerUserId?: string | null;
+  walletBalancesPublic?: boolean;
   repo?: Record<string, unknown>;
   walletService?: Record<string, unknown>;
+  fetchDiscordGuildMembers?: ToolContext["fetchDiscordGuildMembers"];
 } = {}): ToolContext {
   const auditTool = vi.fn(async () => undefined);
   return {
@@ -127,6 +188,7 @@ function context(input: {
       payments: {
         walletEnabled: true,
         userWalletsEnabled: true,
+        balancesPublic: input.walletBalancesPublic ?? false,
         tempoNetwork: "mainnet"
       }
     },
@@ -145,7 +207,8 @@ function context(input: {
       userDisplayName: "Requester"
     }),
     repo: { auditTool, ...(input.repo ?? {}) },
-    walletService: input.walletService
+    walletService: input.walletService,
+    fetchDiscordGuildMembers: input.fetchDiscordGuildMembers
   } as unknown as ToolContext;
 }
 

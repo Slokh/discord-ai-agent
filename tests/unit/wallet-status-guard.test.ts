@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldForceWalletBalance, walletBalanceOwnerForPrompt } from "../../src/agent/walletStatusGuard.js";
+import { shouldForceWalletBalance, walletBalanceOwnerForPrompt, walletBalanceRouteForPrompt } from "../../src/agent/walletStatusGuard.js";
 import { loadConfig } from "../../src/config/env.js";
 
 function configuredWallets() {
@@ -49,5 +49,18 @@ describe("wallet balance guard", () => {
     ["how much balance do you have?", "bot"],
   ] as const)("binds wallet ownership for %s", (text, owner) => {
     expect(walletBalanceOwnerForPrompt(configuredWallets(), text)).toBe(owner);
+  });
+
+  it.each([
+    "what's the balance of every user in this discord server?",
+    "show all member wallet balances",
+    "list everyone's balance",
+    "server-wide wallet balance",
+  ])("routes server-wide balance requests to the aggregate tool: %s", (text) => {
+    expect(walletBalanceRouteForPrompt(configuredWallets(), text)).toEqual({
+      toolName: "listWalletBalances",
+      owner: null,
+    });
+    expect(walletBalanceOwnerForPrompt(configuredWallets(), text)).toBeNull();
   });
 });

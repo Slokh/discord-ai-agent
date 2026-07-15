@@ -3,6 +3,7 @@ import type { ToolContext } from "../../src/tools/types.js";
 
 const mocks = vi.hoisted(() => ({
   walletBalance: vi.fn(),
+  walletBalances: vi.fn(),
   transfer: vi.fn(),
   adminTransfer: vi.fn(),
   reconcileWallets: vi.fn()
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../src/tools/walletTools.js", () => ({
   getWalletBalance: mocks.walletBalance,
+  listWalletBalances: mocks.walletBalances,
   transferWalletFunds: mocks.transfer,
   adminTransferWalletFunds: mocks.adminTransfer,
   reconcileWalletTransfers: mocks.reconcileWallets
@@ -22,6 +24,7 @@ describe("executeWalletToolRoute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.walletBalance.mockResolvedValue(" wallet ");
+    mocks.walletBalances.mockResolvedValue({ content: "wallet directory" });
     mocks.transfer.mockResolvedValue(" transferred ");
     mocks.adminTransfer.mockResolvedValue(" admin transferred ");
     mocks.reconcileWallets.mockResolvedValue(" wallets reconciled ");
@@ -46,6 +49,13 @@ describe("executeWalletToolRoute", () => {
     await expect(executeWalletToolRoute(ctx, route("reconcileWalletTransfers", {})))
       .resolves.toEqual({ content: "wallets reconciled" });
     await expect(executeWalletToolRoute(ctx, route("reportStatus", {}))).resolves.toBeNull();
+  });
+
+  it("routes the server wallet directory without truncating its tool payload", async () => {
+    const ctx = context();
+    await expect(executeWalletToolRoute(ctx, route("listWalletBalances", {})))
+      .resolves.toEqual({ content: "wallet directory" });
+    expect(mocks.walletBalances).toHaveBeenCalledWith(ctx);
   });
 });
 

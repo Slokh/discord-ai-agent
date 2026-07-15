@@ -63,6 +63,37 @@ describe("WalletService", () => {
     }));
   });
 
+  it("reads only existing user wallets without provisioning members who do not have one", async () => {
+    const alice = wallet({
+      id: "wallet-alice",
+      guildId: "guild-a",
+      ownerKind: "user",
+      discordUserId: "alice",
+      providerWalletId: "privy-alice",
+      address: `0x${"7".repeat(40)}`
+    });
+    const listUserWallets = vi.fn(async () => [alice]);
+    const ensureWalletPlaceholder = vi.fn();
+    const repo = { listUserWallets, ensureWalletPlaceholder } as unknown as PaymentRepository;
+    const provider = providerFake();
+    provider.getBalance = vi.fn(async () => 2_500_000n);
+    const service = new WalletService(loadConfig().payments, repo, provider);
+
+    const summaries = await service.listExistingUserWalletSummaries({
+      guildId: "guild-a",
+      userIds: ["alice", "bob"]
+    });
+
+    expect(listUserWallets).toHaveBeenCalledWith({ guildId: "guild-a", userIds: ["alice", "bob"], chainId: 42431 });
+    expect(summaries).toEqual([expect.objectContaining({
+      userId: "alice",
+      wallet: alice,
+      balance: expect.objectContaining({ formatted: "2.5" }),
+      error: null
+    })]);
+    expect(ensureWalletPlaceholder).not.toHaveBeenCalled();
+  });
+
   it("persists a low-balance health alert when the shared wallet cannot cover its operating threshold", async () => {
     const bot = wallet({});
     const upsertRuntimeHealth = vi.fn(async () => undefined);

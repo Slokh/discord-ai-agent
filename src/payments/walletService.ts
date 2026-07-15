@@ -73,6 +73,29 @@ export class WalletService {
     return { wallet, balance };
   }
 
+  async listExistingUserWalletSummaries(input: { guildId: string; userIds: string[] }) {
+    const userIds = [...new Set(input.userIds.filter(Boolean))];
+    const wallets = await this.repo.listUserWallets({
+      guildId: input.guildId,
+      userIds,
+      chainId: this.provider.chainId
+    });
+    const token = await this.usdToken();
+    return mapWithConcurrency(wallets, 8, async (wallet) => {
+      try {
+        const amountAtomic = await this.provider.getBalance({ wallet: activeManagedWallet(wallet), token });
+        return {
+          userId: wallet.discordUserId!,
+          wallet,
+          balance: { token, amountAtomic, formatted: atomicToUsd(amountAtomic, token.decimals) },
+          error: null
+        };
+      } catch (error) {
+        return { userId: wallet.discordUserId!, wallet, balance: null, error: errorMessage(error) };
+      }
+    });
+  }
+
   async transferFromUser(input: {
     guildId: string;
     requestedByUserId: string;
@@ -564,6 +587,19 @@ const LEGACY_MODERATO_CHAIN_ID = 42431;
 
 function networkExternalId(base: string, chainId: number): string {
   return chainId === LEGACY_MODERATO_CHAIN_ID ? base : `${base}_chain_${chainId}`;
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index]!);
+    }
+  }));
+  return results;
 }
 
 function activeManagedWallet(account: WalletAccount): ManagedWallet {

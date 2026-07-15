@@ -41,6 +41,17 @@ export class PaymentRepository {
     return result.rows[0] ? mapAccount(result.rows[0]) : null;
   }
 
+  async listUserWallets(input: { guildId: string; userIds: string[]; chainId: number }): Promise<WalletAccount[]> {
+    if (input.userIds.length === 0) return [];
+    const result = await this.pool.query(
+      `SELECT ${ACCOUNT_COLUMNS} FROM wallet_accounts
+       WHERE guild_id = $1 AND owner_kind = 'user' AND discord_user_id = ANY($2::text[]) AND chain_id = $3
+       ORDER BY discord_user_id`,
+      [input.guildId, input.userIds, input.chainId]
+    );
+    return result.rows.map(mapAccount);
+  }
+
   async ensureWalletPlaceholder(input: {
     guildId: string;
     ownerKind: WalletOwnerKind;

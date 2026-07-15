@@ -1,6 +1,6 @@
 import type { Client, GuildMember, Message, MessageCreateOptions, MessageEditOptions, MessagePayload, MessageReaction } from "discord.js";
 import type { Logger } from "pino";
-import type { DiscordAttachmentContext, DiscordUserAvatarResult } from "../tools/types.js";
+import type { DiscordAttachmentContext, DiscordGuildMemberSummary, DiscordUserAvatarResult } from "../tools/types.js";
 import { logger as defaultLogger } from "../util/logger.js";
 import { discordRetryDelayMs, retryAfterMsFromDiscordError } from "./crawler.js";
 
@@ -146,6 +146,21 @@ export async function fetchDiscordUserAvatar(
     defaultLogger.warn({ err: error, userId }, "Failed to fetch Discord user avatar");
     return null;
   }
+}
+
+export async function fetchDiscordGuildMembers(client: Client, guildId: string): Promise<DiscordGuildMemberSummary[]> {
+  const guild = client.guilds.cache.get(guildId) ?? (await client.guilds.fetch(guildId));
+  const members = await guild.members.fetch();
+  return [...members.values()]
+    .map((member) => ({
+      userId: member.id,
+      username: member.user.username ?? null,
+      displayName: member.displayName || member.user.globalName || member.user.username || null,
+      isBot: Boolean(member.user.bot)
+    }))
+    .sort((left, right) =>
+      (left.displayName || left.username || left.userId).localeCompare(right.displayName || right.username || right.userId)
+    );
 }
 
 export async function fetchDiscordAttachment(

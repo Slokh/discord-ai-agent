@@ -76,6 +76,7 @@ config:
   toolsetScoping: "true"
   walletEnabled: "false"
   userWalletsEnabled: "false"
+  walletBalancesPublic: "false"
   tempoNetwork: moderato
   tempoUsdToken: USDC.e
   walletInitialGrantUsd: "1.00"

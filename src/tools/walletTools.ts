@@ -1,7 +1,7 @@
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
 import type { PaymentEventRecorder } from "../payments/types.js";
 import { summarizeForAudit } from "../util/text.js";
-import type { ToolContext } from "./types.js";
+import type { AgentResponse, ToolContext } from "./types.js";
 
 type WalletOwnerInput = "requester" | "bot" | "user";
 type WalletEndpointInput = "bot" | "user";
@@ -23,16 +23,37 @@ export async function getWalletBalance(
   } else {
     const targetUserId = owner === "requester" ? actor.userId : normalizedUserId(input.userId);
     if (!targetUserId) return "userId is required when owner is user.";
-    if (targetUserId !== actor.userId && !isPaymentAdmin(ctx)) {
-      return "Only a payment admin can inspect another user's wallet balance.";
+    if (targetUserId !== actor.userId && !ctx.config.payments.balancesPublic && !isPaymentAdmin(ctx)) {
+      return "Another user's wallet balance is restricted to payment admins in this deployment.";
     }
     const target = await knownDiscordUser(ctx, targetUserId);
     if (!target) return "The target Discord user could not be verified in this server. Use findDiscordUsers first.";
-    result = await ctx.walletService.getUserWalletSummary(
-      { guildId: actor.guildId, userId: targetUserId },
-      paymentRecorder(ctx)
-    );
     label = targetUserId === actor.userId ? "Your wallet" : `${target.displayName}'s wallet`;
+    if (targetUserId !== actor.userId) {
+      const existing = (await ctx.walletService.listExistingUserWalletSummaries({
+        guildId: actor.guildId,
+        userIds: [targetUserId]
+      }))[0];
+      if (!existing) {
+        const content = [
+          `${label}: $0 USD`,
+          "Address: no wallet",
+          `Network: ${ctx.config.payments.tempoNetwork}`,
+          `Checked: ${new Date().toISOString()} (no wallet was created by this lookup)`
+        ].join("\n");
+        await audit(ctx, "getWalletBalance", `user:${targetUserId}`, content);
+        return content;
+      }
+      if (!existing.balance) {
+        return `${label}: balance unavailable\nAddress: ${existing.wallet.address ?? "unavailable"}\nReason: ${existing.error ?? "unknown balance read failure"}`;
+      }
+      result = { wallet: existing.wallet, balance: existing.balance };
+    } else {
+      result = await ctx.walletService.getUserWalletSummary(
+        { guildId: actor.guildId, userId: targetUserId },
+        paymentRecorder(ctx)
+      );
+    }
   }
   const content = [
     `${label}: $${result.balance.formatted} USD`,
@@ -42,6 +63,74 @@ export async function getWalletBalance(
   ].join("\n");
   await audit(ctx, "getWalletBalance", `${owner}${input.userId ? `:${normalizedUserId(input.userId)}` : ""}`, content);
   return content;
+}
+
+export async function listWalletBalances(ctx: ToolContext): Promise<AgentResponse> {
+  const actor = paymentRequester(ctx);
+  if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
+    return { content: "Per-user USD wallets are not enabled in this deployment." };
+  }
+  if (!ctx.config.payments.balancesPublic && !isPaymentAdmin(ctx)) {
+    return { content: "The server wallet directory is restricted to payment admins in this deployment." };
+  }
+  if (!ctx.fetchDiscordGuildMembers) {
+    return { content: "The live Discord member directory is unavailable in this runtime." };
+  }
+
+  const members = (await ctx.fetchDiscordGuildMembers({ guildId: actor.guildId })).filter((member) => !member.isBot);
+  const summaries = await ctx.walletService.listExistingUserWalletSummaries({
+    guildId: actor.guildId,
+    userIds: members.map((member) => member.userId)
+  });
+  const byUserId = new Map(summaries.map((summary) => [summary.userId, summary]));
+  const rows = members.map((member) => {
+    const summary = byUserId.get(member.userId);
+    const name = member.displayName || member.username || member.userId;
+    if (!summary) return { userId: member.userId, name, balance: "0", hasWallet: false, address: "", status: "no wallet" };
+    if (!summary.balance) {
+      return {
+        userId: member.userId,
+        name,
+        balance: "",
+        hasWallet: true,
+        address: summary.wallet.address ?? "",
+        status: `balance unavailable: ${summary.error ?? "unknown error"}`
+      };
+    }
+    return {
+      userId: member.userId,
+      name,
+      balance: summary.balance.formatted,
+      hasWallet: true,
+      address: summary.wallet.address ?? "",
+      status: "verified onchain"
+    };
+  });
+  const walletCount = rows.filter((row) => row.hasWallet).length;
+  const unavailableCount = rows.filter((row) => row.hasWallet && !row.balance).length;
+  const lines = rows.map((row) =>
+    `- ${row.name} (${row.userId}): ${row.balance ? `$${row.balance} USD` : "unavailable"} — ${row.status}`
+  );
+  const header = `Server wallet balances: ${rows.length} members, ${walletCount} ${walletCount === 1 ? "wallet" : "wallets"}, ${rows.length - walletCount} without wallets.`;
+  const verifiedAt = `Checked: ${new Date().toISOString()}. Members without a wallet are shown as $0 USD; no wallet was created by this lookup.`;
+  let content = [header, ...lines, verifiedAt].join("\n");
+  let files: AgentResponse["files"];
+  if (Buffer.byteLength(content, "utf8") > Math.max(1_000, ctx.config.maxReplyChars - 250)) {
+    content = [header, ...lines.slice(0, 10), `Full ${rows.length}-member directory attached as wallet-balances.csv.`, verifiedAt].join("\n");
+    files = [{ name: "wallet-balances.csv", contentType: "text/csv", data: Buffer.from(walletBalancesCsv(rows), "utf8") }];
+  }
+  await recordAgentEvent(ctx, {
+    eventName: "wallet.directory.read",
+    summary: `Read ${rows.length} Discord member wallet balances`,
+    metadata: { memberCount: rows.length, walletCount, unavailableCount, balancesPublic: ctx.config.payments.balancesPublic }
+  });
+  await audit(ctx, "listWalletBalances", `guild:${actor.guildId}`, header);
+  return {
+    content,
+    files,
+    status: unavailableCount > 0 ? "partial" : "ok",
+    limitation: unavailableCount > 0 ? `${unavailableCount} existing wallet balance reads failed.` : undefined
+  };
 }
 
 export async function transferWalletFunds(
@@ -204,6 +293,24 @@ function positiveAmount(value: number | undefined): number | null {
 
 function money(value: number): string {
   return value.toFixed(6).replace(/\.0+$|(?<=\.[0-9]*[1-9])0+$/, "");
+}
+
+function walletBalancesCsv(rows: Array<{
+  userId: string;
+  name: string;
+  balance: string;
+  hasWallet: boolean;
+  address: string;
+  status: string;
+}>): string {
+  return [
+    ["discord_user_id", "display_name", "balance_usd", "has_wallet", "address", "status"],
+    ...rows.map((row) => [row.userId, row.name, row.balance || "unavailable", String(row.hasWallet), row.address, row.status])
+  ].map((row) => row.map(csvCell).join(",")).join("\n");
+}
+
+function csvCell(value: string): string {
+  return /[",\n\r]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
 
 function formatManagedTransfer(

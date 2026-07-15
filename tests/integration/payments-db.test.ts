@@ -130,6 +130,22 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
     await expect(repo.getWalletForOwner({ guildId, ownerKind: "bot", chainId: 4217 })).resolves.toMatchObject({ id: mainnet.id });
   });
 
+  it("lists only existing user wallets in the requested guild and network", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const alice = await activeWallet(guildId, "user", "alice", "6");
+    await activeWallet(guildId, "user", "charlie", "7");
+    await repo.ensureWalletPlaceholder({
+      guildId,
+      ownerKind: "user",
+      discordUserId: "alice",
+      externalId: `${guildId}-alice-mainnet`,
+      chainId: 4217
+    });
+
+    await expect(repo.listUserWallets({ guildId, userIds: ["alice", "bob"], chainId: 42431 }))
+      .resolves.toEqual([expect.objectContaining({ id: alice.id, discordUserId: "alice", chainId: 42431 })]);
+  });
+
   it("reserves wager exposure transactionally and releases it", async () => {
     const guildId = `${guildPrefix}${randomUUID()}`;
     const bot = await activeWallet(guildId, "bot", null, "4");

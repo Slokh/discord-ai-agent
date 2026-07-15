@@ -40,6 +40,7 @@ jobs:
       BUDGET_GUILD_DAILY_USD: ${{ vars.BUDGET_GUILD_DAILY_USD }}
       WALLET_ENABLED: ${{ vars.WALLET_ENABLED }}
       USER_WALLETS_ENABLED: ${{ vars.USER_WALLETS_ENABLED }}
+      WALLET_BALANCES_PUBLIC: ${{ vars.WALLET_BALANCES_PUBLIC }}
       TEMPO_NETWORK: ${{ vars.TEMPO_NETWORK }}
       TEMPO_USD_TOKEN: ${{ vars.TEMPO_USD_TOKEN }}
       WALLET_INITIAL_GRANT_USD: ${{ vars.WALLET_INITIAL_GRANT_USD }}
@@ -136,6 +137,9 @@ jobs:
           fi
           if [ -n "${USER_WALLETS_ENABLED:-}" ]; then
             helm_args+=(--set-string "config.userWalletsEnabled=$USER_WALLETS_ENABLED")
+          fi
+          if [ -n "${WALLET_BALANCES_PUBLIC:-}" ]; then
+            helm_args+=(--set-string "config.walletBalancesPublic=$WALLET_BALANCES_PUBLIC")
           fi
           if [ -n "${TEMPO_NETWORK:-}" ]; then
             helm_args+=(--set-string "config.tempoNetwork=$TEMPO_NETWORK")

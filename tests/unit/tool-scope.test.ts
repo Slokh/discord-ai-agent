@@ -56,6 +56,8 @@ describe("tool scoping", () => {
       expect(names).toContain("discoverMppServices");
       expect(names).toContain("inspectMppService");
       expect(names).toContain("callMppService");
+      expect(names).toContain("getBotPaymentStatus");
+      expect(names).toContain("reconcileBotPayments");
       expect(names).not.toContain("getGameWalletBalance");
       expect(names).not.toContain("settleRandomWager");
       expect(properties).not.toHaveProperty("wager");

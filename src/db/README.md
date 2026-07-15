@@ -12,7 +12,7 @@ Owns durable Postgres state and query contracts.
 - Process runs, spans, run events, artifacts, and cleanup live in `processRunRepository.ts`.
 - Trace events and tool audit logs live in `auditRepository.ts`.
 - Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `agent_runtime_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters. Per-user turn-limit overrides (`user_budget_overrides`, managed by the `setUserTurnLimit` tool) are the one piece of stored budget state.
-- Wallet accounts, transfer idempotency, wager exposure, MPP budgets/attempts/receipts, recent-request deduplication, serialized payment-channel state, and payment runtime health live in `paymentRepository.ts`, with focused transfer SQL helpers in `paymentTransferPersistence.ts`, and migrations `008_wallets_mpp.sql` onward.
+- Wallet accounts, transfer idempotency, wager exposure, MPP budgets/attempts/receipts, recent-request deduplication, serialized payment-channel state, and payment runtime health live in `paymentRepository.ts`, with focused transfer SQL helpers in `paymentTransferPersistence.ts`, MPP status/history reads in `paymentMppReadQueries.ts`, and migrations `008_wallets_mpp.sql` onward.
 - Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history.
 - DB-backed skills, server overlays, and health checks live in `skillsRepository.ts`.
 - `repositories.ts` is a compatibility facade that delegates to the focused modules; shared types live in `types.ts`, with only cross-domain helpers left in `shared.ts`.

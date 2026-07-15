@@ -34,6 +34,8 @@ export type ToolName =
   | "undoConversationTurns"
   | "reportStatus"
   | "getGameWalletBalance"
+  | "getBotPaymentStatus"
+  | "reconcileBotPayments"
   | "getSpotifyPlaylistTracks"
   | "getSpotifyAlbumTracks"
   | "getSpotifyArtistDiscography"
@@ -1189,6 +1191,46 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "getBotPaymentStatus",
+    description:
+      "Read the shared bot wallet's complete MPP lifecycle status through a normal conversation: automatically ensure the wallet exists, then return its public mainnet funding address, PathUSD balance, health, today's spend and remaining budget, configured approval limits, and recent paid-call attempts or receipts. Use whenever the user asks for your/the bot's wallet, balance, funding address, MPP budget, payment health, payment history, receipts, or failed paid calls. This is not a Discord command and never exposes signing credentials.",
+    userVisible: true,
+    mutates: false,
+    group: "external",
+    category: "external",
+    toolClass: "external",
+    outputContract: ["shared wallet public address and network", "current PathUSD balance and health", "today's MPP spend and remaining limits", "recent MPP attempts, receipts, and failures"],
+    examples: ["@ai what's your wallet balance?", "@ai where can I fund your MPP wallet?", "@ai show your recent paid API calls"],
+    permissionRequirements: ["configured_bot_wallet", "requesting_discord_user"],
+    auditEvents: ["tool_audit_logs", "wallet.health.checked"],
+    parameters: {
+      type: "object",
+      properties: {
+        limit: { type: "number", description: "Maximum recent MPP attempts to include. Defaults to 5; max 20." }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "reconcileBotPayments",
+    description:
+      "Reconcile pending or uncertain shared-wallet transfers against Tempo, expire stale wagers, and then return the refreshed shared MPP wallet status. Use only when an authorized operator explicitly asks in natural language to reconcile, refresh, or repair payment state. Routine reconciliation already runs automatically; this provides a conversational operator control without a Discord command.",
+    userVisible: true,
+    mutates: true,
+    group: "external",
+    category: "ops",
+    toolClass: "ops",
+    outputContract: ["reconciliation counts", "refreshed shared-wallet balance and health", "today's spend and recent MPP attempts", "failures requiring manual review"],
+    examples: ["@ai reconcile your pending payments and show the updated status"],
+    permissionRequirements: ["owner_or_ops_allowlist", "explicit_user_request", "configured_bot_wallet"],
+    auditEvents: ["tool_audit_logs", "wallet.reconciliation.completed", "wallet.health.checked"],
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  },
+  {
     name: "discoverMppServices",
     description:
       "Rank MPP paid services for a natural-language task using the official read-only Services MCP, with a bounded public-catalog fallback. Use when current/local tools are insufficient and an external paid service may materially improve the answer. Discovery is free. Inspect a candidate before calling it; advertised prices are advisory and never authorize payment.",
@@ -1820,7 +1862,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   ) {
     return "external";
   }
-  if (name === "getGameWalletBalance" || name === "discoverMppServices" || name === "inspectMppService" || name === "callMppService") return "external";
+  if (name === "getGameWalletBalance" || name === "getBotPaymentStatus" || name === "discoverMppServices" || name === "inspectMppService" || name === "callMppService") return "external";
   return "discord";
 }
 
@@ -1858,6 +1900,8 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   undoConversationTurns: "memory",
   reportStatus: "ops",
   getGameWalletBalance: "external",
+  getBotPaymentStatus: "external",
+  reconcileBotPayments: "ops",
   getSpotifyPlaylistTracks: "external",
   getSpotifyAlbumTracks: "external",
   getSpotifyArtistDiscography: "external",
@@ -1932,6 +1976,8 @@ function defaultToolExamples(name: ToolName): string[] {
     undoConversationTurns: "@ai undo that",
     reportStatus: "@ai status",
     getGameWalletBalance: "@ai what's my bankroll?",
+    getBotPaymentStatus: "@ai what's your wallet balance?",
+    reconcileBotPayments: "@ai reconcile your pending payments and show the updated status",
     getSpotifyPlaylistTracks: "@ai list all the tracks in this Spotify playlist: https://open.spotify.com/playlist/abc123",
     getSpotifyAlbumTracks: "@ai list the tracks on this Spotify album: https://open.spotify.com/album/abc123",
     getSpotifyArtistDiscography: "@ai show me this artist's Spotify discography: https://open.spotify.com/artist/abc123",

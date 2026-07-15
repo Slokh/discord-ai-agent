@@ -85,6 +85,37 @@ describe("WalletService", () => {
     }));
   });
 
+  it("returns a conversational shared-wallet lifecycle snapshot", async () => {
+    const bot = wallet({ chainId: 4217 });
+    const repo = {
+      ensureWalletPlaceholder: vi.fn(async () => bot),
+      upsertRuntimeHealth: vi.fn(async () => undefined),
+      getBotMppSpendToday: vi.fn(async () => 2_500_000n),
+      listMppAttempts: vi.fn(async () => [{
+          id: "mppa-1",
+          service_id: "company-data",
+          operation_id: "enrich_company",
+          status: "succeeded",
+          amount_usd_micros: "10000",
+          approval_mode: "automatic_low_cost",
+          receipt_reference: "receipt-1",
+          created_at: new Date("2026-07-15T12:00:00Z")
+        }])
+    } as unknown as PaymentRepository;
+    const provider = { ...providerFake(), chainId: 4217, getBalance: vi.fn(async () => 7_500_000n) };
+    const config = loadConfig().payments;
+    config.tempoNetwork = "mainnet";
+    const service = new WalletService(config, repo, provider);
+
+    await expect(service.getBotPaymentStatus("guild-a", 5)).resolves.toEqual(expect.objectContaining({
+      wallet: expect.objectContaining({ address: botAddress, network: "mainnet", chainId: 4217, balanceUsd: "7.5" }),
+      spend: { todayUsd: "2.5", remainingBotDailyUsd: "7.5" },
+      recentAttempts: [expect.objectContaining({ id: "mppa-1", amountUsd: "0.01", receiptReference: "receipt-1" })]
+    }));
+    expect(repo.getBotMppSpendToday).toHaveBeenCalledWith();
+    expect(repo.listMppAttempts).toHaveBeenCalledWith({ guildId: "guild-a", limit: 5 });
+  });
+
   it("marks an unfunded transfer failed before signing instead of treating it as uncertain", async () => {
     const source = wallet({ guildId: SHARED_BOT_GUILD_ID, externalId: "shared" });
     const transfer = transferRecord({ sourceWalletId: source.id });

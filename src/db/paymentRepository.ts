@@ -9,6 +9,7 @@ import type {
 } from "../payments/types.js";
 import { stableId } from "../payments/money.js";
 import { mapAccount, mapTransfer, mapWager, toUsdMicrosCeil } from "./paymentRowMappers.js";
+import { getBotMppSpendToday, listMppAttempts } from "./paymentMppReadQueries.js";
 import { getTransferWithClient, insertTransfer, TRANSFER_COLUMNS } from "./paymentTransferPersistence.js";
 
 const ACCOUNT_COLUMNS = `
@@ -666,24 +667,11 @@ export class PaymentRepository {
   }
 
   async listMppAttempts(input: { guildId?: string; limit?: number } = {}): Promise<Array<Record<string, unknown>>> {
-    const values: unknown[] = [];
-    const where = input.guildId ? `WHERE guild_id = $${values.push(input.guildId)}` : "";
-    values.push(Math.max(1, Math.min(input.limit ?? 100, 500)));
-    const result = await this.pool.query(
-      `
-        SELECT id, guild_id, requested_by_user_id, execution_id, service_id,
-          inspection_id, operation_id, effect, approval_mode, service_origin,
-          request_url, request_method, challenge_id, payment_method, payment_intent,
-          currency, amount_atomic::text, amount_usd_micros::text, decimals,
-          recipient, chain_id, status, http_status, response_content_type,
-          response_bytes, receipt_method, receipt_reference, receipt_status,
-          receipt_timestamp, receipt_external_id, error_message, created_at, completed_at, updated_at
-        FROM mpp_payment_attempts ${where}
-        ORDER BY created_at DESC LIMIT $${values.length}
-      `,
-      values
-    );
-    return result.rows;
+    return listMppAttempts(this.pool, input);
+  }
+
+  async getBotMppSpendToday(): Promise<bigint> {
+    return getBotMppSpendToday(this.pool);
   }
 
   async getPaymentsConsoleSnapshot(input: { guildId?: string; limit?: number } = {}): Promise<Record<string, unknown>> {

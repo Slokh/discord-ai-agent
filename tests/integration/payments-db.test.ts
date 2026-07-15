@@ -214,6 +214,34 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       userDailyUsdMicros: 1_000_000n,
       botDailyUsdMicros: 10_000_000n
     })).rejects.toThrow(/user's daily payment limit/);
+
+    const third = await repo.beginMppAttempt({
+      guildId: `${guildId}-another-guild`,
+      requestedByUserId: "user-4",
+      executionId: "execution-4",
+      requestFingerprint: "fingerprint-3",
+      serviceId: "service",
+      inspectionId: "inspection-3",
+      operationId: "get_c",
+      effect: "read_only",
+      serviceOrigin: "https://service.example",
+      requestUrl: "https://service.example/c",
+      requestMethod: "GET"
+    });
+    await repo.authorizeMppPayment({
+      attemptId: third.id,
+      method: "tempo",
+      intent: "charge",
+      currency: `0x${"6".repeat(40)}`,
+      amountAtomic: 600_000n,
+      decimals: 6,
+      chainId: 42431,
+      approvalMode: "automatic_low_cost",
+      maxCallUsdMicros: 1_000_000n,
+      userDailyUsdMicros: 1_000_000n,
+      botDailyUsdMicros: 10_000_000n
+    });
+    await expect(repo.getBotMppSpendToday()).resolves.toBe(1_100_000n);
   });
 
   it("persists JSON channel state used by MPP sessions", async () => {

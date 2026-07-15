@@ -56,7 +56,6 @@ import {
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
-  prefersStructuredLiveService,
 } from "./freshExternalDataGuard.js";
 import {
   currentScopedToolset,
@@ -64,7 +63,7 @@ import {
   handleAdditionalToolsRequest,
   initialToolsetState,
 } from "./modelToolset.js";
-import { shouldForceSharedWalletStatus } from "./walletStatusGuard.js";
+import { shouldForceWalletBalance } from "./walletStatusGuard.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -122,7 +121,7 @@ async function runAgentModelLoopInternal(
     invalidToolCallRecoveryAttempted: false,
   };
   let forceToolUseNextRound = false;
-  let forcedToolNameNextRound: ToolName | null = shouldForceSharedWalletStatus(ctx.config, text) ? "getBotPaymentStatus" : null;
+  let forcedToolNameNextRound: ToolName | null = shouldForceWalletBalance(ctx.config, text) ? "getWalletBalance" : null;
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -361,12 +360,6 @@ async function runAgentModelLoopInternal(
       if (freshExternalDataDecision !== "allow") {
         if (freshExternalDataDecision === "retry") {
           forceToolUseNextRound = true;
-          if (
-            prefersStructuredLiveService(text) &&
-            currentToolset.localTools.some((tool) => tool.name === "discoverMppServices")
-          ) {
-            forcedToolNameNextRound = "discoverMppServices";
-          }
           messages.push({ role: "assistant", content: response.content });
           messages.push({
             role: "system",
@@ -466,7 +459,6 @@ async function runAgentModelLoopInternal(
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
       randomOutcomeGuard.noteToolResult(route.name, result.content);
-      freshExternalDataGuard.noteToolResult(route.name, result);
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
         route.name !== "requestAdditionalTools" &&

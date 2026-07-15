@@ -63,7 +63,7 @@ describe("WalletService", () => {
     }));
   });
 
-  it("persists a low-balance health alert when the shared wallet cannot cover the daily MPP budget", async () => {
+  it("persists a low-balance health alert when the shared wallet cannot cover its operating threshold", async () => {
     const bot = wallet({});
     const upsertRuntimeHealth = vi.fn(async () => undefined);
     const repo = {
@@ -83,43 +83,6 @@ describe("WalletService", () => {
       status: "low_balance",
       details: expect.objectContaining({ alertThresholdUsd: 10, balanceUsd: "5" })
     }));
-  });
-
-  it("returns a conversational shared-wallet lifecycle snapshot", async () => {
-    const bot = wallet({ chainId: 4217 });
-    const repo = {
-      ensureWalletPlaceholder: vi.fn(async () => bot),
-      upsertRuntimeHealth: vi.fn(async () => undefined),
-      getBotMppSpendToday: vi.fn(async () => 2_500_000n),
-      listMppAttempts: vi.fn(async () => [{
-          id: "mppa-1",
-          service_id: "company-data",
-          operation_id: "enrich_company",
-          status: "succeeded",
-          amount_usd_micros: "10000",
-          approval_mode: "automatic_low_cost",
-          receipt_reference: "receipt-1",
-          created_at: new Date("2026-07-15T12:00:00Z")
-        }])
-    } as unknown as PaymentRepository;
-    const provider = {
-      ...providerFake(),
-      chainId: 4217,
-      getBalance: vi.fn(async () => 7_500_000n),
-      resolveToken: vi.fn(async (token: string) => ({ symbol: token, address: tokenAddress, decimals: 6, currency: "USD" }))
-    };
-    const config = loadConfig().payments;
-    config.tempoNetwork = "mainnet";
-    const service = new WalletService(config, repo, provider);
-
-    await expect(service.getBotPaymentStatus("guild-a", 5)).resolves.toEqual(expect.objectContaining({
-      wallet: expect.objectContaining({ address: botAddress, network: "mainnet", chainId: 4217, token: "USDC.e", balanceUsd: "7.5" }),
-      spend: { todayUsd: "2.5", remainingBotDailyUsd: "7.5" },
-      recentAttempts: [expect.objectContaining({ id: "mppa-1", amountUsd: "0.01", receiptReference: "receipt-1" })]
-    }));
-    expect(repo.getBotMppSpendToday).toHaveBeenCalledWith();
-    expect(repo.listMppAttempts).toHaveBeenCalledWith({ guildId: "guild-a", limit: 5 });
-    expect(provider.resolveToken).toHaveBeenCalledWith("USDC.e");
   });
 
   it("marks an unfunded transfer failed before signing instead of treating it as uncertain", async () => {
@@ -175,13 +138,109 @@ describe("WalletService", () => {
       feePayerWallet: { providerWalletId: "privy-bot", address: botAddress }
     }));
   });
+
+  it("records a confirmed transaction without the expected delivery as final and never retryable", async () => {
+    const source = wallet({ guildId: SHARED_BOT_GUILD_ID, externalId: "shared" });
+    const transfer = transferRecord({ sourceWalletId: source.id });
+    const transactionHash = `0x${"8".repeat(64)}` as const;
+    const markTransferSubmitted = vi.fn(async () => ({ ...transfer, status: "submitted", transactionHash }));
+    const updateTransferStatus = vi.fn(async (input) => ({
+      ...transfer,
+      status: input.status,
+      transactionHash,
+      errorMessage: input.errorMessage ?? null
+    }));
+    const repo = {
+      getTransfer: vi.fn(async () => transfer),
+      claimTransferSubmission: vi.fn(async () => ({ ...transfer, status: "submitting" })),
+      getWallet: vi.fn(async () => source),
+      markTransferSubmitted,
+      updateTransferStatus
+    } as unknown as PaymentRepository;
+    const provider = providerFake();
+    provider.transfer = vi.fn(async () => {
+      throw Object.assign(new Error("confirmed without expected delivery"), { transactionHash });
+    });
+    const service = new WalletService(loadConfig().payments, repo, provider);
+
+    await expect(service.submitTransfer(transfer.id)).rejects.toThrow(/will not be retried/);
+    expect(markTransferSubmitted).toHaveBeenCalledWith(transfer.id, transactionHash);
+    expect(updateTransferStatus).toHaveBeenCalledWith(expect.objectContaining({
+      id: transfer.id,
+      status: "cancelled"
+    }));
+  });
+
+  it("creates requester-bound user-to-user transfers on the single USD token", async () => {
+    const sender = wallet({
+      id: "wallet-sender",
+      guildId: "guild-a",
+      ownerKind: "user",
+      discordUserId: "sender",
+      providerWalletId: "privy-sender",
+      externalId: "sender",
+      address: `0x${"6".repeat(40)}`
+    });
+    const receiver = wallet({
+      id: "wallet-receiver",
+      guildId: "guild-a",
+      ownerKind: "user",
+      discordUserId: "receiver",
+      providerWalletId: "privy-receiver",
+      externalId: "receiver",
+      address: `0x${"7".repeat(40)}`
+    });
+    const reserved = transferRecord({
+      id: "transfer-user",
+      sourceWalletId: sender.id,
+      destinationWalletId: receiver.id,
+      destinationAddress: receiver.address!,
+      purpose: "user_transfer",
+      amountAtomic: 2_000_000n,
+      token: "USDC.e"
+    });
+    const createManagedTransfer = vi.fn(async () => reserved);
+    const repo = {
+      ensureWalletPlaceholder: vi.fn(async (input) => input.discordUserId === "sender" ? sender : receiver),
+      createManagedTransfer,
+      getTransfer: vi.fn(async () => reserved),
+      claimTransferSubmission: vi.fn(async () => ({ ...reserved, status: "submitting" })),
+      getWallet: vi.fn(async (id) => id === sender.id ? sender : receiver),
+      markTransferSubmitted: vi.fn(async () => ({ ...reserved, status: "submitted" })),
+      updateTransferStatus: vi.fn(async (input) => ({ ...reserved, status: input.status }))
+    } as unknown as PaymentRepository;
+    const config = loadConfig().payments;
+    config.userWalletsEnabled = true;
+    config.initialGrantUsd = 0;
+    const provider = providerFake();
+    const service = new WalletService(config, repo, provider);
+
+    const result = await service.transferFromUser({
+      guildId: "guild-a",
+      requestedByUserId: "sender",
+      destination: { kind: "user", userId: "receiver" },
+      amountUsd: 2,
+      requestId: "request-1"
+    });
+
+    expect(createManagedTransfer).toHaveBeenCalledWith(expect.objectContaining({
+      requestedByUserId: "sender",
+      source: sender,
+      destination: receiver,
+      purpose: "user_transfer",
+      token: "USDC.e",
+      amountAtomic: 2_000_000n,
+      idempotencyKey: expect.stringContaining("request-1")
+    }));
+    expect(result.transfer.status).toBe("confirmed");
+  });
 });
 
 function providerFake(): WalletProvider {
   return {
     chainId: 42431,
     createWallet: vi.fn(async () => ({ providerWalletId: "privy-bot", address: botAddress })),
-    resolveToken: vi.fn(async () => ({ symbol: "pathUSD", address: tokenAddress, decimals: 6, currency: "USD" })),
+    resolveToken: vi.fn(async () => ({ symbol: "USDC.e", address: tokenAddress, decimals: 6, currency: "USD" })),
     getBalance: vi.fn(async () => 10_000_000n),
     transfer: vi.fn(async () => ({ transactionHash: `0x${"3".repeat(64)}` as const })),
     getTransactionStatus: vi.fn(async () => "confirmed" as const)
@@ -217,7 +276,7 @@ function transferRecord(overrides: Partial<WalletTransfer>): WalletTransfer {
     destinationWalletId: "wallet-user",
     destinationAddress: `0x${"4".repeat(40)}`,
     purpose: "initial_grant",
-    token: "pathUSD",
+    token: "USDC.e",
     tokenAddress,
     tokenDecimals: 6,
     amountAtomic: 1_000_000n,

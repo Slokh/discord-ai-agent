@@ -43,7 +43,6 @@ import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { restrictedToolGate } from "./toolGate.js";
-import { executeMppToolRoute } from "./mppToolRoutes.js";
 import { executeWalletToolRoute } from "./walletToolRoutes.js";
 
 export async function executeLocalToolRoute(
@@ -53,8 +52,6 @@ export async function executeLocalToolRoute(
 ): Promise<AgentResponse> {
   const gate = await restrictedToolGate(ctx, route.name);
   if (!gate.allowed) return { content: gate.message };
-  const mppResponse = await executeMppToolRoute(ctx, route);
-  if (mppResponse) return mppResponse;
   const walletResponse = await executeWalletToolRoute(ctx, route);
   if (walletResponse) return walletResponse;
 

@@ -115,7 +115,7 @@ describe("internal API run endpoints", () => {
       paymentRepo: {
         getPaymentsConsoleSnapshot: async (input: unknown) => {
           inputs.push(input);
-          return { totals: { wallets: 2, mpp_usd_micros_today: "500000" }, wallets: [], transfers: [], wagers: [], mppAttempts: [] };
+          return { totals: { wallets: 2 }, wallets: [], transfers: [], wagers: [] };
         }
       } as never
     });

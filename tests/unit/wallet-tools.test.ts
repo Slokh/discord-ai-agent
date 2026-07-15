@@ -1,113 +1,165 @@
 import { describe, expect, it, vi } from "vitest";
-import { getBotPaymentStatus, getGameWalletBalance, reconcileBotPayments } from "../../src/tools/walletTools.js";
+import {
+  adminTransferWalletFunds,
+  getWalletBalance,
+  transferWalletFunds
+} from "../../src/tools/walletTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
-describe("getGameWalletBalance", () => {
-  it("returns the current onchain game balance and public wallet address", async () => {
-    const auditTool = vi.fn(async () => undefined);
-    const getUserWalletSummary = vi.fn(async () => ({
-      wallet: {
-        address: `0x${"1".repeat(40)}`,
-        initialGrantTransferId: "transfer-grant"
-      },
-      balance: {
-        formatted: "1.75",
-        token: { symbol: "pathUSD" }
-      }
-    }));
-    const ctx = {
-      config: { payments: { userWalletsEnabled: true } },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-      repo: { auditTool },
-      walletService: { getUserWalletSummary }
-    } as unknown as ToolContext;
+describe("managed wallet tools", () => {
+  it("returns the requester's verified onchain USD balance without exposing a token ticker", async () => {
+    const getUserWalletSummary = vi.fn(async () => walletSummary("1.75"));
+    const ctx = context({ walletService: { getUserWalletSummary } });
 
-    const result = await getGameWalletBalance(ctx);
+    const result = await getWalletBalance(ctx, { owner: "requester" });
 
-    expect(result).toContain("Game balance: $1.75 pathUSD");
-    expect(result).toContain(`Wallet: 0x${"1".repeat(40)}`);
-    expect(getUserWalletSummary).toHaveBeenCalledWith({ guildId: "guild", userId: "user" }, expect.any(Function));
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getGameWalletBalance" }));
-  });
-});
-
-describe("shared bot payment lifecycle tools", () => {
-  it("reports the funding address, balance, budgets, and recent receipts", async () => {
-    const auditTool = vi.fn(async () => undefined);
-    const getBotPaymentStatusSnapshot = vi.fn(async () => botStatus());
-    const ctx = {
-      config: { payments: { walletEnabled: true, mppEnabled: true } },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-      repo: { auditTool },
-      walletService: { getBotPaymentStatus: getBotPaymentStatusSnapshot }
-    } as unknown as ToolContext;
-
-    const result = await getBotPaymentStatus(ctx, { limit: 5 });
-
-    expect(result).toContain("Shared MPP wallet (mainnet)");
-    expect(result).toContain(`Funding address: 0x${"1".repeat(40)}`);
-    expect(result).toContain("Balance: $7.5");
+    expect(result).toContain("Your wallet: $1.75 USD");
+    expect(result).toContain(`Address: 0x${"1".repeat(40)}`);
+    expect(result).toContain("Verified onchain:");
     expect(result).not.toContain("pathUSD");
     expect(result).not.toContain("USDC.e");
-    expect(result).toContain("Today's MPP spend: $2.5 of $10");
-    expect(result).toContain("company-data / enrich_company · succeeded · $0.01 · receipt receipt-1");
-    expect(getBotPaymentStatusSnapshot).toHaveBeenCalledWith("guild", 5, expect.any(Function));
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getBotPaymentStatus" }));
+    expect(getUserWalletSummary).toHaveBeenCalledWith({ guildId: "guild", userId: "requester" }, expect.any(Function));
   });
 
-  it("reconciles pending transfers and returns refreshed status", async () => {
-    const auditTool = vi.fn(async () => undefined);
-    const reconcile = vi.fn(async () => ({ checked: 2, confirmed: 1, failed: 1 }));
-    const getBotPaymentStatusSnapshot = vi.fn(async () => botStatus());
-    const ctx = {
-      config: { payments: { walletEnabled: true, mppEnabled: true } },
+  it("uses the bot treasury for an explicit bot balance request", async () => {
+    const getBotWalletSummary = vi.fn(async () => walletSummary("9.5"));
+    const ctx = context({ walletService: { getBotWalletSummary } });
+
+    await expect(getWalletBalance(ctx, { owner: "bot" })).resolves.toContain("Bot wallet: $9.5 USD");
+    expect(getBotWalletSummary).toHaveBeenCalledWith("guild", expect.any(Function));
+  });
+
+  it("defaults a bare balance request to the bot when user wallets are disabled", async () => {
+    const getBotWalletSummary = vi.fn(async () => walletSummary("9.5"));
+    const ctx = context({ walletService: { getBotWalletSummary } });
+    ctx.config.payments.userWalletsEnabled = false;
+
+    await expect(getWalletBalance(ctx)).resolves.toContain("Bot wallet: $9.5 USD");
+    expect(getBotWalletSummary).toHaveBeenCalledWith("guild", expect.any(Function));
+  });
+
+  it("binds a normal transfer source to the immutable requester and verifies the managed destination", async () => {
+    const transferFromUser = vi.fn(async () => transferResult());
+    const ctx = context({
+      repo: {
+        getDiscordUserReferenceTerms: vi.fn(async () => [{
+          userId: "friend",
+          username: "friend",
+          globalName: "Friend",
+          aliases: [],
+          terms: []
+        }])
+      },
+      walletService: { transferFromUser }
+    });
+
+    const result = await transferWalletFunds(ctx, {
+      destination: "user",
+      destinationUserId: "friend",
+      amountUsd: 2
+    });
+
+    expect(result).toContain("Transferred $2 USD from your wallet to Friend's wallet.");
+    expect(result).toContain("Source balance: $3 USD");
+    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
       guildId: "guild",
-      channelId: "channel",
-      userId: "owner",
-      repo: { auditTool },
-      walletService: { reconcile, getBotPaymentStatus: getBotPaymentStatusSnapshot }
-    } as unknown as ToolContext;
+      requestedByUserId: "requester",
+      requestId: "message-1",
+      destination: { kind: "user", userId: "friend" },
+      amountUsd: 2
+    }), expect.any(Function));
+  });
 
-    const result = await reconcileBotPayments(ctx);
+  it("fails closed if requester identity changes after ingress", async () => {
+    const ctx = context();
+    ctx.userId = "other";
 
-    expect(result).toContain("Reconciliation: checked 2, confirmed 1, failed 1.");
-    expect(result).toContain("Shared MPP wallet (mainnet)");
-    expect(reconcile).toHaveBeenCalledWith(expect.any(Function));
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "reconcileBotPayments" }));
+    await expect(getWalletBalance(ctx)).rejects.toThrow(/requester scope changed/);
+  });
+
+  it("restricts arbitrary managed-wallet rebalancing to payment admins", async () => {
+    const denied = context();
+    await expect(adminTransferWalletFunds(denied, {
+      source: "bot",
+      destination: "user",
+      destinationUserId: "friend",
+      amountUsd: 1,
+      reason: "repair"
+    })).resolves.toMatch(/restricted/);
+
+    const transferAsAdmin = vi.fn(async () => transferResult());
+    const allowed = context({
+      ownerUserId: "requester",
+      repo: {
+        getDiscordUserReferenceTerms: vi.fn(async () => [{
+          userId: "friend", username: "friend", globalName: "Friend", aliases: [], terms: []
+        }])
+      },
+      walletService: { transferAsAdmin }
+    });
+    const result = await adminTransferWalletFunds(allowed, {
+      source: "bot",
+      destination: "user",
+      destinationUserId: "friend",
+      amountUsd: 1,
+      reason: "restore a failed payout"
+    });
+
+    expect(result).toContain("Reason: restore a failed payout");
+    expect(transferAsAdmin).toHaveBeenCalledWith(expect.objectContaining({
+      requestedByUserId: "requester",
+      source: { kind: "bot" },
+      destination: { kind: "user", userId: "friend" }
+    }), expect.any(Function));
   });
 });
 
-function botStatus() {
+function context(input: {
+  ownerUserId?: string | null;
+  repo?: Record<string, unknown>;
+  walletService?: Record<string, unknown>;
+} = {}): ToolContext {
+  const auditTool = vi.fn(async () => undefined);
   return {
-    wallet: {
-      address: `0x${"1".repeat(40)}`,
-      network: "mainnet",
-      chainId: 4217,
-      token: "USDC.e",
-      balanceUsd: "7.5",
-      health: "low_balance"
+    config: {
+      maxReplyChars: 2_000,
+      allowlists: { ownerUserId: input.ownerUserId ?? null, opsUserIds: [] },
+      payments: {
+        walletEnabled: true,
+        userWalletsEnabled: true,
+        tempoNetwork: "mainnet"
+      }
     },
-    policy: {
-      autoApproveUsd: 0.05,
-      maxCallUsd: 0.5,
-      userDailyUsd: 2,
-      botDailyUsd: 10
-    },
-    spend: { todayUsd: "2.5", remainingBotDailyUsd: "7.5" },
-    recentAttempts: [{
-      id: "mppa-1",
-      serviceId: "company-data",
-      operationId: "enrich_company",
-      status: "succeeded",
-      amountUsd: "0.01",
-      approvalMode: "automatic_low_cost",
-      receiptReference: "receipt-1",
-      errorMessage: null,
-      createdAt: "2026-07-15T12:00:00.000Z"
-    }]
+    guildId: "guild",
+    channelId: "channel",
+    userId: "requester",
+    userDisplayName: "Requester",
+    requestId: "message-1",
+    requestMessageId: "message-1",
+    requesterScope: Object.freeze({
+      requestId: "message-1",
+      messageId: "message-1",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "requester",
+      userDisplayName: "Requester"
+    }),
+    repo: { auditTool, ...(input.repo ?? {}) },
+    walletService: input.walletService
+  } as unknown as ToolContext;
+}
+
+function walletSummary(balance: string) {
+  return {
+    wallet: { address: `0x${"1".repeat(40)}`, initialGrantTransferId: "grant" },
+    balance: { formatted: balance, token: { symbol: "USDC.e" } }
+  };
+}
+
+function transferResult() {
+  return {
+    transfer: { status: "confirmed", transactionHash: `0x${"9".repeat(64)}` },
+    source: { wallet: {}, balance: { formatted: "3" } },
+    destination: { wallet: {}, balance: { formatted: "2" } }
   };
 }

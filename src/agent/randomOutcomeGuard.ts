@@ -27,9 +27,9 @@ const INTENT_OUTCOME_PATTERNS = [
 ];
 
 export const RANDOM_OUTCOME_RETRY_GUIDANCE =
-  "Your previous draft was rejected because it claimed a fresh random outcome without a successful drawRandom call. " +
-  "Call drawRandom now and report its result exactly. If the tool rejects invalid arguments, correct them and retry in this turn. " +
-  "Do not report, simulate, or invent any chance outcome until drawRandom succeeds.";
+  "Your previous draft was rejected because the verified chance workflow is incomplete. " +
+  "If no draw succeeded, call drawRandom and report its result exactly. If drawRandom reserved a wallet wager, call settleRandomWager exactly once before replying, using the exact wager id and deterministic payout calculation. " +
+  "Correct rejected arguments and retry in this turn. Never report or apply a chance outcome or money change until the required tools succeed.";
 
 export const RANDOM_OUTCOME_BLOCKED_RESPONSE =
   "I couldn't complete a verified random draw, so I didn't apply or report an outcome. Try that action again.";
@@ -39,6 +39,7 @@ export type RandomOutcomeGuardDecision = "allow" | "retry" | "block";
 export class RandomOutcomeGuard {
   private successfulDraw = false;
   private retryAttempted = false;
+  private readonly pendingWagerIds = new Set<string>();
 
   constructor(
     private readonly ctx: ToolContext,
@@ -48,6 +49,12 @@ export class RandomOutcomeGuard {
   noteToolResult(toolName: ToolName, content: string) {
     if (toolName === "drawRandom" && isSuccessfulRandomDrawResult(content)) {
       this.successfulDraw = true;
+      const wagerId = content.match(/\bWager\s+(wager_[A-Za-z0-9_-]+)\s+is reserved\b/)?.[1];
+      if (wagerId) this.pendingWagerIds.add(wagerId);
+    }
+    if (toolName === "settleRandomWager") {
+      const wagerId = content.match(/^Wager\s+(wager_[A-Za-z0-9_-]+)\s+settled\./m)?.[1];
+      if (wagerId) this.pendingWagerIds.delete(wagerId);
     }
   }
 
@@ -82,6 +89,7 @@ export class RandomOutcomeGuard {
   }
 
   private shouldReject(responseContent: string) {
+    if (this.pendingWagerIds.size > 0) return true;
     return shouldRejectUnverifiedRandomOutcome({
       userText: this.userText,
       replyContextText: this.ctx.replyContext?.content,

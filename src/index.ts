@@ -22,7 +22,6 @@ import { createAgentRuntimeRunner } from "./agent/runtimeRunner.js";
 import { PaymentRepository } from "./db/paymentRepository.js";
 import { PrivyTempoWalletProvider } from "./payments/privyTempoWalletProvider.js";
 import { WalletService } from "./payments/walletService.js";
-import { MppService } from "./payments/mppService.js";
 import { startPaymentReconciler } from "./payments/reconciler.js";
 
 async function main() {
@@ -40,7 +39,7 @@ async function main() {
   if (startsBot || startsEmbeddingWorker || startsTaskWorker || startsDiscordAgentWorker) assertOpenRouterConfig(config);
   if (startsApi) assertTaskCallbackConfig(config);
   if (startsTaskWorker) assertExecutionConfig(config);
-  if (startsPaymentRuntime && (config.payments.walletEnabled || config.payments.mppEnabled)) assertPaymentConfig(config);
+  if (startsPaymentRuntime && config.payments.walletEnabled) assertPaymentConfig(config);
 
   logger.info(
     {
@@ -70,7 +69,6 @@ async function main() {
       payments: {
         walletEnabled: config.payments.walletEnabled,
         userWalletsEnabled: config.payments.userWalletsEnabled,
-        mppEnabled: config.payments.mppEnabled,
         tempoNetwork: config.payments.tempoNetwork
       }
     },
@@ -103,10 +101,6 @@ async function main() {
       })
     : undefined;
   const walletService = walletProvider ? new WalletService(config.payments, paymentRepo, walletProvider) : undefined;
-  const mppService = config.payments.mppEnabled && walletService
-    ? new MppService(config.payments, paymentRepo, walletService)
-    : undefined;
-
   const client =
     startsDiscordClient
       ? new Client({
@@ -159,7 +153,7 @@ async function main() {
         await embedStoredMessage({ repo, openRouter, config, messageId });
       }
     },
-    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, budgetRepo, rngRepo, walletService, mppService, agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, client }) : undefined,
+    agentRuntime: client && startsWorker ? createAgentRuntimeRunner({ config, repo, budgetRepo, rngRepo, walletService, agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, client }) : undefined,
     crawlWorker: startsCrawlWorker,
     embeddingWorker: startsEmbeddingWorker,
     taskWorker: startsTaskWorker,
@@ -185,7 +179,7 @@ async function main() {
   const paymentReconciler = walletService && startsWorker ? startPaymentReconciler({ walletService }) : null;
   const runtime =
     startsBot && client && crawler instanceof DiscordCrawler
-      ? createDiscordAiAgentBot({ config, repo, budgetRepo, rngRepo, walletService, mppService, agentRuntime: agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, crawler, jobs, client })
+      ? createDiscordAiAgentBot({ config, repo, budgetRepo, rngRepo, walletService, agentRuntime: agentRuntimeRepo, deliveryObligations: deliveryObligationsRepo, openRouter, crawler, jobs, client })
       : null;
   const taskNotifier = startsBot && client ? startAgentTaskNotifier({ client, repo, config }) : null;
 

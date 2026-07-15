@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isSuccessfulRandomDrawResult,
+  RandomOutcomeGuard,
   shouldRejectUnverifiedRandomOutcome,
 } from "../../src/agent/randomOutcomeGuard.js";
+import type { ToolContext } from "../../src/tools/types.js";
 
 describe("random outcome guard", () => {
   it.each([
@@ -43,5 +45,27 @@ describe("random outcome guard", () => {
       .toBe(true);
     expect(isSuccessfulRandomDrawResult("integers draws require both min and max"))
       .toBe(false);
+  });
+
+  it("rejects a final answer while a real-money wager remains unsettled", async () => {
+    const guard = new RandomOutcomeGuard({
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      repo: {
+        recordTraceEvent: vi.fn(async () => undefined),
+        auditTool: vi.fn(async () => undefined)
+      }
+    } as unknown as ToolContext, "bet $1 on a coin flip");
+
+    guard.noteToolResult("drawRandom", [
+      "Provably fair draw complete.",
+      "Result: heads",
+      "Wager wager_abc is reserved."
+    ].join("\n"));
+    await expect(guard.inspectDraft("Heads — you win $2.")).resolves.toBe("retry");
+
+    guard.noteToolResult("settleRandomWager", "Wager wager_abc settled.\nPayout: $2.");
+    await expect(guard.inspectDraft("Heads — you win $2.")).resolves.toBe("allow");
   });
 });

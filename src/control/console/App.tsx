@@ -482,7 +482,7 @@ function PaymentsDashboard() {
         <div>
           <p className="eyebrow">Agent Ops</p>
           <h1>Wallets & payments</h1>
-          <p className="payments-subtitle">Provisioning, transfers, wagers, and MPP calls from the durable ledger.</p>
+          <p className="payments-subtitle">Provisioning, transfers, and wagers from the durable wallet ledger.</p>
         </div>
         <div className="sidebar-actions">
           <a className="ops-nav-link" href="/runs">Runs</a>
@@ -497,18 +497,10 @@ function PaymentsDashboard() {
             <Metric label="Wallet errors" value={Number(snapshot.totals.wallet_errors ?? 0)} tone={Number(snapshot.totals.wallet_errors ?? 0) > 0 ? "bad" : "normal"} />
             <Metric label="Pending transfers" value={Number(snapshot.totals.transfers_pending ?? 0)} tone={Number(snapshot.totals.transfers_pending ?? 0) > 0 ? "info" : "normal"} />
             <Metric label="Open wagers" value={Number(snapshot.totals.wagers_open ?? 0)} tone={Number(snapshot.totals.wagers_open ?? 0) > 0 ? "info" : "normal"} />
-            <Metric label="MPP today" value={formatUsdMicros(snapshot.totals.mpp_usd_micros_today)} tone="good" />
             <Metric
               label="Bot wallet"
               value={botHealthDetails?.balanceUsd != null ? `$${textValue(botHealthDetails.balanceUsd)}` : "—"}
               tone={textValue(botHealth?.status) === "low_balance" ? "bad" : "normal"}
-            />
-            <Metric
-              label="MPP budget used"
-              value={snapshot.policy?.botDailyUsd
-                ? `${Math.min(100, (Number(snapshot.totals.mpp_usd_micros_today ?? 0) / 1_000_000 / snapshot.policy.botDailyUsd) * 100).toFixed(1)}%`
-                : "—"}
-              tone={Number(snapshot.totals.mpp_usd_micros_today ?? 0) / 1_000_000 >= Number(snapshot.policy?.botDailyUsd ?? Infinity) * 0.8 ? "bad" : "normal"}
             />
           </section>
           <PaymentsTable
@@ -527,7 +519,7 @@ function PaymentsDashboard() {
             rows={snapshot.transfers}
             columns={[
               ["purpose", (row) => textValue(row.purpose)],
-              ["amount", (row) => `${formatAtomic(textValue(row.amount_atomic), Number(row.token_decimals ?? 6))} ${textValue(row.token)}`],
+              ["amount", (row) => `$${formatAtomic(textValue(row.amount_atomic), Number(row.token_decimals ?? 6))} USD`],
               ["status", (row) => textValue(row.status)],
               ["tx", (row) => shortId(textValue(row.transaction_hash))],
               ["created", (row) => formatRelative(textValue(row.created_at))]
@@ -542,20 +534,6 @@ function PaymentsDashboard() {
               ["max payout", (row) => `$${formatAtomic(textValue(row.max_payout_atomic), Number(row.token_decimals ?? 6))}`],
               ["status", (row) => textValue(row.status)],
               ["draw", (row) => textValue(row.draw_id)]
-            ]}
-          />
-          <PaymentsTable
-            title="MPP attempts"
-            rows={snapshot.mppAttempts}
-            columns={[
-              ["service", (row) => textValue(row.service_id) || textValue(row.service_origin)],
-              ["operation", (row) => textValue(row.operation_id)],
-              ["request", (row) => `${textValue(row.request_method)} ${safePath(textValue(row.request_url))}`],
-              ["amount", (row) => row.amount_usd_micros ? formatUsdMicros(textValue(row.amount_usd_micros)) : "—"],
-              ["approval", (row) => textValue(row.approval_mode)],
-              ["status", (row) => textValue(row.status)],
-              ["receipt", (row) => shortId(textValue(row.receipt_reference))],
-              ["HTTP", (row) => textValue(row.http_status)]
             ]}
           />
         </>
@@ -588,10 +566,6 @@ function PaymentsTable({
   );
 }
 
-function formatUsdMicros(value: unknown) {
-  return `$${formatAtomic(textValue(value) || "0", 6)}`;
-}
-
 function formatAtomic(value: string, decimals: number) {
   if (!/^\d+$/.test(value)) return "—";
   const padded = value.padStart(decimals + 1, "0");
@@ -606,15 +580,6 @@ function textValue(value: unknown): string {
 
 function shortAddress(value: string) {
   return value.length > 14 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
-}
-
-function safePath(value: string) {
-  try {
-    const url = new URL(value);
-    return `${url.pathname}${url.search}`;
-  } catch {
-    return value;
-  }
 }
 
 function RunHeader({ run, loading }: { run: RunSummary; loading: boolean }) {

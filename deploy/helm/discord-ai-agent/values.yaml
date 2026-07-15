@@ -76,21 +76,10 @@ config:
   toolsetScoping: "true"
   walletEnabled: "false"
   userWalletsEnabled: "false"
-  mppEnabled: "false"
   tempoNetwork: moderato
-  tempoGameToken: pathUSD
+  tempoUsdToken: USDC.e
   walletInitialGrantUsd: "1.00"
   walletMaxGameSettlementUsd: "10.00"
-  mppMaxCallUsd: "0.50"
-  mppUserDailyUsd: "2.00"
-  mppBotDailyUsd: "10.00"
-  mppMaxSessionDepositUsd: "0.50"
-  mppAutoApproveUsd: "0.05"
-  mppServiceCatalogUrl: https://mpp.dev/api/services
-  mppServiceDiscoveryMcpUrl: https://mpp.dev/mcp/services
-  mppInspectionTtlSeconds: "900"
-  mppRecentRequestWindowSeconds: "600"
-  mppMaxResponseBytes: "2000000"
   # Optional daily budget overrides. Leave empty to use the application
   # defaults (50 turns, 10 images, 1 code-update task per user; $10/day
   # guild spend). Use "-1" to disable a limit entirely.

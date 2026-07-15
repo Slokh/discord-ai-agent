@@ -8,8 +8,7 @@ import type {
   WagerReservation
 } from "../payments/types.js";
 import { stableId } from "../payments/money.js";
-import { mapAccount, mapTransfer, mapWager, toUsdMicrosCeil } from "./paymentRowMappers.js";
-import { getBotMppSpendToday, listMppAttempts } from "./paymentMppReadQueries.js";
+import { mapAccount, mapTransfer, mapWager } from "./paymentRowMappers.js";
 import { getTransferWithClient, insertTransfer, TRANSFER_COLUMNS } from "./paymentTransferPersistence.js";
 
 const ACCOUNT_COLUMNS = `
@@ -121,18 +120,20 @@ export class PaymentRepository {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const accountResult = await client.query(
-        `SELECT initial_grant_transfer_id FROM wallet_accounts WHERE id = $1 FOR UPDATE`,
-        [input.user.id]
+      await client.query(`SELECT id FROM wallet_accounts WHERE id = $1 FOR UPDATE`, [input.user.id]);
+      const grantResult = await client.query(
+        `SELECT transfer_id FROM wallet_initial_grants WHERE wallet_id = $1 AND token_address = lower($2)`,
+        [input.user.id, input.tokenAddress]
       );
-      const existingId = accountResult.rows[0]?.initial_grant_transfer_id;
+      const existingId = grantResult.rows[0]?.transfer_id;
       if (existingId) {
         const existing = await getTransferWithClient(client, String(existingId));
         await client.query("COMMIT");
         return existing;
       }
       if (!input.user.address) throw new Error("User wallet is not active");
-      const id = stableId("transfer", "initial_grant", input.user.id);
+      const tokenScope = input.tokenAddress.toLowerCase();
+      const id = stableId("transfer", "initial_grant", input.user.id, tokenScope);
       const transfer = await insertTransfer(client, {
         id,
         guildId: input.guildId,
@@ -145,9 +146,15 @@ export class PaymentRepository {
         tokenAddress: input.tokenAddress,
         tokenDecimals: input.tokenDecimals,
         amountAtomic: input.amountAtomic,
-        idempotencyKey: `initial_grant:${input.user.id}`,
+        idempotencyKey: `initial_grant:${input.user.id}:${tokenScope}`,
         metadata: {}
       });
+      await client.query(
+        `INSERT INTO wallet_initial_grants(wallet_id, token_address, transfer_id)
+         VALUES ($1, lower($2), $3)
+         ON CONFLICT (wallet_id, token_address) DO NOTHING`,
+        [input.user.id, input.tokenAddress, transfer.id]
+      );
       await client.query(
         `UPDATE wallet_accounts SET initial_grant_transfer_id = $2, updated_at = now() WHERE id = $1`,
         [input.user.id, transfer.id]
@@ -165,6 +172,92 @@ export class PaymentRepository {
   async getTransfer(id: string): Promise<WalletTransfer | null> {
     const result = await this.pool.query(`SELECT ${TRANSFER_COLUMNS} FROM wallet_transfers WHERE id = $1`, [id]);
     return result.rows[0] ? mapTransfer(result.rows[0]) : null;
+  }
+
+  async createManagedTransfer(input: {
+    guildId: string;
+    requestedByUserId: string;
+    source: WalletAccount;
+    destination: WalletAccount;
+    purpose: "user_transfer" | "admin_transfer";
+    token: string;
+    tokenAddress: string;
+    tokenDecimals: number;
+    amountAtomic: bigint;
+    sourceBalanceAtomic: bigint;
+    sourceBalanceObservedAt: Date;
+    idempotencyKey: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<WalletTransfer> {
+    if (input.amountAtomic <= 0n) throw new Error("Transfer amount must be positive");
+    if (input.source.id === input.destination.id) throw new Error("Source and destination wallets must be different");
+    if (!input.destination.address) throw new Error("Destination wallet is not active");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`SELECT id FROM wallet_accounts WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`, [
+        [input.source.id, input.destination.id]
+      ]);
+      const existing = await client.query(
+        `SELECT ${TRANSFER_COLUMNS} FROM wallet_transfers WHERE idempotency_key = $1`,
+        [input.idempotencyKey]
+      );
+      if (existing.rows[0]) {
+        await client.query("COMMIT");
+        return mapTransfer(existing.rows[0]);
+      }
+      const activeTransfers = await client.query(
+        `SELECT coalesce(sum(amount_atomic), 0)::text AS amount
+         FROM wallet_transfers
+         WHERE source_wallet_id = $1
+           AND lower(token_address) = lower($2)
+           AND (
+             status IN ('reserved', 'submitting', 'submitted', 'unknown')
+             OR (status = 'confirmed' AND confirmed_at >= $3)
+           )`,
+        [input.source.id, input.tokenAddress, input.sourceBalanceObservedAt]
+      );
+      const activeWagers = await client.query(
+        `SELECT coalesce(sum(
+           CASE
+             WHEN user_wallet_id = $1 THEN stake_atomic
+             WHEN bot_wallet_id = $1 THEN greatest(max_payout_atomic - stake_atomic, 0)
+             ELSE 0
+           END
+         ), 0)::text AS amount
+         FROM wallet_wager_reservations
+         WHERE (user_wallet_id = $1 OR bot_wallet_id = $1)
+           AND token = $2
+           AND status IN ('reserved', 'drawn', 'settling')`,
+        [input.source.id, input.token]
+      );
+      const reservedAtomic = BigInt(activeTransfers.rows[0]?.amount ?? "0") + BigInt(activeWagers.rows[0]?.amount ?? "0");
+      if (reservedAtomic + input.amountAtomic > input.sourceBalanceAtomic) {
+        throw new Error("Insufficient available wallet balance for this transfer");
+      }
+      const transfer = await insertTransfer(client, {
+        id: stableId("transfer", input.purpose, input.idempotencyKey),
+        guildId: input.guildId,
+        requestedByUserId: input.requestedByUserId,
+        sourceWalletId: input.source.id,
+        destinationWalletId: input.destination.id,
+        destinationAddress: input.destination.address,
+        purpose: input.purpose,
+        token: input.token,
+        tokenAddress: input.tokenAddress,
+        tokenDecimals: input.tokenDecimals,
+        amountAtomic: input.amountAtomic,
+        idempotencyKey: input.idempotencyKey,
+        metadata: input.metadata ?? {}
+      });
+      await client.query("COMMIT");
+      return transfer;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async claimTransferSubmission(id: string): Promise<WalletTransfer | null> {
@@ -238,6 +331,7 @@ export class PaymentRepository {
     maxPayoutAtomic: bigint;
     userBalanceAtomic: bigint;
     botBalanceAtomic: bigint;
+    balancesObservedAt: Date;
     ttlSeconds?: number;
   }): Promise<WagerReservation> {
     if (input.stakeAtomic <= 0n) throw new Error("Wager stake must be positive");
@@ -248,7 +342,8 @@ export class PaymentRepository {
       await client.query(`SELECT id FROM wallet_accounts WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`, [
         [input.user.id, input.bot.id]
       ]);
-      const reserved = await client.query(
+      const [reserved, pendingTransfers] = await Promise.all([
+        client.query(
         `
           SELECT
             coalesce(sum(CASE WHEN user_wallet_id = $1 THEN stake_atomic ELSE 0 END), 0)::text AS user_reserved,
@@ -257,9 +352,27 @@ export class PaymentRepository {
           WHERE token = $3 AND status IN ('reserved', 'drawn', 'settling')
         `,
         [input.user.id, input.bot.id, input.token]
+        ),
+        client.query(
+          `SELECT source_wallet_id, coalesce(sum(amount_atomic), 0)::text AS amount
+           FROM wallet_transfers
+           WHERE source_wallet_id = ANY($1::text[])
+             AND token = $2
+             AND (
+               status IN ('reserved', 'submitting', 'submitted', 'unknown')
+               OR (status = 'confirmed' AND confirmed_at >= $3)
+             )
+           GROUP BY source_wallet_id`,
+          [[input.user.id, input.bot.id], input.token, input.balancesObservedAt]
+        )
+      ]);
+      const transferReservations = new Map(
+        pendingTransfers.rows.map((row) => [String(row.source_wallet_id), BigInt(row.amount ?? "0")])
       );
-      const userReserved = BigInt(reserved.rows[0]?.user_reserved ?? "0");
-      const botReserved = BigInt(reserved.rows[0]?.bot_reserved ?? "0");
+      const userReserved = BigInt(reserved.rows[0]?.user_reserved ?? "0") +
+        (transferReservations.get(input.user.id) ?? 0n);
+      const botReserved = BigInt(reserved.rows[0]?.bot_reserved ?? "0") +
+        (transferReservations.get(input.bot.id) ?? 0n);
       const botExposure = input.maxPayoutAtomic > input.stakeAtomic ? input.maxPayoutAtomic - input.stakeAtomic : 0n;
       if (userReserved + input.stakeAtomic > input.userBalanceAtomic) throw new Error("Insufficient user wallet balance for this wager");
       if (botReserved + botExposure > input.botBalanceAtomic) throw new Error("The bot wallet cannot cover this wager's maximum payout");
@@ -434,255 +547,14 @@ export class PaymentRepository {
     return result.rows[0] ? mapWager(result.rows[0]) : null;
   }
 
-  async beginMppAttempt(input: {
-    guildId: string;
-    requestedByUserId: string;
-    executionId?: string | null;
-    requestFingerprint: string;
-    serviceId: string;
-    inspectionId: string;
-    operationId: string;
-    effect: "read_only" | "external_side_effect";
-    allowRecentRepeat?: boolean;
-    recentRequestWindowSeconds?: number;
-    serviceOrigin: string;
-    requestUrl: string;
-    requestMethod: string;
-  }): Promise<{ id: string; status: string; duplicate: boolean }> {
-    const id = `mpp_${randomUUID()}`;
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
-        `mpp:request:${input.guildId}:${input.requestedByUserId}:${input.requestFingerprint}`
-      ]);
-      if (!input.allowRecentRepeat && (input.recentRequestWindowSeconds ?? 0) > 0) {
-        const recent = await client.query(
-          `
-            SELECT id, status FROM mpp_payment_attempts
-            WHERE guild_id = $1 AND requested_by_user_id = $2 AND request_fingerprint = $3
-              AND created_at >= now() - make_interval(secs => $4)
-              AND status IN ('started','challenged','approved','paid','succeeded','uncertain')
-            ORDER BY created_at DESC LIMIT 1
-          `,
-          [input.guildId, input.requestedByUserId, input.requestFingerprint, input.recentRequestWindowSeconds]
-        );
-        if (recent.rows[0]) {
-          await client.query("COMMIT");
-          return { id: String(recent.rows[0].id), status: String(recent.rows[0].status), duplicate: true };
-        }
-      }
-      const inserted = await client.query(
-        `
-          INSERT INTO mpp_payment_attempts(
-            id, guild_id, requested_by_user_id, execution_id, request_fingerprint,
-            service_id, inspection_id, operation_id, effect,
-            service_origin, request_url, request_method
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-          ON CONFLICT (execution_id, request_fingerprint) WHERE execution_id IS NOT NULL DO NOTHING
-          RETURNING id, status
-        `,
-        [
-          id,
-          input.guildId,
-          input.requestedByUserId,
-          input.executionId ?? null,
-          input.requestFingerprint,
-          input.serviceId,
-          input.inspectionId,
-          input.operationId,
-          input.effect,
-          input.serviceOrigin,
-          input.requestUrl,
-          input.requestMethod
-        ]
-      );
-      if (inserted.rows[0]) {
-        await client.query("COMMIT");
-        return { id: String(inserted.rows[0].id), status: String(inserted.rows[0].status), duplicate: false };
-      }
-      const existing = await client.query(
-        `SELECT id, status FROM mpp_payment_attempts WHERE execution_id = $1 AND request_fingerprint = $2`,
-        [input.executionId, input.requestFingerprint]
-      );
-      if (!existing.rows[0]) throw new Error("Could not resolve the existing MPP request attempt");
-      await client.query("COMMIT");
-      return { id: String(existing.rows[0].id), status: String(existing.rows[0].status), duplicate: true };
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async authorizeMppPayment(input: {
-    attemptId: string;
-    challengeId?: string | null;
-    method: string;
-    intent: string;
-    currency: string;
-    amountAtomic: bigint;
-    decimals: number;
-    recipient?: string | null;
-    chainId: number;
-    approvalMode: "automatic_low_cost" | "explicit_user";
-    maxCallUsdMicros: bigint;
-    userDailyUsdMicros: bigint;
-    botDailyUsdMicros: bigint;
-  }): Promise<{ amountUsdMicros: bigint }> {
-    const amountUsdMicros = toUsdMicrosCeil(input.amountAtomic, input.decimals);
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      const attemptResult = await client.query(
-        `SELECT guild_id, requested_by_user_id, status FROM mpp_payment_attempts WHERE id = $1 FOR UPDATE`,
-        [input.attemptId]
-      );
-      if (!attemptResult.rows[0]) throw new Error(`Unknown MPP attempt ${input.attemptId}`);
-      const attempt = attemptResult.rows[0];
-      if (["approved", "paid", "succeeded", "uncertain"].includes(String(attempt.status))) {
-        await client.query("COMMIT");
-        return { amountUsdMicros };
-      }
-      await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, ["mpp:shared-bot-wallet"]);
-      const spend = await client.query(
-        `
-          SELECT
-            coalesce(sum(amount_usd_micros), 0)::text AS bot_spend,
-            coalesce(sum(amount_usd_micros) FILTER (WHERE requested_by_user_id = $1), 0)::text AS user_spend
-          FROM mpp_payment_attempts
-          WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-            AND status IN ('approved', 'paid', 'succeeded', 'uncertain')
-        `,
-        [attempt.requested_by_user_id]
-      );
-      const botSpend = BigInt(spend.rows[0]?.bot_spend ?? "0");
-      const userSpend = BigInt(spend.rows[0]?.user_spend ?? "0");
-      if (amountUsdMicros > input.maxCallUsdMicros) throw new Error("MPP challenge exceeds the per-call payment limit");
-      if (userSpend + amountUsdMicros > input.userDailyUsdMicros) throw new Error("MPP challenge exceeds this user's daily payment limit");
-      if (botSpend + amountUsdMicros > input.botDailyUsdMicros) throw new Error("MPP challenge exceeds the bot wallet's daily payment limit");
-      await client.query(
-        `
-          UPDATE mpp_payment_attempts SET status = 'approved', challenge_id = $2,
-            payment_method = $3, payment_intent = $4, currency = $5,
-            amount_atomic = $6, amount_usd_micros = $7, decimals = $8,
-            recipient = $9, chain_id = $10, approval_mode = $11, updated_at = now()
-          WHERE id = $1
-        `,
-        [
-          input.attemptId,
-          input.challengeId ?? null,
-          input.method,
-          input.intent,
-          input.currency,
-          input.amountAtomic.toString(),
-          amountUsdMicros.toString(),
-          input.decimals,
-          input.recipient ?? null,
-          input.chainId,
-          input.approvalMode
-        ]
-      );
-      await client.query("COMMIT");
-      return { amountUsdMicros };
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      await this.markMppAttempt(input.attemptId, "rejected", { errorMessage: error instanceof Error ? error.message : String(error) }).catch(
-        () => undefined
-      );
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async markMppAttempt(
-    id: string,
-    status: "challenged" | "approved" | "paid" | "succeeded" | "rejected" | "failed" | "uncertain",
-    input: {
-      httpStatus?: number;
-      contentType?: string | null;
-      responseBytes?: number;
-      errorMessage?: string | null;
-      receipt?: {
-        method: string;
-        reference: string;
-        status: "success";
-        timestamp: string;
-        externalId?: string;
-        [key: string]: unknown;
-      };
-    } = {}
-  ): Promise<void> {
-    const receipt = input.receipt;
-    await this.pool.query(
-      `
-        UPDATE mpp_payment_attempts SET status = $2,
-          http_status = coalesce($3, http_status),
-          response_content_type = coalesce($4, response_content_type),
-          response_bytes = coalesce($5, response_bytes),
-          error_message = $6,
-          receipt_method = coalesce($7, receipt_method),
-          receipt_reference = coalesce($8, receipt_reference),
-          receipt_status = coalesce($9, receipt_status),
-          receipt_timestamp = coalesce($10, receipt_timestamp),
-          receipt_external_id = coalesce($11, receipt_external_id),
-          receipt = coalesce($12::jsonb, receipt),
-          completed_at = CASE WHEN $2 IN ('succeeded', 'rejected', 'failed', 'uncertain') THEN now() ELSE completed_at END,
-          updated_at = now()
-        WHERE id = $1
-      `,
-      [
-        id,
-        status,
-        input.httpStatus ?? null,
-        input.contentType ?? null,
-        input.responseBytes ?? null,
-        input.errorMessage?.slice(0, 2_000) ?? null,
-        receipt?.method ?? null,
-        receipt?.reference ?? null,
-        receipt?.status ?? null,
-        receipt?.timestamp ?? null,
-        receipt?.externalId ?? null,
-        receipt ? JSON.stringify(receipt) : null
-      ]
-    );
-  }
-
-  async withMppSessionLock<T>(guildId: string, chainId: number, action: () => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`mpp:session:${guildId}:${chainId}`]);
-      const result = await action();
-      await client.query("COMMIT");
-      return result;
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async listMppAttempts(input: { guildId?: string; limit?: number } = {}): Promise<Array<Record<string, unknown>>> {
-    return listMppAttempts(this.pool, input);
-  }
-
-  async getBotMppSpendToday(): Promise<bigint> {
-    return getBotMppSpendToday(this.pool);
-  }
-
   async getPaymentsConsoleSnapshot(input: { guildId?: string; limit?: number } = {}): Promise<Record<string, unknown>> {
     const limit = Math.max(1, Math.min(input.limit ?? 100, 500));
     const values: unknown[] = [];
     const where = input.guildId ? `WHERE guild_id = $${values.push(input.guildId)}` : "";
     const transferWhere = input.guildId ? `WHERE wallet_transfers.guild_id = $1` : "";
     const wagerWhere = input.guildId ? `WHERE wallet_wager_reservations.guild_id = $1` : "";
-    const mppWhere = input.guildId ? `WHERE mpp_payment_attempts.guild_id = $1` : "";
     const queryValues = input.guildId ? [input.guildId] : [];
-    const [wallets, transfers, wagers, attempts, totals, health] = await Promise.all([
+    const [wallets, transfers, wagers, totals, health] = await Promise.all([
       this.pool.query(
         `
           SELECT id, guild_id, owner_kind, discord_user_id, external_id, address,
@@ -715,15 +587,13 @@ export class PaymentRepository {
         `,
         [...queryValues, limit]
       ),
-      this.listMppAttempts({ guildId: input.guildId, limit }),
       this.pool.query(
         `
           SELECT
             (SELECT count(*)::int FROM wallet_accounts ${where}) AS wallets,
             (SELECT count(*)::int FROM wallet_accounts ${where}${where ? " AND" : " WHERE"} status = 'error') AS wallet_errors,
             (SELECT count(*)::int FROM wallet_transfers ${transferWhere}${transferWhere ? " AND" : " WHERE"} status IN ('submitting','submitted','unknown')) AS transfers_pending,
-            (SELECT count(*)::int FROM wallet_wager_reservations ${wagerWhere}${wagerWhere ? " AND" : " WHERE"} status IN ('reserved','drawn','settling')) AS wagers_open,
-            (SELECT coalesce(sum(amount_usd_micros), 0)::text FROM mpp_payment_attempts ${mppWhere}${mppWhere ? " AND" : " WHERE"} status IN ('approved','paid','succeeded','uncertain') AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS mpp_usd_micros_today
+            (SELECT count(*)::int FROM wallet_wager_reservations ${wagerWhere}${wagerWhere ? " AND" : " WHERE"} status IN ('reserved','drawn','settling')) AS wagers_open
         `,
         queryValues
       ),
@@ -734,7 +604,6 @@ export class PaymentRepository {
       wallets: wallets.rows,
       transfers: transfers.rows,
       wagers: wagers.rows,
-      mppAttempts: attempts,
       health: health.rows,
       generatedAt: new Date().toISOString()
     };
@@ -752,28 +621,6 @@ export class PaymentRepository {
     );
   }
 
-  async getChannelValue(guildId: string, chainId: number, key: string): Promise<string | null> {
-    const result = await this.pool.query(`SELECT value FROM mpp_channel_store WHERE guild_id = $1 AND chain_id = $2 AND store_key = $3`, [
-      guildId,
-      chainId,
-      key
-    ]);
-    return result.rows[0]?.value == null ? null : String(result.rows[0].value);
-  }
-
-  async setChannelValue(guildId: string, chainId: number, key: string, value: string | null): Promise<void> {
-    if (value == null) {
-      await this.pool.query(`DELETE FROM mpp_channel_store WHERE guild_id = $1 AND chain_id = $2 AND store_key = $3`, [guildId, chainId, key]);
-      return;
-    }
-    await this.pool.query(
-      `
-        INSERT INTO mpp_channel_store(guild_id, chain_id, store_key, value) VALUES ($1, $2, $3, $4)
-        ON CONFLICT (guild_id, chain_id, store_key) DO UPDATE SET value = excluded.value, updated_at = now()
-      `,
-      [guildId, chainId, key, value]
-    );
-  }
 }
 
 const LEGACY_MODERATO_CHAIN_ID = 42431;

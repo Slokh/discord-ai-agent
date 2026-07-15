@@ -45,7 +45,10 @@ describe("prompt context cost controls", () => {
     expect(second[0]?.role).toBe("system");
     expect(first[0]?.content).toBe(second[0]?.content);
     expect(String(first[0]?.content)).toContain("You are Discord AI Agent");
-    expect(first.findIndex((message) => String(message.content).includes("Current Discord requester"))).toBeGreaterThan(0);
+    const requesterIndex = first.findIndex((message) => String(message.content).includes("Current Discord requester"));
+    expect(requesterIndex).toBeGreaterThan(0);
+    expect(String(first[requesterIndex]?.content)).toContain("immutable actor for the entire turn");
+    expect(String(first[requesterIndex]?.content)).toContain("every wallet lookup, transfer, wager, settlement");
   });
 
   it("routes genuinely tabular output through Markdown table normalization", () => {
@@ -63,7 +66,7 @@ describe("prompt context cost controls", () => {
     expect(guidance).toContain("this fall");
     expect(guidance).toContain("never answer from model memory");
     expect(guidance).toContain("Use web_search first");
-    expect(guidance).toContain("discover, inspect, and call a relevant specialized service");
+    expect(guidance).toContain("actual purchasable offers");
     expect(guidance).toContain("ask the shortest necessary follow-up");
     expect(chatMessages("find current fares", "").map((message) => String(message.content)).join("\n")).toContain("Current UTC date:");
   });

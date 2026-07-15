@@ -1,17 +1,19 @@
 import type { AppConfig } from "../config/env.js";
 
-const UNQUALIFIED_SHARED_BALANCE =
-  /^(?:(?:what(?:'s| is)|show|check|give me|tell me)\s+)?(?:(?:your|the bot(?:'s)?|bot(?:'s)?|shared(?: bot)?|mpp)\s+)?(?:wallet\s+)?balance(?:\s+(?:please|now))?[?.!]*$/i;
+const WALLET_BALANCE_INTENT = /\b(?:wallet|balance|bankroll|casino funds?|available funds?)\b/i;
+const NON_WALLET_BALANCE = /\b(?:bank|checking|savings|credit card|equations?|ledger sheet|balance of power)\b/i;
+const TRANSFER_INTENT = /\b(?:send|pay|tip|transfer|move|give|deposit|withdraw|rebalance|refund|reimburse)\b/i;
 
-export function shouldForceSharedWalletStatus(config: AppConfig, text: string): boolean {
+export function shouldForceWalletBalance(config: AppConfig, text: string): boolean {
   const payments = config.payments;
   if (!payments) return false;
+  const normalized = text.trim();
   return Boolean(
     payments.walletEnabled &&
-      payments.mppEnabled &&
       payments.privyAppId &&
       payments.privyAppSecret &&
-      !payments.userWalletsEnabled &&
-      UNQUALIFIED_SHARED_BALANCE.test(text.trim())
+      WALLET_BALANCE_INTENT.test(normalized) &&
+      !NON_WALLET_BALANCE.test(normalized) &&
+      !TRANSFER_INTENT.test(normalized)
   );
 }

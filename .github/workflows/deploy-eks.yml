@@ -40,21 +40,10 @@ jobs:
       BUDGET_GUILD_DAILY_USD: ${{ vars.BUDGET_GUILD_DAILY_USD }}
       WALLET_ENABLED: ${{ vars.WALLET_ENABLED }}
       USER_WALLETS_ENABLED: ${{ vars.USER_WALLETS_ENABLED }}
-      MPP_ENABLED: ${{ vars.MPP_ENABLED }}
       TEMPO_NETWORK: ${{ vars.TEMPO_NETWORK }}
-      TEMPO_GAME_TOKEN: ${{ vars.TEMPO_GAME_TOKEN }}
+      TEMPO_USD_TOKEN: ${{ vars.TEMPO_USD_TOKEN }}
       WALLET_INITIAL_GRANT_USD: ${{ vars.WALLET_INITIAL_GRANT_USD }}
       WALLET_MAX_GAME_SETTLEMENT_USD: ${{ vars.WALLET_MAX_GAME_SETTLEMENT_USD }}
-      MPP_MAX_CALL_USD: ${{ vars.MPP_MAX_CALL_USD }}
-      MPP_USER_DAILY_USD: ${{ vars.MPP_USER_DAILY_USD }}
-      MPP_BOT_DAILY_USD: ${{ vars.MPP_BOT_DAILY_USD }}
-      MPP_MAX_SESSION_DEPOSIT_USD: ${{ vars.MPP_MAX_SESSION_DEPOSIT_USD }}
-      MPP_AUTO_APPROVE_USD: ${{ vars.MPP_AUTO_APPROVE_USD }}
-      MPP_SERVICE_CATALOG_URL: ${{ vars.MPP_SERVICE_CATALOG_URL }}
-      MPP_SERVICE_DISCOVERY_MCP_URL: ${{ vars.MPP_SERVICE_DISCOVERY_MCP_URL }}
-      MPP_INSPECTION_TTL_SECONDS: ${{ vars.MPP_INSPECTION_TTL_SECONDS }}
-      MPP_RECENT_REQUEST_WINDOW_SECONDS: ${{ vars.MPP_RECENT_REQUEST_WINDOW_SECONDS }}
-      MPP_MAX_RESPONSE_BYTES: ${{ vars.MPP_MAX_RESPONSE_BYTES }}
       SANDBOX_CACHE_ENABLED: ${{ vars.SANDBOX_CACHE_ENABLED }}
       SANDBOX_CACHE_SIZE: ${{ vars.SANDBOX_CACHE_SIZE }}
       SANDBOX_CACHE_STORAGE_CLASS: ${{ vars.SANDBOX_CACHE_STORAGE_CLASS }}
@@ -148,50 +137,17 @@ jobs:
           if [ -n "${USER_WALLETS_ENABLED:-}" ]; then
             helm_args+=(--set-string "config.userWalletsEnabled=$USER_WALLETS_ENABLED")
           fi
-          if [ -n "${MPP_ENABLED:-}" ]; then
-            helm_args+=(--set-string "config.mppEnabled=$MPP_ENABLED")
-          fi
           if [ -n "${TEMPO_NETWORK:-}" ]; then
             helm_args+=(--set-string "config.tempoNetwork=$TEMPO_NETWORK")
           fi
-          if [ -n "${TEMPO_GAME_TOKEN:-}" ]; then
-            helm_args+=(--set-string "config.tempoGameToken=$TEMPO_GAME_TOKEN")
+          if [ -n "${TEMPO_USD_TOKEN:-}" ]; then
+            helm_args+=(--set-string "config.tempoUsdToken=$TEMPO_USD_TOKEN")
           fi
           if [ -n "${WALLET_INITIAL_GRANT_USD:-}" ]; then
             helm_args+=(--set-string "config.walletInitialGrantUsd=$WALLET_INITIAL_GRANT_USD")
           fi
           if [ -n "${WALLET_MAX_GAME_SETTLEMENT_USD:-}" ]; then
             helm_args+=(--set-string "config.walletMaxGameSettlementUsd=$WALLET_MAX_GAME_SETTLEMENT_USD")
-          fi
-          if [ -n "${MPP_MAX_CALL_USD:-}" ]; then
-            helm_args+=(--set-string "config.mppMaxCallUsd=$MPP_MAX_CALL_USD")
-          fi
-          if [ -n "${MPP_USER_DAILY_USD:-}" ]; then
-            helm_args+=(--set-string "config.mppUserDailyUsd=$MPP_USER_DAILY_USD")
-          fi
-          if [ -n "${MPP_BOT_DAILY_USD:-}" ]; then
-            helm_args+=(--set-string "config.mppBotDailyUsd=$MPP_BOT_DAILY_USD")
-          fi
-          if [ -n "${MPP_MAX_SESSION_DEPOSIT_USD:-}" ]; then
-            helm_args+=(--set-string "config.mppMaxSessionDepositUsd=$MPP_MAX_SESSION_DEPOSIT_USD")
-          fi
-          if [ -n "${MPP_AUTO_APPROVE_USD:-}" ]; then
-            helm_args+=(--set-string "config.mppAutoApproveUsd=$MPP_AUTO_APPROVE_USD")
-          fi
-          if [ -n "${MPP_SERVICE_CATALOG_URL:-}" ]; then
-            helm_args+=(--set-string "config.mppServiceCatalogUrl=$MPP_SERVICE_CATALOG_URL")
-          fi
-          if [ -n "${MPP_SERVICE_DISCOVERY_MCP_URL:-}" ]; then
-            helm_args+=(--set-string "config.mppServiceDiscoveryMcpUrl=$MPP_SERVICE_DISCOVERY_MCP_URL")
-          fi
-          if [ -n "${MPP_INSPECTION_TTL_SECONDS:-}" ]; then
-            helm_args+=(--set-string "config.mppInspectionTtlSeconds=$MPP_INSPECTION_TTL_SECONDS")
-          fi
-          if [ -n "${MPP_RECENT_REQUEST_WINDOW_SECONDS:-}" ]; then
-            helm_args+=(--set-string "config.mppRecentRequestWindowSeconds=$MPP_RECENT_REQUEST_WINDOW_SECONDS")
-          fi
-          if [ -n "${MPP_MAX_RESPONSE_BYTES:-}" ]; then
-            helm_args+=(--set-string "config.mppMaxResponseBytes=$MPP_MAX_RESPONSE_BYTES")
           fi
           if is_true "$SANDBOX_CACHE_ENABLED"; then
             helm_args+=(--set "sandbox.cache.enabled=true")

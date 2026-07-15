@@ -3,7 +3,7 @@ import { isOpenRouterContentFilterError } from "../models/openrouter.js";
 import type { DiscordAgentRequestJob } from "../jobs/queue.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
-import { loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
+import { assertAgentRuntimeTurnEnvelopeScope, loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ToolContext } from "../tools/types.js";
@@ -175,6 +175,13 @@ export async function executeDiscordAgentRequest(
   const priorSessionMessages = preparedTurn.priorSessionMessages;
 
   try {
+    assertAgentRuntimeTurnEnvelopeScope(turnEnvelope, {
+      requestId: request.requestId,
+      messageId: message.id,
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author.id
+    });
     const agentStartedAt = Date.now();
     const inputLines = await loadAgentRuntimeInputLines({
       agentRuntime: input.agentRuntime,
@@ -189,7 +196,6 @@ export async function executeDiscordAgentRequest(
       budgetRepo: input.budgetRepo,
       rngRepo: input.rngRepo,
       walletService: input.walletService,
-      mppService: input.mppService,
       agentRuntime: input.agentRuntime,
       agentRuntimeSession: agentRuntimeExecution?.session ?? null,
       agentRuntimeExecutionId: agentRuntimeExecution?.executionId ?? null,
@@ -199,6 +205,14 @@ export async function executeDiscordAgentRequest(
       channelId: turnEnvelope.channelId,
       userId: turnEnvelope.userId,
       userDisplayName,
+      requesterScope: Object.freeze({
+        requestId: turnEnvelope.requestId,
+        messageId: message.id,
+        guildId: turnEnvelope.guildId,
+        channelId: turnEnvelope.channelId,
+        userId: turnEnvelope.userId,
+        userDisplayName
+      }),
       visibleChannelIds,
       mentionedUserIds,
       mentionedChannelIds,
@@ -207,7 +221,7 @@ export async function executeDiscordAgentRequest(
       replyContext,
       requestAttachments,
       requestId: request.requestId,
-      requestMessageId: message.id,
+      requestMessageId: turnEnvelope.requestId,
       statusChannelId: responseSink.statusChannelId,
       statusMessageId: responseSink.statusMessageId,
       noteProgress: () => undefined,

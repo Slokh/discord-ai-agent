@@ -24,8 +24,8 @@ Owns the model loop for one user prompt.
 - `invalidToolCallRecovery.ts`: one-shot full-context recovery when a model emits malformed or unavailable function names.
 - `modelToolset.ts`: initial scoped tool selection, same-turn tool-group expansion, and image-context checks used by the model loop.
 - `randomOutcomeGuard.ts`: detects fresh chance outcomes that lack a successful `drawRandom` result, drives one in-turn retry, and provides the fail-closed response used by the model loop.
-- `freshExternalDataGuard.ts`: detects time-sensitive price, fare, schedule, availability, and similar answers that lack fresh web or specialized-service evidence, drives one retrieval retry, and fails closed instead of publishing invented live data.
-- `walletStatusGuard.ts`: forces genuinely unqualified balance prompts through the shared MPP wallet status tool when MPP is configured and user wallets are disabled, without capturing bank, game, or unrelated balance requests.
+- `freshExternalDataGuard.ts`: detects time-sensitive price, fare, schedule, availability, and similar answers that lack fresh web evidence, drives one retrieval retry, and fails closed instead of publishing invented live data.
+- `walletStatusGuard.ts`: forces wallet balance prompts through the managed wallet balance tool without capturing bank, game, or unrelated balance requests.
 - `routerShared.ts`: `AgentToolRoute`/`ModelCallBudget` types, round/call ceilings, `reserveModelCall`.
 - `runtimeTranscript.ts`: single event-recording helper for trace events, spans, audits, and runtime transcript appends.
 

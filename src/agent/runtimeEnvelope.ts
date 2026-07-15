@@ -95,6 +95,21 @@ export function buildAgentRuntimeTurnEnvelope(input: {
   };
 }
 
+export function assertAgentRuntimeTurnEnvelopeScope(
+  envelope: AgentRuntimeTurnEnvelope,
+  request: { requestId: string; messageId: string; guildId: string | null; channelId: string; userId: string }
+): void {
+  const mismatches: string[] = [];
+  if (envelope.requestId !== request.requestId) mismatches.push("requestId");
+  if (envelope.requestId !== request.messageId) mismatches.push("messageId");
+  if (envelope.guildId !== request.guildId) mismatches.push("guildId");
+  if (envelope.channelId !== request.channelId) mismatches.push("channelId");
+  if (envelope.userId !== request.userId) mismatches.push("userId");
+  if (mismatches.length > 0) {
+    throw new Error(`Stored Discord turn scope does not match the triggering message: ${mismatches.join(", ")}`);
+  }
+}
+
 export async function storeAgentRuntimeTurnEnvelope(input: {
   agentRuntime?: AgentRuntimeRepository;
   session?: AgentRuntimeSessionRecord | null;

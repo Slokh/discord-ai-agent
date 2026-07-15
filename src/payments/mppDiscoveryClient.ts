@@ -87,7 +87,11 @@ export class MppDiscoveryClient {
         ["get_usage_recipe", { service: serviceIdOrName }],
         ["get_openapi", { service: serviceIdOrName, raw: true }]
       ]);
-      return profileFromMcp(serviceIdOrName, recipe, openapi);
+      return await hydrateProfileFromAdvertisedOpenApi(
+        profileFromMcp(serviceIdOrName, recipe, openapi),
+        this.config,
+        this.fetchImpl
+      );
     } catch (error) {
       const profile = await this.inspectFromCatalog(serviceIdOrName);
       return {
@@ -276,7 +280,7 @@ function profileFromMcp(
   const recipeOperations = operationsFromRecipe(recipe);
   const operations = mergeOperations(operationsFromOpenApi(document), registryOperations, recipeOperations);
   const limitations: string[] = [];
-  if (!document) limitations.push("The directory returned a registry summary rather than a full OpenAPI document; request fields may be incomplete.");
+  if (!document) limitations.push(MCP_REGISTRY_SUMMARY_LIMITATION);
   if (operations.length === 0) limitations.push("No operation schema was available; this service cannot be called automatically.");
   return {
     serviceId: stringValue(service.id) ?? requested,
@@ -289,6 +293,34 @@ function profileFromMcp(
     discoverySource: "services_mcp",
     limitations
   };
+}
+
+export async function hydrateProfileFromAdvertisedOpenApi(
+  profile: MppServiceProfile,
+  config: Pick<AppConfig["payments"]["mpp"], "maxResponseBytes">,
+  fetchImpl: typeof fetch = fetch
+): Promise<MppServiceProfile> {
+  if (!profile.limitations.includes(MCP_REGISTRY_SUMMARY_LIMITATION)) return profile;
+  try {
+    const base = await assertPublicHttpsUrl(profile.baseUrl);
+    const openapiUrl = new URL("openapi.json", base.toString().endsWith("/") ? base : new URL(`${base.toString()}/`));
+    const response = await safeFetch(openapiUrl, {}, { allowedOrigin: base.origin, fetchImpl });
+    if (!response.ok) return profile;
+    const document = await readBoundedJson(response, Math.min(config.maxResponseBytes, 1_000_000));
+    const documentOperations = operationsFromOpenApi(document);
+    if (documentOperations.length === 0) return profile;
+    const operations = mergeOperations(documentOperations, profile.operations);
+    const hasCompleteRequestShapes = operations.every((operation) => operation.requestShape !== null);
+    return {
+      ...profile,
+      operations,
+      limitations: hasCompleteRequestShapes
+        ? profile.limitations.filter((limitation) => limitation !== MCP_REGISTRY_SUMMARY_LIMITATION)
+        : profile.limitations
+    };
+  } catch {
+    return profile;
+  }
 }
 
 function operationsFromRegistryOpenApi(openapi: Record<string, unknown>): MppOperation[] {
@@ -418,10 +450,19 @@ function mergeOperations(...groups: MppOperation[][]): MppOperation[] {
       operationId: existing.operationId || operation.operationId,
       summary: existing.summary ?? operation.summary,
       requestShape: existing.requestShape ?? operation.requestShape,
-      offers: existing.offers.length > 0 ? existing.offers : operation.offers
+      offers: offerListScore(existing.offers) >= offerListScore(operation.offers) ? existing.offers : operation.offers
     });
   }
   return [...merged.values()].slice(0, 100);
+}
+
+function offerListScore(offers: MppPaymentOffer[]): number {
+  return offers.reduce((best, offer) => Math.max(best,
+    (offer.amount ? 4 : 0) +
+    (offer.decimals != null ? 2 : 0) +
+    (offer.currency ? 1 : 0) +
+    (offer.method === "tempo" ? 1 : 0)
+  ), 0);
 }
 
 function recommendationFromCatalog(row: Record<string, unknown>): MppRecommendation {
@@ -519,3 +560,4 @@ function errorMessage(error: unknown): string {
 
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const MPP_CATEGORIES = new Set(["ai", "blockchain", "compute", "data", "media", "search", "social", "storage", "web"]);
+const MCP_REGISTRY_SUMMARY_LIMITATION = "The directory returned a registry summary rather than a full OpenAPI document; request fields may be incomplete.";

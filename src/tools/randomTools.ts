@@ -12,6 +12,8 @@ import {
   type RngDrawParams
 } from "../rng/provable.js";
 import { summarizeForAudit } from "../util/text.js";
+import { recordAgentEvent } from "../agent/runtimeTranscript.js";
+import type { PaymentEventRecorder, WagerReservation } from "../payments/types.js";
 import type { ToolContext } from "./types.js";
 
 export type DrawRandomInput = {
@@ -23,6 +25,11 @@ export type DrawRandomInput = {
   options?: string[];
   deckCount?: number;
   reason?: string;
+  wager?: {
+    stakeUsd?: number;
+    maxPayoutUsd?: number;
+    game?: string;
+  };
 };
 
 const MAX_COUNT = 100;
@@ -50,13 +57,38 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     return validationError;
   }
 
+  const wagerValidationError = validateWagerInput(input);
+  if (wagerValidationError) {
+    await auditRng(ctx, "drawRandom", input, wagerValidationError);
+    return wagerValidationError;
+  }
+  let wager: WagerReservation | null = null;
+  if (input.wager) {
+    if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
+    if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
+    wager = await ctx.walletService.reserveWager(
+      {
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        threadKey,
+        userId: ctx.userId,
+        game: input.wager.game!.trim(),
+        stakeUsd: input.wager.stakeUsd!,
+        maxPayoutUsd: input.wager.maxPayoutUsd!
+      },
+      paymentRecorder(ctx)
+    );
+  }
+
   const clientSeedValue = ctx.requestMessageId ?? ctx.requestId ?? generateServerSeed();
   const clientSeedSource = ctx.requestMessageId ? "discord_message_id" : ctx.requestId ? "request_id" : "random";
   const reason = normalizeReason(input.reason);
   // Candidate seed for a new session; discarded unpublished when one already exists.
   const candidateServerSeed = generateServerSeed();
 
-  const result = await rngRepo.withActiveSession<DrawTxResult>(
+  let result: DrawTxResult;
+  try {
+    result = await rngRepo.withActiveSession<DrawTxResult>(
     {
       threadKey,
       guildId: ctx.guildId,
@@ -91,13 +123,26 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
         showCommit: sessionCreated || seed.justSet
       };
     }
-  );
+    );
+  } catch (error) {
+    if (wager && ctx.walletService) await ctx.walletService.releaseWager(wager.id, "RNG draw failed", paymentRecorder(ctx));
+    throw error;
+  }
 
   if (!result.ok) {
+    if (wager && ctx.walletService) await ctx.walletService.releaseWager(wager.id, result.error, paymentRecorder(ctx));
     await auditRng(ctx, "drawRandom", input, result.error);
     return result.error;
   }
   const { draw, sessionId, commitment, clientSeed, showCommit } = result;
+  if (wager && ctx.walletService) {
+    try {
+      await ctx.walletService.attachWagerDraw(wager.id, draw.drawId, paymentRecorder(ctx));
+    } catch (error) {
+      await ctx.walletService.releaseWager(wager.id, "Could not attach the RNG draw", paymentRecorder(ctx));
+      throw error;
+    }
+  }
 
   const footerLines: string[] = [];
   if (draw.shuffleFooter) footerLines.push(draw.shuffleFooter);
@@ -114,9 +159,40 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   return [
     `Provably fair draw complete.`,
     `Result: ${draw.summary}`,
-    `Session ${sessionId} · nonce ${draw.nonce} · commitment sha256:${commitment}`,
+    `Session ${sessionId} · nonce ${draw.nonce} · draw ${draw.drawId} · commitment sha256:${commitment}`,
+    wager
+      ? `Wager ${wager.id} is reserved. After calculating the payout from this exact result, you MUST call settleRandomWager once with that wager id, the total payout including returned stake, and a concise calculation.`
+      : null,
     `Report this result exactly as shown. A proof footer is appended to your reply automatically; do not restate or alter the proof details.`
-  ].join("\n");
+  ].filter((line): line is string => line !== null).join("\n");
+}
+
+export async function settleRandomWager(
+  ctx: ToolContext,
+  input: { wagerId?: string; payoutUsd?: number; explanation?: string }
+): Promise<string> {
+  if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
+  if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
+  const wagerId = input.wagerId?.trim();
+  const explanation = input.explanation?.trim();
+  if (!wagerId) return "wagerId is required.";
+  if (input.payoutUsd == null || !Number.isFinite(input.payoutUsd) || input.payoutUsd < 0) {
+    return "payoutUsd must be a non-negative amount.";
+  }
+  if (!explanation) return "explanation is required and must show how the payout follows from the draw.";
+  const settled = await ctx.walletService.settleWager(
+    { wagerId, userId: ctx.userId, payoutUsd: input.payoutUsd, explanation },
+    paymentRecorder(ctx)
+  );
+  return [
+    `Wager ${wagerId} settled.`,
+    `Payout: $${input.payoutUsd}.`,
+    settled.transfer
+      ? `Net transfer: ${settled.transfer.amountAtomic.toString()} base units (${settled.transfer.status})${settled.transfer.transactionHash ? ` · ${settled.transfer.transactionHash}` : ""}.`
+      : "Net transfer: none (the payout equals the stake).",
+    settled.userBalance ? `User game balance: $${settled.userBalance.formatted} ${settled.userBalance.symbol}.` : null,
+    `Calculation: ${explanation}`
+  ].filter((line): line is string => line !== null).join("\n");
 }
 
 export async function revealRandomness(ctx: ToolContext): Promise<string> {
@@ -177,6 +253,7 @@ export async function revealRandomness(ctx: ToolContext): Promise<string> {
 }
 
 type DrawResult = {
+  drawId: number;
   nonce: number;
   summary: string;
   footerLine: string;
@@ -205,7 +282,7 @@ async function drawBasic(
   const params = drawParamsFor(kind, input);
   const nonce = await tx.takeNonce();
   const outcome = computeRngOutcome({ serverSeed: tx.session.serverSeed, clientSeed, nonce, kind, params });
-  await tx.recordDraw({
+  const stored = await tx.recordDraw({
     nonce,
     kind,
     params: params as Record<string, unknown>,
@@ -223,6 +300,7 @@ async function drawBasic(
   }
   const label = describeDraw(kind, params, reason);
   return {
+    drawId: stored.id,
     nonce,
     summary: `${label} → ${summary}`,
     footerLine: `🎲 ${label} → ${truncate(summary, MAX_FOOTER_OUTCOME_CHARS)} · nonce ${nonce} · session ${tx.session.id}`
@@ -290,7 +368,7 @@ async function drawCards(
     start,
     count
   });
-  await tx.recordDraw({
+  const stored = await tx.recordDraw({
     nonce: shuffleNonce,
     kind: "cards",
     params: { deckCount, start, count },
@@ -304,6 +382,7 @@ async function drawCards(
   const label = reason ? `cards (${reason})` : "cards";
   const summary = cards.join(" ");
   return {
+    drawId: stored.id,
     nonce: shuffleNonce,
     summary: `${label} → ${summary} · shoe cards ${start + 1}–${start + count} of ${size}`,
     footerLine: `🎲 ${label} → ${truncate(summary, MAX_FOOTER_OUTCOME_CHARS)} · nonce ${shuffleNonce} · shoe ${start + 1}–${start + count}/${size} · session ${tx.session.id}`,
@@ -396,6 +475,31 @@ function validateDrawInput(kind: string, input: DrawRandomInput): string | null 
     default:
       return `Unknown draw kind "${kind}".`;
   }
+}
+
+function validateWagerInput(input: DrawRandomInput): string | null {
+  if (!input.wager) return null;
+  const { stakeUsd, maxPayoutUsd, game } = input.wager;
+  if (!Number.isFinite(stakeUsd) || (stakeUsd ?? 0) <= 0) return "wager.stakeUsd must be a positive amount.";
+  if (!Number.isFinite(maxPayoutUsd) || (maxPayoutUsd ?? -1) < 0) {
+    return "wager.maxPayoutUsd must be a non-negative amount that includes any returned stake.";
+  }
+  if (!game?.trim()) return "wager.game is required.";
+  return null;
+}
+
+function paymentRecorder(ctx: ToolContext): PaymentEventRecorder {
+  return async (event) => {
+    await recordAgentEvent(ctx, {
+      ...event,
+      traceId: ctx.requestId,
+      requestId: ctx.requestId,
+      guildId: ctx.guildId,
+      channelId: ctx.channelId,
+      userId: ctx.userId,
+      messageId: ctx.requestMessageId
+    });
+  };
 }
 
 function drawParamsFor(kind: RngDrawKind, input: DrawRandomInput): RngDrawParams {

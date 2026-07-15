@@ -9,12 +9,16 @@ import { runQueuedAgentRuntimeExecution } from "../discord/client.js";
 import type { AgentRuntimeExecutionRunner } from "../jobs/queue.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import { InProcessAgentRuntimePromptExecutor } from "./runtimeExecutor.js";
+import type { WalletService } from "../payments/walletService.js";
+import type { MppService } from "../payments/mppService.js";
 
 export function createAgentRuntimeRunner(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   budgetRepo?: BudgetRepository;
   rngRepo?: RngRepository;
+  walletService?: WalletService;
+  mppService?: MppService;
   agentRuntimeRepo: AgentRuntimeRepository;
   deliveryObligations?: DeliveryObligationsRepository;
   openRouter: OpenRouterClient;
@@ -29,6 +33,8 @@ export function createAgentRuntimeRunner(input: {
           repo: input.repo,
           budgetRepo: input.budgetRepo,
           rngRepo: input.rngRepo,
+          walletService: input.walletService,
+          mppService: input.mppService,
           agentRuntime: input.agentRuntimeRepo,
           deliveryObligations: input.deliveryObligations,
           agentExecutor,

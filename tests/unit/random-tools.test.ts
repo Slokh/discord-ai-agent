@@ -8,7 +8,7 @@ import type {
   RngSessionTx
 } from "../../src/db/rngRepository.js";
 import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } from "../../src/rng/provable.js";
-import { drawRandom, revealRandomness } from "../../src/tools/randomTools.js";
+import { drawRandom, revealRandomness, settleRandomWager } from "../../src/tools/randomTools.js";
 import type { DiscordReplyContext, ToolContext } from "../../src/tools/types.js";
 
 /** In-memory mirror of RngRepository's transactional interface (single-threaded, no locking needed). */
@@ -162,7 +162,7 @@ class FakeRngRepository {
         return session.nonceCounter++;
       },
       async recordDraw(input: RngDrawInput) {
-        draws.push({
+        const draw = {
           id: nextDrawId(),
           sessionId: session.id,
           nonce: input.nonce,
@@ -174,7 +174,9 @@ class FakeRngRepository {
           messageId: input.messageId ?? null,
           requestedByUserId: input.requestedByUserId ?? null,
           createdAt: new Date()
-        });
+        };
+        draws.push(draw);
+        return draw;
       },
       async setShoe(input: { deckCount: number; shuffleNonce: number }) {
         session.deckCount = input.deckCount;
@@ -197,7 +199,7 @@ function fakeContext(overrides: Partial<ToolContext> = {}): { ctx: ToolContext; 
   const rngRepo = new FakeRngRepository();
   const footerLines: string[] = [];
   const ctx = {
-    config: { maxReplyChars: 1800 },
+    config: { maxReplyChars: 1800, payments: { userWalletsEnabled: true } },
     repo: { auditTool: vi.fn(async () => undefined) },
     rngRepo: rngRepo as unknown as RngRepository,
     guildId: "guild",
@@ -452,6 +454,66 @@ describe("drawRandom", () => {
   it("reports unavailability when no RNG store is wired", async () => {
     const { ctx } = fakeContext({ rngRepo: undefined });
     expect(await drawRandom(ctx, { kind: "coin" })).toContain("Provably fair RNG is unavailable");
+  });
+
+  it("reserves a generic wager before drawing and attaches the stored draw id", async () => {
+    const reserveWager = vi.fn(async () => ({ id: "wager-1" }));
+    const attachWagerDraw = vi.fn(async () => undefined);
+    const releaseWager = vi.fn(async () => undefined);
+    const walletService = { reserveWager, attachWagerDraw, releaseWager };
+    const { ctx } = fakeContext({ walletService: walletService as unknown as ToolContext["walletService"] });
+
+    const response = await drawRandom(ctx, {
+      kind: "dice",
+      sides: 6,
+      wager: { stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }
+    });
+
+    expect(reserveWager).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user", stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }),
+      expect.any(Function)
+    );
+    expect(attachWagerDraw).toHaveBeenCalledWith("wager-1", 1, expect.any(Function));
+    expect(releaseWager).not.toHaveBeenCalled();
+    expect(response).toContain("MUST call settleRandomWager once");
+  });
+
+  it("rejects wallet-backed wagers when user wallets are disabled", async () => {
+    const reserveWager = vi.fn();
+    const { ctx } = fakeContext({
+      config: { maxReplyChars: 1800, payments: { userWalletsEnabled: false } } as ToolContext["config"],
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "coin",
+      wager: { stakeUsd: 0.25, maxPayoutUsd: 0.5, game: "coin" }
+    });
+
+    expect(response).toContain("User wallets and wallet-backed wagers are not enabled");
+    expect(reserveWager).not.toHaveBeenCalled();
+  });
+
+  it("settles a wager exactly through the wallet service", async () => {
+    const settleWager = vi.fn(async () => ({
+      wager: { id: "wager-1" },
+      transfer: { amountAtomic: 750_000n, status: "confirmed", transactionHash: "0xabc" },
+      userBalance: { formatted: "2.75", symbol: "pathUSD" }
+    }));
+    const { ctx } = fakeContext({ walletService: { settleWager } as unknown as ToolContext["walletService"] });
+
+    const response = await settleRandomWager(ctx, {
+      wagerId: "wager-1",
+      payoutUsd: 1,
+      explanation: "rolled the winning face"
+    });
+
+    expect(settleWager).toHaveBeenCalledWith(
+      { wagerId: "wager-1", userId: "user", payoutUsd: 1, explanation: "rolled the winning face" },
+      expect.any(Function)
+    );
+    expect(response).toContain("750000 base units (confirmed)");
+    expect(response).toContain("User game balance: $2.75 pathUSD");
   });
 });
 

@@ -47,6 +47,25 @@ kubectl -n discord-ai-agent create secret generic discord-ai-agent-env \
 
 For production, prefer creating the Secret from your normal secret manager rather than shell literals.
 For local/dev you can use `GITHUB_TOKEN` instead of the GitHub App fields.
+When enabling `WALLET_ENABLED` or `MPP_ENABLED`, add `PRIVY_APP_ID` and
+`PRIVY_APP_SECRET` to this same Secret. Keep both features disabled until the
+shared bot wallet has been created and funded on the configured Tempo network;
+the staged cutover is documented in [payments-mpp.md](payments-mpp.md).
+Set `USER_WALLETS_ENABLED=false` for an MPP-only deployment; the shared wallet
+and MPP tools remain available without provisioning wallets for Discord users.
+The chart also exposes the MPP automatic-approval threshold, Services MCP URL,
+inspection lifetime, recent-request window, response limit, and all hard spend
+caps under `config.mpp*`. Keep the default Moderato network and conservative
+caps for the first rollout. If a Privy secret has appeared in chat, logs, or a
+ticket, rotate it before deployment and replace the Kubernetes Secret value.
+
+The `Deploy EKS` GitHub workflow maps repository variables with the corresponding
+environment names into those Helm settings. For an MPP-only Moderato rollout,
+configure at least `WALLET_ENABLED=true`, `USER_WALLETS_ENABLED=false`,
+`MPP_ENABLED=true`, and `TEMPO_NETWORK=moderato`. Set the remaining `MPP_*`
+variables only when overriding the conservative chart defaults. Keeping these as
+repository variables prevents an automated `main` deployment from silently
+reverting a manually configured Helm release to disabled payment features.
 
 Optional permission keys (strongly recommended): the chart maps these into every
 pod when present in the same Secret. Without them, restricted tools (code-update

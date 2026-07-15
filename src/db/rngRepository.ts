@@ -60,7 +60,7 @@ export type RngSessionTx = {
   setClientSeed(clientSeed: string, source: string): Promise<{ clientSeed: string; justSet: boolean }>;
   /** Reserve the next nonce (0-based) for an entropy-consuming draw. */
   takeNonce(): Promise<number>;
-  recordDraw(input: RngDrawInput): Promise<void>;
+  recordDraw(input: RngDrawInput): Promise<RngDrawRecord>;
   setShoe(input: { deckCount: number; shuffleNonce: number }): Promise<void>;
   /** Claim `count` cards from the current shoe; returns the slice start, or null when the shoe cannot cover it. */
   claimDeckCards(count: number): Promise<number | null>;
@@ -310,10 +310,11 @@ function makeSessionTx(client: pg.PoolClient, session: RngSessionRecord): RngSes
       return nonce;
     },
     async recordDraw(input) {
-      await client.query(
+      const result = await client.query(
         `
           INSERT INTO rng_draws (session_id, nonce, kind, params, outcome, reason, request_id, message_id, requested_by_user_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          RETURNING ${DRAW_COLUMNS}
         `,
         [
           session.id,
@@ -327,6 +328,7 @@ function makeSessionTx(client: pg.PoolClient, session: RngSessionRecord): RngSes
           input.requestedByUserId ?? null
         ]
       );
+      return mapDraw(result.rows[0]);
     },
     async setShoe(input) {
       const result = await client.query(

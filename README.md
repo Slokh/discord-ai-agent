@@ -52,6 +52,7 @@ Postgres with `pgvector` is the source of truth for Discord history, embeddings,
 - Image generation
 - OpenRouter-hosted web search, web fetch, and datetime tools
 - Public Spotify catalog search, item lookup, playlist/album track-list, artist discography, playlist stats, and playlist comparison tools when Spotify client credentials are configured
+- Optional automatic Privy game wallets, provably fair wager settlement, and bot-funded MPP paid-service discovery/calls on Tempo
 - Private DB-backed skills
 - Code-update PRs through sandboxed agent tasks
 - Structured logs and trace/agent-runtime event inspection
@@ -222,6 +223,15 @@ Common optional settings:
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | unset | Optional Spotify client-credentials integration for public catalog and high-level playlist/album/artist tools |
+| `WALLET_ENABLED` / `MPP_ENABLED` | `false` / `false` | Opt into the shared Privy bot-wallet runtime and bot-funded MPP calls. See [docs/payments-mpp.md](docs/payments-mpp.md). |
+| `USER_WALLETS_ENABLED` | `false` | Separately opt into automatic Discord user wallets, initial grants, balance tools, and wallet-backed wagers. Leave false for MPP-only operation. |
+| `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | unset | Required only when wallet or MPP runtime features are enabled. Never exposed to Discord or sandbox tasks. |
+| `TEMPO_NETWORK` / `TEMPO_GAME_TOKEN` | `moderato` / `pathUSD` | Tempo network and curated USD game token. Validate on Moderato before mainnet cutover. |
+| `WALLET_INITIAL_GRANT_USD` / `WALLET_MAX_GAME_SETTLEMENT_USD` | `1.00` / `10.00` | Automatic first-interaction game balance and maximum reserved payout per wager. |
+| `MPP_MAX_CALL_USD` / `MPP_USER_DAILY_USD` / `MPP_BOT_DAILY_USD` | `0.50` / `2.00` / `10.00` | Independent MPP runtime challenge caps; discovery prices never bypass them. |
+| `MPP_AUTO_APPROVE_USD` | `0.05` | Maximum read-only call the agent may approve autonomously; higher-cost calls and external side effects require explicit current-request authorization. |
+| `MPP_SERVICE_DISCOVERY_MCP_URL` | `https://mpp.dev/mcp/services` | Official service ranking, offer search, recipes, and OpenAPI discovery endpoint. |
+| `MPP_INSPECTION_TTL_SECONDS` / `MPP_RECENT_REQUEST_WINDOW_SECONDS` | `900` / `600` | Lifetime of a free inspected service capability and the default cross-turn duplicate-payment guard window. |
 | `GITHUB_BASE_BRANCH` | `main` | PR base branch |
 | `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |

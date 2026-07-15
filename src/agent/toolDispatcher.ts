@@ -9,7 +9,7 @@ import {
 import { updateBotAvatar } from "../tools/botProfileTools.js";
 import { createDiscordPoll } from "../tools/discordPollTools.js";
 import { inspectDiscordFile } from "../tools/discordFileTools.js";
-import { drawRandom, revealRandomness } from "../tools/randomTools.js";
+import { drawRandom, revealRandomness, settleRandomWager } from "../tools/randomTools.js";
 import { findDiscordChannels, findDiscordUsers } from "../tools/discordResolverTools.js";
 import {
   answerFromHistory,
@@ -18,18 +18,10 @@ import {
   getRecentDiscordMessages,
   searchDiscordAttachments,
 } from "../tools/discordRetrievalTools.js";
-import {
-  getDiscordChannelTopics,
-  summarizeCurrentThread,
-  summarizeDiscordHistory,
-} from "../tools/discordSummaryTools.js";
+import { getDiscordChannelTopics, summarizeCurrentThread, summarizeDiscordHistory } from "../tools/discordSummaryTools.js";
 import { getAgentMemoryStats, getRecentAgentMemory, undoConversationTurns } from "../tools/agentMemoryTools.js";
 import { inspectAgentLogs, reportStatus, setUserTurnLimit } from "../tools/discordOpsTools.js";
-import {
-  generateImage,
-  getDiscordUserAvatar,
-  inspectDiscordImages,
-} from "../tools/imageTools.js";
+import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../tools/imageTools.js";
 import { createSkillFromRequest } from "../tools/skillTools.js";
 import { getSpendSummary } from "../tools/spendTools.js";
 import {
@@ -51,6 +43,8 @@ import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { restrictedToolGate } from "./toolGate.js";
+import { executeMppToolRoute } from "./mppToolRoutes.js";
+import { executeWalletToolRoute } from "./walletToolRoutes.js";
 
 export async function executeLocalToolRoute(
   ctx: ToolContext,
@@ -59,6 +53,10 @@ export async function executeLocalToolRoute(
 ): Promise<AgentResponse> {
   const gate = await restrictedToolGate(ctx, route.name);
   if (!gate.allowed) return { content: gate.message };
+  const mppResponse = await executeMppToolRoute(ctx, route);
+  if (mppResponse) return mppResponse;
+  const walletResponse = await executeWalletToolRoute(ctx, route);
+  if (walletResponse) return walletResponse;
 
   if (route.name === "listTools") {
     return {
@@ -643,6 +641,11 @@ export async function executeLocalToolRoute(
           options: stringArrayArgument(route.arguments, "options"),
           deckCount: numberArgument(route.arguments, "deckCount"),
           reason: stringArgument(route.arguments, "reason"),
+          wager: recordArgument(route.arguments, "wager") as {
+            stakeUsd?: number;
+            maxPayoutUsd?: number;
+            game?: string;
+          } | undefined,
         }),
         ctx.config.maxReplyChars,
       ),
@@ -653,6 +656,19 @@ export async function executeLocalToolRoute(
     return {
       content: cleanResponse(
         await revealRandomness(ctx),
+        ctx.config.maxReplyChars,
+      ),
+    };
+  }
+
+  if (route.name === "settleRandomWager") {
+    return {
+      content: cleanResponse(
+        await settleRandomWager(ctx, {
+          wagerId: stringArgument(route.arguments, "wagerId"),
+          payoutUsd: numberArgument(route.arguments, "payoutUsd"),
+          explanation: stringArgument(route.arguments, "explanation"),
+        }),
         ctx.config.maxReplyChars,
       ),
     };
@@ -774,4 +790,9 @@ function booleanArgument(
     if (/^(false|no|0)$/i.test(value)) return false;
   }
   return undefined;
+}
+
+function recordArgument(args: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  const value = args?.[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }

@@ -74,6 +74,23 @@ config:
   memoryCompactionKeepRecent: "30"
   crawlScheduleCron: "0 6 * * *"
   toolsetScoping: "true"
+  walletEnabled: "false"
+  userWalletsEnabled: "false"
+  mppEnabled: "false"
+  tempoNetwork: moderato
+  tempoGameToken: pathUSD
+  walletInitialGrantUsd: "1.00"
+  walletMaxGameSettlementUsd: "10.00"
+  mppMaxCallUsd: "0.50"
+  mppUserDailyUsd: "2.00"
+  mppBotDailyUsd: "10.00"
+  mppMaxSessionDepositUsd: "0.50"
+  mppAutoApproveUsd: "0.05"
+  mppServiceCatalogUrl: https://mpp.dev/api/services
+  mppServiceDiscoveryMcpUrl: https://mpp.dev/mcp/services
+  mppInspectionTtlSeconds: "900"
+  mppRecentRequestWindowSeconds: "600"
+  mppMaxResponseBytes: "2000000"
   # Optional daily budget overrides. Leave empty to use the application
   # defaults (50 turns, 10 images, 1 code-update task per user; $10/day
   # guild spend). Use "-1" to disable a limit entirely.
@@ -88,6 +105,8 @@ config:
   openRouterApiKeySecretKey: OPENROUTER_API_KEY
   spotifyClientIdSecretKey: SPOTIFY_CLIENT_ID
   spotifyClientSecretKey: SPOTIFY_CLIENT_SECRET
+  privyAppIdSecretKey: PRIVY_APP_ID
+  privyAppSecretSecretKey: PRIVY_APP_SECRET
   githubTokenSecretKey: GITHUB_TOKEN
   githubAppIdSecretKey: GITHUB_APP_ID
   githubAppPrivateKeySecretKey: GITHUB_APP_PRIVATE_KEY

@@ -188,6 +188,8 @@ export async function executeDiscordAgentRequest(
       repo: input.repo,
       budgetRepo: input.budgetRepo,
       rngRepo: input.rngRepo,
+      walletService: input.walletService,
+      mppService: input.mppService,
       agentRuntime: input.agentRuntime,
       agentRuntimeSession: agentRuntimeExecution?.session ?? null,
       agentRuntimeExecutionId: agentRuntimeExecution?.executionId ?? null,

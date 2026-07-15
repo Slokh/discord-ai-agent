@@ -5,12 +5,16 @@ import type { ConversationMessage, DiscordAiAgentRepository } from "../db/reposi
 import type { RngRepository } from "../db/rngRepository.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { JobRuntime } from "../jobs/queue.js";
+import type { WalletService } from "../payments/walletService.js";
+import type { MppService } from "../payments/mppService.js";
 
 export type ToolContext = {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   budgetRepo?: BudgetRepository;
   rngRepo?: RngRepository;
+  walletService?: WalletService;
+  mppService?: MppService;
   agentRuntime?: AgentRuntimeRepository;
   agentRuntimeSession?: AgentRuntimeSessionRecord | null;
   agentRuntimeExecutionId?: string | null;
@@ -32,6 +36,8 @@ export type ToolContext = {
   /** Non-model footer lines appended verbatim to the final Discord reply (e.g. RNG fairness proofs). */
   footerLines?: string[];
   requestId?: string;
+  /** Exact current user request, used for code-enforced authorization checks on paid external side effects. */
+  requestText?: string;
   /** Discord id of the message that triggered this request; assigned by Discord, not the bot. */
   requestMessageId?: string;
   statusChannelId?: string;

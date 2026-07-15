@@ -43,5 +43,6 @@ spec:
             {{- include "discord-ai-agent.discordEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.openRouterEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.spotifyEnv" . | nindent 12 }}
+            {{- include "discord-ai-agent.paymentEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.bot.resources | nindent 12 }}

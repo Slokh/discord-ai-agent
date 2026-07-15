@@ -42,12 +42,15 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
 
 export function scopedToolset(input: { config: AppConfig; groups: Set<ToolGroup> }): ScopedToolset {
   const groups = normalizeGroups(input.groups, input.config);
-  return {
-    groups,
-    localTools: toolRegistry.filter((tool) =>
+  const localTools = toolRegistry
+    .filter((tool) =>
       (groups.has(tool.group) || tool.name === "drawRandom") &&
       isToolDeploymentAvailable(tool, input.config)
-    ),
+    )
+    .map((tool) => toolForDeployment(tool, input.config));
+  return {
+    groups,
+    localTools,
     serverTools: openRouterServerToolRegistry.filter((tool) => groups.has(tool.group)),
   };
 }
@@ -73,6 +76,15 @@ export function isCodegenConfigured(config: AppConfig) {
   return missingCodegenConfig(config).length === 0;
 }
 
+export function isMppConfigured(config: AppConfig) {
+  return Boolean(
+    config.payments?.walletEnabled &&
+      config.payments?.mppEnabled &&
+      config.payments?.privyAppId &&
+      config.payments?.privyAppSecret
+  );
+}
+
 export function missingCodegenConfig(config: AppConfig): string[] {
   const missing: string[] = [];
   const repository = config.github?.repository?.trim();
@@ -94,7 +106,20 @@ function normalizeGroups(groups: Set<ToolGroup>, config: AppConfig) {
 function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
   if (tool.group === "spotify") return isSpotifyConfigured(config);
   if (tool.group === "codegen") return isCodegenConfigured(config);
+  if (["discoverMppServices", "inspectMppService", "callMppService"].includes(tool.name)) return isMppConfigured(config);
+  if (["settleRandomWager", "getGameWalletBalance"].includes(tool.name)) {
+    return Boolean(config.payments?.walletEnabled && config.payments?.userWalletsEnabled);
+  }
   return true;
+}
+
+function toolForDeployment(tool: ToolRegistryEntry, config: AppConfig): ToolRegistryEntry {
+  if (tool.name !== "drawRandom" || config.payments?.userWalletsEnabled) return tool;
+  const properties = tool.parameters.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return tool;
+  const withoutWager = { ...properties } as Record<string, unknown>;
+  delete withoutWager.wager;
+  return { ...tool, parameters: { ...tool.parameters, properties: withoutWager } };
 }
 
 function isToolGroup(value: string): value is ToolGroup {

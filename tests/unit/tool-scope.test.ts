@@ -39,11 +39,10 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
   });
 
-  it("keeps MPP available while removing every user-wallet tool and wager schema", () => {
+  it("keeps bot balance reads while removing user-wallet actions and wager schema", () => {
     withEnv({
       WALLET_ENABLED: "true",
       USER_WALLETS_ENABLED: "false",
-      MPP_ENABLED: "true",
       PRIVY_APP_ID: "app",
       PRIVY_APP_SECRET: "secret"
     }, () => {
@@ -53,12 +52,8 @@ describe("tool scoping", () => {
       const drawRandom = tools.find((tool) => tool.name === "drawRandom");
       const properties = drawRandom?.parameters.properties as Record<string, unknown>;
 
-      expect(names).toContain("discoverMppServices");
-      expect(names).toContain("inspectMppService");
-      expect(names).toContain("callMppService");
-      expect(names).toContain("getBotPaymentStatus");
-      expect(names).toContain("reconcileBotPayments");
-      expect(names).not.toContain("getGameWalletBalance");
+      expect(names).toContain("getWalletBalance");
+      expect(names).not.toContain("transferWalletFunds");
       expect(names).not.toContain("settleRandomWager");
       expect(properties).not.toHaveProperty("wager");
     });
@@ -68,7 +63,6 @@ describe("tool scoping", () => {
     withEnv({
       WALLET_ENABLED: "true",
       USER_WALLETS_ENABLED: "true",
-      MPP_ENABLED: "true",
       PRIVY_APP_ID: "app",
       PRIVY_APP_SECRET: "secret"
     }, () => {
@@ -78,7 +72,10 @@ describe("tool scoping", () => {
       const drawRandom = tools.find((tool) => tool.name === "drawRandom");
       const properties = drawRandom?.parameters.properties as Record<string, unknown>;
 
-      expect(names).toContain("getGameWalletBalance");
+      expect(names).toContain("getWalletBalance");
+      expect(names).toContain("transferWalletFunds");
+      expect(names).toContain("adminTransferWalletFunds");
+      expect(names).toContain("reconcileWalletTransfers");
       expect(names).toContain("settleRandomWager");
       expect(properties).toHaveProperty("wager");
     });

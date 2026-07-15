@@ -11,7 +11,8 @@ const RESTRICTED_TOOL_MESSAGES: Partial<Record<ToolName, string>> = {
   retryAgentTask: "Retrying code-update tasks is restricted to the bot owner or codegen allowlist.",
   updateBotAvatar: "Avatar updates are restricted to the bot owner or ops allowlist.",
   setUserTurnLimit: "User turn limits are restricted to the bot owner or ops allowlist.",
-  reconcileBotPayments: "Payment reconciliation is restricted to the bot owner or ops allowlist.",
+  reconcileWalletTransfers: "Wallet reconciliation is restricted to the bot owner or ops allowlist.",
+  adminTransferWalletFunds: "Wallet administration is restricted to the bot owner or ops allowlist.",
   generateImage: "Image generation is restricted to the bot owner or configured allowlist."
 };
 
@@ -28,7 +29,9 @@ export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): 
   }
   if (toolName === "updateBotAvatar" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
   if (toolName === "setUserTurnLimit" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
-  if (toolName === "reconcileBotPayments" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
+  if ((toolName === "reconcileWalletTransfers" || toolName === "adminTransferWalletFunds") && !isStrictlyAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) {
+    return denied(toolName);
+  }
   if (toolName === "generateImage") {
     if (ctx.config.allowlists?.imageToolsAllowlistOnly && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
     const limit = ctx.config.budget?.userImagesPerDay ?? -1;
@@ -49,6 +52,11 @@ function isAllowed(ctx: ToolContext, configuredIds: string[]) {
   if (owner && ctx.userId === owner) return true;
   const allowlist = configuredIds.length > 0 ? configuredIds : owner ? [owner] : [];
   return allowlist.length === 0 || allowlist.includes(ctx.userId);
+}
+
+function isStrictlyAllowed(ctx: ToolContext, configuredIds: string[]) {
+  const owner = ctx.config.allowlists?.ownerUserId;
+  return Boolean((owner && ctx.userId === owner) || configuredIds.includes(ctx.userId));
 }
 
 function startOfUtcDay(date: Date) {

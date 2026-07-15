@@ -92,7 +92,7 @@ describe("Discord response formatting", () => {
     expect(
       formatDiscordMarkdownTables(
         [
-          "**MPP Wallet Status** 💰",
+          "**Wallet Status** 💰",
           "",
           "| | |",
           "|---|---|",
@@ -104,7 +104,7 @@ describe("Discord response formatting", () => {
       ),
     ).toBe(
       [
-        "**MPP Wallet Status** 💰",
+        "**Wallet Status** 💰",
         "",
         "```text",
         "Address        0x7D8B7aC6a16F9Ad5a647Dd4837c270b460b1A462",

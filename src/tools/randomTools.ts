@@ -13,6 +13,7 @@ import {
 } from "../rng/provable.js";
 import { summarizeForAudit } from "../util/text.js";
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
+import { atomicToUsd } from "../payments/money.js";
 import type { PaymentEventRecorder, WagerReservation } from "../payments/types.js";
 import type { ToolContext } from "./types.js";
 
@@ -46,6 +47,11 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   if (!DRAW_KINDS.has(kind)) {
     await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
     return `Unknown draw kind "${kind}". Supported kinds: integers, dice, coin, pick, shuffle, cards.`;
+  }
+  if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWager(ctx.requestText ?? "")) {
+    const error = "This request risks real USD, so drawRandom requires a wallet-backed wager with stakeUsd, maxPayoutUsd, and game before any randomness is consumed.";
+    await auditRng(ctx, "drawRandom", input, error);
+    return error;
   }
   const setup = await ensureRngSetup(ctx, "drawRandom", input);
   if (typeof setup === "string") return setup;
@@ -167,6 +173,14 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   ].filter((line): line is string => line !== null).join("\n");
 }
 
+export function requiresWalletBackedWager(text: string): boolean {
+  const money = /(?:\$\s*\d+(?:\.\d+)?|\b\d+(?:\.\d+)?\s*(?:usd|dollars?|bucks?)\b)/i;
+  const shorthand = /(?:\b(?:bet|wager|stake|risk|put)\s+\$?\d+(?:\.\d+)?\b|\b\$?\d+(?:\.\d+)?\s+(?:on|per\s+(?:spin|hand|roll|game)|each)\b)/i;
+  const game = /\b(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|lottery|wager|bet)\b/i;
+  const action = /\b(?:play|run|do|give|deal|roll|flip|spin|bet|wager|stake|risk|put|again|more)\b/i;
+  return game.test(text) && ((money.test(text) && action.test(text)) || shorthand.test(text));
+}
+
 export async function settleRandomWager(
   ctx: ToolContext,
   input: { wagerId?: string; payoutUsd?: number; explanation?: string }
@@ -188,9 +202,9 @@ export async function settleRandomWager(
     `Wager ${wagerId} settled.`,
     `Payout: $${input.payoutUsd}.`,
     settled.transfer
-      ? `Net transfer: ${settled.transfer.amountAtomic.toString()} base units (${settled.transfer.status})${settled.transfer.transactionHash ? ` · ${settled.transfer.transactionHash}` : ""}.`
+      ? `Net transfer: $${atomicToUsd(settled.transfer.amountAtomic, settled.transfer.tokenDecimals)} USD (${settled.transfer.status})${settled.transfer.transactionHash ? ` · ${settled.transfer.transactionHash}` : ""}.`
       : "Net transfer: none (the payout equals the stake).",
-    settled.userBalance ? `User game balance: $${settled.userBalance.formatted} ${settled.userBalance.symbol}.` : null,
+    settled.userBalance ? `User wallet balance: $${settled.userBalance.formatted} USD.` : null,
     `Calculation: ${explanation}`
   ].filter((line): line is string => line !== null).join("\n");
 }

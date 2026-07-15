@@ -3,33 +3,24 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
-  it("forces a bare balance request through the shared MPP wallet tool when user wallets are disabled", async () => {
+  it("forces a bare balance request through the requester's verified wallet tool", async () => {
     const chat = vi
       .fn()
       .mockResolvedValueOnce({
         content: "",
         model: "router-model",
         raw: {},
-        toolCalls: [{ id: "wallet-call", name: "getBotPaymentStatus", argumentsText: "{}" }]
+        toolCalls: [{ id: "wallet-call", name: "getWalletBalance", argumentsText: "{}" }]
       })
       .mockResolvedValueOnce({
-        content: "I have $1 available for paid services.",
+        content: "You have $1 USD.",
         model: "router-model",
         raw: {},
         toolCalls: []
       });
-    const getBotPaymentStatus = vi.fn(async () => ({
-      wallet: {
-        address: `0x${"1".repeat(40)}`,
-        network: "mainnet",
-        chainId: 4217,
-        token: "USDC.e",
-        balanceUsd: "1",
-        health: "low_balance"
-      },
-      policy: { autoApproveUsd: 0.05, maxCallUsd: 0.5, userDailyUsd: 2, botDailyUsd: 10 },
-      spend: { todayUsd: "0", remainingBotDailyUsd: "10" },
-      recentAttempts: []
+    const getUserWalletSummary = vi.fn(async () => ({
+      wallet: { address: `0x${"1".repeat(40)}` },
+      balance: { formatted: "1", token: { symbol: "USDC.e" } }
     }));
     const ctx = {
       config: {
@@ -38,8 +29,7 @@ describe("agent router", () => {
         openRouter: {},
         payments: {
           walletEnabled: true,
-          userWalletsEnabled: false,
-          mppEnabled: true,
+          userWalletsEnabled: true,
           privyAppId: "app",
           privyAppSecret: "secret"
         }
@@ -48,26 +38,28 @@ describe("agent router", () => {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined)
       },
-      walletService: { getBotPaymentStatus },
+      walletService: { getUserWalletSummary },
       openRouter: { chat },
       guildId: "g",
       channelId: "c",
       userId: "u",
       userDisplayName: "User",
       visibleChannelIds: ["c"],
-      sessionMessages: []
+      sessionMessages: [],
+      requestId: "message-1",
+      requestMessageId: "message-1"
     } as unknown as ToolContext;
 
     const response = await handleAgentRequest(ctx, "balance");
 
-    expect(response.content).toBe("I have $1 available for paid services.");
+    expect(response.content).toBe("You have $1 USD.");
     expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-      toolChoice: { type: "function", function: { name: "getBotPaymentStatus" } }
+      toolChoice: { type: "function", function: { name: "getWalletBalance" } }
     }));
-    expect(getBotPaymentStatus).toHaveBeenCalledWith("g", 5, expect.any(Function));
+    expect(getUserWalletSummary).toHaveBeenCalledWith({ guildId: "g", userId: "u" }, expect.any(Function));
     const walletResult = (chat.mock.calls[1]?.[0] as { messages?: Array<{ role: string; content: string }> }).messages
       ?.find((message) => message.role === "tool")?.content;
-    expect(walletResult).toContain("Balance: $1");
+    expect(walletResult).toContain("Your wallet: $1 USD");
     expect(walletResult).not.toContain("USDC.e");
   });
 
@@ -109,7 +101,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: {
         auditTool,
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -180,7 +172,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -206,7 +198,7 @@ describe("agent router", () => {
     };
     expect(retryRequest.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
     expect(retryRequest.messages?.some((message) =>
-      message.role === "system" && message.content.includes("rejected because it claimed a fresh random outcome")
+      message.role === "system" && message.content.includes("verified chance workflow is incomplete")
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
       .toBe(true);
@@ -270,56 +262,6 @@ describe("agent router", () => {
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.fresh_external_data_guard.rejected"))
       .toBe(true);
-  });
-
-  it("forces free MPP discovery after an ungrounded structured-price draft when MPP is configured", async () => {
-    const chat = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: "The cheapest fare is $841.",
-        model: "router-model",
-        raw: {},
-        toolCalls: [],
-      })
-      .mockResolvedValueOnce({
-        content: "I couldn't verify a live fare.",
-        model: "router-model",
-        raw: {},
-        toolCalls: [],
-      });
-    const ctx = {
-      config: {
-        maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: {},
-        payments: {
-          walletEnabled: true,
-          mppEnabled: true,
-          privyAppId: "app",
-          privyAppSecret: "secret",
-        },
-      },
-      repo: {
-        auditTool: vi.fn(async () => undefined),
-        recordTraceEvent: vi.fn(async () => undefined),
-      },
-      openRouter: { chat },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      sessionMessages: [],
-    } as unknown as ToolContext;
-
-    await handleAgentRequest(ctx, "Find the cheapest nonstop round-trip flights this fall.");
-
-    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
-      toolChoice: {
-        type: "function",
-        function: { name: "discoverMppServices" },
-      },
-    }));
   });
 
   it("stops recovery calls at the per-turn model call ceiling", async () => {

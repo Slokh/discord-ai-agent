@@ -24,12 +24,33 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
       await client.query(await readFile(path.resolve("migrations/006_runtime_event_spans.sql"), "utf8"));
       await client.query(await readFile(path.resolve("migrations/007_rng_active_channel_index.sql"), "utf8"));
       await client.query(await readFile(path.resolve("migrations/008_wallets_mpp.sql"), "utf8"));
+      await client.query(`
+        INSERT INTO wallet_transfers(
+          id, guild_id, destination_address, purpose, token, token_address,
+          token_decimals, amount_atomic, idempotency_key, memo_hex
+        ) VALUES (
+          'legacy-mpp', 'guild', '0x1111111111111111111111111111111111111111',
+          'mpp_payment', 'USDC.e', '0x2222222222222222222222222222222222222222',
+          6, 1000, 'legacy-mpp', '0x00'
+        )
+      `);
+      for (const version of ["009_mpp_hardening", "010_managed_wallet_transfers", "011_remove_paid_service_prototype"]) {
+        await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
+      }
       await client.query("UPDATE agent_runtime_events SET span_id = 'root', parent_span_id = NULL WHERE execution_id = 'execution'");
       const event = await client.query("SELECT span_id, event_name FROM agent_runtime_trace_projection WHERE execution_id = 'execution'");
       expect(event.rows).toEqual([expect.objectContaining({ span_id: "root", event_name: "agent.execution.queued" })]);
       await expect(client.query("SELECT count(*)::int AS count FROM wallet_accounts")).resolves.toEqual(
         expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] })
       );
+      await expect(client.query("SELECT purpose, metadata->>'retiredPrototype' AS retired FROM wallet_transfers WHERE id = 'legacy-mpp'"))
+        .resolves.toEqual(expect.objectContaining({
+          rows: [expect.objectContaining({ purpose: "reconciliation", retired: "true" })]
+        }));
+      await expect(client.query("SELECT count(*)::int AS count FROM wallet_initial_grants"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM mpp_payment_attempts"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await client.query("INSERT INTO agent_run_feedback(run_id, rating, capture_eval) VALUES ('execution', 'good', true)");
       await expect(client.query("SELECT count(*)::int AS count FROM agent_run_feedback")).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 1 })] }));
     } finally {

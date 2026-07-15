@@ -1,15 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  prefersStructuredLiveService,
-  requiresFreshExternalData,
-  shouldRejectUngroundedFreshData,
-} from "../../src/agent/freshExternalDataGuard.js";
+import { requiresFreshExternalData, shouldRejectUngroundedFreshData } from "../../src/agent/freshExternalDataGuard.js";
 
 describe("fresh external data guard", () => {
   it("requires fresh evidence for natural-language live flight shopping", () => {
     const prompt = "Find the cheapest nonstop round-trip flights from NYC to Japan this fall.";
     expect(requiresFreshExternalData(prompt)).toBe(true);
-    expect(prefersStructuredLiveService(prompt)).toBe(true);
     expect(shouldRejectUngroundedFreshData({
       userText: prompt,
       responseContent: "United is cheapest at $841 round-trip on September 16.",

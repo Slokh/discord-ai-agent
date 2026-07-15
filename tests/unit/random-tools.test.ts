@@ -8,7 +8,7 @@ import type {
   RngSessionTx
 } from "../../src/db/rngRepository.js";
 import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } from "../../src/rng/provable.js";
-import { drawRandom, revealRandomness, settleRandomWager } from "../../src/tools/randomTools.js";
+import { drawRandom, requiresWalletBackedWager, revealRandomness, settleRandomWager } from "../../src/tools/randomTools.js";
 import type { DiscordReplyContext, ToolContext } from "../../src/tools/types.js";
 
 /** In-memory mirror of RngRepository's transactional interface (single-threaded, no locking needed). */
@@ -478,6 +478,28 @@ describe("drawRandom", () => {
     expect(response).toContain("MUST call settleRandomWager once");
   });
 
+  it("refuses to consume randomness for a real-money game until a wallet wager is supplied", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "play 20 slot spins at $5 each",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, { kind: "integers", min: 0, max: 99, count: 20 });
+
+    expect(response).toContain("requires a wallet-backed wager");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
+  });
+
+  it.each([
+    "500 on roulette black",
+    "bet 2 on a coin flip",
+    "20 more spins at $5 each"
+  ])("recognizes common wager shorthand: %s", (text) => {
+    expect(requiresWalletBackedWager(text)).toBe(true);
+  });
+
   it("rejects wallet-backed wagers when user wallets are disabled", async () => {
     const reserveWager = vi.fn();
     const { ctx } = fakeContext({
@@ -497,8 +519,8 @@ describe("drawRandom", () => {
   it("settles a wager exactly through the wallet service", async () => {
     const settleWager = vi.fn(async () => ({
       wager: { id: "wager-1" },
-      transfer: { amountAtomic: 750_000n, status: "confirmed", transactionHash: "0xabc" },
-      userBalance: { formatted: "2.75", symbol: "pathUSD" }
+      transfer: { amountAtomic: 750_000n, tokenDecimals: 6, status: "confirmed", transactionHash: "0xabc" },
+      userBalance: { formatted: "2.75", symbol: "USDC.e" }
     }));
     const { ctx } = fakeContext({ walletService: { settleWager } as unknown as ToolContext["walletService"] });
 
@@ -512,8 +534,8 @@ describe("drawRandom", () => {
       { wagerId: "wager-1", userId: "user", payoutUsd: 1, explanation: "rolled the winning face" },
       expect.any(Function)
     );
-    expect(response).toContain("750000 base units (confirmed)");
-    expect(response).toContain("User game balance: $2.75 pathUSD");
+    expect(response).toContain("Net transfer: $0.75 USD (confirmed)");
+    expect(response).toContain("User wallet balance: $2.75 USD");
   });
 });
 

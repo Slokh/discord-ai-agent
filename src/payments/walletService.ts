@@ -10,41 +10,9 @@ import type {
   WalletTransfer,
   WagerReservation
 } from "./types.js";
-import type { Account, Client } from "viem";
-import type { PrivyTempoWalletProvider } from "./privyTempoWalletProvider.js";
-
-export type BotPaymentStatus = {
-  wallet: {
-    address: string;
-    network: string;
-    chainId: number;
-    token: string;
-    balanceUsd: string;
-    health: "ok" | "low_balance";
-  };
-  policy: {
-    autoApproveUsd: number;
-    maxCallUsd: number;
-    userDailyUsd: number;
-    botDailyUsd: number;
-  };
-  spend: { todayUsd: string; remainingBotDailyUsd: string };
-  recentAttempts: Array<{
-    id: string;
-    serviceId: string | null;
-    operationId: string | null;
-    status: string;
-    amountUsd: string | null;
-    approvalMode: string | null;
-    receiptReference: string | null;
-    errorMessage: string | null;
-    createdAt: string | null;
-  }>;
-};
 
 export class WalletService {
-  private gameTokenPromise: Promise<TokenInfo> | null = null;
-  private mppFundingTokenPromise: Promise<TokenInfo> | null = null;
+  private usdTokenPromise: Promise<TokenInfo> | null = null;
 
   constructor(
     private readonly config: AppConfig["payments"],
@@ -88,7 +56,7 @@ export class WalletService {
   }
 
   async getBalance(account: WalletAccount): Promise<{ token: TokenInfo; amountAtomic: bigint; formatted: string }> {
-    const token = await this.gameToken();
+    const token = await this.usdToken();
     const amountAtomic = await this.provider.getBalance({ wallet: activeManagedWallet(account), token });
     return { token, amountAtomic, formatted: atomicToUsd(amountAtomic, token.decimals) };
   }
@@ -99,15 +67,62 @@ export class WalletService {
     return { wallet, balance };
   }
 
-  async getBotMppPaymentContext(guildId: string, record?: PaymentEventRecorder): Promise<{
-    account: Account;
-    getClient: (input: { chainId?: number }) => Client;
-    wallet: WalletAccount;
-  }> {
+  async getBotWalletSummary(guildId: string, record?: PaymentEventRecorder) {
     const wallet = await this.ensureBotWallet(guildId, record);
-    const provider = this.provider as WalletProvider & Pick<PrivyTempoWalletProvider, "getMppPaymentContext">;
-    if (typeof provider.getMppPaymentContext !== "function") throw new Error("Wallet provider does not support MPP payments");
-    return { ...provider.getMppPaymentContext(activeManagedWallet(wallet)), wallet };
+    const balance = await this.getBalance(wallet);
+    return { wallet, balance };
+  }
+
+  async transferFromUser(input: {
+    guildId: string;
+    requestedByUserId: string;
+    destination: { kind: "bot" } | { kind: "user"; userId: string };
+    amountUsd: number;
+    requestId: string;
+  }, record?: PaymentEventRecorder) {
+    const source = await this.ensureUserWallet(
+      { guildId: input.guildId, userId: input.requestedByUserId },
+      record
+    );
+    const destination = input.destination.kind === "bot"
+      ? await this.ensureBotWallet(input.guildId, record)
+      : await this.ensureUserWallet({ guildId: input.guildId, userId: input.destination.userId }, record);
+    if (destination.id === source.id) throw new Error("You cannot transfer USD to your own wallet");
+    return await this.createAndSubmitManagedTransfer({
+      guildId: input.guildId,
+      requestedByUserId: input.requestedByUserId,
+      source,
+      destination,
+      amountUsd: input.amountUsd,
+      requestId: input.requestId,
+      purpose: "user_transfer"
+    }, record);
+  }
+
+  async transferAsAdmin(input: {
+    guildId: string;
+    requestedByUserId: string;
+    source: { kind: "bot" } | { kind: "user"; userId: string };
+    destination: { kind: "bot" } | { kind: "user"; userId: string };
+    amountUsd: number;
+    requestId: string;
+    reason: string;
+  }, record?: PaymentEventRecorder) {
+    const [source, destination] = await Promise.all([
+      this.resolveManagedEndpoint(input.guildId, input.source, record),
+      this.resolveManagedEndpoint(input.guildId, input.destination, record)
+    ]);
+    if (destination.id === source.id) throw new Error("Admin transfer source and destination must be different wallets");
+    return await this.createAndSubmitManagedTransfer({
+      guildId: input.guildId,
+      requestedByUserId: input.requestedByUserId,
+      source,
+      destination,
+      amountUsd: input.amountUsd,
+      requestId: input.requestId,
+      purpose: "admin_transfer",
+      metadata: { reason: input.reason.slice(0, 500) }
+    }, record);
   }
 
   async recordBotWalletHealth(record?: PaymentEventRecorder): Promise<{
@@ -119,9 +134,9 @@ export class WalletService {
     chainId: number;
   }> {
     const wallet = await this.ensureBotWallet(SHARED_BOT_GUILD_ID, record);
-    const balance = await this.getMppFundingBalance(wallet);
+    const balance = await this.getBalance(wallet);
     const balanceNumber = Number(balance.formatted);
-    const thresholdUsd = Math.max(this.config.mpp.botDailyUsd, this.config.mpp.maxCallUsd);
+    const thresholdUsd = Math.max(this.config.initialGrantUsd, this.config.maxGameSettlementUsd);
     const status = balanceNumber < thresholdUsd ? "low_balance" : "ok";
     const details = {
       walletId: wallet.id,
@@ -135,7 +150,7 @@ export class WalletService {
     await this.repo.upsertRuntimeHealth({ key: "shared_bot_wallet", status, details });
     await emit(record, {
       eventName: "wallet.health.checked",
-      summary: status === "ok" ? "Shared bot wallet balance is healthy" : "Shared bot wallet balance is below the configured daily MPP budget",
+      summary: status === "ok" ? "Shared bot wallet balance is healthy" : "Shared bot wallet balance is below the configured operating threshold",
       level: status === "ok" ? "info" : "warn",
       metadata: details
     });
@@ -146,52 +161,6 @@ export class WalletService {
       address: wallet.address ?? "",
       network: this.config.tempoNetwork,
       chainId: wallet.chainId
-    };
-  }
-
-  async getBotPaymentStatus(
-    guildId: string,
-    limit = 5,
-    record?: PaymentEventRecorder
-  ): Promise<BotPaymentStatus> {
-    const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 20));
-    const [health, todayMicros, attempts] = await Promise.all([
-      this.recordBotWalletHealth(record),
-      this.repo.getBotMppSpendToday(),
-      this.repo.listMppAttempts({ guildId, limit: boundedLimit })
-    ]);
-    const dailyMicros = usdToAtomic(this.config.mpp.botDailyUsd, 6);
-    const remainingMicros = dailyMicros > todayMicros ? dailyMicros - todayMicros : 0n;
-    return {
-      wallet: {
-        address: health.address,
-        network: health.network,
-        chainId: health.chainId,
-        token: health.token,
-        balanceUsd: health.balanceUsd,
-        health: health.status
-      },
-      policy: {
-        autoApproveUsd: this.config.mpp.autoApproveUsd,
-        maxCallUsd: this.config.mpp.maxCallUsd,
-        userDailyUsd: this.config.mpp.userDailyUsd,
-        botDailyUsd: this.config.mpp.botDailyUsd
-      },
-      spend: {
-        todayUsd: atomicToUsd(todayMicros, 6),
-        remainingBotDailyUsd: atomicToUsd(remainingMicros, 6)
-      },
-      recentAttempts: attempts.slice(0, boundedLimit).map((attempt) => ({
-        id: stringValue(attempt.id) ?? "unknown",
-        serviceId: stringValue(attempt.service_id),
-        operationId: stringValue(attempt.operation_id),
-        status: stringValue(attempt.status) ?? "unknown",
-        amountUsd: attempt.amount_usd_micros == null ? null : atomicToUsd(unsignedBigInt(attempt.amount_usd_micros), 6),
-        approvalMode: stringValue(attempt.approval_mode),
-        receiptReference: stringValue(attempt.receipt_reference),
-        errorMessage: stringValue(attempt.error_message),
-        createdAt: dateValue(attempt.created_at)
-      }))
     };
   }
 
@@ -214,8 +183,9 @@ export class WalletService {
     const [user, bot, token] = await Promise.all([
       this.ensureUserWallet({ guildId: input.guildId, userId: input.userId }, record),
       this.ensureBotWallet(input.guildId, record),
-      this.gameToken()
+      this.usdToken()
     ]);
+    const balancesObservedAt = new Date();
     const [userBalanceAtomic, botBalanceAtomic] = await Promise.all([
       this.provider.getBalance({ wallet: activeManagedWallet(user), token }),
       this.provider.getBalance({ wallet: activeManagedWallet(bot), token })
@@ -230,7 +200,8 @@ export class WalletService {
       stakeAtomic: usdToAtomic(input.stakeUsd, token.decimals),
       maxPayoutAtomic: usdToAtomic(input.maxPayoutUsd, token.decimals),
       userBalanceAtomic,
-      botBalanceAtomic
+      botBalanceAtomic,
+      balancesObservedAt
     });
     await emit(record, {
       eventName: "wallet.wager.reserved",
@@ -269,7 +240,7 @@ export class WalletService {
     transfer: WalletTransfer | null;
     userBalance: { formatted: string; symbol: string } | null;
   }> {
-    const token = await this.gameToken();
+    const token = await this.usdToken();
     const settlement = await this.repo.beginWagerSettlement({
       wagerId: input.wagerId,
       requestedByUserId: input.userId,
@@ -349,6 +320,22 @@ export class WalletService {
       });
       return confirmed;
     } catch (error) {
+      const transactionHash = transactionHashFromError(error);
+      if (transactionHash) {
+        await this.repo.markTransferSubmitted(transfer.id, transactionHash);
+        await this.repo.updateTransferStatus({
+          id: transfer.id,
+          status: "cancelled",
+          errorMessage: errorMessage(error)
+        });
+        await emit(record, {
+          eventName: "wallet.transfer.delivery_rejected",
+          summary: "The transaction confirmed without the expected wallet delivery and will not be retried",
+          level: "error",
+          metadata: { transferId: transfer.id, transactionHash, error: errorMessage(error) }
+        });
+        throw new Error(`Transfer ${transfer.id} did not deliver to the intended managed wallet and will not be retried`);
+      }
       await this.repo.updateTransferStatus({
         id: transfer.id,
         status: "unknown",
@@ -380,7 +367,19 @@ export class WalletService {
         }
         continue;
       }
-      const status = await this.provider.getTransactionStatus(checkedHash(transfer.transactionHash));
+      const source = transfer.sourceWalletId ? await this.repo.getWallet(transfer.sourceWalletId) : null;
+      const expectedTransfer = source?.address && transfer.tokenAddress
+        ? {
+            token: checkedAddress(transfer.tokenAddress, "transfer token"),
+            from: checkedAddress(source.address, "transfer source"),
+            to: checkedAddress(transfer.destinationAddress, "transfer destination"),
+            amountAtomic: transfer.amountAtomic
+          }
+        : undefined;
+      const status = await this.provider.getTransactionStatus(
+        checkedHash(transfer.transactionHash),
+        expectedTransfer
+      );
       if (status === "confirmed") {
         await this.repo.updateTransferStatus({ id: transfer.id, status: "confirmed" });
         confirmed += 1;
@@ -395,6 +394,75 @@ export class WalletService {
       metadata: { checked: transfers.length, confirmed, failed }
     });
     return { checked: transfers.length, confirmed, failed };
+  }
+
+  private async createAndSubmitManagedTransfer(input: {
+    guildId: string;
+    requestedByUserId: string;
+    source: WalletAccount;
+    destination: WalletAccount;
+    amountUsd: number;
+    requestId: string;
+    purpose: "user_transfer" | "admin_transfer";
+    metadata?: Record<string, unknown>;
+  }, record?: PaymentEventRecorder): Promise<{
+    transfer: WalletTransfer;
+    source: { wallet: WalletAccount; balance: { formatted: string } };
+    destination: { wallet: WalletAccount; balance: { formatted: string } };
+  }> {
+    const token = await this.usdToken();
+    const amountAtomic = usdToAtomic(input.amountUsd, token.decimals);
+    if (amountAtomic <= 0n) throw new Error("Transfer amount must be greater than $0");
+    const sourceBalanceObservedAt = new Date();
+    const sourceBalanceAtomic = await this.provider.getBalance({ wallet: activeManagedWallet(input.source), token });
+    const transfer = await this.repo.createManagedTransfer({
+      guildId: input.guildId,
+      requestedByUserId: input.requestedByUserId,
+      source: input.source,
+      destination: input.destination,
+      purpose: input.purpose,
+      token: token.symbol,
+      tokenAddress: token.address,
+      tokenDecimals: token.decimals,
+      amountAtomic,
+      sourceBalanceAtomic,
+      sourceBalanceObservedAt,
+      idempotencyKey: `managed:${input.requestId}:${input.purpose}:${input.source.id}:${input.destination.id}:${amountAtomic}`,
+      metadata: input.metadata
+    });
+    await emit(record, {
+      eventName: "wallet.transfer.reserved",
+      summary: `Reserved $${atomicToUsd(amountAtomic, token.decimals)} managed-wallet transfer`,
+      metadata: {
+        transferId: transfer.id,
+        purpose: input.purpose,
+        sourceWalletId: input.source.id,
+        destinationWalletId: input.destination.id
+      }
+    });
+    const submitted = await this.submitTransfer(transfer.id, record);
+    if (submitted.status !== "confirmed") {
+      throw new Error(`Transfer ${submitted.id} is ${submitted.status}; no completed transfer will be reported until it is confirmed`);
+    }
+    const [sourceBalance, destinationBalance] = await Promise.all([
+      this.getBalance(input.source),
+      this.getBalance(input.destination)
+    ]);
+    return {
+      transfer: submitted,
+      source: { wallet: input.source, balance: { formatted: sourceBalance.formatted } },
+      destination: { wallet: input.destination, balance: { formatted: destinationBalance.formatted } }
+    };
+  }
+
+  private async resolveManagedEndpoint(
+    guildId: string,
+    endpoint: { kind: "bot" } | { kind: "user"; userId: string },
+    record?: PaymentEventRecorder
+  ): Promise<WalletAccount> {
+    return endpoint.kind === "bot"
+      ? await this.ensureBotWallet(guildId, record)
+      : await this.ensureUserWallet({ guildId, userId: endpoint.userId }, record);
   }
 
   private async ensureWallet(
@@ -447,7 +515,7 @@ export class WalletService {
   }
 
   private async ensureInitialGrant(user: WalletAccount, record?: PaymentEventRecorder): Promise<void> {
-    const [bot, token] = await Promise.all([this.ensureBotWallet(user.guildId, record), this.gameToken()]);
+    const [bot, token] = await Promise.all([this.ensureBotWallet(user.guildId, record), this.usdToken()]);
     const transfer = await this.repo.createInitialGrant({
       guildId: user.guildId,
       bot,
@@ -480,20 +548,14 @@ export class WalletService {
     }
   }
 
-  private gameToken(): Promise<TokenInfo> {
-    this.gameTokenPromise ??= this.provider.resolveToken(this.config.gameToken);
-    return this.gameTokenPromise;
-  }
-
-  private async getMppFundingBalance(account: WalletAccount): Promise<{
-    token: TokenInfo;
-    amountAtomic: bigint;
-    formatted: string;
-  }> {
-    this.mppFundingTokenPromise ??= this.provider.resolveToken(this.config.mpp.fundingToken);
-    const token = await this.mppFundingTokenPromise;
-    const amountAtomic = await this.provider.getBalance({ wallet: activeManagedWallet(account), token });
-    return { token, amountAtomic, formatted: atomicToUsd(amountAtomic, token.decimals) };
+  private usdToken(): Promise<TokenInfo> {
+    this.usdTokenPromise ??= this.provider.resolveToken(this.config.usdToken).then((token) => {
+      if (token.symbol.toLowerCase() !== "usdc.e" || token.currency?.toUpperCase() !== "USD" || token.decimals !== 6) {
+        throw new Error("Configured wallet token must resolve to six-decimal USD-denominated USDC.e");
+      }
+      return token;
+    });
+    return this.usdTokenPromise;
   }
 }
 
@@ -529,18 +591,8 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function unsignedBigInt(value: unknown): bigint {
-  const text = typeof value === "bigint" ? value.toString() : typeof value === "number" || typeof value === "string" ? String(value) : "0";
-  return /^\d+$/.test(text) ? BigInt(text) : 0n;
-}
-
-function dateValue(value: unknown): string | null {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
-  if (typeof value !== "string") return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+function transactionHashFromError(error: unknown): `0x${string}` | null {
+  if (!error || typeof error !== "object" || !("transactionHash" in error)) return null;
+  const hash = (error as { transactionHash?: unknown }).transactionHash;
+  return typeof hash === "string" && /^0x[0-9a-f]{64}$/i.test(hash) ? hash as `0x${string}` : null;
 }

@@ -163,18 +163,7 @@ async function handleRequest(input: {
       guildId: url.searchParams.get("guildId") ?? undefined,
       limit: parseLimit(url.searchParams.get("limit"), 100, 500)
     });
-    sendJson(input.response, 200, {
-      ...snapshot,
-      policy: {
-        network: input.config.payments.tempoNetwork,
-        autoApproveUsd: input.config.payments.mpp.autoApproveUsd,
-        maxCallUsd: input.config.payments.mpp.maxCallUsd,
-        userDailyUsd: input.config.payments.mpp.userDailyUsd,
-        botDailyUsd: input.config.payments.mpp.botDailyUsd,
-        inspectionTtlSeconds: input.config.payments.mpp.inspectionTtlSeconds,
-        recentRequestWindowSeconds: input.config.payments.mpp.recentRequestWindowSeconds
-      }
-    });
+    sendJson(input.response, 200, snapshot);
     return;
   }
 

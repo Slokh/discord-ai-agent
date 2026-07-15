@@ -44,12 +44,10 @@ describe("toolRegistry", () => {
       "undoConversationTurns",
       "inspectAgentLogs",
       "reportStatus",
-      "getGameWalletBalance",
-      "getBotPaymentStatus",
-      "reconcileBotPayments",
-      "discoverMppServices",
-      "inspectMppService",
-      "callMppService",
+      "getWalletBalance",
+      "transferWalletFunds",
+      "adminTransferWalletFunds",
+      "reconcileWalletTransfers",
       "getSpotifyPlaylistTracks",
       "getSpotifyAlbumTracks",
       "getSpotifyArtistDiscography",
@@ -75,13 +73,13 @@ describe("toolRegistry", () => {
     expect(renderToolList()).toContain("web_search");
   });
 
-  it("routes a bare balance request to the shared MPP wallet contract", () => {
-    const tool = toolRegistry.find((entry) => entry.name === "getBotPaymentStatus");
+  it("routes wallet balances through verified onchain USD", () => {
+    const tool = toolRegistry.find((entry) => entry.name === "getWalletBalance");
 
-    expect(tool?.description).toContain("unqualified request such as 'balance'");
-    expect(tool?.description).toContain("USD balance");
+    expect(tool?.description).toContain("ALWAYS call this");
+    expect(tool?.description).toContain("USDC.e");
     expect(tool?.description).not.toContain("PathUSD");
-    expect(tool?.outputContract).toContain("current USD balance and health");
+    expect(tool?.outputContract).toContain("verified current USD balance");
   });
 
   it("exports a self-documenting contract for every local tool", () => {

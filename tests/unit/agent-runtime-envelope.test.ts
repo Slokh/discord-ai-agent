@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  assertAgentRuntimeTurnEnvelopeScope,
   buildAgentRuntimeTurnEnvelope,
   loadAgentRuntimeTurnEnvelope,
   replaceAgentRuntimeTurnEnvelopeSessionMessages,
@@ -64,6 +65,20 @@ describe("agent runtime envelope", () => {
         createdAt: "2026-06-30T12:00:00.000Z"
       })
     ]);
+    expect(() => assertAgentRuntimeTurnEnvelopeScope(envelope, {
+      requestId: "message-1",
+      messageId: "message-1",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user"
+    })).not.toThrow();
+    expect(() => assertAgentRuntimeTurnEnvelopeScope(envelope, {
+      requestId: "message-1",
+      messageId: "message-1",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "different-user"
+    })).toThrow(/userId/);
   });
 
   it("stores the envelope as an execution artifact and records a context event", async () => {

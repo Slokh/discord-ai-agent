@@ -1,41 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { shouldForceSharedWalletStatus } from "../../src/agent/walletStatusGuard.js";
+import { shouldForceWalletBalance } from "../../src/agent/walletStatusGuard.js";
 import { loadConfig } from "../../src/config/env.js";
 
-function configuredMpp() {
+function configuredWallets() {
   const config = loadConfig();
   config.payments.walletEnabled = true;
-  config.payments.userWalletsEnabled = false;
-  config.payments.mppEnabled = true;
+  config.payments.userWalletsEnabled = true;
   config.payments.privyAppId = "app";
   config.payments.privyAppSecret = "secret";
   return config;
 }
 
-describe("shared wallet status guard", () => {
+describe("wallet balance guard", () => {
   it.each([
     "balance",
     "your balance",
     "what's your wallet balance?",
     "show the bot's balance",
-    "check MPP wallet balance now"
-  ])("forces the shared wallet tool for an unqualified MPP balance request: %s", (text) => {
-    expect(shouldForceSharedWalletStatus(configuredMpp(), text)).toBe(true);
+    "check my casino funds now",
+    "what's my bankroll?"
+  ])("forces a verified wallet lookup for a balance request: %s", (text) => {
+    expect(shouldForceWalletBalance(configuredWallets(), text)).toBe(true);
   });
 
   it.each([
     "my bank balance",
-    "my game balance",
+    "transfer $2 from my balance to the bot",
     "balance these equations",
     "what is the server balance of power?"
   ])("does not capture qualified or unrelated balance requests: %s", (text) => {
-    expect(shouldForceSharedWalletStatus(configuredMpp(), text)).toBe(false);
+    expect(shouldForceWalletBalance(configuredWallets(), text)).toBe(false);
   });
 
-  it("does not force the shared wallet when user wallets are enabled", () => {
-    const config = configuredMpp();
-    config.payments.userWalletsEnabled = true;
+  it("does not force a wallet lookup when the wallet runtime is disabled", () => {
+    const config = configuredWallets();
+    config.payments.walletEnabled = false;
 
-    expect(shouldForceSharedWalletStatus(config, "balance")).toBe(false);
+    expect(shouldForceWalletBalance(config, "balance")).toBe(false);
   });
 });

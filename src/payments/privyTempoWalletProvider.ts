@@ -1,10 +1,20 @@
 import { PrivyClient } from "@privy-io/node";
 import { createViemAccount } from "@privy-io/node/viem";
-import { getAddress, isAddress, keccak256, parseSignature, type Account, type Address, type Client, type Hex } from "viem";
+import { getAddress, isAddress, keccak256, parseEventLogs, parseSignature, type Account, type Address, type Hex } from "viem";
 import { tempo, tempoModerato } from "viem/chains";
 import { createClient, http, Transaction as TempoTransaction } from "viem/tempo";
 import { tokens, type Token } from "viem/tokens";
-import type { ManagedWallet, TokenInfo, WalletProvider } from "./types.js";
+import type { ExpectedTokenTransfer, ManagedWallet, TokenInfo, WalletProvider } from "./types.js";
+
+const tip20TransferEvent = [{
+  type: "event",
+  name: "Transfer",
+  inputs: [
+    { name: "from", type: "address", indexed: true },
+    { name: "to", type: "address", indexed: true },
+    { name: "value", type: "uint256", indexed: false }
+  ]
+}] as const;
 
 export class PrivyTempoWalletProvider implements WalletProvider {
   readonly chainId: number;
@@ -53,26 +63,6 @@ export class PrivyTempoWalletProvider implements WalletProvider {
     };
   }
 
-  getMppPaymentContext(wallet: ManagedWallet): {
-    account: Account;
-    getClient: (input: { chainId?: number }) => Client;
-  } {
-    // MPP pull-mode challenges set the Tempo fee-payer flag without supplying
-    // a fee-payer signature. Privy's full-transaction formatter currently
-    // drops that in-memory flag, so sign the canonical Tempo hash directly.
-    const account = withTempoFeePayerSupport(createViemAccount(this.privy, {
-      walletId: wallet.providerWalletId,
-      address: wallet.address
-    }));
-    return {
-      account,
-      getClient: ({ chainId }) => {
-        if (chainId != null && chainId !== this.chainId) throw new Error(`Unsupported MPP chain id ${chainId}`);
-        return createClient({ account, chain: this.chain, transport: http() });
-      }
-    };
-  }
-
   async getBalance(input: { wallet: ManagedWallet; token: TokenInfo }): Promise<bigint> {
     const client = createClient({ chain: this.chain, transport: http() });
     const balance = await client.token.getBalance({ account: input.wallet.address, token: input.token.address });
@@ -114,20 +104,57 @@ export class PrivyTempoWalletProvider implements WalletProvider {
       memo: input.memo,
       feePayer
     });
+    if (!receiptDeliversTransfer(result.receipt.logs, {
+      token: input.token.address,
+      from: input.wallet.address,
+      to: input.to,
+      amountAtomic: input.amountAtomic
+    })) {
+      throw new TransferDeliveryError(
+        result.receipt.transactionHash,
+        `Tempo confirmed the transaction but did not deliver the expected ${input.token.symbol} transfer`
+      );
+    }
     return { transactionHash: result.receipt.transactionHash };
   }
 
-  async getTransactionStatus(transactionHash: Hex): Promise<"confirmed" | "pending" | "failed" | "not_found"> {
+  async getTransactionStatus(
+    transactionHash: Hex,
+    expectedTransfer?: ExpectedTokenTransfer
+  ): Promise<"confirmed" | "pending" | "failed" | "not_found"> {
     const client = createClient({ chain: this.chain, transport: http() });
     try {
       const receipt = await client.getTransactionReceipt({ hash: transactionHash });
-      return receipt.status === "success" ? "confirmed" : "failed";
+      if (receipt.status !== "success") return "failed";
+      if (expectedTransfer && !receiptDeliversTransfer(receipt.logs, expectedTransfer)) return "failed";
+      return "confirmed";
     } catch (error) {
       const name = error instanceof Error ? error.name : "";
       if (/not.?found/i.test(name) || /not.?found/i.test(String(error))) return "not_found";
       return "pending";
     }
   }
+}
+
+class TransferDeliveryError extends Error {
+  constructor(readonly transactionHash: Hex, message: string) {
+    super(message);
+    this.name = "TransferDeliveryError";
+  }
+}
+
+function receiptDeliversTransfer(
+  logs: readonly { address: Address; data: Hex; topics: readonly Hex[] }[],
+  expected: ExpectedTokenTransfer
+): boolean {
+  const decoded = parseEventLogs({ abi: tip20TransferEvent, logs: logs as never, strict: false });
+  return decoded.some((log) =>
+    log.address.toLowerCase() === expected.token.toLowerCase() &&
+    log.eventName === "Transfer" &&
+    log.args.from?.toLowerCase() === expected.from.toLowerCase() &&
+    log.args.to?.toLowerCase() === expected.to.toLowerCase() &&
+    log.args.value === expected.amountAtomic
+  );
 }
 
 function withTempoFeePayerSupport(account: Account): Account {

@@ -2,15 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolContext } from "../../src/tools/types.js";
 
 const mocks = vi.hoisted(() => ({
-  gameBalance: vi.fn(),
-  botStatus: vi.fn(),
-  reconcile: vi.fn()
+  walletBalance: vi.fn(),
+  transfer: vi.fn(),
+  adminTransfer: vi.fn(),
+  reconcileWallets: vi.fn()
 }));
 
 vi.mock("../../src/tools/walletTools.js", () => ({
-  getGameWalletBalance: mocks.gameBalance,
-  getBotPaymentStatus: mocks.botStatus,
-  reconcileBotPayments: mocks.reconcile
+  getWalletBalance: mocks.walletBalance,
+  transferWalletFunds: mocks.transfer,
+  adminTransferWalletFunds: mocks.adminTransfer,
+  reconcileWalletTransfers: mocks.reconcileWallets
 }));
 
 import { executeWalletToolRoute } from "../../src/agent/walletToolRoutes.js";
@@ -19,22 +21,30 @@ import type { AgentToolRoute } from "../../src/agent/routerShared.js";
 describe("executeWalletToolRoute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.gameBalance.mockResolvedValue(" game ");
-    mocks.botStatus.mockResolvedValue(" bot status ");
-    mocks.reconcile.mockResolvedValue(" reconciled ");
+    mocks.walletBalance.mockResolvedValue(" wallet ");
+    mocks.transfer.mockResolvedValue(" transferred ");
+    mocks.adminTransfer.mockResolvedValue(" admin transferred ");
+    mocks.reconcileWallets.mockResolvedValue(" wallets reconciled ");
   });
 
-  it("routes shared-wallet status with a bounded recent-attempt limit", async () => {
+  it("routes requester-bound balance and transfer arguments", async () => {
     const ctx = context();
-    await expect(executeWalletToolRoute(ctx, route("getBotPaymentStatus", { limit: "7" })))
-      .resolves.toEqual({ content: "bot status" });
-    expect(mocks.botStatus).toHaveBeenCalledWith(ctx, { limit: 7 });
+    await expect(executeWalletToolRoute(ctx, route("getWalletBalance", { owner: "user", userId: "friend" })))
+      .resolves.toEqual({ content: "wallet" });
+    expect(mocks.walletBalance).toHaveBeenCalledWith(ctx, { owner: "user", userId: "friend" });
+
+    await expect(executeWalletToolRoute(ctx, route("transferWalletFunds", {
+      destination: "bot", amountUsd: "2.5"
+    }))).resolves.toEqual({ content: "transferred" });
+    expect(mocks.transfer).toHaveBeenCalledWith(ctx, {
+      destination: "bot", destinationUserId: undefined, amountUsd: 2.5
+    });
   });
 
   it("routes operator reconciliation and ignores unrelated tools", async () => {
     const ctx = context();
-    await expect(executeWalletToolRoute(ctx, route("reconcileBotPayments", {})))
-      .resolves.toEqual({ content: "reconciled" });
+    await expect(executeWalletToolRoute(ctx, route("reconcileWalletTransfers", {})))
+      .resolves.toEqual({ content: "wallets reconciled" });
     await expect(executeWalletToolRoute(ctx, route("reportStatus", {}))).resolves.toBeNull();
   });
 });

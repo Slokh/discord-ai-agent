@@ -9,7 +9,6 @@ import type { OpenRouterClient } from "../models/openrouter.js";
 import type { JobRuntime } from "../jobs/queue.js";
 import type { AgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
 import type { WalletService } from "../payments/walletService.js";
-import type { MppService } from "../payments/mppService.js";
 import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { sweepDiscordDeliveryObligations } from "./deliverySweep.js";
@@ -33,7 +32,6 @@ export function createDiscordAiAgentBot(input: {
   budgetRepo?: BudgetRepository;
   rngRepo?: RngRepository;
   walletService?: WalletService;
-  mppService?: MppService;
   agentRuntime?: AgentRuntimeRepository;
   deliveryObligations?: DeliveryObligationsRepository;
   agentExecutor?: AgentRuntimePromptExecutor;

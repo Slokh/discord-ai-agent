@@ -1,4 +1,3 @@
-import type { ToolName } from "../tools/registry.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { previewText } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
@@ -14,7 +13,7 @@ const FRESH_EVIDENCE_TOOLS = new Set(["openrouter:web_search", "openrouter:web_f
 
 export const FRESH_EXTERNAL_DATA_RETRY_GUIDANCE =
   "Your previous draft was rejected because it answered a time-sensitive request without fresh tool evidence. " +
-  "Call web_search now. If public-web results do not provide dated, bookable or otherwise verifiable current results and MPP tools are available, use discoverMppServices, inspectMppService, and callMppService. " +
+  "Call web_search now and use dated, bookable, or otherwise verifiable current results. " +
   "Do not reuse unsupported prices, dates, schedules, availability, or claims from the rejected draft. If the lookup needs a missing parameter, ask one concise follow-up question instead.";
 
 export const FRESH_EXTERNAL_DATA_BLOCKED_RESPONSE =
@@ -35,13 +34,6 @@ export class FreshExternalDataGuard {
     if (toolNames.some((name) => FRESH_EVIDENCE_TOOLS.has(name))) {
       this.freshEvidenceObserved = true;
     }
-  }
-
-  noteToolResult(toolName: ToolName, result: AgentResponse) {
-    if (toolName !== "callMppService") return;
-    if (result.status === "error") return;
-    if (/\b(?:not completed|failed|unavailable|rejected|couldn't|could not)\b/i.test(result.content)) return;
-    this.freshEvidenceObserved = true;
   }
 
   async inspectDraft(responseContent: string): Promise<FreshExternalDataGuardDecision> {
@@ -86,11 +78,6 @@ export class FreshExternalDataGuard {
 
 export function requiresFreshExternalData(userText: string): boolean {
   return FRESH_DATA_INTENT.test(userText) && TIME_SENSITIVE_SUBJECT.test(userText);
-}
-
-export function prefersStructuredLiveService(userText: string): boolean {
-  return requiresFreshExternalData(userText) &&
-    /\b(prices?|fares?|flights?|hotels?|tickets?|availability|bookable|in stock)\b/i.test(userText);
 }
 
 export function shouldRejectUngroundedFreshData(input: {

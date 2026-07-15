@@ -1,4 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { encodeAbiParameters, encodeEventTopics } from "viem";
+
+const transferEvent = [{
+  type: "event",
+  name: "Transfer",
+  inputs: [
+    { name: "from", type: "address", indexed: true },
+    { name: "to", type: "address", indexed: true },
+    { name: "value", type: "uint256", indexed: false }
+  ]
+}] as const;
 
 const mocks = vi.hoisted(() => ({
   baseSignTransaction: vi.fn(),
@@ -47,7 +58,20 @@ describe("PrivyTempoWalletProvider", () => {
     }));
     mocks.rawSign.mockResolvedValue(`0x${"1".repeat(128)}1b`);
     mocks.serialize.mockResolvedValueOnce("0x01").mockResolvedValueOnce("0x02");
-    mocks.transferSync.mockResolvedValue({ receipt: { transactionHash: `0x${"9".repeat(64)}` } });
+    mocks.transferSync.mockResolvedValue({
+      receipt: {
+        transactionHash: `0x${"9".repeat(64)}`,
+        logs: [{
+          address: `0x${"3".repeat(40)}`,
+          topics: encodeEventTopics({
+            abi: transferEvent,
+            eventName: "Transfer",
+            args: { from: `0x${"1".repeat(40)}`, to: `0x${"4".repeat(40)}` }
+          }),
+          data: encodeAbiParameters([{ type: "uint256" }], [250_000n])
+        }]
+      }
+    });
   });
 
   it("dual-signs a sponsored transfer with the supplied fee-payer wallet", async () => {
@@ -68,7 +92,7 @@ describe("PrivyTempoWalletProvider", () => {
     await provider.transfer({
       wallet: sender,
       feePayerWallet: sponsor,
-      token: { symbol: "pathUSD", address: `0x${"3".repeat(40)}`, decimals: 6 },
+      token: { symbol: "USDC.e", address: `0x${"3".repeat(40)}`, decimals: 6 },
       to: `0x${"4".repeat(40)}`,
       amountAtomic: 250_000n,
       memo: `0x${"5".repeat(64)}`
@@ -98,29 +122,19 @@ describe("PrivyTempoWalletProvider", () => {
     }));
   });
 
-  it("preserves the Tempo fee-payer flag when signing MPP pull credentials", async () => {
-    const provider = new PrivyTempoWalletProvider({
-      appId: "app-id",
-      appSecret: "app-secret",
-      network: "moderato"
+  it("refuses a successful receipt that did not deliver to the intended wallet", async () => {
+    mocks.transferSync.mockResolvedValueOnce({
+      receipt: { transactionHash: `0x${"9".repeat(64)}`, logs: [] }
     });
-    const wallet = {
-      providerWalletId: "privy-bot",
-      address: `0x${"2".repeat(40)}` as const
-    };
+    const provider = new PrivyTempoWalletProvider({ appId: "app-id", appSecret: "app-secret", network: "moderato" });
 
-    const context = provider.getMppPaymentContext(wallet);
-    if (!context.account.signTransaction) throw new Error("MPP account signer missing");
-    await context.account.signTransaction({
-      type: "tempo",
-      chainId: 42431,
-      calls: [],
-      feePayer: true
-    } as never);
-
-    expect(mocks.baseSignTransaction).not.toHaveBeenCalled();
-    expect(mocks.rawSign).toHaveBeenCalledOnce();
-    expect(mocks.serialize.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ feePayer: true }));
-    expect(mocks.serialize).toHaveBeenCalledTimes(2);
+    await expect(provider.transfer({
+      wallet: { providerWalletId: "privy-user", address: `0x${"1".repeat(40)}` },
+      token: { symbol: "USDC.e", address: `0x${"3".repeat(40)}`, decimals: 6 },
+      to: `0x${"4".repeat(40)}`,
+      amountAtomic: 250_000n,
+      memo: `0x${"5".repeat(64)}`
+    })).rejects.toThrow(/did not deliver/);
   });
+
 });

@@ -6,7 +6,6 @@ import type { RngRepository } from "../db/rngRepository.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { JobRuntime } from "../jobs/queue.js";
 import type { WalletService } from "../payments/walletService.js";
-import type { MppService } from "../payments/mppService.js";
 
 export type ToolContext = {
   config: AppConfig;
@@ -14,7 +13,6 @@ export type ToolContext = {
   budgetRepo?: BudgetRepository;
   rngRepo?: RngRepository;
   walletService?: WalletService;
-  mppService?: MppService;
   agentRuntime?: AgentRuntimeRepository;
   agentRuntimeSession?: AgentRuntimeSessionRecord | null;
   agentRuntimeExecutionId?: string | null;
@@ -24,6 +22,15 @@ export type ToolContext = {
   channelId: string;
   userId: string;
   userDisplayName: string;
+  /** Immutable Discord actor captured at ingress. Payment tools validate this scope before any wallet action. */
+  requesterScope?: Readonly<{
+    requestId: string;
+    messageId: string;
+    guildId: string;
+    channelId: string;
+    userId: string;
+    userDisplayName: string;
+  }>;
   visibleChannelIds: string[];
   mentionedUserIds?: string[];
   mentionedChannelIds?: string[];
@@ -36,7 +43,7 @@ export type ToolContext = {
   /** Non-model footer lines appended verbatim to the final Discord reply (e.g. RNG fairness proofs). */
   footerLines?: string[];
   requestId?: string;
-  /** Exact current user request, used for code-enforced authorization checks on paid external side effects. */
+  /** Exact current user request, available to tools that need request-level validation. */
   requestText?: string;
   /** Discord id of the message that triggered this request; assigned by Discord, not the bot. */
   requestMessageId?: string;

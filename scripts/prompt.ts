@@ -49,7 +49,6 @@ async function main() {
     { OpenRouterClient },
     { PrivyTempoWalletProvider },
     { WalletService },
-    { MppService },
     { startJobs },
     { runWithTrace }
   ] = await Promise.all([
@@ -62,7 +61,6 @@ async function main() {
     import("../src/models/openrouter.js"),
     import("../src/payments/privyTempoWalletProvider.js"),
     import("../src/payments/walletService.js"),
-    import("../src/payments/mppService.js"),
     import("../src/jobs/queue.js"),
     import("../src/util/trace.js")
   ]);
@@ -86,9 +84,6 @@ async function main() {
     : undefined;
   const walletService = walletProvider
     ? new WalletService(config.payments, paymentRepo, walletProvider)
-    : undefined;
-  const mppService = config.payments.mppEnabled && walletService
-    ? new MppService(config.payments, paymentRepo, walletService)
     : undefined;
   const jobs = await startJobs({
     config,
@@ -178,7 +173,6 @@ async function main() {
               openRouter,
               jobs,
               walletService,
-              mppService,
               guildId,
               channelId: currentChannel.id,
               userId: args.userId,

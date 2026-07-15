@@ -68,15 +68,6 @@ export function mapWager(row: Record<string, unknown>): WagerReservation {
   };
 }
 
-export function toUsdMicrosCeil(amountAtomic: bigint, decimals: number): bigint {
-  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) throw new Error("Invalid MPP token decimals");
-  if (amountAtomic < 0n) throw new Error("Invalid negative MPP amount");
-  if (decimals === 6) return amountAtomic;
-  if (decimals < 6) return amountAtomic * 10n ** BigInt(6 - decimals);
-  const divisor = 10n ** BigInt(decimals - 6);
-  return (amountAtomic + divisor - 1n) / divisor;
-}
-
 function mapWalletStatus(value: unknown): WalletAccount["status"] {
   const status = String(value);
   return status === "active" || status === "error" || status === "disabled" ? status : "provisioning";
@@ -92,7 +83,12 @@ function mapTransferStatus(value: unknown): WalletTransferStatus {
 
 function mapPurpose(value: unknown): WalletTransfer["purpose"] {
   const purpose = String(value);
-  if (purpose === "game_settlement" || purpose === "mpp_payment" || purpose === "reconciliation") return purpose;
+  if (
+    purpose === "game_settlement" ||
+    purpose === "user_transfer" ||
+    purpose === "admin_transfer" ||
+    purpose === "reconciliation"
+  ) return purpose;
   return "initial_grant";
 }
 

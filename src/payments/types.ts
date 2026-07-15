@@ -30,6 +30,13 @@ export type ManagedWallet = {
   address: `0x${string}`;
 };
 
+export type ExpectedTokenTransfer = {
+  token: `0x${string}`;
+  from: `0x${string}`;
+  to: `0x${string}`;
+  amountAtomic: bigint;
+};
+
 export type WalletProvider = {
   chainId: number;
   createWallet(input: { externalId: string; idempotencyKey: string }): Promise<ManagedWallet>;
@@ -43,7 +50,10 @@ export type WalletProvider = {
     amountAtomic: bigint;
     memo: `0x${string}`;
   }): Promise<{ transactionHash: `0x${string}` }>;
-  getTransactionStatus(transactionHash: `0x${string}`): Promise<"confirmed" | "pending" | "failed" | "not_found">;
+  getTransactionStatus(
+    transactionHash: `0x${string}`,
+    expectedTransfer?: ExpectedTokenTransfer
+  ): Promise<"confirmed" | "pending" | "failed" | "not_found">;
 };
 
 export type WalletTransferStatus =
@@ -62,7 +72,12 @@ export type WalletTransfer = {
   sourceWalletId: string | null;
   destinationWalletId: string | null;
   destinationAddress: string;
-  purpose: "initial_grant" | "game_settlement" | "mpp_payment" | "reconciliation";
+  purpose:
+    | "initial_grant"
+    | "game_settlement"
+    | "user_transfer"
+    | "admin_transfer"
+    | "reconciliation";
   token: string;
   tokenAddress: string | null;
   tokenDecimals: number;

@@ -74,6 +74,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.walletEnabled | quote }}
 - name: USER_WALLETS_ENABLED
   value: {{ .Values.config.userWalletsEnabled | quote }}
+- name: WALLET_BALANCES_PUBLIC
+  value: {{ .Values.config.walletBalancesPublic | quote }}
 - name: TEMPO_NETWORK
   value: {{ .Values.config.tempoNetwork | quote }}
 - name: TEMPO_USD_TOKEN

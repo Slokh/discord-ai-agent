@@ -64,7 +64,7 @@ import {
   handleAdditionalToolsRequest,
   initialToolsetState,
 } from "./modelToolset.js";
-import { walletBalanceOwnerForPrompt } from "./walletStatusGuard.js";
+import { walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -122,8 +122,9 @@ async function runAgentModelLoopInternal(
     invalidToolCallRecoveryAttempted: false,
   };
   let forceToolUseNextRound = false;
-  let forcedWalletBalanceOwnerNextRound = walletBalanceOwnerForPrompt(ctx.config, text);
-  let forcedToolNameNextRound: ToolName | null = forcedWalletBalanceOwnerNextRound ? "getWalletBalance" : null;
+  const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
+  let forcedWalletBalanceOwnerNextRound = forcedWalletBalanceRoute?.owner ?? null;
+  let forcedToolNameNextRound: ToolName | null = forcedWalletBalanceRoute?.toolName ?? null;
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -578,7 +579,7 @@ async function runAgentModelLoopInternal(
           : toolResultContentForPrompt(route.name, result) + repeatNudge,
       });
 
-      if (route.name === "runCodingAgent") {
+      if (route.name === "runCodingAgent" || route.name === "listWalletBalances") {
         return await completeDirectToolResponse(ctx, {
           routeName: route.name,
           result,
@@ -586,7 +587,7 @@ async function runAgentModelLoopInternal(
           memoryEvents,
           requestLogger,
           startedAt,
-          completionKind: "direct codegen tool result",
+          completionKind: route.name === "runCodingAgent" ? "direct codegen tool result" : "direct wallet directory result",
         });
       }
     }

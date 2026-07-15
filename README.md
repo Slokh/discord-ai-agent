@@ -227,6 +227,7 @@ Common optional settings:
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | unset | Optional Spotify client-credentials integration for public catalog and high-level playlist/album/artist tools |
 | `WALLET_ENABLED` | `false` | Opt into the shared Privy bot-wallet runtime. See [docs/wallets.md](docs/wallets.md). |
 | `USER_WALLETS_ENABLED` | `false` | Separately opt into automatic Discord user wallets, initial grants, balance tools, transfers, and wallet-backed wagers. |
+| `WALLET_BALANCES_PUBLIC` | `false` | Allow every server member to list the member-to-wallet balance directory; owner/ops can always inspect it. |
 | `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | unset | Required when the wallet runtime is enabled. Never exposed to Discord or sandbox tasks. |
 | `TEMPO_NETWORK` / `TEMPO_USD_TOKEN` | `moderato` / `USDC.e` | Tempo network and six-decimal USD wallet token. Validate on Moderato before mainnet cutover. |
 | `WALLET_INITIAL_GRANT_USD` / `WALLET_MAX_GAME_SETTLEMENT_USD` | `1.00` / `10.00` | Automatic first-interaction game balance and maximum reserved payout per wager. |

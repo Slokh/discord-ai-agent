@@ -126,6 +126,67 @@ describe("agent router", () => {
     expect(JSON.parse(executedToolCall?.function.arguments ?? "{}")).toEqual({ owner: "bot" });
   });
 
+  it("forces server-wide balance requests through the live member wallet directory", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{ id: "directory-call", name: "listWalletBalances", argumentsText: "{}" }],
+      });
+    const listExistingUserWalletSummaries = vi.fn(async () => [{
+      userId: "alice",
+      wallet: { address: `0x${"3".repeat(40)}` },
+      balance: { formatted: "2.5" },
+      error: null,
+    }]);
+    const fetchDiscordGuildMembers = vi.fn(async () => [
+      { userId: "alice", username: "alice", displayName: "Alice", isBot: false },
+      { userId: "bob", username: "bob", displayName: "Bob", isBot: false },
+    ]);
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        allowlists: { ownerUserId: null, opsUserIds: [] },
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          balancesPublic: true,
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { listExistingUserWalletSummaries },
+      fetchDiscordGuildMembers,
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "message-3",
+      requestMessageId: "message-3",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what's the balance of every user in this discord server?");
+
+    expect(response.content).toContain("Alice (alice): $2.5 USD");
+    expect(response.content).toContain("Bob (bob): $0 USD — no wallet");
+    expect(chat).toHaveBeenCalledOnce();
+    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: { type: "function", function: { name: "listWalletBalances" } },
+    }));
+    expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "g", userIds: ["alice", "bob"] });
+  });
+
   it("retries malformed tool calls with the original reply context and toolset", async () => {
     const traceEvents: any[] = [];
     const auditTool = vi.fn(async () => undefined);

@@ -5,14 +5,22 @@ const NON_WALLET_BALANCE = /\b(?:bank|checking|savings|credit card|equations?|le
 const TRANSFER_INTENT = /\b(?:send|pay|tip|transfer|move|give|deposit|withdraw|rebalance|refund|reimburse)\b/i;
 const REQUESTER_WALLET_REFERENCE = /\b(?:my|mine)\b/i;
 const BOT_WALLET_REFERENCE = /\b(?:your|yours|bot(?:'s|s')?|treasury)\b|\byou\s+(?:have|hold)\b/i;
+const SERVER_WIDE_WALLET_REFERENCE = /\b(?:every|all|each)\s+(?:(?:discord|server)\s+)?(?:users?|members?|people|persons?|wallets?)\b|\beveryone(?:'s)?\b|\bserver[- ]wide\b/i;
 
 export type ForcedWalletBalanceOwner = "requester" | "bot";
+export type ForcedWalletBalanceRoute =
+  | { toolName: "getWalletBalance"; owner: ForcedWalletBalanceOwner }
+  | { toolName: "listWalletBalances"; owner: null };
 
 export function shouldForceWalletBalance(config: AppConfig, text: string): boolean {
-  return walletBalanceOwnerForPrompt(config, text) != null;
+  return walletBalanceRouteForPrompt(config, text) != null;
 }
 
 export function walletBalanceOwnerForPrompt(config: AppConfig, text: string): ForcedWalletBalanceOwner | null {
+  return walletBalanceRouteForPrompt(config, text)?.owner ?? null;
+}
+
+export function walletBalanceRouteForPrompt(config: AppConfig, text: string): ForcedWalletBalanceRoute | null {
   const payments = config.payments;
   if (!payments) return null;
   const normalized = text.trim();
@@ -25,9 +33,10 @@ export function walletBalanceOwnerForPrompt(config: AppConfig, text: string): Fo
     !TRANSFER_INTENT.test(normalized)
   );
   if (!isWalletBalanceRequest) return null;
+  if (SERVER_WIDE_WALLET_REFERENCE.test(normalized)) return { toolName: "listWalletBalances", owner: null };
 
   const requesterReference = REQUESTER_WALLET_REFERENCE.exec(normalized);
   const botReference = BOT_WALLET_REFERENCE.exec(normalized);
-  if (botReference && (!requesterReference || botReference.index < requesterReference.index)) return "bot";
-  return "requester";
+  const owner = botReference && (!requesterReference || botReference.index < requesterReference.index) ? "bot" : "requester";
+  return { toolName: "getWalletBalance", owner };
 }

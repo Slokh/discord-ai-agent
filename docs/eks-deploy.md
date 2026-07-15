@@ -52,6 +52,7 @@ When enabling `WALLET_ENABLED`, add `PRIVY_APP_ID` and
 shared bot wallet has been created and funded on the configured Tempo network;
 the staged cutover is documented in [wallets.md](wallets.md).
 Set `USER_WALLETS_ENABLED=false` when only the shared bot wallet is needed.
+`WALLET_BALANCES_PUBLIC` defaults to false; enable it only for servers where the Discord identity-to-wallet directory is intentionally visible to every member.
 Keep the default Moderato network for the first rollout. If a Privy secret has appeared in chat, logs, or a
 ticket, rotate it before deployment and replace the Kubernetes Secret value.
 

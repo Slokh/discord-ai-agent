@@ -41,6 +41,7 @@ describe("config", () => {
         "TOOLSET_SCOPING",
         "WALLET_ENABLED",
         "USER_WALLETS_ENABLED",
+        "WALLET_BALANCES_PUBLIC",
         "PRIVY_APP_ID",
         "PRIVY_APP_SECRET",
         "TEMPO_USD_TOKEN"
@@ -108,6 +109,7 @@ describe("config", () => {
         expect(config.payments).toEqual({
           walletEnabled: false,
           userWalletsEnabled: false,
+          balancesPublic: false,
           privyAppId: null,
           privyAppSecret: null,
           tempoNetwork: "moderato",
@@ -136,6 +138,12 @@ describe("config", () => {
   it("validates user-wallet dependencies", () => {
     withEnv({ WALLET_ENABLED: "false", USER_WALLETS_ENABLED: "true", PRIVY_APP_ID: "app", PRIVY_APP_SECRET: "secret" }, () => {
       expect(() => assertPaymentConfig(loadConfig())).toThrow(/USER_WALLETS_ENABLED requires WALLET_ENABLED/);
+    });
+  });
+
+  it("allows opting into a public server wallet directory", () => {
+    withEnv({ WALLET_BALANCES_PUBLIC: "true" }, () => {
+      expect(loadConfig().payments.balancesPublic).toBe(true);
     });
   });
 

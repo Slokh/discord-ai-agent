@@ -122,6 +122,7 @@ const defaults = {
   spotifyMarket: "US",
   walletEnabled: false,
   userWalletsEnabled: false,
+  walletBalancesPublic: false,
   tempoNetwork: "moderato" as TempoNetwork,
   tempoUsdToken: "USDC.e",
   walletInitialGrantUsd: 1,
@@ -233,6 +234,7 @@ const envSchema = z.object({
   SPOTIFY_MARKET: nonEmptyStringWithDefault(defaults.spotifyMarket),
   WALLET_ENABLED: booleanFromEnv.default(defaults.walletEnabled),
   USER_WALLETS_ENABLED: booleanFromEnv.default(defaults.userWalletsEnabled),
+  WALLET_BALANCES_PUBLIC: booleanFromEnv.default(defaults.walletBalancesPublic),
   PRIVY_APP_ID: z.string().trim().optional(),
   PRIVY_APP_SECRET: z.string().trim().optional(),
   TEMPO_NETWORK: z.enum(["moderato", "mainnet"]).default(defaults.tempoNetwork),
@@ -375,6 +377,7 @@ export function loadConfig() {
     payments: {
       walletEnabled: parsed.data.WALLET_ENABLED ?? defaults.walletEnabled,
       userWalletsEnabled: parsed.data.USER_WALLETS_ENABLED ?? defaults.userWalletsEnabled,
+      balancesPublic: parsed.data.WALLET_BALANCES_PUBLIC ?? defaults.walletBalancesPublic,
       privyAppId: parsed.data.PRIVY_APP_ID?.trim() || null,
       privyAppSecret: parsed.data.PRIVY_APP_SECRET?.trim() || null,
       tempoNetwork: parsed.data.TEMPO_NETWORK,

@@ -15,6 +15,7 @@ The wallet runtime uses Privy application-controlled EVM wallets on Tempo. It ma
 Users interact through normal `@ai` prompts:
 
 - `getWalletBalance` reads the requester, bot, or an admin-authorized user's current onchain balance and public address.
+- `listWalletBalances` joins the live Discord member roster to existing wallets. Members without wallets appear as `$0`; existing balances are read live onchain. Owner/ops can always use it, and all members can use it when `WALLET_BALANCES_PUBLIC=true`.
 - `transferWalletFunds` moves USD from the current requester's wallet to another verified Discord user or the bot wallet.
 - `adminTransferWalletFunds` performs an owner/ops-authorized correction between managed wallets and requires a reason.
 - `reconcileWalletTransfers` lets an owner/ops requester reconcile pending or uncertain transfers. The worker also reconciles automatically.
@@ -40,7 +41,8 @@ Idempotency keys protect initial grants, ordinary transfers, and wager settlemen
 3. Fund the returned address on the configured Tempo network.
 4. Verify `npm run payments:status` and the authenticated `/payments` console.
 5. Enable `USER_WALLETS_ENABLED=true` only when per-user wallets are desired.
-6. Test balance reads, an initial grant, user-to-user and user-to-bot transfers, plus winning, losing, and break-even wagers.
+6. Set `WALLET_BALANCES_PUBLIC=true` only when every member may inspect other members' balances and the server-wide directory. Owner/ops retain access when it is false.
+7. Test balance reads, an initial grant, user-to-user and user-to-bot transfers, plus winning, losing, and break-even wagers.
 
 The `/payments` console shows wallet provisioning, transfers, wagers, and shared-wallet health. `npm run payments:reconcile` is an operator fallback; normal reconciliation runs automatically.
 

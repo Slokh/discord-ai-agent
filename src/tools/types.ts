@@ -62,12 +62,20 @@ export type ToolContext = {
     guildId: string;
     userId: string;
   }) => Promise<DiscordUserAvatarResult | null>;
+  fetchDiscordGuildMembers?: (input: { guildId: string }) => Promise<DiscordGuildMemberSummary[]>;
   fetchDiscordAttachment?: (input: {
     channelId: string;
     messageId: string;
     attachmentId: string;
   }) => Promise<DiscordAttachmentContext | null>;
   noteProgress?: () => void;
+};
+
+export type DiscordGuildMemberSummary = {
+  userId: string;
+  username: string | null;
+  displayName: string | null;
+  isBot: boolean;
 };
 
 export type DiscordUserAvatarResult = {

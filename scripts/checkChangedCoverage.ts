@@ -9,7 +9,7 @@ const enforcedPrefixes = ["src/agent/", "src/config/", "src/memory/", "src/model
 const dbBackedCoverageFiles = new Set(["src/observability/dataRetention.ts"]);
 const report = JSON.parse(await readFile(reportPath, "utf8")) as Record<string, { s: Record<string, number> }>;
 const base = process.env.COVERAGE_BASE_REF ?? "origin/main";
-const files = execFileSync("git", ["diff", "--name-only", `${base}...HEAD`, "--", "src/**/*.ts", "src/**/*.tsx"], { encoding: "utf8" })
+const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", `${base}...HEAD`, "--", "src/**/*.ts", "src/**/*.tsx"], { encoding: "utf8" })
   .trim().split("\n").filter((file) => enforcedPrefixes.some((prefix) => file.startsWith(prefix)) && !dbBackedCoverageFiles.has(file));
 const failures: string[] = [];
 for (const file of files) {

@@ -13,6 +13,35 @@ import type {
 import type { Account, Client } from "viem";
 import type { PrivyTempoWalletProvider } from "./privyTempoWalletProvider.js";
 
+export type BotPaymentStatus = {
+  wallet: {
+    address: string;
+    network: string;
+    chainId: number;
+    token: string;
+    balanceUsd: string;
+    health: "ok" | "low_balance";
+  };
+  policy: {
+    autoApproveUsd: number;
+    maxCallUsd: number;
+    userDailyUsd: number;
+    botDailyUsd: number;
+  };
+  spend: { todayUsd: string; remainingBotDailyUsd: string };
+  recentAttempts: Array<{
+    id: string;
+    serviceId: string | null;
+    operationId: string | null;
+    status: string;
+    amountUsd: string | null;
+    approvalMode: string | null;
+    receiptReference: string | null;
+    errorMessage: string | null;
+    createdAt: string | null;
+  }>;
+};
+
 export class WalletService {
   private tokenPromise: Promise<TokenInfo> | null = null;
 
@@ -85,6 +114,8 @@ export class WalletService {
     balanceUsd: string;
     token: string;
     address: string;
+    network: string;
+    chainId: number;
   }> {
     const wallet = await this.ensureBotWallet(SHARED_BOT_GUILD_ID, record);
     const balance = await this.getBalance(wallet);
@@ -107,7 +138,60 @@ export class WalletService {
       level: status === "ok" ? "info" : "warn",
       metadata: details
     });
-    return { status, balanceUsd: balance.formatted, token: balance.token.symbol, address: wallet.address ?? "" };
+    return {
+      status,
+      balanceUsd: balance.formatted,
+      token: balance.token.symbol,
+      address: wallet.address ?? "",
+      network: this.config.tempoNetwork,
+      chainId: wallet.chainId
+    };
+  }
+
+  async getBotPaymentStatus(
+    guildId: string,
+    limit = 5,
+    record?: PaymentEventRecorder
+  ): Promise<BotPaymentStatus> {
+    const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 20));
+    const [health, todayMicros, attempts] = await Promise.all([
+      this.recordBotWalletHealth(record),
+      this.repo.getBotMppSpendToday(),
+      this.repo.listMppAttempts({ guildId, limit: boundedLimit })
+    ]);
+    const dailyMicros = usdToAtomic(this.config.mpp.botDailyUsd, 6);
+    const remainingMicros = dailyMicros > todayMicros ? dailyMicros - todayMicros : 0n;
+    return {
+      wallet: {
+        address: health.address,
+        network: health.network,
+        chainId: health.chainId,
+        token: health.token,
+        balanceUsd: health.balanceUsd,
+        health: health.status
+      },
+      policy: {
+        autoApproveUsd: this.config.mpp.autoApproveUsd,
+        maxCallUsd: this.config.mpp.maxCallUsd,
+        userDailyUsd: this.config.mpp.userDailyUsd,
+        botDailyUsd: this.config.mpp.botDailyUsd
+      },
+      spend: {
+        todayUsd: atomicToUsd(todayMicros, 6),
+        remainingBotDailyUsd: atomicToUsd(remainingMicros, 6)
+      },
+      recentAttempts: attempts.slice(0, boundedLimit).map((attempt) => ({
+        id: stringValue(attempt.id) ?? "unknown",
+        serviceId: stringValue(attempt.service_id),
+        operationId: stringValue(attempt.operation_id),
+        status: stringValue(attempt.status) ?? "unknown",
+        amountUsd: attempt.amount_usd_micros == null ? null : atomicToUsd(unsignedBigInt(attempt.amount_usd_micros), 6),
+        approvalMode: stringValue(attempt.approval_mode),
+        receiptReference: stringValue(attempt.receipt_reference),
+        errorMessage: stringValue(attempt.error_message),
+        createdAt: dateValue(attempt.created_at)
+      }))
+    };
   }
 
   resolveToken(token: string): Promise<TokenInfo> {
@@ -431,4 +515,20 @@ async function emit(record: PaymentEventRecorder | undefined, event: Parameters<
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function unsignedBigInt(value: unknown): bigint {
+  const text = typeof value === "bigint" ? value.toString() : typeof value === "number" || typeof value === "string" ? String(value) : "0";
+  return /^\d+$/.test(text) ? BigInt(text) : 0n;
+}
+
+function dateValue(value: unknown): string | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }

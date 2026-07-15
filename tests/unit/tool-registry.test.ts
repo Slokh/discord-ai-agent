@@ -45,6 +45,8 @@ describe("toolRegistry", () => {
       "inspectAgentLogs",
       "reportStatus",
       "getGameWalletBalance",
+      "getBotPaymentStatus",
+      "reconcileBotPayments",
       "discoverMppServices",
       "inspectMppService",
       "callMppService",

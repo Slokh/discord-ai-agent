@@ -23,10 +23,22 @@ The payment runtime can give Discord users lightweight game accounts while keepi
 
 Settlement validates the requester, draw, maximum payout, and one-time status. It sends only the net difference: bot to user for a win, user to bot for a loss, and no transaction for break-even. Stale reservations expire automatically.
 
+## Conversational lifecycle
+
+The full shared-wallet lifecycle is model-led through ordinary `@ai` prompts; there are no Discord slash commands:
+
+- Ask `@ai what's your wallet balance?` to automatically ensure the shared wallet exists and report its public funding address, active Tempo network, PathUSD balance, health, today's MPP spend, remaining budget, approval limits, and recent receipts or failures.
+- Ask `@ai where can I fund your MPP wallet?` for the same verified public address. Funding still comes from an operator-controlled external source; the bot never invents a funding source or moves money without an authorized flow.
+- Ask for a paid capability in normal language and the model can discover, inspect, and call a suitable MPP service within policy.
+- Authorized operators can ask `@ai reconcile your pending payments and show the updated status`. Manual reconciliation uses the same durable path as the automatic one-minute worker and is restricted to the owner/ops allowlist.
+- Ask `@ai show your recent paid API calls` to see recent service/operation status, paid amount, receipt reference, and bounded failure reason.
+
 ## MPP flow
 
-The model can use three generic tools:
+The model can use five generic lifecycle tools:
 
+- `getBotPaymentStatus` automatically ensures the shared wallet exists and returns its public funding address, balance, health, configured policy, UTC-day spend, remaining budget, and recent attempts/receipts.
+- `reconcileBotPayments` lets an authorized operator explicitly reconcile pending transfers and returns refreshed status. Routine reconciliation remains automatic.
 - `discoverMppServices` asks the official MPP Services MCP server to rank services and offers for the task without paying. The public catalog is a degraded fallback when MCP discovery is unavailable.
 - `inspectMppService` resolves the callable service URL, reads its usage recipe and OpenAPI document, and returns a short-lived inspection ID, exact operation IDs, request shapes, and every advertised payment offer. It does not pay.
 - `callMppService` accepts only an operation from that inspection and makes a bounded HTTPS request through the official `mppx` client using the shared bot wallet. Arbitrary URLs, methods, and paths are not accepted by the paid-call tool.
@@ -46,7 +58,7 @@ The inspection IDs are intentionally process-local and short-lived. A deployment
 1. Create a Privy app and place `PRIVY_APP_ID` and `PRIVY_APP_SECRET` in the runtime secret.
 2. Deploy with migrations and `TEMPO_NETWORK=moderato`.
 3. For MPP-only operation, set `WALLET_ENABLED=true`, `MPP_ENABLED=true`, and `USER_WALLETS_ENABLED=false`.
-4. Run `npm run payments:provision-bot`, fund the displayed bot wallet with Moderato PathUSD, and run `npm run payments:status` until `bot_wallet_balance` is healthy.
+4. Ask `@ai what's your wallet balance?`, fund the returned address with PathUSD on the configured network, and ask again until the shared wallet reports healthy.
 5. Open `/payments` in the authenticated console and verify the shared bot wallet, configured policy, runtime health, and event timeline.
 6. Discover and inspect a service, then make one read-only call below the automatic-approval threshold. Verify the challenge, approval, receipt, and response events plus the operation and receipt columns in `/payments`.
 7. Explicitly test a call above the automatic threshold and a side-effecting operation: both must fail without a verbatim authorization quote and pass only with one.
@@ -54,13 +66,13 @@ The inspection IDs are intentionally process-local and short-lived. A deployment
 9. Exercise an oversized challenge, recent duplicate request, missing receipt, private URL, off-origin redirect, and stale transfer reconciliation.
 10. Only after those checks, switch to `TEMPO_NETWORK=mainnet`, redeploy, fund the new mainnet bot wallet, and keep the conservative caps until production behavior is understood.
 
-Disabling `MPP_ENABLED` removes all three paid-service tools. Disabling `USER_WALLETS_ENABLED` stops automatic user provisioning and removes the balance and wager surfaces while preserving the shared bot wallet for MPP. Disabling `WALLET_ENABLED` prevents all wallet construction, so MPP cannot remain enabled. None of these flags deletes existing ledger records or Privy wallets.
+Disabling `MPP_ENABLED` removes all five shared-wallet/paid-service tools. Disabling `USER_WALLETS_ENABLED` stops automatic user provisioning and removes the user balance and wager surfaces while preserving the shared bot wallet for MPP. Disabling `WALLET_ENABLED` prevents all wallet construction, so MPP cannot remain enabled. None of these flags deletes existing ledger records or Privy wallets.
 
 ## Operations
 
-The `/payments` console view shows wallet provisioning states, transfers, open wagers, MPP attempts, operation/effect/approval details, receipt references, runtime health, configured policy, and current UTC-day MPP spend. Runtime traces use the event families `wallet.provision.*`, `wallet.transfer.*`, `wallet.wager.*`, `wallet.reconciliation.*`, `mpp.discovery.*`, `mpp.challenge.*`, `mpp.payment.*`, and `mpp.response.*`.
+The `/payments` console view shows wallet provisioning states, transfers, open wagers, MPP attempts, operation/effect/approval details, receipt references, runtime health, configured policy, and current UTC-day MPP spend. The same lifecycle status and reconciliation controls are available conversationally through `@ai` prompts. Runtime traces use the event families `wallet.provision.*`, `wallet.transfer.*`, `wallet.wager.*`, `wallet.reconciliation.*`, `mpp.discovery.*`, `mpp.challenge.*`, `mpp.payment.*`, and `mpp.response.*`.
 
-Run `npm run payments:status` for a bounded ledger snapshot, `npm run payments:reconcile` for an explicit reconciliation pass, or `npm run payments:provision-bot` to create the shared bot wallet and print its public funding address.
+The `npm run payments:*` scripts remain internal operator/CI fallbacks only. They are not Discord commands and are not required for normal lifecycle management.
 
 Use `npm run payments:mpp-smoke -- --service <service-id-or-https-url>` for a free inspection. Add `--operation <operation-id> --confirm-spend` to execute exactly one bounded call; optional request inputs are `--path-json`, `--query-json`, and `--body-json`. Mainnet additionally requires `--allow-mainnet`, making an accidental production smoke payment less likely. This command uses the same discovery, policy, receipt, budget, and ledger path as Discord.
 

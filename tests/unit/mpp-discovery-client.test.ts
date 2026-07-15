@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
-import { MppDiscoveryClient, operationsFromOpenApi } from "../../src/payments/mppDiscoveryClient.js";
+import {
+  hydrateProfileFromAdvertisedOpenApi,
+  MppDiscoveryClient,
+  operationsFromOpenApi
+} from "../../src/payments/mppDiscoveryClient.js";
 
 describe("MPP discovery", () => {
   it("normalizes current multi-offer OpenAPI metadata and request schemas", () => {
@@ -51,6 +55,70 @@ describe("MPP discovery", () => {
       })
     ]);
     expect(operations[0]?.requestShape).toContain("JSON {query:string!, filters:object} required");
+  });
+
+  it("hydrates an MCP registry summary from the service's advertised OpenAPI document", async () => {
+    const config = loadConfig().payments.mpp;
+    config.maxResponseBytes = 2_000_000;
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => Response.json({
+      openapi: "3.1.0",
+      info: { title: "Company Enrichment", version: "1" },
+      paths: {
+        "/companies/enrich": {
+          get: {
+            operationId: "enrich_company",
+            parameters: [
+              { name: "domain", in: "query", required: true, schema: { type: "string" } }
+            ],
+            "x-payment-info": {
+              offers: [{ method: "mpp", intent: "charge", currency: "USD" }]
+            },
+            responses: { "200": { description: "Company profile" } }
+          }
+        }
+      }
+    }));
+    const fetchImpl = fetchMock as unknown as typeof fetch;
+
+    const hydrated = await hydrateProfileFromAdvertisedOpenApi({
+      serviceId: "company-enrich",
+      name: "Company Enrichment",
+      description: "Company data",
+      baseUrl: "https://8.8.8.8/mpp/company-enrich",
+      categories: ["data"],
+      status: "active",
+      discoverySource: "services_mcp",
+      limitations: ["The directory returned a registry summary rather than a full OpenAPI document; request fields may be incomplete."],
+      operations: [{
+        operationId: "get_companies_enrich",
+        method: "GET",
+        path: "/companies/enrich",
+        summary: "Enrich a company",
+        requestShape: null,
+        offers: [{
+          method: "tempo",
+          intent: "charge",
+          currency: "0xtoken",
+          amount: "10000",
+          decimals: 6,
+          display: "0.01 0xtoken",
+          unitType: "request",
+          dynamic: false
+        }]
+      }]
+    }, config, fetchImpl);
+
+    const request = fetchMock.mock.calls[0]?.[0];
+    expect(request instanceof URL ? request.href : request instanceof Request ? request.url : request)
+      .toBe("https://8.8.8.8/mpp/company-enrich/openapi.json");
+    expect(hydrated.limitations).toEqual([]);
+    expect(hydrated.operations).toEqual([
+      expect.objectContaining({
+        operationId: "enrich_company",
+        requestShape: "query domain:string required",
+        offers: [expect.objectContaining({ amount: "10000" })]
+      })
+    ]);
   });
 
   it("falls back to the public catalog and prefers the callable serviceUrl over the provider homepage", async () => {

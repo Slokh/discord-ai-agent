@@ -32,8 +32,16 @@ export type MppServiceProfile = {
   categories: string[];
   status: string | null;
   operations: MppOperation[];
+  documentation: MppServiceDocumentation | null;
   discoverySource: "services_mcp" | "catalog_fallback" | "direct_openapi";
   limitations: string[];
+};
+
+export type MppServiceDocumentation = {
+  indexUrl: string;
+  pageUrl: string;
+  title: string;
+  excerpt: string;
 };
 
 export type MppRecommendation = {
@@ -81,19 +89,20 @@ export class MppDiscoveryClient {
     }
   }
 
-  async inspectService(serviceIdOrName: string): Promise<MppServiceProfile> {
+  async inspectService(serviceIdOrName: string, usageIntent?: string): Promise<MppServiceProfile> {
     try {
       const [recipe, openapi] = await this.callMcpBatch([
         ["get_usage_recipe", { service: serviceIdOrName }],
         ["get_openapi", { service: serviceIdOrName, raw: true }]
       ]);
-      return await hydrateProfileFromAdvertisedOpenApi(
+      const profile = await hydrateProfileFromAdvertisedOpenApi(
         profileFromMcp(serviceIdOrName, recipe, openapi),
         this.config,
         this.fetchImpl
       );
+      return await this.hydrateProfileDocumentation(profile, serviceIdOrName, usageIntent);
     } catch (error) {
-      const profile = await this.inspectFromCatalog(serviceIdOrName);
+      const profile = await this.inspectFromCatalog(serviceIdOrName, usageIntent);
       return {
         ...profile,
         limitations: [...profile.limitations, `Services MCP unavailable; used catalog/OpenAPI fallback (${errorMessage(error)}).`]
@@ -118,6 +127,7 @@ export class MppDiscoveryClient {
       categories: [],
       status: null,
       operations,
+      documentation: null,
       discoverySource: "direct_openapi",
       limitations: []
     };
@@ -179,7 +189,7 @@ export class MppDiscoveryClient {
       .map((row) => recommendationFromCatalog(row));
   }
 
-  private async inspectFromCatalog(serviceIdOrName: string): Promise<MppServiceProfile> {
+  private async inspectFromCatalog(serviceIdOrName: string, usageIntent?: string): Promise<MppServiceProfile> {
     const row = (await this.catalogRows()).find((candidate) => {
       const requested = serviceIdOrName.toLowerCase();
       return stringValue(candidate.id)?.toLowerCase() === requested || stringValue(candidate.name)?.toLowerCase() === requested;
@@ -204,7 +214,7 @@ export class MppDiscoveryClient {
     }
     const operations = mergeOperations(operationsFromOpenApi(document), operationsFromCatalog(row));
     if (operations.length === 0) limitations.push("No operation schema was available; this service cannot be called automatically.");
-    return {
+    const profile: MppServiceProfile = {
       serviceId: stringValue(row.id) ?? serviceIdOrName,
       name: stringValue(row.name) ?? serviceIdOrName,
       description: stringValue(row.description) ?? "",
@@ -212,9 +222,32 @@ export class MppDiscoveryClient {
       categories: stringArray(row.categories),
       status: stringValue(row.status),
       operations,
+      documentation: null,
       discoverySource: "catalog_fallback",
       limitations
     };
+    return hydrateProfileFromOfficialDocumentation(profile, row, usageIntent, this.config, this.fetchImpl);
+  }
+
+  private async hydrateProfileDocumentation(
+    profile: MppServiceProfile,
+    serviceIdOrName: string,
+    usageIntent?: string
+  ): Promise<MppServiceProfile> {
+    if (profile.operations.every((operation) => operation.requestShape !== null)) return profile;
+    try {
+      const requested = serviceIdOrName.toLowerCase();
+      const row = (await this.catalogRows()).find((candidate) =>
+        stringValue(candidate.id)?.toLowerCase() === requested ||
+        stringValue(candidate.name)?.toLowerCase() === requested ||
+        stringValue(candidate.id)?.toLowerCase() === profile.serviceId.toLowerCase()
+      );
+      return row
+        ? await hydrateProfileFromOfficialDocumentation(profile, row, usageIntent, this.config, this.fetchImpl)
+        : profile;
+    } catch {
+      return profile;
+    }
   }
 
   private async catalogRows(): Promise<Record<string, unknown>[]> {
@@ -290,9 +323,49 @@ function profileFromMcp(
     categories: stringArray(service.categories),
     status: stringValue(service.status),
     operations,
+    documentation: null,
     discoverySource: "services_mcp",
     limitations
   };
+}
+
+export async function hydrateProfileFromOfficialDocumentation(
+  profile: MppServiceProfile,
+  catalogRow: Record<string, unknown>,
+  usageIntent: string | undefined,
+  config: Pick<AppConfig["payments"]["mpp"], "maxResponseBytes">,
+  fetchImpl: typeof fetch = fetch
+): Promise<MppServiceProfile> {
+  if (profile.documentation || profile.operations.every((operation) => operation.requestShape !== null)) return profile;
+  const index = await firstAvailableDocumentationIndex(catalogRow, config, fetchImpl);
+  if (!index) return profile;
+  const references = documentationReferences(index.content, index.url);
+  const selected = references
+    .map((reference, position) => ({
+      ...reference,
+      position,
+      score: documentationReferenceScore(reference, profile, usageIntent)
+    }))
+    .filter((reference) => reference.score > 0)
+    .sort((left, right) => right.score - left.score || left.position - right.position)[0];
+  if (!selected) return profile;
+  try {
+    const url = await assertPublicHttpsUrl(selected.url);
+    const response = await safeFetch(url, {}, { allowedOrigin: url.origin, fetchImpl });
+    if (!response.ok) return profile;
+    const content = await readBoundedText(response, Math.min(config.maxResponseBytes, MAX_DOCUMENTATION_PAGE_BYTES));
+    return {
+      ...profile,
+      documentation: {
+        indexUrl: index.url.toString(),
+        pageUrl: url.toString(),
+        title: selected.title,
+        excerpt: documentationExcerpt(content)
+      }
+    };
+  } catch {
+    return profile;
+  }
 }
 
 export async function hydrateProfileFromAdvertisedOpenApi(
@@ -494,6 +567,101 @@ function openApiUrl(value: Record<string, unknown>): string | null {
   return stringValue(value.openapiUrl) ?? stringValue(value.openapi_url) ?? stringValue(value.discoveryUrl) ?? stringValue(docs.openapi) ?? stringValue(docs.openapiUrl) ?? stringValue(docs.apiReference);
 }
 
+async function firstAvailableDocumentationIndex(
+  row: Record<string, unknown>,
+  config: Pick<AppConfig["payments"]["mpp"], "maxResponseBytes">,
+  fetchImpl: typeof fetch
+): Promise<{ url: URL; content: string } | null> {
+  const docs = isRecord(row.docs) ? row.docs : {};
+  const configured = stringValue(docs.llmsTxt) ?? stringValue(docs.llms_txt) ?? stringValue(row.llmsTxt) ?? stringValue(row.llms_txt);
+  const provider = stringValue(row.url);
+  const candidates = new Set<string>();
+  if (configured) candidates.add(configured);
+  if (provider) {
+    try {
+      const base = new URL(provider);
+      candidates.add(new URL("/llms.txt", base).toString());
+      if (base.hostname.startsWith("api.")) {
+        const docsHost = new URL(base);
+        docsHost.hostname = `docs.${base.hostname.slice(4)}`;
+        candidates.add(new URL("/llms.txt", docsHost).toString());
+      }
+    } catch {
+      // Ignore malformed provider metadata and leave the profile unhydrated.
+    }
+  }
+  for (const candidate of candidates) {
+    try {
+      const url = await assertPublicHttpsUrl(candidate);
+      const response = await safeFetch(url, {}, { allowedOrigin: url.origin, fetchImpl });
+      if (!response.ok) continue;
+      const content = await readBoundedText(response, Math.min(config.maxResponseBytes, MAX_DOCUMENTATION_INDEX_BYTES));
+      if (content.trim()) return { url, content };
+    } catch {
+      // Documentation is optional. Continue through the bounded candidate list.
+    }
+  }
+  return null;
+}
+
+type DocumentationReference = { title: string; description: string; url: string };
+
+function documentationReferences(content: string, indexUrl: URL): DocumentationReference[] {
+  const references: DocumentationReference[] = [];
+  const pattern = /^\s*[-*]?\s*\[([^\]]+)]\(([^)]+)\)\s*:?[ \t]*(.*)$/gm;
+  for (const match of content.matchAll(pattern)) {
+    const title = match[1]?.trim();
+    const href = match[2]?.trim();
+    if (!title || !href) continue;
+    try {
+      const url = new URL(href, indexUrl);
+      if (url.protocol !== "https:") continue;
+      references.push({ title, description: match[3]?.trim() ?? "", url: url.toString() });
+    } catch {
+      // Ignore malformed links in untrusted provider documentation.
+    }
+  }
+  return references.slice(0, 500);
+}
+
+function documentationReferenceScore(
+  reference: DocumentationReference,
+  profile: MppServiceProfile,
+  usageIntent?: string
+): number {
+  const terms = significantTerms([
+    profile.name,
+    profile.description,
+    ...profile.categories,
+    ...profile.operations.flatMap((operation) => [operation.operationId, operation.path, operation.summary ?? ""]),
+    usageIntent ?? ""
+  ].join(" "));
+  const haystack = `${reference.title} ${reference.description} ${reference.url}`.toLowerCase();
+  let score = 0;
+  for (const term of terms) if (haystack.includes(term)) score += term.length >= 8 ? 3 : 1;
+  if (/\b(api|reference|usage|getting started)\b/i.test(reference.title)) score += 1;
+  if (/\b(cheapest|lowest|flexible|season|spring|summer|fall|autumn|winter)\b/i.test(usageIntent ?? "") && /\b(deals?|prices?)\b/i.test(haystack)) score += 8;
+  return score;
+}
+
+function significantTerms(value: string): Set<string> {
+  return new Set(
+    value.toLowerCase().split(/[^a-z0-9]+/).filter((term) =>
+      term.length >= 4 && !DOCUMENTATION_STOP_WORDS.has(term)
+    )
+  );
+}
+
+function documentationExcerpt(content: string): string {
+  const normalized = content.replace(/\r\n/g, "\n").trim();
+  if (Buffer.byteLength(normalized) <= MAX_DOCUMENTATION_EXCERPT_BYTES) return normalized;
+  let excerpt = normalized.slice(0, MAX_DOCUMENTATION_EXCERPT_BYTES);
+  while (Buffer.byteLength(excerpt) > MAX_DOCUMENTATION_EXCERPT_BYTES) excerpt = excerpt.slice(0, -256);
+  const lastLine = excerpt.lastIndexOf("\n");
+  if (lastLine > MAX_DOCUMENTATION_EXCERPT_BYTES / 2) excerpt = excerpt.slice(0, lastLine);
+  return `${excerpt}\n… [official documentation excerpt truncated]`;
+}
+
 function offerPrice(value: Record<string, unknown>): string | null {
   const display = stringValue(value.display) ?? stringValue(value.amountHint);
   if (display) return display;
@@ -524,6 +692,14 @@ async function readBoundedJson(response: Response, maxBytes: number): Promise<un
   const bytes = Buffer.from(await response.arrayBuffer());
   if (bytes.length > maxBytes) throw new Error(`MPP discovery response exceeds ${maxBytes} bytes`);
   return JSON.parse(bytes.toString("utf8"));
+}
+
+async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error(`MPP documentation response exceeds ${maxBytes} bytes`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length > maxBytes) throw new Error(`MPP documentation response exceeds ${maxBytes} bytes`);
+  return bytes.toString("utf8");
 }
 
 function compactRecord(value: Record<string, unknown>): Record<string, unknown> {
@@ -561,3 +737,9 @@ function errorMessage(error: unknown): string {
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const MPP_CATEGORIES = new Set(["ai", "blockchain", "compute", "data", "media", "search", "social", "storage", "web"]);
 const MCP_REGISTRY_SUMMARY_LIMITATION = "The directory returned a registry summary rather than a full OpenAPI document; request fields may be incomplete.";
+const MAX_DOCUMENTATION_INDEX_BYTES = 128_000;
+const MAX_DOCUMENTATION_PAGE_BYTES = 128_000;
+const MAX_DOCUMENTATION_EXCERPT_BYTES = 8_500;
+const DOCUMENTATION_STOP_WORDS = new Set([
+  "about", "after", "before", "between", "call", "from", "into", "operation", "prices", "request", "search", "service", "this", "with"
+]);

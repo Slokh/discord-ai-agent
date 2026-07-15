@@ -125,6 +125,7 @@ const defaults = {
   mppEnabled: false,
   tempoNetwork: "moderato" as TempoNetwork,
   tempoGameToken: "pathUSD",
+  mppFundingToken: "USDC.e",
   walletInitialGrantUsd: 1,
   walletMaxGameSettlementUsd: 10,
   mppMaxCallUsd: 0.5,
@@ -249,6 +250,7 @@ const envSchema = z.object({
   PRIVY_APP_SECRET: z.string().trim().optional(),
   TEMPO_NETWORK: z.enum(["moderato", "mainnet"]).default(defaults.tempoNetwork),
   TEMPO_GAME_TOKEN: nonEmptyStringWithDefault(defaults.tempoGameToken),
+  MPP_FUNDING_TOKEN: nonEmptyStringWithDefault(defaults.mppFundingToken),
   WALLET_INITIAL_GRANT_USD: z.coerce.number().min(0).max(100).default(defaults.walletInitialGrantUsd),
   WALLET_MAX_GAME_SETTLEMENT_USD: z.coerce.number().positive().max(10_000).default(defaults.walletMaxGameSettlementUsd),
   MPP_MAX_CALL_USD: z.coerce.number().positive().max(100).default(defaults.mppMaxCallUsd),
@@ -405,6 +407,7 @@ export function loadConfig() {
       initialGrantUsd: parsed.data.WALLET_INITIAL_GRANT_USD,
       maxGameSettlementUsd: parsed.data.WALLET_MAX_GAME_SETTLEMENT_USD,
       mpp: {
+        fundingToken: parsed.data.MPP_FUNDING_TOKEN,
         maxCallUsd: parsed.data.MPP_MAX_CALL_USD,
         userDailyUsd: parsed.data.MPP_USER_DAILY_USD,
         botDailyUsd: parsed.data.MPP_BOT_DAILY_USD,

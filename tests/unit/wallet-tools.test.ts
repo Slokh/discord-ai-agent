@@ -50,7 +50,9 @@ describe("shared bot payment lifecycle tools", () => {
 
     expect(result).toContain("Shared MPP wallet (mainnet)");
     expect(result).toContain(`Funding address: 0x${"1".repeat(40)}`);
-    expect(result).toContain("Balance: $7.5 pathUSD");
+    expect(result).toContain("Balance: $7.5");
+    expect(result).not.toContain("pathUSD");
+    expect(result).not.toContain("USDC.e");
     expect(result).toContain("Today's MPP spend: $2.5 of $10");
     expect(result).toContain("company-data / enrich_company · succeeded · $0.01 · receipt receipt-1");
     expect(getBotPaymentStatusSnapshot).toHaveBeenCalledWith("guild", 5, expect.any(Function));
@@ -85,7 +87,7 @@ function botStatus() {
       address: `0x${"1".repeat(40)}`,
       network: "mainnet",
       chainId: 4217,
-      token: "pathUSD",
+      token: "USDC.e",
       balanceUsd: "7.5",
       health: "low_balance"
     },

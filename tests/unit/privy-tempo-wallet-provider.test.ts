@@ -97,4 +97,30 @@ describe("PrivyTempoWalletProvider", () => {
       yParity: 0
     }));
   });
+
+  it("preserves the Tempo fee-payer flag when signing MPP pull credentials", async () => {
+    const provider = new PrivyTempoWalletProvider({
+      appId: "app-id",
+      appSecret: "app-secret",
+      network: "moderato"
+    });
+    const wallet = {
+      providerWalletId: "privy-bot",
+      address: `0x${"2".repeat(40)}` as const
+    };
+
+    const context = provider.getMppPaymentContext(wallet);
+    if (!context.account.signTransaction) throw new Error("MPP account signer missing");
+    await context.account.signTransaction({
+      type: "tempo",
+      chainId: 42431,
+      calls: [],
+      feePayer: true
+    } as never);
+
+    expect(mocks.baseSignTransaction).not.toHaveBeenCalled();
+    expect(mocks.rawSign).toHaveBeenCalledOnce();
+    expect(mocks.serialize.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ feePayer: true }));
+    expect(mocks.serialize).toHaveBeenCalledTimes(2);
+  });
 });

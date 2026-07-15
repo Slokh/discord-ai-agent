@@ -44,6 +44,7 @@ describe("config", () => {
         ,"MPP_ENABLED"
         ,"PRIVY_APP_ID"
         ,"PRIVY_APP_SECRET"
+        ,"MPP_FUNDING_TOKEN"
       ],
       () => {
         const config = loadConfig();
@@ -116,6 +117,7 @@ describe("config", () => {
           initialGrantUsd: 1,
           maxGameSettlementUsd: 10,
           mpp: {
+            fundingToken: "USDC.e",
             maxCallUsd: 0.5,
             userDailyUsd: 2,
             botDailyUsd: 10,

@@ -713,17 +713,6 @@ function cleanAgentResponse(
   };
 }
 
-export function parseToolArguments(argumentsText: string): Record<string, unknown> {
-  try {
-    const value = JSON.parse(argumentsText);
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? value
-      : {};
-  } catch {
-    return {};
-  }
-}
-
 export function stringArgument(
   args: Record<string, unknown> | undefined,
   key: string,

@@ -59,7 +59,7 @@ function formatBotPaymentStatus(status: BotPaymentStatus): string {
   const lines = [
     `Shared MPP wallet (${status.wallet.network})`,
     `Funding address: ${status.wallet.address}`,
-    `Balance: $${status.wallet.balanceUsd} ${status.wallet.token}`,
+    `Balance: $${status.wallet.balanceUsd}`,
     `Health: ${status.wallet.health === "ok" ? "healthy" : "low balance"}`,
     `Today's MPP spend: $${status.spend.todayUsd} of $${money(status.policy.botDailyUsd)} ($${status.spend.remainingBotDailyUsd} remaining)`,
     `Limits: $${money(status.policy.autoApproveUsd)} automatic approval · $${money(status.policy.maxCallUsd)} per call · $${money(status.policy.userDailyUsd)} per user/day`

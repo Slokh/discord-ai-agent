@@ -102,18 +102,24 @@ describe("WalletService", () => {
           created_at: new Date("2026-07-15T12:00:00Z")
         }])
     } as unknown as PaymentRepository;
-    const provider = { ...providerFake(), chainId: 4217, getBalance: vi.fn(async () => 7_500_000n) };
+    const provider = {
+      ...providerFake(),
+      chainId: 4217,
+      getBalance: vi.fn(async () => 7_500_000n),
+      resolveToken: vi.fn(async (token: string) => ({ symbol: token, address: tokenAddress, decimals: 6, currency: "USD" }))
+    };
     const config = loadConfig().payments;
     config.tempoNetwork = "mainnet";
     const service = new WalletService(config, repo, provider);
 
     await expect(service.getBotPaymentStatus("guild-a", 5)).resolves.toEqual(expect.objectContaining({
-      wallet: expect.objectContaining({ address: botAddress, network: "mainnet", chainId: 4217, balanceUsd: "7.5" }),
+      wallet: expect.objectContaining({ address: botAddress, network: "mainnet", chainId: 4217, token: "USDC.e", balanceUsd: "7.5" }),
       spend: { todayUsd: "2.5", remainingBotDailyUsd: "7.5" },
       recentAttempts: [expect.objectContaining({ id: "mppa-1", amountUsd: "0.01", receiptReference: "receipt-1" })]
     }));
     expect(repo.getBotMppSpendToday).toHaveBeenCalledWith();
     expect(repo.listMppAttempts).toHaveBeenCalledWith({ guildId: "guild-a", limit: 5 });
+    expect(provider.resolveToken).toHaveBeenCalledWith("USDC.e");
   });
 
   it("marks an unfunded transfer failed before signing instead of treating it as uncertain", async () => {

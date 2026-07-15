@@ -17,10 +17,14 @@ export async function executeMppToolRoute(ctx: ToolContext, route: AgentToolRout
     };
   }
   if (route.name === "inspectMppService") {
+    const serviceIdOrUrl = stringArgument(route.arguments, "serviceIdOrUrl");
+    const usageIntent = stringArgument(route.arguments, "usageIntent");
     return {
       content: cleanResponse(
-        await inspectMppService(ctx, stringArgument(route.arguments, "serviceIdOrUrl")),
-        ctx.config.maxReplyChars
+        await (usageIntent
+          ? inspectMppService(ctx, serviceIdOrUrl, usageIntent)
+          : inspectMppService(ctx, serviceIdOrUrl)),
+        Math.max(ctx.config.maxReplyChars, 12_000)
       )
     };
   }

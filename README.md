@@ -143,6 +143,8 @@ npm run prompt -- --no-memory "what can you do?"
 npm run eval -- --dry-run
 ```
 
+`npm run prompt` constructs the same configured wallet and MPP services as the Discord runtime, so payment-enabled local prompts exercise real discovery, inspection, policy, and receipt paths rather than advertising unavailable tools.
+
 Use [docs/evals.md](docs/evals.md) to run regression prompts before and after retrieval, tool, prompt, or codegen changes. Use [docs/tool-design.md](docs/tool-design.md) when changing model-facing tools.
 
 ## Code Updates

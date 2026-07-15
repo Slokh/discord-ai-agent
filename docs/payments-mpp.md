@@ -27,7 +27,7 @@ Settlement validates the requester, draw, maximum payout, and one-time status. I
 
 The full shared-wallet lifecycle is model-led through ordinary `@ai` prompts; there are no Discord slash commands:
 
-- Ask `@ai what's your wallet balance?` to automatically ensure the shared wallet exists and report its public funding address, active Tempo network, PathUSD balance, health, today's MPP spend, remaining budget, approval limits, and recent receipts or failures.
+- Ask `@ai balance` or `@ai what's your wallet balance?` to automatically ensure the shared wallet exists and report its public funding address, active Tempo network, USD balance, health, today's MPP spend, remaining budget, approval limits, and recent receipts or failures. The display uses `$`; the onchain asset read is `MPP_FUNDING_TOKEN` (`USDC.e` by default).
 - Ask `@ai where can I fund your MPP wallet?` for the same verified public address. Funding still comes from an operator-controlled external source; the bot never invents a funding source or moves money without an authorized flow.
 - Ask for a paid capability in normal language and the model can discover, inspect, and call a suitable MPP service within policy.
 - Authorized operators can ask `@ai reconcile your pending payments and show the updated status`. Manual reconciliation uses the same durable path as the automatic one-minute worker and is restricted to the owner/ops allowlist.
@@ -40,7 +40,7 @@ The model can use five generic lifecycle tools:
 - `getBotPaymentStatus` automatically ensures the shared wallet exists and returns its public funding address, balance, health, configured policy, UTC-day spend, remaining budget, and recent attempts/receipts.
 - `reconcileBotPayments` lets an authorized operator explicitly reconcile pending transfers and returns refreshed status. Routine reconciliation remains automatic.
 - `discoverMppServices` asks the official MPP Services MCP server to rank services and offers for the task without paying. The public catalog is a degraded fallback when MCP discovery is unavailable.
-- `inspectMppService` resolves the callable service URL, reads its usage recipe and OpenAPI document, and returns a short-lived inspection ID, exact operation IDs, request shapes, and every advertised payment offer. It does not pay.
+- `inspectMppService` resolves the callable service URL, reads its usage recipe and OpenAPI document, and returns a short-lived inspection ID, exact operation IDs, request shapes, and every advertised payment offer. When registry schemas are incomplete, it uses the current task to select and include a bounded page from the provider's official `llms.txt` documentation instead of guessing parameter names or enum values. It does not pay.
 - `callMppService` accepts only an operation from that inspection and makes a bounded HTTPS request through the official `mppx` client using the shared bot wallet. Arbitrary URLs, methods, and paths are not accepted by the paid-call tool.
 
 Discovery metadata is advisory. The signed runtime `402 Payment Required` challenge is authoritative. The client accepts only Tempo `charge` and TIP-1034 `session` intents, six-decimal USD-denominated tokens whose decimals match onchain metadata, and the configured chain. The repository atomically enforces the default `$0.50` per call, `$2` per requesting Discord user per UTC day across guilds, and `$10` shared-bot-wallet total per UTC day caps. For sessions, authorization conservatively counts the bounded opening-deposit suggestion rather than only the first unit price. Session channel access is serialized per guild and uses the Postgres-backed JSON channel store.
@@ -51,6 +51,8 @@ Every request is fingerprinted. Identical calls in one execution and recent call
 
 Requests require public HTTPS destinations, reject credentials and private/reserved addresses, validate the DNS answer used by the actual socket, and refuse redirects outside the inspected origin. Responses are streamed into a configurable byte cap; JSON and text are returned inline, while bounded binary responses become Discord attachments. All service output is labeled and wrapped as untrusted external data so it cannot grant permission or become agent instructions.
 
+Time-sensitive shopping requests are also guarded at response time. A fare, price, schedule, or availability claim without fresh evidence is rejected once and retried with tool use required; structured live-price requests fall back to free MPP discovery when the model skipped public-web retrieval. If fresh retrieval still fails, the bot returns a concise limitation instead of publishing remembered or fabricated offers.
+
 The inspection IDs are intentionally process-local and short-lived. A deployment or expiry requires a fresh free inspection, which prevents an old discovery result from becoming a durable capability to call a changed endpoint. Wallet records and reusable MPP session channels are chain-scoped, so a Moderato-to-mainnet cutover cannot reuse testnet payment state.
 
 ## Rollout
@@ -58,7 +60,7 @@ The inspection IDs are intentionally process-local and short-lived. A deployment
 1. Create a Privy app and place `PRIVY_APP_ID` and `PRIVY_APP_SECRET` in the runtime secret.
 2. Deploy with migrations and `TEMPO_NETWORK=moderato`.
 3. For MPP-only operation, set `WALLET_ENABLED=true`, `MPP_ENABLED=true`, and `USER_WALLETS_ENABLED=false`.
-4. Ask `@ai what's your wallet balance?`, fund the returned address with PathUSD on the configured network, and ask again until the shared wallet reports healthy.
+4. Ask `@ai balance`, fund the returned address with the configured `MPP_FUNDING_TOKEN` (`USDC.e` by default) on the active network, and ask again until the shared wallet reports healthy.
 5. Open `/payments` in the authenticated console and verify the shared bot wallet, configured policy, runtime health, and event timeline.
 6. Discover and inspect a service, then make one read-only call below the automatic-approval threshold. Verify the challenge, approval, receipt, and response events plus the operation and receipt columns in `/payments`.
 7. Explicitly test a call above the automatic threshold and a side-effecting operation: both must fail without a verbatim authorization quote and pass only with one.

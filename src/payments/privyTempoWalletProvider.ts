@@ -57,10 +57,13 @@ export class PrivyTempoWalletProvider implements WalletProvider {
     account: Account;
     getClient: (input: { chainId?: number }) => Client;
   } {
-    const account = createViemAccount(this.privy, {
+    // MPP pull-mode challenges set the Tempo fee-payer flag without supplying
+    // a fee-payer signature. Privy's full-transaction formatter currently
+    // drops that in-memory flag, so sign the canonical Tempo hash directly.
+    const account = withTempoFeePayerSupport(createViemAccount(this.privy, {
       walletId: wallet.providerWalletId,
       address: wallet.address
-    });
+    }));
     return {
       account,
       getClient: ({ chainId }) => {

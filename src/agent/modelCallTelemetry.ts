@@ -40,6 +40,7 @@ export async function runObservedModelCall(
     toolSchemas,
     offeredTools: (input.chat.tools ?? []).map((tool) => tool.type === "function" ? tool.function.name : tool.type),
     maxTokens: input.chat.maxTokens ?? 4096,
+    toolChoice: input.chat.toolChoice ?? "auto",
     ...runtimeVersionMetadata(ctx.config),
     ...input.metadata,
   };
@@ -55,6 +56,7 @@ export async function runObservedModelCall(
       requestedModel: input.chat.model ?? "default",
       maxTokens: input.chat.maxTokens ?? 4096,
       temperature: input.chat.temperature ?? null,
+      toolChoice: input.chat.toolChoice ?? "auto",
       messages: input.chat.messages.map((message, index) => ({
         index,
         section: promptMessageSection(message, index, input.chat.messages.length),

@@ -39,6 +39,49 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
   });
 
+  it("keeps MPP available while removing every user-wallet tool and wager schema", () => {
+    withEnv({
+      WALLET_ENABLED: "true",
+      USER_WALLETS_ENABLED: "false",
+      MPP_ENABLED: "true",
+      PRIVY_APP_ID: "app",
+      PRIVY_APP_SECRET: "secret"
+    }, () => {
+      const config = loadConfig();
+      const tools = scopedToolset({ config, groups: new Set(["external", "discord-action"]) }).localTools;
+      const names = tools.map((tool) => tool.name);
+      const drawRandom = tools.find((tool) => tool.name === "drawRandom");
+      const properties = drawRandom?.parameters.properties as Record<string, unknown>;
+
+      expect(names).toContain("discoverMppServices");
+      expect(names).toContain("inspectMppService");
+      expect(names).toContain("callMppService");
+      expect(names).not.toContain("getGameWalletBalance");
+      expect(names).not.toContain("settleRandomWager");
+      expect(properties).not.toHaveProperty("wager");
+    });
+  });
+
+  it("restores user-wallet tools and wager schema only when explicitly enabled", () => {
+    withEnv({
+      WALLET_ENABLED: "true",
+      USER_WALLETS_ENABLED: "true",
+      MPP_ENABLED: "true",
+      PRIVY_APP_ID: "app",
+      PRIVY_APP_SECRET: "secret"
+    }, () => {
+      const config = loadConfig();
+      const tools = scopedToolset({ config, groups: new Set(["external", "discord-action"]) }).localTools;
+      const names = tools.map((tool) => tool.name);
+      const drawRandom = tools.find((tool) => tool.name === "drawRandom");
+      const properties = drawRandom?.parameters.properties as Record<string, unknown>;
+
+      expect(names).toContain("getGameWalletBalance");
+      expect(names).toContain("settleRandomWager");
+      expect(properties).toHaveProperty("wager");
+    });
+  });
+
   it("adds image tools for visual intent even without the word image", () => {
     const groups = selectToolGroups({ text: "draw a wizard eating nachos", hasImageAttachments: false, config: loadConfig() });
     expect(groups.has("image")).toBe(true);

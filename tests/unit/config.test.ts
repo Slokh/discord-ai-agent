@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertExecutionConfig, assertOpenRouterConfig, loadConfig } from "../../src/config/env.js";
+import { assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, loadConfig } from "../../src/config/env.js";
 
 describe("config", () => {
   it("loads defaults", () => {
@@ -39,6 +39,11 @@ describe("config", () => {
         "SPOTIFY_CLIENT_SECRET",
         "SPOTIFY_MARKET",
         "TOOLSET_SCOPING"
+        ,"WALLET_ENABLED"
+        ,"USER_WALLETS_ENABLED"
+        ,"MPP_ENABLED"
+        ,"PRIVY_APP_ID"
+        ,"PRIVY_APP_SECRET"
       ],
       () => {
         const config = loadConfig();
@@ -100,6 +105,29 @@ describe("config", () => {
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
         expect(config.crawlRetryMaxMs).toBe(30_000);
+        expect(config.payments).toEqual({
+          walletEnabled: false,
+          userWalletsEnabled: false,
+          mppEnabled: false,
+          privyAppId: null,
+          privyAppSecret: null,
+          tempoNetwork: "moderato",
+          gameToken: "pathUSD",
+          initialGrantUsd: 1,
+          maxGameSettlementUsd: 10,
+          mpp: {
+            maxCallUsd: 0.5,
+            userDailyUsd: 2,
+            botDailyUsd: 10,
+            maxSessionDepositUsd: 0.5,
+            autoApproveUsd: 0.05,
+            serviceCatalogUrl: "https://mpp.dev/api/services",
+            serviceDiscoveryMcpUrl: "https://mpp.dev/mcp/services",
+            inspectionTtlSeconds: 900,
+            recentRequestWindowSeconds: 600,
+            maxResponseBytes: 2_000_000
+          }
+        });
       }
     );
   });
@@ -108,6 +136,47 @@ describe("config", () => {
     const config = loadConfig();
     if (config.openRouter.apiKey) return;
     expect(() => assertOpenRouterConfig(config)).toThrow(/OPENROUTER_API_KEY/);
+  });
+
+  it("requires Privy credentials when payment features are enabled", () => {
+    withEnvUnset(["PRIVY_APP_ID", "PRIVY_APP_SECRET"], () => {
+      withEnv({ WALLET_ENABLED: "true" }, () => {
+        expect(() => assertPaymentConfig(loadConfig())).toThrow(/PRIVY_APP_ID, PRIVY_APP_SECRET/);
+      });
+    });
+  });
+
+  it("requires the shared wallet runtime when MPP is enabled", () => {
+    withEnv({ MPP_ENABLED: "true", WALLET_ENABLED: "false", PRIVY_APP_ID: "app", PRIVY_APP_SECRET: "secret" }, () => {
+      expect(() => assertPaymentConfig(loadConfig())).toThrow(/MPP_ENABLED requires WALLET_ENABLED/);
+    });
+  });
+
+  it("allows MPP with user wallets disabled and validates user-wallet dependencies", () => {
+    withEnv({ MPP_ENABLED: "true", WALLET_ENABLED: "true", USER_WALLETS_ENABLED: "false", PRIVY_APP_ID: "app", PRIVY_APP_SECRET: "secret" }, () => {
+      expect(() => assertPaymentConfig(loadConfig())).not.toThrow();
+    });
+    withEnv({ MPP_ENABLED: "false", WALLET_ENABLED: "false", USER_WALLETS_ENABLED: "true", PRIVY_APP_ID: "app", PRIVY_APP_SECRET: "secret" }, () => {
+      expect(() => assertPaymentConfig(loadConfig())).toThrow(/USER_WALLETS_ENABLED requires WALLET_ENABLED/);
+    });
+  });
+
+  it("rejects contradictory or insecure MPP policy configuration", () => {
+    const base = {
+      MPP_ENABLED: "true",
+      WALLET_ENABLED: "true",
+      PRIVY_APP_ID: "app",
+      PRIVY_APP_SECRET: "secret"
+    };
+    withEnv({ ...base, MPP_AUTO_APPROVE_USD: "0.75", MPP_MAX_CALL_USD: "0.50" }, () => {
+      expect(() => assertPaymentConfig(loadConfig())).toThrow(/MPP_AUTO_APPROVE_USD cannot exceed/);
+    });
+    withEnv({ ...base, MPP_MAX_SESSION_DEPOSIT_USD: "0.75", MPP_MAX_CALL_USD: "0.50" }, () => {
+      expect(() => assertPaymentConfig(loadConfig())).toThrow(/MPP_MAX_SESSION_DEPOSIT_USD cannot exceed/);
+    });
+    withEnv({ ...base, MPP_SERVICE_DISCOVERY_MCP_URL: "http://mpp.dev/mcp/services" }, () => {
+      expect(() => assertPaymentConfig(loadConfig())).toThrow(/MPP_SERVICE_DISCOVERY_MCP_URL must use HTTPS/);
+    });
   });
 
   it("accepts the internal API process role", () => {

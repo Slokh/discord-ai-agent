@@ -14,12 +14,16 @@ import type { AgentPromptExecutionRef } from "../agent/runtimeLedger.js";
 import type { DiscordResponseFooter } from "./responseSink.js";
 import { durationMs, logger } from "../util/logger.js";
 import type { TraceContext } from "../util/trace.js";
+import type { WalletService } from "../payments/walletService.js";
+import type { MppService } from "../payments/mppService.js";
 
 export type DiscordAgentRequestInput = {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   budgetRepo?: BudgetRepository;
   rngRepo?: RngRepository;
+  walletService?: WalletService;
+  mppService?: MppService;
   agentRuntime?: AgentRuntimeRepository;
   deliveryObligations?: DeliveryObligationsRepository;
   agentExecutor?: AgentRuntimePromptExecutor;

@@ -3,6 +3,40 @@ import type { RunFeedback, RunListAggregate, RunListResponse, RunSnapshot, RunSu
 
 const useFixtures = import.meta.env.MODE === "fixture";
 
+export type PaymentsSnapshot = {
+  totals: {
+    wallets?: number;
+    wallet_errors?: number;
+    transfers_pending?: number;
+    wagers_open?: number;
+    mpp_usd_micros_today?: string;
+  };
+  wallets: Array<Record<string, unknown>>;
+  transfers: Array<Record<string, unknown>>;
+  wagers: Array<Record<string, unknown>>;
+  mppAttempts: Array<Record<string, unknown>>;
+  health?: Array<Record<string, unknown>>;
+  policy?: {
+    network: string;
+    autoApproveUsd: number;
+    maxCallUsd: number;
+    userDailyUsd: number;
+    botDailyUsd: number;
+    inspectionTtlSeconds: number;
+    recentRequestWindowSeconds: number;
+  };
+  generatedAt: string;
+};
+
+export async function fetchPaymentsSnapshot(): Promise<PaymentsSnapshot> {
+  if (useFixtures) {
+    return { totals: {}, wallets: [], transfers: [], wagers: [], mppAttempts: [], health: [], generatedAt: new Date().toISOString() };
+  }
+  const response = await fetch("/api/payments?limit=100", { credentials: "include" });
+  if (!response.ok) throw new Error(`Failed to load payments (${response.status})`);
+  return (await response.json()) as PaymentsSnapshot;
+}
+
 export async function fetchRunList(input: { includeEmbeddings?: boolean } = {}): Promise<RunListResponse> {
   if (useFixtures) {
     const runs = input.includeEmbeddings ? fixtureRuns : fixtureRuns.filter((run) => run.kind !== "embedding");

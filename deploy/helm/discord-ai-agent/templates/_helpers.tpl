@@ -70,6 +70,40 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.crawlScheduleCron | quote }}
 - name: TOOLSET_SCOPING
   value: {{ .Values.config.toolsetScoping | quote }}
+- name: WALLET_ENABLED
+  value: {{ .Values.config.walletEnabled | quote }}
+- name: USER_WALLETS_ENABLED
+  value: {{ .Values.config.userWalletsEnabled | quote }}
+- name: MPP_ENABLED
+  value: {{ .Values.config.mppEnabled | quote }}
+- name: TEMPO_NETWORK
+  value: {{ .Values.config.tempoNetwork | quote }}
+- name: TEMPO_GAME_TOKEN
+  value: {{ .Values.config.tempoGameToken | quote }}
+- name: WALLET_INITIAL_GRANT_USD
+  value: {{ .Values.config.walletInitialGrantUsd | quote }}
+- name: WALLET_MAX_GAME_SETTLEMENT_USD
+  value: {{ .Values.config.walletMaxGameSettlementUsd | quote }}
+- name: MPP_MAX_CALL_USD
+  value: {{ .Values.config.mppMaxCallUsd | quote }}
+- name: MPP_USER_DAILY_USD
+  value: {{ .Values.config.mppUserDailyUsd | quote }}
+- name: MPP_BOT_DAILY_USD
+  value: {{ .Values.config.mppBotDailyUsd | quote }}
+- name: MPP_MAX_SESSION_DEPOSIT_USD
+  value: {{ .Values.config.mppMaxSessionDepositUsd | quote }}
+- name: MPP_AUTO_APPROVE_USD
+  value: {{ .Values.config.mppAutoApproveUsd | quote }}
+- name: MPP_SERVICE_CATALOG_URL
+  value: {{ .Values.config.mppServiceCatalogUrl | quote }}
+- name: MPP_SERVICE_DISCOVERY_MCP_URL
+  value: {{ .Values.config.mppServiceDiscoveryMcpUrl | quote }}
+- name: MPP_INSPECTION_TTL_SECONDS
+  value: {{ .Values.config.mppInspectionTtlSeconds | quote }}
+- name: MPP_RECENT_REQUEST_WINDOW_SECONDS
+  value: {{ .Values.config.mppRecentRequestWindowSeconds | quote }}
+- name: MPP_MAX_RESPONSE_BYTES
+  value: {{ .Values.config.mppMaxResponseBytes | quote }}
 {{- if .Values.config.budgetUserTurnsPerDay }}
 - name: BUDGET_USER_TURNS_PER_DAY
   value: {{ .Values.config.budgetUserTurnsPerDay | quote }}
@@ -234,6 +268,21 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
     secretKeyRef:
       name: {{ .Values.secret.existingSecretName }}
       key: {{ .Values.config.spotifyClientSecretKey }}
+      optional: true
+{{- end -}}
+
+{{- define "discord-ai-agent.paymentEnv" -}}
+- name: PRIVY_APP_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.privyAppIdSecretKey }}
+      optional: true
+- name: PRIVY_APP_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secret.existingSecretName }}
+      key: {{ .Values.config.privyAppSecretSecretKey }}
       optional: true
 {{- end -}}
 

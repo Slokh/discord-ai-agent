@@ -18,6 +18,7 @@ import { collectAgentTaskStatusSnapshot } from "../observability/agentTaskStatus
 import { buildRunListAggregate } from "../observability/runAggregates.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../observability/runs.js";
 import type { JobRuntime } from "../jobs/queue.js";
+import type { PaymentRepository } from "../db/paymentRepository.js";
 import { readRunConsoleAsset, renderRunConsolePage } from "./runConsole.js";
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
@@ -36,6 +37,7 @@ export async function startInternalApi(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   agentRuntimeRepo?: AgentRuntimeRepository;
+  paymentRepo?: PaymentRepository;
   db?: DbPool;
   jobs?: Pick<JobRuntime, "enqueueAgentRuntimeExecution">;
 }): Promise<InternalApiRuntime> {
@@ -69,6 +71,7 @@ async function handleRequest(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
   agentRuntimeRepo?: AgentRuntimeRepository;
+  paymentRepo?: PaymentRepository;
   db?: DbPool;
   jobs?: Pick<JobRuntime, "enqueueAgentRuntimeExecution">;
   request: http.IncomingMessage;
@@ -111,6 +114,12 @@ async function handleRequest(input: {
     return;
   }
 
+  if (method === "GET" && url.pathname === "/payments") {
+    if (!authorizedUi(input.config, input.request, input.response, url, { redirectOnQueryAuth: true })) return;
+    sendHtml(input.response, 200, await renderRunConsolePage());
+    return;
+  }
+
   const runPageMatch = url.pathname.match(/^\/runs\/([^/]+)$/);
   if (method === "GET" && runPageMatch) {
     if (!authorizedUi(input.config, input.request, input.response, url, { redirectOnQueryAuth: true })) return;
@@ -140,6 +149,31 @@ async function handleRequest(input: {
       runs,
       aggregate: buildRunListAggregate(runs),
       generatedAt: new Date().toISOString()
+    });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/payments") {
+    if (!authorizedUi(input.config, input.request, input.response, url)) return;
+    if (!input.paymentRepo) {
+      sendJson(input.response, 503, { error: "payment_repository_unavailable" });
+      return;
+    }
+    const snapshot = await input.paymentRepo.getPaymentsConsoleSnapshot({
+      guildId: url.searchParams.get("guildId") ?? undefined,
+      limit: parseLimit(url.searchParams.get("limit"), 100, 500)
+    });
+    sendJson(input.response, 200, {
+      ...snapshot,
+      policy: {
+        network: input.config.payments.tempoNetwork,
+        autoApproveUsd: input.config.payments.mpp.autoApproveUsd,
+        maxCallUsd: input.config.payments.mpp.maxCallUsd,
+        userDailyUsd: input.config.payments.mpp.userDailyUsd,
+        botDailyUsd: input.config.payments.mpp.botDailyUsd,
+        inspectionTtlSeconds: input.config.payments.mpp.inspectionTtlSeconds,
+        recentRequestWindowSeconds: input.config.payments.mpp.recentRequestWindowSeconds
+      }
     });
     return;
   }

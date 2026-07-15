@@ -154,6 +154,25 @@ export async function handleMessageCreate(
     await responseSink.sendError(budgetDecision.message, discordTraceFooter(input.config, requestId, messageStartedAt));
     return;
   }
+  if (input.walletService && input.config.payments.userWalletsEnabled) {
+    await input.walletService.enqueueUserProvision(
+      { guildId: message.guildId, userId: message.author.id },
+      async (event) => {
+        await recordTraceEvent(input.repo, {
+          eventName: event.eventName,
+          level: event.level,
+          summary: event.summary,
+          metadata: event.metadata,
+          traceId: requestId,
+          requestId,
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          messageId: message.id
+        });
+      }
+    );
+  }
   const agentRuntimeExecution = await ensureAgentRuntimePromptExecution({
     agentRuntime: input.agentRuntime,
     guildId: message.guildId,

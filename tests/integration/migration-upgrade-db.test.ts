@@ -22,9 +22,14 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
       await client.query("INSERT INTO agent_runtime_executions(execution_id, session_id) VALUES ('execution', 'session')");
       await client.query("INSERT INTO agent_runtime_events(session_id, execution_id, sequence, kind, event_name) VALUES ('session', 'execution', 1, 'status', 'agent.execution.queued')");
       await client.query(await readFile(path.resolve("migrations/006_runtime_event_spans.sql"), "utf8"));
+      await client.query(await readFile(path.resolve("migrations/007_rng_active_channel_index.sql"), "utf8"));
+      await client.query(await readFile(path.resolve("migrations/008_wallets_mpp.sql"), "utf8"));
       await client.query("UPDATE agent_runtime_events SET span_id = 'root', parent_span_id = NULL WHERE execution_id = 'execution'");
       const event = await client.query("SELECT span_id, event_name FROM agent_runtime_trace_projection WHERE execution_id = 'execution'");
       expect(event.rows).toEqual([expect.objectContaining({ span_id: "root", event_name: "agent.execution.queued" })]);
+      await expect(client.query("SELECT count(*)::int AS count FROM wallet_accounts")).resolves.toEqual(
+        expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] })
+      );
       await client.query("INSERT INTO agent_run_feedback(run_id, rating, capture_eval) VALUES ('execution', 'good', true)");
       await expect(client.query("SELECT count(*)::int AS count FROM agent_run_feedback")).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 1 })] }));
     } finally {

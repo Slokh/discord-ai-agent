@@ -63,6 +63,7 @@ export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
 ): Promise<AgentResponse> {
+  ctx.requestText = userText;
   const randomOutcomeGuard = new RandomOutcomeGuard(ctx, userText);
   return await randomOutcomeGuard.enforce(
     await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard),

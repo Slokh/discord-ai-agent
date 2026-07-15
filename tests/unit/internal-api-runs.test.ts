@@ -107,6 +107,27 @@ describe("internal API run endpoints", () => {
     expect(listInputs.at(-1)).toEqual({ includeEmbeddings: true });
   });
 
+  it("serves the authenticated payment operations snapshot", async () => {
+    const inputs: unknown[] = [];
+    runtime = await startInternalApi({
+      config: testConfig(),
+      repo: fakeRepo(),
+      paymentRepo: {
+        getPaymentsConsoleSnapshot: async (input: unknown) => {
+          inputs.push(input);
+          return { totals: { wallets: 2, mpp_usd_micros_today: "500000" }, wallets: [], transfers: [], wagers: [], mppAttempts: [] };
+        }
+      } as never
+    });
+    const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };
+
+    const response = await fetch(`${runtime.url}/api/payments?guildId=guild-1&limit=25`, { headers: auth });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({ totals: expect.objectContaining({ wallets: 2 }) }));
+    expect(inputs).toEqual([{ guildId: "guild-1", limit: 25 }]);
+  });
+
   it("serves codegen status snapshots for operator tooling", async () => {
     runtime = await startInternalApi({ config: testConfig(), repo: fakeRepo(), db: fakeAgentTaskStatusPool() as never });
     const auth = { authorization: `Basic ${Buffer.from("admin:secret").toString("base64")}` };

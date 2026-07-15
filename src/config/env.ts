@@ -21,6 +21,7 @@ function nonEmptyStringWithDefault(defaultValue: string) {
 type ProcessRole = "all" | "api" | "bot" | "worker";
 type CodegenExecutionBackend = "kubernetes-job" | "local-process";
 type CodegenHarness = "codex" | "opencode";
+type TempoNetwork = "moderato" | "mainnet";
 
 function defaultProcessRole(argv = process.argv): ProcessRole {
   const role = argv.find((arg): arg is ProcessRole => arg === "all" || arg === "api" || arg === "bot" || arg === "worker");
@@ -119,6 +120,23 @@ const defaults = {
   spotifyClientId: "",
   spotifyClientSecret: "",
   spotifyMarket: "US",
+  walletEnabled: false,
+  userWalletsEnabled: false,
+  mppEnabled: false,
+  tempoNetwork: "moderato" as TempoNetwork,
+  tempoGameToken: "pathUSD",
+  walletInitialGrantUsd: 1,
+  walletMaxGameSettlementUsd: 10,
+  mppMaxCallUsd: 0.5,
+  mppUserDailyUsd: 2,
+  mppBotDailyUsd: 10,
+  mppMaxSessionDepositUsd: 0.5,
+  mppAutoApproveUsd: 0.05,
+  mppServiceCatalogUrl: "https://mpp.dev/api/services",
+  mppServiceDiscoveryMcpUrl: "https://mpp.dev/mcp/services",
+  mppInspectionTtlSeconds: 15 * 60,
+  mppRecentRequestWindowSeconds: 10 * 60,
+  mppMaxResponseBytes: 2_000_000,
   promptOverlayPath: ".discord-ai-agent/prompt-overlay.md",
   toolsetScoping: true
 } as const;
@@ -224,6 +242,25 @@ const envSchema = z.object({
   SPOTIFY_CLIENT_ID: z.string().default(defaults.spotifyClientId),
   SPOTIFY_CLIENT_SECRET: z.string().default(defaults.spotifyClientSecret),
   SPOTIFY_MARKET: nonEmptyStringWithDefault(defaults.spotifyMarket),
+  WALLET_ENABLED: booleanFromEnv.default(defaults.walletEnabled),
+  USER_WALLETS_ENABLED: booleanFromEnv.default(defaults.userWalletsEnabled),
+  MPP_ENABLED: booleanFromEnv.default(defaults.mppEnabled),
+  PRIVY_APP_ID: z.string().trim().optional(),
+  PRIVY_APP_SECRET: z.string().trim().optional(),
+  TEMPO_NETWORK: z.enum(["moderato", "mainnet"]).default(defaults.tempoNetwork),
+  TEMPO_GAME_TOKEN: nonEmptyStringWithDefault(defaults.tempoGameToken),
+  WALLET_INITIAL_GRANT_USD: z.coerce.number().min(0).max(100).default(defaults.walletInitialGrantUsd),
+  WALLET_MAX_GAME_SETTLEMENT_USD: z.coerce.number().positive().max(10_000).default(defaults.walletMaxGameSettlementUsd),
+  MPP_MAX_CALL_USD: z.coerce.number().positive().max(100).default(defaults.mppMaxCallUsd),
+  MPP_USER_DAILY_USD: z.coerce.number().positive().max(10_000).default(defaults.mppUserDailyUsd),
+  MPP_BOT_DAILY_USD: z.coerce.number().positive().max(100_000).default(defaults.mppBotDailyUsd),
+  MPP_MAX_SESSION_DEPOSIT_USD: z.coerce.number().positive().max(100).default(defaults.mppMaxSessionDepositUsd),
+  MPP_AUTO_APPROVE_USD: z.coerce.number().min(0).max(100).default(defaults.mppAutoApproveUsd),
+  MPP_SERVICE_CATALOG_URL: z.string().url().default(defaults.mppServiceCatalogUrl),
+  MPP_SERVICE_DISCOVERY_MCP_URL: z.string().url().default(defaults.mppServiceDiscoveryMcpUrl),
+  MPP_INSPECTION_TTL_SECONDS: z.coerce.number().int().min(60).max(24 * 60 * 60).default(defaults.mppInspectionTtlSeconds),
+  MPP_RECENT_REQUEST_WINDOW_SECONDS: z.coerce.number().int().min(0).max(24 * 60 * 60).default(defaults.mppRecentRequestWindowSeconds),
+  MPP_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1_024).max(20_000_000).default(defaults.mppMaxResponseBytes),
   PROMPT_OVERLAY_PATH: z.string().trim().default(defaults.promptOverlayPath),
   TOOLSET_SCOPING: booleanFromEnv.default(defaults.toolsetScoping)
 });
@@ -357,6 +394,29 @@ export function loadConfig() {
       clientSecret: parsed.data.SPOTIFY_CLIENT_SECRET,
       market: parsed.data.SPOTIFY_MARKET
     },
+    payments: {
+      walletEnabled: parsed.data.WALLET_ENABLED ?? defaults.walletEnabled,
+      userWalletsEnabled: parsed.data.USER_WALLETS_ENABLED ?? defaults.userWalletsEnabled,
+      mppEnabled: parsed.data.MPP_ENABLED ?? defaults.mppEnabled,
+      privyAppId: parsed.data.PRIVY_APP_ID?.trim() || null,
+      privyAppSecret: parsed.data.PRIVY_APP_SECRET?.trim() || null,
+      tempoNetwork: parsed.data.TEMPO_NETWORK,
+      gameToken: parsed.data.TEMPO_GAME_TOKEN,
+      initialGrantUsd: parsed.data.WALLET_INITIAL_GRANT_USD,
+      maxGameSettlementUsd: parsed.data.WALLET_MAX_GAME_SETTLEMENT_USD,
+      mpp: {
+        maxCallUsd: parsed.data.MPP_MAX_CALL_USD,
+        userDailyUsd: parsed.data.MPP_USER_DAILY_USD,
+        botDailyUsd: parsed.data.MPP_BOT_DAILY_USD,
+        maxSessionDepositUsd: parsed.data.MPP_MAX_SESSION_DEPOSIT_USD,
+        autoApproveUsd: parsed.data.MPP_AUTO_APPROVE_USD,
+        serviceCatalogUrl: parsed.data.MPP_SERVICE_CATALOG_URL,
+        serviceDiscoveryMcpUrl: parsed.data.MPP_SERVICE_DISCOVERY_MCP_URL,
+        inspectionTtlSeconds: parsed.data.MPP_INSPECTION_TTL_SECONDS,
+        recentRequestWindowSeconds: parsed.data.MPP_RECENT_REQUEST_WINDOW_SECONDS,
+        maxResponseBytes: parsed.data.MPP_MAX_RESPONSE_BYTES
+      }
+    },
     promptOverlayPath: parsed.data.PROMPT_OVERLAY_PATH,
     toolsetScoping: parsed.data.TOOLSET_SCOPING ?? defaults.toolsetScoping
   };
@@ -381,6 +441,40 @@ export function assertDiscordConfig(config: AppConfig): asserts config is AppCon
   if (missing.length > 0) {
     throw new Error(`Missing required Discord secret/config values: ${missing.map(([name]) => name).join(", ")}`);
   }
+}
+
+export function missingPaymentConfig(config: AppConfig): string[] {
+  const missing: string[] = [];
+  if (!config.payments.privyAppId) missing.push("PRIVY_APP_ID");
+  if (!config.payments.privyAppSecret) missing.push("PRIVY_APP_SECRET");
+  return missing;
+}
+
+export function assertPaymentConfig(config: AppConfig): asserts config is AppConfig & {
+  payments: AppConfig["payments"] & { privyAppId: string; privyAppSecret: string };
+} {
+  if (config.payments.userWalletsEnabled && !config.payments.walletEnabled) {
+    throw new Error("USER_WALLETS_ENABLED requires WALLET_ENABLED");
+  }
+  if (config.payments.mppEnabled && !config.payments.walletEnabled) {
+    throw new Error("MPP_ENABLED requires WALLET_ENABLED because the shared bot wallet is the default payer");
+  }
+  if (config.payments.mppEnabled && config.payments.mpp.autoApproveUsd > config.payments.mpp.maxCallUsd) {
+    throw new Error("MPP_AUTO_APPROVE_USD cannot exceed MPP_MAX_CALL_USD");
+  }
+  if (config.payments.mppEnabled && config.payments.mpp.maxSessionDepositUsd > config.payments.mpp.maxCallUsd) {
+    throw new Error("MPP_MAX_SESSION_DEPOSIT_USD cannot exceed MPP_MAX_CALL_USD");
+  }
+  if (config.payments.mppEnabled) {
+    for (const [name, value] of [
+      ["MPP_SERVICE_CATALOG_URL", config.payments.mpp.serviceCatalogUrl],
+      ["MPP_SERVICE_DISCOVERY_MCP_URL", config.payments.mpp.serviceDiscoveryMcpUrl]
+    ] as const) {
+      if (new URL(value).protocol !== "https:") throw new Error(`${name} must use HTTPS when MPP is enabled`);
+    }
+  }
+  const missing = missingPaymentConfig(config);
+  if (missing.length > 0) throw new Error(`Wallet or MPP payments are enabled but required configuration is missing: ${missing.join(", ")}`);
 }
 
 export function assertOpenRouterConfig(config: AppConfig): asserts config is AppConfig & {

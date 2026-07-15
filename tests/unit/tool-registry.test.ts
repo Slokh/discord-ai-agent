@@ -44,6 +44,10 @@ describe("toolRegistry", () => {
       "undoConversationTurns",
       "inspectAgentLogs",
       "reportStatus",
+      "getGameWalletBalance",
+      "discoverMppServices",
+      "inspectMppService",
+      "callMppService",
       "getSpotifyPlaylistTracks",
       "getSpotifyAlbumTracks",
       "getSpotifyArtistDiscography",
@@ -55,6 +59,7 @@ describe("toolRegistry", () => {
       "updateBotAvatar",
       "setUserTurnLimit",
       "drawRandom",
+      "settleRandomWager",
       "revealRandomness"
     ]);
   });

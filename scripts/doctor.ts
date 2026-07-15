@@ -16,6 +16,10 @@ async function main() {
     "required for sandbox code-update PRs"
   ]);
   checks.push(["Task signing secret", Boolean(config.execution.taskSigningSecret), "required for Kubernetes sandbox callbacks"]);
+  if (config.payments.walletEnabled || config.payments.mppEnabled) {
+    checks.push(["Privy app ID", Boolean(config.payments.privyAppId), "required when wallets or MPP are enabled"]);
+    checks.push(["Privy app secret", Boolean(config.payments.privyAppSecret), "required when wallets or MPP are enabled"]);
+  }
   const githubRepository = checkGitHubRepository(config.github.repository);
   checks.push(["GitHub repository", githubRepository.ok, githubRepository.detail]);
 
@@ -44,7 +48,12 @@ async function main() {
       "sandbox_command_events",
       "agent_runtime_sessions",
       "agent_runtime_executions",
-      "agent_runtime_events"
+      "agent_runtime_events",
+      "wallet_accounts",
+      "wallet_transfers",
+      "wallet_wager_reservations",
+      "mpp_payment_attempts",
+      "mpp_channel_store"
     ];
     const tables = await pool.query(
       `

@@ -3,7 +3,6 @@ import type { ChatMessage } from "../models/openrouter.js";
 import {
   toolByName,
   toolDefinitionsForModel,
-  toolSupportsCsvFormat,
   type ToolName,
 } from "../tools/registry.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
@@ -44,20 +43,28 @@ import {
   invalidToolCallNames,
   invalidToolCallRecoveryMessage,
 } from "./invalidToolCallRecovery.js";
+import { executeLocalToolRoute } from "./toolDispatcher.js";
 import {
-  executeLocalToolRoute,
-  parseToolArguments,
-} from "./toolDispatcher.js";
+  coerceGeneratedCsvProducerRoutes,
+  selectModelToolRoutes,
+  traceToolRequestMetadata,
+} from "./modelToolRoutes.js";
 import {
   RANDOM_OUTCOME_RETRY_GUIDANCE,
   RandomOutcomeGuard,
 } from "./randomOutcomeGuard.js";
+import {
+  FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
+  FreshExternalDataGuard,
+  prefersStructuredLiveService,
+} from "./freshExternalDataGuard.js";
 import {
   currentScopedToolset,
   expandToolsetState,
   handleAdditionalToolsRequest,
   initialToolsetState,
 } from "./modelToolset.js";
+import { shouldForceSharedWalletStatus } from "./walletStatusGuard.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -65,8 +72,11 @@ export async function runAgentModelLoop(
 ): Promise<AgentResponse> {
   ctx.requestText = userText;
   const randomOutcomeGuard = new RandomOutcomeGuard(ctx, userText);
+  const freshExternalDataGuard = new FreshExternalDataGuard(ctx, userText);
   return await randomOutcomeGuard.enforce(
-    await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard),
+    await freshExternalDataGuard.enforce(
+      await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard),
+    ),
   );
 }
 
@@ -74,6 +84,7 @@ async function runAgentModelLoopInternal(
   ctx: ToolContext,
   userText: string,
   randomOutcomeGuard: RandomOutcomeGuard,
+  freshExternalDataGuard: FreshExternalDataGuard,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
   const text = userText.trim();
@@ -110,6 +121,8 @@ async function runAgentModelLoopInternal(
     emptyNoToolRecoveryAttempted: false,
     invalidToolCallRecoveryAttempted: false,
   };
+  let forceToolUseNextRound = false;
+  let forcedToolNameNextRound: ToolName | null = shouldForceSharedWalletStatus(ctx.config, text) ? "getBotPaymentStatus" : null;
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -212,6 +225,13 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
+      const toolChoice = forcedToolNameNextRound
+        ? { type: "function" as const, function: { name: forcedToolNameNextRound } }
+        : forceToolUseNextRound
+          ? "required" as const
+          : undefined;
+      forceToolUseNextRound = false;
+      forcedToolNameNextRound = null;
       response = await runObservedModelCall(ctx, {
         purpose: "tool_selection",
         metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort() },
@@ -221,6 +241,7 @@ async function runAgentModelLoopInternal(
             localTools: currentToolset.localTools,
             serverTools: currentToolset.serverTools,
           }),
+          toolChoice,
           temperature: 0.2,
           maxTokens: 4096,
           retryPolicy: "expensive",
@@ -245,6 +266,7 @@ async function runAgentModelLoopInternal(
     const modelRoutes = coerceGeneratedCsvProducerRoutes(
       selectModelToolRoutes(response.toolCalls),
     );
+    freshExternalDataGuard.noteRequestedTools(response.toolCalls.map((call) => call.name));
     const requestedToolRequests = response.toolCalls.map(
       traceToolRequestMetadata,
     );
@@ -335,6 +357,29 @@ async function runAgentModelLoopInternal(
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
         });
       }
+      const freshExternalDataDecision = await freshExternalDataGuard.inspectDraft(response.content);
+      if (freshExternalDataDecision !== "allow") {
+        if (freshExternalDataDecision === "retry") {
+          forceToolUseNextRound = true;
+          if (
+            prefersStructuredLiveService(text) &&
+            currentToolset.localTools.some((tool) => tool.name === "discoverMppServices")
+          ) {
+            forcedToolNameNextRound = "discoverMppServices";
+          }
+          messages.push({ role: "assistant", content: response.content });
+          messages.push({
+            role: "system",
+            content: FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
+          });
+          continue;
+        }
+        return freshExternalDataGuard.blockedResponse({
+          files: files.length > 0 ? files : undefined,
+          tables: tables.length > 0 ? tables : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
+        });
+      }
       return await finalizeModelRoundWithoutTools(ctx, {
         round: round + 1,
         roundStartedAt,
@@ -385,6 +430,9 @@ async function runAgentModelLoopInternal(
       })),
     });
 
+    const priorRoundToolResultSignatures = new Map(
+      [...toolResultSignatures.entries()].map(([name, signatures]) => [name, new Set(signatures)]),
+    );
     const parallelToolResults = await executeIndependentToolRoutesInParallel(ctx, modelRoutes, successfulToolCallKeys, text);
     let redundantToolReason: string | null = null;
     for (const route of modelRoutes) {
@@ -418,10 +466,13 @@ async function runAgentModelLoopInternal(
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
       randomOutcomeGuard.noteToolResult(route.name, result.content);
+      freshExternalDataGuard.noteToolResult(route.name, result);
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
         route.name !== "requestAdditionalTools" &&
         (toolResultSignatures.get(route.name)?.has(toolResultSignature(result.content)) ?? false);
+      const repeatedFromPriorRound =
+        priorRoundToolResultSignatures.get(route.name)?.has(toolResultSignature(result.content)) ?? false;
       const isRedundantToolCall = isRepeatedExactToolCall || isRepeatedToolResult;
       if (isRepeatedToolResult) {
         await recordAgentEvent(ctx, {
@@ -474,10 +525,10 @@ async function runAgentModelLoopInternal(
       }
       if (isRepeatedExactToolCall) {
         redundantToolReason = "redundant tool call";
-      } else if (isRepeatedToolResult) {
-        // The first repeated result only nudges the model, so it can still
-        // pivot to a different tool. A second one means it is stuck: stop
-        // calling tools and answer from the evidence already gathered.
+      } else if (isRepeatedToolResult && repeatedFromPriorRound) {
+        // Same-result calls issued together in one model round should be shown
+        // together, then the model gets a chance to pivot. Only repeats across
+        // later rounds indicate that it is stuck.
         repeatedToolResultCount += 1;
         if (repeatedToolResultCount >= 2) {
           redundantToolReason = "repeated tool result";
@@ -702,56 +753,6 @@ async function skippedRedundantToolResult(
   });
   return {
     content: `Skipped redundant ${input.route.name} call. Use the earlier ${input.route.name} evidence already provided in this turn.`,
-  };
-}
-
-function selectModelToolRoutes(
-  toolCalls: Array<{ id: string; name: string; argumentsText: string }>,
-): AgentToolRoute[] {
-  const routes: AgentToolRoute[] = [];
-  for (const call of toolCalls) {
-    const tool = toolByName(call.name);
-    if (!tool) continue;
-    routes.push({
-      id: call.id,
-      name: tool.name,
-      arguments: parseToolArguments(call.argumentsText),
-      argumentsText: call.argumentsText,
-    });
-  }
-  return routes;
-}
-
-function coerceGeneratedCsvProducerRoutes(
-  routes: AgentToolRoute[],
-): AgentToolRoute[] {
-  if (!routes.some((route) => route.name === "queryGeneratedCsv"))
-    return routes;
-  return routes.map((route) => {
-    if (!toolSupportsCsvFormat(route.name)) return route;
-    const existingFormat =
-      typeof route.arguments?.format === "string"
-        ? route.arguments.format.trim()
-        : "";
-    if (existingFormat) return route;
-    const args = { ...(route.arguments ?? {}), format: "csv" };
-    return {
-      ...route,
-      arguments: args,
-      argumentsText: JSON.stringify(args),
-    };
-  });
-}
-
-function traceToolRequestMetadata(call: {
-  id: string;
-  name: string;
-  argumentsText: string;
-}) {
-  return {
-    id: call.id,
-    name: call.name,
-    argumentsText: previewText(call.argumentsText, 2_000),
   };
 }
 

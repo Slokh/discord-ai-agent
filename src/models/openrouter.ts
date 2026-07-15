@@ -35,6 +35,10 @@ export type OpenRouterServerToolDefinition = {
 };
 
 export type ToolDefinition = FunctionToolDefinition | OpenRouterServerToolDefinition;
+export type ToolChoice = "auto" | "required" | "none" | {
+  type: "function";
+  function: { name: string };
+};
 
 export type ChatResult = {
   content: string;
@@ -109,6 +113,7 @@ export class OpenRouterClient {
     messages: ChatMessage[];
     model?: string;
     tools?: ToolDefinition[];
+    toolChoice?: ToolChoice;
     temperature?: number;
     maxTokens?: number;
     retryPolicy?: OpenRouterRetryPolicy;
@@ -138,6 +143,7 @@ export class OpenRouterClient {
         model,
         messages: messagesForPromptCaching(model, input.messages),
         tools: input.tools,
+        tool_choice: input.toolChoice,
         temperature: input.temperature ?? 0.3,
         max_tokens: input.maxTokens ?? 4096
       },

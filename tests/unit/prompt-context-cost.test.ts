@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chatMessages,
+  currentDataGuidance,
   toolResultContentForPrompt,
 } from "../../src/agent/promptBuilder.js";
 import {
@@ -53,6 +54,18 @@ describe("prompt context cost controls", () => {
     expect(systemPrompt).toContain("use a standard Markdown pipe table");
     expect(systemPrompt).toContain("Discord renderer converts it into an aligned code block");
     expect(systemPrompt).not.toContain("use compact lists for tabular/ranking information");
+  });
+
+  it("grounds relative dates and current offers in fresh tool evidence", () => {
+    const guidance = String(currentDataGuidance(new Date("2026-07-15T12:00:00.000Z")).content);
+
+    expect(guidance).toContain("Current UTC date: 2026-07-15");
+    expect(guidance).toContain("this fall");
+    expect(guidance).toContain("never answer from model memory");
+    expect(guidance).toContain("Use web_search first");
+    expect(guidance).toContain("discover, inspect, and call a relevant specialized service");
+    expect(guidance).toContain("ask the shortest necessary follow-up");
+    expect(chatMessages("find current fares", "").map((message) => String(message.content)).join("\n")).toContain("Current UTC date:");
   });
 
   it("omits prior tool-result bodies from default memory but includes them for reply follow-ups", () => {

@@ -1193,14 +1193,14 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getBotPaymentStatus",
     description:
-      "Read the shared bot wallet's complete MPP lifecycle status through a normal conversation: automatically ensure the wallet exists, then return its public mainnet funding address, PathUSD balance, health, today's spend and remaining budget, configured approval limits, and recent paid-call attempts or receipts. Use whenever the user asks for your/the bot's wallet, balance, funding address, MPP budget, payment health, payment history, receipts, or failed paid calls. This is not a Discord command and never exposes signing credentials.",
+      "Read the shared bot wallet's complete MPP lifecycle status through a normal conversation: automatically ensure the wallet exists, then return its public mainnet funding address, USD balance, health, today's spend and remaining budget, configured approval limits, and recent paid-call attempts or receipts. Always use this for an unqualified request such as 'balance' when it is the only available wallet-balance tool; do not answer from conversation memory or an invented ledger. Also use whenever the user asks for your/the bot's wallet, balance, funding address, MPP budget, payment health, payment history, receipts, or failed paid calls. The displayed balance is USD-denominated and backed by the configured MPP funding token. This is not a Discord command and never exposes signing credentials.",
     userVisible: true,
     mutates: false,
     group: "external",
     category: "external",
     toolClass: "external",
-    outputContract: ["shared wallet public address and network", "current PathUSD balance and health", "today's MPP spend and remaining limits", "recent MPP attempts, receipts, and failures"],
-    examples: ["@ai what's your wallet balance?", "@ai where can I fund your MPP wallet?", "@ai show your recent paid API calls"],
+    outputContract: ["shared wallet public address and network", "current USD balance and health", "today's MPP spend and remaining limits", "recent MPP attempts, receipts, and failures"],
+    examples: ["@ai balance", "@ai what's your wallet balance?", "@ai where can I fund your MPP wallet?", "@ai show your recent paid API calls"],
     permissionRequirements: ["configured_bot_wallet", "requesting_discord_user"],
     auditEvents: ["tool_audit_logs", "wallet.health.checked"],
     parameters: {
@@ -1233,14 +1233,14 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "discoverMppServices",
     description:
-      "Rank MPP paid services for a natural-language task using the official read-only Services MCP, with a bounded public-catalog fallback. Use when current/local tools are insufficient and an external paid service may materially improve the answer. Discovery is free. Inspect a candidate before calling it; advertised prices are advisory and never authorize payment.",
+      "Rank MPP paid services for a natural-language task using the official read-only Services MCP, with a bounded public-catalog fallback. Use when current/local tools are insufficient and an external paid service may materially improve the answer, especially when generic web results cannot provide structured live prices, flight fares or schedules, availability, media generation, or another specialized capability. Discovery is free. Inspect a candidate before calling it; advertised prices are advisory and never authorize payment.",
     userVisible: true,
     mutates: false,
     group: "external",
     category: "external",
     toolClass: "external",
     outputContract: ["ranked service ids and names", "match reasons and status", "top endpoint offers and advisory prices", "discovery source and limitations"],
-    examples: ["@ai find a paid API that can enrich this company", "@ai what MPP services can transcribe audio?"],
+    examples: ["@ai find a paid API that can enrich this company", "@ai what MPP services can transcribe audio?", "@ai find the cheapest nonstop round-trip flights this fall"],
     auditEvents: ["mpp.discovery.completed"],
     parameters: {
       type: "object",
@@ -1255,7 +1255,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "inspectMppService",
     description:
-      "Inspect an MPP service without paying. Returns a short-lived inspection ID, exact operation IDs, methods, paths, request shapes, multi-method payment offers, and limitations from the Services MCP/OpenAPI data. Always inspect immediately before callMppService. Runtime 402 challenges remain authoritative.",
+      "Inspect an MPP service without paying. Returns a short-lived inspection ID, exact operation IDs, methods, paths, request shapes, multi-method payment offers, and limitations from the Services MCP/OpenAPI data. When the directory schema is incomplete, it also retrieves a bounded relevant page from the provider's official llms.txt documentation; include usageIntent so the right page is selected. Always inspect immediately before callMppService. Runtime 402 challenges remain authoritative.",
     userVisible: true,
     mutates: false,
     group: "external",
@@ -1267,7 +1267,8 @@ export const toolRegistry: ToolRegistryEntry[] = [
     parameters: {
       type: "object",
       properties: {
-        serviceIdOrUrl: { type: "string", description: "Exact service id returned by discovery or a public HTTPS MPP service URL." }
+        serviceIdOrUrl: { type: "string", description: "Exact service id returned by discovery or a public HTTPS MPP service URL." },
+        usageIntent: { type: "string", description: "Concise current task, constraints, and desired result. Used only to select the most relevant official provider documentation when endpoint schemas are incomplete." }
       },
       required: ["serviceIdOrUrl"],
       additionalProperties: false

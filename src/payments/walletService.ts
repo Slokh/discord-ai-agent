@@ -43,7 +43,8 @@ export type BotPaymentStatus = {
 };
 
 export class WalletService {
-  private tokenPromise: Promise<TokenInfo> | null = null;
+  private gameTokenPromise: Promise<TokenInfo> | null = null;
+  private mppFundingTokenPromise: Promise<TokenInfo> | null = null;
 
   constructor(
     private readonly config: AppConfig["payments"],
@@ -118,7 +119,7 @@ export class WalletService {
     chainId: number;
   }> {
     const wallet = await this.ensureBotWallet(SHARED_BOT_GUILD_ID, record);
-    const balance = await this.getBalance(wallet);
+    const balance = await this.getMppFundingBalance(wallet);
     const balanceNumber = Number(balance.formatted);
     const thresholdUsd = Math.max(this.config.mpp.botDailyUsd, this.config.mpp.maxCallUsd);
     const status = balanceNumber < thresholdUsd ? "low_balance" : "ok";
@@ -480,8 +481,19 @@ export class WalletService {
   }
 
   private gameToken(): Promise<TokenInfo> {
-    this.tokenPromise ??= this.provider.resolveToken(this.config.gameToken);
-    return this.tokenPromise;
+    this.gameTokenPromise ??= this.provider.resolveToken(this.config.gameToken);
+    return this.gameTokenPromise;
+  }
+
+  private async getMppFundingBalance(account: WalletAccount): Promise<{
+    token: TokenInfo;
+    amountAtomic: bigint;
+    formatted: string;
+  }> {
+    this.mppFundingTokenPromise ??= this.provider.resolveToken(this.config.mpp.fundingToken);
+    const token = await this.mppFundingTokenPromise;
+    const amountAtomic = await this.provider.getBalance({ wallet: activeManagedWallet(account), token });
+    return { token, amountAtomic, formatted: atomicToUsd(amountAtomic, token.decimals) };
   }
 }
 

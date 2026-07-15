@@ -3,6 +3,74 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("forces a bare balance request through the shared MPP wallet tool when user wallets are disabled", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{ id: "wallet-call", name: "getBotPaymentStatus", argumentsText: "{}" }]
+      })
+      .mockResolvedValueOnce({
+        content: "I have $1 available for paid services.",
+        model: "router-model",
+        raw: {},
+        toolCalls: []
+      });
+    const getBotPaymentStatus = vi.fn(async () => ({
+      wallet: {
+        address: `0x${"1".repeat(40)}`,
+        network: "mainnet",
+        chainId: 4217,
+        token: "USDC.e",
+        balanceUsd: "1",
+        health: "low_balance"
+      },
+      policy: { autoApproveUsd: 0.05, maxCallUsd: 0.5, userDailyUsd: 2, botDailyUsd: 10 },
+      spend: { todayUsd: "0", remainingBotDailyUsd: "10" },
+      recentAttempts: []
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: false,
+          mppEnabled: true,
+          privyAppId: "app",
+          privyAppSecret: "secret"
+        }
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined)
+      },
+      walletService: { getBotPaymentStatus },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: []
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "balance");
+
+    expect(response.content).toBe("I have $1 available for paid services.");
+    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: { type: "function", function: { name: "getBotPaymentStatus" } }
+    }));
+    expect(getBotPaymentStatus).toHaveBeenCalledWith("g", 5, expect.any(Function));
+    const walletResult = (chat.mock.calls[1]?.[0] as { messages?: Array<{ role: string; content: string }> }).messages
+      ?.find((message) => message.role === "tool")?.content;
+    expect(walletResult).toContain("Balance: $1");
+    expect(walletResult).not.toContain("USDC.e");
+  });
+
   it("retries malformed tool calls with the original reply context and toolset", async () => {
     const traceEvents: any[] = [];
     const auditTool = vi.fn(async () => undefined);
@@ -142,6 +210,116 @@ describe("agent router", () => {
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
       .toBe(true);
+  });
+
+  it("rejects fabricated live fares and retries with fresh retrieval tools", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "United is cheapest at $841 round-trip this fall.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Fresh search results do not expose a bookable fare without exact travel dates. How long should the trip be?",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "hosted-search-1",
+          name: "openrouter:web_search",
+          argumentsText: JSON.stringify({ query: "NYC Japan nonstop round trip fall 2026 fares" }),
+        }],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Find the cheapest nonstop round-trip flights from NYC to Japan this fall.",
+    );
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(response.content).toContain("How long should the trip be?");
+    const retryRequest = (chat.mock.calls[1]?.[0] ?? {}) as {
+      messages?: Array<{ role: string; content: string }>;
+      tools?: Array<{ type?: string }>;
+      toolChoice?: string;
+    };
+    expect(retryRequest.toolChoice).toBe("required");
+    expect(retryRequest.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "openrouter:web_search" }),
+    ]));
+    expect(retryRequest.messages?.some((message) =>
+      message.role === "system" && message.content.includes("time-sensitive request without fresh tool evidence")
+    )).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.fresh_external_data_guard.rejected"))
+      .toBe(true);
+  });
+
+  it("forces free MPP discovery after an ungrounded structured-price draft when MPP is configured", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "The cheapest fare is $841.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "I couldn't verify a live fare.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          mppEnabled: true,
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "Find the cheapest nonstop round-trip flights this fall.");
+
+    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: {
+        type: "function",
+        function: { name: "discoverMppServices" },
+      },
+    }));
   });
 
   it("stops recovery calls at the per-turn model call ceiling", async () => {
@@ -1618,6 +1796,70 @@ describe("agent router", () => {
         expect.objectContaining({ role: "system", content: expect.stringContaining("Write one natural Discord reply") })
       ])
     );
+  });
+
+  it("lets the model pivot after same-evidence calls issued together in one round", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const keywordSearch = vi.fn(async () => [agentSearchResult()]);
+    const recentMessagesFromChannels = vi.fn(async () => [agentSearchResult({
+      messageId: "fresh-message",
+      normalizedContent: "A newer result",
+    })]);
+    const ctx = {
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        keywordSearch,
+        vectorSearch: vi.fn(async () => []),
+        recentMessagesFromChannels,
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool,
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: "",
+            model: "router-model",
+            raw: {},
+            toolCalls: ["jobs", "careers", "interviews"].map((query, index) => ({
+              id: `call-${index + 1}`,
+              name: "searchDiscordHistory",
+              argumentsText: JSON.stringify({ query }),
+            })),
+          })
+          .mockResolvedValueOnce({
+            content: "",
+            model: "pivot-model",
+            raw: {},
+            toolCalls: [{
+              id: "call-pivot",
+              name: "getRecentDiscordMessages",
+              argumentsText: JSON.stringify({ limit: 10 }),
+            }],
+          })
+          .mockResolvedValueOnce({
+            content: "The newer result changed the answer.",
+            model: "final-model",
+            raw: {},
+            toolCalls: [],
+          }),
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "find recent job updates");
+
+    expect(response.content).toBe("The newer result changed the answer.");
+    expect(keywordSearch).toHaveBeenCalledTimes(3);
+    expect(recentMessagesFromChannels).toHaveBeenCalledTimes(1);
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
+    expect((ctx.openRouter.chat as any).mock.calls[1][0].tools).toBeDefined();
   });
 
   it("lets the model answer after message context evidence", async () => {

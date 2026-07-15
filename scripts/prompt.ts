@@ -45,7 +45,11 @@ async function main() {
     { runMigrations },
     { createPool },
     { DiscordAiAgentRepository },
+    { PaymentRepository },
     { OpenRouterClient },
+    { PrivyTempoWalletProvider },
+    { WalletService },
+    { MppService },
     { startJobs },
     { runWithTrace }
   ] = await Promise.all([
@@ -54,7 +58,11 @@ async function main() {
     import("../src/db/migrate.js"),
     import("../src/db/pool.js"),
     import("../src/db/repositories.js"),
+    import("../src/db/paymentRepository.js"),
     import("../src/models/openrouter.js"),
+    import("../src/payments/privyTempoWalletProvider.js"),
+    import("../src/payments/walletService.js"),
+    import("../src/payments/mppService.js"),
     import("../src/jobs/queue.js"),
     import("../src/util/trace.js")
   ]);
@@ -67,7 +75,21 @@ async function main() {
 
   const pool = createPool(config);
   const repo = new DiscordAiAgentRepository(pool);
+  const paymentRepo = new PaymentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
+  const walletProvider = config.payments.walletEnabled && config.payments.privyAppId && config.payments.privyAppSecret
+    ? new PrivyTempoWalletProvider({
+        appId: config.payments.privyAppId,
+        appSecret: config.payments.privyAppSecret,
+        network: config.payments.tempoNetwork
+      })
+    : undefined;
+  const walletService = walletProvider
+    ? new WalletService(config.payments, paymentRepo, walletProvider)
+    : undefined;
+  const mppService = config.payments.mppEnabled && walletService
+    ? new MppService(config.payments, paymentRepo, walletService)
+    : undefined;
   const jobs = await startJobs({
     config,
     repo,
@@ -155,6 +177,8 @@ async function main() {
               repo,
               openRouter,
               jobs,
+              walletService,
+              mppService,
               guildId,
               channelId: currentChannel.id,
               userId: args.userId,

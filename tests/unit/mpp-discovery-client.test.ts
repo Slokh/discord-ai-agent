@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
 import {
+  hydrateProfileFromOfficialDocumentation,
   hydrateProfileFromAdvertisedOpenApi,
   MppDiscoveryClient,
   operationsFromOpenApi
@@ -87,6 +88,7 @@ describe("MPP discovery", () => {
       baseUrl: "https://8.8.8.8/mpp/company-enrich",
       categories: ["data"],
       status: "active",
+      documentation: null,
       discoverySource: "services_mcp",
       limitations: ["The directory returned a registry summary rather than a full OpenAPI document; request fields may be incomplete."],
       operations: [{
@@ -119,6 +121,52 @@ describe("MPP discovery", () => {
         offers: [expect.objectContaining({ amount: "10000" })]
       })
     ]);
+  });
+
+  it("hydrates missing request schemas from the most relevant official llms.txt page", async () => {
+    const config = loadConfig().payments.mpp;
+    const fetchImpl = vi.fn(async (target: string | URL | Request) => {
+      const url = new URL(target instanceof Request ? target.url : target.toString());
+      if (url.pathname === "/llms.txt") {
+        return new Response([
+          "# Provider API docs",
+          "- [Google Flights API](https://8.8.8.8/google-flights-api.md): Exact date flight search.",
+          "- [Google Flights Deals API](https://8.8.8.8/google-flights-deals-api.md): Flexible dates and lowest prices."
+        ].join("\n"));
+      }
+      if (url.pathname === "/google-flights-deals-api.md") {
+        return new Response("# Google Flights Deals API\n`engine=google_flights_deals`\n`stops=1` means nonstop only.");
+      }
+      return new Response("missing", { status: 404 });
+    }) as unknown as typeof fetch;
+    const profile = await hydrateProfileFromOfficialDocumentation({
+      serviceId: "serpapi",
+      name: "SerpApi",
+      description: "Google Flights search with real-time prices",
+      baseUrl: "https://1.1.1.1/mpp/serpapi",
+      categories: ["search"],
+      status: "active",
+      operations: [{
+        operationId: "get_search",
+        method: "GET",
+        path: "/search",
+        summary: "Google Flights search",
+        requestShape: null,
+        offers: []
+      }],
+      documentation: null,
+      discoverySource: "services_mcp",
+      limitations: []
+    }, {
+      id: "serpapi",
+      url: "https://8.8.8.8"
+    }, "cheapest nonstop round-trip flights with flexible fall dates", config, fetchImpl);
+
+    expect(profile.documentation).toEqual(expect.objectContaining({
+      pageUrl: "https://8.8.8.8/google-flights-deals-api.md",
+      title: "Google Flights Deals API",
+      excerpt: expect.stringContaining("stops=1")
+    }));
   });
 
   it("falls back to the public catalog and prefers the callable serviceUrl over the provider homepage", async () => {

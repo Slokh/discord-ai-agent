@@ -22,6 +22,17 @@ export const CONTEXT_DISCIPLINE_GUIDANCE =
   "Do not infer birthdays, anniversaries, or personal dates from the current date or request timestamp; state them only when the current request, reply chain, or fresh tool evidence provides them. ";
 export const TOOL_RESULT_PROMPT_BYTE_LIMIT = 12 * 1024;
 
+export function currentDataGuidance(now = new Date()): ChatMessage {
+  return {
+    role: "system",
+    content:
+      `Current UTC date: ${now.toISOString().slice(0, 10)}. Resolve relative dates such as today, this weekend, and this fall against this date. ` +
+      "For current prices, fares, schedules, availability, weather, or other time-sensitive facts, never answer from model memory or claim you found results without fresh tool evidence from this turn. Use web_search first. " +
+      "Generic snippets, historical averages, and undated estimates are not sufficient evidence for actual purchasable offers. If public-web evidence cannot provide dated, bookable results and MPP tools are available, discover, inspect, and call a relevant specialized service. " +
+      "If an exact lookup requires a missing date, duration, location, or other parameter, ask the shortest necessary follow-up instead of inventing values.",
+  };
+}
+
 export function chatMessages(
   text: string,
   skills: string,
@@ -81,6 +92,7 @@ export function chatMessages(
         "Before claiming you cannot do something, check your available tools first.",
     },
     ...requesterMessagesForPrompt(requester),
+    currentDataGuidance(),
     {
       role: "system" as const,
       content: `Loaded skills:\n${skills || "No skills loaded."}`,

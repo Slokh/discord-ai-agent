@@ -14,10 +14,10 @@ export async function discoverMppServices(
   return result;
 }
 
-export async function inspectMppService(ctx: ToolContext, serviceIdOrUrl?: string): Promise<string> {
+export async function inspectMppService(ctx: ToolContext, serviceIdOrUrl?: string, usageIntent?: string): Promise<string> {
   if (!ctx.mppService) return unavailable();
-  const result = await ctx.mppService.inspect(serviceIdOrUrl, paymentRecorder(ctx));
-  await audit(ctx, "inspectMppService", { serviceIdOrUrl }, result);
+  const result = await ctx.mppService.inspect(serviceIdOrUrl, usageIntent, paymentRecorder(ctx));
+  await audit(ctx, "inspectMppService", { serviceIdOrUrl, usageIntent }, result);
   return result;
 }
 

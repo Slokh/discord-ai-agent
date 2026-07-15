@@ -6,7 +6,7 @@ Owns Privy application wallets, Tempo transfers, generic wagers, and MPP paid-se
 
 - `walletProvider.ts` and `privyTempoWalletProvider.ts`: wallet-provider contract, deterministic Privy wallet provisioning, Tempo clients, signing, and bot-funded transaction fees.
 - `walletService.ts`: network-scoped shared/user wallet lifecycle, conversational shared-wallet status snapshots, balances, transfer submission, wager settlement, reconciliation, and bot-wallet runtime health.
-- `mppDiscoveryClient.ts`: official MPP Services MCP discovery plus bounded public-catalog/OpenAPI fallbacks. Discovery and inspection are always free.
+- `mppDiscoveryClient.ts`: official MPP Services MCP discovery plus bounded public-catalog/OpenAPI and official `llms.txt` documentation fallbacks. Discovery and inspection are always free.
 - `mppService.ts`: short-lived inspected capabilities, semantic effect/authorization policy, official `mppx` negotiation, durable spend limits, receipt validation, response trust boundaries, and bounded result conversion.
 - `safeHttp.ts`: public-HTTPS enforcement, connection-time DNS validation, origin-bound redirects, and the shared safe fetch path for discovery and calls.
 - `reconciler.ts`: uncertain/submitted transfer reconciliation, stale wager expiry, and periodic wallet health checks.

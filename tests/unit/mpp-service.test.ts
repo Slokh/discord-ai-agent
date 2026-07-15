@@ -21,6 +21,7 @@ function profile(): MppServiceProfile {
     baseUrl: "https://8.8.8.8/api",
     categories: ["data"],
     status: "active",
+    documentation: null,
     discoverySource: "services_mcp",
     limitations: [],
     operations: [
@@ -102,7 +103,7 @@ async function inspect(service: MppService): Promise<string> {
   return inspectionId;
 }
 
-function paymentChallenge(amount = "0") {
+function paymentChallenge(amount = "0", challengeDecimals: number | null = 6) {
   return Challenge.from({
     id: `challenge-${amount}`,
     realm: "8.8.8.8",
@@ -111,21 +112,21 @@ function paymentChallenge(amount = "0") {
     request: {
       amount,
       currency,
-      decimals: 6,
+      ...(challengeDecimals == null ? {} : { decimals: challengeDecimals }),
       recipient,
       methodDetails: { chainId: tempoModerato.id }
     }
   });
 }
 
-function paidFetch(options: { amount?: string; includeReceipt?: boolean } = {}): typeof fetch {
+function paidFetch(options: { amount?: string; includeReceipt?: boolean; challengeDecimals?: number | null } = {}): typeof fetch {
   let calls = 0;
   return vi.fn(async () => {
     calls += 1;
     if (calls === 1) {
       return new Response(null, {
         status: 402,
-        headers: { "WWW-Authenticate": Challenge.serialize(paymentChallenge(options.amount ?? "0")) }
+        headers: { "WWW-Authenticate": Challenge.serialize(paymentChallenge(options.amount ?? "0", options.challengeDecimals === undefined ? 6 : options.challengeDecimals)) }
       });
     }
     const headers = new Headers({ "content-type": "application/json" });
@@ -158,6 +159,25 @@ describe("MppService", () => {
     expect(inspected).toContain("tempo/charge $0.001");
   });
 
+  it("warns the model not to guess missing request schemas", async () => {
+    const { service, discovery } = setup();
+    vi.mocked(discovery.inspectService).mockResolvedValueOnce({
+      ...profile(),
+      operations: [{
+        operationId: "get_roundtrip_rest",
+        method: "GET",
+        path: "/roundtrip/:rest*",
+        summary: "Round-trip flight search",
+        requestShape: null,
+        offers: [],
+      }],
+    });
+
+    const inspected = await service.inspect("flightapi");
+    expect(inspected).toContain("Do not guess fields or wildcard layouts");
+    expect(inspected).toContain("choose another inspected service with a complete schema");
+  });
+
   it("calls only an inspected operation and labels free response data as untrusted", async () => {
     const { service, repo } = setup();
     const inspectionId = await inspect(service);
@@ -172,6 +192,62 @@ describe("MppService", () => {
       operationId: "get_forecast",
       requestUrl: "https://8.8.8.8/api/forecast/New%20York"
     }));
+  });
+
+  it("resolves colon wildcard paths from catalog-only MPP services without escaping the origin", async () => {
+    const { service, repo, discovery } = setup();
+    const wildcardProfile: MppServiceProfile = {
+      ...profile(),
+      operations: [{
+        operationId: "get_roundtrip_rest",
+        method: "GET",
+        path: "/roundtrip/:rest*",
+        summary: "Round-trip flight search",
+        requestShape: "path rest:string required",
+        offers: [],
+      }],
+    };
+    vi.mocked(discovery.inspectService).mockResolvedValueOnce(wildcardProfile);
+    const inspectionId = await inspect(service);
+
+    await expect(service.call(
+      { guildId: "guild", userId: "user", executionId: "execution", requestText: "find a flight" },
+      {
+        inspectionId,
+        operationId: "get_roundtrip_rest",
+        pathParams: { rest: "JFK/HND/2026-09-15/2026-09-25/1/0/0/Economy" },
+        effect: "read_only",
+      },
+    )).resolves.toEqual(expect.objectContaining({ status: "ok" }));
+    expect(repo.beginMppAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      requestUrl: "https://8.8.8.8/api/roundtrip/JFK/HND/2026-09-15/2026-09-25/1/0/0/Economy",
+    }));
+  });
+
+  it("rejects traversal segments in catalog wildcard paths", async () => {
+    const { service, discovery } = setup();
+    vi.mocked(discovery.inspectService).mockResolvedValueOnce({
+      ...profile(),
+      operations: [{
+        operationId: "get_roundtrip_rest",
+        method: "GET",
+        path: "/roundtrip/:rest*",
+        summary: "Round-trip flight search",
+        requestShape: "path rest:string required",
+        offers: [],
+      }],
+    });
+    const inspectionId = await inspect(service);
+
+    await expect(service.call(
+      { guildId: "guild", userId: "user", executionId: "execution", requestText: "find a flight" },
+      {
+        inspectionId,
+        operationId: "get_roundtrip_rest",
+        pathParams: { rest: "JFK/../admin" },
+        effect: "read_only",
+      },
+    )).rejects.toThrow(/invalid path segment/);
   });
 
   it("rejects operations that were not part of the fresh inspection", async () => {
@@ -196,6 +272,25 @@ describe("MppService", () => {
     expect(repo.markMppAttempt).toHaveBeenCalledWith("mpp_test", "paid", expect.objectContaining({
       receipt: expect.objectContaining({ reference: "0xreceipt", status: "success" })
     }));
+  });
+
+  it("uses verified onchain decimals when a current MPP challenge omits the redundant field", async () => {
+    const { service, repo } = setup(paidFetch({ challengeDecimals: null }));
+    const inspectionId = await inspect(service);
+    await expect(service.call(
+      { guildId: "guild", userId: "user", executionId: "execution", requestText: "forecast NYC" },
+      { inspectionId, operationId: "get_forecast", pathParams: { city: "NYC" }, effect: "read_only" }
+    )).resolves.toEqual(expect.objectContaining({ status: "ok" }));
+    expect(repo.authorizeMppPayment).toHaveBeenCalledWith(expect.objectContaining({ decimals: 6 }));
+  });
+
+  it("still rejects challenge decimals that contradict verified onchain metadata", async () => {
+    const { service } = setup(paidFetch({ challengeDecimals: 18 }));
+    const inspectionId = await inspect(service);
+    await expect(service.call(
+      { guildId: "guild", userId: "user", executionId: "execution", requestText: "forecast NYC" },
+      { inspectionId, operationId: "get_forecast", pathParams: { city: "NYC" }, effect: "read_only" }
+    )).rejects.toThrow(/decimals do not match/);
   });
 
   it("marks a paid retry uncertain when Payment-Receipt is absent", async () => {

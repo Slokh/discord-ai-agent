@@ -1172,7 +1172,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "getWalletBalance",
     description:
-      "Read a verified current onchain USD wallet balance. Defaults to the current Discord requester; use owner=bot for the bot treasury. Only payment admins may pass owner=user to inspect another Discord user's wallet. ALWAYS call this instead of answering from memory whenever the user asks about a wallet, balance, bankroll, casino funds, or available money. Wallets are provisioned automatically and every displayed dollar is backed by USDC.e; present it simply as $ or USD.",
+      "Read a verified current onchain USD wallet balance. Use owner=requester for 'my/mine' and unqualified balance requests; use owner=bot for 'your/yours', the bot, or the bot treasury. Only payment admins may pass owner=user to inspect another Discord user's wallet. ALWAYS call this instead of answering from memory whenever the user asks about a wallet, balance, bankroll, casino funds, or available money. Wallets are provisioned automatically and every displayed dollar is backed by USDC.e; present it simply as $ or USD.",
     userVisible: true,
     mutates: false,
     group: "external",

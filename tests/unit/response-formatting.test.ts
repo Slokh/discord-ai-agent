@@ -88,6 +88,34 @@ describe("Discord response formatting", () => {
     expect(formatDiscordMarkdownTables(content)).toBe(content);
   });
 
+  it("converts multi-row two-column key/value tables with empty headers", () => {
+    expect(
+      formatDiscordMarkdownTables(
+        [
+          "**MPP Wallet Status** 💰",
+          "",
+          "| | |",
+          "|---|---|",
+          "| **Address** | `0x7D8B7aC6a16F9Ad5a647Dd4837c270b460b1A462` |",
+          "| **Balance** | $0.97 |",
+          "| **Health** | ⚠️ Low balance |",
+          "| **Today's spend** | $0 / $10 |",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "**MPP Wallet Status** 💰",
+        "",
+        "```text",
+        "Address        0x7D8B7aC6a16F9Ad5a647Dd4837c270b460b1A462",
+        "Balance        $0.97",
+        "Health         ⚠️ Low balance",
+        "Today's spend  $0 / $10",
+        "```",
+      ].join("\n"),
+    );
+  });
+
   it("converts multi-row headerless grids into padded code blocks", () => {
     expect(
       formatDiscordMarkdownTables(

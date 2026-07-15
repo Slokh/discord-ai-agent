@@ -204,7 +204,7 @@ function isMarkdownTableShape(
 }
 
 function isHeaderlessMarkdownGrid(header: string[], rows: string[][]) {
-  return header.length >= 3 &&
+  return header.length >= 2 &&
     header.every((cell) => !cell) &&
     rows.length >= 2 &&
     rows.every((row) => row.some(Boolean));

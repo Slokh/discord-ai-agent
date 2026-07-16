@@ -14,6 +14,7 @@ export type ToolScopeInput = {
   hasFileAttachments?: boolean;
   config: AppConfig;
   replyContext?: boolean;
+  replyContextText?: string;
 };
 
 export type ScopedToolset = {
@@ -26,16 +27,19 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   const text = input.text.toLowerCase();
   const groups = new Set<ToolGroup>(["core", "external"]);
   const bugInboxIntent = hasAny(text, BUG_INBOX_KEYWORDS);
+  const replyContextText = input.replyContextText?.toLowerCase() ?? "";
 
   if (bugInboxIntent || hasAny(text, DISCORD_RETRIEVAL_KEYWORDS)) groups.add("discord-retrieval");
   if (input.hasFileAttachments) groups.add("discord-retrieval");
   if (input.replyContext && hasAny(text, REPLY_FILE_KEYWORDS)) groups.add("discord-retrieval");
   if (hasAny(text, GENERATED_DATA_KEYWORDS)) groups.add("generated-data");
   if (hasAny(text, DISCORD_ACTION_KEYWORDS)) groups.add("discord-action");
+  if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("discord-action");
   if (input.hasImageAttachments || hasAny(text, IMAGE_KEYWORDS)) groups.add("image");
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
   if (isCodegenConfigured(input.config) && (hasAny(text, CODEGEN_KEYWORDS) || (bugInboxIntent && BUG_FIX_INTENT.test(text)))) groups.add("codegen");
   if (hasAny(text, OPS_KEYWORDS)) groups.add("ops");
+  if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("ops");
   if (input.replyContext && hasAny(text, REPLY_OPS_KEYWORDS)) groups.add("ops");
 
   return groups;
@@ -165,6 +169,8 @@ const DISCORD_ACTION_KEYWORDS = [
   /\b(random|randomly|randomness|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
   /\b(reveal)\b.*\b(random|randomness|seed|proof|commitment)\b/,
 ];
+
+const EMOJI_CONTEXT = /\b(?:custom|server)\s+emojis?\b|<a?:[a-z0-9_]+:\d+>/i;
 
 const SPOTIFY_KEYWORDS = [
   /\bspotify\b/,

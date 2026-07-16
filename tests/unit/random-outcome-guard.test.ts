@@ -151,6 +151,19 @@ describe("random outcome guard", () => {
     expect(guard.requiresWagerResolution()).toBe(false);
   });
 
+  it("requires resolution but lets the model choose settle or pause for an interactive opening draw", () => {
+    const guard = new RandomOutcomeGuard({} as ToolContext, "bet $2 on blackjack");
+    guard.noteToolResult("drawRandom", [
+      "Provably fair draw complete.",
+      "Result: blackjack deal",
+      "The scoped wallet wager is reserved.",
+      "Required next action: settle a terminal result or persist a genuine player decision.",
+    ].join("\n"));
+
+    expect(guard.requiresWagerResolution()).toBe(true);
+    expect(guard.requiredWagerResolutionTool()).toBeNull();
+  });
+
   it.each([
     "awaitRandomWagerAction",
     "settleRandomWager",

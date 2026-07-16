@@ -258,6 +258,8 @@ export async function executeLocalToolRoute(
         "referenceImageUrls",
       ),
       useContextImages: booleanArgument(route.arguments, "useContextImages"),
+      outputFormat: stringArgument(route.arguments, "outputFormat") as "png" | "jpeg" | "webp" | undefined,
+      background: stringArgument(route.arguments, "background") as "auto" | "transparent" | "opaque" | undefined,
     });
     return {
       content: cleanResponse(image.content, ctx.config.maxReplyChars),

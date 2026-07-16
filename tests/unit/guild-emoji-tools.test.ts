@@ -55,6 +55,45 @@ describe("createDiscordEmoji", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining("upload failed") }));
   });
 
+  it("refuses an opaque generated image before uploading it as a transparent emoji", async () => {
+    const opaqueJpeg = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 220, g: 220, b: 220 } },
+    }).jpeg().toBuffer();
+    const create = vi.fn();
+    const ctx = context({
+      generatedFiles: [{ name: "checkerboard.jpg", data: opaqueJpeg, contentType: "image/jpeg" }],
+      createDiscordEmoji: create,
+    });
+
+    const response = await createDiscordEmoji(ctx, { name: "checkerboard" });
+
+    expect(response).toContain("does not contain verified alpha transparency");
+    expect(response).toContain("checkerboard drawn into a JPEG/PNG is still an opaque background");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("allows an intentionally opaque generated emoji when explicitly requested", async () => {
+    const opaqueJpeg = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 220, g: 220, b: 220 } },
+    }).jpeg().toBuffer();
+    const create = vi.fn(async () => ({
+      id: "emoji-opaque",
+      name: "tile",
+      animated: false,
+      mention: "<:tile:emoji-opaque>",
+      url: "https://cdn.discordapp.com/emojis/emoji-opaque.webp",
+    }));
+    const ctx = context({
+      generatedFiles: [{ name: "tile.jpg", data: opaqueJpeg, contentType: "image/jpeg" }],
+      createDiscordEmoji: create,
+    });
+
+    const response = await createDiscordEmoji(ctx, { name: "tile", requireTransparent: false });
+
+    expect(response).toContain("opaque source retained by request");
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it("accepts an explicit data image URL", async () => {
     const create = vi.fn(async (_input: Parameters<NonNullable<ToolContext["createDiscordEmoji"]>>[0]) => ({
       id: "emoji-2",

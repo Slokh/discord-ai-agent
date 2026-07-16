@@ -754,7 +754,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "generateImage",
     description:
-      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for make/draw/generate image requests and for edits like 'make this into...', 'modify this', or 'use the attached image as a reference'.",
+      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for explicit make/draw/generate/regenerate requests and edits like 'make this into...', 'modify this', or 'use the attached image as a reference'. Do not call it for diagnosis-only questions such as why an image has a background or what format it uses unless the user also asks to change or regenerate the image. For emojis, stickers, cutouts, or background removal, request background=transparent and outputFormat=png; the tool also infers those settings from an explicit transparent/emoji/sticker prompt and reports the actual returned format and alpha status.",
     userVisible: true,
     mutates: false,
     group: "image",
@@ -773,6 +773,16 @@ export const toolRegistry: ToolRegistryEntry[] = [
         useContextImages: {
           type: "boolean",
           description: "Whether to include images attached to the current request or replied-to chain as references. Defaults to true when context images exist."
+        },
+        outputFormat: {
+          type: "string",
+          enum: ["png", "jpeg", "webp"],
+          description: "Requested image file format. Use png with a transparent background."
+        },
+        background: {
+          type: "string",
+          enum: ["auto", "transparent", "opaque"],
+          description: "Requested background treatment. Use transparent for emojis, stickers, cutouts, and explicit background removal."
         }
       },
       required: ["prompt"],
@@ -1586,7 +1596,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "createDiscordEmoji",
     description:
-      "Create a custom emoji in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, or create a server/custom emoji. The image is normalized to a transparent 128x128 WebP under Discord's 256 KiB limit; short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
+      "Create a custom emoji in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, or create a server/custom emoji. The image is normalized to a 128x128 WebP with transparent padding under Discord's 256 KiB limit; existing source backgrounds are never falsely treated as transparency. Generated sources require verified alpha by default and fail before upload when they are opaque. Short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -1612,6 +1622,10 @@ export const toolRegistry: ToolRegistryEntry[] = [
         useContextImage: {
           type: "boolean",
           description: "Whether to fall back to images in the current request or reply chain. Defaults to true."
+        },
+        requireTransparent: {
+          type: "boolean",
+          description: "Require real alpha transparency and refuse an opaque source before upload. Defaults to true for generated images and false for other sources."
         }
       },
       required: ["name"],
@@ -1752,7 +1766,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "awaitRandomWagerAction",
     description:
-      "Pause an active wallet-backed game and persist everything needed for the original player to continue it in later Discord replies. Use after a wagered draw when the game has a real player decision, and again after each non-final action. State must include the full public game state, prior outcomes needed for verification, unused pre-drawn outcomes or RNG cursor information, rules, and any totals needed to continue without guessing. allowedActions must list the exact choices accepted next. On a later reply, use the state version injected into context as expectedVersion, apply only the requester's selected allowed action, then either persist the next state or settle a final outcome. Never create another wager for the same game.",
+      "Pause an active wallet-backed game and persist everything needed for the original player to continue it in later Discord replies. Use only when the game has a real unresolved gameplay decision, and again after each non-final action. If the verified draw already produced a terminal win, loss, or push, call settleRandomWager immediately instead; never invent confirm, acknowledge, resolve, or settle as a player action. State must include the full public game state, prior outcomes needed for verification, unused pre-drawn outcomes or RNG cursor information, rules, and any totals needed to continue without guessing. allowedActions must list the exact gameplay choices accepted next. On a later reply, use the state version injected into context as expectedVersion, apply only the requester's selected allowed action, then either persist the next state or settle a final outcome. Never create another wager for the same game.",
     userVisible: false,
     mutates: true,
     group: "discord-action",
@@ -1784,7 +1798,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "settleRandomWager",
     description:
-      "Settle the active wallet-backed wager created by drawRandom in this player's scoped Discord game session. The runtime resolves the canonical wager automatically; never supply or repeat an internal wager id. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. Interactive games may span replies through awaitRandomWagerAction; they cannot settle until a later Discord reply supplies the player's decision. Never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. outcome must agree with whether payoutUsd is above, below, or equal to the stake. Use resolutionSource=verified_randomness for automatic games and player_decision only when a persisted decision was resolved by the current reply. The service validates these facts before creating a transfer.",
+      "Settle the active wallet-backed wager created by drawRandom in this player's scoped Discord game session. The runtime resolves the canonical wager automatically; never supply or repeat an internal wager id. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. A nominally interactive game must settle immediately with resolutionSource=verified_randomness when its opening draw is already terminal, such as a natural blackjack; it spans replies through awaitRandomWagerAction only when a genuine gameplay decision remains. Never ask the player to confirm a completed outcome, and never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. outcome must agree with whether payoutUsd is above, below, or equal to the stake. Use resolutionSource=verified_randomness for an outcome completely determined by the draw and player_decision only when a persisted decision was resolved by a later reply. The service validates these facts before creating a transfer.",
     userVisible: false,
     mutates: true,
     group: "discord-action",

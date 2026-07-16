@@ -234,6 +234,21 @@ describe("tool scoping", () => {
     expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "createDiscordEmoji")).toBe(true);
   });
 
+  it("keeps emoji lifecycle tools available in vague replies to an emoji result", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "why does it not have a transparent background?",
+      hasImageAttachments: true,
+      replyContext: true,
+      replyContextText: "Done! <:seahorse:123> is now live.",
+      config,
+    });
+
+    expect(groups.has("ops")).toBe(true);
+    expect(groups.has("discord-action")).toBe(true);
+    expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "createDiscordEmoji")).toBe(true);
+  });
+
   it("exposes avatar updates when a vague reply escalates to Discord actions", () => {
     const config = loadConfig();
     const tools = requestAdditionalToolGroups({

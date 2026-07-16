@@ -12,10 +12,13 @@ describe("wager settlement validation", () => {
     expect(() => validateSettlementOutcome("push", 0n)).not.toThrow();
   });
 
-  it("will not settle an interactive wager until saved state receives a later player reply", () => {
+  it("allows a terminal interactive opening draw to settle from verified randomness", () => {
     const wager = reservation({ interactionMode: "player_decisions" });
-    expect(() => validateSettlementEvidence(wager, "root", "verified_randomness"))
-      .toThrow(/persisted player decision/);
+    expect(() => validateSettlementEvidence(wager, "root", "verified_randomness")).not.toThrow();
+  });
+
+  it("requires saved state and a later reply for player-decision settlement", () => {
+    const wager = reservation({ interactionMode: "player_decisions" });
     expect(() => validateSettlementEvidence(wager, "root", "player_decision"))
       .toThrow(/pause with saved game state/);
 
@@ -28,6 +31,8 @@ describe("wager settlement validation", () => {
     expect(() => validateSettlementEvidence(paused, "root", "player_decision"))
       .toThrow(/new Discord reply/);
     expect(() => validateSettlementEvidence(paused, "reply", "player_decision")).not.toThrow();
+    expect(() => validateSettlementEvidence(paused, "reply", "verified_randomness"))
+      .toThrow(/paused wager/);
   });
 
   it("allows an automatic wager to settle from verified randomness in its opening request", () => {
@@ -42,7 +47,7 @@ describe("wager settlement validation", () => {
       lastActionRequestId: "root"
     });
     expect(() => validateSettlementEvidence(legacyPaused, "reply", "verified_randomness"))
-      .toThrow(/persisted player decision/);
+      .toThrow(/paused wager/);
   });
 });
 

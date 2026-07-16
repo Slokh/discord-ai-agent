@@ -1,5 +1,6 @@
 import type { ChatContentPart, ImageReference } from "../models/openrouter.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
+import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
@@ -11,6 +12,8 @@ export type GenerateImageInput = {
   prompt: string;
   referenceImageUrls?: string[];
   useContextImages?: boolean;
+  outputFormat?: "png" | "jpeg" | "webp";
+  background?: "auto" | "transparent" | "opaque";
 };
 
 export type InspectDiscordImagesInput = {
@@ -169,16 +172,21 @@ export async function generateImage(
     explicitUrls: normalizedInput.referenceImageUrls,
     useContextImages: normalizedInput.useContextImages ?? true
   });
+  const inferredTransparentBackground = normalizedInput.background == null && wantsTransparentImage(prompt);
+  const background = normalizedInput.background ?? (inferredTransparentBackground ? "transparent" : undefined);
+  const outputFormat = normalizedInput.outputFormat ?? (background === "transparent" ? "png" : undefined);
   const image = await ctx.openRouter.generateImage(prompt, {
-    inputReferences: references.map((reference): ImageReference => ({ type: "image_url", image_url: { url: reference.url } }))
+    inputReferences: references.map((reference): ImageReference => ({ type: "image_url", image_url: { url: reference.url } })),
+    ...(outputFormat ? { outputFormat } : {}),
+    ...(background ? { background } : {}),
   });
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "generateImage",
-    argumentsSummary: summarizeForAudit({ prompt, referenceImageCount: references.length }),
-    resultSummary: summarizeForAudit({ images: image.data.length, referenceImageCount: references.length }),
+    argumentsSummary: summarizeForAudit({ prompt, referenceImageCount: references.length, outputFormat, background }),
+    resultSummary: summarizeForAudit({ images: image.data.length, referenceImageCount: references.length, outputFormat, background }),
     model: image.model,
     estimatedCostUsd: image.estimatedCostUsd
   });
@@ -203,11 +211,46 @@ export async function generateImage(
 
   const promptSummary = truncateForDiscord(prompt, 240);
   const referenceSummary = references.length > 0 ? `\nUsed ${references.length} reference image${references.length === 1 ? "" : "s"}.` : "";
+  const requestedOutputSummary = background || outputFormat
+    ? `\nRequested output: ${[background ? `${background} background` : null, outputFormat?.toUpperCase()].filter(Boolean).join(", ")}.`
+    : "";
+  const actualOutputSummary = requestedOutputSummary && files.length > 0
+    ? `\nActual output: ${(await Promise.all(files.map(describeGeneratedImageFile))).join(", ")}.`
+    : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}`;
   return { content, files };
+}
+
+const TRANSPARENT_IMAGE_INTENT = /\b(?:transparent(?:\s+background)?|no\s+background|remove\s+(?:the\s+)?background|background[- ]?free|cutout|emoji|sticker)\b/i;
+
+function wantsTransparentImage(prompt: string) {
+  return TRANSPARENT_IMAGE_INTENT.test(prompt);
+}
+
+async function describeGeneratedImageFile(file: AgentFile) {
+  const contentType = file.contentType || "unknown image format";
+  try {
+    const { data, info } = await sharp(file.data, { pages: 1, limitInputPixels: 40_000_000 })
+      .toColourspace("srgb")
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const alphaOffset = info.channels - 1;
+    let hasTransparentPixel = false;
+    for (let index = alphaOffset; index < data.length; index += info.channels) {
+      if (data[index] < 255) {
+        hasTransparentPixel = true;
+        break;
+      }
+    }
+    const transparency = hasTransparentPixel ? "real alpha transparency" : "opaque";
+    return `${contentType} (${transparency})`;
+  } catch {
+    return contentType;
+  }
 }
 
 export type ImageReferenceContext = {

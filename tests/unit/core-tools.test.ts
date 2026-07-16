@@ -963,6 +963,35 @@ function topicCandidate(content: string, embedding: number[]) {
 }
 
 describe("generateImage", () => {
+  it("requests and verifies transparent PNG output for emoji generation", async () => {
+    const transparentPixel = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const generateImageMock = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{ b64_json: transparentPixel.toString("base64"), media_type: "image/png" }],
+    }));
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { generateImage: generateImageMock },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, "a cute seahorse emoji");
+
+    expect(generateImageMock).toHaveBeenCalledWith("a cute seahorse emoji", {
+      inputReferences: [],
+      outputFormat: "png",
+      background: "transparent",
+    });
+    expect(result.content).toContain("Requested output: transparent background, PNG");
+    expect(result.content).toContain("Actual output: image/png (real alpha transparency)");
+  });
+
   it("uses returned media types for attached image files and audits estimated cost", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {

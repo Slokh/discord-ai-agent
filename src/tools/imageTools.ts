@@ -280,10 +280,17 @@ export async function imageReferencesForInput(
     });
     for (const attachment of attachments) {
       if (!isImageAttachmentLike(attachment)) continue;
+      const fresh = ctx.fetchDiscordAttachment
+        ? await ctx.fetchDiscordAttachment({
+            channelId: attachment.channelId,
+            messageId: attachment.messageId,
+            attachmentId: attachment.attachmentId
+          }).catch(() => null)
+        : null;
       references.push({
-        url: attachment.url,
+        url: fresh?.url ?? attachment.url,
         label: `${attachment.filename ?? attachment.attachmentId} from ${attachment.link}`,
-        contentType: attachment.contentType,
+        contentType: fresh?.contentType ?? attachment.contentType,
         source: "message_attachment"
       });
     }

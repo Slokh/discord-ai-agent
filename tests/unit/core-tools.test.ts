@@ -1140,6 +1140,76 @@ describe("generateImage", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectDiscordImagesResult", model: "vision-model" }));
   });
 
+  it("refreshes an indexed Discord image URL before vision inspection", async () => {
+    const messageAttachments = vi.fn(async () => [
+      {
+        attachmentId: "attachment-1",
+        messageId: "123456789012345678",
+        guildId: "111111111111111111",
+        channelId: "222222222222222222",
+        authorId: "author",
+        authorUsername: "author",
+        normalizedContent: "old image",
+        createdAt: new Date(),
+        url: "https://cdn.discordapp.com/expired.png",
+        proxyUrl: null,
+        filename: "screenshot.png",
+        contentType: "image/png",
+        sizeBytes: 123,
+        link: "https://discord.com/channels/111111111111111111/222222222222222222/123456789012345678"
+      }
+    ]);
+    const fetchDiscordAttachment = vi.fn(async () => ({
+      id: "attachment-1",
+      url: "https://cdn.discordapp.com/fresh.png",
+      filename: "screenshot.png",
+      contentType: "image/png",
+      sizeBytes: 123
+    }));
+    const chat = vi.fn(async () => ({
+      content: "The historical screenshot is visible.",
+      model: "vision-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      repo: { messageAttachments, auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "111111111111111111",
+      channelId: "333333333333333333",
+      userId: "user",
+      visibleChannelIds: ["222222222222222222"],
+      visibleIndexedChannelIds: ["222222222222222222"],
+      fetchDiscordAttachment
+    } as unknown as ToolContext;
+
+    await inspectDiscordImages(ctx, {
+      messageIdOrUrl: "https://discord.com/channels/111111111111111111/222222222222222222/123456789012345678",
+      question: "what is this?",
+      useContextImages: false
+    });
+
+    expect(messageAttachments).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "123456789012345678",
+      visibleChannelIds: ["222222222222222222"]
+    }));
+    expect(fetchDiscordAttachment).toHaveBeenCalledWith({
+      channelId: "222222222222222222",
+      messageId: "123456789012345678",
+      attachmentId: "attachment-1"
+    });
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            { type: "image_url", image_url: { url: "https://cdn.discordapp.com/fresh.png" } }
+          ])
+        })
+      ])
+    }));
+  });
+
   it("falls back to image URLs when attachment fetching fails", async () => {
     vi.stubGlobal(
       "fetch",

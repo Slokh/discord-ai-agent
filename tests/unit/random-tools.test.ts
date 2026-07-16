@@ -643,6 +643,21 @@ describe("drawRandom", () => {
     expect(inferWagerInteractionMode("let's play for $1", "custom game")).toBe("player_decisions");
   });
 
+  it("does not treat incidental action words as decisions in a known automatic game", () => {
+    expect(inferWagerInteractionMode(
+      "Bet $1 coin flip, I win on heads. Resolve it: flip, then pay out. Since a fair flip is 50/50, don't waste a tool call on it.",
+      "coinflip"
+    )).toBe("automatic");
+  });
+
+  it("classifies independently generated number wagers as automatic", () => {
+    expect(inferWagerInteractionMode(
+      "generate 10 digit number, $.2 on it having a 1 in it, and $.2 on it having a 5 in it",
+      "digit-bet"
+    )).toBe("automatic");
+    expect(inferWagerInteractionMode("draw a 6-digit number", "number draw")).toBe("automatic");
+  });
+
   it("rejects wallet-backed wagers when user wallets are disabled", async () => {
     const reserveWager = vi.fn();
     const { ctx } = fakeContext({

@@ -177,13 +177,13 @@ async function runAgentModelLoopInternal(
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0,
     },
   });
-
   if (forcedWalletBalanceRoute) {
     return await executeDeterministicWalletBalanceRoute(ctx, {
       route: forcedWalletBalanceRoute,
       text,
       requestLogger,
       startedAt,
+      modelCallBudget,
     });
   }
 

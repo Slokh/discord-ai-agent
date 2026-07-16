@@ -3,8 +3,13 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
-  it("executes a bare balance request directly against the requester's verified wallet", async () => {
-    const chat = vi.fn();
+  it("uses the requester's verified wallet balance in a conversational response", async () => {
+    const chat = vi.fn(async () => ({
+      content: "You have exactly **$1.00** in your wallet.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
     const getUserWalletSummary = vi.fn(async () => ({
       wallet: { address: `0x${"1".repeat(40)}` },
       balance: { formatted: "1", token: { symbol: "USDC.e" } }
@@ -39,14 +44,23 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "balance");
 
-    expect(response.content).toContain("Your wallet: $1 USD");
+    expect(response.content).toBe("You have exactly **$1.00** in your wallet.");
     expect(response.content).not.toContain("USDC.e");
-    expect(chat).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
+    const synthesisRequest = (chat.mock.calls as any[])[0]?.[0];
+    expect(synthesisRequest.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: expect.stringContaining("Your wallet: $1 USD") }),
+    ]));
     expect(getUserWalletSummary).toHaveBeenCalledWith({ guildId: "g", userId: "u" }, expect.any(Function));
   });
 
-  it("executes 'your balance' directly against the bot wallet", async () => {
-    const chat = vi.fn();
+  it("uses the verified bot balance in a conversational response", async () => {
+    const chat = vi.fn(async () => ({
+      content: "I currently have **$5.95** available.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
     const getBotWalletSummary = vi.fn(async () => ({
       wallet: { address: `0x${"2".repeat(40)}` },
       balance: { formatted: "5.95", token: { symbol: "USDC.e" } },
@@ -82,14 +96,19 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "what's your balance?");
 
-    expect(response.content).toContain("Bot wallet: $5.95 USD");
+    expect(response.content).toBe("I currently have **$5.95** available.");
     expect(getBotWalletSummary).toHaveBeenCalledWith("g", expect.any(Function));
     expect(getUserWalletSummary).not.toHaveBeenCalled();
-    expect(chat).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
   });
 
-  it("executes server-wide balance requests directly against the live member wallet directory", async () => {
-    const chat = vi.fn();
+  it("uses the live member wallet directory in a conversational response", async () => {
+    const chat = vi.fn(async () => ({
+      content: "Only AI and Alice have positive balances:\n\n```text\nWallet  Balance\nAI      $9.5\nAlice   $2.5\n```",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
     const traceEvents: Array<{ eventName: string; metadata?: Record<string, unknown> }> = [];
     const listExistingUserWalletSummaries = vi.fn(async () => [{
       userId: "alice",
@@ -144,7 +163,7 @@ describe("agent router", () => {
 
     expect(response.content).toContain("```text\nWallet  Balance\nAI      $9.5\nAlice   $2.5\n```");
     expect(response.content).not.toContain("Bob");
-    expect(chat).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
     expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "g", userIds: ["alice", "bob"] });
     expect(traceEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({

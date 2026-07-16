@@ -40,13 +40,11 @@ export function coerceGeneratedCsvProducerRoutes(
 }
 
 export function selectNextRoundToolChoice(input: {
-  forceWagerSettlement: boolean;
+  forceWagerResolution: boolean;
   forceToolUse: boolean;
   initialWalletAction?: ForcedWalletActionTool;
 }) {
-  if (input.forceWagerSettlement) {
-    return { type: "function" as const, function: { name: "settleRandomWager" as const } };
-  }
+  if (input.forceWagerResolution) return "required" as const;
   if (input.initialWalletAction) {
     return { type: "function" as const, function: { name: input.initialWalletAction } };
   }

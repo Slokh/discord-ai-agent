@@ -63,6 +63,12 @@ export function mapWager(row: Record<string, unknown>): WagerReservation {
     settlementTransferId: row.settlement_transfer_id == null ? null : String(row.settlement_transfer_id),
     status: String(row.status) as WagerReservation["status"],
     explanation: row.explanation == null ? null : String(row.explanation),
+    awaitingAction: row.awaiting_action === true,
+    stateVersion: Number(row.state_version ?? 0),
+    decisionState: isRecord(row.decision_state) ? row.decision_state : {},
+    allowedActions: Array.isArray(row.allowed_actions) ? row.allowed_actions.map(String) : [],
+    actionPrompt: row.action_prompt == null ? null : String(row.action_prompt),
+    lastActionRequestId: row.last_action_request_id == null ? null : String(row.last_action_request_id),
     expiresAt: new Date(row.expires_at as string),
     createdAt: new Date(row.created_at as string),
     updatedAt: new Date(row.updated_at as string)

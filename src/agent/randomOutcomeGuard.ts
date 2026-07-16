@@ -30,7 +30,7 @@ const INTENT_OUTCOME_PATTERNS = [
 
 export const RANDOM_OUTCOME_RETRY_GUIDANCE =
   "Your previous draft was rejected because the verified chance workflow is incomplete. " +
-  "If no draw succeeded, call drawRandom and report its result exactly. If drawRandom reserved a wallet wager, call settleRandomWager exactly once before replying, using the exact wager id and deterministic payout calculation. " +
+  "If no draw succeeded, call drawRandom and report its result exactly. If a wallet wager is active, either call awaitRandomWagerAction to persist a complete versioned state and ask for the player's next decision, or call settleRandomWager exactly once after a final outcome. " +
   "Correct rejected arguments and retry in this turn. Never report or apply a chance outcome or money change until the required tools succeed.";
 
 export const RANDOM_OUTCOME_BLOCKED_RESPONSE =
@@ -48,6 +48,10 @@ export class RandomOutcomeGuard {
     private readonly userText: string,
   ) {}
 
+  noteActiveWager(wagerId: string) {
+    this.pendingWagerIds.add(wagerId);
+  }
+
   noteToolResult(toolName: ToolName, content: string) {
     if (toolName === "drawRandom" && isSuccessfulRandomDrawResult(content)) {
       this.successfulDraw = true;
@@ -58,9 +62,13 @@ export class RandomOutcomeGuard {
       const wagerId = content.match(/^Wager\s+(wager_[A-Za-z0-9_-]+)\s+settled\./m)?.[1];
       if (wagerId) this.pendingWagerIds.delete(wagerId);
     }
+    if (toolName === "awaitRandomWagerAction" && content.startsWith("Wallet game paused for player action.")) {
+      const wagerId = content.match(/^Wager:\s+(wager_[A-Za-z0-9_-]+)/m)?.[1];
+      if (wagerId) this.pendingWagerIds.delete(wagerId);
+    }
   }
 
-  requiresWagerSettlement() {
+  requiresWagerResolution() {
     return this.pendingWagerIds.size > 0;
   }
 

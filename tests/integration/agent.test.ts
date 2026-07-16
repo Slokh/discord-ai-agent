@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleAgentRequest } from "../../src/agent/router.js";
+import type { WagerReservation } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
@@ -235,6 +236,128 @@ describe("agent router", () => {
       requestedByUserId: "u",
       destination: { kind: "user", userId: "luke-id" },
       amountUsd: 1,
+    }), expect.any(Function));
+  });
+
+  it("resumes a generic wallet game from versioned state in a Discord reply", async () => {
+    const activeWager = {
+      id: "wager_yahtzee",
+      requestId: "root-message",
+      guildId: "g",
+      channelId: "c",
+      threadKey: "g:c:rng-root:root-message",
+      requestedByUserId: "u",
+      userWalletId: "user-wallet",
+      botWalletId: "bot-wallet",
+      game: "dice game",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 1_000_000n,
+      maxPayoutAtomic: 5_000_000n,
+      payoutAtomic: null,
+      drawId: 12,
+      settlementTransferId: null,
+      status: "drawn",
+      explanation: null,
+      awaitingAction: true,
+      stateVersion: 1,
+      decisionState: { dice: [6, 4, 6, 2, 1], rollsRemaining: 2, held: [] },
+      allowedActions: ["hold 1 and 3", "reroll all", "score now"],
+      actionPrompt: "Which dice do you want to hold?",
+      lastActionRequestId: "root-message",
+      expiresAt: new Date(Date.now() + 60_000),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } satisfies WagerReservation;
+    const getActiveGameSession = vi.fn(async () => activeWager);
+    const awaitGameAction = vi.fn(async () => ({
+      ...activeWager,
+      stateVersion: 2,
+      decisionState: { ...activeWager.decisionState, held: [1, 3] },
+      allowedActions: ["roll", "change holds", "score now"],
+      actionPrompt: "Roll the other three dice?",
+      lastActionRequestId: "reply-message",
+    }));
+    const chat = vi.fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "save-game",
+          name: "awaitRandomWagerAction",
+          argumentsText: JSON.stringify({
+            wagerId: activeWager.id,
+            expectedVersion: 1,
+            state: { ...activeWager.decisionState, held: [1, 3] },
+            allowedActions: ["roll", "change holds", "score now"],
+            prompt: "Roll the other three dice?",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Locked dice 1 and 3. Want to roll the other three, change your holds, or score now?",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { getActiveGameSession, awaitGameAction },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      threadKey: "g:c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "reply-message",
+      requestMessageId: "reply-message",
+      replyContext: {
+        messageId: "bot-prompt",
+        rootMessageId: "root-message",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "Which dice do you want to hold?",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "hold 1 and 3");
+
+    expect(response.content).toContain("Locked dice 1 and 3");
+    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ toolChoice: "required" }));
+    expect(chat.mock.calls[0]?.[0].messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "system", content: expect.stringContaining("State version: 1") }),
+      expect.objectContaining({ role: "system", content: expect.stringContaining('"rollsRemaining":2') }),
+    ]));
+    expect(awaitGameAction).toHaveBeenCalledWith(expect.objectContaining({
+      wagerId: activeWager.id,
+      userId: "u",
+      expectedVersion: 1,
+      requestId: "reply-message",
     }), expect.any(Function));
   });
 

@@ -48,7 +48,7 @@ describe("random outcome guard", () => {
       .toBe(false);
   });
 
-  it("rejects a final answer while a real-money wager remains unsettled", async () => {
+  it("rejects a final answer while a real-money wager remains unresolved", async () => {
     const guard = new RandomOutcomeGuard({
       guildId: "guild",
       channelId: "channel",
@@ -64,11 +64,25 @@ describe("random outcome guard", () => {
       "Result: heads",
       "Wager wager_abc is reserved."
     ].join("\n"));
-    expect(guard.requiresWagerSettlement()).toBe(true);
+    expect(guard.requiresWagerResolution()).toBe(true);
     await expect(guard.inspectDraft("Heads — you win $2.")).resolves.toBe("retry");
 
     guard.noteToolResult("settleRandomWager", "Wager wager_abc settled.\nPayout: $2.");
-    expect(guard.requiresWagerSettlement()).toBe(false);
+    expect(guard.requiresWagerResolution()).toBe(false);
     await expect(guard.inspectDraft("Heads — you win $2.")).resolves.toBe("allow");
+  });
+
+  it("allows a player-facing response after durable game state is saved", async () => {
+    const guard = new RandomOutcomeGuard({} as ToolContext, "hit");
+    guard.noteActiveWager("wager_abc");
+
+    guard.noteToolResult("awaitRandomWagerAction", [
+      "Wallet game paused for player action.",
+      "Wager: wager_abc",
+      "Allowed actions: hit, stand",
+    ].join("\n"));
+
+    expect(guard.requiresWagerResolution()).toBe(false);
+    await expect(guard.inspectDraft("Your total is 16. Hit or stand?")).resolves.toBe("allow");
   });
 });

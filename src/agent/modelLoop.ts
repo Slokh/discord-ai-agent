@@ -44,12 +44,7 @@ import {
   invalidToolCallRecoveryMessage,
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
-import {
-  coerceGeneratedCsvProducerRoutes,
-  selectNextRoundToolChoice,
-  selectModelToolRoutes,
-  traceToolRequestMetadata,
-} from "./modelToolRoutes.js";
+import { coerceGeneratedCsvProducerRoutes, selectNextRoundToolChoice, selectModelToolRoutes, traceToolRequestMetadata } from "./modelToolRoutes.js";
 import {
   RANDOM_OUTCOME_RETRY_GUIDANCE,
   RandomOutcomeGuard,
@@ -67,16 +62,19 @@ import {
 import { walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
 import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
+import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
 ): Promise<AgentResponse> {
   ctx.requestText = userText;
+  const activeGame = await loadActiveGameSession(ctx, userText);
   const randomOutcomeGuard = new RandomOutcomeGuard(ctx, userText);
+  if (activeGame?.actionRequested) randomOutcomeGuard.noteActiveWager(activeGame.wager.id);
   const freshExternalDataGuard = new FreshExternalDataGuard(ctx, userText);
   return await randomOutcomeGuard.enforce(
     await freshExternalDataGuard.enforce(
-      await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard),
+      await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard, activeGame),
     ),
   );
 }
@@ -86,6 +84,7 @@ async function runAgentModelLoopInternal(
   userText: string,
   randomOutcomeGuard: RandomOutcomeGuard,
   freshExternalDataGuard: FreshExternalDataGuard,
+  activeGame: ActiveGameSessionContext | null,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
   const text = userText.trim();
@@ -109,6 +108,7 @@ async function runAgentModelLoopInternal(
     },
     promptOverlay,
   );
+  injectActiveGameSession(messages, activeGame);
   const files: AgentFile[] = [];
   const tables: AgentTable[] = [];
   ctx.generatedFiles = files;
@@ -122,8 +122,8 @@ async function runAgentModelLoopInternal(
     emptyNoToolRecoveryAttempted: false,
     invalidToolCallRecoveryAttempted: false,
   };
-  let forceToolUseNextRound = false;
-  let forceWagerSettlementNextRound = false;
+  let forceToolUseNextRound = activeGame?.actionRequested ?? false;
+  let forceWagerResolutionNextRound = false;
   const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
   const forcedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
   const modelCallBudget: ModelCallBudget = {
@@ -236,13 +236,13 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const forceWagerSettlementThisRound = forceWagerSettlementNextRound;
-      const toolChoice = selectNextRoundToolChoice({ forceWagerSettlement: forceWagerSettlementThisRound, forceToolUse: forceToolUseNextRound, initialWalletAction: round === 0 ? forcedWalletActionTool ?? undefined : undefined });
+      const forceWagerResolutionThisRound = forceWagerResolutionNextRound;
+      const toolChoice = selectNextRoundToolChoice({ forceWagerResolution: forceWagerResolutionThisRound, forceToolUse: forceToolUseNextRound, initialWalletAction: round === 0 ? forcedWalletActionTool ?? undefined : undefined });
       forceToolUseNextRound = false;
-      forceWagerSettlementNextRound = false;
+      forceWagerResolutionNextRound = false;
       response = await runObservedModelCall(ctx, {
         purpose: "tool_selection",
-        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerSettlementThisRound ? "settleRandomWager" : round === 0 ? forcedWalletActionTool ?? undefined : undefined },
+        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerResolutionThisRound ? "wager_resolution" : round === 0 ? forcedWalletActionTool ?? undefined : undefined },
         chat: {
           messages,
           tools: toolDefinitionsForModel({
@@ -466,7 +466,7 @@ async function runAgentModelLoopInternal(
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
       randomOutcomeGuard.noteToolResult(route.name, result.content);
-      forceWagerSettlementNextRound = randomOutcomeGuard.requiresWagerSettlement();
+      forceWagerResolutionNextRound = randomOutcomeGuard.requiresWagerResolution();
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
         route.name !== "requestAdditionalTools" &&

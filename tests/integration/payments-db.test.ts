@@ -194,7 +194,8 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       balancesObservedAt: new Date()
     };
     const wager = await repo.reserveWager(base);
-    await expect(repo.reserveWager({ ...base, requestId: `${guildId}:wager:second` })).rejects.toThrow(/Insufficient user wallet balance/);
+    await expect(repo.reserveWager({ ...base, requestId: `${guildId}:wager:second` }))
+      .rejects.toThrow(/active wallet-backed game/);
     await expect(repo.createManagedTransfer({
       guildId,
       requestedByUserId: "user-2",
@@ -254,6 +255,78 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
     expect(rejected.reason).toEqual(expect.objectContaining({ message: expect.stringMatching(/already exists/) }));
+  });
+
+  it("persists and version-checks a generic game across Discord replies", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const bot = await activeWallet(guildId, "bot", null, "51");
+    const user = await activeWallet(guildId, "user", "game-user", "52");
+    const wager = await repo.reserveWager({
+      requestId: `${guildId}:deal`,
+      guildId,
+      channelId: "channel",
+      threadKey: `${guildId}:channel:rng-root:deal`,
+      requestedByUserId: "game-user",
+      user,
+      bot,
+      game: "generic blackjack",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 100_000n,
+      maxPayoutAtomic: 250_000n,
+      userBalanceAtomic: 1_000_000n,
+      botBalanceAtomic: 10_000_000n,
+      balancesObservedAt: new Date(),
+    });
+    await pool.query(
+      "UPDATE wallet_wager_reservations SET status = 'drawn', updated_at = now() WHERE id = $1",
+      [wager.id],
+    );
+
+    const first = await repo.saveGameDecision({
+      wagerId: wager.id,
+      requestedByUserId: "game-user",
+      requestId: `${guildId}:deal`,
+      expectedVersion: 0,
+      decisionState: { player: ["A♥", "7♣"], dealerUp: "9♦" },
+      allowedActions: ["hit", "stand"],
+      actionPrompt: "Hit or stand?",
+    });
+    expect(first).toMatchObject({ awaitingAction: true, stateVersion: 1, allowedActions: ["hit", "stand"] });
+    await expect(repo.getActiveGameWager({
+      threadKey: wager.threadKey,
+      requestedByUserId: "game-user",
+    })).resolves.toMatchObject({ id: wager.id, decisionState: first.decisionState });
+
+    await expect(repo.saveGameDecision({
+      wagerId: wager.id,
+      requestedByUserId: "different-user",
+      requestId: `${guildId}:intruder`,
+      expectedVersion: 1,
+      decisionState: {},
+      allowedActions: ["stand"],
+      actionPrompt: "Stand?",
+    })).rejects.toThrow(/Only the user who made this wager/);
+    await expect(repo.saveGameDecision({
+      wagerId: wager.id,
+      requestedByUserId: "game-user",
+      requestId: `${guildId}:reply`,
+      expectedVersion: 0,
+      decisionState: {},
+      allowedActions: ["stand"],
+      actionPrompt: "Stand?",
+    })).rejects.toThrow(/version conflict/);
+
+    const idempotent = await repo.saveGameDecision({
+      wagerId: wager.id,
+      requestedByUserId: "game-user",
+      requestId: `${guildId}:deal`,
+      expectedVersion: 0,
+      decisionState: { ignored: true },
+      allowedActions: ["ignored"],
+      actionPrompt: "Ignored",
+    });
+    expect(idempotent).toMatchObject({ stateVersion: 1, decisionState: first.decisionState });
   });
 
 });

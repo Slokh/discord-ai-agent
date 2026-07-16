@@ -497,6 +497,7 @@ function PaymentsDashboard() {
             <Metric label="Wallet errors" value={Number(snapshot.totals.wallet_errors ?? 0)} tone={Number(snapshot.totals.wallet_errors ?? 0) > 0 ? "bad" : "normal"} />
             <Metric label="Pending transfers" value={Number(snapshot.totals.transfers_pending ?? 0)} tone={Number(snapshot.totals.transfers_pending ?? 0) > 0 ? "info" : "normal"} />
             <Metric label="Open wagers" value={Number(snapshot.totals.wagers_open ?? 0)} tone={Number(snapshot.totals.wagers_open ?? 0) > 0 ? "info" : "normal"} />
+            <Metric label="Awaiting players" value={Number(snapshot.totals.games_awaiting_action ?? 0)} tone={Number(snapshot.totals.games_awaiting_action ?? 0) > 0 ? "info" : "normal"} />
             <Metric
               label="Bot wallet"
               value={botHealthDetails?.balanceUsd != null ? `$${textValue(botHealthDetails.balanceUsd)}` : "—"}
@@ -533,6 +534,8 @@ function PaymentsDashboard() {
               ["stake", (row) => `$${formatAtomic(textValue(row.stake_atomic), Number(row.token_decimals ?? 6))}`],
               ["max payout", (row) => `$${formatAtomic(textValue(row.max_payout_atomic), Number(row.token_decimals ?? 6))}`],
               ["status", (row) => textValue(row.status)],
+              ["state", (row) => row.awaiting_action ? `v${textValue(row.state_version)} · ${arrayText(row.allowed_actions)} · ${jsonPreview(row.decision_state)}` : "—"],
+              ["prompt", (row) => textValue(row.action_prompt)],
               ["draw", (row) => textValue(row.draw_id)]
             ]}
           />
@@ -576,6 +579,15 @@ function formatAtomic(value: string, decimals: number) {
 
 function textValue(value: unknown): string {
   return value == null ? "" : String(value);
+}
+
+function arrayText(value: unknown): string {
+  return Array.isArray(value) ? value.map(textValue).filter(Boolean).join(", ") : textValue(value);
+}
+
+function jsonPreview(value: unknown): string {
+  const rendered = JSON.stringify(value ?? {});
+  return rendered.length > 140 ? `${rendered.slice(0, 139)}…` : rendered;
 }
 
 function shortAddress(value: string) {

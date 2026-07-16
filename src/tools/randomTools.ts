@@ -101,6 +101,11 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
         await auditRng(ctx, "drawRandom", input, result);
         return result;
       }
+      if (/active wallet-backed game already exists/i.test(message)) {
+        const result = "An active wallet-backed game already exists in this Discord reply chain. Continue that game from its saved state or settle it before starting another wager.";
+        await auditRng(ctx, "drawRandom", input, result);
+        return result;
+      }
       if (/Insufficient user wallet balance/i.test(message)) {
         const result = "The wager could not be reserved because the user's available wallet balance is below the requested stake. Available balance excludes active wager and transfer reservations; gas fees are paid by the bot fee payer and are not deducted from the user.";
         await auditRng(ctx, "drawRandom", input, result);
@@ -191,7 +196,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     `Result: ${draw.summary}`,
     `Session ${sessionId} · nonce ${draw.nonce} · draw ${draw.drawId} · commitment sha256:${commitment}`,
     wager
-      ? `Wager ${wager.id} is reserved. After calculating the payout from this exact result, you MUST call settleRandomWager once with that wager id, the total payout including returned stake, and a concise calculation.`
+      ? `Wager ${wager.id} is reserved. You MUST now either call awaitRandomWagerAction with complete state if the player has a decision, or call settleRandomWager once after a final outcome.`
       : null,
     `Report this result exactly as shown. A proof footer is appended to your reply automatically; do not restate or alter the proof details.`
   ].filter((line): line is string => line !== null).join("\n");
@@ -230,7 +235,7 @@ export async function settleRandomWager(
   }
   if (!explanation) return "explanation is required and must show how the payout follows from the draw.";
   if (describesUnfinishedWager(explanation)) {
-    return "Settlement rejected: the calculation describes an unfinished game. Resolve every remaining decision deterministically from the existing draw and stated rules, then call settleRandomWager again with the final payout. Wallet-backed games cannot pause for another user choice.";
+    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. Otherwise resolve the remaining deterministic steps and call settleRandomWager again with the final payout.";
   }
   const settled = await ctx.walletService.settleWager(
     { wagerId, userId: ctx.userId, payoutUsd: input.payoutUsd, explanation },
@@ -462,27 +467,34 @@ async function ensureRngSetup(
     await auditRng(ctx, toolName, input, "rng repository unavailable");
     return "Provably fair RNG is unavailable in this runtime (no RNG store is wired up), so I cannot produce verifiable random results here.";
   }
-  const threadKey = ctx.threadKey?.trim();
-  if (!threadKey) {
+  const baseThreadKey = ctx.threadKey?.trim();
+  if (!baseThreadKey) {
     await auditRng(ctx, toolName, input, "missing thread key");
     return "Provably fair RNG is unavailable for this request because it has no conversation thread key.";
   }
   const replyRootMessageId = ctx.replyContext?.rootMessageId?.trim();
   const requestMessageId = ctx.requestMessageId?.trim();
   const rootMessageId = replyRootMessageId || requestMessageId;
-  if (!rootMessageId) return { rngRepo: ctx.rngRepo, threadKey };
+  if (!rootMessageId) return { rngRepo: ctx.rngRepo, threadKey: baseThreadKey };
 
-  const threadKeyPrefix = `${threadKey}:${RNG_ROOT_SCOPE_SEGMENT}:`;
+  const threadKeyPrefix = `${baseThreadKey}:${RNG_ROOT_SCOPE_SEGMENT}:`;
   if (toolName === "revealRandomness" && !replyRootMessageId) {
     const latestThreadKey = await ctx.rngRepo.findLatestDrawnActiveSessionThreadKey({
       channelId: ctx.channelId,
       requestedByUserId: ctx.userId,
-      legacyThreadKey: threadKey,
+      legacyThreadKey: baseThreadKey,
       threadKeyPrefix
     });
     if (latestThreadKey) return { rngRepo: ctx.rngRepo, threadKey: latestThreadKey };
   }
   return { rngRepo: ctx.rngRepo, threadKey: `${threadKeyPrefix}${rootMessageId}` };
+}
+
+export function wagerThreadKeyForContext(ctx: ToolContext): string | null {
+  const baseThreadKey = ctx.threadKey?.trim();
+  if (!baseThreadKey) return null;
+  const rootMessageId = ctx.replyContext?.rootMessageId?.trim() || ctx.requestMessageId?.trim();
+  return rootMessageId ? `${baseThreadKey}:${RNG_ROOT_SCOPE_SEGMENT}:${rootMessageId}` : baseThreadKey;
 }
 
 function validateDrawInput(kind: string, input: DrawRandomInput): string | null {

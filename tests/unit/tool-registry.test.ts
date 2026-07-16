@@ -61,6 +61,7 @@ describe("toolRegistry", () => {
       "updateBotAvatar",
       "setUserTurnLimit",
       "drawRandom",
+      "awaitRandomWagerAction",
       "settleRandomWager",
       "revealRandomness"
     ]);

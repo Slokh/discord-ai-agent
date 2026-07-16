@@ -21,6 +21,7 @@ const WAGER_COLUMNS = `
   id, request_id, guild_id, channel_id, thread_key, requested_by_user_id, user_wallet_id,
   bot_wallet_id, game, token, token_decimals, stake_atomic, max_payout_atomic,
   payout_atomic, draw_id, settlement_transfer_id, status, explanation,
+  awaiting_action, state_version, decision_state, allowed_actions, action_prompt, last_action_request_id,
   expires_at, created_at, updated_at
 `;
 
@@ -384,6 +385,16 @@ export class PaymentRepository {
       if (existingRequest.rows[0]) {
         throw new Error("A wallet-backed wager already exists for this Discord request");
       }
+      const existingGame = await client.query(
+        `SELECT id FROM wallet_wager_reservations
+         WHERE thread_key = $1 AND requested_by_user_id = $2
+           AND status IN ('reserved', 'drawn', 'settling')
+         LIMIT 1`,
+        [input.threadKey, input.requestedByUserId]
+      );
+      if (existingGame.rows[0]) {
+        throw new Error("An active wallet-backed game already exists in this Discord reply chain");
+      }
       const [reserved, pendingTransfers] = await Promise.all([
         client.query(
         `
@@ -475,6 +486,79 @@ export class PaymentRepository {
     return mapWager(result.rows[0]);
   }
 
+  async getActiveGameWager(input: { threadKey: string; requestedByUserId: string }): Promise<WagerReservation | null> {
+    const result = await this.pool.query(
+      `SELECT ${WAGER_COLUMNS} FROM wallet_wager_reservations
+       WHERE thread_key = $1 AND requested_by_user_id = $2
+         AND status = 'drawn' AND awaiting_action = true AND expires_at > now()
+       ORDER BY updated_at DESC LIMIT 1`,
+      [input.threadKey, input.requestedByUserId]
+    );
+    return result.rows[0] ? mapWager(result.rows[0]) : null;
+  }
+
+  async saveGameDecision(input: {
+    wagerId: string;
+    requestedByUserId: string;
+    requestId: string;
+    expectedVersion: number;
+    decisionState: Record<string, unknown>;
+    allowedActions: string[];
+    actionPrompt: string;
+    ttlSeconds?: number;
+  }): Promise<WagerReservation> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const currentResult = await client.query(
+        `SELECT ${WAGER_COLUMNS} FROM wallet_wager_reservations WHERE id = $1 FOR UPDATE`,
+        [input.wagerId]
+      );
+      if (!currentResult.rows[0]) throw new Error(`Unknown wager ${input.wagerId}`);
+      const current = mapWager(currentResult.rows[0]);
+      if (current.requestedByUserId !== input.requestedByUserId) {
+        throw new Error("Only the user who made this wager can update its game state");
+      }
+      if (current.status !== "drawn") throw new Error(`Wager ${input.wagerId} is ${current.status}, not active`);
+      if (current.expiresAt.getTime() <= Date.now()) throw new Error(`Wager ${input.wagerId} has expired`);
+      if (current.lastActionRequestId === input.requestId) {
+        await client.query("COMMIT");
+        return current;
+      }
+      if (current.stateVersion !== input.expectedVersion) {
+        throw new Error(`Game state version conflict: expected ${input.expectedVersion}, current ${current.stateVersion}`);
+      }
+      const result = await client.query(
+        `UPDATE wallet_wager_reservations
+         SET awaiting_action = true,
+             state_version = state_version + 1,
+             decision_state = $2::jsonb,
+             allowed_actions = $3::text[],
+             action_prompt = $4,
+             last_action_request_id = $5,
+             expires_at = least(created_at + interval '1 hour', now() + ($6 * interval '1 second')),
+             updated_at = now()
+         WHERE id = $1
+         RETURNING ${WAGER_COLUMNS}`,
+        [
+          input.wagerId,
+          JSON.stringify(input.decisionState),
+          input.allowedActions,
+          input.actionPrompt.slice(0, 1_000),
+          input.requestId,
+          input.ttlSeconds ?? 600
+        ]
+      );
+      await client.query("COMMIT");
+      return mapWager(result.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async releaseWager(wagerId: string, explanation: string): Promise<void> {
     await this.pool.query(
       `
@@ -515,7 +599,7 @@ export class PaymentRepository {
       if (net === 0n) {
         const updated = await client.query(
           `
-            UPDATE wallet_wager_reservations SET payout_atomic = $2, status = 'settled',
+            UPDATE wallet_wager_reservations SET payout_atomic = $2, status = 'settled', awaiting_action = false,
               explanation = $3, settled_at = now(), updated_at = now()
             WHERE id = $1 RETURNING ${WAGER_COLUMNS}
           `,
@@ -547,7 +631,7 @@ export class PaymentRepository {
       const updated = await client.query(
         `
           UPDATE wallet_wager_reservations SET payout_atomic = $2, settlement_transfer_id = $3,
-            status = 'settling', explanation = $4, updated_at = now()
+            status = 'settling', awaiting_action = false, explanation = $4, updated_at = now()
           WHERE id = $1 RETURNING ${WAGER_COLUMNS}
         `,
         [wager.id, input.payoutAtomic.toString(), transfer.id, input.explanation.slice(0, 2_000)]
@@ -631,7 +715,9 @@ export class PaymentRepository {
           SELECT id, guild_id, channel_id, requested_by_user_id, game, token,
             token_decimals, stake_atomic::text, max_payout_atomic::text,
             payout_atomic::text, draw_id, settlement_transfer_id, status,
-            explanation, expires_at, created_at, settled_at, updated_at
+            explanation, awaiting_action, state_version, decision_state,
+            allowed_actions, action_prompt, last_action_request_id,
+            expires_at, created_at, settled_at, updated_at
           FROM wallet_wager_reservations ${wagerWhere}
           ORDER BY created_at DESC LIMIT $${queryValues.length + 1}
         `,
@@ -643,7 +729,8 @@ export class PaymentRepository {
             (SELECT count(*)::int FROM wallet_accounts ${where}) AS wallets,
             (SELECT count(*)::int FROM wallet_accounts ${where}${where ? " AND" : " WHERE"} status = 'error') AS wallet_errors,
             (SELECT count(*)::int FROM wallet_transfers ${transferWhere}${transferWhere ? " AND" : " WHERE"} status IN ('submitting','submitted','unknown')) AS transfers_pending,
-            (SELECT count(*)::int FROM wallet_wager_reservations ${wagerWhere}${wagerWhere ? " AND" : " WHERE"} status IN ('reserved','drawn','settling')) AS wagers_open
+            (SELECT count(*)::int FROM wallet_wager_reservations ${wagerWhere}${wagerWhere ? " AND" : " WHERE"} status IN ('reserved','drawn','settling')) AS wagers_open,
+            (SELECT count(*)::int FROM wallet_wager_reservations ${wagerWhere}${wagerWhere ? " AND" : " WHERE"} status = 'drawn' AND awaiting_action = true) AS games_awaiting_action
         `,
         queryValues
       ),

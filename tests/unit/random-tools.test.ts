@@ -482,7 +482,8 @@ describe("drawRandom", () => {
     );
     expect(attachWagerDraw).toHaveBeenCalledWith("wager-1", 1, expect.any(Function));
     expect(releaseWager).not.toHaveBeenCalled();
-    expect(response).toContain("MUST call settleRandomWager once");
+    expect(response).toContain("either call awaitRandomWagerAction");
+    expect(response).toContain("settleRandomWager once");
   });
 
   it("rejects a wager amount inherited from history when the current request is an explicit amount", async () => {
@@ -659,7 +660,7 @@ describe("drawRandom", () => {
     });
 
     expect(response).toContain("unfinished game");
-    expect(response).toContain("cannot pause for another user choice");
+    expect(response).toContain("awaitRandomWagerAction");
     expect(settleWager).not.toHaveBeenCalled();
   });
 });

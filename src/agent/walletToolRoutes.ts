@@ -6,11 +6,26 @@ import {
   requestStarterFunds,
   transferWalletFunds
 } from "../tools/walletTools.js";
+import {
+  awaitRandomWagerAction,
+  isSuccessfulAwaitRandomWagerAction,
+} from "../tools/gameSessionTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentToolRoute } from "./routerShared.js";
 
 export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolRoute): Promise<AgentResponse | null> {
+  if (route.name === "awaitRandomWagerAction") {
+    const content = cleanResponse(await awaitRandomWagerAction(ctx, {
+      wagerId: stringArgument(route.arguments, "wagerId"),
+      expectedVersion: numberArgument(route.arguments, "expectedVersion"),
+      state: recordArgument(route.arguments, "state"),
+      allowedActions: stringArrayArgument(route.arguments, "allowedActions"),
+      prompt: stringArgument(route.arguments, "prompt"),
+    }), ctx.config.maxReplyChars);
+    const succeeded = isSuccessfulAwaitRandomWagerAction(content);
+    return { content, status: succeeded ? "ok" : "error", retryable: !succeeded };
+  }
   if (route.name === "getWalletBalance") {
     return {
       content: cleanResponse(await getWalletBalance(ctx, {
@@ -64,4 +79,16 @@ function numberArgument(args: Record<string, unknown> | undefined, key: string):
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
   return undefined;
+}
+
+function recordArgument(args: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  const value = args?.[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringArrayArgument(args: Record<string, unknown> | undefined, key: string): string[] | undefined {
+  const value = args?.[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
 }

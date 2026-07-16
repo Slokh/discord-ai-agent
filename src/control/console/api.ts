@@ -9,6 +9,7 @@ export type PaymentsSnapshot = {
     wallet_errors?: number;
     transfers_pending?: number;
     wagers_open?: number;
+    games_awaiting_action?: number;
   };
   wallets: Array<Record<string, unknown>>;
   transfers: Array<Record<string, unknown>>;

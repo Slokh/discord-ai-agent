@@ -40,7 +40,7 @@ describe("DiscordResponseSink", () => {
     });
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# trace <https://tasks.example/runs/run-1> · 42.183s"
+      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# [trace](<https://tasks.example/runs/run-1>) · 42.183s"
     });
   });
 
@@ -105,14 +105,14 @@ describe("DiscordResponseSink", () => {
       expect(followup.reply?.messageReference).toBe(previousIds[Math.min(index, previousIds.length - 1)]);
     });
     const lastFollowup = followups.at(-1)?.content ?? "";
-    expect(lastFollowup).toContain("-# trace <https://tasks.example/runs/run-1> · 0.042s");
+    expect(lastFollowup).toContain("-# [trace](<https://tasks.example/runs/run-1>) · 0.042s");
     expect(lastFollowup.length).toBeLessThanOrEqual(96);
     const allContents = [replyPayload.content, ...followups.map((followup) => followup.content)];
     for (const chunk of allContents) {
       expect(chunk.length).toBeLessThanOrEqual(96);
     }
     const rejoined = allContents.join("").replace(/\n+/g, "");
-    expect(rejoined.replace(/-# trace <[^>]+> · 0\.042s/, "").length).toBe(200);
+    expect(rejoined.replace(/-# \[trace\]\(<[^>]+>\) · 0\.042s/, "").length).toBe(200);
   });
 
   it("splits long final content without a footer across multiple messages", async () => {

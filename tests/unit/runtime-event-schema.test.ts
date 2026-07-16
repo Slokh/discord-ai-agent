@@ -36,6 +36,14 @@ describe("versioned runtime event metadata", () => {
     expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.completed", { purpose: "legacy" })).toThrow();
   });
 
+  it.each(["agent.model.round.started", "agent.model.round.complete"])(
+    "accepts generic model lifecycle metadata for %s",
+    (eventName) => {
+      const metadata = normalizeRuntimeEventMetadata({ eventName, metadata: { round: 1 } });
+      expect(() => assertVersionedRuntimeEventMetadata(eventName, metadata)).not.toThrow();
+    }
+  );
+
   it("adds controlled category and phase dimensions", () => {
     expect(normalizeRuntimeEventMetadata({ eventName: "discord.mention.received" })).toEqual(expect.objectContaining({ schemaVersion: 1, category: "ingress", phase: "started" }));
     expect(normalizeRuntimeEventMetadata({ eventName: "retrieval.vector_sql.completed" })).toEqual(expect.objectContaining({ category: "retrieval", phase: "completed" }));

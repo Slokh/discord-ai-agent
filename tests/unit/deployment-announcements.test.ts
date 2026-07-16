@@ -15,7 +15,7 @@ function setup() {
     appRevision: newRevision,
     releaseNotes: { channelId: "release-channel", previousRevision: oldRevision },
     discord: { ...loadConfig().discord, guildId: "guild-1" },
-    github: { ...loadConfig().github, repository: "Slokh/discord-ai-agent", token: undefined }
+    github: { ...loadConfig().github, repository: "example-org/example-agent", token: undefined }
   };
   const repo = {
     latestDeploymentRevision: vi.fn().mockResolvedValue(null),
@@ -61,7 +61,7 @@ describe("deployment announcements", () => {
       content: expect.stringContaining("**Bot update**\n- Casino games now keep working across replies."),
       allowedMentions: { parse: [] }
     }));
-    expect(fixture.send.mock.calls[0]?.[0].content).toContain(`<https://github.com/Slokh/discord-ai-agent/compare/${oldRevision}...${newRevision}>`);
+    expect(fixture.send.mock.calls[0]?.[0].content).toContain(`<https://github.com/example-org/example-agent/compare/${oldRevision}...${newRevision}>`);
     expect(fixture.repo.markDeploymentAnnouncementPosted).toHaveBeenCalledWith(expect.objectContaining({
       revision: newRevision,
       discordMessageId: "announcement-1"

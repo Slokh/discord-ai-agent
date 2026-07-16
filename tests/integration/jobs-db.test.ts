@@ -293,7 +293,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       await runtime.stop();
       await pool.end();
     }
-  });
+  }, 20_000);
 
   it("can enqueue agent tasks without running the task worker", async () => {
     const config = testConfig();

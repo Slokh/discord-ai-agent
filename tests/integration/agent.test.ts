@@ -3,21 +3,8 @@ import { handleAgentRequest } from "../../src/agent/router.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
-  it("forces a bare balance request through the requester's verified wallet tool", async () => {
-    const chat = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: "",
-        model: "router-model",
-        raw: {},
-        toolCalls: [{ id: "wallet-call", name: "getWalletBalance", argumentsText: "{}" }]
-      })
-      .mockResolvedValueOnce({
-        content: "You have $1 USD.",
-        model: "router-model",
-        raw: {},
-        toolCalls: []
-      });
+  it("executes a bare balance request directly against the requester's verified wallet", async () => {
+    const chat = vi.fn();
     const getUserWalletSummary = vi.fn(async () => ({
       wallet: { address: `0x${"1".repeat(40)}` },
       balance: { formatted: "1", token: { symbol: "USDC.e" } }
@@ -52,36 +39,14 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "balance");
 
-    expect(response.content).toBe("You have $1 USD.");
-    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-      toolChoice: { type: "function", function: { name: "getWalletBalance" } }
-    }));
+    expect(response.content).toContain("Your wallet: $1 USD");
+    expect(response.content).not.toContain("USDC.e");
+    expect(chat).not.toHaveBeenCalled();
     expect(getUserWalletSummary).toHaveBeenCalledWith({ guildId: "g", userId: "u" }, expect.any(Function));
-    const walletResult = (chat.mock.calls[1]?.[0] as { messages?: Array<{ role: string; content: string }> }).messages
-      ?.find((message) => message.role === "tool")?.content;
-    expect(walletResult).toContain("Your wallet: $1 USD");
-    expect(walletResult).not.toContain("USDC.e");
   });
 
-  it("binds 'your balance' to the bot wallet even when the model requests the requester wallet", async () => {
-    const chat = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: "",
-        model: "router-model",
-        raw: {},
-        toolCalls: [{
-          id: "wallet-call",
-          name: "getWalletBalance",
-          argumentsText: JSON.stringify({ owner: "requester" }),
-        }],
-      })
-      .mockResolvedValueOnce({
-        content: "I have $5.95 USD.",
-        model: "router-model",
-        raw: {},
-        toolCalls: [],
-      });
+  it("executes 'your balance' directly against the bot wallet", async () => {
+    const chat = vi.fn();
     const getBotWalletSummary = vi.fn(async () => ({
       wallet: { address: `0x${"2".repeat(40)}` },
       balance: { formatted: "5.95", token: { symbol: "USDC.e" } },
@@ -117,28 +82,19 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "what's your balance?");
 
-    expect(response.content).toBe("I have $5.95 USD.");
+    expect(response.content).toContain("Bot wallet: $5.95 USD");
     expect(getBotWalletSummary).toHaveBeenCalledWith("g", expect.any(Function));
     expect(getUserWalletSummary).not.toHaveBeenCalled();
-    const executedToolCall = (chat.mock.calls[1]?.[0] as {
-      messages?: Array<{ role: string; tool_calls?: Array<{ function: { arguments: string } }> }>;
-    }).messages?.find((message) => message.role === "assistant")?.tool_calls?.[0];
-    expect(JSON.parse(executedToolCall?.function.arguments ?? "{}")).toEqual({ owner: "bot" });
+    expect(chat).not.toHaveBeenCalled();
   });
 
-  it("forces server-wide balance requests through the live member wallet directory", async () => {
-    const chat = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: "",
-        model: "router-model",
-        raw: {},
-        toolCalls: [{ id: "directory-call", name: "listWalletBalances", argumentsText: "{}" }],
-      });
+  it("executes server-wide balance requests directly against the live member wallet directory", async () => {
+    const chat = vi.fn();
+    const traceEvents: Array<{ eventName: string; metadata?: Record<string, unknown> }> = [];
     const listExistingUserWalletSummaries = vi.fn(async () => [{
       userId: "alice",
       wallet: { address: `0x${"3".repeat(40)}` },
-      balance: { formatted: "2.5" },
+      balance: { formatted: "2.5", amountAtomic: 2_500_000n },
       error: null,
     }]);
     const fetchDiscordGuildMembers = vi.fn(async () => [
@@ -161,9 +117,17 @@ describe("agent router", () => {
       },
       repo: {
         auditTool: vi.fn(async () => undefined),
-        recordTraceEvent: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event) => {
+          traceEvents.push(event as { eventName: string; metadata?: Record<string, unknown> });
+        }),
       },
-      walletService: { listExistingUserWalletSummaries },
+      walletService: {
+        listExistingUserWalletSummaries,
+        getBotWalletSummary: vi.fn(async () => ({
+          wallet: { address: `0x${"4".repeat(40)}` },
+          balance: { formatted: "9.5", amountAtomic: 9_500_000n }
+        }))
+      },
       fetchDiscordGuildMembers,
       openRouter: { chat },
       guildId: "g",
@@ -176,15 +140,83 @@ describe("agent router", () => {
       requestMessageId: "message-3",
     } as unknown as ToolContext;
 
-    const response = await handleAgentRequest(ctx, "what's the balance of every user in this discord server?");
+    const response = await handleAgentRequest(ctx, "every user's balance");
 
-    expect(response.content).toContain("Alice (alice): $2.5 USD");
-    expect(response.content).toContain("Bob (bob): $0 USD — no wallet");
-    expect(chat).toHaveBeenCalledOnce();
-    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-      toolChoice: { type: "function", function: { name: "listWalletBalances" } },
-    }));
+    expect(response.content).toContain("```text\nWallet  Balance\nAI      $9.5\nAlice   $2.5\n```");
+    expect(response.content).not.toContain("Bob");
+    expect(chat).not.toHaveBeenCalled();
     expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "g", userIds: ["alice", "bob"] });
+    expect(traceEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "agent.deterministic_tool.selected",
+        metadata: expect.objectContaining({ toolName: "listWalletBalances" }),
+      }),
+    ]));
+  });
+
+  it("forces an explicit named transfer through the wallet tool on the first model round", async () => {
+    const transactionHash = `0x${"5".repeat(64)}`;
+    const chat = vi.fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "transfer-luke",
+          name: "transferWalletFunds",
+          argumentsText: JSON.stringify({ destination: "user", destinationUserId: "luke", amountUsd: 1 }),
+        }],
+      })
+      .mockResolvedValueOnce({ content: "Luke has his dollar back.", model: "router-model", raw: {}, toolCalls: [] });
+    const transferFromUser = vi.fn(async () => ({
+      transfer: { status: "confirmed", transactionHash },
+      source: { wallet: {}, balance: { formatted: "1" } },
+      destination: { wallet: {}, balance: { formatted: "1" } },
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        allowlists: { ownerUserId: null, opsUserIds: [] },
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          tempoNetwork: "mainnet",
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { transferFromUser },
+      fetchDiscordGuildMembers: vi.fn(async () => [
+        { userId: "luke-id", username: "lukester", displayName: "Luke", isBot: false },
+      ]),
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "message-transfer",
+      requestMessageId: "message-transfer",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "give luke back $1 so he can use it");
+
+    expect(response.content).toContain("Luke has his dollar back");
+    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: { type: "function", function: { name: "transferWalletFunds" } },
+    }));
+    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
+      requestedByUserId: "u",
+      destination: { kind: "user", userId: "luke-id" },
+      amountUsd: 1,
+    }), expect.any(Function));
   });
 
   it("retries malformed tool calls with the original reply context and toolset", async () => {

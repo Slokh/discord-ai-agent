@@ -44,7 +44,7 @@ export function scopedToolset(input: { config: AppConfig; groups: Set<ToolGroup>
   const groups = normalizeGroups(input.groups, input.config);
   const localTools = toolRegistry
     .filter((tool) =>
-      (groups.has(tool.group) || tool.name === "drawRandom") &&
+      (groups.has(tool.group) || tool.name === "drawRandom" || tool.name === "settleRandomWager") &&
       isToolDeploymentAvailable(tool, input.config)
     )
     .map((tool) => toolForDeployment(tool, input.config));
@@ -97,7 +97,7 @@ function normalizeGroups(groups: Set<ToolGroup>, config: AppConfig) {
 function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
   if (tool.group === "spotify") return isSpotifyConfigured(config);
   if (tool.group === "codegen") return isCodegenConfigured(config);
-  if (["settleRandomWager", "transferWalletFunds", "adminTransferWalletFunds", "reconcileWalletTransfers"].includes(tool.name)) {
+  if (["settleRandomWager", "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds", "reconcileWalletTransfers"].includes(tool.name)) {
     return Boolean(config.payments?.walletEnabled && config.payments?.userWalletsEnabled);
   }
   if (tool.name === "getWalletBalance") return Boolean(config.payments?.walletEnabled);

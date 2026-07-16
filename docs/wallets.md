@@ -15,8 +15,9 @@ The wallet runtime uses Privy application-controlled EVM wallets on Tempo. It ma
 Users interact through normal `@ai` prompts:
 
 - `getWalletBalance` reads the requester, bot, or an admin-authorized user's current onchain balance and public address.
-- `listWalletBalances` joins the live Discord member roster to existing wallets. Members without wallets appear as `$0`; existing balances are read live onchain. Owner/ops can always use it, and all members can use it when `WALLET_BALANCES_PUBLIC=true`.
-- `transferWalletFunds` moves USD from the current requester's wallet to another verified Discord user or the bot wallet.
+- `listWalletBalances` reads existing balances live onchain and renders a compact directory. Balance views include the AI treasury and funded member wallets while omitting zero/no-wallet rows; address views include the AI and every existing member wallet. Owner/ops can always use it, and all members can use it when `WALLET_BALANCES_PUBLIC=true`.
+- `transferWalletFunds` moves USD from the current requester's wallet to another verified Discord user or the bot wallet. Usernames and display names are resolved inside the guarded transfer path; ambiguity fails without moving funds.
+- `requestStarterFunds` sends the configured `$1` starter amount from the AI treasury only when the requester's verified balance is exactly zero. Concurrent requests after the same zero-balance observation are rejected.
 - `adminTransferWalletFunds` performs an owner/ops-authorized correction between managed wallets and requires a reason.
 - `reconcileWalletTransfers` lets an owner/ops requester reconcile pending or uncertain transfers. The worker also reconciles automatically.
 
@@ -24,7 +25,7 @@ No tool accepts an arbitrary external destination address. Request identity is c
 
 ## Wagers
 
-`drawRandom` accepts an optional wager with a positive stake, maximum total payout, and game label. Before consuming entropy, the runtime ensures both wallets exist, reads balances, and reserves the user's stake plus the bot's worst-case exposure.
+`drawRandom` accepts an optional wager with a positive stake, maximum total payout, and game label. Before consuming entropy, the runtime ensures both wallets exist, reads balances, and reserves the user's stake plus the bot's worst-case exposure. Leading-decimal amounts such as `.05` are treated as real money. Vague repeats inherit the wager requirement only from the same requester's latest wager prompt. Wagered games are atomic: one bounded random draw must contain enough entropy to resolve the game before the forced settlement step; ordinary transfers cannot be used as a substitute for settlement.
 
 `settleRandomWager` validates the requester, draw, maximum payout, and one-time settlement state. It transfers only the net difference: bot to user for a win, user to bot for a loss, and nothing for break-even. Stale reservations expire automatically.
 
@@ -32,7 +33,7 @@ No tool accepts an arbitrary external destination address. Request identity is c
 
 Transfers move through `reserved → submitting → submitted → confirmed`. An exception after signing is recorded as `unknown` and reconciled against the chain instead of being blindly retried. Confirmed receipts must contain the expected token transfer event, including token, sender, recipient, and amount. A confirmed transaction that did not deliver that exact transfer is recorded as a final rejected delivery and is never automatically replayed.
 
-Idempotency keys protect initial grants, ordinary transfers, and wager settlements. Initial grants are scoped to both wallet and token address so a network or token change cannot silently reuse an unrelated grant record. Transfer and wager reservations share one available-balance calculation, including in-flight transfers and anything confirmed after the balance observation, so concurrent requests cannot spend the same onchain dollars twice.
+Idempotency keys protect initial grants, restart grants, ordinary transfers, and wager settlements. Initial grants are scoped to both wallet and token address so a network or token change cannot silently reuse an unrelated grant record. Restart grants lock both wallets and reject a second incoming transfer after the qualifying zero-balance observation. Transfer and wager reservations share one available-balance calculation, including in-flight transfers and anything confirmed after the balance observation, so concurrent requests cannot spend the same onchain dollars twice.
 
 ## Rollout and operations
 

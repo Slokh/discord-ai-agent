@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   adminTransferWalletFunds,
   getWalletBalance,
+  hasExplicitTransferIntent,
   listWalletBalances,
+  requestStarterFunds,
   transferWalletFunds
 } from "../../src/tools/walletTools.js";
+import type { PaymentEventRecorder } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("managed wallet tools", () => {
@@ -39,11 +42,11 @@ describe("managed wallet tools", () => {
     expect(getBotWalletSummary).toHaveBeenCalledWith("guild", expect.any(Function));
   });
 
-  it("lists every human server member and reports zero without provisioning missing wallets", async () => {
+  it("lists only funded member wallets in a compact table and includes the AI treasury", async () => {
     const listExistingUserWalletSummaries = vi.fn(async () => [{
       userId: "alice",
       wallet: { address: `0x${"2".repeat(40)}` },
-      balance: { formatted: "2.5" },
+      balance: { formatted: "2.5", amountAtomic: 2_500_000n },
       error: null
     }]);
     const fetchDiscordGuildMembers = vi.fn(async () => [
@@ -53,18 +56,46 @@ describe("managed wallet tools", () => {
     ]);
     const ctx = context({
       walletBalancesPublic: true,
-      walletService: { listExistingUserWalletSummaries },
+      walletService: { listExistingUserWalletSummaries, getBotWalletSummary: vi.fn(async () => walletSummary("9.5")) },
       fetchDiscordGuildMembers
     });
 
     const result = await listWalletBalances(ctx);
 
-    expect(result.content).toContain("2 members, 1 wallet, 1 without wallets");
-    expect(result.content).toContain("Alice (alice): $2.5 USD — verified onchain");
-    expect(result.content).toContain("Bob (bob): $0 USD — no wallet");
+    expect(result.content).toContain("2 total including the AI treasury");
+    expect(result.content).toContain("| AI | $9.5 |");
+    expect(result.content).toContain("| Alice | $2.5 |");
+    expect(result.content).not.toContain("$0");
+    expect(result.content).not.toContain("Bob");
     expect(result.content).not.toContain("Build Bot");
     expect(result.content).toContain("no wallet was created by this lookup");
     expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "guild", userIds: ["alice", "bob"] });
+  });
+
+  it("returns a compact address-only directory without repeating balances", async () => {
+    const address = `0x${"2".repeat(40)}`;
+    const listExistingUserWalletSummaries = vi.fn(async () => [{
+      userId: "alice",
+      wallet: { address },
+      balance: { formatted: "2.5", amountAtomic: 2_500_000n },
+      error: null
+    }]);
+    const ctx = context({
+      walletBalancesPublic: true,
+      walletService: { listExistingUserWalletSummaries, getBotWalletSummary: vi.fn(async () => walletSummary("9.5")) },
+      fetchDiscordGuildMembers: vi.fn(async () => [
+        { userId: "alice", username: "alice", displayName: "Alice", isBot: false },
+        { userId: "bob", username: "bob", displayName: "Bob", isBot: false }
+      ])
+    });
+
+    const result = await listWalletBalances(ctx, { view: "addresses" });
+
+    expect(result.content).toContain("Server wallet addresses: AI plus 1 member wallet");
+    expect(result.content).toContain(`| AI | 0x${"1".repeat(40)} |`);
+    expect(result.content).toContain(`| Alice | ${address} |`);
+    expect(result.content).not.toContain("Bob (bob)");
+    expect(result.content).not.toContain("$2.5 USD");
   });
 
   it("keeps the member-to-wallet directory private unless configured public or requested by an admin", async () => {
@@ -98,7 +129,15 @@ describe("managed wallet tools", () => {
   });
 
   it("binds a normal transfer source to the immutable requester and verifies the managed destination", async () => {
-    const transferFromUser = vi.fn(async () => transferResult());
+    const transferFromUser = vi.fn(async (_input: unknown, record: PaymentEventRecorder) => {
+      const result = transferResult();
+      await record({
+        eventName: "wallet.transfer.confirmed",
+        summary: "Confirmed user transfer",
+        metadata: { transactionHash: result.transfer.transactionHash }
+      });
+      return result;
+    });
     const ctx = context({
       repo: {
         getDiscordUserReferenceTerms: vi.fn(async () => [{
@@ -120,6 +159,9 @@ describe("managed wallet tools", () => {
 
     expect(result).toContain("Transferred $2 USD from your wallet to Friend's wallet.");
     expect(result).toContain("Source balance: $3 USD");
+    expect(ctx.footerLines).toEqual([
+      `💸 [transaction 0x999999…999999](https://explore.tempo.xyz/tx/0x${"9".repeat(64)})`
+    ]);
     expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
       guildId: "guild",
       requestedByUserId: "requester",
@@ -127,6 +169,64 @@ describe("managed wallet tools", () => {
       destination: { kind: "user", userId: "friend" },
       amountUsd: 2
     }), expect.any(Function));
+  });
+
+  it("resolves an unambiguous plain Discord name inside a transfer without asking for a mention", async () => {
+    const transferFromUser = vi.fn(async () => transferResult());
+    const ctx = context({
+      requestText: "give luke back $1 so he can use it",
+      walletService: { transferFromUser },
+      fetchDiscordGuildMembers: vi.fn(async () => [
+        { userId: "luke-id", username: "lukester", displayName: "Luke", isBot: false }
+      ])
+    });
+
+    const result = await transferWalletFunds(ctx, {
+      destination: "user",
+      destinationUserId: "luke",
+      amountUsd: 1
+    });
+
+    expect(result).toContain("Luke's wallet");
+    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
+      destination: { kind: "user", userId: "luke-id" },
+      amountUsd: 1
+    }), expect.any(Function));
+  });
+
+  it("blocks a model-invented transfer when the current prompt is only a vague game repeat", async () => {
+    const transferFromUser = vi.fn();
+    const ctx = context({ requestText: "again", walletService: { transferFromUser } });
+
+    await expect(transferWalletFunds(ctx, { destination: "bot", amountUsd: 0.5 }))
+      .resolves.toContain("No transfer was made");
+    expect(transferFromUser).not.toHaveBeenCalled();
+    expect(hasExplicitTransferIntent("give luke back $1")).toBe(true);
+    expect(hasExplicitTransferIntent("again")).toBe(false);
+    expect(hasExplicitTransferIntent("give me advice about saving $1")).toBe(false);
+    expect(hasExplicitTransferIntent("put $0.50 on heads")).toBe(false);
+  });
+
+  it("grants the configured starter amount only through the requester-bound zero-balance flow", async () => {
+    const transactionHash = `0x${"7".repeat(64)}`;
+    const request = vi.fn(async (_input: unknown, record: PaymentEventRecorder) => {
+      await record({ eventName: "wallet.transfer.confirmed", summary: "starter", metadata: { transactionHash } });
+      return { granted: true, amountUsd: 1, ...transferResult(transactionHash) };
+    });
+    const ctx = context({ requestText: "I'm at $0, can I get $1 to play again?", walletService: { requestStarterFunds: request } });
+
+    const result = await requestStarterFunds(ctx);
+
+    expect(result).toContain("Added $1 USD from the AI treasury");
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ requestedByUserId: "requester" }), expect.any(Function));
+    expect(ctx.footerLines).toContain(`💸 [transaction 0x777777…777777](https://explore.tempo.xyz/tx/${transactionHash})`);
+  });
+
+  it("reports a positive verified balance without issuing starter funds", async () => {
+    const request = vi.fn(async () => ({ granted: false, balance: { formatted: "0.25" } }));
+    const ctx = context({ requestText: "give me $1 to play again", walletService: { requestStarterFunds: request } });
+
+    await expect(requestStarterFunds(ctx)).resolves.toContain("verified wallet balance is $0.25 USD");
   });
 
   it("fails closed if requester identity changes after ingress", async () => {
@@ -179,6 +279,7 @@ function context(input: {
   repo?: Record<string, unknown>;
   walletService?: Record<string, unknown>;
   fetchDiscordGuildMembers?: ToolContext["fetchDiscordGuildMembers"];
+  requestText?: string;
 } = {}): ToolContext {
   const auditTool = vi.fn(async () => undefined);
   return {
@@ -189,7 +290,8 @@ function context(input: {
         walletEnabled: true,
         userWalletsEnabled: true,
         balancesPublic: input.walletBalancesPublic ?? false,
-        tempoNetwork: "mainnet"
+        tempoNetwork: "mainnet",
+        initialGrantUsd: 1
       }
     },
     guildId: "guild",
@@ -198,6 +300,7 @@ function context(input: {
     userDisplayName: "Requester",
     requestId: "message-1",
     requestMessageId: "message-1",
+    requestText: input.requestText ?? "send $2 to friend",
     requesterScope: Object.freeze({
       requestId: "message-1",
       messageId: "message-1",
@@ -208,20 +311,21 @@ function context(input: {
     }),
     repo: { auditTool, ...(input.repo ?? {}) },
     walletService: input.walletService,
-    fetchDiscordGuildMembers: input.fetchDiscordGuildMembers
+    fetchDiscordGuildMembers: input.fetchDiscordGuildMembers,
+    footerLines: []
   } as unknown as ToolContext;
 }
 
 function walletSummary(balance: string) {
   return {
     wallet: { address: `0x${"1".repeat(40)}`, initialGrantTransferId: "grant" },
-    balance: { formatted: balance, token: { symbol: "USDC.e" } }
+    balance: { formatted: balance, amountAtomic: BigInt(Math.round(Number(balance) * 1_000_000)), token: { symbol: "USDC.e" } }
   };
 }
 
-function transferResult() {
+function transferResult(transactionHash = `0x${"9".repeat(64)}`) {
   return {
-    transfer: { status: "confirmed", transactionHash: `0x${"9".repeat(64)}` },
+    transfer: { status: "confirmed", transactionHash },
     source: { wallet: {}, balance: { formatted: "3" } },
     destination: { wallet: {}, balance: { formatted: "2" } }
   };

@@ -4,8 +4,8 @@ import {
 } from "../tools/registry.js";
 import { previewText } from "../util/logger.js";
 import type { AgentToolRoute } from "./routerShared.js";
+import type { ForcedWalletActionTool } from "./walletActionGuard.js";
 import { parseToolArguments } from "./toolArguments.js";
-import type { ForcedWalletBalanceOwner } from "./walletStatusGuard.js";
 
 export function selectModelToolRoutes(
   toolCalls: Array<{ id: string; name: string; argumentsText: string }>,
@@ -39,16 +39,18 @@ export function coerceGeneratedCsvProducerRoutes(
   });
 }
 
-export function bindForcedWalletBalanceOwner(
-  routes: AgentToolRoute[],
-  owner: ForcedWalletBalanceOwner | null,
-): AgentToolRoute[] {
-  if (!owner) return routes;
-  return routes.map((route) => {
-    if (route.name !== "getWalletBalance") return route;
-    const args = { owner };
-    return { ...route, arguments: args, argumentsText: JSON.stringify(args) };
-  });
+export function selectNextRoundToolChoice(input: {
+  forceWagerSettlement: boolean;
+  forceToolUse: boolean;
+  initialWalletAction?: ForcedWalletActionTool;
+}) {
+  if (input.forceWagerSettlement) {
+    return { type: "function" as const, function: { name: "settleRandomWager" as const } };
+  }
+  if (input.initialWalletAction) {
+    return { type: "function" as const, function: { name: input.initialWalletAction } };
+  }
+  return input.forceToolUse ? "required" as const : undefined;
 }
 
 export function traceToolRequestMetadata(call: {

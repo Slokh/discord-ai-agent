@@ -3,6 +3,7 @@ import {
   getWalletBalance,
   listWalletBalances,
   reconcileWalletTransfers,
+  requestStarterFunds,
   transferWalletFunds
 } from "../tools/walletTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
@@ -19,7 +20,9 @@ export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolR
     };
   }
   if (route.name === "listWalletBalances") {
-    return listWalletBalances(ctx);
+    return listWalletBalances(ctx, {
+      view: stringArgument(route.arguments, "view") as "balances" | "addresses" | "both" | undefined
+    });
   }
   if (route.name === "transferWalletFunds") {
     return {
@@ -29,6 +32,9 @@ export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolR
         amountUsd: numberArgument(route.arguments, "amountUsd")
       }), ctx.config.maxReplyChars)
     };
+  }
+  if (route.name === "requestStarterFunds") {
+    return { content: cleanResponse(await requestStarterFunds(ctx), ctx.config.maxReplyChars) };
   }
   if (route.name === "adminTransferWalletFunds") {
     return {

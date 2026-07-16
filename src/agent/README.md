@@ -26,6 +26,8 @@ Owns the model loop for one user prompt.
 - `randomOutcomeGuard.ts`: detects fresh chance outcomes that lack a successful `drawRandom` result, drives one in-turn retry, and provides the fail-closed response used by the model loop.
 - `freshExternalDataGuard.ts`: detects time-sensitive price, fare, schedule, availability, and similar answers that lack fresh web evidence, drives one retrieval retry, and fails closed instead of publishing invented live data.
 - `walletStatusGuard.ts`: forces wallet balance prompts through the managed wallet balance tool without capturing bank, game, or unrelated balance requests.
+- `walletActionGuard.ts`: forces explicit USD transfer and zero-balance restart prompts through their guarded wallet tools without capturing wagers.
+- `deterministicWalletRoute.ts`: executes balance-guard routes directly against managed wallet tools, preserving tool transcripts and telemetry without a model-selection hop.
 - `routerShared.ts`: `AgentToolRoute`/`ModelCallBudget` types, round/call ceilings, `reserveModelCall`.
 - `runtimeTranscript.ts`: single event-recording helper for trace events, spans, audits, and runtime transcript appends.
 

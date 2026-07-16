@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   walletBalance: vi.fn(),
   walletBalances: vi.fn(),
   transfer: vi.fn(),
+  starterFunds: vi.fn(),
   adminTransfer: vi.fn(),
   reconcileWallets: vi.fn()
 }));
@@ -13,6 +14,7 @@ vi.mock("../../src/tools/walletTools.js", () => ({
   getWalletBalance: mocks.walletBalance,
   listWalletBalances: mocks.walletBalances,
   transferWalletFunds: mocks.transfer,
+  requestStarterFunds: mocks.starterFunds,
   adminTransferWalletFunds: mocks.adminTransfer,
   reconcileWalletTransfers: mocks.reconcileWallets
 }));
@@ -26,6 +28,7 @@ describe("executeWalletToolRoute", () => {
     mocks.walletBalance.mockResolvedValue(" wallet ");
     mocks.walletBalances.mockResolvedValue({ content: "wallet directory" });
     mocks.transfer.mockResolvedValue(" transferred ");
+    mocks.starterFunds.mockResolvedValue(" starter funded ");
     mocks.adminTransfer.mockResolvedValue(" admin transferred ");
     mocks.reconcileWallets.mockResolvedValue(" wallets reconciled ");
   });
@@ -51,11 +54,18 @@ describe("executeWalletToolRoute", () => {
     await expect(executeWalletToolRoute(ctx, route("reportStatus", {}))).resolves.toBeNull();
   });
 
+  it("routes requester starter funding without model-supplied wallet arguments", async () => {
+    const ctx = context();
+    await expect(executeWalletToolRoute(ctx, route("requestStarterFunds", { amountUsd: 999 })))
+      .resolves.toEqual({ content: "starter funded" });
+    expect(mocks.starterFunds).toHaveBeenCalledWith(ctx);
+  });
+
   it("routes the server wallet directory without truncating its tool payload", async () => {
     const ctx = context();
-    await expect(executeWalletToolRoute(ctx, route("listWalletBalances", {})))
+    await expect(executeWalletToolRoute(ctx, route("listWalletBalances", { view: "addresses" })))
       .resolves.toEqual({ content: "wallet directory" });
-    expect(mocks.walletBalances).toHaveBeenCalledWith(ctx);
+    expect(mocks.walletBalances).toHaveBeenCalledWith(ctx, { view: "addresses" });
   });
 });
 

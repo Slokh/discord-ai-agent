@@ -12,9 +12,9 @@ import {
   type RngDrawParams
 } from "../rng/provable.js";
 import { summarizeForAudit } from "../util/text.js";
-import { recordAgentEvent } from "../agent/runtimeTranscript.js";
 import { atomicToUsd } from "../payments/money.js";
-import type { PaymentEventRecorder, WagerReservation } from "../payments/types.js";
+import type { WagerReservation } from "../payments/types.js";
+import { paymentRecorder } from "./paymentToolContext.js";
 import type { ToolContext } from "./types.js";
 
 export type DrawRandomInput = {
@@ -48,7 +48,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
     return `Unknown draw kind "${kind}". Supported kinds: integers, dice, coin, pick, shuffle, cards.`;
   }
-  if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWager(ctx.requestText ?? "")) {
+  if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWagerForContext(ctx)) {
     const error = "This request risks real USD, so drawRandom requires a wallet-backed wager with stakeUsd, maxPayoutUsd, and game before any randomness is consumed.";
     await auditRng(ctx, "drawRandom", input, error);
     return error;
@@ -174,11 +174,22 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
 }
 
 export function requiresWalletBackedWager(text: string): boolean {
-  const money = /(?:\$\s*\d+(?:\.\d+)?|\b\d+(?:\.\d+)?\s*(?:usd|dollars?|bucks?)\b)/i;
-  const shorthand = /(?:\b(?:bet|wager|stake|risk|put)\s+\$?\d+(?:\.\d+)?\b|\b\$?\d+(?:\.\d+)?\s+(?:on|per\s+(?:spin|hand|roll|game)|each)\b)/i;
-  const game = /\b(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|lottery|wager|bet)\b/i;
+  const amount = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
+  const money = new RegExp(String.raw`(?:\$\s*${amount}|(?<![\w.])${amount}\s*(?:usd|dollars?|bucks?)\b)`, "i");
+  const shorthand = new RegExp(String.raw`(?:\b(?:bet|wager|stake|risk|put)\s+\$?${amount}(?![\w.])|(?<![\w.])\$?${amount}\s+(?:on|per\s+(?:spin|hand|roll|game)|each)\b)`, "i");
+  const game = /\b(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery|wager|bet)\b/i;
   const action = /\b(?:play|run|do|give|deal|roll|flip|spin|bet|wager|stake|risk|put|again|more)\b/i;
   return game.test(text) && ((money.test(text) && action.test(text)) || shorthand.test(text));
+}
+
+export function requiresWalletBackedWagerForContext(ctx: ToolContext): boolean {
+  const requestText = ctx.requestText ?? "";
+  if (requiresWalletBackedWager(requestText)) return true;
+  if (!/^\s*(?:again|same(?:\s+thing)?|one\s+more|do\s+it\s+again|repeat)\b/i.test(requestText)) return false;
+  const previousRequesterPrompt = [...(ctx.sessionMessages ?? [])]
+    .reverse()
+    .find((message) => message.role === "user" && message.authorId === ctx.userId && message.content.trim());
+  return previousRequesterPrompt ? requiresWalletBackedWager(previousRequesterPrompt.content) : false;
 }
 
 export async function settleRandomWager(
@@ -499,21 +510,10 @@ function validateWagerInput(input: DrawRandomInput): string | null {
     return "wager.maxPayoutUsd must be a non-negative amount that includes any returned stake.";
   }
   if (!game?.trim()) return "wager.game is required.";
+  if (input.kind === "cards" && (input.count ?? 1) < 4) {
+    return "A wallet-backed card game must draw its complete bounded game sequence in one call with count at least 4; do not draw one wagered card per model round.";
+  }
   return null;
-}
-
-function paymentRecorder(ctx: ToolContext): PaymentEventRecorder {
-  return async (event) => {
-    await recordAgentEvent(ctx, {
-      ...event,
-      traceId: ctx.requestId,
-      requestId: ctx.requestId,
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      messageId: ctx.requestMessageId
-    });
-  };
 }
 
 function drawParamsFor(kind: RngDrawKind, input: DrawRandomInput): RngDrawParams {

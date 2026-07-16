@@ -45,8 +45,8 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import {
-  bindForcedWalletBalanceOwner,
   coerceGeneratedCsvProducerRoutes,
+  selectNextRoundToolChoice,
   selectModelToolRoutes,
   traceToolRequestMetadata,
 } from "./modelToolRoutes.js";
@@ -65,7 +65,8 @@ import {
   initialToolsetState,
 } from "./modelToolset.js";
 import { walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
-
+import { walletActionToolForPrompt } from "./walletActionGuard.js";
+import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
@@ -122,9 +123,9 @@ async function runAgentModelLoopInternal(
     invalidToolCallRecoveryAttempted: false,
   };
   let forceToolUseNextRound = false;
+  let forceWagerSettlementNextRound = false;
   const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
-  let forcedWalletBalanceOwnerNextRound = forcedWalletBalanceRoute?.owner ?? null;
-  let forcedToolNameNextRound: ToolName | null = forcedWalletBalanceRoute?.toolName ?? null;
+  const forcedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -136,7 +137,6 @@ async function runAgentModelLoopInternal(
     channelId: ctx.channelId,
     userId: ctx.userId,
   });
-
   let toolsetState = initialToolsetState(ctx, text);
 
   requestLogger.info(
@@ -178,6 +178,15 @@ async function runAgentModelLoopInternal(
     },
   });
 
+  if (forcedWalletBalanceRoute) {
+    return await executeDeterministicWalletBalanceRoute(ctx, {
+      route: forcedWalletBalanceRoute,
+      text,
+      requestLogger,
+      startedAt,
+    });
+  }
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     const roundStartedAt = Date.now();
     requestLogger.debug(
@@ -216,9 +225,6 @@ async function runAgentModelLoopInternal(
       },
     });
     const currentToolset = currentScopedToolset(ctx, toolsetState);
-    const forcedWalletBalanceOwnerThisRound = forcedToolNameNextRound === "getWalletBalance"
-      ? forcedWalletBalanceOwnerNextRound
-      : null;
     let response;
     try {
       if (!(await reserveModelCall(ctx, modelCallBudget, "round", { round: round + 1 }))) {
@@ -230,17 +236,13 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const toolChoice = forcedToolNameNextRound
-        ? { type: "function" as const, function: { name: forcedToolNameNextRound } }
-        : forceToolUseNextRound
-          ? "required" as const
-          : undefined;
+      const forceWagerSettlementThisRound = forceWagerSettlementNextRound;
+      const toolChoice = selectNextRoundToolChoice({ forceWagerSettlement: forceWagerSettlementThisRound, forceToolUse: forceToolUseNextRound, initialWalletAction: round === 0 ? forcedWalletActionTool ?? undefined : undefined });
       forceToolUseNextRound = false;
-      forcedToolNameNextRound = null;
-      forcedWalletBalanceOwnerNextRound = null;
+      forceWagerSettlementNextRound = false;
       response = await runObservedModelCall(ctx, {
         purpose: "tool_selection",
-        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort() },
+        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerSettlementThisRound ? "settleRandomWager" : round === 0 ? forcedWalletActionTool ?? undefined : undefined },
         chat: {
           messages,
           tools: toolDefinitionsForModel({
@@ -269,10 +271,7 @@ async function runAgentModelLoopInternal(
       throw error;
     }
 
-    const modelRoutes = bindForcedWalletBalanceOwner(
-      coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls)),
-      forcedWalletBalanceOwnerThisRound,
-    );
+    const modelRoutes = coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls));
     freshExternalDataGuard.noteRequestedTools(response.toolCalls.map((call) => call.name));
     const requestedToolRequests = response.toolCalls.map(
       traceToolRequestMetadata,
@@ -467,6 +466,7 @@ async function runAgentModelLoopInternal(
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
       randomOutcomeGuard.noteToolResult(route.name, result.content);
+      forceWagerSettlementNextRound = randomOutcomeGuard.requiresWagerSettlement();
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
         route.name !== "requestAdditionalTools" &&

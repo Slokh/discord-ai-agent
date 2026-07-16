@@ -74,6 +74,7 @@ export type WalletTransfer = {
   destinationAddress: string;
   purpose:
     | "initial_grant"
+    | "starter_grant"
     | "game_settlement"
     | "user_transfer"
     | "admin_transfer"

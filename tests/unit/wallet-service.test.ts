@@ -265,6 +265,84 @@ describe("WalletService", () => {
     }));
     expect(result.transfer.status).toBe("confirmed");
   });
+
+  it("issues a requester-bound starter grant only after two guarded $0 balance checks", async () => {
+    const bot = wallet({ id: "wallet-bot", guildId: SHARED_BOT_GUILD_ID });
+    const user = wallet({
+      id: "wallet-user",
+      guildId: "guild-a",
+      ownerKind: "user",
+      discordUserId: "user-a",
+      providerWalletId: "privy-user",
+      externalId: "user-a",
+      address: `0x${"6".repeat(40)}`
+    });
+    const reserved = transferRecord({
+      id: "transfer-starter",
+      sourceWalletId: bot.id,
+      destinationWalletId: user.id,
+      destinationAddress: user.address!,
+      purpose: "starter_grant"
+    });
+    const createManagedTransfer = vi.fn(async () => reserved);
+    const repo = {
+      ensureWalletPlaceholder: vi.fn(async (input) => input.ownerKind === "bot" ? bot : user),
+      getWallet: vi.fn(async (id) => id === bot.id ? bot : user),
+      createManagedTransfer,
+      getTransfer: vi.fn(async () => reserved),
+      claimTransferSubmission: vi.fn(async () => ({ ...reserved, status: "submitting" })),
+      markTransferSubmitted: vi.fn(async () => ({ ...reserved, status: "submitted" })),
+      updateTransferStatus: vi.fn(async (input) => ({ ...reserved, status: input.status }))
+    } as unknown as PaymentRepository;
+    const config = loadConfig().payments;
+    config.userWalletsEnabled = true;
+    config.initialGrantUsd = 1;
+    const provider = providerFake();
+    let userReads = 0;
+    provider.getBalance = vi.fn(async ({ wallet: target }) => {
+      if (target.providerWalletId === "privy-user") return userReads++ < 2 ? 0n : 1_000_000n;
+      return 9_000_000n;
+    });
+    const service = new WalletService(config, repo, provider);
+
+    const result = await service.requestStarterFunds({
+      guildId: "guild-a",
+      requestedByUserId: "user-a",
+      requestId: "request-starter"
+    });
+
+    expect(result).toMatchObject({ granted: true, amountUsd: 1 });
+    expect(createManagedTransfer).toHaveBeenCalledWith(expect.objectContaining({
+      requestedByUserId: "user-a",
+      source: bot,
+      destination: user,
+      purpose: "starter_grant",
+      amountAtomic: 1_000_000n,
+      destinationBalanceAtomic: 0n,
+      destinationBalanceObservedAt: expect.any(Date)
+    }));
+  });
+
+  it("does not reserve starter funds when the requester has a positive balance", async () => {
+    const bot = wallet({ id: "wallet-bot" });
+    const user = wallet({ id: "wallet-user", guildId: "guild-a", ownerKind: "user", discordUserId: "user-a" });
+    const createManagedTransfer = vi.fn();
+    const repo = {
+      ensureWalletPlaceholder: vi.fn(async (input) => input.ownerKind === "bot" ? bot : user),
+      getWallet: vi.fn(async (id) => id === bot.id ? bot : user),
+      createManagedTransfer
+    } as unknown as PaymentRepository;
+    const config = loadConfig().payments;
+    config.userWalletsEnabled = true;
+    config.initialGrantUsd = 1;
+    const provider = providerFake();
+    provider.getBalance = vi.fn(async ({ wallet: target }) => target.providerWalletId === user.providerWalletId ? 250_000n : 9_000_000n);
+    const service = new WalletService(config, repo, provider);
+
+    await expect(service.requestStarterFunds({ guildId: "guild-a", requestedByUserId: "user-a", requestId: "request" }))
+      .resolves.toMatchObject({ granted: false, balance: { formatted: "0.25" } });
+    expect(createManagedTransfer).not.toHaveBeenCalled();
+  });
 });
 
 function providerFake(): WalletProvider {

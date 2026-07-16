@@ -474,7 +474,7 @@ export class PaymentRepository {
         "code" in error && error.code === "23505" &&
         "constraint" in error && error.constraint === "wallet_wagers_request_id_unique_idx"
       ) {
-        throw new Error("A wallet-backed wager already exists for this Discord request");
+        throw new Error("A wallet-backed wager already exists for this Discord request", { cause: error });
       }
       throw error;
     } finally {

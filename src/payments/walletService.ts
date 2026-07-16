@@ -443,7 +443,7 @@ export class WalletService {
           level: "error",
           metadata: { transferId: transfer.id, transactionHash, error: errorMessage(error) }
         });
-        throw new Error(`Transfer ${transfer.id} did not deliver to the intended managed wallet and will not be retried`);
+        throw new Error(`Transfer ${transfer.id} did not deliver to the intended managed wallet and will not be retried`, { cause: error });
       }
       await this.repo.updateTransferStatus({
         id: transfer.id,
@@ -456,7 +456,7 @@ export class WalletService {
         level: "error",
         metadata: { transferId: transfer.id, error: errorMessage(error) }
       });
-      throw new Error(`Transfer ${transfer.id} outcome is uncertain; it will be reconciled before any retry`);
+      throw new Error(`Transfer ${transfer.id} outcome is uncertain; it will be reconciled before any retry`, { cause: error });
     }
   }
 

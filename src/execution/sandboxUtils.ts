@@ -112,7 +112,7 @@ export async function withDirectoryLock<T>(lockDir: string, run: () => Promise<T
         await fs.rm(lockDir, { recursive: true, force: true }).catch(() => undefined);
         continue;
       }
-      if (Date.now() - startedAt > staleAfterMs) throw new Error(`Timed out waiting for cache lock ${lockDir}`);
+      if (Date.now() - startedAt > staleAfterMs) throw new Error(`Timed out waiting for cache lock ${lockDir}`, { cause: error });
       await sleep(500);
     }
   }

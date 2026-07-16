@@ -248,7 +248,7 @@ async function runCodexAppServerAttempt(input: CodegenHarnessRunInput & {
   const transcriptLines: string[] = [];
   let threadId = input.threadId;
   let terminalMethod: string | undefined;
-  let exitCode = 0;
+  let exitCode: number;
   let errorText = "";
   let reportedNotifications = 0;
   let startedTurn = false;

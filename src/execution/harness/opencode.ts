@@ -312,7 +312,7 @@ export async function fetchOpenCodeHealth(input: { serverUrl: string; timeoutMs?
       body: response.ok ? "" : await response.text()
     };
   } catch (error) {
-    if (timedOut) throw new Error(`OpenCode health probe timed out after ${formatDuration(timeoutMs)}.`);
+    if (timedOut) throw new Error(`OpenCode health probe timed out after ${formatDuration(timeoutMs)}.`, { cause: error });
     throw error;
   } finally {
     clearTimeout(timeout);

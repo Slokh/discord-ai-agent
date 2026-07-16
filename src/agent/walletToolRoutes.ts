@@ -17,7 +17,6 @@ import type { AgentToolRoute } from "./routerShared.js";
 export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolRoute): Promise<AgentResponse | null> {
   if (route.name === "awaitRandomWagerAction") {
     const content = cleanResponse(await awaitRandomWagerAction(ctx, {
-      wagerId: stringArgument(route.arguments, "wagerId"),
       expectedVersion: numberArgument(route.arguments, "expectedVersion"),
       state: recordArgument(route.arguments, "state"),
       allowedActions: stringArrayArgument(route.arguments, "allowedActions"),

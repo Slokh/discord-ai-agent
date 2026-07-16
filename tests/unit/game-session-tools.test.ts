@@ -9,7 +9,7 @@ describe("awaitRandomWagerAction", () => {
     const ctx = context(awaitGameAction);
 
     const response = await awaitRandomWagerAction(ctx, {
-      wagerId: "wager_1",
+      wagerId: "wager_typo",
       expectedVersion: 1,
       state: { game: "blackjack", player: ["A♥", "7♣"], dealerUp: "9♦" },
       allowedActions: [" Hit ", "stand", "hit"],
@@ -33,7 +33,6 @@ describe("awaitRandomWagerAction", () => {
     const ctx = context(awaitGameAction);
 
     const response = await awaitRandomWagerAction(ctx, {
-      wagerId: "wager_1",
       expectedVersion: 0,
       state: {},
       allowedActions: [],
@@ -50,7 +49,6 @@ describe("awaitRandomWagerAction", () => {
     }));
 
     const response = await awaitRandomWagerAction(ctx, {
-      wagerId: "wager_1",
       expectedVersion: 1,
       state: { turn: 2 },
       allowedActions: ["roll"],
@@ -68,8 +66,11 @@ function context(awaitGameAction: ReturnType<typeof vi.fn>): ToolContext {
     channelId: "channel",
     userId: "user",
     requestId: "message_2",
+    requestMessageId: "message_2",
+    threadKey: "guild:channel",
+    replyContext: { rootMessageId: "message_1" },
     repo: { auditTool: vi.fn(async () => undefined) },
-    walletService: { awaitGameAction },
+    walletService: { getCurrentWager: vi.fn(async () => wager()), awaitGameAction },
   } as unknown as ToolContext;
 }
 

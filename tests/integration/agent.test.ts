@@ -291,7 +291,6 @@ describe("agent router", () => {
           id: "save-game",
           name: "awaitRandomWagerAction",
           argumentsText: JSON.stringify({
-            wagerId: activeWager.id,
             expectedVersion: 1,
             state: { ...activeWager.decisionState, held: [1, 3] },
             allowedActions: ["roll", "change holds", "score now"],
@@ -321,7 +320,11 @@ describe("agent router", () => {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined),
       },
-      walletService: { getActiveGameSession, awaitGameAction },
+      walletService: {
+        getActiveGameSession,
+        getCurrentWager: vi.fn(async () => activeWager),
+        awaitGameAction
+      },
       openRouter: { chat },
       guildId: "g",
       channelId: "c",

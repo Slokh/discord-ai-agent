@@ -673,13 +673,13 @@ describe("drawRandom", () => {
         userBalance: { formatted: "2.75", symbol: "USDC.e" }
       };
     });
+    const getCurrentWager = vi.fn(async () => ({ id: "wager-1" }));
     const { ctx, footerLines } = fakeContext({
       config: { maxReplyChars: 1800, payments: { userWalletsEnabled: true, tempoNetwork: "mainnet" } } as ToolContext["config"],
-      walletService: { settleWager } as unknown as ToolContext["walletService"]
+      walletService: { getCurrentWager, settleWager } as unknown as ToolContext["walletService"]
     });
 
     const response = await settleRandomWager(ctx, {
-      wagerId: "wager-1",
       payoutUsd: 1,
       outcome: "player_win",
       resolutionSource: "verified_randomness",
@@ -703,6 +703,72 @@ describe("drawRandom", () => {
     expect(footerLines).toEqual([
       `💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`
     ]);
+  });
+
+  it("uses the scoped wager when a legacy model call corrupts the opaque wager id", async () => {
+    const getCurrentWager = vi.fn(async () => ({ id: "wager_68db51b7-1466-4ed4-b20c-128f8aeab273" }));
+    const settleWager = vi.fn(async () => ({ wager: {}, transfer: null, userBalance: null }));
+    const { ctx } = fakeContext({
+      walletService: { getCurrentWager, settleWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await settleRandomWager(ctx, {
+      wagerId: "wager_668db51b7-1466-4ed4-b20c-128f8aeab273",
+      payoutUsd: 0,
+      outcome: "player_loss",
+      resolutionSource: "verified_randomness",
+      explanation: "Player loses to the higher verified total."
+    });
+
+    expect(getCurrentWager).toHaveBeenCalledWith({
+      threadKey: discordRngThreadKey(),
+      userId: "user"
+    });
+    expect(settleWager).toHaveBeenCalledWith(
+      expect.objectContaining({ wagerId: "wager_68db51b7-1466-4ed4-b20c-128f8aeab273" }),
+      expect.any(Function)
+    );
+    expect(response).toContain("scoped wallet wager settled");
+  });
+
+  it("returns a recoverable rejection when the scoped Discord session has no active wager", async () => {
+    const settleWager = vi.fn();
+    const { ctx } = fakeContext({
+      walletService: {
+        getCurrentWager: vi.fn(async () => null),
+        settleWager
+      } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await settleRandomWager(ctx, {
+      payoutUsd: 0,
+      outcome: "player_loss",
+      resolutionSource: "verified_randomness",
+      explanation: "The verified result is a loss."
+    });
+
+    expect(response).toContain("no active wallet wager");
+    expect(response).toContain("No transfer was created");
+    expect(settleWager).not.toHaveBeenCalled();
+  });
+
+  it("keeps a raced unknown-wager validation error inside the tool loop", async () => {
+    const { ctx } = fakeContext({
+      walletService: {
+        getCurrentWager: vi.fn(async () => ({ id: "wager_active" })),
+        settleWager: vi.fn(async () => { throw new Error("Unknown wager wager_active"); })
+      } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await settleRandomWager(ctx, {
+      payoutUsd: 0,
+      outcome: "player_loss",
+      resolutionSource: "verified_randomness",
+      explanation: "The verified result is a loss."
+    });
+
+    expect(response).toContain("Settlement rejected: Unknown wager wager_active");
+    expect(response).toContain("No transfer was created");
   });
 
   it("rejects settlement calculations that leave a wallet-backed game unfinished", async () => {

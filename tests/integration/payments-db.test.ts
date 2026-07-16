@@ -285,6 +285,10 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       "UPDATE wallet_wager_reservations SET status = 'drawn', updated_at = now() WHERE id = $1",
       [wager.id],
     );
+    await expect(repo.getCurrentWager({
+      threadKey: wager.threadKey,
+      requestedByUserId: "game-user",
+    })).resolves.toMatchObject({ id: wager.id, awaitingAction: false });
 
     const first = await repo.saveGameDecision({
       wagerId: wager.id,

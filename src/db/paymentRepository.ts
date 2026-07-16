@@ -504,6 +504,17 @@ export class PaymentRepository {
     return result.rows[0] ? mapWager(result.rows[0]) : null;
   }
 
+  async getCurrentWager(input: { threadKey: string; requestedByUserId: string }): Promise<WagerReservation | null> {
+    const result = await this.pool.query(
+      `SELECT ${WAGER_COLUMNS} FROM wallet_wager_reservations
+       WHERE thread_key = $1 AND requested_by_user_id = $2
+         AND status = 'drawn' AND expires_at > now()
+       ORDER BY updated_at DESC LIMIT 1`,
+      [input.threadKey, input.requestedByUserId]
+    );
+    return result.rows[0] ? mapWager(result.rows[0]) : null;
+  }
+
   async saveGameDecision(input: {
     wagerId: string;
     requestedByUserId: string;

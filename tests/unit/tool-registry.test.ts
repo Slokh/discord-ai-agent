@@ -89,6 +89,14 @@ describe("toolRegistry", () => {
       .toHaveProperty("view");
   });
 
+  it("scopes wager continuation tools without exposing opaque wager ids to the model", () => {
+    for (const name of ["awaitRandomWagerAction", "settleRandomWager"] as const) {
+      const tool = toolRegistry.find((entry) => entry.name === name);
+      expect(tool?.parameters.properties).not.toHaveProperty("wagerId");
+      expect(tool?.parameters.required ?? []).not.toContain("wagerId");
+    }
+  });
+
   it("exports a self-documenting contract for every local tool", () => {
     const contracts = toolContracts();
     expect(contracts.map((tool) => tool.name)).toEqual(toolRegistry.map((tool) => tool.name));

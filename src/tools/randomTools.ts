@@ -207,7 +207,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     `Result: ${draw.summary}`,
     `Session ${sessionId} · nonce ${draw.nonce} · draw ${draw.drawId} · commitment sha256:${commitment}`,
     wager
-      ? `Wager ${wager.id} is reserved. You MUST now either call awaitRandomWagerAction with complete state if the player has a decision, or call settleRandomWager once after a final outcome.`
+      ? `The scoped wallet wager is reserved. You MUST now either call awaitRandomWagerAction with complete state if the player has a decision, or call settleRandomWager once after a final outcome. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
       : null,
     `Report this result exactly as shown. A proof footer is appended to your reply automatically; do not restate or alter the proof details.`
   ].filter((line): line is string => line !== null).join("\n");
@@ -244,10 +244,8 @@ export async function settleRandomWager(
 ): Promise<string> {
   if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
   if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
-  const wagerId = input.wagerId?.trim();
   const explanation = input.explanation?.trim();
   const requestId = ctx.requestId ?? ctx.requestMessageId;
-  if (!wagerId) return "wagerId is required.";
   if (!requestId) return "A stable request id is required before a wager can be settled.";
   if (input.payoutUsd == null || !Number.isFinite(input.payoutUsd) || input.payoutUsd < 0) {
     return "payoutUsd must be a non-negative amount.";
@@ -260,6 +258,20 @@ export async function settleRandomWager(
   if (describesUnfinishedWager(explanation)) {
     return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. Otherwise resolve the remaining deterministic steps and call settleRandomWager again with the final payout.";
   }
+  const wager = await currentWagerForContext(ctx);
+  if (!wager) {
+    return "Settlement rejected: no active wallet wager exists for this player in this Discord game session. No transfer was created.";
+  }
+  const suppliedWagerId = input.wagerId?.trim();
+  if (suppliedWagerId && suppliedWagerId !== wager.id) {
+    await paymentRecorder(ctx)({
+      eventName: "wallet.wager.id_hint_corrected",
+      summary: "Ignored a stale or malformed model-supplied wager id and used the scoped active wager",
+      level: "warn",
+      metadata: { suppliedWagerId, resolvedWagerId: wager.id }
+    });
+  }
+  const wagerId = wager.id;
   let settled: Awaited<ReturnType<typeof ctx.walletService.settleWager>>;
   try {
     settled = await ctx.walletService.settleWager(
@@ -276,13 +288,13 @@ export async function settleRandomWager(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/settlement outcome|interactive wager|persisted player decision|new Discord reply|stable settlement request/i.test(message)) {
+    if (/unknown wager|not ready to settle|has expired|payout is outside|only the user|settlement outcome|interactive wager|persisted player decision|new Discord reply|stable settlement request/i.test(message)) {
       return `Settlement rejected: ${message}. No transfer was created.`;
     }
     throw error;
   }
   return [
-    `Wager ${wagerId} settled.`,
+    `The scoped wallet wager settled.`,
     `Payout: $${input.payoutUsd}.`,
     settled.transfer
       ? `Net transfer: $${atomicToUsd(settled.transfer.amountAtomic, settled.transfer.tokenDecimals)} USD (${settled.transfer.status})${settled.transfer.transactionHash ? ` · ${settled.transfer.transactionHash}` : ""}.`
@@ -574,6 +586,13 @@ export function wagerThreadKeyForContext(ctx: ToolContext): string | null {
   if (!baseThreadKey) return null;
   const rootMessageId = ctx.replyContext?.rootMessageId?.trim() || ctx.requestMessageId?.trim();
   return rootMessageId ? `${baseThreadKey}:${RNG_ROOT_SCOPE_SEGMENT}:${rootMessageId}` : baseThreadKey;
+}
+
+export async function currentWagerForContext(ctx: ToolContext): Promise<WagerReservation | null> {
+  if (!ctx.walletService) return null;
+  const threadKey = wagerThreadKeyForContext(ctx);
+  if (!threadKey) return null;
+  return ctx.walletService.getCurrentWager({ threadKey, userId: ctx.userId });
 }
 
 function validateDrawInput(kind: string, input: DrawRandomInput): string | null {

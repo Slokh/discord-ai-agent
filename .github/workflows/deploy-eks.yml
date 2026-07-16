@@ -59,7 +59,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Build and push images
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}

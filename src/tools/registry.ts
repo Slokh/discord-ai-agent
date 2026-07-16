@@ -754,7 +754,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "generateImage",
     description:
-      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for make/draw/generate image requests and for edits like 'make this into...', 'modify this', or 'use the attached image as a reference'.",
+      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for explicit make/draw/generate/regenerate requests and edits like 'make this into...', 'modify this', or 'use the attached image as a reference'. Do not call it for diagnosis-only questions such as why an image has a background or what format it uses unless the user also asks to change or regenerate the image. For emojis, stickers, cutouts, or background removal, request background=transparent and outputFormat=png; the tool also infers those settings from an explicit transparent/emoji/sticker prompt and reports the actual returned format and alpha status.",
     userVisible: true,
     mutates: false,
     group: "image",
@@ -773,6 +773,16 @@ export const toolRegistry: ToolRegistryEntry[] = [
         useContextImages: {
           type: "boolean",
           description: "Whether to include images attached to the current request or replied-to chain as references. Defaults to true when context images exist."
+        },
+        outputFormat: {
+          type: "string",
+          enum: ["png", "jpeg", "webp"],
+          description: "Requested image file format. Use png with a transparent background."
+        },
+        background: {
+          type: "string",
+          enum: ["auto", "transparent", "opaque"],
+          description: "Requested background treatment. Use transparent for emojis, stickers, cutouts, and explicit background removal."
         }
       },
       required: ["prompt"],
@@ -1586,7 +1596,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "createDiscordEmoji",
     description:
-      "Create a custom emoji in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, or create a server/custom emoji. The image is normalized to a transparent 128x128 WebP under Discord's 256 KiB limit; short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
+      "Create a custom emoji in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, or create a server/custom emoji. The image is normalized to a 128x128 WebP with transparent padding under Discord's 256 KiB limit; existing source backgrounds are never falsely treated as transparency. Generated sources require verified alpha by default and fail before upload when they are opaque. Short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -1612,6 +1622,10 @@ export const toolRegistry: ToolRegistryEntry[] = [
         useContextImage: {
           type: "boolean",
           description: "Whether to fall back to images in the current request or reply chain. Defaults to true."
+        },
+        requireTransparent: {
+          type: "boolean",
+          description: "Require real alpha transparency and refuse an opaque source before upload. Defaults to true for generated images and false for other sources."
         }
       },
       required: ["name"],

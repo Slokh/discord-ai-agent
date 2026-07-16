@@ -91,6 +91,17 @@ describe("toolRegistry", () => {
       .toHaveProperty("view");
   });
 
+  it("exposes explicit image alpha controls and transparent emoji validation", () => {
+    const imageProperties = toolRegistry.find((entry) => entry.name === "generateImage")?.parameters.properties;
+    const emojiProperties = toolRegistry.find((entry) => entry.name === "createDiscordEmoji")?.parameters.properties;
+
+    expect(imageProperties).toHaveProperty("background");
+    expect(imageProperties).toHaveProperty("outputFormat");
+    expect(emojiProperties).toHaveProperty("requireTransparent");
+    expect(toolRegistry.find((entry) => entry.name === "generateImage")?.description)
+      .toContain("Do not call it for diagnosis-only questions");
+  });
+
   it("scopes wager continuation tools without exposing opaque wager ids to the model", () => {
     for (const name of ["awaitRandomWagerAction", "settleRandomWager"] as const) {
       const tool = toolRegistry.find((entry) => entry.name === name);

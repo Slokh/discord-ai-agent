@@ -8,6 +8,7 @@ export type CreateDiscordEmojiInput = {
   imageUrl?: string;
   messageIdOrUrl?: string;
   useContextImage?: boolean;
+  requireTransparent?: boolean;
 };
 
 const MAX_SOURCE_BYTES = 8_000_000;
@@ -49,6 +50,18 @@ export async function createDiscordEmoji(ctx: ToolContext, input: CreateDiscordE
     await auditEmoji(ctx, input, `image preparation failed: ${message}`, true, { source: source.label });
     return `I could not prepare that image as a Discord emoji: ${message}`;
   }
+  const requireTransparent = input.requireTransparent ?? source.label.startsWith("generated image ");
+  if (requireTransparent && prepared.sourceTransparency !== "transparent") {
+    const result = prepared.sourceTransparency === "opaque"
+      ? "source image is opaque; no emoji was uploaded"
+      : "source transparency could not be verified; no emoji was uploaded";
+    await auditEmoji(ctx, input, result, true, { source: source.label, sourceTransparency: prepared.sourceTransparency });
+    return [
+      "I did not upload that emoji because the source does not contain verified alpha transparency.",
+      "A checkerboard drawn into a JPEG/PNG is still an opaque background.",
+      "Regenerate or provide a PNG/WebP with real transparency, then retry. Set requireTransparent=false only when an opaque rectangular emoji is intentional.",
+    ].join("\n");
+  }
 
   try {
     const created = await ctx.createDiscordEmoji({
@@ -62,11 +75,13 @@ export async function createDiscordEmoji(ctx: ToolContext, input: CreateDiscordE
       source: source.label,
       bytes: prepared.buffer.length,
       animationPreserved: prepared.animationPreserved,
+      sourceTransparency: prepared.sourceTransparency,
     });
     return [
       `Uploaded server emoji ${created.mention} as :${created.name}:.`,
       `Source: ${source.label}`,
       `Prepared: ${EMOJI_SIZE}×${EMOJI_SIZE} WebP · ${Math.ceil(prepared.buffer.length / 1024)} KiB`,
+      `Transparency: ${prepared.sourceTransparency === "transparent" ? "real source alpha preserved" : "opaque source retained by request"}`,
       prepared.animationFlattened ? "The source animation was flattened to its first frame to fit Discord's upload limit." : null,
     ].filter((line): line is string => Boolean(line)).join("\n");
   } catch (error) {
@@ -84,6 +99,7 @@ type PreparedEmoji = {
   buffer: Buffer;
   animationPreserved: boolean;
   animationFlattened: boolean;
+  sourceTransparency: "transparent" | "opaque" | "unknown";
 };
 
 async function resolveEmojiSource(ctx: ToolContext, input: CreateDiscordEmojiInput): Promise<EmojiSource | null> {
@@ -126,11 +142,12 @@ async function prepareEmoji(source: EmojiSource): Promise<PreparedEmoji> {
   }
 
   const metadata = await sharp(buffer, { animated: true, limitInputPixels: 40_000_000 }).metadata();
+  const sourceTransparency = await imageTransparency(buffer);
   const frames = metadata.pages ?? 1;
   const preserveAnimation = frames > 1 && frames <= MAX_ANIMATION_FRAMES;
   const animated = preserveAnimation ? await encodeEmoji(buffer, true) : null;
   if (animated && animated.length <= MAX_EMOJI_BYTES) {
-    return { buffer: animated, animationPreserved: true, animationFlattened: false };
+    return { buffer: animated, animationPreserved: true, animationFlattened: false, sourceTransparency };
   }
   const still = await encodeEmoji(buffer, false);
   if (still.length > MAX_EMOJI_BYTES) throw new Error("normalized image still exceeds Discord's 256 KiB emoji limit");
@@ -138,7 +155,25 @@ async function prepareEmoji(source: EmojiSource): Promise<PreparedEmoji> {
     buffer: still,
     animationPreserved: false,
     animationFlattened: frames > 1,
+    sourceTransparency,
   };
+}
+
+async function imageTransparency(buffer: Buffer): Promise<PreparedEmoji["sourceTransparency"]> {
+  try {
+    const { data, info } = await sharp(buffer, { pages: 1, limitInputPixels: 40_000_000 })
+      .toColourspace("srgb")
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const alphaOffset = info.channels - 1;
+    for (let index = alphaOffset; index < data.length; index += info.channels) {
+      if (data[index] < 255) return "transparent";
+    }
+    return "opaque";
+  } catch {
+    return "unknown";
+  }
 }
 
 async function encodeEmoji(buffer: Buffer, animated: boolean): Promise<Buffer> {
@@ -240,6 +275,7 @@ async function auditEmoji(
       imageUrl: input.imageUrl,
       messageIdOrUrl: input.messageIdOrUrl,
       useContextImage: input.useContextImage ?? true,
+      requireTransparent: input.requireTransparent,
     }),
     resultSummary: summarizeForAudit(extra ? { result: resultSummary, ...extra } : resultSummary),
     ...(isError ? { error: resultSummary } : {}),

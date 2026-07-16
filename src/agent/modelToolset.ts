@@ -30,6 +30,9 @@ export function initialToolsetState(ctx: ToolContext, text: string): ToolsetStat
       hasImageAttachments: hasImageContext(ctx.requestAttachments, ctx.replyContext),
       hasFileAttachments: hasFileContext(ctx.requestAttachments, ctx.replyContext),
       replyContext: Boolean(ctx.replyContext),
+      replyContextText: ctx.replyContext
+        ? [ctx.replyContext.content, ...ctx.replyContext.chain.map((message) => message.content)].join("\n")
+        : undefined,
       config: ctx.config,
     }),
     expandedAll: false,

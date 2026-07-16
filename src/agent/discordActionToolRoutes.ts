@@ -36,6 +36,7 @@ export async function executeDiscordActionToolRoute(
         imageUrl: stringArgument(route.arguments, "imageUrl"),
         messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
         useContextImage: booleanArgument(route.arguments, "useContextImage"),
+        requireTransparent: booleanArgument(route.arguments, "requireTransparent"),
       }), ctx.config.maxReplyChars),
     };
   }

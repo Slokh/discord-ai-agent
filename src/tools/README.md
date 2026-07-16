@@ -17,7 +17,7 @@ Owns model-facing local tool contracts and implementations.
 - `skillTools.ts`: private skill draft/update generation, policy validation, database persistence, and skill audit logging.
 - `spotifyTools.ts`: Spotify Web API client-credentials integration for public catalog search, item details, playlist/album track attachments, artist discographies, playlist stats, and playlist comparisons with current API limits and sanitized stored output.
 - `spendTools.ts`: ops spend summaries from `tool_audit_logs.estimated_cost_usd`, including today/month totals and top tool/user breakdowns.
-- `walletTools.ts`: conversational shared-wallet lifecycle status, funded-wallet directories, safe Discord-name resolution, zero-balance starter funding, requester transfers, and authorized reconciliation.
+- `walletTools.ts`: conversational shared-wallet lifecycle status, roster-independent funded-wallet directories backed by existing wallet accounts, safe Discord-name resolution, zero-balance starter funding, requester transfers, and authorized reconciliation.
 - `paymentToolContext.ts`: shared payment event recording and network-aware Tempo transaction explorer footers.
 - `discordOpsTools.ts`: reply-aware, permission-filtered self-debugging through `inspectAgentLogs`, including normalized run evidence and optional bounded redacted model I/O.
 - `discordBugTools.ts`: requester-scoped, permission-filtered retrieval of messages marked with the Unicode `🐛` reaction, including replied-to prompt context for later code-update tasks.

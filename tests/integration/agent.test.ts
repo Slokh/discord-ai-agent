@@ -137,6 +137,9 @@ describe("agent router", () => {
       },
       repo: {
         auditTool: vi.fn(async () => undefined),
+        getDiscordUserReferenceTerms: vi.fn(async () => [{
+          userId: "alice", username: "alice", globalName: "Alice", aliases: [], terms: []
+        }]),
         recordTraceEvent: vi.fn(async (event) => {
           traceEvents.push(event as { eventName: string; metadata?: Record<string, unknown> });
         }),
@@ -165,7 +168,8 @@ describe("agent router", () => {
     expect(response.content).toContain("```text\nWallet  Balance\nAI      $9.5\nAlice   $2.5\n```");
     expect(response.content).not.toContain("Bob");
     expect(chat).toHaveBeenCalledTimes(1);
-    expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "g", userIds: ["alice", "bob"] });
+    expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "g" });
+    expect(fetchDiscordGuildMembers).not.toHaveBeenCalled();
     expect(traceEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({
         eventName: "agent.deterministic_tool.selected",
@@ -507,6 +511,69 @@ describe("agent router", () => {
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
       .toBe(true);
+  });
+
+  it("forces the reveal tool for an explicit randomness reveal", async () => {
+    const chat = vi.fn(async () => ({
+      content: "I will reveal the committed RNG session.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "Reveal randomness");
+
+    const request = ((chat.mock.calls as any[])[0]?.[0] ?? {}) as {
+      toolChoice?: unknown;
+      tools?: Array<{ function?: { name?: string } }>;
+    };
+    expect(request.toolChoice).toEqual({ type: "function", function: { name: "revealRandomness" } });
+    expect(request.tools?.some((tool) => tool.function?.name === "revealRandomness")).toBe(true);
+  });
+
+  it("does not short-circuit a balance-backed roulette wager into tool-free synthesis", async () => {
+    const getUserWalletSummary = vi.fn();
+    const chat = vi.fn(async () => ({
+      content: "I need a verified balance and RNG draw before resolving that wager.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: true, userWalletsEnabled: true, privyAppId: "app", privyAppSecret: "secret" },
+      },
+      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
+      walletService: { getUserWalletSummary },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "bet the rest of my balance on roulette");
+
+    expect(getUserWalletSummary).not.toHaveBeenCalled();
+    const request = ((chat.mock.calls as any[])[0]?.[0] ?? {}) as { tools?: Array<{ function?: { name?: string } }> };
+    expect(request.tools?.some((tool) => tool.function?.name === "getWalletBalance")).toBe(true);
+    expect(request.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
   });
 
   it("re-executes an exact drawRandom call after a failed result instead of treating it as successful evidence", async () => {

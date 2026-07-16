@@ -45,10 +45,7 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { coerceGeneratedCsvProducerRoutes, selectNextRoundToolChoice, selectModelToolRoutes, traceToolRequestMetadata } from "./modelToolRoutes.js";
-import {
-  RANDOM_OUTCOME_RETRY_GUIDANCE,
-  RandomOutcomeGuard,
-} from "./randomOutcomeGuard.js";
+import { RANDOM_OUTCOME_RETRY_GUIDANCE, RandomOutcomeGuard, randomToolForPrompt } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
@@ -126,6 +123,7 @@ async function runAgentModelLoopInternal(
   let forceWagerResolutionNextRound = false;
   const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
   const forcedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
+  const forcedRandomTool = randomToolForPrompt(text);
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -237,12 +235,12 @@ async function runAgentModelLoopInternal(
       }
       ctx.noteProgress?.();
       const forceWagerResolutionThisRound = forceWagerResolutionNextRound;
-      const toolChoice = selectNextRoundToolChoice({ forceWagerResolution: forceWagerResolutionThisRound, forceToolUse: forceToolUseNextRound, initialWalletAction: round === 0 ? forcedWalletActionTool ?? undefined : undefined });
+      const toolChoice = selectNextRoundToolChoice({ forceWagerResolution: forceWagerResolutionThisRound, forceToolUse: forceToolUseNextRound, initialForcedTool: round === 0 ? forcedWalletActionTool ?? forcedRandomTool ?? undefined : undefined });
       forceToolUseNextRound = false;
       forceWagerResolutionNextRound = false;
       response = await runObservedModelCall(ctx, {
         purpose: "tool_selection",
-        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerResolutionThisRound ? "wager_resolution" : round === 0 ? forcedWalletActionTool ?? undefined : undefined },
+        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerResolutionThisRound ? "wager_resolution" : round === 0 ? forcedWalletActionTool ?? forcedRandomTool ?? undefined : undefined },
         chat: {
           messages,
           tools: toolDefinitionsForModel({

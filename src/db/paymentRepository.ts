@@ -47,13 +47,15 @@ export class PaymentRepository {
     return result.rows[0] ? mapAccount(result.rows[0]) : null;
   }
 
-  async listUserWallets(input: { guildId: string; userIds: string[]; chainId: number }): Promise<WalletAccount[]> {
-    if (input.userIds.length === 0) return [];
+  async listUserWallets(input: { guildId: string; userIds?: string[]; chainId: number }): Promise<WalletAccount[]> {
+    if (input.userIds?.length === 0) return [];
+    const userFilter = input.userIds ? "AND discord_user_id = ANY($2::text[])" : "";
+    const chainIdParameter = input.userIds ? "$3" : "$2";
     const result = await this.pool.query(
       `SELECT ${ACCOUNT_COLUMNS} FROM wallet_accounts
-       WHERE guild_id = $1 AND owner_kind = 'user' AND discord_user_id = ANY($2::text[]) AND chain_id = $3
+       WHERE guild_id = $1 AND owner_kind = 'user' ${userFilter} AND chain_id = ${chainIdParameter}
        ORDER BY discord_user_id`,
-      [input.guildId, input.userIds, input.chainId]
+      input.userIds ? [input.guildId, input.userIds, input.chainId] : [input.guildId, input.chainId]
     );
     return result.rows.map(mapAccount);
   }

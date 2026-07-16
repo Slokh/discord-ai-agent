@@ -161,8 +161,8 @@ const GENERATED_DATA_KEYWORDS = [
 const DISCORD_ACTION_KEYWORDS = [
   /\b(poll|vote|undo|delete your|remove your|forget your)\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
-  /\b(random|randomly|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
-  /\b(reveal)\b.*\b(random|seed|proof|commitment)\b/,
+  /\b(random|randomly|randomness|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
+  /\b(reveal)\b.*\b(random|randomness|seed|proof|commitment)\b/,
 ];
 
 const SPOTIFY_KEYWORDS = [

@@ -1,15 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   isSuccessfulRandomDrawResult,
+  randomToolForPrompt,
   RandomOutcomeGuard,
   shouldRejectUnverifiedRandomOutcome,
 } from "../../src/agent/randomOutcomeGuard.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("random outcome guard", () => {
+  it("routes an explicit fairness reveal to the reveal tool", () => {
+    expect(randomToolForPrompt("Reveal randomness")).toBe("revealRandomness");
+    expect(randomToolForPrompt("prove the RNG commitment")).toBe("revealRandomness");
+    expect(randomToolForPrompt("explain randomness")).toBeNull();
+  });
+
   it.each([
     ["ordinary overlay", "Roll: 3. English.\n\nHere is the answer."],
     ["roulette", "The wheel spins...\n\n21 red. You lose."],
+    ["roulette synthesis", "Spinning the wheel... 🔴 **17 BLACK — hits 17!** You nailed it."],
     ["craps", "Come-out roll: 🎲 4 + 🎲 3 = 7 — seven-out."],
     ["slots", "| Spin | Reel 1 | Reel 2 | Reel 3 | Result |\n| 1 | 🍒 | ⭐ | 🍋 | Loss |"],
     ["blackjack", "Let's deal.\n\nYour hand: 9♣ 4♠\nDealer shows: K♦"],

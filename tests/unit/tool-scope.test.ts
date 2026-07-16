@@ -39,6 +39,15 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
   });
 
+  it("exposes the reveal tool for an explicit randomness reveal", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "Reveal randomness", hasImageAttachments: false, replyContext: true, config });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("discord-action")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "revealRandomness")).toBe(true);
+  });
+
   it("always pairs wallet-backed randomness with pause and settlement tools", () => {
     withEnv({
       WALLET_ENABLED: "true",

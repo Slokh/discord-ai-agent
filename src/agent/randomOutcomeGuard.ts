@@ -8,9 +8,12 @@ const SUCCESSFUL_DRAW_PREFIX = "Provably fair draw complete.";
 const CHANCE_INTENT =
   /\b(random(?:ly)?|chance|roll|dice|d\d+|coin|flip|pick|choose|shuffle|draw|deal|cards?|hand|shoe|blackjack|poker|roulette|wheel|craps|slots?|spins?|bet|casino|lottery|raffle|winner)\b/i;
 
+const REVEAL_RANDOMNESS_INTENT = /\b(?:reveal|verify|prove)\b[\s\S]{0,80}\b(?:random(?:ness)?|fairness|seed|proof|commitment)\b/i;
+
 const STRONG_OUTCOME_PATTERNS = [
   /^\s*Roll:\s*\d+\b/im,
   /\b(?:roulette spin|wheel spins?|ball lands?|spin result)\b[\s\S]{0,180}\b(?:0|[1-9]|[12]\d|3[0-6])\b/i,
+  /\bspinning the wheel\b[\s\S]{0,180}\b(?:0|[1-9]|[12]\d|3[0-6])\b/i,
   /\bSpin\s+\d+\s*:\s*(?:0|[1-9]|[12]\d|3[0-6])\b/i,
   /\bcome-out roll\b|\bseven-out\b/i,
   /🎲\s*\d+\s*\+\s*🎲\s*\d+\s*=\s*\d+/,
@@ -37,6 +40,10 @@ export const RANDOM_OUTCOME_BLOCKED_RESPONSE =
   "I couldn't complete a verified random draw, so I didn't apply or report an outcome. Try that action again.";
 
 export type RandomOutcomeGuardDecision = "allow" | "retry" | "block";
+
+export function randomToolForPrompt(text: string): "revealRandomness" | null {
+  return REVEAL_RANDOMNESS_INTENT.test(text) ? "revealRandomness" : null;
+}
 
 export class RandomOutcomeGuard {
   private successfulDraw = false;

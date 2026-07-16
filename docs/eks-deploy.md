@@ -63,6 +63,15 @@ configure at least `WALLET_ENABLED=true`, `USER_WALLETS_ENABLED=false`, and
 repository variables prevents an automated `main` deployment from silently
 reverting a manually configured Helm release to disabled payment features.
 
+To post automatic deployment notes, set the repository variable
+`RELEASE_NOTES_CHANNEL_ID` to the destination Discord channel ID. Before each
+Helm upgrade, the workflow reads `APP_REVISION` from the currently running bot
+and passes it to the new bot as `PREVIOUS_APP_REVISION`. The bot compares those
+exact commits on GitHub, writes a few plain-English bullets with the utility
+model, and records a durable claim so restarts and replica overlap do not
+double-post. A first startup without a known previous revision records a
+baseline and waits for the next real diff.
+
 Optional permission keys (strongly recommended): the chart maps these into every
 pod when present in the same Secret. Without them, restricted tools (code-update
 tasks, avatar updates, per-user turn limits, allowlist-only image generation)

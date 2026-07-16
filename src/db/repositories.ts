@@ -7,6 +7,7 @@ import * as processRunRepository from "./processRunRepository.js";
 import * as agentTaskRepository from "./agentTaskRepository.js";
 import * as discordArchiveRepository from "./discordArchiveRepository.js";
 import * as discordBugMarkerRepository from "./discordBugMarkerRepository.js";
+import * as deploymentAnnouncementRepository from "./deploymentAnnouncementRepository.js";
 import * as retrievalRepository from "./retrievalRepository.js";
 import type { PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
 export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
@@ -17,6 +18,11 @@ export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMar
 
 export class DiscordAiAgentRepository {
   constructor(private readonly pool: DbPool) {}
+  claimDeploymentAnnouncement(input: deploymentAnnouncementRepository.DeploymentAnnouncementClaim) { return deploymentAnnouncementRepository.claimDeploymentAnnouncement(this.pool, input); }
+  recordDeploymentBaseline(input: Omit<deploymentAnnouncementRepository.DeploymentAnnouncementClaim, "previousRevision">) { return deploymentAnnouncementRepository.recordDeploymentBaseline(this.pool, input); }
+  latestDeploymentRevision(guildId: string) { return deploymentAnnouncementRepository.latestDeploymentRevision(this.pool, guildId); }
+  markDeploymentAnnouncementPosted(input: { guildId: string; revision: string; content: string; comparisonUrl: string; discordMessageId: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementPosted(this.pool, input); }
+  markDeploymentAnnouncementFailed(input: { guildId: string; revision: string; error: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementFailed(this.pool, input); }
   recordSkillChange(input: {
     skillName: string;
     filePath: string;

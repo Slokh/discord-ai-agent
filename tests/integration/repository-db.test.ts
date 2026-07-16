@@ -130,6 +130,30 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     })).resolves.toEqual([]);
   });
 
+  it("claims each deployment announcement once and tracks the latest posted revision", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const revision = randomUUID().replaceAll("-", "");
+    const claim = {
+      guildId,
+      revision,
+      previousRevision: "a".repeat(40),
+      repository: "example/repository",
+      channelId: `channel-${randomUUID()}`
+    };
+
+    await expect(repo.claimDeploymentAnnouncement(claim)).resolves.toBe(true);
+    await expect(repo.claimDeploymentAnnouncement(claim)).resolves.toBe(false);
+    await repo.markDeploymentAnnouncementPosted({
+      guildId,
+      revision,
+      content: "**Bot update**\n- Better replies.",
+      comparisonUrl: "https://github.com/example/repository/compare/a...b",
+      discordMessageId: `message-${randomUUID()}`
+    });
+    await expect(repo.latestDeploymentRevision(guildId)).resolves.toBe(revision);
+    await expect(repo.claimDeploymentAnnouncement(claim)).resolves.toBe(false);
+  });
+
   it("records privacy deletion for a user with no prior indexed messages", async () => {
     const userId = `user-${randomUUID()}`;
     await expect(repo.requestUserDeletion(userId)).resolves.toBeUndefined();
@@ -2953,6 +2977,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 });
 
 async function cleanupTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");
   await pool.query(
     `

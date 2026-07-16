@@ -52,6 +52,10 @@ secret:
 config:
   # Deployed commit SHA included in runtime and model-call telemetry.
   appRevision: unknown
+  # The deploy workflow fills this from the currently running bot before rollout.
+  previousAppRevision: ""
+  # Optional Discord channel for automatic plain-English deployment notes.
+  releaseNotesChannelId: ""
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main

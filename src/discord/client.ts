@@ -19,6 +19,7 @@ import { deletedMessageIdsForConfiguredGuild, isSelfMessage, isSelfUser, shouldP
 import { discordMessageTraceContext, recordTraceEvent } from "./requestContext.js";
 import { logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
+import { announceDeployment } from "./deploymentAnnouncements.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -74,6 +75,14 @@ export function createDiscordAiAgentBot(input: {
         maxReplyChars: input.config.maxReplyChars
       }).catch((error) => logger.warn({ err: error }, "Discord delivery obligation startup sweep failed"));
     }
+    void announceDeployment({
+      client: readyClient,
+      config: input.config,
+      repo: input.repo,
+      openRouter: input.openRouter
+    }).then((result) => {
+      if (result !== "disabled" && result !== "duplicate") logger.info({ result, revision: input.config.appRevision }, "Deployment announcement lifecycle completed");
+    }).catch((error) => logger.warn({ err: error, revision: input.config.appRevision }, "Deployment announcement failed"));
   });
 
   client.on(Events.ShardDisconnect, (event, shardId) => {

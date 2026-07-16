@@ -8,6 +8,8 @@ describe("config", () => {
         "DISCORD_CLIENT_ID",
         "DISCORD_GUILD_ID",
         "APP_REVISION",
+        "PREVIOUS_APP_REVISION",
+        "RELEASE_NOTES_CHANNEL_ID",
         "BOT_NAME",
         "DISCORD_LOADING_REACTION",
         "RUN_MIGRATIONS",
@@ -50,6 +52,7 @@ describe("config", () => {
         const config = loadConfig();
         expect(config.processRole).toBe("bot");
         expect(config.appRevision).toBe("unknown");
+        expect(config.releaseNotes).toEqual({ previousRevision: null, channelId: null });
         expect(config.discord.clientId).toBe("");
         expect(config.discord.guildId).toBe("");
         expect(config.discord.botName).toBe("ai");
@@ -166,8 +169,11 @@ describe("config", () => {
   });
 
   it("includes the deployed application revision", () => {
-    withEnv({ APP_REVISION: "abc123" }, () => {
-      expect(loadConfig().appRevision).toBe("abc123");
+    withEnv({ APP_REVISION: "abc123", PREVIOUS_APP_REVISION: "def456", RELEASE_NOTES_CHANNEL_ID: "123" }, () => {
+      expect(loadConfig()).toEqual(expect.objectContaining({
+        appRevision: "abc123",
+        releaseNotes: { previousRevision: "def456", channelId: "123" }
+      }));
     });
   });
 

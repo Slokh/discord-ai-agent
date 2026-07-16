@@ -1625,7 +1625,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. Unknown and decision-based games default to requiring a later player reply. Real-money games based on a secret the player can reveal after the bot acts are unverifiable and will be rejected before funds are reserved. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -1726,7 +1726,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "settleRandomWager",
     description:
-      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. Interactive games may span replies through awaitRandomWagerAction; settle only after the saved state reaches a final outcome. Never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. The service validates ownership, finality, the reserved maximum, duplicate settlement, and makes only the net onchain transfer.",
+      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. Interactive games may span replies through awaitRandomWagerAction; they cannot settle until a later Discord reply supplies the player's decision. Never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. outcome must agree with whether payoutUsd is above, below, or equal to the stake. Use resolutionSource=verified_randomness for automatic games and player_decision only when a persisted decision was resolved by the current reply. The service validates these facts before creating a transfer.",
     userVisible: false,
     mutates: true,
     group: "discord-action",
@@ -1740,9 +1740,19 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         wagerId: { type: "string", description: "Exact wager id returned by drawRandom." },
         payoutUsd: { type: "number", description: "Total USD payout including returned stake; 0 means the player loses the full stake." },
+        outcome: {
+          type: "string",
+          enum: ["player_win", "player_loss", "push"],
+          description: "Final result from the player's perspective. It must agree with payoutUsd relative to the reserved stake."
+        },
+        resolutionSource: {
+          type: "string",
+          enum: ["verified_randomness", "player_decision"],
+          description: "Use verified_randomness for an automatic result; use player_decision only after a persisted interactive game receives a later player reply."
+        },
         explanation: { type: "string", description: "Concise deterministic calculation from the draw result through the final outcome. It must not describe a pending decision or unfinished game." }
       },
-      required: ["wagerId", "payoutUsd", "explanation"],
+      required: ["wagerId", "payoutUsd", "outcome", "resolutionSource", "explanation"],
       additionalProperties: false
     }
   },

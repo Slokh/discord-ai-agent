@@ -11,6 +11,8 @@ import type { PaymentEventRecorder } from "../../src/payments/types.js";
 import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } from "../../src/rng/provable.js";
 import {
   drawRandom,
+  hasUncommittedPlayerSecretWager,
+  inferWagerInteractionMode,
   requiresWalletBackedWager,
   requiresWalletBackedWagerForContext,
   revealRandomness,
@@ -477,7 +479,14 @@ describe("drawRandom", () => {
     });
 
     expect(reserveWager).toHaveBeenCalledWith(
-      expect.objectContaining({ requestId: "req-1", userId: "user", stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }),
+      expect.objectContaining({
+        requestId: "req-1",
+        userId: "user",
+        stakeUsd: 0.25,
+        maxPayoutUsd: 1,
+        game: "generic dice",
+        interactionMode: "automatic"
+      }),
       expect.any(Function)
     );
     expect(attachWagerDraw).toHaveBeenCalledWith("wager-1", 1, expect.any(Function));
@@ -595,6 +604,45 @@ describe("drawRandom", () => {
     expect(rngRepo.sessions.size).toBe(0);
   });
 
+  it("rejects the incident's uncommitted-secret wager before reserving funds or consuming entropy", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "I bet 1 dollar you cant guess the number I'm thinking of",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "integers",
+      min: 1,
+      max: 1_000,
+      wager: { stakeUsd: 1, maxPayoutUsd: 2, game: "guess my number" }
+    });
+
+    expect(response).toContain("not verifiable");
+    expect(response).toContain("No funds were reserved");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
+  });
+
+  it.each([
+    "Guess the word I've picked and I'll bet $1",
+    "I bet a dollar you cannot tell which card I chose",
+    "Predict the number in my mind for $1"
+  ])("detects an uncommitted player secret: %s", (text) => {
+    expect(hasUncommittedPlayerSecretWager(text)).toBe(true);
+  });
+
+  it("does not block a normal wager on independently generated randomness", () => {
+    expect(hasUncommittedPlayerSecretWager("I bet $1 the next die roll is six")).toBe(false);
+  });
+
+  it("classifies games with later choices as interactive without trusting the settlement call", () => {
+    expect(inferWagerInteractionMode("deal me in for $1", "blackjack")).toBe("player_decisions");
+    expect(inferWagerInteractionMode("let me choose after the first roll", "custom dice")).toBe("player_decisions");
+    expect(inferWagerInteractionMode("$1 on heads", "coin flip")).toBe("automatic");
+    expect(inferWagerInteractionMode("let's play for $1", "custom game")).toBe("player_decisions");
+  });
+
   it("rejects wallet-backed wagers when user wallets are disabled", async () => {
     const reserveWager = vi.fn();
     const { ctx } = fakeContext({
@@ -633,11 +681,21 @@ describe("drawRandom", () => {
     const response = await settleRandomWager(ctx, {
       wagerId: "wager-1",
       payoutUsd: 1,
+      outcome: "player_win",
+      resolutionSource: "verified_randomness",
       explanation: "rolled the winning face"
     });
 
     expect(settleWager).toHaveBeenCalledWith(
-      { wagerId: "wager-1", userId: "user", payoutUsd: 1, explanation: "rolled the winning face" },
+      {
+        wagerId: "wager-1",
+        userId: "user",
+        requestId: "req-1",
+        payoutUsd: 1,
+        outcome: "player_win",
+        resolutionSource: "verified_randomness",
+        explanation: "rolled the winning face"
+      },
       expect.any(Function)
     );
     expect(response).toContain("Net transfer: $0.75 USD (confirmed)");
@@ -656,6 +714,8 @@ describe("drawRandom", () => {
     const response = await settleRandomWager(ctx, {
       wagerId: "wager-blackjack",
       payoutUsd: 0.5,
+      outcome: "push",
+      resolutionSource: "player_decision",
       explanation: "Blackjack deal in progress; awaiting player action before settling. Choose hit or stand."
     });
 

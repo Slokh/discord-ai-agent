@@ -3,6 +3,9 @@ import type { DbPool } from "./pool.js";
 import type {
   WalletAccount,
   WalletOwnerKind,
+  WagerInteractionMode,
+  WagerResolutionSource,
+  WagerSettlementOutcome,
   WalletTransfer,
   WalletTransferStatus,
   WagerReservation
@@ -10,6 +13,7 @@ import type {
 import { stableId } from "../payments/money.js";
 import { mapAccount, mapTransfer, mapWager } from "./paymentRowMappers.js";
 import { getTransferWithClient, insertTransfer, TRANSFER_COLUMNS } from "./paymentTransferPersistence.js";
+import { validateSettlementEvidence, validateSettlementOutcome } from "./paymentWagerValidation.js";
 
 const ACCOUNT_COLUMNS = `
   id, guild_id, owner_kind, discord_user_id, provider, provider_wallet_id,
@@ -21,6 +25,7 @@ const WAGER_COLUMNS = `
   id, request_id, guild_id, channel_id, thread_key, requested_by_user_id, user_wallet_id,
   bot_wallet_id, game, token, token_decimals, stake_atomic, max_payout_atomic,
   payout_atomic, draw_id, settlement_transfer_id, status, explanation,
+  interaction_mode, settlement_outcome, settlement_resolution_source, settlement_request_id,
   awaiting_action, state_version, decision_state, allowed_actions, action_prompt, last_action_request_id,
   expires_at, created_at, updated_at
 `;
@@ -359,6 +364,7 @@ export class PaymentRepository {
     user: WalletAccount;
     bot: WalletAccount;
     game: string;
+    interactionMode: WagerInteractionMode;
     token: string;
     tokenDecimals: number;
     stakeAtomic: bigint;
@@ -434,9 +440,9 @@ export class PaymentRepository {
         `
           INSERT INTO wallet_wager_reservations(
             id, request_id, guild_id, channel_id, thread_key, requested_by_user_id,
-            user_wallet_id, bot_wallet_id, game, token, token_decimals,
+            user_wallet_id, bot_wallet_id, game, interaction_mode, token, token_decimals,
             stake_atomic, max_payout_atomic, expires_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now() + ($14 * interval '1 second'))
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now() + ($15 * interval '1 second'))
           RETURNING ${WAGER_COLUMNS}
         `,
         [
@@ -449,6 +455,7 @@ export class PaymentRepository {
           input.user.id,
           input.bot.id,
           input.game,
+          input.interactionMode,
           input.token,
           input.tokenDecimals,
           input.stakeAtomic.toString(),
@@ -575,6 +582,9 @@ export class PaymentRepository {
     payoutAtomic: bigint;
     explanation: string;
     tokenAddress: string;
+    requestId: string;
+    outcome: WagerSettlementOutcome;
+    resolutionSource: WagerResolutionSource;
   }): Promise<{ wager: WagerReservation; transfer: WalletTransfer | null }> {
     const client = await this.pool.connect();
     try {
@@ -596,14 +606,18 @@ export class PaymentRepository {
         throw new Error("Payout is outside the wager's reserved range");
       }
       const net = input.payoutAtomic - wager.stakeAtomic;
+      validateSettlementOutcome(input.outcome, net);
+      validateSettlementEvidence(wager, input.requestId, input.resolutionSource);
       if (net === 0n) {
         const updated = await client.query(
           `
             UPDATE wallet_wager_reservations SET payout_atomic = $2, status = 'settled', awaiting_action = false,
-              explanation = $3, settled_at = now(), updated_at = now()
+              explanation = $3, settlement_outcome = $4, settlement_resolution_source = $5,
+              settlement_request_id = $6, settled_at = now(), updated_at = now()
             WHERE id = $1 RETURNING ${WAGER_COLUMNS}
           `,
-          [wager.id, input.payoutAtomic.toString(), input.explanation.slice(0, 2_000)]
+          [wager.id, input.payoutAtomic.toString(), input.explanation.slice(0, 2_000), input.outcome,
+            input.resolutionSource, input.requestId]
         );
         await client.query("COMMIT");
         return { wager: mapWager(updated.rows[0]), transfer: null };
@@ -631,10 +645,13 @@ export class PaymentRepository {
       const updated = await client.query(
         `
           UPDATE wallet_wager_reservations SET payout_atomic = $2, settlement_transfer_id = $3,
-            status = 'settling', awaiting_action = false, explanation = $4, updated_at = now()
+            status = 'settling', awaiting_action = false, explanation = $4,
+            settlement_outcome = $5, settlement_resolution_source = $6, settlement_request_id = $7,
+            updated_at = now()
           WHERE id = $1 RETURNING ${WAGER_COLUMNS}
         `,
-        [wager.id, input.payoutAtomic.toString(), transfer.id, input.explanation.slice(0, 2_000)]
+        [wager.id, input.payoutAtomic.toString(), transfer.id, input.explanation.slice(0, 2_000), input.outcome,
+          input.resolutionSource, input.requestId]
       );
       wager = mapWager(updated.rows[0]);
       await client.query("COMMIT");
@@ -715,7 +732,8 @@ export class PaymentRepository {
           SELECT id, guild_id, channel_id, requested_by_user_id, game, token,
             token_decimals, stake_atomic::text, max_payout_atomic::text,
             payout_atomic::text, draw_id, settlement_transfer_id, status,
-            explanation, awaiting_action, state_version, decision_state,
+            explanation, interaction_mode, settlement_outcome, settlement_resolution_source,
+            settlement_request_id, awaiting_action, state_version, decision_state,
             allowed_actions, action_prompt, last_action_request_id,
             expires_at, created_at, settled_at, updated_at
           FROM wallet_wager_reservations ${wagerWhere}

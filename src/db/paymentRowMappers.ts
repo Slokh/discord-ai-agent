@@ -63,6 +63,14 @@ export function mapWager(row: Record<string, unknown>): WagerReservation {
     settlementTransferId: row.settlement_transfer_id == null ? null : String(row.settlement_transfer_id),
     status: String(row.status) as WagerReservation["status"],
     explanation: row.explanation == null ? null : String(row.explanation),
+    interactionMode: row.interaction_mode === "player_decisions" ? "player_decisions" : "automatic",
+    settlementOutcome: row.settlement_outcome == null
+      ? null
+      : String(row.settlement_outcome) as WagerReservation["settlementOutcome"],
+    settlementResolutionSource: row.settlement_resolution_source == null
+      ? null
+      : String(row.settlement_resolution_source) as WagerReservation["settlementResolutionSource"],
+    settlementRequestId: row.settlement_request_id == null ? null : String(row.settlement_request_id),
     awaitingAction: row.awaiting_action === true,
     stateVersion: Number(row.state_version ?? 0),
     decisionState: isRecord(row.decision_state) ? row.decision_state : {},

@@ -46,6 +46,7 @@ import {
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import {
   coerceGeneratedCsvProducerRoutes,
+  selectNextRoundToolChoice,
   selectModelToolRoutes,
   traceToolRequestMetadata,
 } from "./modelToolRoutes.js";
@@ -122,6 +123,7 @@ async function runAgentModelLoopInternal(
     invalidToolCallRecoveryAttempted: false,
   };
   let forceToolUseNextRound = false;
+  let forceWagerSettlementNextRound = false;
   const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
   const modelCallBudget: ModelCallBudget = {
     used: 0,
@@ -234,11 +236,13 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const toolChoice = forceToolUseNextRound ? "required" as const : undefined;
+      const forceWagerSettlementThisRound = forceWagerSettlementNextRound;
+      const toolChoice = selectNextRoundToolChoice({ forceWagerSettlement: forceWagerSettlementThisRound, forceToolUse: forceToolUseNextRound });
       forceToolUseNextRound = false;
+      forceWagerSettlementNextRound = false;
       response = await runObservedModelCall(ctx, {
         purpose: "tool_selection",
-        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort() },
+        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerSettlementThisRound ? "settleRandomWager" : undefined },
         chat: {
           messages,
           tools: toolDefinitionsForModel({
@@ -462,6 +466,7 @@ async function runAgentModelLoopInternal(
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
       randomOutcomeGuard.noteToolResult(route.name, result.content);
+      forceWagerSettlementNextRound = randomOutcomeGuard.requiresWagerSettlement();
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
         route.name !== "requestAdditionalTools" &&

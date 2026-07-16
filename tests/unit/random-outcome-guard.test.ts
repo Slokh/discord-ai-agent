@@ -63,9 +63,11 @@ describe("random outcome guard", () => {
       "Result: heads",
       "Wager wager_abc is reserved."
     ].join("\n"));
+    expect(guard.requiresWagerSettlement()).toBe(true);
     await expect(guard.inspectDraft("Heads — you win $2.")).resolves.toBe("retry");
 
     guard.noteToolResult("settleRandomWager", "Wager wager_abc settled.\nPayout: $2.");
+    expect(guard.requiresWagerSettlement()).toBe(false);
     await expect(guard.inspectDraft("Heads — you win $2.")).resolves.toBe("allow");
   });
 });

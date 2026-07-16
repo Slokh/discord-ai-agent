@@ -58,6 +58,10 @@ export class RandomOutcomeGuard {
     }
   }
 
+  requiresWagerSettlement() {
+    return this.pendingWagerIds.size > 0;
+  }
+
   async inspectDraft(responseContent: string): Promise<RandomOutcomeGuardDecision> {
     if (!this.shouldReject(responseContent)) return "allow";
     const retry = !this.retryAttempted;

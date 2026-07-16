@@ -39,6 +39,22 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
   });
 
+  it("always pairs wallet-backed randomness with its settlement tool", () => {
+    withEnv({
+      WALLET_ENABLED: "true",
+      USER_WALLETS_ENABLED: "true",
+      PRIVY_APP_ID: "app",
+      PRIVY_APP_SECRET: "secret"
+    }, () => {
+      const config = loadConfig();
+      const tools = scopedToolset({ config, groups: new Set(["core", "external"]) });
+      const names = tools.localTools.map((tool) => tool.name);
+
+      expect(names).toContain("drawRandom");
+      expect(names).toContain("settleRandomWager");
+    });
+  });
+
   it("keeps bot balance reads while removing user-wallet actions and wager schema", () => {
     withEnv({
       WALLET_ENABLED: "true",

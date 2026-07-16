@@ -38,6 +38,16 @@ export function coerceGeneratedCsvProducerRoutes(
   });
 }
 
+export function selectNextRoundToolChoice(input: {
+  forceWagerSettlement: boolean;
+  forceToolUse: boolean;
+}) {
+  if (input.forceWagerSettlement) {
+    return { type: "function" as const, function: { name: "settleRandomWager" as const } };
+  }
+  return input.forceToolUse ? "required" as const : undefined;
+}
+
 export function traceToolRequestMetadata(call: {
   id: string;
   name: string;

@@ -5,6 +5,7 @@ import { previewText } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
 const SUCCESSFUL_DRAW_PREFIX = "Provably fair draw complete.";
+const SUCCESSFUL_WAGER_SETTLEMENT_PREFIX = "The scoped wallet wager settled.";
 
 const CHANCE_INTENT =
   /\b(random(?:ly)?|chance|roll|dice|d\d+|coin|flip|pick|choose|shuffle|draw|deal|cards?|hand|shoe|blackjack|poker|roulette|wheel|craps|slots?|spins?|bet|casino|lottery|raffle|winner)\b/i;
@@ -123,9 +124,15 @@ export class RandomOutcomeGuard {
     }
     if (toolName === "settleRandomWager") {
       const wagerId = content.match(/^Wager\s+(wager_[A-Za-z0-9_-]+)\s+settled\./m)?.[1];
-      if (wagerId) this.pendingWagerIds.delete(wagerId);
-      else if (/^The scoped wallet wager settled\./m.test(content)) this.pendingWagerIds.clear();
-      if (this.pendingWagerIds.size === 0) this.requiredWagerTool = null;
+      const scopedWagerSettled = content.trimStart().startsWith(SUCCESSFUL_WAGER_SETTLEMENT_PREFIX);
+      if (wagerId || scopedWagerSettled) {
+        // A successful settlement is authoritative verified-outcome evidence on
+        // continuation turns, where the original draw happened in an earlier request.
+        this.successfulDraw = true;
+        if (wagerId) this.pendingWagerIds.delete(wagerId);
+        else this.pendingWagerIds.clear();
+        if (this.pendingWagerIds.size === 0) this.requiredWagerTool = null;
+      }
     }
     if (toolName === "awaitRandomWagerAction" && content.startsWith("Wallet game paused for player action.")) {
       const wagerId = content.match(/^Wager:\s+(wager_[A-Za-z0-9_-]+)/m)?.[1];

@@ -112,7 +112,7 @@ export async function sendDiscordPollMessage(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Discord rejected the poll message: ${message}`);
+    throw new Error(`Discord rejected the poll message: ${message}`, { cause: error });
   }
 }
 

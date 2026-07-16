@@ -352,7 +352,7 @@ export class OpenRouterClient {
             },
             "OpenRouter request timed out"
           );
-          throw new Error(`OpenRouter request timed out after ${timeoutMs}ms (${path}).`);
+          throw new Error(`OpenRouter request timed out after ${timeoutMs}ms (${path}).`, { cause: error });
         }
         if (attempt < maxAttempts && isTransientFetchError(error) && options.retryPolicy !== "expensive") {
           const retryDelayMs = OPENROUTER_TRANSIENT_RETRY_DELAYS_MS[attempt - 1] ?? 0;

@@ -419,7 +419,9 @@ async function fetchDiscordAttachmentBytes(urlValue: string, maxBytes = MAX_ATTA
       sourceBytes: Number.isFinite(declaredBytes) ? declaredBytes : total
     };
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error(`attachment download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`attachment download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`, { cause: error });
+    }
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -486,7 +488,9 @@ async function fetchDiscordAttachmentRange(
       sourceBytes: contentRange[3] === "*" ? null : Number(contentRange[3])
     };
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error(`attachment download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`attachment download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`, { cause: error });
+    }
     throw error;
   } finally {
     clearTimeout(timeout);

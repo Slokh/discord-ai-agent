@@ -192,15 +192,13 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       ...selection
     }
   });
-  let jobId: string | null = null;
-  let queueResult: Awaited<ReturnType<JobRuntime["enqueueAgentTask"]>> | null = null;
+  let queueResult: Awaited<ReturnType<JobRuntime["enqueueAgentTask"]>>;
   try {
     queueResult = await input.jobs.enqueueAgentTask({
       ...job,
       taskType: "code_update",
       runtimeMirror: "external"
     });
-    jobId = queueResult.jobId;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await input.agentRuntime.updateExecution({
@@ -221,19 +219,20 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     });
     throw error;
   }
+  const jobId = queueResult.jobId;
   await input.agentRuntime.updateExecution({
     executionId,
     metadata: {
-      pgbossJobId: jobId,
-      queue: queueResult?.queueName ?? "agent.task",
-      backend: queueResult?.backendName ?? null,
+      pgbossJobId: queueResult.jobId,
+      queue: queueResult.queueName ?? "agent.task",
+      backend: queueResult.backendName ?? null,
       parentAgentSessionId: input.session.sessionId,
       parentAgentExecutionId: input.parentExecutionId ?? null,
       parentAgentThreadKey,
-      codegenBackend: queueResult?.codegenBackend ?? selection.codegenBackend,
-      codegenHarness: queueResult?.codegenHarness ?? selection.codegenHarness,
-      codegenModel: queueResult?.codegenModel ?? selection.codegenModel,
-      codegenProvider: queueResult?.codegenProvider ?? selection.codegenProvider,
+      codegenBackend: queueResult.codegenBackend ?? selection.codegenBackend,
+      codegenHarness: queueResult.codegenHarness ?? selection.codegenHarness,
+      codegenModel: queueResult.codegenModel ?? selection.codegenModel,
+      codegenProvider: queueResult.codegenProvider ?? selection.codegenProvider,
       targetBranch: input.targetBranch ?? null,
       targetPullRequestNumber: input.targetPullRequestNumber ?? null,
       targetPullRequestUrl: input.targetPullRequestUrl ?? null
@@ -250,15 +249,15 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
       taskId,
       jobId,
       toolName: "runCodingAgent",
-      queue: queueResult?.queueName ?? "agent.task",
-      backend: queueResult?.backendName ?? null,
+      queue: queueResult.queueName ?? "agent.task",
+      backend: queueResult.backendName ?? null,
       parentAgentSessionId: input.session.sessionId,
       parentAgentExecutionId: input.parentExecutionId ?? null,
       parentAgentThreadKey,
-      codegenBackend: queueResult?.codegenBackend ?? selection.codegenBackend,
-      codegenHarness: queueResult?.codegenHarness ?? selection.codegenHarness,
-      codegenModel: queueResult?.codegenModel ?? selection.codegenModel,
-      codegenProvider: queueResult?.codegenProvider ?? selection.codegenProvider,
+      codegenBackend: queueResult.codegenBackend ?? selection.codegenBackend,
+      codegenHarness: queueResult.codegenHarness ?? selection.codegenHarness,
+      codegenModel: queueResult.codegenModel ?? selection.codegenModel,
+      codegenProvider: queueResult.codegenProvider ?? selection.codegenProvider,
       targetBranch: input.targetBranch ?? null,
       targetPullRequestNumber: input.targetPullRequestNumber ?? null,
       targetPullRequestUrl: input.targetPullRequestUrl ?? null
@@ -319,7 +318,7 @@ export async function enqueueAgentRuntimeSessionExecution(input: {
   queue: AgentRuntimeExecutionQueueInput;
 }): Promise<AgentRuntimeSessionExecutionEnqueueResult> {
   const job = agentRuntimeExecutionJobFromSession(input);
-  let jobId: string | null = null;
+  let jobId: string | null;
   try {
     jobId = await input.jobs.enqueueAgentRuntimeExecution(job);
   } catch (error) {

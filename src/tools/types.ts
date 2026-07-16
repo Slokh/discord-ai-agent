@@ -58,6 +58,17 @@ export type ToolContext = {
     durationHours: number;
     allowMultiselect: boolean;
   }) => Promise<{ messageId: string; channelId: string; url: string }>;
+  createDiscordEmoji?: (input: {
+    name: string;
+    image: Buffer;
+    auditLogReason: string;
+  }) => Promise<{
+    id: string;
+    name: string;
+    animated: boolean;
+    mention: string;
+    url: string;
+  }>;
   fetchDiscordUserAvatar?: (input: {
     guildId: string;
     userId: string;

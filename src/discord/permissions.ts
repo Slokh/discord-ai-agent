@@ -77,6 +77,7 @@ type PermissionSummaryChannel = {
 
 export type BotChannelPermissionSummary = {
   hasAdministrator: boolean;
+  hasCreateGuildExpressions: boolean;
   textLikeChannels: number;
   crawlableChannels: number;
   sendableChannels: number;
@@ -90,12 +91,15 @@ export type BotChannelPermissionSummary = {
 export function validateMemberLevelBotPermissions(
   summary: Pick<
     BotChannelPermissionSummary,
-    "hasAdministrator" | "textLikeChannels" | "crawlableChannels" | "sendableChannels" | "threadSendableChannels" | "attachableChannels"
+    "hasAdministrator" | "hasCreateGuildExpressions" | "textLikeChannels" | "crawlableChannels" | "sendableChannels" | "threadSendableChannels" | "attachableChannels"
   >
 ): string[] {
   const errors: string[] = [];
   if (summary.hasAdministrator) {
     errors.push("Bot has Administrator permission; re-invite or update the server role so Discord AI Agent runs with member-level access.");
+  }
+  if (!summary.hasCreateGuildExpressions) {
+    errors.push("Bot cannot create server emoji; grant the Create Expressions permission to its Discord role.");
   }
   if (summary.textLikeChannels === 0) {
     errors.push("Bot cannot see any text, announcement, thread, forum, or media channels in the configured guild.");
@@ -122,6 +126,7 @@ export function summarizeBotChannelPermissions(
 ): BotChannelPermissionSummary {
   const summary: BotChannelPermissionSummary = {
     hasAdministrator: hasPermission((member as { permissions?: PermissionLike }).permissions, PermissionsBitField.Flags.Administrator),
+    hasCreateGuildExpressions: hasPermission((member as { permissions?: PermissionLike }).permissions, PermissionsBitField.Flags.CreateGuildExpressions),
     textLikeChannels: 0,
     crawlableChannels: 0,
     sendableChannels: 0,

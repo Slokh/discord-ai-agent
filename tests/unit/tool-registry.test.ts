@@ -59,6 +59,7 @@ describe("toolRegistry", () => {
       "searchSpotify",
       "getSpotifyItem",
       "createDiscordPoll",
+      "createDiscordEmoji",
       "updateBotAvatar",
       "setUserTurnLimit",
       "drawRandom",

@@ -161,6 +161,7 @@ const GENERATED_DATA_KEYWORDS = [
 const DISCORD_ACTION_KEYWORDS = [
   /\b(poll|vote|undo|delete your|remove your|forget your)\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
+  /\b(?:custom|server)?\s*emojis?\b/,
   /\b(random|randomly|randomness|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
   /\b(reveal)\b.*\b(random|randomness|seed|proof|commitment)\b/,
 ];
@@ -181,6 +182,7 @@ const CODEGEN_KEYWORDS = [
 const OPS_KEYWORDS = [
   /\b(status|health|logs?|trace|why.*(failed|slow|hung)|deployment|config|admin|ops)\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
+  /\b(?:custom|server)?\s*emojis?\b/,
   /\bwhat can you do\b/,
   /\b(rate.?limit|turn limit|post limit|unlimit)\b/,
   /\blimit\b.*\b(per day|daily|posts?|turns?|messages?|uses?)\b/,

@@ -104,6 +104,8 @@ Generate an invite URL:
 npm run invite-url
 ```
 
+The generated member-level invite includes Create Expressions so the bot can upload custom server emoji when an authorized operator asks it to.
+
 Invite the bot, then run:
 
 ```bash

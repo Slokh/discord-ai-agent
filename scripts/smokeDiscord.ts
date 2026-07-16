@@ -51,6 +51,7 @@ async function main() {
     process.stdout.write(`guild ok: ${guild.name} (${guild.id})\n`);
     process.stdout.write(`bot member ok: ${botMember.displayName}\n`);
     process.stdout.write(`bot administrator permission: ${permissions.hasAdministrator ? "yes - remove this for member-level setup" : "no"}\n`);
+    process.stdout.write(`bot create expressions permission: ${permissions.hasCreateGuildExpressions ? "yes" : "no - grant Create Expressions to upload server emoji"}\n`);
     process.stdout.write(`channels visible to client cache: ${channels.size}\n`);
     process.stdout.write(
       `permissions ok: crawlable=${permissions.crawlableChannels}/${permissions.textLikeChannels}, ` +

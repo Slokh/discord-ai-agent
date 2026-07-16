@@ -48,6 +48,7 @@ export type ToolName =
   | "searchSpotify"
   | "getSpotifyItem"
   | "createDiscordPoll"
+  | "createDiscordEmoji"
   | "updateBotAvatar"
   | "setUserTurnLimit"
   | "drawRandom"
@@ -1583,6 +1584,41 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "createDiscordEmoji",
+    description:
+      "Create a custom emoji in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, or create a server/custom emoji. The image is normalized to a transparent 128x128 WebP under Discord's 256 KiB limit; short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
+    userVisible: true,
+    mutates: true,
+    group: "discord-action",
+    category: "discord",
+    toolClass: "ops",
+    outputContract: ["created emoji name and mention", "source image label", "normalized dimensions and size", "animation preservation status", "failure reason for invalid images, missing permission, rate limits, or full emoji slots"],
+    permissionRequirements: ["explicit_user_request", "ops_allowlist", "tool_audit_log"],
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Name for the custom emoji. It will be normalized to 2-32 lowercase letters, numbers, or underscores. Do not include surrounding colons."
+        },
+        imageUrl: {
+          type: "string",
+          description: "Optional direct http(s) or data: image URL. If omitted, the tool uses the latest generated image, then an image from the current request or reply chain."
+        },
+        messageIdOrUrl: {
+          type: "string",
+          description: "Optional Discord message ID or URL whose permission-visible image attachment should be used."
+        },
+        useContextImage: {
+          type: "boolean",
+          description: "Whether to fall back to images in the current request or reply chain. Defaults to true."
+        }
+      },
+      required: ["name"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "updateBotAvatar",
     description:
       "Update the bot's own Discord profile avatar using an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Uses the Discord Modify Current User API (PATCH /users/@me with a base64 data-URI avatar). Requires the bot token from environment config. Use this when the user asks to change, set, or update the bot's avatar/profile picture. Discord accepts PNG, JPEG, WebP, or GIF avatars; large or unsupported images are rejected before the API call. Handle rate limits, permission errors, and invalid image URLs gracefully.",
@@ -1986,6 +2022,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   searchSpotify: "external",
   getSpotifyItem: "external",
   createDiscordPoll: "ops",
+  createDiscordEmoji: "ops",
   updateBotAvatar: "ops",
   setUserTurnLimit: "ops",
   drawRandom: "generation",
@@ -2064,6 +2101,7 @@ function defaultToolExamples(name: ToolName): string[] {
     searchSpotify: "@ai search Spotify for Running Up That Hill",
     getSpotifyItem: "@ai what is this Spotify track? https://open.spotify.com/track/abc123",
     createDiscordPoll: "@ai make a poll: what day should we play, Friday or Saturday?",
+    createDiscordEmoji: "@ai upload this image as a server emoji named nacho_wizard",
     updateBotAvatar: "@ai change your avatar to this image: https://example.com/avatar.png",
     setUserTurnLimit: "@ai limit tyler to 5 posts per day",
     drawRandom: "@ai deal me a blackjack hand",

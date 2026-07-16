@@ -1,4 +1,4 @@
-import type { Client, GuildMember, Message, MessageCreateOptions, MessageEditOptions, MessagePayload, MessageReaction } from "discord.js";
+import { PermissionFlagsBits, type Client, type GuildMember, type Message, type MessageCreateOptions, type MessageEditOptions, type MessagePayload, type MessageReaction } from "discord.js";
 import type { Logger } from "pino";
 import type { DiscordAttachmentContext, DiscordGuildMemberSummary, DiscordUserAvatarResult } from "../tools/types.js";
 import { logger as defaultLogger } from "../util/logger.js";
@@ -114,6 +114,30 @@ export async function sendDiscordPollMessage(
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Discord rejected the poll message: ${message}`);
   }
+}
+
+export async function createDiscordGuildEmoji(
+  client: Client,
+  guildId: string,
+  input: { name: string; image: Buffer; auditLogReason: string }
+): Promise<{ id: string; name: string; animated: boolean; mention: string; url: string }> {
+  const guild = client.guilds.cache.get(guildId) ?? (await client.guilds.fetch(guildId));
+  const botMember = guild.members.me ?? (await guild.members.fetchMe());
+  if (!botMember.permissions.has(PermissionFlagsBits.CreateGuildExpressions)) {
+    throw new Error("the bot role needs Discord's Create Expressions permission");
+  }
+  const emoji = await guild.emojis.create({
+    attachment: input.image,
+    name: input.name,
+    reason: input.auditLogReason,
+  });
+  return {
+    id: emoji.id,
+    name: emoji.name ?? input.name,
+    animated: Boolean(emoji.animated),
+    mention: emoji.toString(),
+    url: emoji.imageURL({ extension: "webp", size: 128 }),
+  };
 }
 
 export async function fetchDiscordUserAvatar(

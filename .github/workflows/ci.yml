@@ -37,7 +37,7 @@ jobs:
           name: coverage
           path: coverage/
           if-no-files-found: ignore
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm lint deploy/helm/discord-ai-agent
       - run: helm template discord-ai-agent deploy/helm/discord-ai-agent >/tmp/discord-ai-agent.yaml
       - run: helm template discord-ai-agent deploy/helm/discord-ai-agent --set codegenWorker.enabled=true --set sandbox.cache.enabled=true --set codegenWorker.lease.acquireTimeoutSeconds=120 --set codegenWorker.lease.acquirePollSeconds=2 >/tmp/discord-ai-agent-codegen-worker.yaml

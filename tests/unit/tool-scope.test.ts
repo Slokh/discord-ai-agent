@@ -240,7 +240,7 @@ describe("tool scoping", () => {
       text: "why does it not have a transparent background?",
       hasImageAttachments: true,
       replyContext: true,
-      replyContextText: "Done! <:seahorse:1527428086201581678> is now live.",
+      replyContextText: "Done! <:seahorse:123> is now live.",
       config,
     });
 

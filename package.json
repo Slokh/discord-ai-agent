@@ -35,7 +35,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "lint": "eslint .",
-    "verify": "npm run lint && npm run typecheck && npm test && npm audit --omit=dev --audit-level=critical",
+    "verify": "npm run lint && npm run typecheck && npm test && npm audit --omit=dev --audit-level=critical && npm run scan:release",
     "verify:db": "npm run migrate && npm run test:db",
     "migrate": "tsx src/db/migrate.ts",
     "verify:rng": "tsx scripts/verify-rng.ts",

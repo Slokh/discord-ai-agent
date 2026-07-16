@@ -190,7 +190,7 @@ export class WalletService {
     const wallet = await this.ensureBotWallet(SHARED_BOT_GUILD_ID, record);
     const balance = await this.getBalance(wallet);
     const balanceNumber = Number(balance.formatted);
-    const thresholdUsd = Math.max(this.config.initialGrantUsd, this.config.maxGameSettlementUsd);
+    const thresholdUsd = this.config.initialGrantUsd;
     const status = balanceNumber < thresholdUsd ? "low_balance" : "ok";
     const details = {
       walletId: wallet.id,
@@ -233,9 +233,6 @@ export class WalletService {
     stakeUsd: number;
     maxPayoutUsd: number;
   }, record?: PaymentEventRecorder): Promise<WagerReservation> {
-    if (input.maxPayoutUsd > this.config.maxGameSettlementUsd) {
-      throw new Error(`Maximum payout exceeds the configured $${this.config.maxGameSettlementUsd} game limit`);
-    }
     const [user, bot, token] = await Promise.all([
       this.ensureUserWallet({ guildId: input.guildId, userId: input.userId }, record),
       this.ensureBotWallet(input.guildId, record),

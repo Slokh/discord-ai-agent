@@ -108,7 +108,7 @@ describe("WalletService", () => {
     expect(listUserWallets).toHaveBeenCalledWith({ guildId: "guild-a", userIds: undefined, chainId: 42431 });
   });
 
-  it("persists a low-balance health alert when the shared wallet cannot cover its operating threshold", async () => {
+  it("uses the starter grant as the shared-wallet low-balance threshold", async () => {
     const bot = wallet({});
     const upsertRuntimeHealth = vi.fn(async () => undefined);
     const repo = {
@@ -116,17 +116,61 @@ describe("WalletService", () => {
       upsertRuntimeHealth
     } as unknown as PaymentRepository;
     const provider = providerFake();
-    provider.getBalance = vi.fn(async () => 5_000_000n);
+    provider.getBalance = vi.fn(async () => 500_000n);
     const service = new WalletService(loadConfig().payments, repo, provider);
 
     await expect(service.recordBotWalletHealth()).resolves.toEqual(expect.objectContaining({
       status: "low_balance",
-      balanceUsd: "5"
+      balanceUsd: "0.5"
     }));
     expect(upsertRuntimeHealth).toHaveBeenCalledWith(expect.objectContaining({
       key: "shared_bot_wallet",
       status: "low_balance",
-      details: expect.objectContaining({ alertThresholdUsd: 10, balanceUsd: "5" })
+      details: expect.objectContaining({ alertThresholdUsd: 1, balanceUsd: "0.5" })
+    }));
+  });
+
+  it("allows wagers above the former fixed payout cap when the treasury can cover them", async () => {
+    const bot = wallet({ id: "wallet-bot" });
+    const user = wallet({
+      id: "wallet-user",
+      guildId: "guild-a",
+      ownerKind: "user",
+      discordUserId: "user-a",
+      providerWalletId: "privy-user",
+      externalId: "user-a",
+      address: `0x${"6".repeat(40)}`
+    });
+    const reserveWager = vi.fn(async () => ({ id: "wager-large-payout" }));
+    const repo = {
+      ensureWalletPlaceholder: vi.fn(async (input) => input.ownerKind === "bot" ? bot : user),
+      getWallet: vi.fn(async (id) => id === bot.id ? bot : user),
+      reserveWager
+    } as unknown as PaymentRepository;
+    const config = loadConfig().payments;
+    config.userWalletsEnabled = true;
+    config.initialGrantUsd = 0;
+    const provider = providerFake();
+    provider.getBalance = vi.fn(async () => 100_000_000n);
+    const service = new WalletService(config, repo, provider);
+
+    await service.reserveWager({
+      requestId: "request-large-payout",
+      guildId: "guild-a",
+      channelId: "channel-a",
+      threadKey: "thread-a",
+      userId: "user-a",
+      game: "single-number roulette",
+      interactionMode: "automatic",
+      stakeUsd: 1.85,
+      maxPayoutUsd: 66
+    });
+
+    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
+      stakeAtomic: 1_850_000n,
+      maxPayoutAtomic: 66_000_000n,
+      userBalanceAtomic: 100_000_000n,
+      botBalanceAtomic: 100_000_000n
     }));
   });
 

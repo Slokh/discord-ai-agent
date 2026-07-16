@@ -45,7 +45,6 @@ jobs:
       TEMPO_NETWORK: ${{ vars.TEMPO_NETWORK }}
       TEMPO_USD_TOKEN: ${{ vars.TEMPO_USD_TOKEN }}
       WALLET_INITIAL_GRANT_USD: ${{ vars.WALLET_INITIAL_GRANT_USD }}
-      WALLET_MAX_GAME_SETTLEMENT_USD: ${{ vars.WALLET_MAX_GAME_SETTLEMENT_USD }}
       SANDBOX_CACHE_ENABLED: ${{ vars.SANDBOX_CACHE_ENABLED }}
       SANDBOX_CACHE_SIZE: ${{ vars.SANDBOX_CACHE_SIZE }}
       SANDBOX_CACHE_STORAGE_CLASS: ${{ vars.SANDBOX_CACHE_STORAGE_CLASS }}
@@ -160,9 +159,6 @@ jobs:
           fi
           if [ -n "${WALLET_INITIAL_GRANT_USD:-}" ]; then
             helm_args+=(--set-string "config.walletInitialGrantUsd=$WALLET_INITIAL_GRANT_USD")
-          fi
-          if [ -n "${WALLET_MAX_GAME_SETTLEMENT_USD:-}" ]; then
-            helm_args+=(--set-string "config.walletMaxGameSettlementUsd=$WALLET_MAX_GAME_SETTLEMENT_USD")
           fi
           if is_true "$SANDBOX_CACHE_ENABLED"; then
             helm_args+=(--set "sandbox.cache.enabled=true")

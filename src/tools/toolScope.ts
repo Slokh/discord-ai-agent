@@ -125,7 +125,7 @@ function hasAny(text: string, keywords: RegExp[]) {
 
 const IMAGE_KEYWORDS = [
   /\b(generate|draw|paint|sketch|illustrate|make|create)\b.*\b(image|picture|pic|photo|avatar|pfp|logo|poster|meme|art)\b/,
-  /\b(image|picture|pic|photo|screenshot|avatar|pfp|meme|chart|diagram|logo)\b/,
+  /\b(image|picture|pic|photo|screenshot|avatar|pfp|meme|emoji|chart|diagram|logo)\b/,
   /\b(draw|paint|sketch|illustrate)\b/,
   /\bwhat('| i)?s (in|on|shown)\b/,
   /\blook at this\b/,

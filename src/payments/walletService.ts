@@ -283,6 +283,13 @@ export class WalletService {
     });
   }
 
+  getCurrentWager(input: { threadKey: string; userId: string }): Promise<WagerReservation | null> {
+    return this.repo.getCurrentWager({
+      threadKey: input.threadKey,
+      requestedByUserId: input.userId
+    });
+  }
+
   async awaitGameAction(input: {
     wagerId: string;
     userId: string;

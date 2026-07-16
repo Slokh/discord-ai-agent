@@ -1,4 +1,5 @@
 import { paymentRecorder } from "./paymentToolContext.js";
+import { currentWagerForContext } from "./randomTools.js";
 import type { ToolContext } from "./types.js";
 
 const SUCCESS_PREFIX = "Wallet game paused for player action.";
@@ -15,10 +16,8 @@ export async function awaitRandomWagerAction(ctx: ToolContext, input: {
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
     return "Wallet-backed game sessions are not enabled in this deployment.";
   }
-  const wagerId = input.wagerId?.trim();
   const requestId = ctx.requestId ?? ctx.requestMessageId;
   const prompt = input.prompt?.trim();
-  if (!wagerId) return "wagerId is required.";
   if (!requestId) return "A stable Discord request id is required to save game state.";
   if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion! < 0) {
     return "expectedVersion must be the non-negative state version from the active wager.";
@@ -33,9 +32,21 @@ export async function awaitRandomWagerAction(ctx: ToolContext, input: {
   if (allowedActions.length === 0) return "allowedActions must contain at least one distinct player action.";
   if (!prompt) return "prompt is required and must ask the player for their next decision.";
 
+  const wager = await currentWagerForContext(ctx);
+  if (!wager) return "Could not pause wallet game: no active wager exists for this player in this Discord game session.";
+  const suppliedWagerId = input.wagerId?.trim();
+  if (suppliedWagerId && suppliedWagerId !== wager.id) {
+    await paymentRecorder(ctx)({
+      eventName: "wallet.wager.id_hint_corrected",
+      summary: "Ignored a stale or malformed model-supplied wager id and used the scoped active wager",
+      level: "warn",
+      metadata: { suppliedWagerId, resolvedWagerId: wager.id }
+    });
+  }
+
   try {
-    const wager = await ctx.walletService.awaitGameAction({
-      wagerId,
+    const updated = await ctx.walletService.awaitGameAction({
+      wagerId: wager.id,
       userId: ctx.userId,
       requestId,
       expectedVersion: input.expectedVersion!,
@@ -45,11 +56,10 @@ export async function awaitRandomWagerAction(ctx: ToolContext, input: {
     }, paymentRecorder(ctx));
     return [
       SUCCESS_PREFIX,
-      `Wager: ${wager.id}`,
-      `Game: ${wager.game}`,
-      `State version: ${wager.stateVersion}`,
-      `Allowed actions: ${wager.allowedActions.join(", ")}`,
-      `Prompt: ${wager.actionPrompt}`,
+      `Game: ${updated.game}`,
+      `State version: ${updated.stateVersion}`,
+      `Allowed actions: ${updated.allowedActions.join(", ")}`,
+      `Prompt: ${updated.actionPrompt}`,
       `The wager remains reserved until the player replies, settlement succeeds, or the session expires.`
     ].join("\n");
   } catch (error) {

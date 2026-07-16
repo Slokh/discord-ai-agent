@@ -85,4 +85,17 @@ describe("random outcome guard", () => {
     expect(guard.requiresWagerResolution()).toBe(false);
     await expect(guard.inspectDraft("Your total is 16. Hit or stand?")).resolves.toBe("allow");
   });
+
+  it("tracks scoped wager lifecycle without exposing an opaque wager id", () => {
+    const guard = new RandomOutcomeGuard({} as ToolContext, "again");
+    guard.noteToolResult("drawRandom", [
+      "Provably fair draw complete.",
+      "Result: heads",
+      "The scoped wallet wager is reserved."
+    ].join("\n"));
+    expect(guard.requiresWagerResolution()).toBe(true);
+
+    guard.noteToolResult("settleRandomWager", "The scoped wallet wager settled.\nPayout: $2.");
+    expect(guard.requiresWagerResolution()).toBe(false);
+  });
 });

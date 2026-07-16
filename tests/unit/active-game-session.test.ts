@@ -34,7 +34,8 @@ describe("active game sessions", () => {
 
     expect(messages).toHaveLength(3);
     expect(messages[1]?.role).toBe("system");
-    expect(messages[1]?.content).toContain("Wager: wager_1");
+    expect(messages[1]?.content).toContain("Game: blackjack");
+    expect(messages[1]?.content).not.toContain("wager_1");
     expect(messages[1]?.content).toContain("State version: 3");
     expect(messages[1]?.content).toContain('Saved state: {"playerTotal":18,"dealerUp":"9♦"}');
     expect(messages[2]).toEqual({ role: "user", content: "stand" });

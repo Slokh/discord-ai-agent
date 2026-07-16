@@ -1699,13 +1699,12 @@ export const toolRegistry: ToolRegistryEntry[] = [
     group: "discord-action",
     category: "generation",
     toolClass: "generation",
-    outputContract: ["wager id", "new state version", "allowed player actions", "decision prompt", "reservation expiry behavior"],
+    outputContract: ["new state version", "allowed player actions", "decision prompt", "reservation expiry behavior"],
     permissionRequirements: ["wallet_owner", "reserved_wager", "tool_audit_log"],
     auditEvents: ["wallet.wager.awaiting_action"],
     parameters: {
       type: "object",
       properties: {
-        wagerId: { type: "string", description: "Exact active wager id returned by drawRandom or injected active-game context." },
         expectedVersion: { type: "number", description: "Current non-negative state version. Use 0 immediately after the initial draw." },
         state: {
           type: "object",
@@ -1719,26 +1718,25 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         prompt: { type: "string", description: "Short conversational question asking the player for their next decision." }
       },
-      required: ["wagerId", "expectedVersion", "state", "allowedActions", "prompt"],
+      required: ["expectedVersion", "state", "allowedActions", "prompt"],
       additionalProperties: false
     }
   },
   {
     name: "settleRandomWager",
     description:
-      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. Interactive games may span replies through awaitRandomWagerAction; they cannot settle until a later Discord reply supplies the player's decision. Never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. outcome must agree with whether payoutUsd is above, below, or equal to the stake. Use resolutionSource=verified_randomness for automatic games and player_decision only when a persisted decision was resolved by the current reply. The service validates these facts before creating a transfer.",
+      "Settle the active wallet-backed wager created by drawRandom in this player's scoped Discord game session. The runtime resolves the canonical wager automatically; never supply or repeat an internal wager id. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. Interactive games may span replies through awaitRandomWagerAction; they cannot settle until a later Discord reply supplies the player's decision. Never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. outcome must agree with whether payoutUsd is above, below, or equal to the stake. Use resolutionSource=verified_randomness for automatic games and player_decision only when a persisted decision was resolved by the current reply. The service validates these facts before creating a transfer.",
     userVisible: false,
     mutates: true,
     group: "discord-action",
     category: "generation",
     toolClass: "generation",
-    outputContract: ["wager id", "validated total payout", "net transfer status", "settlement calculation"],
+    outputContract: ["validated total payout", "net transfer status", "settlement calculation"],
     permissionRequirements: ["wallet_owner", "reserved_wager", "tool_audit_log"],
     auditEvents: ["wallet.wager.settled", "wallet.transfer.confirmed"],
     parameters: {
       type: "object",
       properties: {
-        wagerId: { type: "string", description: "Exact wager id returned by drawRandom." },
         payoutUsd: { type: "number", description: "Total USD payout including returned stake; 0 means the player loses the full stake." },
         outcome: {
           type: "string",
@@ -1752,7 +1750,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         },
         explanation: { type: "string", description: "Concise deterministic calculation from the draw result through the final outcome. It must not describe a pending decision or unfinished game." }
       },
-      required: ["wagerId", "payoutUsd", "outcome", "resolutionSource", "explanation"],
+      required: ["payoutUsd", "outcome", "resolutionSource", "explanation"],
       additionalProperties: false
     }
   },

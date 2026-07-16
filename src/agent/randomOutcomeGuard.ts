@@ -57,14 +57,17 @@ export class RandomOutcomeGuard {
       this.successfulDraw = true;
       const wagerId = content.match(/\bWager\s+(wager_[A-Za-z0-9_-]+)\s+is reserved\b/)?.[1];
       if (wagerId) this.pendingWagerIds.add(wagerId);
+      else if (/\bscoped wallet wager is reserved\b/i.test(content)) this.pendingWagerIds.add("scoped");
     }
     if (toolName === "settleRandomWager") {
       const wagerId = content.match(/^Wager\s+(wager_[A-Za-z0-9_-]+)\s+settled\./m)?.[1];
       if (wagerId) this.pendingWagerIds.delete(wagerId);
+      else if (/^The scoped wallet wager settled\./m.test(content)) this.pendingWagerIds.clear();
     }
     if (toolName === "awaitRandomWagerAction" && content.startsWith("Wallet game paused for player action.")) {
       const wagerId = content.match(/^Wager:\s+(wager_[A-Za-z0-9_-]+)/m)?.[1];
       if (wagerId) this.pendingWagerIds.delete(wagerId);
+      else this.pendingWagerIds.clear();
     }
   }
 

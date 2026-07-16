@@ -30,7 +30,6 @@ export function injectActiveGameSession(
   const state = JSON.stringify(wager.decisionState);
   const content = [
     "An active wallet-backed game is awaiting this requester's decision in this Discord reply chain.",
-    `Wager: ${wager.id}`,
     `Game: ${wager.game}`,
     `Stake: $${atomicToUsd(wager.stakeAtomic, wager.tokenDecimals)} USD`,
     `Maximum total payout: $${atomicToUsd(wager.maxPayoutAtomic, wager.tokenDecimals)} USD`,

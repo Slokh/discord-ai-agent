@@ -84,6 +84,7 @@ function mapTransferStatus(value: unknown): WalletTransferStatus {
 function mapPurpose(value: unknown): WalletTransfer["purpose"] {
   const purpose = String(value);
   if (
+    purpose === "starter_grant" ||
     purpose === "game_settlement" ||
     purpose === "user_transfer" ||
     purpose === "admin_transfer" ||

@@ -65,8 +65,8 @@ import {
   initialToolsetState,
 } from "./modelToolset.js";
 import { walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
+import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
-
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
@@ -125,6 +125,7 @@ async function runAgentModelLoopInternal(
   let forceToolUseNextRound = false;
   let forceWagerSettlementNextRound = false;
   const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
+  const forcedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -136,7 +137,6 @@ async function runAgentModelLoopInternal(
     channelId: ctx.channelId,
     userId: ctx.userId,
   });
-
   let toolsetState = initialToolsetState(ctx, text);
 
   requestLogger.info(
@@ -237,12 +237,12 @@ async function runAgentModelLoopInternal(
       }
       ctx.noteProgress?.();
       const forceWagerSettlementThisRound = forceWagerSettlementNextRound;
-      const toolChoice = selectNextRoundToolChoice({ forceWagerSettlement: forceWagerSettlementThisRound, forceToolUse: forceToolUseNextRound });
+      const toolChoice = selectNextRoundToolChoice({ forceWagerSettlement: forceWagerSettlementThisRound, forceToolUse: forceToolUseNextRound, initialWalletAction: round === 0 ? forcedWalletActionTool ?? undefined : undefined });
       forceToolUseNextRound = false;
       forceWagerSettlementNextRound = false;
       response = await runObservedModelCall(ctx, {
         purpose: "tool_selection",
-        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerSettlementThisRound ? "settleRandomWager" : undefined },
+        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerSettlementThisRound ? "settleRandomWager" : round === 0 ? forcedWalletActionTool ?? undefined : undefined },
         chat: {
           messages,
           tools: toolDefinitionsForModel({

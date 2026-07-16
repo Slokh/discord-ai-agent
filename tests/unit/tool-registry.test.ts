@@ -47,6 +47,7 @@ describe("toolRegistry", () => {
       "getWalletBalance",
       "listWalletBalances",
       "transferWalletFunds",
+      "requestStarterFunds",
       "adminTransferWalletFunds",
       "reconcileWalletTransfers",
       "getSpotifyPlaylistTracks",
@@ -82,7 +83,7 @@ describe("toolRegistry", () => {
     expect(tool?.description).not.toContain("PathUSD");
     expect(tool?.outputContract).toContain("verified current USD balance");
     expect(toolRegistry.find((entry) => entry.name === "listWalletBalances")?.outputContract)
-      .toContain("$0 for members without wallets");
+      .toContain("only verified non-$0 rows for balance views");
     expect(toolRegistry.find((entry) => entry.name === "listWalletBalances")?.parameters.properties)
       .toHaveProperty("view");
   });

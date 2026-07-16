@@ -190,13 +190,15 @@ export class PaymentRepository {
     requestedByUserId: string;
     source: WalletAccount;
     destination: WalletAccount;
-    purpose: "user_transfer" | "admin_transfer";
+    purpose: "user_transfer" | "admin_transfer" | "starter_grant";
     token: string;
     tokenAddress: string;
     tokenDecimals: number;
     amountAtomic: bigint;
     sourceBalanceAtomic: bigint;
     sourceBalanceObservedAt: Date;
+    destinationBalanceAtomic?: bigint;
+    destinationBalanceObservedAt?: Date;
     idempotencyKey: string;
     metadata?: Record<string, unknown>;
   }): Promise<WalletTransfer> {
@@ -216,6 +218,25 @@ export class PaymentRepository {
       if (existing.rows[0]) {
         await client.query("COMMIT");
         return mapTransfer(existing.rows[0]);
+      }
+      if (input.purpose === "starter_grant") {
+        if (input.destinationBalanceAtomic !== 0n || !input.destinationBalanceObservedAt) {
+          throw new Error("Starter funds are only available when the destination wallet balance is exactly $0");
+        }
+        const newerIncoming = await client.query(
+          `SELECT count(*)::int AS count
+           FROM wallet_transfers
+           WHERE destination_wallet_id = $1
+             AND lower(token_address) = lower($2)
+             AND (
+               status IN ('reserved', 'submitting', 'submitted', 'unknown')
+               OR (status = 'confirmed' AND confirmed_at >= $3)
+             )`,
+          [input.destination.id, input.tokenAddress, input.destinationBalanceObservedAt]
+        );
+        if ((newerIncoming.rows[0]?.count ?? 0) > 0) {
+          throw new Error("The destination wallet was already funded after its $0 balance was checked");
+        }
       }
       const activeTransfers = await client.query(
         `SELECT coalesce(sum(amount_atomic), 0)::text AS amount

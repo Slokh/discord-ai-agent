@@ -36,6 +36,7 @@ export type ToolName =
   | "getWalletBalance"
   | "listWalletBalances"
   | "transferWalletFunds"
+  | "requestStarterFunds"
   | "adminTransferWalletFunds"
   | "reconcileWalletTransfers"
   | "getSpotifyPlaylistTracks"
@@ -1202,13 +1203,13 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "listWalletBalances",
     description:
-      "List the managed wallet directory for this Discord server. ALWAYS use this for plural or server-wide balance or address requests. Use view=balances for 'every user's balance', view=addresses for wallet-address questions, and view=both only when both were explicitly requested. It joins the live non-bot member roster to existing managed wallets, reads existing balances live onchain when shown, and reports $0 USD for members without a wallet without creating one. This directory is available to owner/ops, or to every member when WALLET_BALANCES_PUBLIC=true.",
+      "List the managed wallet directory for this Discord server. ALWAYS use this for plural or server-wide balance or address requests. Use view=balances for 'every user's balance', view=addresses for wallet-address questions, and view=both only when both were explicitly requested. Balance views include the shared AI treasury plus only member wallets with a verified non-$0 balance; $0, unavailable, and missing member wallets are summarized but omitted. Address-only views include the AI and every existing member wallet without repeating balances or creating wallets. This directory is available to owner/ops, or to every member when WALLET_BALANCES_PUBLIC=true.",
     userVisible: true,
     mutates: false,
     group: "external",
     category: "external",
     toolClass: "external",
-    outputContract: ["requested balances, addresses, or both", "every current non-bot server member for balance views", "only existing wallets for address-only views", "$0 for members without wallets"],
+    outputContract: ["requested balances, addresses, or both", "shared AI treasury", "only verified non-$0 rows for balance views", "only existing wallets for address-only views", "compact Markdown table"],
     examples: ["@ai what's the balance of every user in this server?", "@ai can I get their wallet addresses?"],
     permissionRequirements: ["configured_user_wallet_runtime", "live_discord_member_roster", "public_balance_directory_or_owner_ops"],
     auditEvents: ["tool_audit_logs", "wallet.directory.read"],
@@ -1227,7 +1228,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "transferWalletFunds",
     description:
-      "Transfer real USD out of the current Discord requester's managed wallet. The only allowed destinations are another verified Discord user's managed wallet or the shared bot wallet; arbitrary blockchain addresses are never accepted. Use only when the requester explicitly asks to send, pay, tip, deposit to the bot, or transfer money. The source is always bound to the current requester and cannot be supplied by the model. The bot wallet sponsors the network fee. Returns the confirmed transaction and fresh source/destination balances.",
+      "Transfer real USD out of the current Discord requester's managed wallet. The only allowed destinations are another verified Discord user's managed wallet or the shared bot wallet; arbitrary blockchain addresses are never accepted. Use only when the current prompt explicitly asks to send, pay, tip, give, deposit, return, or transfer money; never use this to charge or settle a game wager. The source is always bound to the current requester and cannot be supplied by the model. A destination can be an ID, mention, username, or display name: pass the provided name directly and the tool will resolve it safely, so do not ask the user for an ID or mention. Ambiguous names fail without transferring. The bot wallet sponsors the network fee. Returns the confirmed transaction and fresh source/destination balances.",
     userVisible: true,
     mutates: true,
     group: "external",
@@ -1241,10 +1242,29 @@ export const toolRegistry: ToolRegistryEntry[] = [
       type: "object",
       properties: {
         destination: { type: "string", enum: ["user", "bot"], description: "Managed destination type." },
-        destinationUserId: { type: "string", description: "Required for destination=user. Discord ID or mention; use findDiscordUsers for names." },
+        destinationUserId: { type: "string", description: "Required for destination=user. Discord ID, mention, username, or display name; plain names are resolved safely by the tool." },
         amountUsd: { type: "number", description: "Positive USD amount to transfer." }
       },
       required: ["destination", "amountUsd"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "requestStarterFunds",
+    description:
+      "Request the fixed starter amount from the shared AI treasury for the current Discord requester. Use when someone explicitly asks for $1, starter funds, a refill, or money to start playing again. The tool verifies the requester's live onchain balance and transfers only when it is exactly $0; users with any positive balance are ineligible. The requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
+    userVisible: true,
+    mutates: true,
+    group: "external",
+    category: "external",
+    toolClass: "external",
+    outputContract: ["eligibility from verified requester balance", "fixed starter amount", "confirmed transaction", "fresh requester and AI balances"],
+    examples: ["@ai I'm at $0, can I get $1 to play again?"],
+    permissionRequirements: ["explicit_user_request", "requester_scope", "verified_zero_balance", "configured_wallet_runtime"],
+    auditEvents: ["tool_audit_logs", "wallet.transfer.reserved", "wallet.transfer.confirmed"],
+    parameters: {
+      type: "object",
+      properties: {},
       additionalProperties: false
     }
   },
@@ -1604,7 +1624,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. Card draws (kind cards) are dealt without replacement until the shoe is exhausted or reshuffled; use one call per hand segment (e.g. reason 'player hand', 'dealer upcard'). Every outcome is published immediately in a public proof footer that all players can read, so drawing a card reveals it to everyone — including you. NEVER draw cards that must stay hidden (a blackjack dealer's hole card, face-down cards) before the moment play reveals them; deal each hidden card with a separate call at the moment it is turned face up. The shoe order is committed up front, so a deferred draw is exactly as fair as an early one. A proof footer is appended to your reply automatically; report the drawn results exactly and do not fabricate or alter them.",
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. Non-wagered interactive card games may deal one visible hand segment per call. Wallet-backed games must be atomic: make exactly one drawRandom call containing the complete bounded random sequence needed to resolve the wager, then settle it exactly once; for wagered blackjack, draw at least four cards in one call (prefer a bounded 12-card sequence) and consume them in order under the stated rules. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -1655,7 +1675,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         wager: {
           type: "object",
           description:
-            "Optional wallet-backed wager. Reserve this before the draw whenever the user is risking their bot-game balance. The maximum payout must cover the largest possible total return, including returned stake.",
+            "Optional wallet-backed wager. Required before the single atomic draw whenever the user is risking their bot-game balance, including vague repeats of their prior wager. The maximum payout must cover the largest possible total return, including returned stake.",
           properties: {
             stakeUsd: { type: "number", description: "Positive USD-denominated stake taken from the user's game wallet." },
             maxPayoutUsd: { type: "number", description: "Maximum possible total payout in USD, including returned stake." },
@@ -1849,7 +1869,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   ) {
     return "external";
   }
-  if (name === "getWalletBalance" || name === "listWalletBalances" || name === "transferWalletFunds") return "external";
+  if (name === "getWalletBalance" || name === "listWalletBalances" || name === "transferWalletFunds" || name === "requestStarterFunds") return "external";
   return "discord";
 }
 
@@ -1889,6 +1909,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   getWalletBalance: "external",
   listWalletBalances: "external",
   transferWalletFunds: "external",
+  requestStarterFunds: "external",
   adminTransferWalletFunds: "ops",
   reconcileWalletTransfers: "ops",
   getSpotifyPlaylistTracks: "external",
@@ -1964,6 +1985,7 @@ function defaultToolExamples(name: ToolName): string[] {
     getWalletBalance: "@ai what's my bankroll?",
     listWalletBalances: "@ai what's the balance of every user in this server?",
     transferWalletFunds: "@ai send $2 to @friend",
+    requestStarterFunds: "@ai I'm at $0, can I get $1 to play again?",
     adminTransferWalletFunds: "@ai move $5 from the bot wallet to @friend because their payout failed",
     reconcileWalletTransfers: "@ai reconcile pending wallet transfers",
     getSpotifyPlaylistTracks: "@ai list all the tracks in this Spotify playlist: https://open.spotify.com/playlist/abc123",

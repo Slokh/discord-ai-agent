@@ -9,7 +9,13 @@ import type {
 } from "../../src/db/rngRepository.js";
 import type { PaymentEventRecorder } from "../../src/payments/types.js";
 import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } from "../../src/rng/provable.js";
-import { drawRandom, requiresWalletBackedWager, revealRandomness, settleRandomWager } from "../../src/tools/randomTools.js";
+import {
+  drawRandom,
+  requiresWalletBackedWager,
+  requiresWalletBackedWagerForContext,
+  revealRandomness,
+  settleRandomWager
+} from "../../src/tools/randomTools.js";
 import type { DiscordReplyContext, ToolContext } from "../../src/tools/types.js";
 
 /** In-memory mirror of RngRepository's transactional interface (single-threaded, no locking needed). */
@@ -496,9 +502,43 @@ describe("drawRandom", () => {
   it.each([
     "500 on roulette black",
     "bet 2 on a coin flip",
-    "20 more spins at $5 each"
+    "20 more spins at $5 each",
+    "bet .05 blackjack",
+    "put $.10 on heads"
   ])("recognizes common wager shorthand: %s", (text) => {
     expect(requiresWalletBackedWager(text)).toBe(true);
+  });
+
+  it("carries a wallet-backed wager requirement into a vague repeat only for the same requester", () => {
+    const { ctx } = fakeContext({
+      requestText: "again",
+      sessionMessages: [
+        { role: "user", authorId: "other", content: "bet $10 roulette" },
+        { role: "user", authorId: "user", content: "flip a coin, heads for $0.50" }
+      ] as ToolContext["sessionMessages"]
+    });
+
+    expect(requiresWalletBackedWagerForContext(ctx)).toBe(true);
+    ctx.userId = "unrelated";
+    expect(requiresWalletBackedWagerForContext(ctx)).toBe(false);
+  });
+
+  it("rejects wagered card-by-card draws before reserving funds or consuming entropy", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "bet .05 blackjack",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "cards",
+      count: 1,
+      wager: { stakeUsd: 0.05, maxPayoutUsd: 0.125, game: "blackjack" }
+    });
+
+    expect(response).toContain("complete bounded game sequence");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
   });
 
   it("rejects wallet-backed wagers when user wallets are disabled", async () => {

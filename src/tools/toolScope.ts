@@ -97,7 +97,7 @@ function normalizeGroups(groups: Set<ToolGroup>, config: AppConfig) {
 function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
   if (tool.group === "spotify") return isSpotifyConfigured(config);
   if (tool.group === "codegen") return isCodegenConfigured(config);
-  if (["settleRandomWager", "transferWalletFunds", "adminTransferWalletFunds", "reconcileWalletTransfers"].includes(tool.name)) {
+  if (["settleRandomWager", "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds", "reconcileWalletTransfers"].includes(tool.name)) {
     return Boolean(config.payments?.walletEnabled && config.payments?.userWalletsEnabled);
   }
   if (tool.name === "getWalletBalance") return Boolean(config.payments?.walletEnabled);

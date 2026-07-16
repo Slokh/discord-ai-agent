@@ -6,6 +6,7 @@ describe("model tool routes", () => {
     expect(selectNextRoundToolChoice({
       forceWagerSettlement: true,
       forceToolUse: true,
+      initialWalletAction: "transferWalletFunds",
     })).toEqual({
       type: "function",
       function: { name: "settleRandomWager" },
@@ -21,5 +22,16 @@ describe("model tool routes", () => {
       forceWagerSettlement: false,
       forceToolUse: false,
     })).toBeUndefined();
+  });
+
+  it("forces a guarded wallet action on the first round", () => {
+    expect(selectNextRoundToolChoice({
+      forceWagerSettlement: false,
+      forceToolUse: false,
+      initialWalletAction: "requestStarterFunds",
+    })).toEqual({
+      type: "function",
+      function: { name: "requestStarterFunds" },
+    });
   });
 });

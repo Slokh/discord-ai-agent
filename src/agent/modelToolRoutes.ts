@@ -4,6 +4,7 @@ import {
 } from "../tools/registry.js";
 import { previewText } from "../util/logger.js";
 import type { AgentToolRoute } from "./routerShared.js";
+import type { ForcedWalletActionTool } from "./walletActionGuard.js";
 import { parseToolArguments } from "./toolArguments.js";
 
 export function selectModelToolRoutes(
@@ -41,9 +42,13 @@ export function coerceGeneratedCsvProducerRoutes(
 export function selectNextRoundToolChoice(input: {
   forceWagerSettlement: boolean;
   forceToolUse: boolean;
+  initialWalletAction?: ForcedWalletActionTool;
 }) {
   if (input.forceWagerSettlement) {
     return { type: "function" as const, function: { name: "settleRandomWager" as const } };
+  }
+  if (input.initialWalletAction) {
+    return { type: "function" as const, function: { name: input.initialWalletAction } };
   }
   return input.forceToolUse ? "required" as const : undefined;
 }

@@ -148,6 +148,34 @@ export class WalletService {
     }, record);
   }
 
+  async requestStarterFunds(input: {
+    guildId: string;
+    requestedByUserId: string;
+    requestId: string;
+  }, record?: PaymentEventRecorder) {
+    if (this.config.initialGrantUsd <= 0) throw new Error("Starter funding is disabled in this deployment");
+    const [source, destination] = await Promise.all([
+      this.ensureBotWallet(input.guildId, record),
+      this.ensureUserWallet({ guildId: input.guildId, userId: input.requestedByUserId }, record)
+    ]);
+    const currentBalance = await this.getBalance(destination);
+    if (currentBalance.amountAtomic !== 0n) {
+      return { granted: false as const, wallet: destination, balance: currentBalance };
+    }
+    const result = await this.createAndSubmitManagedTransfer({
+      guildId: input.guildId,
+      requestedByUserId: input.requestedByUserId,
+      source,
+      destination,
+      amountUsd: this.config.initialGrantUsd,
+      requestId: input.requestId,
+      purpose: "starter_grant",
+      requireEmptyDestination: true,
+      metadata: { reason: "requester_zero_balance_restart" }
+    }, record);
+    return { granted: true as const, amountUsd: this.config.initialGrantUsd, ...result };
+  }
+
   async recordBotWalletHealth(record?: PaymentEventRecorder): Promise<{
     status: "ok" | "low_balance";
     balanceUsd: string;
@@ -426,7 +454,8 @@ export class WalletService {
     destination: WalletAccount;
     amountUsd: number;
     requestId: string;
-    purpose: "user_transfer" | "admin_transfer";
+    purpose: "user_transfer" | "admin_transfer" | "starter_grant";
+    requireEmptyDestination?: boolean;
     metadata?: Record<string, unknown>;
   }, record?: PaymentEventRecorder): Promise<{
     transfer: WalletTransfer;
@@ -436,8 +465,16 @@ export class WalletService {
     const token = await this.usdToken();
     const amountAtomic = usdToAtomic(input.amountUsd, token.decimals);
     if (amountAtomic <= 0n) throw new Error("Transfer amount must be greater than $0");
-    const sourceBalanceObservedAt = new Date();
-    const sourceBalanceAtomic = await this.provider.getBalance({ wallet: activeManagedWallet(input.source), token });
+    const balancesObservedAt = new Date();
+    const [sourceBalanceAtomic, destinationBalanceAtomic] = await Promise.all([
+      this.provider.getBalance({ wallet: activeManagedWallet(input.source), token }),
+      input.requireEmptyDestination
+        ? this.provider.getBalance({ wallet: activeManagedWallet(input.destination), token })
+        : Promise.resolve(undefined)
+    ]);
+    if (input.requireEmptyDestination && destinationBalanceAtomic !== 0n) {
+      throw new Error("Starter funds are only available when your verified wallet balance is exactly $0");
+    }
     const transfer = await this.repo.createManagedTransfer({
       guildId: input.guildId,
       requestedByUserId: input.requestedByUserId,
@@ -449,7 +486,9 @@ export class WalletService {
       tokenDecimals: token.decimals,
       amountAtomic,
       sourceBalanceAtomic,
-      sourceBalanceObservedAt,
+      sourceBalanceObservedAt: balancesObservedAt,
+      destinationBalanceAtomic,
+      destinationBalanceObservedAt: input.requireEmptyDestination ? balancesObservedAt : undefined,
       idempotencyKey: `managed:${input.requestId}:${input.purpose}:${input.source.id}:${input.destination.id}:${amountAtomic}`,
       metadata: input.metadata
     });

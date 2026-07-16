@@ -111,6 +111,32 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       .resolves.toMatchObject({ id: first.id, purpose: "user_transfer" });
   });
 
+  it("allows only one starter grant after a shared $0 destination observation", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const source = await activeWallet(guildId, "bot", null, "31");
+    const destination = await activeWallet(guildId, "user", "restart-user", "32");
+    const destinationBalanceObservedAt = new Date();
+    const base = {
+      guildId,
+      requestedByUserId: "restart-user",
+      source,
+      destination,
+      purpose: "starter_grant" as const,
+      token: "USDC.e",
+      tokenAddress: `0x${"4".repeat(40)}`,
+      tokenDecimals: 6,
+      amountAtomic: 1_000_000n,
+      sourceBalanceAtomic: 10_000_000n,
+      sourceBalanceObservedAt: destinationBalanceObservedAt,
+      destinationBalanceAtomic: 0n,
+      destinationBalanceObservedAt
+    };
+
+    await repo.createManagedTransfer({ ...base, idempotencyKey: `${guildId}:starter:first` });
+    await expect(repo.createManagedTransfer({ ...base, idempotencyKey: `${guildId}:starter:second` }))
+      .rejects.toThrow(/already funded/);
+  });
+
   it("keeps wallet ownership distinct across Tempo networks", async () => {
     const guildId = `${guildPrefix}${randomUUID()}`;
     const moderato = await repo.ensureWalletPlaceholder({

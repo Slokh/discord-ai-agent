@@ -94,7 +94,7 @@ describe("agent router", () => {
     const listExistingUserWalletSummaries = vi.fn(async () => [{
       userId: "alice",
       wallet: { address: `0x${"3".repeat(40)}` },
-      balance: { formatted: "2.5" },
+      balance: { formatted: "2.5", amountAtomic: 2_500_000n },
       error: null,
     }]);
     const fetchDiscordGuildMembers = vi.fn(async () => [
@@ -121,7 +121,13 @@ describe("agent router", () => {
           traceEvents.push(event as { eventName: string; metadata?: Record<string, unknown> });
         }),
       },
-      walletService: { listExistingUserWalletSummaries },
+      walletService: {
+        listExistingUserWalletSummaries,
+        getBotWalletSummary: vi.fn(async () => ({
+          wallet: { address: `0x${"4".repeat(40)}` },
+          balance: { formatted: "9.5", amountAtomic: 9_500_000n }
+        }))
+      },
       fetchDiscordGuildMembers,
       openRouter: { chat },
       guildId: "g",
@@ -136,8 +142,8 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "every user's balance");
 
-    expect(response.content).toContain("Alice (alice): $2.5 USD");
-    expect(response.content).toContain("Bob (bob): $0 USD — no wallet");
+    expect(response.content).toContain("```text\nWallet  Balance\nAI      $9.5\nAlice   $2.5\n```");
+    expect(response.content).not.toContain("Bob");
     expect(chat).not.toHaveBeenCalled();
     expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "g", userIds: ["alice", "bob"] });
     expect(traceEvents).toEqual(expect.arrayContaining([
@@ -146,6 +152,71 @@ describe("agent router", () => {
         metadata: expect.objectContaining({ toolName: "listWalletBalances" }),
       }),
     ]));
+  });
+
+  it("forces an explicit named transfer through the wallet tool on the first model round", async () => {
+    const transactionHash = `0x${"5".repeat(64)}`;
+    const chat = vi.fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "transfer-luke",
+          name: "transferWalletFunds",
+          argumentsText: JSON.stringify({ destination: "user", destinationUserId: "luke", amountUsd: 1 }),
+        }],
+      })
+      .mockResolvedValueOnce({ content: "Luke has his dollar back.", model: "router-model", raw: {}, toolCalls: [] });
+    const transferFromUser = vi.fn(async () => ({
+      transfer: { status: "confirmed", transactionHash },
+      source: { wallet: {}, balance: { formatted: "1" } },
+      destination: { wallet: {}, balance: { formatted: "1" } },
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        allowlists: { ownerUserId: null, opsUserIds: [] },
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          tempoNetwork: "mainnet",
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { transferFromUser },
+      fetchDiscordGuildMembers: vi.fn(async () => [
+        { userId: "luke-id", username: "lukester", displayName: "Luke", isBot: false },
+      ]),
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "message-transfer",
+      requestMessageId: "message-transfer",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "give luke back $1 so he can use it");
+
+    expect(response.content).toContain("Luke has his dollar back");
+    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: { type: "function", function: { name: "transferWalletFunds" } },
+    }));
+    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
+      requestedByUserId: "u",
+      destination: { kind: "user", userId: "luke-id" },
+      amountUsd: 1,
+    }), expect.any(Function));
   });
 
   it("retries malformed tool calls with the original reply context and toolset", async () => {

@@ -53,10 +53,14 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
     return `Unknown draw kind "${kind}". Supported kinds: integers, dice, coin, pick, shuffle, cards.`;
   }
+  let continuingWager: WagerReservation | null = null;
   if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWagerForContext(ctx)) {
-    const error = "This request risks real USD, so drawRandom requires a wallet-backed wager with stakeUsd, maxPayoutUsd, and game before any randomness is consumed.";
-    await auditRng(ctx, "drawRandom", input, error);
-    return error;
+    continuingWager = await currentWagerForContext(ctx);
+    if (!continuingWager) {
+      const error = "This request risks real USD, so drawRandom requires a wallet-backed wager with stakeUsd, maxPayoutUsd, and game before any randomness is consumed.";
+      await auditRng(ctx, "drawRandom", input, error);
+      return error;
+    }
   }
   const setup = await ensureRngSetup(ctx, "drawRandom", input);
   if (typeof setup === "string") return setup;
@@ -85,12 +89,14 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     return error;
   }
   let wager: WagerReservation | null = null;
+  let wagerInteractionMode: WagerInteractionMode | null = null;
   if (input.wager) {
     if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
     if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
     const requestId = ctx.requestId ?? ctx.requestMessageId;
     if (!requestId) return "A stable request id is required before a wallet-backed wager can be reserved.";
     try {
+      wagerInteractionMode = inferWagerInteractionMode(ctx.requestText ?? "", input.wager.game!);
       wager = await ctx.walletService.reserveWager(
         {
           requestId,
@@ -99,7 +105,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
           threadKey,
           userId: ctx.userId,
           game: input.wager.game!.trim(),
-          interactionMode: inferWagerInteractionMode(ctx.requestText ?? "", input.wager.game!),
+          interactionMode: wagerInteractionMode,
           stakeUsd: input.wager.stakeUsd!,
           maxPayoutUsd: input.wager.maxPayoutUsd!
         },
@@ -207,7 +213,11 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     `Result: ${draw.summary}`,
     `Session ${sessionId} · nonce ${draw.nonce} · draw ${draw.drawId} · commitment sha256:${commitment}`,
     wager
-      ? `The scoped wallet wager is reserved. You MUST now either call awaitRandomWagerAction with complete state if the player has a decision, or call settleRandomWager once after a final outcome. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+      ? wagerInteractionMode === "player_decisions"
+        ? `The scoped wallet wager is reserved.\nRequired next tool: awaitRandomWagerAction. Save complete versioned game state and allowed player actions now; do not draw again or answer before that succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        : `The scoped wallet wager is reserved.\nRequired next tool: settleRandomWager. Settle the final outcome exactly once before answering. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+      : continuingWager
+        ? `This verified draw continues the scoped active wallet wager. Either save the updated state with awaitRandomWagerAction when another player decision is needed, or settle the final outcome exactly once with settleRandomWager before answering.`
       : null,
     `Report this result exactly as shown. A proof footer is appended to your reply automatically; do not restate or alter the proof details.`
   ].filter((line): line is string => line !== null).join("\n");

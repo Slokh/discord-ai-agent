@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectNextRoundToolChoice } from "../../src/agent/modelToolRoutes.js";
+import { selectNextRoundToolChoice, WagerResolutionRouter } from "../../src/agent/modelToolRoutes.js";
 
 describe("model tool routes", () => {
   it("requires a wager resolution tool before any generic required-tool retry", () => {
@@ -8,6 +8,32 @@ describe("model tool routes", () => {
       forceToolUse: true,
       initialForcedTool: "transferWalletFunds",
     })).toBe("required");
+  });
+
+  it("forces the exact post-draw wager transition when the draw declares one", () => {
+    expect(selectNextRoundToolChoice({
+      forceWagerResolution: true,
+      forcedWagerResolutionTool: "awaitRandomWagerAction",
+      forceToolUse: true,
+      initialForcedTool: "drawRandom",
+    })).toEqual({
+      type: "function",
+      function: { name: "awaitRandomWagerAction" },
+    });
+  });
+
+  it("consumes a queued exact wager transition once", () => {
+    const router = new WagerResolutionRouter();
+    router.arm(true, "settleRandomWager");
+
+    expect(router.take({ forceToolUse: false })).toMatchObject({
+      toolChoice: { type: "function", function: { name: "settleRandomWager" } },
+      forcedToolName: "settleRandomWager",
+    });
+    expect(router.take({ forceToolUse: false })).toEqual({
+      toolChoice: undefined,
+      forcedToolName: undefined,
+    });
   });
 
   it("falls back to generic required-tool routing when no wager is pending", () => {

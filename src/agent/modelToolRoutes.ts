@@ -42,13 +42,42 @@ export function coerceGeneratedCsvProducerRoutes(
 export function selectNextRoundToolChoice(input: {
   forceWagerResolution: boolean;
   forceToolUse: boolean;
+  forcedWagerResolutionTool?: "awaitRandomWagerAction" | "settleRandomWager";
   initialForcedTool?: ToolName;
 }) {
+  if (input.forcedWagerResolutionTool) {
+    return { type: "function" as const, function: { name: input.forcedWagerResolutionTool } };
+  }
   if (input.forceWagerResolution) return "required" as const;
   if (input.initialForcedTool) {
     return { type: "function" as const, function: { name: input.initialForcedTool } };
   }
   return input.forceToolUse ? "required" as const : undefined;
+}
+
+export class WagerResolutionRouter {
+  private forceResolution = false;
+  private forcedTool: "awaitRandomWagerAction" | "settleRandomWager" | null = null;
+
+  arm(forceResolution: boolean, forcedTool: "awaitRandomWagerAction" | "settleRandomWager" | null) {
+    this.forceResolution = forceResolution;
+    this.forcedTool = forceResolution ? forcedTool : null;
+  }
+
+  take(input: { forceToolUse: boolean; initialForcedTool?: ToolName }) {
+    const forceResolution = this.forceResolution;
+    const forcedTool = this.forcedTool;
+    this.forceResolution = false;
+    this.forcedTool = null;
+    return {
+      toolChoice: selectNextRoundToolChoice({
+        forceWagerResolution: forceResolution,
+        forcedWagerResolutionTool: forcedTool ?? undefined,
+        ...input,
+      }),
+      forcedToolName: forcedTool ?? (forceResolution ? "wager_resolution" : input.initialForcedTool),
+    };
+  }
 }
 
 export function traceToolRequestMetadata(call: {

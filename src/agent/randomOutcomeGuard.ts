@@ -99,6 +99,7 @@ export class RandomOutcomeGuard {
   private successfulDraw = false;
   private retryAttempted = false;
   private readonly pendingWagerIds = new Set<string>();
+  private requiredWagerTool: "awaitRandomWagerAction" | "settleRandomWager" | null = null;
 
   constructor(
     private readonly ctx: ToolContext,
@@ -115,21 +116,31 @@ export class RandomOutcomeGuard {
       const wagerId = content.match(/\bWager\s+(wager_[A-Za-z0-9_-]+)\s+is reserved\b/)?.[1];
       if (wagerId) this.pendingWagerIds.add(wagerId);
       else if (/\bscoped wallet wager is reserved\b/i.test(content)) this.pendingWagerIds.add("scoped");
+      const requiredTool = content.match(/^Required next tool:\s*(awaitRandomWagerAction|settleRandomWager)\b/im)?.[1];
+      if (requiredTool === "awaitRandomWagerAction" || requiredTool === "settleRandomWager") {
+        this.requiredWagerTool = requiredTool;
+      }
     }
     if (toolName === "settleRandomWager") {
       const wagerId = content.match(/^Wager\s+(wager_[A-Za-z0-9_-]+)\s+settled\./m)?.[1];
       if (wagerId) this.pendingWagerIds.delete(wagerId);
       else if (/^The scoped wallet wager settled\./m.test(content)) this.pendingWagerIds.clear();
+      if (this.pendingWagerIds.size === 0) this.requiredWagerTool = null;
     }
     if (toolName === "awaitRandomWagerAction" && content.startsWith("Wallet game paused for player action.")) {
       const wagerId = content.match(/^Wager:\s+(wager_[A-Za-z0-9_-]+)/m)?.[1];
       if (wagerId) this.pendingWagerIds.delete(wagerId);
       else this.pendingWagerIds.clear();
+      if (this.pendingWagerIds.size === 0) this.requiredWagerTool = null;
     }
   }
 
   requiresWagerResolution() {
     return this.pendingWagerIds.size > 0;
+  }
+
+  requiredWagerResolutionTool() {
+    return this.requiresWagerResolution() ? this.requiredWagerTool : null;
   }
 
   async inspectDraft(responseContent: string): Promise<RandomOutcomeGuardDecision> {

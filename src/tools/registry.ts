@@ -50,6 +50,7 @@ export type ToolName =
   | "updateBotAvatar"
   | "setUserTurnLimit"
   | "drawRandom"
+  | "awaitRandomWagerAction"
   | "settleRandomWager"
   | "revealRandomness";
 
@@ -1624,7 +1625,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. Non-wagered interactive card games may deal one visible hand segment per call. Wallet-backed games must be atomic: make exactly one drawRandom call containing the complete bounded random sequence needed to resolve the wager, then settle it exactly once; for wagered blackjack, draw at least four cards in one call (prefer a bounded 12-card sequence) and consume them in order under the stated rules. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -1690,9 +1691,42 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "awaitRandomWagerAction",
+    description:
+      "Pause an active wallet-backed game and persist everything needed for the original player to continue it in later Discord replies. Use after a wagered draw when the game has a real player decision, and again after each non-final action. State must include the full public game state, prior outcomes needed for verification, unused pre-drawn outcomes or RNG cursor information, rules, and any totals needed to continue without guessing. allowedActions must list the exact choices accepted next. On a later reply, use the state version injected into context as expectedVersion, apply only the requester's selected allowed action, then either persist the next state or settle a final outcome. Never create another wager for the same game.",
+    userVisible: false,
+    mutates: true,
+    group: "discord-action",
+    category: "generation",
+    toolClass: "generation",
+    outputContract: ["wager id", "new state version", "allowed player actions", "decision prompt", "reservation expiry behavior"],
+    permissionRequirements: ["wallet_owner", "reserved_wager", "tool_audit_log"],
+    auditEvents: ["wallet.wager.awaiting_action"],
+    parameters: {
+      type: "object",
+      properties: {
+        wagerId: { type: "string", description: "Exact active wager id returned by drawRandom or injected active-game context." },
+        expectedVersion: { type: "number", description: "Current non-negative state version. Use 0 immediately after the initial draw." },
+        state: {
+          type: "object",
+          description: "Complete bounded JSON game state required to continue deterministically on the next reply.",
+          additionalProperties: true
+        },
+        allowedActions: {
+          type: "array",
+          items: { type: "string" },
+          description: "One to twelve normalized player choices accepted next, such as hit, stand, hold, roll, or fold."
+        },
+        prompt: { type: "string", description: "Short conversational question asking the player for their next decision." }
+      },
+      required: ["wagerId", "expectedVersion", "state", "allowedActions", "prompt"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "settleRandomWager",
     description:
-      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to the exact provably fair result. Wallet-backed games are single-turn autoplay: resolve every player decision deterministically from stated rules, or standard rules when none were provided, and reach a final outcome before settlement. Never pause for hit/stand or another user choice, and never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. The service validates ownership, finality, the reserved maximum, duplicate settlement, and makes only the net onchain transfer.",
+      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. Interactive games may span replies through awaitRandomWagerAction; settle only after the saved state reaches a final outcome. Never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. The service validates ownership, finality, the reserved maximum, duplicate settlement, and makes only the net onchain transfer.",
     userVisible: false,
     mutates: true,
     group: "discord-action",
@@ -1923,6 +1957,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   updateBotAvatar: "ops",
   setUserTurnLimit: "ops",
   drawRandom: "generation",
+  awaitRandomWagerAction: "generation",
   settleRandomWager: "generation",
   revealRandomness: "generation"
 };
@@ -1999,6 +2034,7 @@ function defaultToolExamples(name: ToolName): string[] {
     updateBotAvatar: "@ai change your avatar to this image: https://example.com/avatar.png",
     setUserTurnLimit: "@ai limit tyler to 5 posts per day",
     drawRandom: "@ai deal me a blackjack hand",
+    awaitRandomWagerAction: "@ai hit",
     settleRandomWager: "@ai settle the wager from that draw",
     revealRandomness: "@ai reveal randomness"
   };

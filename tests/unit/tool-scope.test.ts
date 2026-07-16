@@ -39,7 +39,7 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
   });
 
-  it("always pairs wallet-backed randomness with its settlement tool", () => {
+  it("always pairs wallet-backed randomness with pause and settlement tools", () => {
     withEnv({
       WALLET_ENABLED: "true",
       USER_WALLETS_ENABLED: "true",
@@ -51,6 +51,7 @@ describe("tool scoping", () => {
       const names = tools.localTools.map((tool) => tool.name);
 
       expect(names).toContain("drawRandom");
+      expect(names).toContain("awaitRandomWagerAction");
       expect(names).toContain("settleRandomWager");
     });
   });
@@ -72,6 +73,7 @@ describe("tool scoping", () => {
       expect(names).not.toContain("listWalletBalances");
       expect(names).not.toContain("transferWalletFunds");
       expect(names).not.toContain("requestStarterFunds");
+      expect(names).not.toContain("awaitRandomWagerAction");
       expect(names).not.toContain("settleRandomWager");
       expect(properties).not.toHaveProperty("wager");
     });
@@ -96,6 +98,7 @@ describe("tool scoping", () => {
       expect(names).toContain("requestStarterFunds");
       expect(names).toContain("adminTransferWalletFunds");
       expect(names).toContain("reconcileWalletTransfers");
+      expect(names).toContain("awaitRandomWagerAction");
       expect(names).toContain("settleRandomWager");
       expect(properties).toHaveProperty("wager");
     });

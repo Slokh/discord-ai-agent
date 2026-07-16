@@ -2,31 +2,28 @@ import { describe, expect, it } from "vitest";
 import { selectNextRoundToolChoice } from "../../src/agent/modelToolRoutes.js";
 
 describe("model tool routes", () => {
-  it("forces wager settlement before any generic required-tool retry", () => {
+  it("requires a wager resolution tool before any generic required-tool retry", () => {
     expect(selectNextRoundToolChoice({
-      forceWagerSettlement: true,
+      forceWagerResolution: true,
       forceToolUse: true,
       initialWalletAction: "transferWalletFunds",
-    })).toEqual({
-      type: "function",
-      function: { name: "settleRandomWager" },
-    });
+    })).toBe("required");
   });
 
   it("falls back to generic required-tool routing when no wager is pending", () => {
     expect(selectNextRoundToolChoice({
-      forceWagerSettlement: false,
+      forceWagerResolution: false,
       forceToolUse: true,
     })).toBe("required");
     expect(selectNextRoundToolChoice({
-      forceWagerSettlement: false,
+      forceWagerResolution: false,
       forceToolUse: false,
     })).toBeUndefined();
   });
 
   it("forces a guarded wallet action on the first round", () => {
     expect(selectNextRoundToolChoice({
-      forceWagerSettlement: false,
+      forceWagerResolution: false,
       forceToolUse: false,
       initialWalletAction: "requestStarterFunds",
     })).toEqual({

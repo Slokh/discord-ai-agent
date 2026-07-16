@@ -112,6 +112,12 @@ export type WagerReservation = {
   settlementTransferId: string | null;
   status: "reserved" | "drawn" | "settling" | "settled" | "released" | "expired" | "failed";
   explanation: string | null;
+  awaitingAction: boolean;
+  stateVersion: number;
+  decisionState: Record<string, unknown>;
+  allowedActions: string[];
+  actionPrompt: string | null;
+  lastActionRequestId: string | null;
   expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;

@@ -272,6 +272,43 @@ export class WalletService {
     });
   }
 
+  getActiveGameSession(input: { threadKey: string; userId: string }): Promise<WagerReservation | null> {
+    return this.repo.getActiveGameWager({
+      threadKey: input.threadKey,
+      requestedByUserId: input.userId
+    });
+  }
+
+  async awaitGameAction(input: {
+    wagerId: string;
+    userId: string;
+    requestId: string;
+    expectedVersion: number;
+    state: Record<string, unknown>;
+    allowedActions: string[];
+    prompt: string;
+  }, record?: PaymentEventRecorder): Promise<WagerReservation> {
+    const wager = await this.repo.saveGameDecision({
+      wagerId: input.wagerId,
+      requestedByUserId: input.userId,
+      requestId: input.requestId,
+      expectedVersion: input.expectedVersion,
+      decisionState: input.state,
+      allowedActions: input.allowedActions,
+      actionPrompt: input.prompt
+    });
+    await emit(record, {
+      eventName: "wallet.wager.awaiting_action",
+      summary: `Paused ${wager.game} for the player's next decision`,
+      metadata: {
+        wagerId: wager.id,
+        stateVersion: wager.stateVersion,
+        allowedActions: wager.allowedActions
+      }
+    });
+    return wager;
+  }
+
   async releaseWager(wagerId: string, explanation: string, record?: PaymentEventRecorder): Promise<void> {
     await this.repo.releaseWager(wagerId, explanation);
     await emit(record, {

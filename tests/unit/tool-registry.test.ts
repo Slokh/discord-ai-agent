@@ -21,6 +21,7 @@ describe("toolRegistry", () => {
       "getAgentMemoryStats",
       "getRecentDiscordMessages",
       "getDiscordMessageContext",
+      "listDiscordBugMarkers",
       "searchDiscordAttachments",
       "inspectDiscordFile",
       "inspectDiscordImages",

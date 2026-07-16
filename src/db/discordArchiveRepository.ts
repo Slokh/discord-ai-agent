@@ -1,6 +1,7 @@
 import type { DbPool } from "./pool.js";
 import { rowToDiscordUserAlias, normalizeLookupQuery, rowToInteractionBlock } from "./shared.js";
 import type { PersistedMessage, InteractionBlock } from "./shared.js";
+import { clearDiscordBugMarkersForUser } from "./discordBugMarkerRepository.js";
 
 export async function upsertGuild(pool: DbPool, input: { id: string; name?: string | null; raw?: unknown }) {
     await pool.query(
@@ -265,6 +266,7 @@ export async function isUserPrivacyDeleted(pool: DbPool, userId: string) {
   }
 
 export async function requestUserDeletion(pool: DbPool, userId: string) {
+    await clearDiscordBugMarkersForUser(pool, userId);
     await pool.query(
       `
         INSERT INTO discord_users(id, username, global_name, is_bot, raw, updated_at)

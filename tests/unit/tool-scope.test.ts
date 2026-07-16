@@ -139,6 +139,37 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
   });
 
+  it("adds requester-scoped retrieval for the bug inbox", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "show me my bug inbox", hasImageAttachments: false, config });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("discord-retrieval")).toBe(true);
+    expect(groups.has("codegen")).toBe(false);
+    expect(tools.localTools.some((tool) => tool.name === "listDiscordBugMarkers")).toBe(true);
+  });
+
+  it("adds retrieval and codegen when the requester asks to fix reacted-to bugs", () => {
+    withEnv({
+      GITHUB_REPOSITORY: "example-org/example-repo",
+      GITHUB_TOKEN: "test-token",
+      TASK_SIGNING_SECRET: "test-secret"
+    }, () => {
+      const config = loadConfig();
+      const groups = selectToolGroups({
+        text: "look at all the things I reacted to and fix them",
+        hasImageAttachments: false,
+        config
+      });
+      const tools = scopedToolset({ config, groups });
+
+      expect(groups.has("discord-retrieval")).toBe(true);
+      expect(groups.has("codegen")).toBe(true);
+      expect(tools.localTools.some((tool) => tool.name === "listDiscordBugMarkers")).toBe(true);
+      expect(tools.localTools.some((tool) => tool.name === "runCodingAgent")).toBe(true);
+    });
+  });
+
   it("adds spotify only when credentials and music intent are present", () => {
     withEnv({ SPOTIFY_CLIENT_ID: "id", SPOTIFY_CLIENT_SECRET: "secret" }, () => {
       const config = loadConfig();

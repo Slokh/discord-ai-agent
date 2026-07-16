@@ -15,6 +15,9 @@ export type DeliverySweepDecision =
   | { action: "wait" };
 
 export function decideDiscordDeliverySweep(snapshot: SweepExecutionSnapshot): DeliverySweepDecision {
+  if (!snapshot.execution) {
+    return { action: "abandon", content: RESTART_NOTICE, error: "execution was missing during startup sweep" };
+  }
   const status = snapshot.execution?.status;
   if (isTerminalStatus(status)) {
     const replyMessageId = snapshot.execution?.metadata?.replyMessageId;
@@ -25,7 +28,7 @@ export function decideDiscordDeliverySweep(snapshot: SweepExecutionSnapshot): De
     if (text) return { action: "deliver", content: text };
     return { action: "abandon", content: RESTART_NOTICE, error: snapshot.execution?.error ?? "terminal execution had no stored response text" };
   }
-  return { action: "abandon", content: RESTART_NOTICE, error: "execution was not terminal during startup sweep" };
+  return { action: "wait" };
 }
 
 export async function sweepDiscordDeliveryObligations(input: {

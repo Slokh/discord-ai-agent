@@ -18,7 +18,7 @@ const ACCOUNT_COLUMNS = `
 `;
 
 const WAGER_COLUMNS = `
-  id, guild_id, channel_id, thread_key, requested_by_user_id, user_wallet_id,
+  id, request_id, guild_id, channel_id, thread_key, requested_by_user_id, user_wallet_id,
   bot_wallet_id, game, token, token_decimals, stake_atomic, max_payout_atomic,
   payout_atomic, draw_id, settlement_transfer_id, status, explanation,
   expires_at, created_at, updated_at
@@ -350,6 +350,7 @@ export class PaymentRepository {
   }
 
   async reserveWager(input: {
+    requestId: string;
     guildId: string;
     channelId: string;
     threadKey: string;
@@ -374,6 +375,15 @@ export class PaymentRepository {
       await client.query(`SELECT id FROM wallet_accounts WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`, [
         [input.user.id, input.bot.id]
       ]);
+      const existingRequest = await client.query(
+        `SELECT id FROM wallet_wager_reservations
+         WHERE request_id = $1 AND status NOT IN ('released', 'expired', 'failed')
+         LIMIT 1`,
+        [input.requestId]
+      );
+      if (existingRequest.rows[0]) {
+        throw new Error("A wallet-backed wager already exists for this Discord request");
+      }
       const [reserved, pendingTransfers] = await Promise.all([
         client.query(
         `
@@ -412,14 +422,15 @@ export class PaymentRepository {
       const result = await client.query(
         `
           INSERT INTO wallet_wager_reservations(
-            id, guild_id, channel_id, thread_key, requested_by_user_id,
+            id, request_id, guild_id, channel_id, thread_key, requested_by_user_id,
             user_wallet_id, bot_wallet_id, game, token, token_decimals,
             stake_atomic, max_payout_atomic, expires_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now() + ($13 * interval '1 second'))
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now() + ($14 * interval '1 second'))
           RETURNING ${WAGER_COLUMNS}
         `,
         [
           id,
+          input.requestId,
           input.guildId,
           input.channelId,
           input.threadKey,
@@ -438,6 +449,13 @@ export class PaymentRepository {
       return mapWager(result.rows[0]);
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
+      if (
+        error && typeof error === "object" &&
+        "code" in error && error.code === "23505" &&
+        "constraint" in error && error.constraint === "wallet_wagers_request_id_unique_idx"
+      ) {
+        throw new Error("A wallet-backed wager already exists for this Discord request");
+      }
       throw error;
     } finally {
       client.release();

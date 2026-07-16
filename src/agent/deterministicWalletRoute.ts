@@ -1,8 +1,8 @@
 import type { Logger } from "pino";
-import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { durationMs, previewText } from "../util/logger.js";
-import type { AgentToolRoute } from "./routerShared.js";
+import { synthesizeFinalAnswerWithoutTools } from "./finalSynthesis.js";
+import type { AgentToolRoute, ModelCallBudget } from "./routerShared.js";
 import {
   appendAgentRuntimeAssistantToolCalls,
   appendAgentRuntimeToolResult,
@@ -18,6 +18,7 @@ export async function executeDeterministicWalletBalanceRoute(
     text: string;
     requestLogger: Logger;
     startedAt: number;
+    modelCallBudget: ModelCallBudget;
   },
 ): Promise<AgentResponse> {
   const argumentsValue = input.route.owner ? { owner: input.route.owner } : {};
@@ -36,7 +37,7 @@ export async function executeDeterministicWalletBalanceRoute(
       toolName: route.name,
       owner: input.route.owner,
       reason: "wallet_balance_guard",
-      skippedModelCall: true,
+      skippedModelSelection: true,
     },
     audit: {
       guildId: ctx.guildId,
@@ -44,7 +45,7 @@ export async function executeDeterministicWalletBalanceRoute(
       userId: ctx.userId,
       toolName: "deterministicToolRouter",
       argumentsSummary: previewText(input.text, 300),
-      resultSummary: `${route.name} (model call skipped)`,
+      resultSummary: `${route.name} (model selection skipped)`,
       estimatedCostUsd: 0,
     },
   });
@@ -88,7 +89,6 @@ export async function executeDeterministicWalletBalanceRoute(
     skippedRedundantToolCall: false,
   });
 
-  const content = cleanResponse(result.content, ctx.config.maxReplyChars);
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [{
     role: "tool",
     content: result.content,
@@ -108,36 +108,14 @@ export async function executeDeterministicWalletBalanceRoute(
       })) ?? [],
     },
   }];
-  input.requestLogger.info(
-    {
-      durationMs: durationMs(input.startedAt),
-      finalChars: content.length,
-      fileCount: result.files?.length ?? 0,
-      memoryEventCount: memoryEvents.length,
-      toolName: route.name,
-    },
-    "Agent request complete after deterministic wallet tool result",
-  );
-  await recordAgentEvent(ctx, {
-    eventName: "agent.request.complete",
-    summary: "Completed with deterministic wallet tool result",
-    metadata: {
-      toolName: route.name,
-      finalChars: content.length,
-      fileCount: result.files?.length ?? 0,
-      tableCount: result.tables?.length ?? 0,
-      memoryEventCount: memoryEvents.length,
-      responseRedacted: Boolean(result.storedContent),
-      skippedModelCall: true,
-    },
-    durationMs: durationMs(input.startedAt),
-  });
-
-  return {
-    content,
-    storedContent: result.storedContent,
-    files: result.files,
-    tables: result.tables,
+  return await synthesizeFinalAnswerWithoutTools(ctx, {
+    reason: "verified wallet balance evidence",
+    text: input.text,
+    messages: [],
+    files: result.files ?? [],
     memoryEvents,
-  };
+    requestLogger: input.requestLogger,
+    startedAt: input.startedAt,
+    modelCallBudget: input.modelCallBudget,
+  });
 }

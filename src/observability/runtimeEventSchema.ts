@@ -63,14 +63,7 @@ const modelCallMetadataSchema = z.object({
   error: z.string().optional(),
 }).passthrough();
 
-const genericRuntimeSchemas = runtimeEventCategories
-  .filter((category) => category !== "model")
-  .map((category) => z.object({ ...runtimeEnvelope, category: z.literal(category) }).passthrough());
-
-export const runtimeEventMetadataSchema = z.discriminatedUnion("category", [
-  modelCallMetadataSchema,
-  ...genericRuntimeSchemas,
-] as [typeof modelCallMetadataSchema, ...typeof genericRuntimeSchemas]);
+export const runtimeEventMetadataSchema = z.object(runtimeEnvelope).passthrough();
 
 const versionedRuntimeEventSchemas: Record<string, z.ZodType<Record<string, unknown>>> = {
   "agent.model.call.started": modelCallMetadataSchema,

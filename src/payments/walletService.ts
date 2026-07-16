@@ -220,6 +220,7 @@ export class WalletService {
   }
 
   async reserveWager(input: {
+    requestId: string;
     guildId: string;
     channelId: string;
     threadKey: string;

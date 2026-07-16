@@ -1624,7 +1624,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. Non-wagered interactive card games may deal one visible hand segment per call. Wallet-backed games must be atomic: make exactly one drawRandom call containing the complete bounded random sequence needed to resolve the wager, then settle it exactly once; for wagered blackjack, draw at least four cards in one call (prefer a bounded 12-card sequence) and consume them in order under the stated rules. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. Non-wagered interactive card games may deal one visible hand segment per call. Wallet-backed games must be atomic: make exactly one drawRandom call containing the complete bounded random sequence needed to resolve the wager, then settle it exactly once; for wagered blackjack, draw at least four cards in one call (prefer a bounded 12-card sequence) and consume them in order under the stated rules. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -1692,7 +1692,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "settleRandomWager",
     description:
-      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to the exact provably fair result. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for break-even. The service validates ownership, the reserved maximum, duplicate settlement, and makes only the net onchain transfer.",
+      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to the exact provably fair result. Wallet-backed games are single-turn autoplay: resolve every player decision deterministically from stated rules, or standard rules when none were provided, and reach a final outcome before settlement. Never pause for hit/stand or another user choice, and never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. The service validates ownership, finality, the reserved maximum, duplicate settlement, and makes only the net onchain transfer.",
     userVisible: false,
     mutates: true,
     group: "discord-action",
@@ -1706,7 +1706,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         wagerId: { type: "string", description: "Exact wager id returned by drawRandom." },
         payoutUsd: { type: "number", description: "Total USD payout including returned stake; 0 means the player loses the full stake." },
-        explanation: { type: "string", description: "Concise deterministic calculation from the draw result and stated payout rules." }
+        explanation: { type: "string", description: "Concise deterministic calculation from the draw result through the final outcome. It must not describe a pending decision or unfinished game." }
       },
       required: ["wagerId", "payoutUsd", "explanation"],
       additionalProperties: false

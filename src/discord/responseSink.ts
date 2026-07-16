@@ -237,18 +237,24 @@ export class DiscordResponseSink {
 export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | null) {
   const lines: string[] = [];
   for (const extraLine of footer?.extraLines ?? []) {
-    const trimmed = extraLine.trim();
+    const trimmed = suppressDiscordFooterEmbeds(extraLine.trim());
     if (trimmed) lines.push(`-# ${trimmed}`);
   }
   const traceUrl = footer?.traceUrl?.trim();
   if (traceUrl) {
-    const parts = [`[trace](${traceUrl})`];
+    const parts = [`trace <${traceUrl.replace(/^<|>$/g, "")}>`];
     if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
       parts.push(formatFooterDuration(footer.durationMs));
     }
     lines.push(`-# ${parts.join(" · ")}`);
   }
   return lines.length > 0 ? lines.join("\n") : null;
+}
+
+function suppressDiscordFooterEmbeds(value: string) {
+  return value
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1 <$2>")
+    .replace(/(?<!<)https?:\/\/[^\s<>]+/g, "<$&>");
 }
 
 function formatFooterDuration(ms: number) {

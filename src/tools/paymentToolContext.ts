@@ -25,11 +25,7 @@ export function appendTempoTransactionFooter(ctx: ToolContext, transactionHash: 
     ? "https://explore.testnet.tempo.xyz"
     : "https://explore.tempo.xyz";
   const url = `${explorer}/tx/${transactionHash}`;
-  const line = `💸 [transaction ${shortHash(transactionHash)}](${url})`;
+  const line = `💸 [transfer](<${url}>)`;
   const footerLines = (ctx.footerLines = ctx.footerLines ?? []);
   if (!footerLines.includes(line)) footerLines.push(line);
-}
-
-function shortHash(hash: string): string {
-  return `${hash.slice(0, 8)}…${hash.slice(-6)}`;
 }

@@ -477,12 +477,65 @@ describe("drawRandom", () => {
     });
 
     expect(reserveWager).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: "user", stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }),
+      expect.objectContaining({ requestId: "req-1", userId: "user", stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }),
       expect.any(Function)
     );
     expect(attachWagerDraw).toHaveBeenCalledWith("wager-1", 1, expect.any(Function));
     expect(releaseWager).not.toHaveBeenCalled();
     expect(response).toContain("MUST call settleRandomWager once");
+  });
+
+  it("rejects a wager amount inherited from history when the current request is an explicit amount", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "$.01",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "cards",
+      count: 12,
+      wager: { stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack" }
+    });
+
+    expect(response).toContain("match the explicit amount");
+    expect(response).toContain("stakeUsd=0.01");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
+  });
+
+  it("returns duplicate request reservations as a recoverable tool result", async () => {
+    const reserveWager = vi.fn(async () => {
+      throw new Error("A wallet-backed wager already exists for this Discord request");
+    });
+    const { ctx, rngRepo } = fakeContext({
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "coin",
+      wager: { stakeUsd: 0.01, maxPayoutUsd: 0.02, game: "coin" }
+    });
+
+    expect(response).toContain("first successful draw");
+    expect(rngRepo.sessions.size).toBe(0);
+  });
+
+  it("explains insufficient available balance without inventing user-paid fees", async () => {
+    const reserveWager = vi.fn(async () => {
+      throw new Error("Insufficient user wallet balance for this wager");
+    });
+    const { ctx } = fakeContext({
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "coin",
+      wager: { stakeUsd: 1, maxPayoutUsd: 2, game: "coin" }
+    });
+
+    expect(response).toContain("active wager and transfer reservations");
+    expect(response).toContain("gas fees are paid by the bot fee payer");
   });
 
   it("refuses to consume randomness for a real-money game until a wallet wager is supplied", async () => {
@@ -589,8 +642,25 @@ describe("drawRandom", () => {
     expect(response).toContain("Net transfer: $0.75 USD (confirmed)");
     expect(response).toContain("User wallet balance: $2.75 USD");
     expect(footerLines).toEqual([
-      `💸 [transaction 0xbbbbbb…bbbbbb](https://explore.tempo.xyz/tx/${transactionHash})`
+      `💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`
     ]);
+  });
+
+  it("rejects settlement calculations that leave a wallet-backed game unfinished", async () => {
+    const settleWager = vi.fn();
+    const { ctx } = fakeContext({
+      walletService: { settleWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await settleRandomWager(ctx, {
+      wagerId: "wager-blackjack",
+      payoutUsd: 0.5,
+      explanation: "Blackjack deal in progress; awaiting player action before settling. Choose hit or stand."
+    });
+
+    expect(response).toContain("unfinished game");
+    expect(response).toContain("cannot pause for another user choice");
+    expect(settleWager).not.toHaveBeenCalled();
   });
 });
 

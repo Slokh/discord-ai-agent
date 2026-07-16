@@ -10,6 +10,7 @@ import { updateBotAvatar } from "../tools/botProfileTools.js";
 import { createDiscordPoll } from "../tools/discordPollTools.js";
 import { inspectDiscordFile } from "../tools/discordFileTools.js";
 import { drawRandom, revealRandomness, settleRandomWager } from "../tools/randomTools.js";
+import { isSuccessfulRandomDrawResult } from "./randomOutcomeGuard.js";
 import { findDiscordChannels, findDiscordUsers } from "../tools/discordResolverTools.js";
 import {
   answerFromHistory,
@@ -627,25 +628,28 @@ export async function executeLocalToolRoute(
   }
 
   if (route.name === "drawRandom") {
+    const content = cleanResponse(
+      await drawRandom(ctx, {
+        kind: stringArgument(route.arguments, "kind"),
+        count: numberArgument(route.arguments, "count"),
+        min: numberArgument(route.arguments, "min"),
+        max: numberArgument(route.arguments, "max"),
+        sides: numberArgument(route.arguments, "sides"),
+        options: stringArrayArgument(route.arguments, "options"),
+        deckCount: numberArgument(route.arguments, "deckCount"),
+        reason: stringArgument(route.arguments, "reason"),
+        wager: recordArgument(route.arguments, "wager") as {
+          stakeUsd?: number;
+          maxPayoutUsd?: number;
+          game?: string;
+        } | undefined,
+      }),
+      ctx.config.maxReplyChars,
+    );
     return {
-      content: cleanResponse(
-        await drawRandom(ctx, {
-          kind: stringArgument(route.arguments, "kind"),
-          count: numberArgument(route.arguments, "count"),
-          min: numberArgument(route.arguments, "min"),
-          max: numberArgument(route.arguments, "max"),
-          sides: numberArgument(route.arguments, "sides"),
-          options: stringArrayArgument(route.arguments, "options"),
-          deckCount: numberArgument(route.arguments, "deckCount"),
-          reason: stringArgument(route.arguments, "reason"),
-          wager: recordArgument(route.arguments, "wager") as {
-            stakeUsd?: number;
-            maxPayoutUsd?: number;
-            game?: string;
-          } | undefined,
-        }),
-        ctx.config.maxReplyChars,
-      ),
+      content,
+      status: isSuccessfulRandomDrawResult(content) ? "ok" : "error",
+      retryable: !isSuccessfulRandomDrawResult(content),
     };
   }
 

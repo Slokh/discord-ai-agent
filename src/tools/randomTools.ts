@@ -68,22 +68,46 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     await auditRng(ctx, "drawRandom", input, wagerValidationError);
     return wagerValidationError;
   }
+  const explicitStakeUsd = explicitBareWagerAmount(ctx.requestText);
+  if (input.wager && explicitStakeUsd != null && Math.abs(input.wager.stakeUsd! - explicitStakeUsd) > 1e-9) {
+    const error = `Wager stake must match the explicit amount in the current request: $${explicitStakeUsd}. Retry drawRandom with stakeUsd=${explicitStakeUsd}; do not reuse an amount from conversation history.`;
+    await auditRng(ctx, "drawRandom", input, error);
+    return error;
+  }
   let wager: WagerReservation | null = null;
   if (input.wager) {
     if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
     if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
-    wager = await ctx.walletService.reserveWager(
-      {
-        guildId: ctx.guildId,
-        channelId: ctx.channelId,
-        threadKey,
-        userId: ctx.userId,
-        game: input.wager.game!.trim(),
-        stakeUsd: input.wager.stakeUsd!,
-        maxPayoutUsd: input.wager.maxPayoutUsd!
-      },
-      paymentRecorder(ctx)
-    );
+    const requestId = ctx.requestId ?? ctx.requestMessageId;
+    if (!requestId) return "A stable request id is required before a wallet-backed wager can be reserved.";
+    try {
+      wager = await ctx.walletService.reserveWager(
+        {
+          requestId,
+          guildId: ctx.guildId,
+          channelId: ctx.channelId,
+          threadKey,
+          userId: ctx.userId,
+          game: input.wager.game!.trim(),
+          stakeUsd: input.wager.stakeUsd!,
+          maxPayoutUsd: input.wager.maxPayoutUsd!
+        },
+        paymentRecorder(ctx)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/already exists for this Discord request/i.test(message)) {
+        const result = "A wallet-backed wager has already been reserved for this Discord request. Use the first successful draw and settle that wager; do not draw or reserve another wager.";
+        await auditRng(ctx, "drawRandom", input, result);
+        return result;
+      }
+      if (/Insufficient user wallet balance/i.test(message)) {
+        const result = "The wager could not be reserved because the user's available wallet balance is below the requested stake. Available balance excludes active wager and transfer reservations; gas fees are paid by the bot fee payer and are not deducted from the user.";
+        await auditRng(ctx, "drawRandom", input, result);
+        return result;
+      }
+      throw error;
+    }
   }
 
   const clientSeedValue = ctx.requestMessageId ?? ctx.requestId ?? generateServerSeed();
@@ -205,6 +229,9 @@ export async function settleRandomWager(
     return "payoutUsd must be a non-negative amount.";
   }
   if (!explanation) return "explanation is required and must show how the payout follows from the draw.";
+  if (describesUnfinishedWager(explanation)) {
+    return "Settlement rejected: the calculation describes an unfinished game. Resolve every remaining decision deterministically from the existing draw and stated rules, then call settleRandomWager again with the final payout. Wallet-backed games cannot pause for another user choice.";
+  }
   const settled = await ctx.walletService.settleWager(
     { wagerId, userId: ctx.userId, payoutUsd: input.payoutUsd, explanation },
     paymentRecorder(ctx)
@@ -218,6 +245,17 @@ export async function settleRandomWager(
     settled.userBalance ? `User wallet balance: $${settled.userBalance.formatted} USD.` : null,
     `Calculation: ${explanation}`
   ].filter((line): line is string => line !== null).join("\n");
+}
+
+function describesUnfinishedWager(explanation: string): boolean {
+  return /\b(?:in\s+progress|await(?:ing|s)?|pending|hit\s+or\s+stand|not\s+(?:yet\s+)?(?:finished|complete|resolved|decided|settled)|to\s+be\s+(?:continued|completed|decided))\b/i.test(explanation);
+}
+
+function explicitBareWagerAmount(requestText: string | undefined): number | null {
+  const match = requestText?.trim().match(/^\$?\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:usd|dollars?|bucks?)?\s*[.!?]?$/i);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export async function revealRandomness(ctx: ToolContext): Promise<string> {

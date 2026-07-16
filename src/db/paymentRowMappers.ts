@@ -46,6 +46,7 @@ export function mapTransfer(row: Record<string, unknown>): WalletTransfer {
 export function mapWager(row: Record<string, unknown>): WagerReservation {
   return {
     id: String(row.id),
+    requestId: row.request_id == null ? null : String(row.request_id),
     guildId: String(row.guild_id),
     channelId: String(row.channel_id),
     threadKey: String(row.thread_key),

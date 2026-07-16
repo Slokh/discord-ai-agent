@@ -6,7 +6,7 @@ import { recordAgentEvent } from "./runtimeTranscript.js";
 const SUCCESSFUL_DRAW_PREFIX = "Provably fair draw complete.";
 
 const CHANCE_INTENT =
-  /\b(random(?:ly)?|roll|dice|d\d+|coin|flip|pick|choose|shuffle|draw|deal|cards?|hand|shoe|blackjack|poker|roulette|wheel|craps|slots?|spins?|bet|casino|lottery|raffle|winner)\b/i;
+  /\b(random(?:ly)?|chance|roll|dice|d\d+|coin|flip|pick|choose|shuffle|draw|deal|cards?|hand|shoe|blackjack|poker|roulette|wheel|craps|slots?|spins?|bet|casino|lottery|raffle|winner)\b/i;
 
 const STRONG_OUTCOME_PATTERNS = [
   /^\s*Roll:\s*\d+\b/im,
@@ -24,6 +24,8 @@ const INTENT_OUTCOME_PATTERNS = [
   /(?:^|\n)\s*(?:result|outcome|draw|roll|spin|flip)\s*(?:is|was|:|—|-)\s*\S+/im,
   /\b(?:landed on|came up)\s+(?:heads|tails|\d+)\b/i,
   /\b(?:your hand|dealer (?:shows|upcard))\s*:\s*[^\n]*(?:10|[2-9JQKA])[♠♥♦♣]/i,
+  /\b(?:you|player|dealer|house|they)\s+(?:win|won|lose|lost)\b/i,
+  /\b\d{16,}\b/,
 ];
 
 export const RANDOM_OUTCOME_RETRY_GUIDANCE =

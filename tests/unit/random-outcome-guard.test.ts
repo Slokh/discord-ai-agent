@@ -150,4 +150,25 @@ describe("random outcome guard", () => {
     guard.noteToolResult("settleRandomWager", "The scoped wallet wager settled.\nPayout: $2.");
     expect(guard.requiresWagerResolution()).toBe(false);
   });
+
+  it.each([
+    "awaitRandomWagerAction",
+    "settleRandomWager",
+  ] as const)("forces the declared %s transition after a newly reserved wager draw", (requiredTool) => {
+    const guard = new RandomOutcomeGuard({} as ToolContext, "bet $1");
+    guard.noteToolResult("drawRandom", [
+      "Provably fair draw complete.",
+      "Result: verified result",
+      "The scoped wallet wager is reserved.",
+      `Required next tool: ${requiredTool}.`,
+    ].join("\n"));
+
+    expect(guard.requiresWagerResolution()).toBe(true);
+    expect(guard.requiredWagerResolutionTool()).toBe(requiredTool);
+
+    guard.noteToolResult(requiredTool, requiredTool === "awaitRandomWagerAction"
+      ? "Wallet game paused for player action.\nState version: 1"
+      : "The scoped wallet wager settled.\nPayout: $0.");
+    expect(guard.requiredWagerResolutionTool()).toBeNull();
+  });
 });

@@ -44,7 +44,7 @@ import {
   invalidToolCallRecoveryMessage,
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
-import { coerceGeneratedCsvProducerRoutes, selectNextRoundToolChoice, selectModelToolRoutes, traceToolRequestMetadata } from "./modelToolRoutes.js";
+import { coerceGeneratedCsvProducerRoutes, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
 import { RANDOM_OUTCOME_RETRY_GUIDANCE, ForcedRandomActionRouter, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
@@ -120,7 +120,7 @@ async function runAgentModelLoopInternal(
     invalidToolCallRecoveryAttempted: false,
   };
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
-  let forceWagerResolutionNextRound = false;
+  const wagerResolutionRouter = new WagerResolutionRouter();
   const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
   const forcedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
   const forcedRandomAction = new ForcedRandomActionRouter(text, Boolean(ctx.config.payments?.userWalletsEnabled));
@@ -234,14 +234,13 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const forceWagerResolutionThisRound = forceWagerResolutionNextRound;
       const forcedToolThisRound = (round === 0 ? forcedWalletActionTool : null) ?? forcedRandomAction.takeToolForRound(round);
-      const toolChoice = selectNextRoundToolChoice({ forceWagerResolution: forceWagerResolutionThisRound, forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
+      const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
+      const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
-      forceWagerResolutionNextRound = false;
       response = await runObservedModelCall(ctx, {
         purpose: "tool_selection",
-        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: forceWagerResolutionThisRound ? "wager_resolution" : forcedToolThisRound ?? undefined },
+        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: wagerResolutionRoute.forcedToolName },
         chat: {
           messages,
           tools: toolDefinitionsForModel({
@@ -466,7 +465,7 @@ async function runAgentModelLoopInternal(
           : await executeLocalToolRoute(ctx, route, text));
       forcedRandomAction.noteToolResult(route.name, result.status);
       randomOutcomeGuard.noteToolResult(route.name, result.content);
-      forceWagerResolutionNextRound = randomOutcomeGuard.requiresWagerResolution();
+      wagerResolutionRouter.arm(randomOutcomeGuard.requiresWagerResolution(), randomOutcomeGuard.requiredWagerResolutionTool());
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
         route.name !== "requestAdditionalTools" &&

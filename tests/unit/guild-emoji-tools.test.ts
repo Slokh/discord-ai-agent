@@ -55,6 +55,22 @@ describe("createDiscordEmoji", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining("upload failed") }));
   });
 
+  it("accepts an explicit data image URL", async () => {
+    const create = vi.fn(async (_input: Parameters<NonNullable<ToolContext["createDiscordEmoji"]>>[0]) => ({
+      id: "emoji-2",
+      name: "pixel",
+      animated: false,
+      mention: "<:pixel:emoji-2>",
+      url: "https://cdn.discordapp.com/emojis/emoji-2.webp",
+    }));
+    const ctx = context({ generatedFiles: [], createDiscordEmoji: create });
+    const dataUrl = `data:image/png;base64,${PNG_PIXEL.toString("base64")}`;
+
+    await expect(createDiscordEmoji(ctx, { name: "pixel", imageUrl: dataUrl }))
+      .resolves.toContain("<:pixel:emoji-2>");
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it("rejects invalid names and image URL schemes before uploading", async () => {
     const create = vi.fn();
     const ctx = context({ createDiscordEmoji: create });

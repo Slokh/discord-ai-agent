@@ -567,7 +567,9 @@ describe("drawRandom", () => {
     "bet 2 on a coin flip",
     "20 more spins at $5 each",
     "bet .05 blackjack",
-    "put $.10 on heads"
+    "put $.10 on heads",
+    "put the rest of my balance on roulette",
+    "bet my entire bankroll on black"
   ])("recognizes common wager shorthand: %s", (text) => {
     expect(requiresWalletBackedWager(text)).toBe(true);
   });

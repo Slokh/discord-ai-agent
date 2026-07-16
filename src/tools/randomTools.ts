@@ -219,7 +219,8 @@ export function requiresWalletBackedWager(text: string): boolean {
   const shorthand = new RegExp(String.raw`(?:\b(?:bet|wager|stake|risk|put)\s+\$?${amount}(?![\w.])|(?<![\w.])\$?${amount}\s+(?:on|per\s+(?:spin|hand|roll|game)|each)\b)`, "i");
   const game = /\b(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery|wager|bet)\b/i;
   const action = /\b(?:play|run|do|give|deal|roll|flip|spin|bet|wager|stake|risk|put|again|more)\b/i;
-  return game.test(text) && ((money.test(text) && action.test(text)) || shorthand.test(text));
+  const wholeBalance = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
+  return game.test(text) && ((money.test(text) && action.test(text)) || shorthand.test(text) || (wholeBalance.test(text) && action.test(text)));
 }
 
 export function requiresWalletBackedWagerForContext(ctx: ToolContext): boolean {

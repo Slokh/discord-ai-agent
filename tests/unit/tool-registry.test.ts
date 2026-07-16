@@ -83,6 +83,8 @@ describe("toolRegistry", () => {
     expect(tool?.outputContract).toContain("verified current USD balance");
     expect(toolRegistry.find((entry) => entry.name === "listWalletBalances")?.outputContract)
       .toContain("$0 for members without wallets");
+    expect(toolRegistry.find((entry) => entry.name === "listWalletBalances")?.parameters.properties)
+      .toHaveProperty("view");
   });
 
   it("exports a self-documenting contract for every local tool", () => {

@@ -5,6 +5,7 @@ import type { AgentResponse, ToolContext } from "./types.js";
 
 type WalletOwnerInput = "requester" | "bot" | "user";
 type WalletEndpointInput = "bot" | "user";
+type WalletDirectoryView = "balances" | "addresses" | "both";
 
 export async function getWalletBalance(
   ctx: ToolContext,
@@ -65,7 +66,10 @@ export async function getWalletBalance(
   return content;
 }
 
-export async function listWalletBalances(ctx: ToolContext): Promise<AgentResponse> {
+export async function listWalletBalances(
+  ctx: ToolContext,
+  input: { view?: WalletDirectoryView } = {}
+): Promise<AgentResponse> {
   const actor = paymentRequester(ctx);
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
     return { content: "Per-user USD wallets are not enabled in this deployment." };
@@ -106,23 +110,25 @@ export async function listWalletBalances(ctx: ToolContext): Promise<AgentRespons
       status: "verified onchain"
     };
   });
+  const view = input.view ?? "balances";
   const walletCount = rows.filter((row) => row.hasWallet).length;
   const unavailableCount = rows.filter((row) => row.hasWallet && !row.balance).length;
-  const lines = rows.map((row) =>
-    `- ${row.name} (${row.userId}): ${row.balance ? `$${row.balance} USD` : "unavailable"} — ${row.status}`
-  );
-  const header = `Server wallet balances: ${rows.length} members, ${walletCount} ${walletCount === 1 ? "wallet" : "wallets"}, ${rows.length - walletCount} without wallets.`;
-  const verifiedAt = `Checked: ${new Date().toISOString()}. Members without a wallet are shown as $0 USD; no wallet was created by this lookup.`;
+  const withoutWalletCount = rows.length - walletCount;
+  const lines = walletDirectoryLines(rows, view);
+  const header = walletDirectoryHeader({ view, memberCount: rows.length, walletCount, withoutWalletCount });
+  const verifiedAt = walletDirectoryCheckedLine(view);
   let content = [header, ...lines, verifiedAt].join("\n");
   let files: AgentResponse["files"];
   if (Buffer.byteLength(content, "utf8") > Math.max(1_000, ctx.config.maxReplyChars - 250)) {
-    content = [header, ...lines.slice(0, 10), `Full ${rows.length}-member directory attached as wallet-balances.csv.`, verifiedAt].join("\n");
-    files = [{ name: "wallet-balances.csv", contentType: "text/csv", data: Buffer.from(walletBalancesCsv(rows), "utf8") }];
+    const filename = view === "addresses" ? "wallet-addresses.csv" : "wallet-balances.csv";
+    const directoryCount = view === "addresses" ? walletCount : rows.length;
+    content = [header, ...lines.slice(0, 10), `Full ${directoryCount}-entry directory attached as ${filename}.`, verifiedAt].join("\n");
+    files = [{ name: filename, contentType: "text/csv", data: Buffer.from(walletDirectoryCsv(rows, view), "utf8") }];
   }
   await recordAgentEvent(ctx, {
     eventName: "wallet.directory.read",
     summary: `Read ${rows.length} Discord member wallet balances`,
-    metadata: { memberCount: rows.length, walletCount, unavailableCount, balancesPublic: ctx.config.payments.balancesPublic }
+    metadata: { memberCount: rows.length, walletCount, unavailableCount, view, balancesPublic: ctx.config.payments.balancesPublic }
   });
   await audit(ctx, "listWalletBalances", `guild:${actor.guildId}`, header);
   return {
@@ -131,6 +137,45 @@ export async function listWalletBalances(ctx: ToolContext): Promise<AgentRespons
     status: unavailableCount > 0 ? "partial" : "ok",
     limitation: unavailableCount > 0 ? `${unavailableCount} existing wallet balance reads failed.` : undefined
   };
+}
+
+function walletDirectoryLines(
+  rows: Array<{ userId: string; name: string; balance: string; hasWallet: boolean; address: string; status: string }>,
+  view: WalletDirectoryView
+) {
+  if (view === "addresses") {
+    return rows.filter((row) => row.hasWallet).map((row) =>
+      `- ${row.name} (${row.userId}): ${row.address || "address unavailable"}`
+    );
+  }
+  if (view === "both") {
+    return rows.map((row) => row.hasWallet
+      ? `- ${row.name} (${row.userId}): ${row.balance ? `$${row.balance} USD` : "balance unavailable"} — ${row.address || "address unavailable"} — ${row.status}`
+      : `- ${row.name} (${row.userId}): $0 USD — no wallet`
+    );
+  }
+  return rows.map((row) =>
+    `- ${row.name} (${row.userId}): ${row.balance ? `$${row.balance} USD` : "unavailable"} — ${row.status}`
+  );
+}
+
+function walletDirectoryHeader(input: {
+  view: WalletDirectoryView;
+  memberCount: number;
+  walletCount: number;
+  withoutWalletCount: number;
+}) {
+  if (input.view === "addresses") {
+    return `Server wallet addresses: ${input.walletCount} ${input.walletCount === 1 ? "wallet" : "wallets"}, ${input.withoutWalletCount} ${input.withoutWalletCount === 1 ? "member" : "members"} without a wallet.`;
+  }
+  return `Server wallet ${input.view === "both" ? "balances and addresses" : "balances"}: ${input.memberCount} members, ${input.walletCount} ${input.walletCount === 1 ? "wallet" : "wallets"}, ${input.withoutWalletCount} without wallets.`;
+}
+
+function walletDirectoryCheckedLine(view: WalletDirectoryView) {
+  const suffix = view === "addresses"
+    ? "Only members with an existing wallet are listed; no wallet was created by this lookup."
+    : "Members without a wallet are shown as $0 USD; no wallet was created by this lookup.";
+  return `Checked: ${new Date().toISOString()}. ${suffix}`;
 }
 
 export async function transferWalletFunds(
@@ -306,6 +351,17 @@ function walletBalancesCsv(rows: Array<{
   return [
     ["discord_user_id", "display_name", "balance_usd", "has_wallet", "address", "status"],
     ...rows.map((row) => [row.userId, row.name, row.balance || "unavailable", String(row.hasWallet), row.address, row.status])
+  ].map((row) => row.map(csvCell).join(",")).join("\n");
+}
+
+function walletDirectoryCsv(
+  rows: Parameters<typeof walletBalancesCsv>[0],
+  view: WalletDirectoryView
+) {
+  if (view !== "addresses") return walletBalancesCsv(rows);
+  return [
+    ["discord_user_id", "display_name", "address"],
+    ...rows.filter((row) => row.hasWallet).map((row) => [row.userId, row.name, row.address])
   ].map((row) => row.map(csvCell).join(",")).join("\n");
 }
 

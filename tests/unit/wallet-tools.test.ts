@@ -67,6 +67,31 @@ describe("managed wallet tools", () => {
     expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "guild", userIds: ["alice", "bob"] });
   });
 
+  it("returns a compact address-only directory without repeating balances", async () => {
+    const address = `0x${"2".repeat(40)}`;
+    const listExistingUserWalletSummaries = vi.fn(async () => [{
+      userId: "alice",
+      wallet: { address },
+      balance: { formatted: "2.5" },
+      error: null
+    }]);
+    const ctx = context({
+      walletBalancesPublic: true,
+      walletService: { listExistingUserWalletSummaries },
+      fetchDiscordGuildMembers: vi.fn(async () => [
+        { userId: "alice", username: "alice", displayName: "Alice", isBot: false },
+        { userId: "bob", username: "bob", displayName: "Bob", isBot: false }
+      ])
+    });
+
+    const result = await listWalletBalances(ctx, { view: "addresses" });
+
+    expect(result.content).toContain("Server wallet addresses: 1 wallet, 1 member without a wallet");
+    expect(result.content).toContain(`Alice (alice): ${address}`);
+    expect(result.content).not.toContain("Bob (bob)");
+    expect(result.content).not.toContain("$2.5 USD");
+  });
+
   it("keeps the member-to-wallet directory private unless configured public or requested by an admin", async () => {
     const fetchDiscordGuildMembers = vi.fn();
     const ctx = context({ fetchDiscordGuildMembers, walletService: {} });

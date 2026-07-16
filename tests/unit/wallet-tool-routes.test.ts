@@ -53,9 +53,9 @@ describe("executeWalletToolRoute", () => {
 
   it("routes the server wallet directory without truncating its tool payload", async () => {
     const ctx = context();
-    await expect(executeWalletToolRoute(ctx, route("listWalletBalances", {})))
+    await expect(executeWalletToolRoute(ctx, route("listWalletBalances", { view: "addresses" })))
       .resolves.toEqual({ content: "wallet directory" });
-    expect(mocks.walletBalances).toHaveBeenCalledWith(ctx);
+    expect(mocks.walletBalances).toHaveBeenCalledWith(ctx, { view: "addresses" });
   });
 });
 

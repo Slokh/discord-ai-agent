@@ -1202,19 +1202,25 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "listWalletBalances",
     description:
-      "List the real USD wallet balance of every current non-bot member in this Discord server. ALWAYS use this for plural or server-wide requests such as 'every user's balance', 'all wallet balances', or 'who has money?'. It joins the live Discord member roster to existing managed wallets, reads every existing balance live onchain, and reports $0 USD for members without a wallet without creating one. This directory is available to owner/ops, or to every member when WALLET_BALANCES_PUBLIC=true.",
+      "List the managed wallet directory for this Discord server. ALWAYS use this for plural or server-wide balance or address requests. Use view=balances for 'every user's balance', view=addresses for wallet-address questions, and view=both only when both were explicitly requested. It joins the live non-bot member roster to existing managed wallets, reads existing balances live onchain when shown, and reports $0 USD for members without a wallet without creating one. This directory is available to owner/ops, or to every member when WALLET_BALANCES_PUBLIC=true.",
     userVisible: true,
     mutates: false,
     group: "external",
     category: "external",
     toolClass: "external",
-    outputContract: ["every current non-bot server member", "verified current USD balances", "$0 for members without wallets", "wallet addresses in attached CSV when needed"],
-    examples: ["@ai what's the balance of every user in this server?"],
+    outputContract: ["requested balances, addresses, or both", "every current non-bot server member for balance views", "only existing wallets for address-only views", "$0 for members without wallets"],
+    examples: ["@ai what's the balance of every user in this server?", "@ai can I get their wallet addresses?"],
     permissionRequirements: ["configured_user_wallet_runtime", "live_discord_member_roster", "public_balance_directory_or_owner_ops"],
     auditEvents: ["tool_audit_logs", "wallet.directory.read"],
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        view: {
+          type: "string",
+          enum: ["balances", "addresses", "both"],
+          description: "Directory fields to return. Use addresses for address-only questions to avoid repeating balances; use both only when explicitly requested. Defaults to balances."
+        }
+      },
       additionalProperties: false
     }
   },

@@ -19,7 +19,9 @@ export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolR
     };
   }
   if (route.name === "listWalletBalances") {
-    return listWalletBalances(ctx);
+    return listWalletBalances(ctx, {
+      view: stringArgument(route.arguments, "view") as "balances" | "addresses" | "both" | undefined
+    });
   }
   if (route.name === "transferWalletFunds") {
     return {

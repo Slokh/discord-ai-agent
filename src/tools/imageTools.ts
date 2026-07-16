@@ -2,6 +2,7 @@ import type { ChatContentPart, ImageReference } from "../models/openrouter.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
+import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 
@@ -180,19 +181,10 @@ export async function generateImage(
     ...(outputFormat ? { outputFormat } : {}),
     ...(background ? { background } : {}),
   });
-  await ctx.repo.auditTool({
-    guildId: ctx.guildId,
-    channelId: ctx.channelId,
-    userId: ctx.userId,
-    toolName: "generateImage",
-    argumentsSummary: summarizeForAudit({ prompt, referenceImageCount: references.length, outputFormat, background }),
-    resultSummary: summarizeForAudit({ images: image.data.length, referenceImageCount: references.length, outputFormat, background }),
-    model: image.model,
-    estimatedCostUsd: image.estimatedCostUsd
-  });
 
-  const files: AgentFile[] = [];
+  let files: AgentFile[] = [];
   const urls: string[] = [];
+  let rejectedOpaqueImages = 0;
 
   for (const [index, item] of image.data.entries()) {
     if (item.b64_json) {
@@ -205,9 +197,42 @@ export async function generateImage(
     } else if (item.url) {
       const file = await imageUrlToAgentFile(item.url, index).catch(() => undefined);
       if (file) files.push(file);
+      else if (background === "transparent") rejectedOpaqueImages += 1;
       else urls.push(item.url);
     }
   }
+
+  let automaticBackgroundRemovalCount = 0;
+  if (background === "transparent") {
+    const normalized = await Promise.all(files.map(normalizeGeneratedTransparentImage));
+    files = normalized.flatMap((result) => {
+      if (!result.file) {
+        rejectedOpaqueImages += 1;
+        return [];
+      }
+      if (result.backgroundRemoved) automaticBackgroundRemovalCount += 1;
+      return [result.file];
+    });
+  }
+
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "generateImage",
+    argumentsSummary: summarizeForAudit({ prompt, referenceImageCount: references.length, outputFormat, background }),
+    resultSummary: summarizeForAudit({
+      images: image.data.length,
+      attachedImages: files.length,
+      referenceImageCount: references.length,
+      outputFormat,
+      background,
+      automaticBackgroundRemovalCount,
+      rejectedOpaqueImages
+    }),
+    model: image.model,
+    estimatedCostUsd: image.estimatedCostUsd
+  });
 
   const promptSummary = truncateForDiscord(prompt, 240);
   const referenceSummary = references.length > 0 ? `\nUsed ${references.length} reference image${references.length === 1 ? "" : "s"}.` : "";
@@ -217,10 +242,16 @@ export async function generateImage(
   const actualOutputSummary = requestedOutputSummary && files.length > 0
     ? `\nActual output: ${(await Promise.all(files.map(describeGeneratedImageFile))).join(", ")}.`
     : "";
+  const backgroundRemovalSummary = automaticBackgroundRemovalCount > 0
+    ? `\nAutomatic background removal: applied to ${automaticBackgroundRemovalCount} image${automaticBackgroundRemovalCount === 1 ? "" : "s"}.`
+    : "";
+  const transparencyFailureSummary = rejectedOpaqueImages > 0
+    ? `\nTransparency validation failed for ${rejectedOpaqueImages} generated image${rejectedOpaqueImages === 1 ? "" : "s"}: the provider returned opaque output and automatic background removal could not safely isolate a foreground subject. No opaque image was attached.`
+    : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}`;
   return { content, files };
 }
 

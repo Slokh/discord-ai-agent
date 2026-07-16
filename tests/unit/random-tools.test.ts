@@ -650,6 +650,14 @@ describe("drawRandom", () => {
     )).toBe("automatic");
   });
 
+  it("classifies independently generated number wagers as automatic", () => {
+    expect(inferWagerInteractionMode(
+      "generate 10 digit number, $.2 on it having a 1 in it, and $.2 on it having a 5 in it",
+      "digit-bet"
+    )).toBe("automatic");
+    expect(inferWagerInteractionMode("draw a 6-digit number", "number draw")).toBe("automatic");
+  });
+
   it("rejects wallet-backed wagers when user wallets are disabled", async () => {
     const reserveWager = vi.fn();
     const { ctx } = fakeContext({

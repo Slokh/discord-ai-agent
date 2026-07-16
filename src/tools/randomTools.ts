@@ -329,7 +329,7 @@ export function inferWagerInteractionMode(text: string, game: string): WagerInte
   if (/\b(?:choose\s+(?:after|whether)|ask\s+me|let\s+me\s+(?:choose|decide))\b/i.test(combined)) {
     return "player_decisions";
   }
-  if (/\b(?:slots?|roulette|craps|dice|die\s+roll|coin\s*flip|heads|tails|wheel|lottery|raffle|random\s+(?:pick|draw|number))\b/i.test(combined)) {
+  if (/\b(?:slots?|roulette|craps|dice|die\s+roll|coin\s*flip|heads|tails|wheel|lottery|raffle|random\s+(?:pick|draw|number)|(?:digit|number)[\s_-]*(?:bet|draw)|(?:generate|draw|pick)\s+(?:a\s+)?(?:\d+\s*[- ]?digit\s+)?number)\b/i.test(combined)) {
     return "automatic";
   }
   if (/\b(?:hit|stand|double\s+down|split|fold|call|raise|hold|discard)\b/i.test(combined)) {

@@ -360,6 +360,38 @@ describe("agent router", () => {
       .toBe(true);
   });
 
+  it("re-executes an exact drawRandom call after a failed result instead of treating it as successful evidence", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const drawCall = { id: "draw-call", name: "drawRandom", argumentsText: JSON.stringify({ kind: "coin" }) };
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [drawCall] })
+      .mockResolvedValueOnce({ content: "", model: "router-model", raw: {}, toolCalls: [{ ...drawCall, id: "draw-retry" }] })
+      .mockResolvedValueOnce({
+        content: "I couldn't complete a verified coin flip because the RNG service is unavailable.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      repo: { auditTool, recordTraceEvent: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "flip a coin");
+
+    expect(response.content).toContain("couldn't complete a verified coin flip");
+    const drawAudits = (auditTool.mock.calls as any[]).filter((call) => call[0]?.toolName === "drawRandom");
+    expect(drawAudits).toHaveLength(2);
+  });
+
   it("rejects fabricated live fares and retries with fresh retrieval tools", async () => {
     const traceEvents: any[] = [];
     const chat = vi

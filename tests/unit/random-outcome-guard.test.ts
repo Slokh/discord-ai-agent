@@ -15,6 +15,7 @@ describe("random outcome guard", () => {
     ["blackjack", "Let's deal.\n\nYour hand: 9♣ 4♠\nDealer shows: K♦"],
     ["coin", "The coin landed on heads."],
     ["raffle", "The winner is Alice."],
+    ["digit wager verdict", "**You win.** Here's your 50-digit number: `38472915061726483950482716395063849271054927381056`"],
   ])("rejects a fresh %s outcome without a successful draw", (_label, responseContent) => {
     expect(shouldRejectUnverifiedRandomOutcome({
       userText: "do it",

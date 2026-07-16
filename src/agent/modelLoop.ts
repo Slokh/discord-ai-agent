@@ -534,7 +534,7 @@ async function runAgentModelLoopInternal(
           redundantToolReason = "repeated tool result";
         }
       } else {
-        successfulToolCallKeys.add(routeKey);
+        if (result.status !== "error") successfulToolCallKeys.add(routeKey);
         if (route.name !== "requestAdditionalTools") {
           const signatures =
             toolResultSignatures.get(route.name) ?? new Set<string>();

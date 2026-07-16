@@ -1,6 +1,6 @@
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
-import type { PaymentEventRecorder } from "../payments/types.js";
 import { summarizeForAudit } from "../util/text.js";
+import { paymentRecorder } from "./paymentToolContext.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 
 type WalletOwnerInput = "requester" | "bot" | "user";
@@ -395,18 +395,4 @@ async function audit(ctx: ToolContext, toolName: string, argumentsSummary: strin
     argumentsSummary,
     resultSummary: summarizeForAudit(content)
   });
-}
-
-function paymentRecorder(ctx: ToolContext): PaymentEventRecorder {
-  return async (event) => {
-    await recordAgentEvent(ctx, {
-      ...event,
-      traceId: ctx.requestId,
-      requestId: ctx.requestId,
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      messageId: ctx.requestMessageId
-    });
-  };
 }

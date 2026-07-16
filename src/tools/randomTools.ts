@@ -12,9 +12,9 @@ import {
   type RngDrawParams
 } from "../rng/provable.js";
 import { summarizeForAudit } from "../util/text.js";
-import { recordAgentEvent } from "../agent/runtimeTranscript.js";
 import { atomicToUsd } from "../payments/money.js";
-import type { PaymentEventRecorder, WagerReservation } from "../payments/types.js";
+import type { WagerReservation } from "../payments/types.js";
+import { paymentRecorder } from "./paymentToolContext.js";
 import type { ToolContext } from "./types.js";
 
 export type DrawRandomInput = {
@@ -500,20 +500,6 @@ function validateWagerInput(input: DrawRandomInput): string | null {
   }
   if (!game?.trim()) return "wager.game is required.";
   return null;
-}
-
-function paymentRecorder(ctx: ToolContext): PaymentEventRecorder {
-  return async (event) => {
-    await recordAgentEvent(ctx, {
-      ...event,
-      traceId: ctx.requestId,
-      requestId: ctx.requestId,
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      messageId: ctx.requestMessageId
-    });
-  };
 }
 
 function drawParamsFor(kind: RngDrawKind, input: DrawRandomInput): RngDrawParams {

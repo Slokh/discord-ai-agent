@@ -5,6 +5,7 @@ import {
   listWalletBalances,
   transferWalletFunds
 } from "../../src/tools/walletTools.js";
+import type { PaymentEventRecorder } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("managed wallet tools", () => {
@@ -123,7 +124,15 @@ describe("managed wallet tools", () => {
   });
 
   it("binds a normal transfer source to the immutable requester and verifies the managed destination", async () => {
-    const transferFromUser = vi.fn(async () => transferResult());
+    const transferFromUser = vi.fn(async (_input: unknown, record: PaymentEventRecorder) => {
+      const result = transferResult();
+      await record({
+        eventName: "wallet.transfer.confirmed",
+        summary: "Confirmed user transfer",
+        metadata: { transactionHash: result.transfer.transactionHash }
+      });
+      return result;
+    });
     const ctx = context({
       repo: {
         getDiscordUserReferenceTerms: vi.fn(async () => [{
@@ -145,6 +154,9 @@ describe("managed wallet tools", () => {
 
     expect(result).toContain("Transferred $2 USD from your wallet to Friend's wallet.");
     expect(result).toContain("Source balance: $3 USD");
+    expect(ctx.footerLines).toEqual([
+      `💸 [transaction 0x999999…999999](https://explore.tempo.xyz/tx/0x${"9".repeat(64)})`
+    ]);
     expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
       guildId: "guild",
       requestedByUserId: "requester",
@@ -233,7 +245,8 @@ function context(input: {
     }),
     repo: { auditTool, ...(input.repo ?? {}) },
     walletService: input.walletService,
-    fetchDiscordGuildMembers: input.fetchDiscordGuildMembers
+    fetchDiscordGuildMembers: input.fetchDiscordGuildMembers,
+    footerLines: []
   } as unknown as ToolContext;
 }
 

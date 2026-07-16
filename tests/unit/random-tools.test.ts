@@ -7,6 +7,7 @@ import type {
   RngSessionRecord,
   RngSessionTx
 } from "../../src/db/rngRepository.js";
+import type { PaymentEventRecorder } from "../../src/payments/types.js";
 import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } from "../../src/rng/provable.js";
 import { drawRandom, requiresWalletBackedWager, revealRandomness, settleRandomWager } from "../../src/tools/randomTools.js";
 import type { DiscordReplyContext, ToolContext } from "../../src/tools/types.js";
@@ -517,12 +518,23 @@ describe("drawRandom", () => {
   });
 
   it("settles a wager exactly through the wallet service", async () => {
-    const settleWager = vi.fn(async () => ({
-      wager: { id: "wager-1" },
-      transfer: { amountAtomic: 750_000n, tokenDecimals: 6, status: "confirmed", transactionHash: "0xabc" },
-      userBalance: { formatted: "2.75", symbol: "USDC.e" }
-    }));
-    const { ctx } = fakeContext({ walletService: { settleWager } as unknown as ToolContext["walletService"] });
+    const transactionHash = `0x${"b".repeat(64)}`;
+    const settleWager = vi.fn(async (_input: unknown, record: PaymentEventRecorder) => {
+      await record({
+        eventName: "wallet.transfer.confirmed",
+        summary: "Confirmed game settlement transfer",
+        metadata: { transactionHash }
+      });
+      return {
+        wager: { id: "wager-1" },
+        transfer: { amountAtomic: 750_000n, tokenDecimals: 6, status: "confirmed", transactionHash },
+        userBalance: { formatted: "2.75", symbol: "USDC.e" }
+      };
+    });
+    const { ctx, footerLines } = fakeContext({
+      config: { maxReplyChars: 1800, payments: { userWalletsEnabled: true, tempoNetwork: "mainnet" } } as ToolContext["config"],
+      walletService: { settleWager } as unknown as ToolContext["walletService"]
+    });
 
     const response = await settleRandomWager(ctx, {
       wagerId: "wager-1",
@@ -536,6 +548,9 @@ describe("drawRandom", () => {
     );
     expect(response).toContain("Net transfer: $0.75 USD (confirmed)");
     expect(response).toContain("User wallet balance: $2.75 USD");
+    expect(footerLines).toEqual([
+      `💸 [transaction 0xbbbbbb…bbbbbb](https://explore.tempo.xyz/tx/${transactionHash})`
+    ]);
   });
 });
 

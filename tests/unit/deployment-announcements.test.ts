@@ -61,7 +61,7 @@ describe("deployment announcements", () => {
       content: expect.stringContaining("**Bot update**\n- Casino games now keep working across replies."),
       allowedMentions: { parse: [] }
     }));
-    expect(fixture.send.mock.calls[0]?.[0].content).toContain(`<https://github.com/example-org/example-agent/compare/${oldRevision}...${newRevision}>`);
+    expect(fixture.send.mock.calls[0]?.[0].content).toContain(`[Version ${newRevision.slice(0, 7)}](<https://github.com/example-org/example-agent/compare/${oldRevision}...${newRevision}>)`);
     expect(fixture.repo.markDeploymentAnnouncementPosted).toHaveBeenCalledWith(expect.objectContaining({
       revision: newRevision,
       discordMessageId: "announcement-1"

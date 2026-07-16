@@ -6,8 +6,6 @@ import {
   listAgentTasks,
   retryAgentTask,
 } from "../tools/agentTaskTools.js";
-import { updateBotAvatar } from "../tools/botProfileTools.js";
-import { createDiscordPoll } from "../tools/discordPollTools.js";
 import { listDiscordBugMarkers } from "../tools/discordBugTools.js";
 import { inspectDiscordFile } from "../tools/discordFileTools.js";
 import { drawRandom, revealRandomness, settleRandomWager } from "../tools/randomTools.js";
@@ -46,6 +44,7 @@ import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { restrictedToolGate } from "./toolGate.js";
 import { executeWalletToolRoute } from "./walletToolRoutes.js";
+import { executeDiscordActionToolRoute } from "./discordActionToolRoutes.js";
 
 export async function executeLocalToolRoute(
   ctx: ToolContext,
@@ -54,6 +53,8 @@ export async function executeLocalToolRoute(
 ): Promise<AgentResponse> {
   const gate = await restrictedToolGate(ctx, route.name);
   if (!gate.allowed) return { content: gate.message };
+  const discordActionResponse = await executeDiscordActionToolRoute(ctx, route, originalText);
+  if (discordActionResponse) return discordActionResponse;
   const walletResponse = await executeWalletToolRoute(ctx, route);
   if (walletResponse) return walletResponse;
 
@@ -600,36 +601,6 @@ export async function executeLocalToolRoute(
           dateFrom: stringArgument(route.arguments, "dateFrom"),
           dateTo: stringArgument(route.arguments, "dateTo"),
           sampleLimit: numberArgument(route.arguments, "sampleLimit"),
-        }),
-        ctx.config.maxReplyChars,
-      ),
-    };
-  }
-
-  if (route.name === "createDiscordPoll") {
-    return {
-      content: cleanResponse(
-        await createDiscordPoll(ctx, {
-          question: stringArgument(route.arguments, "question") ?? originalText,
-          answers: stringArrayArgument(route.arguments, "answers") ?? [],
-          durationHours: numberArgument(route.arguments, "durationHours"),
-          allowMultiselect: booleanArgument(
-            route.arguments,
-            "allowMultiselect",
-          ),
-        }),
-        ctx.config.maxReplyChars,
-      ),
-    };
-  }
-
-  if (route.name === "updateBotAvatar") {
-    return {
-      content: cleanResponse(
-        await updateBotAvatar(ctx, {
-          imageUrl: stringArgument(route.arguments, "imageUrl"),
-          messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
-          useContextImage: booleanArgument(route.arguments, "useContextImage"),
         }),
         ctx.config.maxReplyChars,
       ),

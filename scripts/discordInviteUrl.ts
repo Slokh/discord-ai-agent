@@ -13,7 +13,8 @@ const permissions =
   PermissionFlagsBits.ReadMessageHistory |
   PermissionFlagsBits.SendMessages |
   PermissionFlagsBits.SendMessagesInThreads |
-  PermissionFlagsBits.AttachFiles;
+  PermissionFlagsBits.AttachFiles |
+  PermissionFlagsBits.CreateGuildExpressions;
 
 const url = new URL("https://discord.com/oauth2/authorize");
 url.searchParams.set("client_id", config.discord.clientId);

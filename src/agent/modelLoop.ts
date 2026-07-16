@@ -578,7 +578,7 @@ async function runAgentModelLoopInternal(
           : toolResultContentForPrompt(route.name, result) + repeatNudge,
       });
 
-      if (route.name === "runCodingAgent" || route.name === "listWalletBalances") {
+      if (route.name === "runCodingAgent") {
         return await completeDirectToolResponse(ctx, {
           routeName: route.name,
           result,
@@ -586,7 +586,7 @@ async function runAgentModelLoopInternal(
           memoryEvents,
           requestLogger,
           startedAt,
-          completionKind: route.name === "runCodingAgent" ? "direct codegen tool result" : "direct wallet directory result",
+          completionKind: "direct codegen tool result",
         });
       }
     }

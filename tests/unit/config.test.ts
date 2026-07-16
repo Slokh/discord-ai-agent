@@ -117,8 +117,7 @@ describe("config", () => {
           privyAppSecret: null,
           tempoNetwork: "moderato",
           usdToken: "USDC.e",
-          initialGrantUsd: 1,
-          maxGameSettlementUsd: 10
+          initialGrantUsd: 1
         });
       }
     );

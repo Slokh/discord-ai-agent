@@ -242,7 +242,7 @@ export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | nul
   }
   const traceUrl = footer?.traceUrl?.trim();
   if (traceUrl) {
-    const parts = [`trace <${traceUrl.replace(/^<|>$/g, "")}>`];
+    const parts = [`[trace](<${traceUrl.replace(/^<|>$/g, "")}>)`];
     if (typeof footer?.durationMs === "number" && Number.isFinite(footer.durationMs)) {
       parts.push(formatFooterDuration(footer.durationMs));
     }

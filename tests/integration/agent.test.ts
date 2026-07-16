@@ -178,6 +178,82 @@ describe("agent router", () => {
     ]));
   });
 
+  it("lets the model present a model-selected wallet directory instead of returning the tool format verbatim", async () => {
+    const chat = vi.fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "wallet-directory",
+          name: "listWalletBalances",
+          argumentsText: "{}",
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "AI has $9.50 and Alice has $2.50. Those are the only funded wallets right now.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: false,
+        openRouter: {},
+        allowlists: { ownerUserId: null, opsUserIds: [] },
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          balancesPublic: true,
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        getDiscordUserReferenceTerms: vi.fn(async () => [{
+          userId: "alice", username: "alice", globalName: "Alice", aliases: [], terms: [],
+        }]),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: {
+        listExistingUserWalletSummaries: vi.fn(async () => [{
+          userId: "alice",
+          wallet: { address: `0x${"3".repeat(40)}` },
+          balance: { formatted: "2.5", amountAtomic: 2_500_000n },
+          error: null,
+        }]),
+        getBotWalletSummary: vi.fn(async () => ({
+          wallet: { address: `0x${"4".repeat(40)}` },
+          balance: { formatted: "9.5", amountAtomic: 9_500_000n },
+        })),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "message-wallet-directory",
+      requestMessageId: "message-wallet-directory",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "baalnces");
+
+    expect(response.content).toBe("AI has $9.50 and Alice has $2.50. Those are the only funded wallets right now.");
+    expect(response.content).not.toContain("| Wallet | Balance |");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1]?.[0]?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "tool",
+        name: "listWalletBalances",
+        content: expect.stringContaining("| Alice | $2.5 |"),
+      }),
+    ]));
+  });
+
   it("forces an explicit named transfer through the wallet tool on the first model round", async () => {
     const transactionHash = `0x${"5".repeat(64)}`;
     const chat = vi.fn()

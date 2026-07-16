@@ -128,7 +128,6 @@ const defaults = {
   tempoNetwork: "moderato" as TempoNetwork,
   tempoUsdToken: "USDC.e",
   walletInitialGrantUsd: 1,
-  walletMaxGameSettlementUsd: 10,
   promptOverlayPath: ".discord-ai-agent/prompt-overlay.md",
   toolsetScoping: true
 } as const;
@@ -244,7 +243,6 @@ const envSchema = z.object({
   TEMPO_NETWORK: z.enum(["moderato", "mainnet"]).default(defaults.tempoNetwork),
   TEMPO_USD_TOKEN: nonEmptyStringWithDefault(defaults.tempoUsdToken),
   WALLET_INITIAL_GRANT_USD: z.coerce.number().min(0).max(100).default(defaults.walletInitialGrantUsd),
-  WALLET_MAX_GAME_SETTLEMENT_USD: z.coerce.number().positive().max(10_000).default(defaults.walletMaxGameSettlementUsd),
   PROMPT_OVERLAY_PATH: z.string().trim().default(defaults.promptOverlayPath),
   TOOLSET_SCOPING: booleanFromEnv.default(defaults.toolsetScoping)
 });
@@ -390,8 +388,7 @@ export function loadConfig() {
       privyAppSecret: parsed.data.PRIVY_APP_SECRET?.trim() || null,
       tempoNetwork: parsed.data.TEMPO_NETWORK,
       usdToken: parsed.data.TEMPO_USD_TOKEN,
-      initialGrantUsd: parsed.data.WALLET_INITIAL_GRANT_USD,
-      maxGameSettlementUsd: parsed.data.WALLET_MAX_GAME_SETTLEMENT_USD
+      initialGrantUsd: parsed.data.WALLET_INITIAL_GRANT_USD
     },
     promptOverlayPath: parsed.data.PROMPT_OVERLAY_PATH,
     toolsetScoping: parsed.data.TOOLSET_SCOPING ?? defaults.toolsetScoping

@@ -10,6 +10,7 @@ const RESTRICTED_TOOL_MESSAGES: Partial<Record<ToolName, string>> = {
   runCodingAgent: "Code-update tasks are restricted to the bot owner or codegen allowlist.",
   retryAgentTask: "Retrying code-update tasks is restricted to the bot owner or codegen allowlist.",
   updateBotAvatar: "Avatar updates are restricted to the bot owner or ops allowlist.",
+  createDiscordEmoji: "Server emoji uploads are restricted to the bot owner or ops allowlist.",
   setUserTurnLimit: "User turn limits are restricted to the bot owner or ops allowlist.",
   reconcileWalletTransfers: "Wallet reconciliation is restricted to the bot owner or ops allowlist.",
   adminTransferWalletFunds: "Wallet administration is restricted to the bot owner or ops allowlist.",
@@ -28,6 +29,7 @@ export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): 
     }
   }
   if (toolName === "updateBotAvatar" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
+  if (toolName === "createDiscordEmoji" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
   if (toolName === "setUserTurnLimit" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
   if ((toolName === "reconcileWalletTransfers" || toolName === "adminTransferWalletFunds") && !isStrictlyAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) {
     return denied(toolName);

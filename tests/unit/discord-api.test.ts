@@ -1,5 +1,6 @@
+import { PermissionFlagsBits } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
-import { classifyDiscordWriteError, discordWrite, fetchDiscordAttachment, fetchDiscordGuildMembers } from "../../src/discord/api.js";
+import { classifyDiscordWriteError, createDiscordGuildEmoji, discordWrite, fetchDiscordAttachment, fetchDiscordGuildMembers } from "../../src/discord/api.js";
 
 const logger = { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as any;
 
@@ -80,5 +81,50 @@ describe("Discord write API", () => {
       { userId: "2", username: "zed", displayName: "Zed", isBot: false }
     ]);
     expect(fetchMembers).toHaveBeenCalledOnce();
+  });
+
+  it("creates a guild emoji only when the bot has Create Expressions", async () => {
+    const create = vi.fn(async () => ({
+      id: "emoji-1",
+      name: "wizard",
+      animated: false,
+      toString: (): string => "<:wizard:emoji-1>",
+      imageURL: () => "https://cdn.discordapp.com/emojis/emoji-1.webp",
+    }));
+    const guild = {
+      members: {
+        me: { permissions: { has: (flag: bigint) => flag === PermissionFlagsBits.CreateGuildExpressions } },
+        fetchMe: vi.fn(),
+      },
+      emojis: { create },
+    };
+    const client = { guilds: { cache: new Map([["guild", guild]]) } } as any;
+
+    await expect(createDiscordGuildEmoji(client, "guild", {
+      name: "wizard",
+      image: Buffer.from("image"),
+      auditLogReason: "test upload",
+    })).resolves.toMatchObject({ id: "emoji-1", name: "wizard", mention: "<:wizard:emoji-1>" });
+    expect(create).toHaveBeenCalledWith({
+      attachment: Buffer.from("image"),
+      name: "wizard",
+      reason: "test upload",
+    });
+  });
+
+  it("refuses guild emoji creation without Create Expressions", async () => {
+    const create = vi.fn();
+    const guild = {
+      members: { me: { permissions: { has: () => false } }, fetchMe: vi.fn() },
+      emojis: { create },
+    };
+    const client = { guilds: { cache: new Map([["guild", guild]]) } } as any;
+
+    await expect(createDiscordGuildEmoji(client, "guild", {
+      name: "wizard",
+      image: Buffer.from("image"),
+      auditLogReason: "test upload",
+    })).rejects.toThrow(/Create Expressions/);
+    expect(create).not.toHaveBeenCalled();
   });
 });

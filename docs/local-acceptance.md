@@ -13,7 +13,7 @@ Expected:
 - `preflight` stops at the first failed check and prints the step name.
 - `doctor` reports all checks as `ok`.
 - `smoke:discord` logs in and finds the configured guild.
-- `smoke:discord` reports `bot administrator permission: no`.
+- `smoke:discord` reports `bot administrator permission: no` and `bot create expressions permission: yes`.
 - `smoke:discord` fails if the bot currently has Administrator, because this milestone validates member-level access.
 - `smoke:discord` reports crawl/send/thread/attach permission counts for bot-visible channels and fails if none are usable for a required capability.
 - `smoke:openrouter` verifies chat and embeddings.

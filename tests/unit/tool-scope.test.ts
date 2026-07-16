@@ -221,7 +221,17 @@ describe("tool scoping", () => {
     const groups = selectToolGroups({ text: "change the bot avatar", hasImageAttachments: false, config });
     expect(groups.has("ops")).toBe(true);
     expect(groups.has("discord-action")).toBe(true);
+    expect(groups.has("image")).toBe(true);
     expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "updateBotAvatar")).toBe(true);
+  });
+
+  it("offers server emoji creation for explicit emoji upload prompts", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "make a custom emoji of a nacho wizard", hasImageAttachments: false, config });
+    expect(groups.has("ops")).toBe(true);
+    expect(groups.has("discord-action")).toBe(true);
+    expect(groups.has("image")).toBe(true);
+    expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "createDiscordEmoji")).toBe(true);
   });
 
   it("exposes avatar updates when a vague reply escalates to Discord actions", () => {

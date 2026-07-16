@@ -104,6 +104,8 @@ Generate an invite URL:
 npm run invite-url
 ```
 
+The generated member-level invite includes Create Expressions so the bot can upload custom server emoji when an authorized operator asks it to.
+
 Invite the bot, then run:
 
 ```bash
@@ -230,7 +232,7 @@ Common optional settings:
 | `WALLET_BALANCES_PUBLIC` | `false` | Allow every server member to list the member-to-wallet balance directory; owner/ops can always inspect it. |
 | `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | unset | Required when the wallet runtime is enabled. Never exposed to Discord or sandbox tasks. |
 | `TEMPO_NETWORK` / `TEMPO_USD_TOKEN` | `moderato` / `USDC.e` | Tempo network and six-decimal USD wallet token. Validate on Moderato before mainnet cutover. |
-| `WALLET_INITIAL_GRANT_USD` / `WALLET_MAX_GAME_SETTLEMENT_USD` | `1.00` / `10.00` | Automatic first-interaction game balance and maximum reserved payout per wager. |
+| `WALLET_INITIAL_GRANT_USD` | `1.00` | Automatic first-interaction and zero-balance restart funding. Wallet-backed wagers are limited by available user and treasury funds rather than a fixed payout ceiling. |
 | `GITHUB_BASE_BRANCH` | `main` | PR base branch |
 | `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |

@@ -11,6 +11,15 @@ describe("payment tool permissions", () => {
       await expect(restrictedToolGate(context("operator"), toolName)).resolves.toEqual({ allowed: true });
     }
   );
+
+  it.each(["updateBotAvatar", "createDiscordEmoji"] as const)(
+    "restricts %s to the owner or ops allowlist",
+    async (toolName) => {
+      await expect(restrictedToolGate(context("friend"), toolName)).resolves.toEqual(expect.objectContaining({ allowed: false }));
+      await expect(restrictedToolGate(context("owner"), toolName)).resolves.toEqual({ allowed: true });
+      await expect(restrictedToolGate(context("operator"), toolName)).resolves.toEqual({ allowed: true });
+    },
+  );
 });
 
 function context(userId: string): ToolContext {

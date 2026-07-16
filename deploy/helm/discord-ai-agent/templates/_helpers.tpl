@@ -90,8 +90,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.tempoUsdToken | quote }}
 - name: WALLET_INITIAL_GRANT_USD
   value: {{ .Values.config.walletInitialGrantUsd | quote }}
-- name: WALLET_MAX_GAME_SETTLEMENT_USD
-  value: {{ .Values.config.walletMaxGameSettlementUsd | quote }}
 {{- if .Values.config.budgetUserTurnsPerDay }}
 - name: BUDGET_USER_TURNS_PER_DAY
   value: {{ .Values.config.budgetUserTurnsPerDay | quote }}

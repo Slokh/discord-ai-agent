@@ -8,7 +8,7 @@ import {
 
 describe("summarizeBotChannelPermissions", () => {
   it("counts member-level channel permissions needed by Discord AI Agent", () => {
-    const member = { permissions: permissionSet([]) } as any;
+    const member = { permissions: permissionSet([PermissionsBitField.Flags.CreateGuildExpressions]) } as any;
     const full = permissionSet([
       PermissionsBitField.Flags.ViewChannel,
       PermissionsBitField.Flags.ReadMessageHistory,
@@ -31,6 +31,7 @@ describe("summarizeBotChannelPermissions", () => {
 
     expect(summary).toMatchObject({
       hasAdministrator: false,
+      hasCreateGuildExpressions: true,
       textLikeChannels: 4,
       crawlableChannels: 4,
       sendableChannels: 3,
@@ -65,8 +66,14 @@ describe("summarizeBotChannelPermissions", () => {
     expect(summarizeBotChannelPermissions(member, []).hasAdministrator).toBe(true);
   });
 
+  it("reports the guild-level Create Expressions permission", () => {
+    const member = { permissions: permissionSet([PermissionsBitField.Flags.CreateGuildExpressions]) } as any;
+    expect(summarizeBotChannelPermissions(member, []).hasCreateGuildExpressions).toBe(true);
+  });
+
   it("rejects Administrator for the member-level local milestone setup", () => {
     const baseSummary = {
+      hasCreateGuildExpressions: true,
       textLikeChannels: 1,
       crawlableChannels: 1,
       sendableChannels: 1,
@@ -83,6 +90,7 @@ describe("summarizeBotChannelPermissions", () => {
   it("rejects member-level setups without usable crawl, send, thread, or attach permissions", () => {
     const errors = validateMemberLevelBotPermissions({
       hasAdministrator: false,
+      hasCreateGuildExpressions: false,
       textLikeChannels: 0,
       crawlableChannels: 0,
       sendableChannels: 0,
@@ -95,6 +103,7 @@ describe("summarizeBotChannelPermissions", () => {
     expect(errors.join("\n")).toMatch(/cannot send messages/i);
     expect(errors.join("\n")).toMatch(/threads/i);
     expect(errors.join("\n")).toMatch(/Attach Files/i);
+    expect(errors.join("\n")).toMatch(/Create Expressions/i);
   });
 });
 

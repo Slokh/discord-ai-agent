@@ -35,12 +35,12 @@ describe("DiscordResponseSink", () => {
       footer: {
         traceUrl: "https://tasks.example/runs/run-1",
         durationMs: 42_183,
-        extraLines: ["💸 transfer [abc](<https://explore.tempo.xyz/tx/abc>)"]
+        extraLines: ["💸 [transfer](<https://explore.tempo.xyz/tx/abc>)"]
       }
     });
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "done\n\n-# 💸 transfer [abc](<https://explore.tempo.xyz/tx/abc>)\n-# trace <https://tasks.example/runs/run-1> · 42.183s"
+      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# trace <https://tasks.example/runs/run-1> · 42.183s"
     });
   });
 

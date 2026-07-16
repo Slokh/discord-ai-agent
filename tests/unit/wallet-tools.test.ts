@@ -160,7 +160,7 @@ describe("managed wallet tools", () => {
     expect(result).toContain("Transferred $2 USD from your wallet to Friend's wallet.");
     expect(result).toContain("Source balance: $3 USD");
     expect(ctx.footerLines).toEqual([
-      `💸 transfer [0x999999…999999](<https://explore.tempo.xyz/tx/0x${"9".repeat(64)}>)`
+      `💸 [transfer](<https://explore.tempo.xyz/tx/0x${"9".repeat(64)}>)`
     ]);
     expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
       guildId: "guild",
@@ -219,7 +219,7 @@ describe("managed wallet tools", () => {
 
     expect(result).toContain("Added $1 USD from the AI treasury");
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ requestedByUserId: "requester" }), expect.any(Function));
-    expect(ctx.footerLines).toContain(`💸 transfer [0x777777…777777](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
+    expect(ctx.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
   });
 
   it("reports a positive verified balance without issuing starter funds", async () => {

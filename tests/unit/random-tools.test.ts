@@ -589,7 +589,7 @@ describe("drawRandom", () => {
     expect(response).toContain("Net transfer: $0.75 USD (confirmed)");
     expect(response).toContain("User wallet balance: $2.75 USD");
     expect(footerLines).toEqual([
-      `💸 [transaction 0xbbbbbb…bbbbbb](https://explore.tempo.xyz/tx/${transactionHash})`
+      `💸 transaction 0xbbbbbb…bbbbbb <https://explore.tempo.xyz/tx/${transactionHash}>`
     ]);
   });
 });

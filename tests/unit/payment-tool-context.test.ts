@@ -24,7 +24,7 @@ describe("payment tool context", () => {
     });
 
     expect(ctx.footerLines).toEqual([
-      `💸 [transaction 0xaaaaaa…aaaaaa](${explorer}/tx/${transactionHash})`
+      `💸 transaction 0xaaaaaa…aaaaaa <${explorer}/tx/${transactionHash}>`
     ]);
     expect(recordTraceEvent).toHaveBeenCalledTimes(2);
   });

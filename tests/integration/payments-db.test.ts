@@ -185,6 +185,7 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       user,
       bot,
       game: "generic dice",
+      interactionMode: "automatic" as const,
       token: "USDC.e",
       tokenDecimals: 6,
       stakeAtomic: 750_000n,
@@ -242,6 +243,7 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       user,
       bot,
       game: "blackjack",
+      interactionMode: "player_decisions" as const,
       token: "USDC.e",
       tokenDecimals: 6,
       stakeAtomic: 10_000n,
@@ -270,6 +272,7 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       user,
       bot,
       game: "generic blackjack",
+      interactionMode: "player_decisions",
       token: "USDC.e",
       tokenDecimals: 6,
       stakeAtomic: 100_000n,
@@ -327,6 +330,106 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       actionPrompt: "Ignored",
     });
     expect(idempotent).toMatchObject({ stateVersion: 1, decisionState: first.decisionState });
+  });
+
+  it("rejects a payout whose structured outcome points in the opposite direction", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const bot = await activeWallet(guildId, "bot", null, "61");
+    const user = await activeWallet(guildId, "user", "outcome-user", "62");
+    const wager = await repo.reserveWager({
+      requestId: `${guildId}:flip`,
+      guildId,
+      channelId: "channel",
+      threadKey: `${guildId}:channel:rng-root:flip`,
+      requestedByUserId: "outcome-user",
+      user,
+      bot,
+      game: "coin flip",
+      interactionMode: "automatic",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 1_000_000n,
+      maxPayoutAtomic: 2_000_000n,
+      userBalanceAtomic: 5_000_000n,
+      botBalanceAtomic: 10_000_000n,
+      balancesObservedAt: new Date(),
+    });
+    await pool.query("UPDATE wallet_wager_reservations SET status = 'drawn' WHERE id = $1", [wager.id]);
+
+    await expect(repo.beginWagerSettlement({
+      wagerId: wager.id,
+      requestedByUserId: "outcome-user",
+      requestId: `${guildId}:flip`,
+      payoutAtomic: 2_000_000n,
+      outcome: "player_loss",
+      resolutionSource: "verified_randomness",
+      explanation: "Player lost, but the supplied payout would pay a win.",
+      tokenAddress: `0x${"6".repeat(40)}`,
+    })).rejects.toThrow(/conflicts with the payout/);
+
+    const transfers = await pool.query("SELECT count(*)::int AS count FROM wallet_transfers WHERE guild_id = $1", [guildId]);
+    expect(transfers.rows[0].count).toBe(0);
+    await expect(repo.getWager(wager.id)).resolves.toMatchObject({ status: "drawn", settlementOutcome: null });
+  });
+
+  it("requires saved state and a later player reply before settling an interactive wager", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const bot = await activeWallet(guildId, "bot", null, "71");
+    const user = await activeWallet(guildId, "user", "interactive-user", "72");
+    const rootRequestId = `${guildId}:deal`;
+    const wager = await repo.reserveWager({
+      requestId: rootRequestId,
+      guildId,
+      channelId: "channel",
+      threadKey: `${guildId}:channel:rng-root:deal`,
+      requestedByUserId: "interactive-user",
+      user,
+      bot,
+      game: "blackjack",
+      interactionMode: "player_decisions",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 1_000_000n,
+      maxPayoutAtomic: 2_000_000n,
+      userBalanceAtomic: 5_000_000n,
+      botBalanceAtomic: 10_000_000n,
+      balancesObservedAt: new Date(),
+    });
+    await pool.query("UPDATE wallet_wager_reservations SET status = 'drawn' WHERE id = $1", [wager.id]);
+    const settlement = {
+      wagerId: wager.id,
+      requestedByUserId: "interactive-user",
+      payoutAtomic: 0n,
+      outcome: "player_loss" as const,
+      resolutionSource: "player_decision" as const,
+      explanation: "Player stood and dealer won.",
+      tokenAddress: `0x${"7".repeat(40)}`,
+    };
+
+    await expect(repo.beginWagerSettlement({ ...settlement, requestId: rootRequestId }))
+      .rejects.toThrow(/pause with saved game state/);
+    await repo.saveGameDecision({
+      wagerId: wager.id,
+      requestedByUserId: "interactive-user",
+      requestId: rootRequestId,
+      expectedVersion: 0,
+      decisionState: { playerTotal: 18, dealerTotal: 17 },
+      allowedActions: ["hit", "stand"],
+      actionPrompt: "Hit or stand?",
+    });
+    await expect(repo.beginWagerSettlement({ ...settlement, requestId: rootRequestId }))
+      .rejects.toThrow(/new Discord reply/);
+
+    const settled = await repo.beginWagerSettlement({ ...settlement, requestId: `${guildId}:stand-reply` });
+    expect(settled).toMatchObject({
+      wager: {
+        status: "settling",
+        settlementOutcome: "player_loss",
+        settlementResolutionSource: "player_decision",
+        settlementRequestId: `${guildId}:stand-reply`,
+      },
+      transfer: { purpose: "game_settlement", sourceWalletId: user.id, destinationWalletId: bot.id },
+    });
   });
 
 });

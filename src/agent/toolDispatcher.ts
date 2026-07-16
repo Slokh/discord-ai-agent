@@ -668,6 +668,8 @@ export async function executeLocalToolRoute(
         await settleRandomWager(ctx, {
           wagerId: stringArgument(route.arguments, "wagerId"),
           payoutUsd: numberArgument(route.arguments, "payoutUsd"),
+          outcome: stringArgument(route.arguments, "outcome") as "player_win" | "player_loss" | "push" | undefined,
+          resolutionSource: stringArgument(route.arguments, "resolutionSource") as "verified_randomness" | "player_decision" | undefined,
           explanation: stringArgument(route.arguments, "explanation"),
         }),
         ctx.config.maxReplyChars,

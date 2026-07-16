@@ -65,6 +65,10 @@ export type WalletTransferStatus =
   | "unknown"
   | "cancelled";
 
+export type WagerInteractionMode = "automatic" | "player_decisions";
+export type WagerSettlementOutcome = "player_win" | "player_loss" | "push";
+export type WagerResolutionSource = "verified_randomness" | "player_decision";
+
 export type WalletTransfer = {
   id: string;
   guildId: string;
@@ -112,6 +116,10 @@ export type WagerReservation = {
   settlementTransferId: string | null;
   status: "reserved" | "drawn" | "settling" | "settled" | "released" | "expired" | "failed";
   explanation: string | null;
+  interactionMode: WagerInteractionMode;
+  settlementOutcome: WagerSettlementOutcome | null;
+  settlementResolutionSource: WagerResolutionSource | null;
+  settlementRequestId: string | null;
   awaitingAction: boolean;
   stateVersion: number;
   decisionState: Record<string, unknown>;

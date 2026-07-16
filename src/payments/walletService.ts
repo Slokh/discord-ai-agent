@@ -8,6 +8,9 @@ import type {
   WalletAccount,
   WalletProvider,
   WalletTransfer,
+  WagerInteractionMode,
+  WagerResolutionSource,
+  WagerSettlementOutcome,
   WagerReservation
 } from "./types.js";
 
@@ -226,6 +229,7 @@ export class WalletService {
     threadKey: string;
     userId: string;
     game: string;
+    interactionMode: WagerInteractionMode;
     stakeUsd: number;
     maxPayoutUsd: number;
   }, record?: PaymentEventRecorder): Promise<WagerReservation> {
@@ -322,7 +326,10 @@ export class WalletService {
   async settleWager(input: {
     wagerId: string;
     userId: string;
+    requestId: string;
     payoutUsd: number;
+    outcome: WagerSettlementOutcome;
+    resolutionSource: WagerResolutionSource;
     explanation: string;
   }, record?: PaymentEventRecorder): Promise<{
     wager: WagerReservation;
@@ -335,13 +342,22 @@ export class WalletService {
       requestedByUserId: input.userId,
       payoutAtomic: usdToAtomic(input.payoutUsd, token.decimals),
       explanation: input.explanation,
-      tokenAddress: token.address
+      tokenAddress: token.address,
+      requestId: input.requestId,
+      outcome: input.outcome,
+      resolutionSource: input.resolutionSource
     });
     if (!settlement.transfer) {
       await emit(record, {
         eventName: "wallet.wager.settled",
         summary: "Settled a break-even wager without an onchain transfer",
-        metadata: { wagerId: input.wagerId, payoutUsd: input.payoutUsd }
+        metadata: {
+          wagerId: input.wagerId,
+          payoutUsd: input.payoutUsd,
+          outcome: input.outcome,
+          resolutionSource: input.resolutionSource,
+          requestId: input.requestId
+        }
       });
       return { ...settlement, userBalance: await this.readSettlementBalance(settlement.wager, record) };
     }

@@ -38,7 +38,7 @@ export function injectActiveGameSession(
     `Allowed actions: ${wager.allowedActions.join(", ")}`,
     `Saved state: ${state}`,
     wager.actionPrompt ? `Pending prompt: ${wager.actionPrompt}` : null,
-    "Treat the latest user message as the only new input. If it selects an allowed action, apply exactly that action to the saved state. Use drawRandom without a new wager only if that action needs additional chance, then either call awaitRandomWagerAction with the updated complete state and current version or call settleRandomWager for a final outcome. Never reserve a second wager for this game. If the message is a question or does not choose an allowed action, answer conversationally without changing state."
+    "Treat the latest user message as the only new input. If it selects an allowed action, apply exactly that action to the saved state. Use drawRandom without a new wager only if that action needs additional chance, then either call awaitRandomWagerAction with the updated complete state and current version or call settleRandomWager for a final outcome using resolutionSource=player_decision. Never reserve a second wager for this game. If the message is a question or does not choose an allowed action, answer conversationally without changing state."
   ].filter((line): line is string => line !== null).join("\n");
   messages.splice(Math.max(0, messages.length - 1), 0, { role: "system", content });
 }

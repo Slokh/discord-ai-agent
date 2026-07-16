@@ -30,7 +30,7 @@ const INTENT_OUTCOME_PATTERNS = [
 
 export const RANDOM_OUTCOME_RETRY_GUIDANCE =
   "Your previous draft was rejected because the verified chance workflow is incomplete. " +
-  "If no draw succeeded, call drawRandom and report its result exactly. If a wallet wager is active, either call awaitRandomWagerAction to persist a complete versioned state and ask for the player's next decision, or call settleRandomWager exactly once after a final outcome. " +
+  "If no draw succeeded, call drawRandom and report its result exactly. If a wallet wager is active, either call awaitRandomWagerAction to persist a complete versioned state and ask for the player's next decision, or call settleRandomWager exactly once after a final outcome with a payout-consistent outcome and its true resolution source. " +
   "Correct rejected arguments and retry in this turn. Never report or apply a chance outcome or money change until the required tools succeed.";
 
 export const RANDOM_OUTCOME_BLOCKED_RESPONSE =

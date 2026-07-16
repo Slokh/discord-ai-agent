@@ -76,8 +76,8 @@ export class WalletService {
     return { wallet, balance };
   }
 
-  async listExistingUserWalletSummaries(input: { guildId: string; userIds: string[] }) {
-    const userIds = [...new Set(input.userIds.filter(Boolean))];
+  async listExistingUserWalletSummaries(input: { guildId: string; userIds?: string[] }) {
+    const userIds = input.userIds ? [...new Set(input.userIds.filter(Boolean))] : undefined;
     const wallets = await this.repo.listUserWallets({
       guildId: input.guildId,
       userIds,

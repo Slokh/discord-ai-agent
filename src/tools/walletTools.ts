@@ -90,26 +90,22 @@ export async function listWalletBalances(
   if (!ctx.config.payments.balancesPublic && !isPaymentAdmin(ctx)) {
     return { content: "The server wallet directory is restricted to payment admins in this deployment." };
   }
-  if (!ctx.fetchDiscordGuildMembers) {
-    return { content: "The live Discord member directory is unavailable in this runtime." };
-  }
-
-  const members = (await ctx.fetchDiscordGuildMembers({ guildId: actor.guildId })).filter((member) => !member.isBot);
   const [summaries, botSummary] = await Promise.all([
     ctx.walletService.listExistingUserWalletSummaries({
-      guildId: actor.guildId,
-      userIds: members.map((member) => member.userId)
+      guildId: actor.guildId
     }),
     ctx.walletService.getBotWalletSummary(actor.guildId, paymentRecorder(ctx))
   ]);
-  const byUserId = new Map(summaries.map((summary) => [summary.userId, summary]));
-  const memberRows: WalletDirectoryRow[] = members.map((member) => {
-    const summary = byUserId.get(member.userId);
-    const name = member.displayName || member.username || member.userId;
-    if (!summary) return { userId: member.userId, name, balance: "0", funded: false, hasWallet: false, address: "", status: "no wallet" };
+  const references = await ctx.repo.getDiscordUserReferenceTerms({
+    guildId: actor.guildId,
+    userIds: summaries.map((summary) => summary.userId)
+  });
+  const names = new Map(references.map((row) => [row.userId, row.globalName || row.username || row.aliases[0] || row.userId]));
+  const memberRows: WalletDirectoryRow[] = summaries.map((summary) => {
+    const name = names.get(summary.userId) ?? summary.userId;
     if (!summary.balance) {
       return {
-        userId: member.userId,
+        userId: summary.userId,
         name,
         balance: "",
         funded: false,
@@ -119,7 +115,7 @@ export async function listWalletBalances(
       };
     }
     return {
-      userId: member.userId,
+      userId: summary.userId,
       name,
       balance: summary.balance.formatted,
       funded: isFundedBalance(summary.balance),
@@ -141,7 +137,6 @@ export async function listWalletBalances(
   const walletCount = memberRows.filter((row) => row.hasWallet).length;
   const fundedMemberCount = memberRows.filter((row) => row.funded).length;
   const unavailableCount = memberRows.filter((row) => row.hasWallet && !row.balance).length;
-  const withoutWalletCount = memberRows.length - walletCount;
   const displayedRows = walletDirectoryRows(rows, view);
   const lines = walletDirectoryLines(displayedRows, view);
   const header = walletDirectoryHeader({
@@ -150,7 +145,6 @@ export async function listWalletBalances(
     walletCount,
     fundedMemberCount,
     botFunded: rows[0]?.funded ?? false,
-    withoutWalletCount
   });
   const verifiedAt = walletDirectoryCheckedLine(view);
   let content = [header, ...lines, verifiedAt].join("\n");
@@ -207,10 +201,9 @@ function walletDirectoryHeader(input: {
   walletCount: number;
   fundedMemberCount: number;
   botFunded: boolean;
-  withoutWalletCount: number;
 }) {
   if (input.view === "addresses") {
-    return `Server wallet addresses: AI plus ${input.walletCount} member ${input.walletCount === 1 ? "wallet" : "wallets"}; ${input.withoutWalletCount} ${input.withoutWalletCount === 1 ? "member has" : "members have"} no wallet.`;
+    return `Server wallet addresses: AI plus ${input.walletCount} existing member ${input.walletCount === 1 ? "wallet" : "wallets"}.`;
   }
   const totalFunded = input.fundedMemberCount + (input.botFunded ? 1 : 0);
   const omitted = input.memberCount - input.fundedMemberCount;

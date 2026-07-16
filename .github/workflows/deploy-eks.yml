@@ -26,6 +26,7 @@ jobs:
       API_SERVICE_TYPE: ${{ vars.API_SERVICE_TYPE }}
       API_TLS_CERTIFICATE_ARN: ${{ vars.API_TLS_CERTIFICATE_ARN }}
       CONTROL_UI_PUBLIC_URL: ${{ vars.CONTROL_UI_PUBLIC_URL }}
+      RELEASE_NOTES_CHANNEL_ID: ${{ vars.RELEASE_NOTES_CHANNEL_ID }}
       # Repo the bot opens code-update PRs against; defaults to this repo.
       CODE_UPDATE_REPOSITORY: ${{ vars.CODE_UPDATE_REPOSITORY || github.repository }}
       CODEGEN_WORKER_ENABLED: ${{ vars.CODEGEN_WORKER_ENABLED }}
@@ -73,6 +74,10 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+          previous_app_revision=""
+          if kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" >/dev/null 2>&1; then
+            previous_app_revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$HELM_RELEASE-bot" -o jsonpath='{.spec.template.spec.containers[?(@.name=="bot")].env[?(@.name=="APP_REVISION")].value}')"
+          fi
           helm_args=(
             --namespace "$K8S_NAMESPACE"
             --create-namespace
@@ -82,6 +87,12 @@ jobs:
             --set-string "config.appRevision=$IMAGE_TAG"
             --set "config.githubRepository=$CODE_UPDATE_REPOSITORY"
           )
+          if [ -n "$previous_app_revision" ]; then
+            helm_args+=(--set-string "config.previousAppRevision=$previous_app_revision")
+          fi
+          if [ -n "${RELEASE_NOTES_CHANNEL_ID:-}" ]; then
+            helm_args+=(--set-string "config.releaseNotesChannelId=$RELEASE_NOTES_CHANNEL_ID")
+          fi
           if [ -n "${API_SERVICE_TYPE:-}" ]; then
             helm_args+=(--set "api.publicService.type=$API_SERVICE_TYPE")
           fi

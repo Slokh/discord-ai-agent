@@ -12,6 +12,8 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Queue handoff into durable agent runtime executions.
 - Full-server crawl and incremental message persistence.
 - Code-update task progress rendering back to Discord.
+- Unicode `🐛` reaction add/remove events persist a requester-owned bug marker through `bugMarkerReaction.ts`; removing the reaction, emoji, or message clears the marker.
+- `deploymentAnnouncements.ts` compares the previous and current deployed revisions, produces casual patch notes from bounded GitHub diff evidence, and posts once to the configured release-notes channel when the bot becomes ready.
 
 ## Change Routing
 
@@ -19,6 +21,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Message indexing or deletion behavior starts in `messagePersistence.ts` and `crawler.ts`, then repository storage.
 - Permission bugs start in `permissions.ts`, then retrieval filtering.
 - Code-update progress rendering starts in `taskNotifications.ts`.
+- Bug-marker reaction lifecycle changes start in `bugMarkerReaction.ts`, then the archive/retrieval repositories and `listDiscordBugMarkers` tool.
 
 ## Tests
 
@@ -27,6 +30,8 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Delivery write/sweep helpers: `tests/unit/discord-api.test.ts` and `tests/unit/discord-delivery-sweep.test.ts`.
 - Task rendering: `tests/unit/task-notifications.test.ts`.
 - Crawl/persistence: `tests/unit/crawler.test.ts` and `tests/unit/message-persistence.test.ts`.
+- Bug-marker reactions: `tests/unit/bug-marker-reaction.test.ts`.
+- Deployment notes: `tests/unit/deployment-announcements.test.ts`.
 
 ## Structure
 

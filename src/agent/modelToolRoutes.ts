@@ -1,10 +1,10 @@
 import {
   toolByName,
   toolSupportsCsvFormat,
+  type ToolName,
 } from "../tools/registry.js";
 import { previewText } from "../util/logger.js";
 import type { AgentToolRoute } from "./routerShared.js";
-import type { ForcedWalletActionTool } from "./walletActionGuard.js";
 import { parseToolArguments } from "./toolArguments.js";
 
 export function selectModelToolRoutes(
@@ -42,11 +42,11 @@ export function coerceGeneratedCsvProducerRoutes(
 export function selectNextRoundToolChoice(input: {
   forceWagerResolution: boolean;
   forceToolUse: boolean;
-  initialWalletAction?: ForcedWalletActionTool;
+  initialForcedTool?: ToolName;
 }) {
   if (input.forceWagerResolution) return "required" as const;
-  if (input.initialWalletAction) {
-    return { type: "function" as const, function: { name: input.initialWalletAction } };
+  if (input.initialForcedTool) {
+    return { type: "function" as const, function: { name: input.initialForcedTool } };
   }
   return input.forceToolUse ? "required" as const : undefined;
 }

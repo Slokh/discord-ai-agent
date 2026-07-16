@@ -49,6 +49,26 @@ export type SearchResult = {
   link: string;
 };
 
+export type DiscordBugMarker = {
+  guildId: string;
+  channelId: string;
+  messageId: string;
+  userId: string;
+  markedAt: Date;
+  messageAuthorId: string;
+  messageAuthorUsername: string | null;
+  messageAuthorIsBot: boolean;
+  messageContent: string;
+  messageCreatedAt: Date;
+  messageLink: string;
+  promptMessageId: string | null;
+  promptAuthorId: string | null;
+  promptAuthorUsername: string | null;
+  promptContent: string | null;
+  promptCreatedAt: Date | null;
+  promptLink: string | null;
+};
+
 export type DiscordUserLookupResult = {
   id: string;
   username: string | null;

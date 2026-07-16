@@ -6,9 +6,11 @@ import * as auditRepository from "./auditRepository.js";
 import * as processRunRepository from "./processRunRepository.js";
 import * as agentTaskRepository from "./agentTaskRepository.js";
 import * as discordArchiveRepository from "./discordArchiveRepository.js";
+import * as discordBugMarkerRepository from "./discordBugMarkerRepository.js";
+import * as deploymentAnnouncementRepository from "./deploymentAnnouncementRepository.js";
 import * as retrievalRepository from "./retrievalRepository.js";
-import type { PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
-export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
+import type { PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
+export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
 // for repository-permissions.test.ts import-compatibility coverage:
@@ -16,6 +18,11 @@ export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordUserLo
 
 export class DiscordAiAgentRepository {
   constructor(private readonly pool: DbPool) {}
+  claimDeploymentAnnouncement(input: deploymentAnnouncementRepository.DeploymentAnnouncementClaim) { return deploymentAnnouncementRepository.claimDeploymentAnnouncement(this.pool, input); }
+  recordDeploymentBaseline(input: Omit<deploymentAnnouncementRepository.DeploymentAnnouncementClaim, "previousRevision">) { return deploymentAnnouncementRepository.recordDeploymentBaseline(this.pool, input); }
+  latestDeploymentRevision(guildId: string) { return deploymentAnnouncementRepository.latestDeploymentRevision(this.pool, guildId); }
+  markDeploymentAnnouncementPosted(input: { guildId: string; revision: string; content: string; comparisonUrl: string; discordMessageId: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementPosted(this.pool, input); }
+  markDeploymentAnnouncementFailed(input: { guildId: string; revision: string; error: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementFailed(this.pool, input); }
   recordSkillChange(input: {
     skillName: string;
     filePath: string;
@@ -421,6 +428,8 @@ export class DiscordAiAgentRepository {
   }) { return discordArchiveRepository.upsertGuildMember(this.pool, input); }
   upsertMessage(input: PersistedMessage) { return discordArchiveRepository.upsertMessage(this.pool, input); }
   markMessageDeleted(messageId: string) { return discordArchiveRepository.markMessageDeleted(this.pool, messageId); }
+  setDiscordBugMarker(input: { guildId: string; channelId: string; messageId: string; userId: string; present: boolean }) { return discordBugMarkerRepository.setDiscordBugMarker(this.pool, input); }
+  clearDiscordBugMarkersForMessage(input: { guildId: string; messageId: string }) { return discordBugMarkerRepository.clearDiscordBugMarkersForMessage(this.pool, input); }
   isUserPrivacyDeleted(userId: string) { return discordArchiveRepository.isUserPrivacyDeleted(this.pool, userId); }
   requestUserDeletion(userId: string) { return discordArchiveRepository.requestUserDeletion(this.pool, userId); }
   setChannelExcluded(input: {
@@ -454,6 +463,7 @@ export class DiscordAiAgentRepository {
   deleteDiscordUserAlias(input: { guildId: string; alias: string }) { return discordArchiveRepository.deleteDiscordUserAlias(this.pool, input); }
   listDiscordUserAliases(input: { guildId: string; userId?: string; query?: string; limit?: number }) { return discordArchiveRepository.listDiscordUserAliases(this.pool, input); }
   getVisibleIndexedChannelIds(guildId: string, visibleChannelIds: string[]) { return retrievalRepository.getVisibleIndexedChannelIds(this.pool, guildId, visibleChannelIds); }
+  listDiscordBugMarkers(input: { guildId: string; userId: string; visibleChannelIds: string[]; limit: number }): Promise<DiscordBugMarker[]> { return discordBugMarkerRepository.listDiscordBugMarkers(this.pool, input); }
   keywordSearch(input: {
     guildId: string;
     visibleChannelIds: string[];

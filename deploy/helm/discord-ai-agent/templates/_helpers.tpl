@@ -24,6 +24,14 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: "false"
 - name: APP_REVISION
   value: {{ .Values.config.appRevision | quote }}
+{{- if .Values.config.previousAppRevision }}
+- name: PREVIOUS_APP_REVISION
+  value: {{ .Values.config.previousAppRevision | quote }}
+{{- end }}
+{{- if .Values.config.releaseNotesChannelId }}
+- name: RELEASE_NOTES_CHANNEL_ID
+  value: {{ .Values.config.releaseNotesChannelId | quote }}
+{{- end }}
 - name: BOT_NAME
   value: {{ .Values.config.botName | quote }}
 - name: GITHUB_REPOSITORY

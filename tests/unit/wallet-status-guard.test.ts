@@ -27,7 +27,9 @@ describe("wallet balance guard", () => {
     "my bank balance",
     "transfer $2 from my balance to the bot",
     "balance these equations",
-    "what is the server balance of power?"
+    "what is the server balance of power?",
+    "bet the rest of my balance on roulette",
+    "play blackjack with my casino funds"
   ])("does not capture qualified or unrelated balance requests: %s", (text) => {
     expect(shouldForceWalletBalance(configuredWallets(), text)).toBe(false);
   });

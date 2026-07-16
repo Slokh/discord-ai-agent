@@ -25,15 +25,16 @@ export type ScopedToolset = {
 export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   const text = input.text.toLowerCase();
   const groups = new Set<ToolGroup>(["core", "external"]);
+  const bugInboxIntent = hasAny(text, BUG_INBOX_KEYWORDS);
 
-  if (hasAny(text, DISCORD_RETRIEVAL_KEYWORDS)) groups.add("discord-retrieval");
+  if (bugInboxIntent || hasAny(text, DISCORD_RETRIEVAL_KEYWORDS)) groups.add("discord-retrieval");
   if (input.hasFileAttachments) groups.add("discord-retrieval");
   if (input.replyContext && hasAny(text, REPLY_FILE_KEYWORDS)) groups.add("discord-retrieval");
   if (hasAny(text, GENERATED_DATA_KEYWORDS)) groups.add("generated-data");
   if (hasAny(text, DISCORD_ACTION_KEYWORDS)) groups.add("discord-action");
   if (input.hasImageAttachments || hasAny(text, IMAGE_KEYWORDS)) groups.add("image");
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
-  if (isCodegenConfigured(input.config) && hasAny(text, CODEGEN_KEYWORDS)) groups.add("codegen");
+  if (isCodegenConfigured(input.config) && (hasAny(text, CODEGEN_KEYWORDS) || (bugInboxIntent && BUG_FIX_INTENT.test(text)))) groups.add("codegen");
   if (hasAny(text, OPS_KEYWORDS)) groups.add("ops");
   if (input.replyContext && hasAny(text, REPLY_OPS_KEYWORDS)) groups.add("ops");
 
@@ -138,6 +139,15 @@ const DISCORD_RETRIEVAL_KEYWORDS = [
   /<[@#][!&]?\d+>/,
 ];
 
+const BUG_INBOX_KEYWORDS = [
+  /🐛/u,
+  /\bbug\s+inbox\b/,
+  /\b(?:marked|flagged|reacted[- ]?to)\b.{0,80}\b(?:bugs?|issues?|messages?|replies?|things?)\b/,
+  /\b(?:bugs?|issues?|messages?|replies?|things?)\b.{0,80}\b(?:i\s+)?(?:marked|flagged|reacted\s+to)\b/,
+];
+
+const BUG_FIX_INTENT = /\b(?:fix|debug|diagnose|address|resolve|work\s+on)\b/i;
+
 const REPLY_FILE_KEYWORDS = [
   /\b(file|document|attachment|download|contents?|bytes?|open|read|parse|inspect)\b/,
   /\.(?:sto|txt|log|json|ya?ml|xml|csv|pdf|docx|xlsx|pptx|zip)\b/
@@ -151,8 +161,8 @@ const GENERATED_DATA_KEYWORDS = [
 const DISCORD_ACTION_KEYWORDS = [
   /\b(poll|vote|undo|delete your|remove your|forget your)\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
-  /\b(random|randomly|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
-  /\b(reveal)\b.*\b(random|seed|proof|commitment)\b/,
+  /\b(random|randomly|randomness|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
+  /\b(reveal)\b.*\b(random|randomness|seed|proof|commitment)\b/,
 ];
 
 const SPOTIFY_KEYWORDS = [

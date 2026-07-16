@@ -56,6 +56,7 @@ describe("managed wallet tools", () => {
     ]);
     const ctx = context({
       walletBalancesPublic: true,
+      repo: walletNameRepository(),
       walletService: { listExistingUserWalletSummaries, getBotWalletSummary: vi.fn(async () => walletSummary("9.5")) },
       fetchDiscordGuildMembers
     });
@@ -69,7 +70,8 @@ describe("managed wallet tools", () => {
     expect(result.content).not.toContain("Bob");
     expect(result.content).not.toContain("Build Bot");
     expect(result.content).toContain("no wallet was created by this lookup");
-    expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "guild", userIds: ["alice", "bob"] });
+    expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "guild" });
+    expect(fetchDiscordGuildMembers).not.toHaveBeenCalled();
   });
 
   it("returns a compact address-only directory without repeating balances", async () => {
@@ -82,6 +84,7 @@ describe("managed wallet tools", () => {
     }]);
     const ctx = context({
       walletBalancesPublic: true,
+      repo: walletNameRepository(),
       walletService: { listExistingUserWalletSummaries, getBotWalletSummary: vi.fn(async () => walletSummary("9.5")) },
       fetchDiscordGuildMembers: vi.fn(async () => [
         { userId: "alice", username: "alice", displayName: "Alice", isBot: false },
@@ -91,7 +94,7 @@ describe("managed wallet tools", () => {
 
     const result = await listWalletBalances(ctx, { view: "addresses" });
 
-    expect(result.content).toContain("Server wallet addresses: AI plus 1 member wallet");
+    expect(result.content).toContain("Server wallet addresses: AI plus 1 existing member wallet");
     expect(result.content).toContain(`| AI | 0x${"1".repeat(40)} |`);
     expect(result.content).toContain(`| Alice | ${address} |`);
     expect(result.content).not.toContain("Bob (bob)");
@@ -314,6 +317,18 @@ function context(input: {
     fetchDiscordGuildMembers: input.fetchDiscordGuildMembers,
     footerLines: []
   } as unknown as ToolContext;
+}
+
+function walletNameRepository() {
+  return {
+    getDiscordUserReferenceTerms: vi.fn(async ({ userIds }: { userIds: string[] }) => userIds.map((userId) => ({
+      userId,
+      username: userId,
+      globalName: userId === "alice" ? "Alice" : null,
+      aliases: [],
+      terms: []
+    })))
+  };
 }
 
 function walletSummary(balance: string) {

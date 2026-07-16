@@ -52,7 +52,7 @@ export function chatMessages(
         BEST_EFFORT_RESPONSE_GUIDANCE +
         CONTEXT_DISCIPLINE_GUIDANCE +
         "You can call local Discord AI Agent function tools and OpenRouter-hosted server tools. Let tool calls do the work when they match the user's request. " +
-        "For private server memory, call searchDiscordHistory. Never invent Discord history. " +
+        "For server memory, call searchDiscordHistory. Never invent Discord history. " +
         "Do not use Discord history search for ordinary public how-to questions, public apps/sites/games/products/services, or unfamiliar external nouns unless the user asks what this Discord server said about them. Prefer web_search for those. " +
         "When answering from Discord search evidence, use dates sparingly; show them only when the user asks about timing, links, sources, proof, or exact messages, or when needed to avoid making old messages sound recent. " +
         "When naming people from Discord search evidence, only use exact handles or IDs shown in the tool output; do not infer real names or display names. " +

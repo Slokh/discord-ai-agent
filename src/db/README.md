@@ -5,6 +5,7 @@ Owns durable Postgres state and query contracts.
 ## Responsibilities
 
 - Discord guilds, channels, users, messages, attachments, edits/deletes, aliases, crawl cursors, interaction blocks, and exclusions live in `discordArchiveRepository.ts`.
+- Requester-owned Discord bug-marker writes, privacy cleanup, and permission-filtered inbox reads live in `discordBugMarkerRepository.ts`.
 - Message embeddings and embedding backlog selection live in `embeddingRepository.ts`.
 - Permission-aware retrieval, search, attachment search, and message context live in `retrievalRepository.ts`; stats and topic candidates live in `retrievalStatsRepository.ts`.
 - Conversation sessions and per-channel agent memory live in `conversationMemoryRepository.ts`.
@@ -12,8 +13,9 @@ Owns durable Postgres state and query contracts.
 - Process runs, spans, run events, artifacts, and cleanup live in `processRunRepository.ts`.
 - Trace events and tool audit logs live in `auditRepository.ts`.
 - Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `agent_runtime_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters. Per-user turn-limit overrides (`user_budget_overrides`, managed by the `setUserTurnLimit` tool) are the one piece of stored budget state.
-- Wallet accounts, transfer idempotency, wager exposure, and payment runtime health live in `paymentRepository.ts`, with focused transfer SQL helpers in `paymentTransferPersistence.ts` and forward-only migrations.
+- Wallet accounts and guild/network-scoped wallet directory reads, transfer idempotency, wager exposure, and payment runtime health live in `paymentRepository.ts`, with focused transfer SQL helpers in `paymentTransferPersistence.ts` and forward-only migrations.
 - Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history.
+- Exactly-once deployment note claims, baselines, and posted Discord message IDs live in `deploymentAnnouncementRepository.ts`.
 - DB-backed skills, server overlays, and health checks live in `skillsRepository.ts`.
 - `repositories.ts` is a compatibility facade that delegates to the focused modules; shared types live in `types.ts`, with only cross-domain helpers left in `shared.ts`.
 

@@ -6,7 +6,7 @@ describe("model tool routes", () => {
     expect(selectNextRoundToolChoice({
       forceWagerResolution: true,
       forceToolUse: true,
-      initialWalletAction: "transferWalletFunds",
+      initialForcedTool: "transferWalletFunds",
     })).toBe("required");
   });
 
@@ -25,10 +25,18 @@ describe("model tool routes", () => {
     expect(selectNextRoundToolChoice({
       forceWagerResolution: false,
       forceToolUse: false,
-      initialWalletAction: "requestStarterFunds",
+      initialForcedTool: "requestStarterFunds",
     })).toEqual({
       type: "function",
       function: { name: "requestStarterFunds" },
     });
+  });
+
+  it("can force an explicit randomness reveal", () => {
+    expect(selectNextRoundToolChoice({
+      forceWagerResolution: false,
+      forceToolUse: false,
+      initialForcedTool: "revealRandomness",
+    })).toEqual({ type: "function", function: { name: "revealRandomness" } });
   });
 });

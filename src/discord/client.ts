@@ -14,10 +14,12 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { sweepDiscordDeliveryObligations } from "./deliverySweep.js";
 import { handleMessageCreate, queueIncomingMessageEmbedding } from "./messageIngress.js";
 import { handleRegenerateReplyReaction, handleUndoCrossReaction, persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
+import { clearDiscordBugMarkersForMessage, clearDiscordBugMarkersForReaction, handleDiscordBugMarkerReaction } from "./bugMarkerReaction.js";
 import { deletedMessageIdsForConfiguredGuild, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
 import { discordMessageTraceContext, recordTraceEvent } from "./requestContext.js";
 import { logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
+import { announceDeployment } from "./deploymentAnnouncements.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -73,6 +75,14 @@ export function createDiscordAiAgentBot(input: {
         maxReplyChars: input.config.maxReplyChars
       }).catch((error) => logger.warn({ err: error }, "Discord delivery obligation startup sweep failed"));
     }
+    void announceDeployment({
+      client: readyClient,
+      config: input.config,
+      repo: input.repo,
+      openRouter: input.openRouter
+    }).then((result) => {
+      if (result !== "disabled" && result !== "duplicate") logger.info({ result, revision: input.config.appRevision }, "Deployment announcement lifecycle completed");
+    }).catch((error) => logger.warn({ err: error, revision: input.config.appRevision }, "Deployment announcement failed"));
   });
 
   client.on(Events.ShardDisconnect, (event, shardId) => {
@@ -156,6 +166,9 @@ export function createDiscordAiAgentBot(input: {
         persistReactionMessageUpdate(input, reaction).catch((error) => {
           logger.warn({ err: error }, "Failed to persist reaction add");
         }),
+        handleDiscordBugMarkerReaction(input, reaction, user, true).catch((error) => {
+          logger.warn({ err: error }, "Failed to add Discord bug marker");
+        }),
         handleRegenerateReplyReaction(input, client, reaction, user).catch((error) => {
           logger.warn({ err: error }, "Failed to handle regenerate reply reaction");
         })
@@ -163,11 +176,16 @@ export function createDiscordAiAgentBot(input: {
     });
   });
 
-  client.on(Events.MessageReactionRemove, async (reaction) => {
+  client.on(Events.MessageReactionRemove, async (reaction, user) => {
     await runWithTrace(discordMessageTraceContext(reaction.message), async () => {
-      await persistReactionMessageUpdate(input, reaction).catch((error) => {
-        logger.warn({ err: error }, "Failed to persist reaction remove");
-      });
+      await Promise.all([
+        persistReactionMessageUpdate(input, reaction).catch((error) => {
+          logger.warn({ err: error }, "Failed to persist reaction remove");
+        }),
+        handleDiscordBugMarkerReaction(input, reaction, user, false).catch((error) => {
+          logger.warn({ err: error }, "Failed to remove Discord bug marker");
+        })
+      ]);
     });
   });
 
@@ -176,6 +194,7 @@ export function createDiscordAiAgentBot(input: {
       await persistReactionMessageUpdate(input, reaction).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction emoji removal");
       });
+      await clearDiscordBugMarkersForReaction(input, reaction);
     });
   });
 
@@ -184,6 +203,7 @@ export function createDiscordAiAgentBot(input: {
       await persistReactionMessage(input, message).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction clear");
       });
+      await clearDiscordBugMarkersForMessage(input, message);
     });
   });
 

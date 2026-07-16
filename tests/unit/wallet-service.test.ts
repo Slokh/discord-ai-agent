@@ -94,6 +94,20 @@ describe("WalletService", () => {
     expect(ensureWalletPlaceholder).not.toHaveBeenCalled();
   });
 
+  it("lists every existing guild wallet without requiring a Discord roster", async () => {
+    const alice = wallet({ guildId: "guild-a", ownerKind: "user", discordUserId: "alice" });
+    const listUserWallets = vi.fn(async () => [alice]);
+    const service = new WalletService(
+      loadConfig().payments,
+      { listUserWallets } as unknown as PaymentRepository,
+      providerFake()
+    );
+
+    await service.listExistingUserWalletSummaries({ guildId: "guild-a" });
+
+    expect(listUserWallets).toHaveBeenCalledWith({ guildId: "guild-a", userIds: undefined, chainId: 42431 });
+  });
+
   it("persists a low-balance health alert when the shared wallet cannot cover its operating threshold", async () => {
     const bot = wallet({});
     const upsertRuntimeHealth = vi.fn(async () => undefined);

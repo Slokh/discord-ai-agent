@@ -43,6 +43,8 @@ function defaultLogLevel(nodeEnv = process.env.NODE_ENV) {
 const defaults = {
   nodeEnv: "development",
   appRevision: "unknown",
+  previousAppRevision: "",
+  releaseNotesChannelId: "",
   logLevel: defaultLogLevel(),
   processRole: defaultProcessRole(),
   runMigrations: true,
@@ -134,6 +136,8 @@ const defaults = {
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default(defaults.nodeEnv),
   APP_REVISION: z.string().trim().default(defaults.appRevision),
+  PREVIOUS_APP_REVISION: z.string().trim().default(defaults.previousAppRevision),
+  RELEASE_NOTES_CHANNEL_ID: z.string().trim().default(defaults.releaseNotesChannelId),
   LOG_LEVEL: z.string().default(defaults.logLevel),
   DISCORD_AI_AGENT_PROCESS_ROLE: z.enum(["all", "api", "bot", "worker"]).default(defaults.processRole),
   RUN_MIGRATIONS: booleanFromEnv.default(defaults.runMigrations),
@@ -260,6 +264,10 @@ export function loadConfig() {
   return {
     nodeEnv: parsed.data.NODE_ENV,
     appRevision: parsed.data.APP_REVISION || defaults.appRevision,
+    releaseNotes: {
+      previousRevision: parsed.data.PREVIOUS_APP_REVISION || null,
+      channelId: parsed.data.RELEASE_NOTES_CHANNEL_ID || null
+    },
     logLevel: parsed.data.LOG_LEVEL,
     processRole: parsed.data.DISCORD_AI_AGENT_PROCESS_ROLE,
     runMigrations: parsed.data.RUN_MIGRATIONS,

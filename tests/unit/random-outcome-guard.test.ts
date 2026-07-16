@@ -1,15 +1,67 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   isSuccessfulRandomDrawResult,
+  forcedRandomActionRouteForPrompt,
+  ForcedRandomActionRouter,
+  randomActionNeedsWalletBalance,
+  randomToolForPrompt,
   RandomOutcomeGuard,
   shouldRejectUnverifiedRandomOutcome,
 } from "../../src/agent/randomOutcomeGuard.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("random outcome guard", () => {
+  it("routes an explicit fairness reveal to the reveal tool", () => {
+    expect(randomToolForPrompt("Reveal randomness")).toBe("revealRandomness");
+    expect(randomToolForPrompt("prove the RNG commitment")).toBe("revealRandomness");
+    expect(randomToolForPrompt("explain randomness")).toBeNull();
+  });
+
+  it.each([
+    "put 0.25 on roulette and pick the most likely numbers",
+    "put the rest of my balance on roulette",
+    "bet $1 on black",
+    "roll two dice",
+    "please spin the slots for me",
+    "can you deal me a blackjack hand?",
+    "let's flip a coin",
+  ])("forces verified randomness for an explicit chance action: %s", (text) => {
+    expect(randomToolForPrompt(text)).toBe("drawRandom");
+  });
+
+  it.each([
+    "what are the roulette odds?",
+    "which roulette number is most likely?",
+    "should I bet on black?",
+    "explain how to roll dice",
+    "tell me about blackjack",
+    "roulette is a bad bet",
+  ])("leaves chance discussion conversational: %s", (text) => {
+    expect(randomToolForPrompt(text)).toBeNull();
+  });
+
+  it("requires a verified balance before an all-in random wager", () => {
+    expect(randomActionNeedsWalletBalance("put the rest of my balance on roulette")).toBe(true);
+    expect(randomActionNeedsWalletBalance("bet $0.25 on roulette")).toBe(false);
+    expect(forcedRandomActionRouteForPrompt("put the rest of my balance on roulette", true)).toEqual({
+      initialTool: "getWalletBalance",
+      afterWalletBalanceTool: "drawRandom",
+    });
+    expect(forcedRandomActionRouteForPrompt("put $0.25 on roulette", true)).toEqual({
+      initialTool: "drawRandom",
+      afterWalletBalanceTool: null,
+    });
+    const router = new ForcedRandomActionRouter("put the rest of my balance on roulette", true);
+    expect(router.takeToolForRound(0)).toBe("getWalletBalance");
+    router.noteToolResult("getWalletBalance");
+    expect(router.takeToolForRound(1)).toBe("drawRandom");
+    expect(router.takeToolForRound(2)).toBeNull();
+  });
+
   it.each([
     ["ordinary overlay", "Roll: 3. English.\n\nHere is the answer."],
     ["roulette", "The wheel spins...\n\n21 red. You lose."],
+    ["roulette synthesis", "Spinning the wheel... 🔴 **17 BLACK — hits 17!** You nailed it."],
     ["craps", "Come-out roll: 🎲 4 + 🎲 3 = 7 — seven-out."],
     ["slots", "| Spin | Reel 1 | Reel 2 | Reel 3 | Result |\n| 1 | 🍒 | ⭐ | 🍋 | Loss |"],
     ["blackjack", "Let's deal.\n\nYour hand: 9♣ 4♠\nDealer shows: K♦"],

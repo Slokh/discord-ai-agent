@@ -250,6 +250,8 @@ Common optional settings:
 | `SANDBOX_CACHE_PVC_NAME` | unset | Optional PVC mounted at `SANDBOX_CACHE_DIR` (Kubernetes backend only) |
 | `CONTROL_UI_AUTH_PASSWORD` | unset | Password for the authenticated run-console UI served by the `api` role |
 | `CONTROL_UI_PUBLIC_URL` | unset | Public console origin, for example `https://tasks.example.com`; when set, Discord replies include a trace footer and code-update progress messages include a run-console link |
+| `RELEASE_NOTES_CHANNEL_ID` | unset | Discord channel where the bot posts short, AI-written patch notes after a successful deployment |
+| `PREVIOUS_APP_REVISION` | unset | Previously running commit used as the release-note diff base; the EKS workflow sets this automatically |
 | `CONTROL_PLANE_INTERNAL_URL` | `http://discord-ai-agent-api:8080` | Sandbox callback URL |
 | `DISCORD_AGENT_RESPONSE_TIMEOUT_MS` | `1800000` | Max time a Discord request can run before returning an error; code-update PR work continues through background task rendering |
 | `AGENT_PROMPT_MAX_CONCURRENCY` | `4` | Parallel prompt capacity across distinct thread keys; prompts sharing a Discord thread remain serialized |

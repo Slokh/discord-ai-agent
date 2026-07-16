@@ -170,6 +170,11 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
 
     await expect(repo.listUserWallets({ guildId, userIds: ["alice", "bob"], chainId: 42431 }))
       .resolves.toEqual([expect.objectContaining({ id: alice.id, discordUserId: "alice", chainId: 42431 })]);
+    await expect(repo.listUserWallets({ guildId, chainId: 42431 }))
+      .resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ discordUserId: "alice", chainId: 42431 }),
+        expect.objectContaining({ discordUserId: "charlie", chainId: 42431 })
+      ]));
   });
 
   it("reserves wager exposure transactionally and releases it", async () => {

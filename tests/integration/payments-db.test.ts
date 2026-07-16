@@ -177,6 +177,7 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
     const bot = await activeWallet(guildId, "bot", null, "4");
     const user = await activeWallet(guildId, "user", "user-2", "5");
     const base = {
+      requestId: `${guildId}:wager:first`,
       guildId,
       channelId: "channel",
       threadKey: "thread",
@@ -193,7 +194,7 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       balancesObservedAt: new Date()
     };
     const wager = await repo.reserveWager(base);
-    await expect(repo.reserveWager(base)).rejects.toThrow(/Insufficient user wallet balance/);
+    await expect(repo.reserveWager({ ...base, requestId: `${guildId}:wager:second` })).rejects.toThrow(/Insufficient user wallet balance/);
     await expect(repo.createManagedTransfer({
       guildId,
       requestedByUserId: "user-2",
@@ -223,8 +224,36 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       sourceBalanceObservedAt: new Date(),
       idempotencyKey: `${guildId}:after-wager`
     });
-    await expect(repo.reserveWager({ ...base, balancesObservedAt: new Date() }))
+    await expect(repo.reserveWager({ ...base, requestId: `${guildId}:wager:third`, balancesObservedAt: new Date() }))
       .rejects.toThrow(/Insufficient user wallet balance/);
+  });
+
+  it("allows only one wallet-backed wager per Discord request", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const bot = await activeWallet(guildId, "bot", null, "41");
+    const user = await activeWallet(guildId, "user", "request-user", "42");
+    const base = {
+      requestId: `${guildId}:discord-message`,
+      guildId,
+      channelId: "channel",
+      threadKey: "thread",
+      requestedByUserId: "request-user",
+      user,
+      bot,
+      game: "blackjack",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 10_000n,
+      maxPayoutAtomic: 25_000n,
+      userBalanceAtomic: 1_000_000n,
+      botBalanceAtomic: 10_000_000n,
+      balancesObservedAt: new Date()
+    };
+
+    const results = await Promise.allSettled([repo.reserveWager(base), repo.reserveWager(base)]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toEqual(expect.objectContaining({ message: expect.stringMatching(/already exists/) }));
   });
 
 });

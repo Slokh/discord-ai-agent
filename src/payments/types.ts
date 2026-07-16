@@ -95,6 +95,7 @@ export type WalletTransfer = {
 
 export type WagerReservation = {
   id: string;
+  requestId: string | null;
   guildId: string;
   channelId: string;
   threadKey: string;

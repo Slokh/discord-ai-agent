@@ -381,7 +381,54 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
     await expect(repo.getWager(wager.id)).resolves.toMatchObject({ status: "drawn", settlementOutcome: null });
   });
 
-  it("requires saved state and a later player reply before settling an interactive wager", async () => {
+  it("settles a terminal interactive opening draw without a confirmation reply", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const bot = await activeWallet(guildId, "bot", null, "69");
+    const user = await activeWallet(guildId, "user", "natural-user", "70");
+    const rootRequestId = `${guildId}:natural-deal`;
+    const wager = await repo.reserveWager({
+      requestId: rootRequestId,
+      guildId,
+      channelId: "channel",
+      threadKey: `${guildId}:channel:rng-root:natural-deal`,
+      requestedByUserId: "natural-user",
+      user,
+      bot,
+      game: "blackjack",
+      interactionMode: "player_decisions",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 1_000_000n,
+      maxPayoutAtomic: 2_500_000n,
+      userBalanceAtomic: 5_000_000n,
+      botBalanceAtomic: 10_000_000n,
+      balancesObservedAt: new Date(),
+    });
+    await pool.query("UPDATE wallet_wager_reservations SET status = 'drawn' WHERE id = $1", [wager.id]);
+
+    const settled = await repo.beginWagerSettlement({
+      wagerId: wager.id,
+      requestedByUserId: "natural-user",
+      payoutAtomic: 0n,
+      outcome: "player_loss",
+      resolutionSource: "verified_randomness",
+      explanation: "Dealer natural blackjack made the opening deal terminal.",
+      tokenAddress: `0x${"7".repeat(40)}`,
+      requestId: rootRequestId,
+    });
+
+    expect(settled).toMatchObject({
+      wager: {
+        status: "settling",
+        settlementOutcome: "player_loss",
+        settlementResolutionSource: "verified_randomness",
+        settlementRequestId: rootRequestId,
+      },
+      transfer: { purpose: "game_settlement", sourceWalletId: user.id, destinationWalletId: bot.id },
+    });
+  });
+
+  it("requires saved state and a later player reply before settling a player decision", async () => {
     const guildId = `${guildPrefix}${randomUUID()}`;
     const bot = await activeWallet(guildId, "bot", null, "71");
     const user = await activeWallet(guildId, "user", "interactive-user", "72");

@@ -43,6 +43,22 @@ describe("awaitRandomWagerAction", () => {
     expect(awaitGameAction).not.toHaveBeenCalled();
   });
 
+  it("rejects settlement confirmation disguised as a player action", async () => {
+    const awaitGameAction = vi.fn();
+    const ctx = context(awaitGameAction);
+
+    const response = await awaitRandomWagerAction(ctx, {
+      expectedVersion: 0,
+      state: { result: "dealer blackjack" },
+      allowedActions: ["confirm to settle"],
+      prompt: "Confirm to settle?",
+    });
+
+    expect(response).toContain("genuine gameplay decisions");
+    expect(response).toContain("Call settleRandomWager immediately");
+    expect(awaitGameAction).not.toHaveBeenCalled();
+  });
+
   it("surfaces optimistic concurrency conflicts as retryable tool errors", async () => {
     const ctx = context(vi.fn(async () => {
       throw new Error("Game state version conflict: expected 1, current 2");

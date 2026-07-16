@@ -17,13 +17,14 @@ export function validateSettlementEvidence(
   resolutionSource: WagerResolutionSource
 ): void {
   if (!requestId.trim()) throw new Error("A stable settlement request id is required");
-  const requiresPlayerReply = wager.interactionMode === "player_decisions" || wager.awaitingAction || resolutionSource === "player_decision";
-  if (!requiresPlayerReply) return;
-  if (resolutionSource !== "player_decision") {
-    throw new Error("This interactive wager can only settle from a persisted player decision");
+  if (resolutionSource === "verified_randomness") {
+    if (wager.awaitingAction || wager.stateVersion > 0 || wager.lastActionRequestId) {
+      throw new Error("A paused wager can only settle from the player's persisted decision in a later Discord reply");
+    }
+    return;
   }
   if (!wager.awaitingAction || wager.stateVersion < 1 || !wager.lastActionRequestId) {
-    throw new Error("This interactive wager must pause with saved game state before it can settle");
+    throw new Error("A player-decision settlement must first pause with saved game state");
   }
   if (requestId === wager.requestId || requestId === wager.lastActionRequestId) {
     throw new Error("This interactive wager requires a new Discord reply from the player before settlement");

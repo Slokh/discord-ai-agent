@@ -214,7 +214,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     `Session ${sessionId} · nonce ${draw.nonce} · draw ${draw.drawId} · commitment sha256:${commitment}`,
     wager
       ? wagerInteractionMode === "player_decisions"
-        ? `The scoped wallet wager is reserved.\nRequired next tool: awaitRandomWagerAction. Save complete versioned game state and allowed player actions now; do not draw again or answer before that succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        ? `The scoped wallet wager is reserved.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with resolutionSource=verified_randomness. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
         : `The scoped wallet wager is reserved.\nRequired next tool: settleRandomWager. Settle the final outcome exactly once before answering. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
       : continuingWager
         ? `This verified draw continues the scoped active wallet wager. Either save the updated state with awaitRandomWagerAction when another player decision is needed, or settle the final outcome exactly once with settleRandomWager before answering.`

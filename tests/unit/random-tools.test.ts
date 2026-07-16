@@ -494,7 +494,7 @@ describe("drawRandom", () => {
     expect(response).toContain("Required next tool: settleRandomWager");
   });
 
-  it("requires an interactive wager to persist its first decision point before another draw", async () => {
+  it("lets an interactive wager either settle a terminal opening draw or persist a real decision", async () => {
     const reserveWager = vi.fn(async () => ({ id: "wager-1" }));
     const attachWagerDraw = vi.fn(async () => undefined);
     const { ctx } = fakeContext({
@@ -508,8 +508,11 @@ describe("drawRandom", () => {
       wager: { stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" }
     });
 
-    expect(response).toContain("Required next tool: awaitRandomWagerAction");
-    expect(response).toContain("do not draw again or answer before that succeeds");
+    expect(response).toContain("call settleRandomWager now");
+    expect(response).toContain("Otherwise call awaitRandomWagerAction");
+    expect(response).not.toContain("Required next tool: awaitRandomWagerAction");
+    expect(response).toContain("Never pause a terminal outcome");
+    expect(response).toContain("Do not draw again or answer before one of those tools succeeds");
   });
 
   it("rejects a wager amount inherited from history when the current request is an explicit amount", async () => {

@@ -25,7 +25,7 @@ No tool accepts an arbitrary external destination address. Request identity is c
 
 ## Wagers
 
-`drawRandom` accepts an optional wager with a positive stake, maximum total payout, and game label. Before consuming entropy, the runtime ensures both wallets exist, reads balances, and reserves the user's stake plus the bot's worst-case exposure. Leading-decimal amounts such as `.05` are treated as real money. Vague repeats inherit the wager requirement only from the same requester's latest wager prompt. Wagered games are atomic: one bounded random draw must contain enough entropy to resolve the game before the forced settlement step; ordinary transfers cannot be used as a substitute for settlement.
+`drawRandom` accepts an optional wager with a positive stake, maximum total payout, and game label. Before consuming entropy, the runtime ensures both wallets exist, reads balances, and reserves the user's stake plus the bot's worst-case exposure. Leading-decimal amounts such as `.05` are treated as real money. Vague repeats inherit the wager requirement only from the same requester's latest wager prompt. Wagered games are atomic single-turn autoplay: one bounded random draw must contain enough entropy to resolve every decision and reach a final outcome before the forced settlement step. An unfinished or choice-pending calculation is rejected, and ordinary transfers cannot substitute for settlement.
 
 `settleRandomWager` validates the requester, draw, maximum payout, and one-time settlement state. It transfers only the net difference: bot to user for a win, user to bot for a loss, and nothing for break-even. Stale reservations expire automatically.
 

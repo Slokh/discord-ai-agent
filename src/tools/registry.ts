@@ -1692,7 +1692,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "settleRandomWager",
     description:
-      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to the exact provably fair result. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for break-even. The service validates ownership, the reserved maximum, duplicate settlement, and makes only the net onchain transfer.",
+      "Settle a wallet-backed wager created by drawRandom. Call this exactly once after applying the game's stated payout rules to the exact provably fair result. Wallet-backed games are single-turn autoplay: resolve every player decision deterministically from stated rules, or standard rules when none were provided, and reach a final outcome before settlement. Never pause for hit/stand or another user choice, and never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. The service validates ownership, finality, the reserved maximum, duplicate settlement, and makes only the net onchain transfer.",
     userVisible: false,
     mutates: true,
     group: "discord-action",
@@ -1706,7 +1706,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       properties: {
         wagerId: { type: "string", description: "Exact wager id returned by drawRandom." },
         payoutUsd: { type: "number", description: "Total USD payout including returned stake; 0 means the player loses the full stake." },
-        explanation: { type: "string", description: "Concise deterministic calculation from the draw result and stated payout rules." }
+        explanation: { type: "string", description: "Concise deterministic calculation from the draw result through the final outcome. It must not describe a pending decision or unfinished game." }
       },
       required: ["wagerId", "payoutUsd", "explanation"],
       additionalProperties: false

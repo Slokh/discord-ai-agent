@@ -205,6 +205,9 @@ export async function settleRandomWager(
     return "payoutUsd must be a non-negative amount.";
   }
   if (!explanation) return "explanation is required and must show how the payout follows from the draw.";
+  if (describesUnfinishedWager(explanation)) {
+    return "Settlement rejected: the calculation describes an unfinished game. Resolve every remaining decision deterministically from the existing draw and stated rules, then call settleRandomWager again with the final payout. Wallet-backed games cannot pause for another user choice.";
+  }
   const settled = await ctx.walletService.settleWager(
     { wagerId, userId: ctx.userId, payoutUsd: input.payoutUsd, explanation },
     paymentRecorder(ctx)
@@ -218,6 +221,10 @@ export async function settleRandomWager(
     settled.userBalance ? `User wallet balance: $${settled.userBalance.formatted} USD.` : null,
     `Calculation: ${explanation}`
   ].filter((line): line is string => line !== null).join("\n");
+}
+
+function describesUnfinishedWager(explanation: string): boolean {
+  return /\b(?:in\s+progress|await(?:ing|s)?|pending|hit\s+or\s+stand|not\s+(?:yet\s+)?(?:finished|complete|resolved|decided|settled)|to\s+be\s+(?:continued|completed|decided))\b/i.test(explanation);
 }
 
 export async function revealRandomness(ctx: ToolContext): Promise<string> {

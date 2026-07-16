@@ -592,6 +592,23 @@ describe("drawRandom", () => {
       `💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`
     ]);
   });
+
+  it("rejects settlement calculations that leave a wallet-backed game unfinished", async () => {
+    const settleWager = vi.fn();
+    const { ctx } = fakeContext({
+      walletService: { settleWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await settleRandomWager(ctx, {
+      wagerId: "wager-blackjack",
+      payoutUsd: 0.5,
+      explanation: "Blackjack deal in progress; awaiting player action before settling. Choose hit or stand."
+    });
+
+    expect(response).toContain("unfinished game");
+    expect(response).toContain("cannot pause for another user choice");
+    expect(settleWager).not.toHaveBeenCalled();
+  });
 });
 
 describe("revealRandomness", () => {

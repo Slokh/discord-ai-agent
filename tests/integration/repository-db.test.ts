@@ -53,6 +53,83 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
   });
 
+  it("stores a permission-filtered, requester-scoped Discord bug inbox", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const visibleChannelId = `channel-${randomUUID()}`;
+    const hiddenChannelId = `channel-${randomUUID()}`;
+    const requesterId = `user-${randomUUID()}`;
+    const otherUserId = `user-${randomUUID()}`;
+    const promptMessageId = `message-${randomUUID()}`;
+    const markedMessageId = `message-${randomUUID()}`;
+    const hiddenMessageId = `message-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: visibleChannelId, guildId, name: "visible", type: 0 });
+    await repo.upsertChannel({ id: hiddenChannelId, guildId, name: "hidden", type: 0 });
+    await repo.upsertMessage({
+      id: promptMessageId,
+      guildId,
+      channelId: visibleChannelId,
+      authorId: requesterId,
+      authorUsername: "requester",
+      content: "show the verified value",
+      normalizedContent: "show the verified value",
+      createdAt: new Date("2026-01-01T00:00:00Z")
+    });
+    await repo.upsertMessage({
+      id: markedMessageId,
+      guildId,
+      channelId: visibleChannelId,
+      authorId: "user-bot",
+      authorUsername: "ai",
+      authorIsBot: true,
+      content: "unverified answer",
+      normalizedContent: "unverified answer",
+      referencedMessageId: promptMessageId,
+      referencedChannelId: visibleChannelId,
+      referencedGuildId: guildId,
+      createdAt: new Date("2026-01-01T00:01:00Z")
+    });
+    await repo.upsertMessage({
+      id: hiddenMessageId,
+      guildId,
+      channelId: hiddenChannelId,
+      authorId: "user-bot",
+      authorUsername: "ai",
+      authorIsBot: true,
+      content: "hidden answer",
+      normalizedContent: "hidden answer",
+      createdAt: new Date("2026-01-01T00:02:00Z")
+    });
+    await repo.setDiscordBugMarker({ guildId, channelId: visibleChannelId, messageId: markedMessageId, userId: requesterId, present: true });
+    await repo.setDiscordBugMarker({ guildId, channelId: hiddenChannelId, messageId: hiddenMessageId, userId: requesterId, present: true });
+    await repo.setDiscordBugMarker({ guildId, channelId: visibleChannelId, messageId: markedMessageId, userId: otherUserId, present: true });
+
+    await expect(repo.listDiscordBugMarkers({
+      guildId,
+      userId: requesterId,
+      visibleChannelIds: [visibleChannelId],
+      limit: 20
+    })).resolves.toEqual([
+      expect.objectContaining({
+        userId: requesterId,
+        messageId: markedMessageId,
+        messageContent: "unverified answer",
+        promptMessageId,
+        promptContent: "show the verified value",
+        promptLink: `https://discord.com/channels/${guildId}/${visibleChannelId}/${promptMessageId}`
+      })
+    ]);
+
+    await repo.requestUserDeletion(requesterId);
+    await expect(repo.listDiscordBugMarkers({
+      guildId,
+      userId: requesterId,
+      visibleChannelIds: [visibleChannelId],
+      limit: 20
+    })).resolves.toEqual([]);
+  });
+
   it("records privacy deletion for a user with no prior indexed messages", async () => {
     const userId = `user-${randomUUID()}`;
     await expect(repo.requestUserDeletion(userId)).resolves.toBeUndefined();

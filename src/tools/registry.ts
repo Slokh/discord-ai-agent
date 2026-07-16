@@ -10,6 +10,7 @@ export type ToolName =
   | "getAgentMemoryStats"
   | "getRecentDiscordMessages"
   | "getDiscordMessageContext"
+  | "listDiscordBugMarkers"
   | "searchDiscordAttachments"
   | "inspectDiscordFile"
   | "inspectDiscordImages"
@@ -370,6 +371,28 @@ export const toolRegistry: ToolRegistryEntry[] = [
         }
       },
       required: ["messageIdOrUrl"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "listDiscordBugMarkers",
+    description:
+      "List the current requester's active Discord bug inbox: messages they personally reacted to with the Unicode 🐛 emoji. Use when the user asks about bugs/issues/messages they marked, flagged, or reacted to, especially before asking inspectAgentLogs or runCodingAgent to diagnose or fix them. Results are requester-scoped and permission-filtered, and include the marked message, its link, and the original/replied-to prompt when available. Never substitute aggregate reaction counts or another user's markers.",
+    userVisible: true,
+    mutates: false,
+    group: "discord-retrieval",
+    category: "discord",
+    toolClass: "retrieval",
+    outputContract: ["requester-scoped active marker count", "marked message excerpt and link", "original/replied-to prompt excerpt and link when available", "permission and removal guidance"],
+    examples: ["@ai show the bugs I marked with 🐛", "@ai fix everything in my bug inbox"],
+    parameters: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          description: "Maximum active markers to return. Defaults to 20 and is capped at 25."
+        }
+      },
       additionalProperties: false
     }
   },
@@ -1925,6 +1948,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   getAgentMemoryStats: "memory",
   getRecentDiscordMessages: "retrieval",
   getDiscordMessageContext: "retrieval",
+  listDiscordBugMarkers: "retrieval",
   searchDiscordAttachments: "retrieval",
   inspectDiscordFile: "retrieval",
   inspectDiscordImages: "image",
@@ -2002,6 +2026,7 @@ function defaultToolExamples(name: ToolName): string[] {
     getAgentMemoryStats: "@ai how many turns have you completed since this message?",
     getRecentDiscordMessages: "@ai what just happened in here?",
     getDiscordMessageContext: "@ai show the context around this message link",
+    listDiscordBugMarkers: "@ai fix everything in my bug inbox",
     searchDiscordAttachments: "@ai find the image of nachos",
     inspectDiscordFile: "@ai read the file I replied to",
     inspectDiscordImages: "@ai what is in this screenshot?",

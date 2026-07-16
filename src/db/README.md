@@ -5,6 +5,7 @@ Owns durable Postgres state and query contracts.
 ## Responsibilities
 
 - Discord guilds, channels, users, messages, attachments, edits/deletes, aliases, crawl cursors, interaction blocks, and exclusions live in `discordArchiveRepository.ts`.
+- Requester-owned Discord bug-marker writes, privacy cleanup, and permission-filtered inbox reads live in `discordBugMarkerRepository.ts`.
 - Message embeddings and embedding backlog selection live in `embeddingRepository.ts`.
 - Permission-aware retrieval, search, attachment search, and message context live in `retrievalRepository.ts`; stats and topic candidates live in `retrievalStatsRepository.ts`.
 - Conversation sessions and per-channel agent memory live in `conversationMemoryRepository.ts`.

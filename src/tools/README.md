@@ -20,6 +20,7 @@ Owns model-facing local tool contracts and implementations.
 - `walletTools.ts`: conversational shared-wallet lifecycle status, funded-wallet directories, safe Discord-name resolution, zero-balance starter funding, requester transfers, and authorized reconciliation.
 - `paymentToolContext.ts`: shared payment event recording and network-aware Tempo transaction explorer footers.
 - `discordOpsTools.ts`: reply-aware, permission-filtered self-debugging through `inspectAgentLogs`, including normalized run evidence and optional bounded redacted model I/O.
+- `discordBugTools.ts`: requester-scoped, permission-filtered retrieval of messages marked with the Unicode `🐛` reaction, including replied-to prompt context for later code-update tasks.
 - `toolContext.ts`: shared tool-context helpers such as requester-visible indexed channels and Discord message-id parsing.
 - Discord resolvers, history/retrieval, stats/topics, images/vision, skills, code-update tasks, task status, logs, deployment status, and response cleanup.
 - Restricted expensive/mutating tools are gated in the router before dispatch: codegen defaults to owner-only when `BOT_OWNER_USER_ID` is set, avatar updates and per-user turn limits (`setUserTurnLimit`) use the ops allowlist, and image generation can opt into the ops allowlist.

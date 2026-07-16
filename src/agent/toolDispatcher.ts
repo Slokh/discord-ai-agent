@@ -8,6 +8,7 @@ import {
 } from "../tools/agentTaskTools.js";
 import { updateBotAvatar } from "../tools/botProfileTools.js";
 import { createDiscordPoll } from "../tools/discordPollTools.js";
+import { listDiscordBugMarkers } from "../tools/discordBugTools.js";
 import { inspectDiscordFile } from "../tools/discordFileTools.js";
 import { drawRandom, revealRandomness, settleRandomWager } from "../tools/randomTools.js";
 import { isSuccessfulRandomDrawResult } from "./randomOutcomeGuard.js";
@@ -85,6 +86,14 @@ export async function executeLocalToolRoute(
         ),
         ctx.config.maxReplyChars,
       ),
+    };
+  }
+
+  if (route.name === "listDiscordBugMarkers") {
+    return {
+      content: cleanResponse(await listDiscordBugMarkers(ctx, {
+        limit: numberArgument(route.arguments, "limit"),
+      }), Math.max(ctx.config.maxReplyChars, 6_000)),
     };
   }
 

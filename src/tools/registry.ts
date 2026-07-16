@@ -1565,7 +1565,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
       "Update the bot's own Discord profile avatar using an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Uses the Discord Modify Current User API (PATCH /users/@me with a base64 data-URI avatar). Requires the bot token from environment config. Use this when the user asks to change, set, or update the bot's avatar/profile picture. Discord accepts PNG, JPEG, WebP, or GIF avatars; large or unsupported images are rejected before the API call. Handle rate limits, permission errors, and invalid image URLs gracefully.",
     userVisible: true,
     mutates: true,
-    group: "ops",
+    group: "discord-action",
     category: "discord",
     toolClass: "ops",
     outputContract: ["image source label", "Discord avatar update status", "new avatar URL when available", "failure reason when the image is invalid, rate-limited, or unauthorized"],

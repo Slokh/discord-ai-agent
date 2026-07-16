@@ -177,8 +177,22 @@ describe("tool scoping", () => {
   });
 
   it("adds ops for bot administration", () => {
-    const groups = selectToolGroups({ text: "change the bot avatar", hasImageAttachments: false, config: loadConfig() });
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "change the bot avatar", hasImageAttachments: false, config });
     expect(groups.has("ops")).toBe(true);
+    expect(groups.has("discord-action")).toBe(true);
+    expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "updateBotAvatar")).toBe(true);
+  });
+
+  it("exposes avatar updates when a vague reply escalates to Discord actions", () => {
+    const config = loadConfig();
+    const tools = requestAdditionalToolGroups({
+      requestedGroups: ["discord-action"],
+      currentGroups: new Set(["core", "external", "image"]),
+      config
+    }).localTools;
+
+    expect(tools.some((tool) => tool.name === "updateBotAvatar")).toBe(true);
   });
 
   it("offers direct run debugging for terse Discord replies", () => {

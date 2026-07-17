@@ -13,6 +13,7 @@ import type {
 import { stableId } from "../payments/money.js";
 import { mapAccount, mapTransfer, mapWager } from "./paymentRowMappers.js";
 import { getTransferWithClient, insertTransfer, TRANSFER_COLUMNS } from "./paymentTransferPersistence.js";
+import { validateStarterTopUp } from "./paymentTransferValidation.js";
 import { validateSettlementEvidence, validateSettlementOutcome } from "./paymentWagerValidation.js";
 import { listWagerHistory, type WagerHistoryQuery } from "./paymentWagerHistory.js";
 
@@ -207,6 +208,7 @@ export class PaymentRepository {
     sourceBalanceAtomic: bigint;
     sourceBalanceObservedAt: Date;
     destinationBalanceAtomic?: bigint;
+    destinationTargetBalanceAtomic?: bigint;
     destinationBalanceObservedAt?: Date;
     idempotencyKey: string;
     metadata?: Record<string, unknown>;
@@ -229,9 +231,7 @@ export class PaymentRepository {
         return mapTransfer(existing.rows[0]);
       }
       if (input.purpose === "starter_grant") {
-        if (input.destinationBalanceAtomic !== 0n || !input.destinationBalanceObservedAt) {
-          throw new Error("Starter funds are only available when the destination wallet balance is exactly $0");
-        }
+        validateStarterTopUp(input);
         const newerIncoming = await client.query(
           `SELECT count(*)::int AS count
            FROM wallet_transfers

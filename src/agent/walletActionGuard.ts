@@ -3,7 +3,7 @@ import { promptExcludesRealWallet } from "./walletPromptIntent.js";
 
 export type ForcedWalletActionTool = "transferWalletFunds" | "requestStarterFunds";
 export type ExplicitWalletTransfer = {
-  amountUsd: number;
+  amountUsd: number | "balance";
   destination: { kind: "bot" } | { kind: "user"; reference: string };
 };
 
@@ -48,10 +48,12 @@ export function isExplicitWalletTransferPrompt(text: string): boolean {
 export function explicitWalletTransferForPrompt(text: string): ExplicitWalletTransfer | null {
   const normalized = text.trim();
   if (promptExcludesRealWallet(normalized) || WAGER_CONTEXT.test(normalized)) return null;
-  if (!USD_AMOUNT.test(normalized) && !BARE_DECIMAL_AMOUNT.test(normalized)) return null;
   const verb = TRANSFER_REQUEST.exec(normalized);
   if (!verb) return null;
   const afterVerb = normalized.slice((verb.index ?? 0) + verb[0].length).trim();
+  const balanceTransfer = parseBalanceTransfer(afterVerb);
+  if (balanceTransfer) return balanceTransfer;
+  if (!USD_AMOUNT.test(normalized) && !BARE_DECIMAL_AMOUNT.test(normalized)) return null;
   const amountMatch = AMOUNT_AFTER_VERB.exec(afterVerb);
   if (!amountMatch) return null;
   const amountText = amountMatch[0].trim();
@@ -68,6 +70,18 @@ export function explicitWalletTransferForPrompt(text: string): ExplicitWalletTra
     return { amountUsd, destination: { kind: "bot" } };
   }
   return { amountUsd, destination: { kind: "user", reference } };
+}
+
+function parseBalanceTransfer(afterVerb: string): ExplicitWalletTransfer | null {
+  const match = afterVerb.match(/^(it|all|everything|(?:my|the)\s+(?:(?:remaining|whole|entire)\s+)?balance)\s+(?:back\s+)?(?:to|into)\s+(.+)$/i);
+  if (!match) return null;
+  const reference = cleanDestinationReference(match[2]);
+  if (!reference || /^(?:me\b|myself\b|mine\b)/i.test(reference)) return null;
+  if (BOT_DESTINATION.test(reference)) {
+    return { amountUsd: "balance", destination: { kind: "bot" } };
+  }
+  if (/^it$/i.test(match[1]!)) return null;
+  return { amountUsd: "balance", destination: { kind: "user", reference } };
 }
 
 function parseUsdAmount(value: string): number | null {

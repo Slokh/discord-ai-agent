@@ -414,6 +414,7 @@ function finalSynthesisMessages(
         BEST_EFFORT_RESPONSE_GUIDANCE +
         CONTEXT_DISCIPLINE_GUIDANCE +
         "For Discord history claims, use only the provided Discord tool evidence. You have no tools in this step: if the evidence does not answer the question, say plainly what you found and what is missing; never invent facts or pretend to look something up. " +
+        "Describe tool failures exactly as the evidence reports them. Never claim a tool was unavailable when the evidence shows that it ran and rejected the request or its arguments. " +
         "Do not print XML-like tool-call markup, raw tool names, or skipped redundant tool calls in the final answer. Use dates sparingly: show dates only when the user asks about timing, links, sources, proof, or exact messages, " +
         "or when a date is needed to avoid making old evidence sound current. Do not add a Sources section unless asked. " +
         "If the user asks for links, sources, receipts, proof, or exact messages, include exact Discord message URLs from the evidence. " +

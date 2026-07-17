@@ -475,6 +475,8 @@ describe("drawRandom", () => {
     const response = await drawRandom(ctx, {
       kind: "dice",
       sides: 6,
+      count: 2,
+      reason: "player wins if sum = 7",
       wager: { stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }
     });
 
@@ -492,6 +494,26 @@ describe("drawRandom", () => {
     expect(attachWagerDraw).toHaveBeenCalledWith("wager-1", 1, expect.any(Function));
     expect(releaseWager).not.toHaveBeenCalled();
     expect(response).toContain("Required next tool: settleRandomWager");
+  });
+
+  it("rejects a guaranteed-profit dice wager before reserving funds or drawing", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "i bet 30 cents. roll 7 regular dice. i win 2x if any two match. if none match i lose",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "dice",
+      count: 7,
+      sides: 6,
+      reason: "7d6 pair match game",
+      wager: { stakeUsd: 0.3, maxPayoutUsd: 0.6, game: "dice" },
+    });
+
+    expect(response).toMatch(/100%.*guaranteed profit/i);
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
   });
 
   it("lets an interactive wager either settle a terminal opening draw or persist a real decision", async () => {
@@ -539,6 +561,7 @@ describe("drawRandom", () => {
       throw new Error("A wallet-backed wager already exists for this Discord request");
     });
     const { ctx, rngRepo } = fakeContext({
+      requestText: "I bet $0.01 on heads",
       walletService: { reserveWager } as unknown as ToolContext["walletService"]
     });
 
@@ -556,6 +579,7 @@ describe("drawRandom", () => {
       throw new Error("Insufficient user wallet balance for this wager");
     });
     const { ctx } = fakeContext({
+      requestText: "I bet $1 on heads",
       walletService: { reserveWager } as unknown as ToolContext["walletService"]
     });
 

@@ -21,6 +21,7 @@ import type {
 } from "../payments/types.js";
 import { paymentRecorder } from "./paymentToolContext.js";
 import type { ToolContext } from "./types.js";
+import { validateWagerFairness } from "./wagerFairness.js";
 
 export type DrawRandomInput = {
   kind?: string;
@@ -77,6 +78,26 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     await auditRng(ctx, "drawRandom", input, wagerValidationError);
     return wagerValidationError;
   }
+  if (input.wager && !ctx.config.payments.userWalletsEnabled) {
+    return "User wallets and wallet-backed wagers are not enabled in this deployment.";
+  }
+  if (input.wager && !ctx.walletService) {
+    return "Wallet-backed wagers are not enabled in this deployment.";
+  }
+  if (input.wager) {
+    const fairnessError = validateWagerFairness({
+      kind,
+      count: input.count,
+      sides: input.sides,
+      description: [ctx.requestText, input.reason, input.wager.game].filter(Boolean).join("\n"),
+      stakeUsd: input.wager.stakeUsd!,
+      maxPayoutUsd: input.wager.maxPayoutUsd!,
+    });
+    if (fairnessError) {
+      await auditRng(ctx, "drawRandom", input, fairnessError);
+      return fairnessError;
+    }
+  }
   if (input.wager && hasUncommittedPlayerSecretWager(ctx.requestText ?? "")) {
     const error = "This real-money wager is not verifiable because its outcome depends on a secret the player can reveal or change after the bot acts. No funds were reserved and no random draw was made. Use play money or a result that was independently committed before the wager.";
     await auditRng(ctx, "drawRandom", input, error);
@@ -91,13 +112,11 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   let wager: WagerReservation | null = null;
   let wagerInteractionMode: WagerInteractionMode | null = null;
   if (input.wager) {
-    if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
-    if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
     const requestId = ctx.requestId ?? ctx.requestMessageId;
     if (!requestId) return "A stable request id is required before a wallet-backed wager can be reserved.";
     try {
       wagerInteractionMode = inferWagerInteractionMode(ctx.requestText ?? "", input.wager.game!);
-      wager = await ctx.walletService.reserveWager(
+      wager = await ctx.walletService!.reserveWager(
         {
           requestId,
           guildId: ctx.guildId,

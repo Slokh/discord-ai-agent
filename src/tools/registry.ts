@@ -1749,7 +1749,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         wager: {
           type: "object",
           description:
-            "Optional wallet-backed wager. Required before the single atomic draw whenever the user is risking their bot-game balance, including vague repeats of their prior wager. The maximum payout must cover the largest possible total return, including returned stake.",
+            "Optional wallet-backed wager. Required before the single atomic draw whenever the user is risking their bot-game balance, including vague repeats of their prior wager. The maximum payout must cover the largest possible total return, including returned stake. Real-money contracts with machine-recognizable rules are probability-checked before reservation and rejected when they guarantee player profit or have expected payout above the stake; put the exact win rule in reason so it can be validated.",
           properties: {
             stakeUsd: { type: "number", description: "Positive USD-denominated stake taken from the user's game wallet." },
             maxPayoutUsd: { type: "number", description: "Maximum possible total payout in USD, including returned stake." },

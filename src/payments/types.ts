@@ -41,7 +41,7 @@ export type WalletProvider = {
   chainId: number;
   createWallet(input: { externalId: string; idempotencyKey: string }): Promise<ManagedWallet>;
   resolveToken(token: string): Promise<TokenInfo>;
-  getBalance(input: { wallet: ManagedWallet; token: TokenInfo }): Promise<bigint>;
+  getBalance(input: { wallet: ManagedWallet; token: TokenInfo; blockNumber?: bigint }): Promise<bigint>;
   transfer(input: {
     wallet: ManagedWallet;
     feePayerWallet?: ManagedWallet;
@@ -49,7 +49,7 @@ export type WalletProvider = {
     to: `0x${string}`;
     amountAtomic: bigint;
     memo: `0x${string}`;
-  }): Promise<{ transactionHash: `0x${string}` }>;
+  }): Promise<{ transactionHash: `0x${string}`; blockNumber?: bigint }>;
   getTransactionStatus(
     transactionHash: `0x${string}`,
     expectedTransfer?: ExpectedTokenTransfer

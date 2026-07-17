@@ -14,6 +14,8 @@ import type {
   WagerReservation
 } from "./types.js";
 
+type SubmittedWalletTransfer = WalletTransfer & { confirmedBlockNumber?: bigint };
+
 export class WalletService {
   private usdTokenPromise: Promise<TokenInfo> | null = null;
 
@@ -58,9 +60,16 @@ export class WalletService {
     });
   }
 
-  async getBalance(account: WalletAccount): Promise<{ token: TokenInfo; amountAtomic: bigint; formatted: string }> {
+  async getBalance(
+    account: WalletAccount,
+    options: { blockNumber?: bigint } = {},
+  ): Promise<{ token: TokenInfo; amountAtomic: bigint; formatted: string }> {
     const token = await this.usdToken();
-    const amountAtomic = await this.provider.getBalance({ wallet: activeManagedWallet(account), token });
+    const amountAtomic = await this.provider.getBalance({
+      wallet: activeManagedWallet(account),
+      token,
+      blockNumber: options.blockNumber,
+    });
     return { token, amountAtomic, formatted: atomicToUsd(amountAtomic, token.decimals) };
   }
 
@@ -369,14 +378,18 @@ export class WalletService {
       const transfer = await this.submitTransfer(settlement.transfer.id, record);
       await this.repo.completeWagerSettlement(input.wagerId, transfer.status === "confirmed");
       const wager = (await this.repo.getWager(input.wagerId)) ?? settlement.wager;
-      return { wager, transfer, userBalance: await this.readSettlementBalance(wager, record) };
+      return {
+        wager,
+        transfer,
+        userBalance: await this.readSettlementBalance(wager, record, transfer.confirmedBlockNumber),
+      };
     } catch (error) {
       await this.repo.completeWagerSettlement(input.wagerId, false, errorMessage(error));
       throw error;
     }
   }
 
-  async submitTransfer(transferId: string, record?: PaymentEventRecorder): Promise<WalletTransfer> {
+  async submitTransfer(transferId: string, record?: PaymentEventRecorder): Promise<SubmittedWalletTransfer> {
     const existing = await this.repo.getTransfer(transferId);
     if (!existing) throw new Error(`Unknown wallet transfer ${transferId}`);
     if (existing.status === "confirmed" || existing.status === "submitted" || existing.status === "unknown") return existing;
@@ -424,10 +437,13 @@ export class WalletService {
         metadata: {
           transferId: transfer.id,
           transactionHash: result.transactionHash,
+          confirmedBlockNumber: result.blockNumber?.toString(),
           feePayerWalletId: feePayer?.id ?? source.id
         }
       });
-      return confirmed;
+      return result.blockNumber == null
+        ? confirmed
+        : { ...confirmed, confirmedBlockNumber: result.blockNumber };
     } catch (error) {
       const transactionHash = transactionHashFromError(error);
       if (transactionHash) {
@@ -565,8 +581,8 @@ export class WalletService {
       throw new Error(`Transfer ${submitted.id} is ${submitted.status}; no completed transfer will be reported until it is confirmed`);
     }
     const [sourceBalance, destinationBalance] = await Promise.all([
-      this.getBalance(input.source),
-      this.getBalance(input.destination)
+      this.getBalance(input.source, { blockNumber: submitted.confirmedBlockNumber }),
+      this.getBalance(input.destination, { blockNumber: submitted.confirmedBlockNumber })
     ]);
     return {
       transfer: submitted,
@@ -650,12 +666,13 @@ export class WalletService {
 
   private async readSettlementBalance(
     wager: WagerReservation,
-    record?: PaymentEventRecorder
+    record?: PaymentEventRecorder,
+    blockNumber?: bigint,
   ): Promise<{ formatted: string; symbol: string } | null> {
     try {
       const user = await this.repo.getWallet(wager.userWalletId);
       if (!user) return null;
-      const balance = await this.getBalance(user);
+      const balance = await this.getBalance(user, { blockNumber });
       return { formatted: balance.formatted, symbol: balance.token.symbol };
     } catch (error) {
       await emit(record, {

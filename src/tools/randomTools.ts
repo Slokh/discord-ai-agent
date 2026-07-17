@@ -236,10 +236,10 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     wager
       ? wagerInteractionMode === "player_decisions"
         ? `The scoped wallet wager is reserved.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with resolutionSource=verified_randomness. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
-        : `The scoped wallet wager is reserved.\nRequired next tool: settleRandomWager. Settle the final outcome exactly once before answering. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        : `The scoped wallet wager is reserved.\nRequired next action: if the outcome is final, call settleRandomWager now. If the rules require more automatic chance before the outcome is final, call drawRandom again without a new wager. If a genuine player choice is required, call awaitRandomWagerAction. Do not answer until one of these tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
       : continuingWager
-        ? `This verified draw continues the scoped active wallet wager. Either save the updated state with awaitRandomWagerAction when another player decision is needed, or settle the final outcome exactly once with settleRandomWager before answering.`
-      : null,
+        ? `This verified draw continues the scoped active wallet wager. If more automatic chance is required, call drawRandom again without a new wager. If a genuine player decision is needed, save the updated state with awaitRandomWagerAction. When the outcome is final, call settleRandomWager exactly once before answering.`
+        : null,
     `Report this result exactly as shown. A proof footer is appended to your reply automatically; do not restate or alter the proof details.`
   ].filter((line): line is string => line !== null).join("\n");
 }
@@ -288,7 +288,7 @@ export async function settleRandomWager(
     return "resolutionSource must be verified_randomness or player_decision.";
   }
   if (describesUnfinishedWager(explanation)) {
-    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. Otherwise resolve the remaining deterministic steps and call settleRandomWager again with the final payout.";
+    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. If more automatic chance is required, call drawRandom again without a new wager, apply the verified result, and repeat until the outcome is final. Then call settleRandomWager with the final payout.";
   }
   const wager = await currentWagerForContext(ctx);
   if (!wager) {

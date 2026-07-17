@@ -493,7 +493,8 @@ describe("drawRandom", () => {
     );
     expect(attachWagerDraw).toHaveBeenCalledWith("wager-1", 1, expect.any(Function));
     expect(releaseWager).not.toHaveBeenCalled();
-    expect(response).toContain("Required next tool: settleRandomWager");
+    expect(response).toContain("Required next action:");
+    expect(response).toContain("call drawRandom again without a new wager");
   });
 
   it("rejects a guaranteed-profit dice wager before reserving funds or drawing", async () => {
@@ -619,6 +620,7 @@ describe("drawRandom", () => {
 
     expect(response).toContain("Provably fair draw complete");
     expect(response).toContain("continues the scoped active wallet wager");
+    expect(response).toContain("call drawRandom again without a new wager");
     expect(getCurrentWager).toHaveBeenCalledWith({
       threadKey: discordRngThreadKey(),
       userId: "user"

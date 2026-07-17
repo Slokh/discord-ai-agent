@@ -1499,7 +1499,7 @@ describe("agent router", () => {
       channelId: "c",
       userId: "u",
       userDisplayName: "User",
-      visibleChannelIds: ["c"]
+      visibleChannelIds: ["c"],
     } as unknown as ToolContext;
 
     vi.stubGlobal(
@@ -1598,7 +1598,7 @@ describe("agent router", () => {
       channelId: "c",
       userId: "u",
       userDisplayName: "User",
-      visibleChannelIds: ["c"]
+      visibleChannelIds: ["c"],
     } as unknown as ToolContext;
 
     vi.stubGlobal(
@@ -2315,7 +2315,22 @@ describe("agent router", () => {
       channelId: "c",
       userId: "u",
       userDisplayName: "User",
-      visibleChannelIds: ["c"]
+      visibleChannelIds: ["c"],
+      replyContext: {
+        messageId: "parent-message",
+        rootMessageId: "root-message",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "I can search the remaining dates. Want me to dig into those?",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
     } as unknown as ToolContext;
 
     const response = await handleAgentRequest(ctx, "what have people said about job hunting?");
@@ -2329,7 +2344,8 @@ describe("agent router", () => {
     expect(repeatGuardAudits).toHaveLength(2);
     expect((ctx.openRouter.chat as any).mock.calls[3][0].messages).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ role: "system", content: expect.stringContaining("Write one natural Discord reply") })
+        expect.objectContaining({ role: "system", content: expect.stringContaining("Write one natural Discord reply") }),
+        expect.objectContaining({ role: "user", content: expect.stringContaining("Want me to dig into those?") }),
       ])
     );
   });

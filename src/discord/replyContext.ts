@@ -1,4 +1,4 @@
-import type { Message } from "discord.js";
+import type { Message, MessageSnapshot } from "discord.js";
 import type { Logger } from "pino";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage } from "../tools/types.js";
@@ -7,6 +7,7 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { recordTraceEvent } from "./requestContext.js";
 
 export const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 24;
+type UsableMessageSnapshot = MessageSnapshot & { id: string; channelId: string };
 
 export async function resolveDiscordReplyContext(input: {
   repo: DiscordAiAgentRepository;
@@ -16,14 +17,21 @@ export async function resolveDiscordReplyContext(input: {
 }): Promise<DiscordReplyContext | undefined> {
   const directFirstChain: DiscordReplyContextMessage[] = [];
   const seenMessageIds = new Set<string>();
-  let cursor: Message = input.message;
+  let cursor: Message | UsableMessageSnapshot = input.message;
+
+  const currentForward = discordForwardedMessageSnapshot(input.message);
+  if (currentForward) {
+    directFirstChain.push(discordReplyContextMessageFromMessage(currentForward, true));
+    seenMessageIds.add(currentForward.id);
+    cursor = currentForward;
+  }
 
   for (let depth = 0; depth < REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT; depth += 1) {
     const reference = cursor.reference;
     if (!reference?.messageId) break;
     if (seenMessageIds.has(reference.messageId)) break;
 
-    const referencedChannelId = reference.channelId ?? cursor.channelId;
+    const referencedChannelId = reference.channelId ?? cursor.channelId ?? input.message.channelId;
     if (!input.visibleChannelIds.includes(referencedChannelId)) {
       input.requestLogger.warn(
         { referencedMessageId: reference.messageId, referencedChannelId, depth },
@@ -40,6 +48,7 @@ export async function resolveDiscordReplyContext(input: {
 
     let parent: Message;
     try {
+      if (typeof cursor.fetchReference !== "function") break;
       parent = await cursor.fetchReference();
     } catch (error) {
       input.requestLogger.warn(
@@ -68,9 +77,12 @@ export async function resolveDiscordReplyContext(input: {
       input.requestLogger.warn({ err: error, referencedMessageId: parent.id }, "Failed to persist Discord reply parent message");
     });
 
+    const forwardedParent = discordForwardedMessageSnapshot(parent);
+    const contextParent = forwardedParent ?? parent;
     seenMessageIds.add(parent.id);
-    directFirstChain.push(discordReplyContextMessageFromMessage(parent));
-    cursor = parent;
+    seenMessageIds.add(contextParent.id);
+    directFirstChain.push(discordReplyContextMessageFromMessage(contextParent, Boolean(forwardedParent)));
+    cursor = contextParent;
   }
 
   if (directFirstChain.length === 0) return undefined;
@@ -110,7 +122,7 @@ export async function resolveDiscordReplyContext(input: {
   return context;
 }
 
-function discordReplyContextMessageFromMessage(message: Message): DiscordReplyContextMessage {
+function discordReplyContextMessageFromMessage(message: Message | UsableMessageSnapshot, forwarded = false): DiscordReplyContextMessage {
   const attachments = discordAttachmentContextsFromMessage(message);
   return {
     messageId: message.id,
@@ -123,11 +135,20 @@ function discordReplyContextMessageFromMessage(message: Message): DiscordReplyCo
     attachmentSummaries: attachments.map(discordAttachmentSummary),
     attachments,
     createdAt: message.createdAt?.toISOString?.() ?? null,
-    url: message.url ?? null
+    url: message.url ?? null,
+    forwarded: forwarded || undefined
   };
 }
 
-export function discordAttachmentContextsFromMessage(message: Message): DiscordAttachmentContext[] {
+export function discordForwardedMessageSnapshot(message: Pick<Message, "messageSnapshots">): UsableMessageSnapshot | null {
+  const snapshots = message.messageSnapshots?.values?.();
+  if (!snapshots) return null;
+  const first = snapshots.next();
+  if (first.done || !first.value?.id || !first.value.channelId) return null;
+  return first.value as UsableMessageSnapshot;
+}
+
+export function discordAttachmentContextsFromMessage(message: Pick<Message, "attachments">): DiscordAttachmentContext[] {
   return [...message.attachments.values()].map((attachment) => ({
     id: attachment.id,
     url: attachment.url,

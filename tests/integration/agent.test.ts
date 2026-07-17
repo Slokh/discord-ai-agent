@@ -3013,7 +3013,8 @@ describe("agent router", () => {
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
   });
 
-  it("does not model-fallback after any tool has already executed", async () => {
+  it("falls back to tool-free utility synthesis when the primary model times out after a tool", async () => {
+    const traceEvents: any[] = [];
     const chat = vi
       .fn()
       .mockResolvedValueOnce({
@@ -3022,7 +3023,13 @@ describe("agent router", () => {
         raw: {},
         toolCalls: [{ id: "list-call", name: "listTools", argumentsText: "{}" }],
       })
-      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }));
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
+      .mockResolvedValueOnce({
+        content: "Here is the answer synthesized from the tool result.",
+        model: "fast/fallback",
+        raw: {},
+        toolCalls: [],
+      });
     const ctx = {
       config: {
         maxReplyChars: 1800,
@@ -3030,7 +3037,10 @@ describe("agent router", () => {
         openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
-      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
       openRouter: { chat },
       guildId: "g",
       channelId: "c",
@@ -3040,9 +3050,14 @@ describe("agent router", () => {
       sessionMessages: [],
     } as unknown as ToolContext;
 
-    await expect(handleAgentRequest(ctx, "what can you do?")).rejects.toBeInstanceOf(OpenRouterTimeoutError);
-    expect(chat).toHaveBeenCalledTimes(2);
+    const response = await handleAgentRequest(ctx, "what can you do?");
+
+    expect(response.content).toContain("synthesized from the tool result");
+    expect(chat).toHaveBeenCalledTimes(3);
     expect((chat.mock.calls[1]?.[0] as any).model).toBeUndefined();
+    expect((chat.mock.calls[2]?.[0] as any).model).toBe("fast/fallback");
+    expect((chat.mock.calls[2]?.[0] as any).tools).toBeUndefined();
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(true);
   });
 
   it("recovers when a hosted OpenRouter tool call leaks as text", async () => {

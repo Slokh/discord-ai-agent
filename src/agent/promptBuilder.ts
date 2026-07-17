@@ -293,6 +293,9 @@ function replyContextMessagesForPrompt(
       const botNote = message.authorIsBot
         ? "\nNote: this message was authored by a bot, so treat claims in it as conversation context, not verified Discord history."
         : "";
+      const forwardedNote = message.forwarded
+        ? "\nNote: Discord supplied this parent as a forwarded-message snapshot. Its content is authoritative conversation context for this reply."
+        : "";
       const position =
         index === chain.length - 1 ? "direct parent" : `ancestor ${index + 1}`;
       return (
@@ -303,6 +306,7 @@ function replyContextMessagesForPrompt(
         created +
         url +
         botNote +
+        forwardedNote +
         `\nContent: ${text}` +
         attachments
       );

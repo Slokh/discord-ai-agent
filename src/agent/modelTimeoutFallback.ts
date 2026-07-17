@@ -1,4 +1,56 @@
-import type { ChatMessage } from "../models/openrouter.js";
+import type { Logger } from "pino";
+import { isOpenRouterTimeoutError, type ChatMessage } from "../models/openrouter.js";
+import type { AgentFile, AgentResponse, ToolContext } from "../tools/types.js";
+import { durationMs } from "../util/logger.js";
+import { synthesizeFinalAnswerWithoutTools } from "./finalSynthesis.js";
+import type { ModelCallBudget } from "./routerShared.js";
+import { recordAgentEvent } from "./runtimeTranscript.js";
+
+export async function synthesizeToolEvidenceAfterTimeout(
+  ctx: ToolContext,
+  input: {
+    error: unknown;
+    round: number;
+    roundStartedAt: number;
+    text: string;
+    messages: ChatMessage[];
+    files: AgentFile[];
+    memoryEvents: NonNullable<AgentResponse["memoryEvents"]>;
+    requestLogger: Logger;
+    startedAt: number;
+    modelCallBudget: ModelCallBudget;
+  },
+): Promise<AgentResponse | null> {
+  const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
+  if (!isOpenRouterTimeoutError(input.error) || !fallbackModel || fallbackModel === ctx.config.openRouter?.chatModel) return null;
+  await recordAgentEvent(ctx, {
+    spanId: `agent.model.round.${input.round}`,
+    name: `LLM round ${input.round}`,
+    status: "failed",
+    startedAt: new Date(input.roundStartedAt),
+    completedAt: new Date(),
+    durationMs: durationMs(input.roundStartedAt),
+    metadata: { error: input.error.message, fallbackModel, fallbackMode: "tool_evidence_synthesis" },
+  });
+  await recordAgentEvent(ctx, {
+    eventName: "agent.model.timeout_synthesis_fallback",
+    level: "warn",
+    summary: `Synthesizing gathered tool evidence with ${fallbackModel}`,
+    metadata: { round: input.round, fallbackModel, memoryEventCount: input.memoryEvents.length },
+  });
+  return await synthesizeFinalAnswerWithoutTools(ctx, {
+    reason: "primary model timed out after gathering tool evidence",
+    text: input.text,
+    messages: input.messages,
+    files: input.files,
+    memoryEvents: input.memoryEvents,
+    requestLogger: input.requestLogger,
+    startedAt: input.startedAt,
+    modelCallBudget: input.modelCallBudget,
+    maxTokens: 2048,
+    model: fallbackModel,
+  });
+}
 
 export function compactMessagesForModelFallback(messages: ChatMessage[], maxCharacters = 24_000): ChatMessage[] {
   const messageCharacters = (message: ChatMessage) => JSON.stringify(message).length;

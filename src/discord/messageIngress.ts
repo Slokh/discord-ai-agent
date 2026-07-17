@@ -14,7 +14,7 @@ import {
   resolveBotMentionContext,
   stripBotAddress
 } from "./mentionParsing.js";
-import { discordAttachmentContextsFromMessage, isDiscordImageAttachment } from "./replyContext.js";
+import { discordAttachmentContextsFromMessage, discordForwardedMessageSnapshot, isDiscordImageAttachment } from "./replyContext.js";
 import { prepareDiscordAgentTurn } from "./turnPreparation.js";
 import {
   discordTraceFooter,
@@ -98,8 +98,8 @@ export async function handleMessageCreate(
   }
 
   const requestId = message.id;
-  const text = stripBotAddress(message.content, client.user.id, mentionContext.botRoleIds).trim();
   const requestAttachments = discordAttachmentContextsFromMessage(message);
+  const text = discordPromptText(message, client.user.id, mentionContext.botRoleIds, requestAttachments.length);
   const requestLogger = logger.child({
     traceId: message.id,
     requestId,
@@ -304,6 +304,22 @@ export async function handleMessageCreate(
     botRoleIds: mentionContext.botRoleIds,
     messageStartedAt
   });
+}
+
+export function discordPromptText(
+  message: Pick<Message, "content" | "messageSnapshots" | "reference">,
+  botUserId: string,
+  botRoleIds: string[],
+  attachmentCount = 0
+) {
+  const explicitText = stripBotAddress(message.content, botUserId, botRoleIds).trim();
+  if (explicitText) return explicitText;
+  if (discordForwardedMessageSnapshot(message as Pick<Message, "messageSnapshots">)) {
+    return "Use the forwarded message and its reply chain as context, then respond helpfully.";
+  }
+  if (attachmentCount > 0) return "Inspect the attached content and respond helpfully.";
+  if (message.reference?.messageId) return "Continue from the replied-to message.";
+  return "Ask briefly what I need help with.";
 }
 
 export function queueIncomingMessageEmbedding(

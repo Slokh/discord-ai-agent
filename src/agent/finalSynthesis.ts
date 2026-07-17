@@ -61,6 +61,7 @@ export async function synthesizeFinalAnswerWithoutTools(
     startedAt: number;
     modelCallBudget: ModelCallBudget;
     maxTokens?: number;
+    model?: string;
   },
 ): Promise<AgentResponse> {
   const finalStartedAt = Date.now();
@@ -97,6 +98,7 @@ export async function synthesizeFinalAnswerWithoutTools(
       temperature: 0.2,
       maxTokens: input.maxTokens ?? 4096,
       retryPolicy: "expensive",
+      model: input.model,
     },
   });
 

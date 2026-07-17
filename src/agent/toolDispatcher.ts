@@ -22,7 +22,7 @@ import { getDiscordChannelTopics, summarizeCurrentThread, summarizeDiscordHistor
 import { getAgentMemoryStats, getRecentAgentMemory, undoConversationTurns } from "../tools/agentMemoryTools.js";
 import { inspectAgentLogs, reportStatus, setUserTurnLimit } from "../tools/discordOpsTools.js";
 import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../tools/imageTools.js";
-import { createSkillFromRequest } from "../tools/skillTools.js";
+import { createSkillFromRequest, manageSkills } from "../tools/skillTools.js";
 import { getSpendSummary } from "../tools/spendTools.js";
 import {
   compareSpotifyPlaylists,
@@ -141,6 +141,21 @@ export async function executeLocalToolRoute(
             stringArgument(route.arguments, "skillName") ?? "server-note",
           instruction:
             stringArgument(route.arguments, "instruction") ?? originalText,
+        }),
+        ctx.config.maxReplyChars,
+      ),
+    };
+  }
+
+  if (route.name === "manageSkills") {
+    const action = stringArgument(route.arguments, "action");
+    return {
+      content: cleanResponse(
+        await manageSkills(ctx, {
+          action: action === "enable" || action === "disable" || action === "delete" ? action : "list",
+          skillNames: stringArrayArgument(route.arguments, "skillNames"),
+          all: route.arguments?.all === true,
+          query: stringArgument(route.arguments, "query"),
         }),
         ctx.config.maxReplyChars,
       ),

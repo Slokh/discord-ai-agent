@@ -23,6 +23,8 @@ import { paymentRecorder } from "./paymentToolContext.js";
 import type { ToolContext } from "./types.js";
 import { validateWagerFairness } from "./wagerFairness.js";
 import { wagerRequester } from "./wagerRequesterScope.js";
+import { effectiveMaximumPayoutUsd, requestSelectsAllowedWagerAction } from "./wagerTerms.js";
+import { validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
 
 export type DrawRandomInput = {
   kind?: string;
@@ -41,9 +43,6 @@ export type DrawRandomInput = {
   };
 };
 
-const MAX_COUNT = 100;
-const MAX_OPTIONS = 100;
-const MAX_SIDES = 1_000_000;
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
 const RNG_ROOT_SCOPE_SEGMENT = "rng-root";
@@ -57,8 +56,13 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     return `Unknown draw kind "${kind}". Supported kinds: integers, dice, coin, pick, shuffle, cards.`;
   }
   let continuingWager: WagerReservation | null = null;
-  if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWagerForContext(ctx)) {
+  if (ctx.config.payments.userWalletsEnabled && ctx.walletService) {
     continuingWager = await currentWagerForContext(ctx);
+    if (continuingWager && input.wager && requestSelectsAllowedWagerAction(ctx.requestText ?? "", continuingWager)) {
+      input = { ...input, wager: undefined };
+    }
+  }
+  if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWagerForContext(ctx)) {
     if (!continuingWager) {
       const error = "This request risks real USD, so drawRandom requires a wallet-backed wager with stakeUsd, maxPayoutUsd, and game before any randomness is consumed.";
       await auditRng(ctx, "drawRandom", input, error);
@@ -91,6 +95,13 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     await auditRng(ctx, "drawRandom", input, requester);
     return requester;
   }
+  const effectiveMaxPayoutUsd = input.wager
+    ? effectiveMaximumPayoutUsd({
+        game: input.wager.game!,
+        stakeUsd: input.wager.stakeUsd!,
+        requestedMaxPayoutUsd: input.wager.maxPayoutUsd!,
+      })
+    : null;
   if (input.wager) {
     if (input.wager.playerUserId !== requester!.userId) {
       const error = input.wager.playerUserId
@@ -107,7 +118,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
       max: input.max,
       description: [ctx.requestText, input.reason, input.wager.game].filter(Boolean).join("\n"),
       stakeUsd: input.wager.stakeUsd!,
-      maxPayoutUsd: input.wager.maxPayoutUsd!,
+      maxPayoutUsd: effectiveMaxPayoutUsd!,
     });
     if (fairnessError) {
       await auditRng(ctx, "drawRandom", input, fairnessError);
@@ -142,7 +153,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
           game: input.wager.game!.trim(),
           interactionMode: wagerInteractionMode,
           stakeUsd: input.wager.stakeUsd!,
-          maxPayoutUsd: input.wager.maxPayoutUsd!
+          maxPayoutUsd: effectiveMaxPayoutUsd!
         },
         paymentRecorder(ctx)
       );
@@ -249,8 +260,8 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     `Session ${sessionId} · nonce ${draw.nonce} · draw ${draw.drawId} · commitment sha256:${commitment}`,
     wager
       ? wagerInteractionMode === "player_decisions"
-        ? `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with resolutionSource=verified_randomness. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
-        : `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person.\nRequired next action: if the outcome is final, call settleRandomWager now. If the rules require more automatic chance before the outcome is final, call drawRandom again without a new wager. If a genuine player choice is required, call awaitRandomWagerAction. Do not answer until one of these tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        ? `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person. Maximum total payout reserved: $${effectiveMaxPayoutUsd}.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with resolutionSource=verified_randomness. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        : `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person. Maximum total payout reserved: $${effectiveMaxPayoutUsd}.\nRequired next action: if the outcome is final, call settleRandomWager now. If the rules require more automatic chance before the outcome is final, call drawRandom again without a new wager. If a genuine player choice is required, call awaitRandomWagerAction. Do not answer until one of these tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
       : continuingWager
         ? `This verified draw continues the scoped active wallet wager. If more automatic chance is required, call drawRandom again without a new wager. If a genuine player decision is needed, save the updated state with awaitRandomWagerAction. When the outcome is final, call settleRandomWager exactly once before answering.`
         : null,
@@ -638,80 +649,10 @@ export function wagerThreadKeyForContext(ctx: ToolContext): string | null {
 }
 
 export async function currentWagerForContext(ctx: ToolContext): Promise<WagerReservation | null> {
-  if (!ctx.walletService) return null;
+  if (!ctx.walletService || typeof ctx.walletService.getCurrentWager !== "function") return null;
   const threadKey = wagerThreadKeyForContext(ctx);
   if (!threadKey) return null;
   return ctx.walletService.getCurrentWager({ threadKey, userId: ctx.userId });
-}
-
-function validateDrawInput(kind: string, input: DrawRandomInput): string | null {
-  const count = input.count ?? 1;
-  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_COUNT) {
-    return `count must be an integer between 1 and ${MAX_COUNT}.`;
-  }
-  switch (kind) {
-    case "integers": {
-      const missing = [input.min == null ? "min" : null, input.max == null ? "max" : null].filter(
-        (name): name is string => name !== null
-      );
-      if (missing.length > 0) {
-        const sidesHint =
-          input.max == null && typeof input.sides === "number" && Number.isSafeInteger(input.sides)
-            ? ` You passed sides=${input.sides}, which belongs to kind "dice", not "integers". For a range of ${input.sides} values starting at ${input.min ?? 0}, use min ${input.min ?? 0} and max ${(input.min ?? 0) + input.sides - 1}; for dice, use {"kind": "dice", "sides": ${input.sides}}.`
-            : "";
-        return `integers draws require both min and max (inclusive bounds). Missing: ${missing.join(" and ")}. Example: {"kind": "integers", "min": 0, "max": 36} for a roulette wheel.${sidesHint} Do not ask the user to fix this; retry drawRandom now with corrected arguments.`;
-      }
-      if (!Number.isSafeInteger(input.min) || !Number.isSafeInteger(input.max)) {
-        return `min and max must be whole numbers, but got min=${JSON.stringify(input.min)} and max=${JSON.stringify(input.max)}. Do not ask the user to fix this; retry drawRandom now with integer min and max.`;
-      }
-      const min = input.min as number;
-      const max = input.max as number;
-      if (min > max) return "min must be less than or equal to max.";
-      if (max - min + 1 > 0x1_0000_0000) return "The min..max range is too large (max 2^32 values).";
-      return null;
-    }
-    case "dice": {
-      const sides = input.sides ?? 6;
-      if (!Number.isSafeInteger(sides) || sides < 2 || sides > MAX_SIDES) {
-        return `sides must be an integer between 2 and ${MAX_SIDES}.`;
-      }
-      return null;
-    }
-    case "coin":
-      return null;
-    case "pick":
-    case "shuffle": {
-      const options = normalizeOptions(input.options);
-      if (options.length < 2) return `${kind} draws need at least 2 non-empty options.`;
-      if (options.length > MAX_OPTIONS) return `${kind} draws support at most ${MAX_OPTIONS} options.`;
-      if (kind === "pick" && count > options.length) return "pick count cannot exceed the number of options.";
-      return null;
-    }
-    case "cards": {
-      const deckCount = input.deckCount;
-      if (deckCount != null && (!Number.isSafeInteger(deckCount) || deckCount < 1 || deckCount > MAX_DECK_COUNT)) {
-        return `deckCount must be an integer between 1 and ${MAX_DECK_COUNT}.`;
-      }
-      return null;
-    }
-    default:
-      return `Unknown draw kind "${kind}".`;
-  }
-}
-
-function validateWagerInput(input: DrawRandomInput): string | null {
-  if (!input.wager) return null;
-  const { playerUserId, stakeUsd, maxPayoutUsd, game } = input.wager;
-  if (!playerUserId?.trim()) return "wager.playerUserId is required for a wallet-backed wager.";
-  if (!Number.isFinite(stakeUsd) || (stakeUsd ?? 0) <= 0) return "wager.stakeUsd must be a positive amount.";
-  if (!Number.isFinite(maxPayoutUsd) || (maxPayoutUsd ?? -1) < 0) {
-    return "wager.maxPayoutUsd must be a non-negative amount that includes any returned stake.";
-  }
-  if (!game?.trim()) return "wager.game is required.";
-  if (input.kind === "cards" && (input.count ?? 1) < 4) {
-    return "A wallet-backed card game must draw its complete bounded game sequence in one call with count at least 4; do not draw one wagered card per model round.";
-  }
-  return null;
 }
 
 function drawParamsFor(kind: RngDrawKind, input: DrawRandomInput): RngDrawParams {

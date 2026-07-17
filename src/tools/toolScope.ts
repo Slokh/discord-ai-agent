@@ -39,6 +39,7 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
   if (isCodegenConfigured(input.config) && (hasAny(text, CODEGEN_KEYWORDS) || (bugInboxIntent && BUG_FIX_INTENT.test(text)))) groups.add("codegen");
   if (hasAny(text, OPS_KEYWORDS)) groups.add("ops");
+  if (input.replyContext && SKILL_CONTEXT.test(replyContextText) && hasAny(text, SKILL_REPLY_KEYWORDS)) groups.add("ops");
   if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("ops");
   if (input.replyContext && hasAny(text, REPLY_OPS_KEYWORDS)) groups.add("ops");
 
@@ -192,10 +193,16 @@ const OPS_KEYWORDS = [
   /\bwhat can you do\b/,
   /\b(rate.?limit|turn limit|post limit|unlimit)\b/,
   /\blimit\b.*\b(per day|daily|posts?|turns?|messages?|uses?)\b/,
+  /\bskills?\b/,
 ];
 
 const REPLY_OPS_KEYWORDS = [
   /\b(debug|diagnose|troubleshoot)\b/,
   /\b(why|how) did (you|the bot|this|that)\b/,
   /\bwhat (failed|hung|timed out|went wrong)\b/,
+];
+
+const SKILL_CONTEXT = /\bskills?\b|`[a-z0-9][a-z0-9-]*`/i;
+const SKILL_REPLY_KEYWORDS = [
+  /\b(remove|delete|disable|enable|change|update|edit|all)\b/,
 ];

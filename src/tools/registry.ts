@@ -24,6 +24,7 @@ export type ToolName =
   | "queryGeneratedCsv"
   | "queryGeneratedTable"
   | "createSkillDraft"
+  | "manageSkills"
   | "runCodingAgent"
   | "getAgentTaskStatus"
   | "listAgentTasks"
@@ -976,6 +977,25 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "manageSkills",
+    description:
+      "List the complete skill inventory, resolve a skill's exact name, or enable, disable, or delete private database-backed skills. Always use action=list instead of inferring the full inventory from prompt context. For content changes, list/resolve the skill first, then call createSkillDraft with its exact name.",
+    userVisible: true,
+    mutates: true,
+    group: "ops",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "enable", "disable", "delete"] },
+        skillNames: { type: "array", items: { type: "string" }, description: "Exact skill names to mutate." },
+        all: { type: "boolean", description: "Apply the mutation to every private database skill only when the user explicitly asks for all." },
+        query: { type: "string", description: "Optional text filter for list/skill-name resolution." },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "runCodingAgent",
     description:
       "Start an isolated sandbox task for Discord AI Agent code, repository, GitHub PR, CI, deployment, or self-update work. The bot will update the same Discord reply with progress and the PR link when the task finishes. Use when the user asks the agent to update itself, add, build, implement, change behavior, debug or fix failing CI/checks/tests, inspect a PR/repo failure, or continue work from a previous code-update task. Prefer this over hosted web tools for GitHub, CI, PR, or repository debugging because the sandbox has repo checkout, shell, tests, and gh CLI access.",
@@ -1698,7 +1718,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. Unknown and decision-based games default to requiring a later player reply. Real-money games based on a secret the player can reveal after the bot acts are unverifiable and will be rejected before funds are reserved. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. For standard named games, the runtime may raise maxPayoutUsd to cover legal later actions such as blackjack doubles or splits; treat the returned reserve as authoritative. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. Unknown and decision-based games default to requiring a later player reply. Real-money games based on a secret the player can reveal after the bot acts are unverifiable and will be rejected before funds are reserved. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -1963,7 +1983,7 @@ function defaultPermissionRequirements(tool: ToolRegistryEntry): string[] {
 function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["category"]> {
   if (name === "generateImage") return "generation";
   if (name === "readGeneratedFile" || name === "queryGeneratedCsv" || name === "queryGeneratedTable") return "memory";
-  if (name === "createSkillDraft") return "memory";
+  if (name === "createSkillDraft" || name === "manageSkills") return "memory";
   if (
     name === "runCodingAgent" ||
     name === "getAgentTaskStatus" ||
@@ -2013,6 +2033,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   queryGeneratedCsv: "stats",
   queryGeneratedTable: "stats",
   createSkillDraft: "memory",
+  manageSkills: "memory",
   runCodingAgent: "coding",
   getAgentTaskStatus: "coding",
   listAgentTasks: "coding",
@@ -2092,6 +2113,7 @@ function defaultToolExamples(name: ToolName): string[] {
     queryGeneratedCsv: "@ai rank the artists in the CSV you just generated",
     queryGeneratedTable: "@ai rank the artists in the table you just generated",
     createSkillDraft: "@ai learn this for next time: movie night is on Fridays",
+    manageSkills: "@ai what are all your skills?",
     runCodingAgent: "@ai debug the failing CI on that PR",
     getAgentTaskStatus: "@ai what happened to the last update?",
     listAgentTasks: "@ai show recent update tasks",

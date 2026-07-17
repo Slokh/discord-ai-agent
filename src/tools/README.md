@@ -14,7 +14,7 @@ Owns model-facing local tool contracts and implementations.
 - `generatedFileTools.ts`: current-turn generated file/table access and CSV/table querying for artifacts produced by earlier tool calls.
 - `imageTools.ts`: Discord image inspection, reference image collection, image generation, and generated-file conversion.
 - `responseFormatting.ts`: shared final-response cleanup, Markdown-table normalization, and Discord length trimming used by the agent router and Discord renderers.
-- `skillTools.ts`: private skill draft/update generation, policy validation, database persistence, and skill audit logging.
+- `skillTools.ts`: complete skill inventory, private skill draft/update generation, enable/disable/delete lifecycle operations, policy validation, database persistence, and skill audit logging. Prompt-injected skill text may be truncated, so inventory questions must use `manageSkills`.
 - `spotifyTools.ts`: Spotify Web API client-credentials integration for public catalog search, item details, playlist/album track attachments, artist discographies, playlist stats, and playlist comparisons with current API limits and sanitized stored output.
 - `spendTools.ts`: ops spend summaries from `tool_audit_logs.estimated_cost_usd`, including today/month totals and top tool/user breakdowns.
 - `walletTools.ts`: conversational shared-wallet lifecycle status, roster-independent funded-wallet directories backed by existing wallet accounts, safe Discord-name resolution, zero-balance starter funding, requester transfers, and authorized reconciliation.

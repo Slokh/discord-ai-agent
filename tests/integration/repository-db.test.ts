@@ -178,6 +178,14 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(obligationsRepo.listPendingOlderThan({ olderThanMs: 0, limit: 10 })).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ executionId })]));
     const delivered = await obligationsRepo.markDelivered({ executionId, statusMessageId: `message-${randomUUID()}` });
     expect(delivered?.state).toBe("delivered");
+    const retried = await obligationsRepo.upsertPending({
+      executionId,
+      guildId: pending.guildId,
+      channelId: pending.channelId,
+      sourceMessageId: pending.sourceMessageId,
+      metadata: { phase: "retry" }
+    });
+    expect(retried.state).toBe("delivered");
     const abandoned = await obligationsRepo.markAbandoned({ executionId, error: "boom" });
     expect(abandoned?.state).toBe("abandoned");
     expect(abandoned?.lastError).toBe("boom");
@@ -2494,6 +2502,15 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       metadata: { toolName: "generateImage", turnId: userDiscordMessageId, turnStatus: "completed" },
       createdAt: new Date("2026-01-01T00:00:01.000Z")
     });
+    await expect(repo.appendConversationMessage({
+      threadKey,
+      role: "user",
+      discordMessageId: userDiscordMessageId,
+      authorId: userId,
+      authorDisplayName: "Kartik",
+      content: "make an image of a wizard eating nachos",
+      metadata: { retried: true }
+    })).resolves.toBeUndefined();
 
     const messages = await repo.recentConversationMessages({ threadKey, limit: 10 });
     const messagesWithTools = await repo.recentConversationMessages({ threadKey, limit: 10, includeToolResults: true });
@@ -2506,7 +2523,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         content: "make an image of a wizard eating nachos"
       })
     );
-    expect(messages[0]?.metadata).toEqual(expect.objectContaining({ turnStatus: "completed", replyMessageId: assistantDiscordMessageId }));
+    expect(messages[0]?.metadata).toEqual(expect.objectContaining({ turnStatus: "completed", replyMessageId: assistantDiscordMessageId, retried: true }));
     expect(messagesWithTools[1]?.metadata).toEqual(expect.objectContaining({ toolName: "generateImage" }));
 
     const deleted = await repo.deleteConversationMessagesByDiscordMessageIds({

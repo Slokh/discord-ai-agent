@@ -61,5 +61,7 @@ async function loadRepoSkills(skillsDir: string): Promise<LoadedSkill[]> {
 
 export function renderSkillsForPrompt(skills: LoadedSkill[], maxChars = 8000): string {
   const rendered = skills.map((skill) => `# Skill: ${skill.name}\n${skill.content}`).join("\n\n---\n\n");
-  return rendered.length <= maxChars ? rendered : rendered.slice(0, maxChars).trimEnd();
+  if (rendered.length <= maxChars) return rendered;
+  const notice = "\n\n[Skill context truncated. Use manageSkills with action=list for the complete inventory; never present this excerpt as the full list.]";
+  return `${rendered.slice(0, Math.max(0, maxChars - notice.length)).trimEnd()}${notice}`;
 }

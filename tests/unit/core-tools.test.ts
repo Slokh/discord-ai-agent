@@ -21,7 +21,7 @@ import {
 import { findDiscordUsers } from "../../src/tools/discordResolverTools.js";
 import { undoConversationTurns } from "../../src/tools/agentMemoryTools.js";
 import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../src/tools/imageTools.js";
-import { createSkillFromRequest } from "../../src/tools/skillTools.js";
+import { createSkillFromRequest, manageSkills } from "../../src/tools/skillTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 afterEach(() => {
@@ -120,6 +120,27 @@ describe("model-led mutating tools", () => {
         request: "movie night votes should use the pinned poll"
       })
     );
+  });
+
+  it("lists matching skills and can delete all database skills", async () => {
+    const deleteDatabaseSkill = vi.fn(async () => true);
+    const ctx = {
+      repo: {
+        listDatabaseSkills: vi.fn(async () => [
+          { name: "alex-random-language", content: "# Alex\nUse a random language.", source: "database", enabled: true, version: 3 },
+          { name: "movie-night", content: "# Movies", source: "database", enabled: false, version: 1 },
+        ]),
+        deleteDatabaseSkill,
+        auditTool: vi.fn(async () => undefined),
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+    } as unknown as ToolContext;
+
+    await expect(manageSkills(ctx, { action: "list", query: "alex" })).resolves.toContain("`alex-random-language` — enabled, database v3");
+    await expect(manageSkills(ctx, { action: "delete", all: true })).resolves.toContain("Deleted 2 database skills");
+    expect(deleteDatabaseSkill).toHaveBeenCalledTimes(2);
   });
 
   it("undoes recent conversation turns through a tool boundary", async () => {

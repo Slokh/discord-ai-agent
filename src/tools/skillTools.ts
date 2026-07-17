@@ -9,6 +9,61 @@ export type SkillDraftInput = {
   instruction: string;
 };
 
+export type ManageSkillsInput = {
+  action: "list" | "enable" | "disable" | "delete";
+  skillNames?: string[];
+  all?: boolean;
+  query?: string;
+};
+
+export async function manageSkills(ctx: ToolContext, input: ManageSkillsInput): Promise<string> {
+  const databaseSkills = await ctx.repo.listDatabaseSkills({ includeDisabled: true });
+  const query = input.query?.trim().toLowerCase();
+
+  if (input.action === "list") {
+    const repoSkills = await loadSkills();
+    const byName = new Map<string, { name: string; source: string; enabled: boolean; version?: number; content: string }>(repoSkills.map((skill) => [skill.name, {
+      name: skill.name,
+      source: "repo",
+      enabled: true,
+      version: skill.version,
+      content: skill.content,
+    }]));
+    for (const skill of databaseSkills) byName.set(skill.name, skill);
+    const matches = [...byName.values()]
+      .filter((skill) => !query || `${skill.name}\n${skill.content}`.toLowerCase().includes(query))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    await auditSkillManagement(ctx, input, { resultCount: matches.length });
+    if (matches.length === 0) return query ? `No skills matched \`${input.query?.trim()}\`.` : "No skills are installed.";
+    return [
+      query ? `Skills matching \`${input.query?.trim()}\` (${matches.length}):` : `All skills (${matches.length}):`,
+      ...matches.map((skill) => `- \`${skill.name}\` — ${skill.enabled ? "enabled" : "disabled"}, ${skill.source}${skill.version ? ` v${skill.version}` : ""}`),
+    ].join("\n");
+  }
+
+  const requestedNames = input.all
+    ? databaseSkills.map((skill) => skill.name)
+    : [...new Set((input.skillNames ?? []).map((name) => name.trim()).filter(Boolean))];
+  if (requestedNames.length === 0) return `Specify exact skillNames or set all=true to ${input.action} database skills.`;
+
+  const databaseNames = new Map(databaseSkills.map((skill) => [skill.name.toLowerCase(), skill.name]));
+  const found = requestedNames.map((name) => databaseNames.get(name.toLowerCase())).filter((name): name is string => Boolean(name));
+  const missing = requestedNames.filter((name) => !databaseNames.has(name.toLowerCase()));
+  const affected: string[] = [];
+  for (const name of found) {
+    const changed = input.action === "delete"
+      ? await ctx.repo.deleteDatabaseSkill(name)
+      : Boolean(await ctx.repo.setDatabaseSkillEnabled({ name, enabled: input.action === "enable", requesterId: ctx.userId }));
+    if (changed) affected.push(name);
+  }
+  await auditSkillManagement(ctx, input, { affected, missing });
+  const verb = input.action === "delete" ? "Deleted" : input.action === "enable" ? "Enabled" : "Disabled";
+  return [
+    affected.length > 0 ? `${verb} ${affected.length} database skill${affected.length === 1 ? "" : "s"}: ${affected.map((name) => `\`${name}\``).join(", ")}.` : `No database skills were ${verb.toLowerCase()}.`,
+    missing.length > 0 ? `Not found: ${missing.map((name) => `\`${name}\``).join(", ")}.` : "",
+  ].filter(Boolean).join("\n");
+}
+
 export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraftInput): Promise<string> {
   const skillName = cleanSkillName(input.skillName);
   const instruction = input.instruction.trim();
@@ -97,4 +152,15 @@ export async function createSkillFromRequest(ctx: ToolContext, input: SkillDraft
 
 function cleanSkillName(value: string) {
   return slugify(value).slice(0, 48) || "server-note";
+}
+
+async function auditSkillManagement(ctx: ToolContext, input: ManageSkillsInput, result: Record<string, unknown>) {
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "manageSkills",
+    argumentsSummary: summarizeForAudit(input),
+    resultSummary: summarizeForAudit(result),
+  });
 }

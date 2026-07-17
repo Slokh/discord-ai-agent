@@ -44,8 +44,14 @@ export class DeliveryObligationsRepository {
           status_channel_id = coalesce(EXCLUDED.status_channel_id, discord_delivery_obligations.status_channel_id),
           status_message_id = coalesce(EXCLUDED.status_message_id, discord_delivery_obligations.status_message_id),
           source_message_id = EXCLUDED.source_message_id,
-          state = 'pending',
-          last_error = NULL,
+          state = CASE
+            WHEN discord_delivery_obligations.state = 'delivered' THEN 'delivered'
+            ELSE 'pending'
+          END,
+          last_error = CASE
+            WHEN discord_delivery_obligations.state = 'delivered' THEN discord_delivery_obligations.last_error
+            ELSE NULL
+          END,
           metadata = discord_delivery_obligations.metadata || EXCLUDED.metadata,
           updated_at = now()
         RETURNING *

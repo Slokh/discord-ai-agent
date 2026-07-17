@@ -230,7 +230,7 @@ function fallbackPatchNotes(comparison: GitHubCompare): string {
 
 function formatAnnouncement(body: string, repository: string, base: string, head: string): string {
   const url = githubComparisonUrl(repository, base, head);
-  return `**Bot update**\n${body}\n\n-# [Version ${head.slice(0, 7)}](<${url}>)`;
+  return `## ✨ Bot update\n${body}\n\n-# [See everything in version ${head.slice(0, 7)}](<${url}>)`;
 }
 
 function githubComparisonUrl(repository: string, base: string, head: string) {

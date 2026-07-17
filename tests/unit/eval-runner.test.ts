@@ -106,6 +106,7 @@ describe("eval runner", () => {
           expectedRequestedTools: ["openrouter:web_search"],
           mustContain: ["job"],
           mustNotContain: ["Sources:"],
+          maxAnswerWords: 8,
           maxLatencyMs: 100
         },
         {
@@ -131,6 +132,7 @@ describe("eval runner", () => {
           expectedRequestedTools: ["openrouter:web_search"],
           mustContain: ["ranked"],
           mustNotContain: ["Sources:"],
+          maxAnswerWords: 1,
           maxLatencyMs: 10
         },
         {
@@ -151,6 +153,7 @@ describe("eval runner", () => {
       "expected requested tool openrouter:web_search was not observed",
       "answer did not contain required text: ranked",
       "answer contained forbidden text: Sources:",
+      "answer length 2 words exceeded the 1-word limit",
       "latency 20ms exceeded 10ms"
     ]);
   });

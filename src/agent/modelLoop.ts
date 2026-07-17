@@ -45,7 +45,7 @@ import {
   invalidToolCallRecoveryMessage,
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
-import { coerceGeneratedCsvProducerRoutes, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
+import { coerceGeneratedCsvProducerRoutes, selectExclusiveWagerTransition, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
 import { ForcedRandomActionRouter, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
@@ -330,7 +330,7 @@ async function runAgentModelLoopInternal(
       throw error;
     }
 
-    const modelRoutes = coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls));
+    const modelRoutes = selectExclusiveWagerTransition(coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls)));
     freshExternalDataGuard.noteRequestedTools(response.toolCalls.map((call) => call.name));
     const requestedToolRequests = response.toolCalls.map(
       traceToolRequestMetadata,

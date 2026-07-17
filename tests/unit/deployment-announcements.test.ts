@@ -58,10 +58,10 @@ describe("deployment announcements", () => {
       toolChoice: "none"
     }));
     expect(fixture.send).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringContaining("**Bot update**\n- Casino games now keep working across replies."),
+      content: expect.stringContaining("## ✨ Bot update\n- Casino games now keep working across replies."),
       allowedMentions: { parse: [] }
     }));
-    expect(fixture.send.mock.calls[0]?.[0].content).toContain(`[Version ${newRevision.slice(0, 7)}](<https://github.com/example-org/example-agent/compare/${oldRevision}...${newRevision}>)`);
+    expect(fixture.send.mock.calls[0]?.[0].content).toContain(`[See everything in version ${newRevision.slice(0, 7)}](<https://github.com/example-org/example-agent/compare/${oldRevision}...${newRevision}>)`);
     expect(fixture.repo.markDeploymentAnnouncementPosted).toHaveBeenCalledWith(expect.objectContaining({
       revision: newRevision,
       discordMessageId: "announcement-1"
@@ -111,5 +111,11 @@ describe("deployment announcements", () => {
   it("normalizes model output to at most five safe bullets", () => {
     expect(__test.normalizePatchNotes("# Notes\n* one\n- two <@123>\n- three\n- four\n- five\n- six"))
       .toBe("- one\n- two someone\n- three\n- four\n- five");
+  });
+
+  it("formats deployed updates as a prominent heading with a compact linked footer", () => {
+    expect(__test.formatAnnouncement("- Better replies.", "example/repo", oldRevision, newRevision)).toBe(
+      `## ✨ Bot update\n- Better replies.\n\n-# [See everything in version ${newRevision.slice(0, 7)}](<https://github.com/example/repo/compare/${oldRevision}...${newRevision}>)`
+    );
   });
 });

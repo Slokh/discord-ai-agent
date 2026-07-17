@@ -46,6 +46,38 @@ describe("wallet wager fairness", () => {
     })).toMatch(/machine-checkable win rule/i);
   });
 
+  it("rejects unsupported custom profit rules for every draw kind", () => {
+    expect(validateWagerFairness({
+      kind: "cards",
+      count: 1,
+      description: "draw a card; I win 2x if it is red or black",
+      stakeUsd: 1,
+      maxPayoutUsd: 2,
+    })).toMatch(/machine-checkable win rule/i);
+  });
+
+  it("does not mistake a standard named game for a custom wager contract", () => {
+    expect(validateWagerFairness({
+      kind: "cards",
+      count: 4,
+      description: "deal me in for $1 blackjack",
+      stakeUsd: 1,
+      maxPayoutUsd: 2.5,
+    })).toBeNull();
+  });
+
+  it("evaluates duplicate rules over generic bounded integer draws", () => {
+    expect(validateWagerFairness({
+      kind: "integers",
+      count: 7,
+      min: 1,
+      max: 6,
+      description: "I win 2x if any two numbers match",
+      stakeUsd: 1,
+      maxPayoutUsd: 2,
+    })).toMatch(/100%.*guaranteed profit/i);
+  });
+
   it("rejects overpaying and guaranteed-profit coin contracts", () => {
     expect(validateWagerFairness({
       kind: "coin",

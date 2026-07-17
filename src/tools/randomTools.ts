@@ -89,6 +89,8 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
       kind,
       count: input.count,
       sides: input.sides,
+      min: input.min,
+      max: input.max,
       description: [ctx.requestText, input.reason, input.wager.game].filter(Boolean).join("\n"),
       stakeUsd: input.wager.stakeUsd!,
       maxPayoutUsd: input.wager.maxPayoutUsd!,

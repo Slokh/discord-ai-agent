@@ -117,5 +117,6 @@ export async function executeDeterministicWalletBalanceRoute(
     requestLogger: input.requestLogger,
     startedAt: input.startedAt,
     modelCallBudget: input.modelCallBudget,
+    maxTokens: 1536,
   });
 }

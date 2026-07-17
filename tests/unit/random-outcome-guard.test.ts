@@ -93,6 +93,14 @@ describe("random outcome guard", () => {
     })).toBe(false);
   });
 
+  it("does not turn hypothetical wager planning into a random outcome", () => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "minimum bet to get me on top, blackjack",
+      responseContent: "A natural blackjack win would put you in first place with a $7.64 bet.",
+      successfulRandomDraw: false,
+    })).toBe(false);
+  });
+
   it("recognizes only completed RNG tool results as successful", () => {
     expect(isSuccessfulRandomDrawResult("Provably fair draw complete.\nResult: 2, 5"))
       .toBe(true);

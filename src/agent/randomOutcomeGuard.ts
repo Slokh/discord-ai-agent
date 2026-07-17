@@ -7,9 +7,6 @@ import { recordAgentEvent } from "./runtimeTranscript.js";
 const SUCCESSFUL_DRAW_PREFIX = "Provably fair draw complete.";
 const SUCCESSFUL_WAGER_SETTLEMENT_PREFIX = "The scoped wallet wager settled.";
 
-const CHANCE_INTENT =
-  /\b(random(?:ly)?|chance|roll|dice|d\d+|coin|flip|pick|choose|shuffle|draw|deal|cards?|hand|shoe|blackjack|poker|roulette|wheel|craps|slots?|spins?|bet|casino|lottery|raffle|winner)\b/i;
-
 const REVEAL_RANDOMNESS_INTENT = /\b(?:reveal|verify|prove)\b[\s\S]{0,80}\b(?:random(?:ness)?|fairness|seed|proof|commitment)\b/i;
 const RANDOM_ACTION = "(?:roll|flip|spin|deal|draw|shuffle|pick|choose|select|play|run|start|bet|wager|stake|risk|put)";
 const RANDOM_TARGET = "(?:random(?:ly)?|dice|d\\d+|coin|heads|tails|red|black|cards?|hand|blackjack|poker|roulette|wheel|craps|slots?|spins?|casino|lottery|raffle|winner|numbers?)";
@@ -30,13 +27,6 @@ const STRONG_OUTCOME_PATTERNS = [
   /\b(?:let(?:'s| us) deal|provably fair blackjack)\b[\s\S]{0,220}\b(?:10|[2-9JQKA])[♠♥♦♣]/i,
   /\bcoin\s+(?:landed|lands|came up|result)\b[\s\S]{0,80}\b(?:heads|tails)\b/i,
   /\b(?:the\s+)?(?:winner|selected|picked)\s*(?:is|:|—|-)\s*\S+/i,
-];
-
-const INTENT_OUTCOME_PATTERNS = [
-  /(?:^|\n)\s*(?:result|outcome|draw|roll|spin|flip)\s*(?:is|was|:|—|-)\s*\S+/im,
-  /\b(?:landed on|came up)\s+(?:heads|tails|\d+)\b/i,
-  /\b(?:your hand|dealer (?:shows|upcard))\s*:\s*[^\n]*(?:10|[2-9JQKA])[♠♥♦♣]/i,
-  /\b(?:you|player|dealer|house|they)\s+(?:win|won|lose|lost)\b/i,
   /\b\d{16,}\b/,
 ];
 
@@ -207,9 +197,7 @@ export function shouldRejectUnverifiedRandomOutcome(input: {
   if (STRONG_OUTCOME_PATTERNS.some((pattern) => pattern.test(response))) {
     return true;
   }
-  const intent = `${input.userText}\n${input.replyContextText ?? ""}`;
-  return CHANCE_INTENT.test(intent) &&
-    INTENT_OUTCOME_PATTERNS.some((pattern) => pattern.test(response));
+  return false;
 }
 
 export async function recordRandomOutcomeGuardEvent(

@@ -216,7 +216,9 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       sourceBalanceObservedAt: new Date(),
       idempotencyKey: `${guildId}:wager-overlap`
     })).rejects.toThrow(/Insufficient available wallet balance/);
-    await repo.releaseWager(wager.id, "test complete");
+    const released = await repo.releaseOpenWagerByRequestId(base.requestId, "request failed");
+    expect(released).toMatchObject({ id: wager.id, status: "released", awaitingAction: false });
+    await expect(repo.releaseOpenWagerByRequestId(base.requestId, "duplicate cleanup")).resolves.toBeNull();
     await repo.createManagedTransfer({
       guildId,
       requestedByUserId: "user-2",

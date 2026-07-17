@@ -336,6 +336,22 @@ export class WalletService {
     });
   }
 
+  async releaseOpenWagerByRequestId(
+    requestId: string,
+    explanation: string,
+    record?: PaymentEventRecorder,
+  ): Promise<WagerReservation | null> {
+    const wager = await this.repo.releaseOpenWagerByRequestId(requestId, explanation);
+    if (!wager) return null;
+    await emit(record, {
+      eventName: "wallet.wager.released_after_request_failure",
+      summary: "Released an open wager after its request failed",
+      level: "warn",
+      metadata: { wagerId: wager.id, requestId, explanation },
+    });
+    return wager;
+  }
+
   async settleWager(input: {
     wagerId: string;
     userId: string;

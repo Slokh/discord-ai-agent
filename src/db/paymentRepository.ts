@@ -588,7 +588,10 @@ export class PaymentRepository {
       [wagerId, explanation.slice(0, 2_000)]
     );
   }
-
+  async releaseOpenWagerByRequestId(requestId: string, explanation: string): Promise<WagerReservation | null> {
+    const result = await this.pool.query(`UPDATE wallet_wager_reservations SET status = 'released', awaiting_action = false, explanation = $2, updated_at = now() WHERE request_id = $1 AND status IN ('reserved', 'drawn') RETURNING ${WAGER_COLUMNS}`, [requestId, explanation.slice(0, 2_000)]);
+    return result.rows[0] ? mapWager(result.rows[0]) : null;
+  }
   async beginWagerSettlement(input: {
     wagerId: string;
     requestedByUserId: string;

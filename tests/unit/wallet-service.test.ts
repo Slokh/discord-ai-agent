@@ -8,6 +8,34 @@ const botAddress = `0x${"1".repeat(40)}` as const;
 const tokenAddress = `0x${"2".repeat(40)}` as const;
 
 describe("WalletService", () => {
+  it("releases an open wager created by a failed request", async () => {
+    const released = {
+      id: "wager-timeout",
+      requestId: "request-timeout",
+      status: "released",
+      awaitingAction: false,
+    } as WagerReservation;
+    const releaseOpenWagerByRequestId = vi.fn(async () => released);
+    const record = vi.fn(async () => undefined);
+    const service = new WalletService(
+      loadConfig().payments,
+      { releaseOpenWagerByRequestId } as unknown as PaymentRepository,
+      providerFake(),
+    );
+
+    await expect(service.releaseOpenWagerByRequestId(
+      "request-timeout",
+      "model timed out",
+      record,
+    )).resolves.toEqual(released);
+
+    expect(releaseOpenWagerByRequestId).toHaveBeenCalledWith("request-timeout", "model timed out");
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "wallet.wager.released_after_request_failure",
+      metadata: expect.objectContaining({ wagerId: "wager-timeout", requestId: "request-timeout" }),
+    }));
+  });
+
   it("does not provision user wallets when the user-wallet feature is disabled", async () => {
     const repo = {
       ensureWalletPlaceholder: vi.fn()

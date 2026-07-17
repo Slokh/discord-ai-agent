@@ -237,6 +237,48 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       .rejects.toThrow(/Insufficient user wallet balance/);
   });
 
+  it("lists bounded requester-scoped wager history with a game filter", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const bot = await activeWallet(guildId, "bot", null, "81");
+    const user = await activeWallet(guildId, "user", "history-user", "82");
+    const reserve = (requestId: string, game: string) => repo.reserveWager({
+      requestId,
+      guildId,
+      channelId: "casino",
+      threadKey: `${guildId}:${requestId}`,
+      requestedByUserId: "history-user",
+      user,
+      bot,
+      game,
+      interactionMode: "automatic",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 100_000n,
+      maxPayoutAtomic: 200_000n,
+      userBalanceAtomic: 5_000_000n,
+      botBalanceAtomic: 10_000_000n,
+      balancesObservedAt: new Date(),
+    });
+    for (const [requestId, game] of [["coin-old", "coinflip"], ["blackjack", "blackjack"], ["coin-new", "coin flip"]] as const) {
+      const wager = await reserve(requestId, game);
+      await repo.releaseWager(wager.id, "test history entry");
+    }
+
+    const history = await repo.listWagerHistory({
+      guildId,
+      requestedByUserId: "history-user",
+      game: "coin",
+      limit: 1,
+    });
+
+    expect(history.hasMore).toBe(true);
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]?.wager).toMatchObject({ requestId: "coin-new", game: "coin flip", requestedByUserId: "history-user" });
+    expect(history.entries[0]?.draw).toBeNull();
+    await expect(repo.listWagerHistory({ guildId, requestedByUserId: "other-user" }))
+      .resolves.toEqual({ entries: [], hasMore: false });
+  });
+
   it("allows only one wallet-backed wager per Discord request", async () => {
     const guildId = `${guildPrefix}${randomUUID()}`;
     const bot = await activeWallet(guildId, "bot", null, "41");

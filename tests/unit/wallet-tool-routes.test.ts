@@ -4,6 +4,7 @@ import type { ToolContext } from "../../src/tools/types.js";
 const mocks = vi.hoisted(() => ({
   walletBalance: vi.fn(),
   walletBalances: vi.fn(),
+  wagerHistory: vi.fn(),
   transfer: vi.fn(),
   starterFunds: vi.fn(),
   adminTransfer: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../src/tools/walletTools.js", () => ({
   getWalletBalance: mocks.walletBalance,
   listWalletBalances: mocks.walletBalances,
+  getWagerHistory: mocks.wagerHistory,
   transferWalletFunds: mocks.transfer,
   requestStarterFunds: mocks.starterFunds,
   adminTransferWalletFunds: mocks.adminTransfer,
@@ -27,6 +29,7 @@ describe("executeWalletToolRoute", () => {
     vi.clearAllMocks();
     mocks.walletBalance.mockResolvedValue(" wallet ");
     mocks.walletBalances.mockResolvedValue({ content: "wallet directory" });
+    mocks.wagerHistory.mockResolvedValue(" wager history ");
     mocks.transfer.mockResolvedValue(" transferred ");
     mocks.starterFunds.mockResolvedValue(" starter funded ");
     mocks.adminTransfer.mockResolvedValue(" admin transferred ");
@@ -66,6 +69,13 @@ describe("executeWalletToolRoute", () => {
     await expect(executeWalletToolRoute(ctx, route("listWalletBalances", { view: "addresses" })))
       .resolves.toEqual({ content: "wallet directory" });
     expect(mocks.walletBalances).toHaveBeenCalledWith(ctx, { view: "addresses" });
+  });
+
+  it("routes canonical requester wager history filters", async () => {
+    const ctx = context();
+    await expect(executeWalletToolRoute(ctx, route("getWagerHistory", { game: "coin", limit: "12" })))
+      .resolves.toEqual({ content: "wager history" });
+    expect(mocks.wagerHistory).toHaveBeenCalledWith(ctx, { game: "coin", limit: 12 });
   });
 });
 

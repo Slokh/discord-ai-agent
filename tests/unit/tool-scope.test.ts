@@ -103,6 +103,7 @@ describe("tool scoping", () => {
 
       expect(names).toContain("getWalletBalance");
       expect(names).not.toContain("listWalletBalances");
+      expect(names).not.toContain("getWagerHistory");
       expect(names).not.toContain("transferWalletFunds");
       expect(names).not.toContain("requestStarterFunds");
       expect(names).not.toContain("awaitRandomWagerAction");
@@ -126,6 +127,7 @@ describe("tool scoping", () => {
 
       expect(names).toContain("getWalletBalance");
       expect(names).toContain("listWalletBalances");
+      expect(names).toContain("getWagerHistory");
       expect(names).toContain("transferWalletFunds");
       expect(names).toContain("requestStarterFunds");
       expect(names).toContain("adminTransferWalletFunds");

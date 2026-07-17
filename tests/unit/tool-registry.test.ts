@@ -48,6 +48,7 @@ describe("toolRegistry", () => {
       "reportStatus",
       "getWalletBalance",
       "listWalletBalances",
+      "getWagerHistory",
       "transferWalletFunds",
       "requestStarterFunds",
       "adminTransferWalletFunds",
@@ -90,6 +91,8 @@ describe("toolRegistry", () => {
       .toContain("only verified non-$0 rows for balance views");
     expect(toolRegistry.find((entry) => entry.name === "listWalletBalances")?.parameters.properties)
       .toHaveProperty("view");
+    expect(toolRegistry.find((entry) => entry.name === "getWagerHistory")?.description)
+      .toContain("canonical real-USD wager ledger");
   });
 
   it("exposes explicit image alpha controls and transparent emoji validation", () => {

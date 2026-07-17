@@ -52,6 +52,11 @@ export function validateWagerInput(input: DrawRandomInput): string | null {
   if (!Number.isFinite(stakeUsd) || (stakeUsd ?? 0) <= 0) return "wager.stakeUsd must be a positive amount.";
   if (!Number.isFinite(maxPayoutUsd) || (maxPayoutUsd ?? -1) < 0) return "wager.maxPayoutUsd must be a non-negative amount that includes any returned stake.";
   if (!game?.trim()) return "wager.game is required.";
+  if (input.kind === "cards" && /\bblackjack\b/i.test(game)) {
+    return (input.count ?? 1) === 3
+      ? null
+      : "An opening blackjack draw must contain exactly 3 public cards: 2 for the player and 1 dealer upcard. The RNG footer publishes every drawn card, so never draw the dealer hole card or future dealer cards until a later player action makes them public.";
+  }
   return input.kind === "cards" && (input.count ?? 1) < 4
     ? "A wallet-backed card game must draw its complete bounded game sequence in one call with count at least 4; do not draw one wagered card per model round."
     : null;

@@ -8,6 +8,24 @@ const botAddress = `0x${"1".repeat(40)}` as const;
 const tokenAddress = `0x${"2".repeat(40)}` as const;
 
 describe("WalletService", () => {
+  it("reads wager history only for the scoped guild and requester", async () => {
+    const listWagerHistory = vi.fn(async () => ({ entries: [], hasMore: false }));
+    const service = new WalletService(
+      loadConfig().payments,
+      { listWagerHistory } as unknown as PaymentRepository,
+      providerFake(),
+    );
+
+    await expect(service.listWagerHistory({ guildId: "guild-a", userId: "user-a", game: "coin", limit: 10 }))
+      .resolves.toEqual({ entries: [], hasMore: false });
+    expect(listWagerHistory).toHaveBeenCalledWith({
+      guildId: "guild-a",
+      requestedByUserId: "user-a",
+      game: "coin",
+      limit: 10,
+    });
+  });
+
   it("releases an open wager created by a failed request", async () => {
     const released = {
       id: "wager-timeout",

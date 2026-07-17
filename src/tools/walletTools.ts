@@ -1,6 +1,8 @@
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
 import { explicitWalletTransferForPrompt, isExplicitWalletTransferPrompt } from "../agent/walletActionGuard.js";
 import { promptExcludesRealWallet } from "../agent/walletPromptIntent.js";
+import { atomicToUsd } from "../payments/money.js";
+import type { WagerHistoryEntry } from "../payments/types.js";
 import { summarizeForAudit } from "../util/text.js";
 import { paymentRecorder } from "./paymentToolContext.js";
 import { visibleIndexedChannelIdsForRequest } from "./toolContext.js";
@@ -168,6 +170,87 @@ export async function listWalletBalances(
     status: unavailableCount > 0 ? "partial" : "ok",
     limitation: unavailableCount > 0 ? `${unavailableCount} existing wallet balance reads failed.` : undefined
   };
+}
+
+export async function getWagerHistory(
+  ctx: ToolContext,
+  input: { game?: string; limit?: number } = {},
+): Promise<string> {
+  const actor = paymentRequester(ctx);
+  if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
+    return "Per-user USD wallets and wager history are not enabled in this deployment.";
+  }
+  const limit = Math.max(1, Math.min(input.limit ?? 20, 50));
+  const result = await ctx.walletService.listWagerHistory({
+    guildId: actor.guildId,
+    userId: actor.userId,
+    game: input.game?.trim() || undefined,
+    limit,
+  });
+  const filter = input.game?.trim();
+  if (result.entries.length === 0) {
+    const content = `No canonical wallet wagers found for the requester${filter ? ` matching ${filter}` : ""}.`;
+    await audit(ctx, "getWagerHistory", filter || "all games", content);
+    return content;
+  }
+  const settled = result.entries.filter((entry) => entry.wager.status === "settled");
+  const wins = settled.filter((entry) => entry.wager.settlementOutcome === "player_win").length;
+  const losses = settled.filter((entry) => entry.wager.settlementOutcome === "player_loss").length;
+  const pushes = settled.filter((entry) => entry.wager.settlementOutcome === "push").length;
+  const netAtomic = settled.reduce(
+    (sum, entry) => sum + ((entry.wager.payoutAtomic ?? 0n) - entry.wager.stakeAtomic),
+    0n,
+  );
+  const decimals = settled[0]?.wager.tokenDecimals ?? result.entries[0]!.wager.tokenDecimals;
+  const countLabel = `${result.entries.length}${result.hasMore ? "+" : ""} recent ${result.entries.length === 1 && !result.hasMore ? "entry" : "entries"}`;
+  const lines = [
+    `Canonical requester wager ledger${filter ? ` matching ${filter}` : ""}: ${countLabel}; ${settled.length} settled (${counted(wins, "win")}, ${counted(losses, "loss")}, ${counted(pushes, "push")}); net ${signedUsd(netAtomic, decimals)}.`,
+    ...result.entries.map((entry, index) => formatWagerHistoryEntry(entry, index, actor.guildId)),
+  ];
+  if (result.hasMore) lines.push(`More matching wagers exist; increase limit above ${limit} if the user asks for older results.`);
+  const content = lines.join("\n\n");
+  await recordAgentEvent(ctx, {
+    eventName: "wallet.wager_history.read",
+    summary: `Read ${result.entries.length} canonical requester wagers`,
+    metadata: { game: filter ?? null, limit, hasMore: result.hasMore, settled: settled.length, wins, losses, pushes },
+  });
+  await audit(ctx, "getWagerHistory", filter || "all games", lines[0]!);
+  return content;
+}
+
+function formatWagerHistoryEntry(entry: WagerHistoryEntry, index: number, guildId: string) {
+  const { wager, draw } = entry;
+  const payout = wager.payoutAtomic ?? 0n;
+  const outcome = wager.settlementOutcome?.replace("player_", "") ?? wager.status;
+  const drawText = draw ? formatVerifiedDraw(draw) : "no verified draw attached";
+  const details = wager.explanation?.trim() ? `\nDetails: ${wager.explanation.trim().slice(0, 500)}` : "";
+  const request = wager.requestId
+    ? `\nRequest: https://discord.com/channels/${guildId}/${wager.channelId}/${wager.requestId}`
+    : "";
+  return [
+    `[${index + 1}] ${wager.createdAt.toISOString()} · ${wager.game} · ${outcome}`,
+    `Verified draw: ${drawText}`,
+    `Stake $${atomicToUsd(wager.stakeAtomic, wager.tokenDecimals)} · payout $${atomicToUsd(payout, wager.tokenDecimals)} · net ${signedUsd(payout - wager.stakeAtomic, wager.tokenDecimals)}`,
+  ].join("\n") + details + request;
+}
+
+function formatVerifiedDraw(draw: NonNullable<WagerHistoryEntry["draw"]>) {
+  const values = Array.isArray(draw.outcome.values)
+    ? draw.outcome.values.filter((value): value is string | number => typeof value === "string" || typeof value === "number")
+    : [];
+  const outcome = values.length > 0 ? values.join(", ") : JSON.stringify(draw.outcome);
+  return `${draw.kind} → ${outcome}${draw.reason ? ` (${draw.reason})` : ""}`;
+}
+
+function signedUsd(amountAtomic: bigint, decimals: number) {
+  if (amountAtomic === 0n) return "$0";
+  const magnitude = amountAtomic < 0n ? -amountAtomic : amountAtomic;
+  return `${amountAtomic > 0n ? "+" : "-"}$${atomicToUsd(magnitude, decimals)}`;
+}
+
+function counted(count: number, noun: string) {
+  const plural = /(?:s|sh|ch|x|z)$/i.test(noun) ? `${noun}es` : `${noun}s`;
+  return `${count} ${count === 1 ? noun : plural}`;
 }
 
 function walletDirectoryRows(rows: WalletDirectoryRow[], view: WalletDirectoryView): WalletDirectoryRow[] {

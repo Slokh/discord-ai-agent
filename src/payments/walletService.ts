@@ -85,6 +85,20 @@ export class WalletService {
     return { wallet, balance };
   }
 
+  async listWagerHistory(input: {
+    guildId: string;
+    userId: string;
+    game?: string;
+    limit?: number;
+  }) {
+    return this.repo.listWagerHistory({
+      guildId: input.guildId,
+      requestedByUserId: input.userId,
+      game: input.game,
+      limit: input.limit,
+    });
+  }
+
   async listExistingUserWalletSummaries(input: { guildId: string; userIds?: string[] }) {
     const userIds = input.userIds ? [...new Set(input.userIds.filter(Boolean))] : undefined;
     const wallets = await this.repo.listUserWallets({

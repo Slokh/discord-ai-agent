@@ -37,6 +37,7 @@ export type ToolName =
   | "reportStatus"
   | "getWalletBalance"
   | "listWalletBalances"
+  | "getWagerHistory"
   | "transferWalletFunds"
   | "requestStarterFunds"
   | "adminTransferWalletFunds"
@@ -1281,6 +1282,28 @@ export const toolRegistry: ToolRegistryEntry[] = [
     }
   },
   {
+    name: "getWagerHistory",
+    description:
+      "Read the current requester's canonical real-USD wager ledger, including verified RNG draws, settlement outcomes, stakes, payouts, net results, explanations, and originating Discord request links. ALWAYS use this instead of Discord history or agent memory when the user asks about their past bets, wagers, casino games, wins/losses, payouts, or coin-flip/dice/card results. Optionally filter by a short game term such as coin, blackjack, dice, or roulette. This is requester-scoped and read-only; never infer settled results from chat messages when this tool is available.",
+    userVisible: true,
+    mutates: false,
+    group: "external",
+    category: "external",
+    toolClass: "external",
+    outputContract: ["requester-scoped canonical wager entries", "verified RNG draw", "settlement outcome", "stake, payout, and net USD", "originating Discord request link"],
+    examples: ["@ai what were the results of my coin flips?", "@ai show my recent blackjack wins and losses"],
+    permissionRequirements: ["configured_user_wallet_runtime", "requester_scope"],
+    auditEvents: ["tool_audit_logs", "wallet.wager_history.read"],
+    parameters: {
+      type: "object",
+      properties: {
+        game: { type: "string", description: "Optional short game-name filter such as coin, blackjack, dice, or roulette." },
+        limit: { type: "number", description: "Maximum recent entries. Defaults to 20 and is capped at 50." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "transferWalletFunds",
     description:
       "Transfer real USD out of the current Discord requester's managed wallet. The only allowed destinations are another verified Discord user's managed wallet or the shared bot wallet; arbitrary blockchain addresses are never accepted. Use only when the current prompt explicitly asks to send, pay, tip, give, deposit, return, or transfer money; never use this to charge or settle a game wager. The source, amount, and destination are parsed again from the current requester prompt and remain authoritative even if model arguments differ. A destination can be an ID, mention, username, or display name: pass the provided name directly and the tool will resolve it safely, so do not ask the user for an ID or mention. Ambiguous names fail without transferring. The bot wallet sponsors the network fee. Returns the confirmed transaction and fresh source/destination balances.",
@@ -1718,7 +1741,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. For standard named games, the runtime may raise maxPayoutUsd to cover legal later actions such as blackjack doubles or splits; treat the returned reserve as authoritative. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. Unknown and decision-based games default to requiring a later player reply. Real-money games based on a secret the player can reveal after the bot acts are unverifiable and will be rejected before funds are reserved. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. An opening blackjack draw must use exactly 3 cards: 2 player cards and 1 dealer upcard; never pre-draw the dealer hole card because every drawn card is published in the proof footer. For standard named games, the runtime may raise maxPayoutUsd to cover legal later actions such as blackjack doubles or splits; treat the returned reserve as authoritative. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. Unknown and decision-based games default to requiring a later player reply. Real-money games based on a secret the player can reveal after the bot acts are unverifiable and will be rejected before funds are reserved. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -2005,7 +2028,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
   ) {
     return "external";
   }
-  if (name === "getWalletBalance" || name === "listWalletBalances" || name === "transferWalletFunds" || name === "requestStarterFunds") return "external";
+  if (name === "getWalletBalance" || name === "listWalletBalances" || name === "getWagerHistory" || name === "transferWalletFunds" || name === "requestStarterFunds") return "external";
   return "discord";
 }
 
@@ -2046,6 +2069,7 @@ const toolClassByName: Record<ToolName, ToolClass> = {
   reportStatus: "ops",
   getWalletBalance: "external",
   listWalletBalances: "external",
+  getWagerHistory: "external",
   transferWalletFunds: "external",
   requestStarterFunds: "external",
   adminTransferWalletFunds: "ops",
@@ -2126,6 +2150,7 @@ function defaultToolExamples(name: ToolName): string[] {
     reportStatus: "@ai status",
     getWalletBalance: "@ai what's my bankroll?",
     listWalletBalances: "@ai what's the balance of every user in this server?",
+    getWagerHistory: "@ai what were the results of my coin flips?",
     transferWalletFunds: "@ai send $2 to @friend",
     requestStarterFunds: "@ai I'm at $0, can I get $1 to play again?",
     adminTransferWalletFunds: "@ai move $5 from the bot wallet to @friend because their payout failed",

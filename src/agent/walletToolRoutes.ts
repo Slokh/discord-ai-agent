@@ -1,5 +1,6 @@
 import {
   adminTransferWalletFunds,
+  getWagerHistory,
   getWalletBalance,
   listWalletBalances,
   reconcileWalletTransfers,
@@ -37,6 +38,14 @@ export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolR
     return listWalletBalances(ctx, {
       view: stringArgument(route.arguments, "view") as "balances" | "addresses" | "both" | undefined
     });
+  }
+  if (route.name === "getWagerHistory") {
+    return {
+      content: cleanResponse(await getWagerHistory(ctx, {
+        game: stringArgument(route.arguments, "game"),
+        limit: numberArgument(route.arguments, "limit"),
+      }), Math.max(ctx.config.maxReplyChars, 6_000)),
+    };
   }
   if (route.name === "transferWalletFunds") {
     return {

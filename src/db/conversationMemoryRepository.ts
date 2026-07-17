@@ -20,6 +20,14 @@ async function appendConversationMessageWithClient(_pool: DbPool, client: Pick<D
           content, parts, metadata, created_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now()))
+        ON CONFLICT (thread_key, discord_message_id)
+          WHERE discord_message_id IS NOT NULL
+        DO UPDATE SET
+          content = EXCLUDED.content,
+          parts = EXCLUDED.parts,
+          metadata = conversation_messages.metadata || EXCLUDED.metadata,
+          author_id = coalesce(EXCLUDED.author_id, conversation_messages.author_id),
+          author_display_name = coalesce(EXCLUDED.author_display_name, conversation_messages.author_display_name)
       `,
       [
         input.threadKey,

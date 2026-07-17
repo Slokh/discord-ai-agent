@@ -581,6 +581,8 @@ describe("drawRandom", () => {
     expect(response).not.toContain("Required next tool: awaitRandomWagerAction");
     expect(response).toContain("Never pause a terminal outcome");
     expect(response).toContain("Do not draw again or answer before one of those tools succeeds");
+    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({ maxPayoutUsd: 0.8 }), expect.any(Function));
+    expect(response).toContain("Maximum total payout reserved: $0.8");
   });
 
   it("rejects a wager amount inherited from history when the current request is an explicit amount", async () => {
@@ -672,6 +674,30 @@ describe("drawRandom", () => {
     });
     expect(reserveWager).not.toHaveBeenCalled();
     expect(rngRepo.draws.map((draw) => draw.kind)).toEqual(["shuffle", "cards"]);
+  });
+
+  it("continues a saved game action when the model redundantly repeats opening wager fields", async () => {
+    const reserveWager = vi.fn();
+    const getCurrentWager = vi.fn(async () => ({
+      id: "wager-active",
+      allowedActions: ["hit", "stand", "double"],
+    }));
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "Stand",
+      walletService: { reserveWager, getCurrentWager } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "cards",
+      count: 1,
+      reason: "dealer continuation card",
+      wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" },
+    });
+
+    expect(response).toContain("Provably fair draw complete");
+    expect(response).toContain("continues the scoped active wallet wager");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.draws.some((draw) => draw.kind === "cards")).toBe(true);
   });
 
   it.each([

@@ -48,6 +48,29 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "revealRandomness")).toBe(true);
   });
 
+  it("offers complete skill management for conversational skill requests", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "what are all the skills you have?", hasImageAttachments: false, config });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("ops")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "manageSkills")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "createSkillDraft")).toBe(true);
+  });
+
+  it("keeps skill management available for terse replies to a skill response", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "remove all",
+      hasImageAttachments: false,
+      replyContext: true,
+      replyContextText: "All skills (2): `movie-night`, `alex-random-language`",
+      config,
+    });
+
+    expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "manageSkills")).toBe(true);
+  });
+
   it("always pairs wallet-backed randomness with pause and settlement tools", () => {
     withEnv({
       WALLET_ENABLED: "true",

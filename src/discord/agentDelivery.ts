@@ -32,6 +32,13 @@ export async function runQueuedAgentRuntimeExecution(
   input: DiscordAgentRequestInput & { client: Client },
   job: DiscordAgentRequestJob
 ) {
+  const existingDelivery = job.agentExecutionId
+    ? await input.deliveryObligations?.getByExecutionId(job.agentExecutionId).catch(() => undefined)
+    : undefined;
+  if (existingDelivery?.state === "delivered") {
+    logger.info({ runId: job.runId, agentExecutionId: job.agentExecutionId }, "Skipping queued agent runtime execution because Discord delivery already completed");
+    return;
+  }
   await waitForDiscordClientReady(input.client);
   const existingRun = await input.repo.getProcessRun(job.runId).catch(() => undefined);
   if (existingRun && isTerminalProcessRunStatus(existingRun.status)) {

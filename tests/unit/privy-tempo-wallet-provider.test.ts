@@ -14,6 +14,7 @@ const transferEvent = [{
 const mocks = vi.hoisted(() => ({
   baseSignTransaction: vi.fn(),
   createViemAccount: vi.fn(),
+  getBalance: vi.fn(),
   rawSign: vi.fn(),
   serialize: vi.fn(),
   transferSync: vi.fn()
@@ -30,6 +31,7 @@ vi.mock("@privy-io/node/viem", () => ({
 vi.mock("viem/tempo", () => ({
   createClient: vi.fn((options) => ({
     token: {
+      getBalance: mocks.getBalance,
       transferSync: async (parameters: { feePayer?: unknown }) => {
         await options.account.signTransaction({
           type: "tempo",
@@ -57,6 +59,7 @@ describe("PrivyTempoWalletProvider", () => {
       type: "local"
     }));
     mocks.rawSign.mockResolvedValue(`0x${"1".repeat(128)}1b`);
+    mocks.getBalance.mockResolvedValue({ amount: 1_000_000n });
     mocks.serialize.mockResolvedValueOnce("0x01").mockResolvedValueOnce("0x02");
     mocks.transferSync.mockResolvedValue({
       receipt: {
@@ -140,6 +143,39 @@ describe("PrivyTempoWalletProvider", () => {
       amountAtomic: 250_000n,
       memo: `0x${"5".repeat(64)}`
     })).rejects.toThrow(/did not deliver/);
+  });
+
+  it("retries the confirmed block when an RPC node has not indexed it yet", async () => {
+    mocks.getBalance
+      .mockRejectedValueOnce(new Error("Requested resource not found\nDetails: block not found: 0x1d0ae1c"))
+      .mockResolvedValueOnce({ amount: 750_000n });
+    const provider = new PrivyTempoWalletProvider({ appId: "app-id", appSecret: "app-secret", network: "mainnet" });
+    const wallet = { providerWalletId: "privy-user", address: `0x${"1".repeat(40)}` as const };
+    const token = { symbol: "USDC.e", address: `0x${"3".repeat(40)}` as const, decimals: 6 };
+
+    await expect(provider.getBalance({ wallet, token, blockNumber: 123n })).resolves.toBe(750_000n);
+    expect(mocks.getBalance).toHaveBeenNthCalledWith(1, {
+      account: wallet.address,
+      token: token.address,
+      blockNumber: 123n,
+    });
+    expect(mocks.getBalance).toHaveBeenNthCalledWith(2, {
+      account: wallet.address,
+      token: token.address,
+      blockNumber: 123n,
+    });
+  });
+
+  it("does not hide unrelated balance read failures", async () => {
+    mocks.getBalance.mockRejectedValueOnce(new Error("rate limited"));
+    const provider = new PrivyTempoWalletProvider({ appId: "app-id", appSecret: "app-secret", network: "mainnet" });
+
+    await expect(provider.getBalance({
+      wallet: { providerWalletId: "privy-user", address: `0x${"1".repeat(40)}` },
+      token: { symbol: "USDC.e", address: `0x${"3".repeat(40)}`, decimals: 6 },
+      blockNumber: 123n,
+    })).rejects.toThrow("rate limited");
+    expect(mocks.getBalance).toHaveBeenCalledOnce();
   });
 
 });

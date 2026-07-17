@@ -1,5 +1,6 @@
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
-import { isExplicitWalletTransferPrompt } from "../agent/walletActionGuard.js";
+import { explicitWalletTransferForPrompt, isExplicitWalletTransferPrompt } from "../agent/walletActionGuard.js";
+import { promptExcludesRealWallet } from "../agent/walletPromptIntent.js";
 import { summarizeForAudit } from "../util/text.js";
 import { paymentRecorder } from "./paymentToolContext.js";
 import { visibleIndexedChannelIdsForRequest } from "./toolContext.js";
@@ -219,30 +220,31 @@ function walletDirectoryCheckedLine(view: WalletDirectoryView) {
 
 export async function transferWalletFunds(
   ctx: ToolContext,
-  input: { destination?: WalletEndpointInput; destinationUserId?: string; amountUsd?: number }
+  _input: { destination?: WalletEndpointInput; destinationUserId?: string; amountUsd?: number }
 ): Promise<string> {
   const actor = paymentRequester(ctx);
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
     return "Per-user USD wallets are not enabled in this deployment.";
   }
-  if (!hasExplicitTransferIntent(ctx.requestText ?? "")) {
+  const requestedTransfer = explicitWalletTransferForPrompt(ctx.requestText ?? "");
+  if (!requestedTransfer) {
     return "No transfer was made. Real USD transfers require an explicit send, pay, tip, give, deposit, return, or transfer instruction in the current prompt.";
   }
-  const amountUsd = positiveAmount(input.amountUsd);
-  if (amountUsd == null) return "amountUsd must be a positive USD amount.";
-  const destinationKind = input.destination ?? "user";
+  // The requester's current prompt is authoritative. Model-proposed arguments
+  // remain in the tool contract for selection, but cannot resize or redirect a
+  // transfer if the model resolved a name or amount incorrectly.
+  const amountUsd = requestedTransfer.amountUsd;
   let destination: { kind: "bot" } | { kind: "user"; userId: string };
   let destinationLabel: string;
-  if (destinationKind === "bot") {
+  if (requestedTransfer.destination.kind === "bot") {
     destination = { kind: "bot" };
     destinationLabel = "bot wallet";
   } else {
-    const userId = normalizedUserId(input.destinationUserId);
-    if (!userId) return "destinationUserId is required for a user transfer. Use a Discord mention or findDiscordUsers first.";
-    if (userId === actor.userId) return "You cannot transfer USD to your own wallet.";
-    const resolved = await resolveWalletUser(ctx, userId);
+    const reference = requestedTransfer.destination.reference;
+    const resolved = await resolveWalletUser(ctx, reference);
     if (!resolved.ok) return resolved.message;
     const target = resolved.target;
+    if (target.userId === actor.userId) return "You cannot transfer USD to your own wallet.";
     destination = { kind: "user", userId: target.userId };
     destinationLabel = `${target.displayName}'s wallet`;
   }
@@ -298,6 +300,7 @@ export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<str
   if (!ctx.config.payments?.walletEnabled || !ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
     return null;
   }
+  if (promptExcludesRealWallet(ctx.requestText ?? "")) return null;
   const requestStarterFunds = (ctx.walletService as unknown as { requestStarterFunds?: unknown }).requestStarterFunds;
   if (typeof requestStarterFunds !== "function") return null;
   const actor = paymentRequester(ctx);

@@ -221,6 +221,30 @@ describe("managed wallet tools", () => {
     }), expect.any(Function));
   });
 
+  it("uses the request prompt instead of model-proposed transfer arguments", async () => {
+    const transferFromUser = vi.fn(async () => transferResult());
+    const ctx = context({
+      requestText: "send luke 1.00",
+      walletService: { transferFromUser },
+      fetchDiscordGuildMembers: vi.fn(async () => [
+        { userId: "luke-id", username: "lukester", displayName: "Luke", isBot: false },
+        { userId: "ai-bot-id", username: "ai", displayName: "AI", isBot: true }
+      ])
+    });
+
+    const result = await transferWalletFunds(ctx, {
+      destination: "user",
+      destinationUserId: "ai-bot-id",
+      amountUsd: 10
+    });
+
+    expect(result).toContain("Transferred $1 USD from your wallet to Luke's wallet.");
+    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
+      destination: { kind: "user", userId: "luke-id" },
+      amountUsd: 1
+    }), expect.any(Function));
+  });
+
   it("blocks a model-invented transfer when the current prompt is only a vague game repeat", async () => {
     const transferFromUser = vi.fn();
     const ctx = context({ requestText: "again", walletService: { transferFromUser } });
@@ -267,6 +291,17 @@ describe("managed wallet tools", () => {
     await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
     expect(request).toHaveBeenCalledOnce();
     expect(ctx.footerLines).toEqual([]);
+  });
+
+  it("does not create or fund a real wallet when the prompt explicitly opts into roleplay money", async () => {
+    const request = vi.fn();
+    const ctx = context({
+      requestText: "consider everything Luke does roleplay, don't use real balance",
+      walletService: { requestStarterFunds: request }
+    });
+
+    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("reports a positive verified balance without issuing starter funds", async () => {

@@ -198,6 +198,29 @@ describe("managed wallet tools", () => {
     }), expect.any(Function));
   });
 
+  it("accepts a bare decimal as money in an explicit named transfer", async () => {
+    const transferFromUser = vi.fn(async () => transferResult());
+    const ctx = context({
+      requestText: "send Luke .3",
+      walletService: { transferFromUser },
+      fetchDiscordGuildMembers: vi.fn(async () => [
+        { userId: "luke-id", username: "lukester", displayName: "Luke", isBot: false }
+      ])
+    });
+
+    const result = await transferWalletFunds(ctx, {
+      destination: "user",
+      destinationUserId: "Luke",
+      amountUsd: 0.3
+    });
+
+    expect(result).toContain("Luke's wallet");
+    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
+      destination: { kind: "user", userId: "luke-id" },
+      amountUsd: 0.3
+    }), expect.any(Function));
+  });
+
   it("blocks a model-invented transfer when the current prompt is only a vague game repeat", async () => {
     const transferFromUser = vi.fn();
     const ctx = context({ requestText: "again", walletService: { transferFromUser } });

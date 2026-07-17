@@ -1287,7 +1287,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "requestStarterFunds",
     description:
-      "Request the fixed starter amount from the shared AI treasury for the current Discord requester. Use when someone explicitly asks for $1, starter funds, a refill, or money to start playing again. The tool verifies the requester's live onchain balance and transfers only when it is exactly $0; users with any positive balance are ineligible. The requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
+      "Fallback recheck for the current Discord requester's automatic starter funding. The request lifecycle normally sends the fixed starter amount before model/tool selection whenever the verified live balance is exactly $0, so users do not need special wording. Use this tool only to retry an explicit starter/refill request when automatic funding did not complete. Positive balances are ineligible; requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
     userVisible: true,
     mutates: true,
     group: "external",

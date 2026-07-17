@@ -4,6 +4,75 @@ import type { WagerReservation } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("automatically grants starter funds before handling any zero-balance user request", async () => {
+    const transactionHash = `0x${"8".repeat(64)}`;
+    const requestStarterFunds = vi.fn(async (_input, record) => {
+      await record({
+        eventName: "wallet.transfer.confirmed",
+        summary: "starter grant confirmed",
+        metadata: { transactionHash },
+      });
+      return {
+        granted: true as const,
+        amountUsd: 1,
+        transfer: { status: "confirmed", transactionHash },
+        destination: { balance: { formatted: "1" } },
+        source: { balance: { formatted: "22" } },
+      };
+    });
+    const chat = vi.fn(async () => ({
+      content: "You were automatically topped up to $1, so we can keep going.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          tempoNetwork: "mainnet",
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { requestStarterFunds },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "message-auto-starter",
+      requestMessageId: "message-auto-starter",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "start pack please and 1 on corner bet");
+
+    expect(requestStarterFunds).toHaveBeenCalledWith({
+      guildId: "g",
+      requestedByUserId: "u",
+      requestId: "message-auto-starter",
+    }, expect.any(Function));
+    expect(requestStarterFunds.mock.invocationCallOrder[0]).toBeLessThan(chat.mock.invocationCallOrder[0]);
+    const modelRequest = (chat.mock.calls as any[])[0]?.[0];
+    expect(modelRequest.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "system",
+        content: expect.stringContaining("Automatic starter funding succeeded before this request"),
+      }),
+    ]));
+    expect(response.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
+  });
+
   it("uses the requester's verified wallet balance in a conversational response", async () => {
     const chat = vi.fn(async () => ({
       content: "You have exactly **$1.00** in your wallet.",

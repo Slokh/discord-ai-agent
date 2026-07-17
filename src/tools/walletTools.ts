@@ -287,6 +287,54 @@ export async function requestStarterFunds(ctx: ToolContext): Promise<string> {
   return content;
 }
 
+/**
+ * Deterministic per-request wallet preflight. Every requester with an exactly
+ * zero verified balance receives the configured starter amount before the
+ * model can choose a wallet or game tool. Positive balances are left alone by
+ * WalletService, and its guarded second balance check serializes concurrent
+ * zero-balance requests.
+ */
+export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<string | null> {
+  if (!ctx.config.payments?.walletEnabled || !ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
+    return null;
+  }
+  const requestStarterFunds = (ctx.walletService as unknown as { requestStarterFunds?: unknown }).requestStarterFunds;
+  if (typeof requestStarterFunds !== "function") return null;
+  const actor = paymentRequester(ctx);
+  try {
+    const result = await ctx.walletService.requestStarterFunds({
+      guildId: actor.guildId,
+      requestedByUserId: actor.userId,
+      requestId: actor.requestId,
+    }, paymentRecorder(ctx));
+    if (!result.granted) return null;
+    const content = [
+      `Automatically added $${money(result.amountUsd)} USD from the AI treasury because your verified balance was $0.`,
+      `Status: ${result.transfer.status}`,
+      `Transaction: ${result.transfer.transactionHash ?? "pending reconciliation"}`,
+      `Your balance: $${result.destination.balance.formatted} USD`,
+      `AI balance: $${result.source.balance.formatted} USD`,
+    ].join("\n");
+    await audit(ctx, "automaticStarterFunds", "requester_zero_balance", content);
+    return content;
+  } catch (error) {
+    await recordAgentEvent(ctx, {
+      eventName: "wallet.starter.auto_failed",
+      level: "warn",
+      summary: error instanceof Error ? error.message : String(error),
+      audit: {
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        userId: ctx.userId,
+        toolName: "automaticStarterFunds",
+        argumentsSummary: "requester_zero_balance_preflight",
+        error: error instanceof Error ? error.message : String(error),
+      },
+    }).catch(() => undefined);
+    return null;
+  }
+}
+
 export async function adminTransferWalletFunds(
   ctx: ToolContext,
   input: {

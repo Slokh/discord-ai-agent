@@ -17,7 +17,7 @@ Users interact through normal `@ai` prompts:
 - `getWalletBalance` reads the requester, bot, or an admin-authorized user's current onchain balance and public address.
 - `listWalletBalances` reads existing balances live onchain and renders a compact directory. Balance views include the AI treasury and funded member wallets while omitting zero/no-wallet rows; address views include the AI and every existing member wallet. Owner/ops can always use it, and all members can use it when `WALLET_BALANCES_PUBLIC=true`.
 - `transferWalletFunds` moves USD from the current requester's wallet to another verified Discord user or the bot wallet. Usernames and display names are resolved inside the guarded transfer path; ambiguity fails without moving funds.
-- `requestStarterFunds` sends the configured `$1` starter amount from the AI treasury only when the requester's verified balance is exactly zero. Concurrent requests after the same zero-balance observation are rejected.
+- Every Discord request runs a deterministic starter-funds preflight before model/tool selection. It sends the configured `$1` amount from the AI treasury only when the requester's verified balance is exactly zero, so users never need special refill wording. Positive balances are untouched. Concurrent requests after the same zero-balance observation are rejected by the existing guarded second balance check and transfer lock. `requestStarterFunds` remains available as a safe fallback/recheck path.
 - `adminTransferWalletFunds` performs an owner/ops-authorized correction between managed wallets and requires a reason.
 - `reconcileWalletTransfers` lets an owner/ops requester reconcile pending or uncertain transfers. The worker also reconciles automatically.
 

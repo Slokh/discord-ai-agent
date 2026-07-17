@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { ChatMessage } from "../models/openrouter.js";
+import { isOpenRouterTimeoutError, type ChatMessage } from "../models/openrouter.js";
 import {
   toolByName,
   toolDefinitionsForModel,
@@ -46,7 +46,7 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { coerceGeneratedCsvProducerRoutes, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
-import { RANDOM_OUTCOME_RETRY_GUIDANCE, ForcedRandomActionRouter, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
+import { ForcedRandomActionRouter, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
@@ -62,6 +62,7 @@ import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
+import { compactMessagesForModelFallback } from "./modelTimeoutFallback.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -154,6 +155,8 @@ async function runAgentModelLoopInternal(
     userId: ctx.userId,
   });
   let toolsetState = initialToolsetState(ctx, text);
+  let hasAttemptedTool = false;
+  let modelTimeoutFallbackAttempted = false;
 
   requestLogger.info(
     {
@@ -256,10 +259,7 @@ async function runAgentModelLoopInternal(
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
-      response = await runObservedModelCall(ctx, {
-        purpose: "tool_selection",
-        metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: wagerResolutionRoute.forcedToolName },
-        chat: {
+      const chat = {
           messages,
           tools: toolDefinitionsForModel({
             localTools: currentToolset.localTools,
@@ -269,8 +269,49 @@ async function runAgentModelLoopInternal(
           temperature: 0.2,
           maxTokens: 4096,
           retryPolicy: "expensive",
-        },
-      });
+        } as const;
+      try {
+        response = await runObservedModelCall(ctx, {
+          purpose: "tool_selection",
+          metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: wagerResolutionRoute.forcedToolName },
+          chat,
+        });
+      } catch (error) {
+        const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
+        const canFallback =
+          isOpenRouterTimeoutError(error) &&
+          !hasAttemptedTool &&
+          !modelTimeoutFallbackAttempted &&
+          Boolean(fallbackModel) &&
+          fallbackModel !== ctx.config.openRouter?.chatModel;
+        if (!canFallback) throw error;
+        if (!(await reserveModelCall(ctx, modelCallBudget, "timeout_fallback", { round: round + 1, fallbackModel }))) {
+          throw error;
+        }
+        modelTimeoutFallbackAttempted = true;
+        const fallbackMessages = compactMessagesForModelFallback(messages);
+        await recordAgentEvent(ctx, {
+          eventName: "agent.model.timeout_fallback",
+          level: "warn",
+          summary: `Retrying timed-out model call with ${fallbackModel}`,
+          metadata: {
+            round: round + 1,
+            fallbackModel,
+            originalMessageCount: messages.length,
+            fallbackMessageCount: fallbackMessages.length,
+          },
+        });
+        response = await runObservedModelCall(ctx, {
+          purpose: "tool_selection_timeout_fallback",
+          metadata: {
+            round: round + 1,
+            fallbackFor: "tool_selection",
+            toolGroups: [...toolsetState.groups].sort(),
+            forcedToolName: wagerResolutionRoute.forcedToolName,
+          },
+          chat: { ...chat, model: fallbackModel, messages: fallbackMessages },
+        });
+      }
       ctx.abortSignal?.throwIfAborted();
       ctx.noteProgress?.();
     } catch (error) {
@@ -370,7 +411,7 @@ async function runAgentModelLoopInternal(
           messages.push({ role: "assistant", content: response.content });
           messages.push({
             role: "system",
-            content: RANDOM_OUTCOME_RETRY_GUIDANCE,
+            content: randomOutcomeGuard.retryGuidance(),
           });
           continue;
         }
@@ -454,6 +495,7 @@ async function runAgentModelLoopInternal(
     let redundantToolReason: string | null = null;
     for (const route of modelRoutes) {
       ctx.noteProgress?.();
+      hasAttemptedTool = true;
       const toolUseCount = (toolUseCounts.get(route.name) ?? 0) + 1;
       toolUseCounts.set(route.name, toolUseCount);
       const routeKey = toolRouteKey(route);

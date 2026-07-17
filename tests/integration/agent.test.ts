@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleAgentRequest } from "../../src/agent/router.js";
+import { OpenRouterTimeoutError } from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
@@ -656,6 +657,50 @@ describe("agent router", () => {
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
       .toBe(true);
+  });
+
+  it("removes invented roll framing from ordinary conversation without forcing RNG", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "Roll: 4. English. One catch does not become a million points.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "One legitimate catch still does not become a million points.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "That one catch does not count for a million points.");
+
+    expect(response.content).toContain("One legitimate catch");
+    expect(chat).toHaveBeenCalledTimes(2);
+    const retryRequest = (chat.mock.calls[1]?.[0] ?? {}) as {
+      messages?: Array<{ role: string; content: string }>;
+      toolChoice?: unknown;
+    };
+    expect(retryRequest.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "system",
+        content: expect.stringContaining("user did not ask you to perform"),
+      }),
+    ]));
+    expect(retryRequest.messages?.some((message) => message.content.includes("Do not call drawRandom unless"))).toBe(true);
   });
 
   it("forces the reveal tool for an explicit randomness reveal", async () => {
@@ -2910,6 +2955,78 @@ describe("agent router", () => {
     expect(response.content).toBe("A haiku is a compact three-line poem.");
     expect(ctx.repo.getVisibleIndexedChannelIds).not.toHaveBeenCalled();
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
+  });
+
+  it("retries an initial model timeout once with the utility model before any tool runs", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
+      .mockResolvedValueOnce({
+        content: "That request survived a slow primary model.",
+        model: "fast/fallback",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "ordinary banter");
+
+    expect(response.content).toContain("survived a slow primary model");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect((chat.mock.calls[0]?.[0] as any).model).toBeUndefined();
+    expect((chat.mock.calls[1]?.[0] as any).model).toBe("fast/fallback");
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
+  });
+
+  it("does not model-fallback after any tool has already executed", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [{ id: "list-call", name: "listTools", argumentsText: "{}" }],
+      })
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    await expect(handleAgentRequest(ctx, "what can you do?")).rejects.toBeInstanceOf(OpenRouterTimeoutError);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect((chat.mock.calls[1]?.[0] as any).model).toBeUndefined();
   });
 
   it("recovers when a hosted OpenRouter tool call leaks as text", async () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
+import { OpenRouterContentFilterError } from "../../src/models/openrouter.js";
 import { agentUpdateTitleFromRequest, formatAgentTaskResult } from "../../src/tools/agentTaskFormatting.js";
 import {
   createAgentUpdateFromRequest,
@@ -964,6 +965,31 @@ function topicCandidate(content: string, embedding: number[]) {
 }
 
 describe("generateImage", () => {
+  it("returns a recoverable tool error when the image provider blocks the prompt", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      repo: { auditTool },
+      openRouter: {
+        generateImage: vi.fn(async () => {
+          throw new OpenRouterContentFilterError({ status: 400, model: "test/image", message: "PROHIBITED_CONTENT" });
+        }),
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, "a blocked prompt");
+
+    expect(result).toMatchObject({ status: "error", files: [] });
+    expect(result.content).toContain("blocked by the provider's safety filter");
+    expect(result.content).not.toContain("PROHIBITED_CONTENT");
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      error: "image_generation_blocked",
+    }));
+  });
+
   it("requests and verifies transparent PNG output for emoji generation", async () => {
     const transparentPixel = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",

@@ -1,4 +1,4 @@
-import type { ChatContentPart, ImageReference } from "../models/openrouter.js";
+import { isOpenRouterContentFilterError, type ChatContentPart, type ImageReference } from "../models/openrouter.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
@@ -166,7 +166,7 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
 export async function generateImage(
   ctx: ToolContext,
   input: string | GenerateImageInput
-): Promise<{ content: string; files: AgentFile[] }> {
+): Promise<{ content: string; files: AgentFile[]; status?: "ok" | "error" }> {
   const normalizedInput = typeof input === "string" ? { prompt: input } : input;
   const prompt = normalizedInput.prompt.trim();
   const references = await imageReferencesForInput(ctx, {
@@ -176,11 +176,30 @@ export async function generateImage(
   const inferredTransparentBackground = normalizedInput.background == null && wantsTransparentImage(prompt);
   const background = normalizedInput.background ?? (inferredTransparentBackground ? "transparent" : undefined);
   const outputFormat = normalizedInput.outputFormat ?? (background === "transparent" ? "png" : undefined);
-  const image = await ctx.openRouter.generateImage(prompt, {
-    inputReferences: references.map((reference): ImageReference => ({ type: "image_url", image_url: { url: reference.url } })),
-    ...(outputFormat ? { outputFormat } : {}),
-    ...(background ? { background } : {}),
-  });
+  let image;
+  try {
+    image = await ctx.openRouter.generateImage(prompt, {
+      inputReferences: references.map((reference): ImageReference => ({ type: "image_url", image_url: { url: reference.url } })),
+      ...(outputFormat ? { outputFormat } : {}),
+      ...(background ? { background } : {}),
+    });
+  } catch (error) {
+    if (!isOpenRouterContentFilterError(error)) throw error;
+    await ctx.repo.auditTool({
+      guildId: ctx.guildId,
+      channelId: ctx.channelId,
+      userId: ctx.userId,
+      toolName: "generateImage",
+      argumentsSummary: summarizeForAudit({ prompt, referenceImageCount: references.length, outputFormat, background }),
+      resultSummary: "image_generation_blocked",
+      error: "image_generation_blocked",
+    });
+    return {
+      content: "Image generation was blocked by the provider's safety filter, so no image was created. Explain that briefly and conversationally, then offer a safe adjustment to the request. Do not expose provider errors or claim that an image was attached.",
+      files: [],
+      status: "error",
+    };
+  }
 
   let files: AgentFile[] = [];
   const urls: string[] = [];

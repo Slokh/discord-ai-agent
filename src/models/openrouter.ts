@@ -364,7 +364,7 @@ export class OpenRouterClient {
             },
             "OpenRouter request timed out"
           );
-          throw new Error(`OpenRouter request timed out after ${timeoutMs}ms (${path}).`, { cause: error });
+          throw new OpenRouterTimeoutError({ timeoutMs, path, cause: error });
         }
         if (options.signal?.aborted) {
           throw options.signal.reason instanceof Error
@@ -494,6 +494,22 @@ export class OpenRouterContentFilterError extends Error {
   }
 }
 
+export class OpenRouterTimeoutError extends Error {
+  readonly timeoutMs: number;
+  readonly path: string;
+
+  constructor(input: { timeoutMs: number; path: string; cause?: unknown }) {
+    super(`OpenRouter request timed out after ${input.timeoutMs}ms (${input.path}).`, { cause: input.cause });
+    this.name = "OpenRouterTimeoutError";
+    this.timeoutMs = input.timeoutMs;
+    this.path = input.path;
+  }
+}
+
+export function isOpenRouterTimeoutError(error: unknown): error is OpenRouterTimeoutError {
+  return error instanceof OpenRouterTimeoutError;
+}
+
 export function isOpenRouterContentFilterError(error: unknown): error is OpenRouterContentFilterError {
   return error instanceof OpenRouterContentFilterError;
 }
@@ -540,7 +556,7 @@ function finishReasonFromChoice(choice: any): string | undefined {
 }
 
 function isContentFilterSignal(value: unknown) {
-  return /\bcontent[_ -]?filter(?:ed)?\b/i.test(String(value ?? ""));
+  return /\b(?:content[_ -]?filter(?:ed)?|prohibited[_ -]?content|safety[_ -]?(?:filter|policy|block(?:ed)?))\b/i.test(String(value ?? ""));
 }
 
 function isRetryableOpenRouterStatus(status: number) {

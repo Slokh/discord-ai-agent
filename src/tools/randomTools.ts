@@ -22,6 +22,7 @@ import type {
 import { paymentRecorder } from "./paymentToolContext.js";
 import type { ToolContext } from "./types.js";
 import { validateWagerFairness } from "./wagerFairness.js";
+import { wagerRequester } from "./wagerRequesterScope.js";
 
 export type DrawRandomInput = {
   kind?: string;
@@ -33,6 +34,7 @@ export type DrawRandomInput = {
   deckCount?: number;
   reason?: string;
   wager?: {
+    playerUserId?: string;
     stakeUsd?: number;
     maxPayoutUsd?: number;
     game?: string;
@@ -84,7 +86,19 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   if (input.wager && !ctx.walletService) {
     return "Wallet-backed wagers are not enabled in this deployment.";
   }
+  const requester = input.wager ? wagerRequester(ctx) : null;
+  if (typeof requester === "string") {
+    await auditRng(ctx, "drawRandom", input, requester);
+    return requester;
+  }
   if (input.wager) {
+    if (input.wager.playerUserId !== requester!.userId) {
+      const error = input.wager.playerUserId
+        ? `Wager rejected: playerUserId ${input.wager.playerUserId} does not match the current requester ${requester!.userId}. A user may only risk their own wallet; no funds were reserved and no random draw was made.`
+        : `Wager rejected: wager.playerUserId is required and must be the current requester ${requester!.userId}. A user may only risk their own wallet; no funds were reserved and no random draw was made.`;
+      await auditRng(ctx, "drawRandom", input, error);
+      return error;
+    }
     const fairnessError = validateWagerFairness({
       kind,
       count: input.count,
@@ -124,7 +138,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
           guildId: ctx.guildId,
           channelId: ctx.channelId,
           threadKey,
-          userId: ctx.userId,
+          userId: requester!.userId,
           game: input.wager.game!.trim(),
           interactionMode: wagerInteractionMode,
           stakeUsd: input.wager.stakeUsd!,
@@ -235,8 +249,8 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     `Session ${sessionId} · nonce ${draw.nonce} · draw ${draw.drawId} · commitment sha256:${commitment}`,
     wager
       ? wagerInteractionMode === "player_decisions"
-        ? `The scoped wallet wager is reserved.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with resolutionSource=verified_randomness. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
-        : `The scoped wallet wager is reserved.\nRequired next action: if the outcome is final, call settleRandomWager now. If the rules require more automatic chance before the outcome is final, call drawRandom again without a new wager. If a genuine player choice is required, call awaitRandomWagerAction. Do not answer until one of these tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        ? `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with resolutionSource=verified_randomness. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        : `The scoped wallet wager is reserved for the current requester ${ctx.requesterScope?.userDisplayName ?? ctx.userDisplayName} (Discord user ${ctx.requesterScope?.userId ?? ctx.userId}); never attribute it to another person.\nRequired next action: if the outcome is final, call settleRandomWager now. If the rules require more automatic chance before the outcome is final, call drawRandom again without a new wager. If a genuine player choice is required, call awaitRandomWagerAction. Do not answer until one of these tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
       : continuingWager
         ? `This verified draw continues the scoped active wallet wager. If more automatic chance is required, call drawRandom again without a new wager. If a genuine player decision is needed, save the updated state with awaitRandomWagerAction. When the outcome is final, call settleRandomWager exactly once before answering.`
         : null,
@@ -687,7 +701,8 @@ function validateDrawInput(kind: string, input: DrawRandomInput): string | null 
 
 function validateWagerInput(input: DrawRandomInput): string | null {
   if (!input.wager) return null;
-  const { stakeUsd, maxPayoutUsd, game } = input.wager;
+  const { playerUserId, stakeUsd, maxPayoutUsd, game } = input.wager;
+  if (!playerUserId?.trim()) return "wager.playerUserId is required for a wallet-backed wager.";
   if (!Number.isFinite(stakeUsd) || (stakeUsd ?? 0) <= 0) return "wager.stakeUsd must be a positive amount.";
   if (!Number.isFinite(maxPayoutUsd) || (maxPayoutUsd ?? -1) < 0) {
     return "wager.maxPayoutUsd must be a non-negative amount that includes any returned stake.";

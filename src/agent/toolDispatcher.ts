@@ -266,6 +266,7 @@ export async function executeLocalToolRoute(
     return {
       content: cleanResponse(image.content, ctx.config.maxReplyChars),
       files: image.files,
+      status: image.status,
     };
   }
 
@@ -623,6 +624,7 @@ export async function executeLocalToolRoute(
         deckCount: numberArgument(route.arguments, "deckCount"),
         reason: stringArgument(route.arguments, "reason"),
         wager: recordArgument(route.arguments, "wager") as {
+          playerUserId?: string;
           stakeUsd?: number;
           maxPayoutUsd?: number;
           game?: string;

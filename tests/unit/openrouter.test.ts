@@ -319,7 +319,11 @@ describe("OpenRouterClient", () => {
 
     const client = new OpenRouterClient(config);
     const request = client.chat({ messages: [{ role: "user", content: "hello" }] });
-    const assertion = expect(request).rejects.toThrow("OpenRouter request timed out after 45000ms");
+    const assertion = expect(request).rejects.toMatchObject({
+      name: "OpenRouterTimeoutError",
+      timeoutMs: 45_000,
+      path: "/chat/completions",
+    });
 
     await vi.advanceTimersByTimeAsync(45_000);
 
@@ -492,6 +496,25 @@ describe("OpenRouterClient", () => {
       name: "OpenRouterContentFilterError",
       status: 400,
       model: "test/chat"
+    });
+  });
+
+  it("recognizes image provider PROHIBITED_CONTENT responses as content filtering", async () => {
+    const fetchMock = vi.fn(async () =>
+      ({
+        ok: false,
+        status: 400,
+        headers: new Headers(),
+        text: async () => JSON.stringify({ error: { code: "PROHIBITED_CONTENT", message: "PROHIBITED_CONTENT" } }),
+      }) as Response
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    await expect(client.generateImage("blocked image")).rejects.toMatchObject({
+      name: "OpenRouterContentFilterError",
+      status: 400,
+      model: "test/image",
     });
   });
 });

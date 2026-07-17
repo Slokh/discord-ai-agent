@@ -1749,13 +1749,14 @@ export const toolRegistry: ToolRegistryEntry[] = [
         wager: {
           type: "object",
           description:
-            "Optional wallet-backed wager. Interpret the current request in its full conversational context: include a wager when the user authorizes play, including a terse request that combines a calculation with a chosen game or action. Do not create a wager when the user is only asking for advice, a calculation, or a hypothetical. Required before the single atomic draw whenever the user is risking their bot-game balance, including vague repeats of their prior wager. The maximum payout must cover the largest possible total return, including returned stake. Real-money contracts with machine-recognizable rules are probability-checked before reservation and rejected when they guarantee player profit or have expected payout above the stake; put the exact win rule in reason so it can be validated.",
+            "Optional wallet-backed wager for the CURRENT REQUESTER only. Interpret the current request in its full conversational context: include a wager when the requester authorizes risking their own wallet, including a terse request that combines a calculation with a chosen game or action. Never wager for a mentioned, replied-to, or third-party user. Do not create a wager when the user is only asking for advice, a calculation, or a hypothetical. Required before the single atomic draw whenever the requester is risking their bot-game balance, including vague repeats of their prior wager. The maximum payout must cover the largest possible total return, including returned stake. Real-money contracts with machine-recognizable rules are probability-checked before reservation and rejected when they guarantee player profit or have expected payout above the stake; put the exact win rule in reason so it can be validated.",
           properties: {
+            playerUserId: { type: "string", description: "Discord user ID of the current requester whose wallet is at risk. Must exactly match Current Discord requester; third-party wagers are rejected." },
             stakeUsd: { type: "number", description: "Positive USD-denominated stake taken from the user's game wallet." },
             maxPayoutUsd: { type: "number", description: "Maximum possible total payout in USD, including returned stake." },
             game: { type: "string", description: "Short generic game identifier, such as slots, roulette, dice, or blackjack." }
           },
-          required: ["stakeUsd", "maxPayoutUsd", "game"],
+          required: ["playerUserId", "stakeUsd", "maxPayoutUsd", "game"],
           additionalProperties: false
         }
       },

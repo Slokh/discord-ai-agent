@@ -223,6 +223,7 @@ Common optional settings:
 | --- | --- | --- |
 | `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
 | `OPENROUTER_CHAT_MODEL` | `z-ai/glm-5.2` | Main agent model |
+| `OPENROUTER_UTILITY_MODEL` | main agent model | Lower-cost utility model and one-shot fallback for a primary timeout before any tool executes; production Helm defaults to `openai/gpt-4o-mini` |
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |

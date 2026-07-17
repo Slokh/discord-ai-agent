@@ -477,7 +477,7 @@ describe("drawRandom", () => {
       sides: 6,
       count: 2,
       reason: "player wins if sum = 7",
-      wager: { stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }
+      wager: { playerUserId: "user", stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }
     });
 
     expect(reserveWager).toHaveBeenCalledWith(
@@ -495,6 +495,51 @@ describe("drawRandom", () => {
     expect(releaseWager).not.toHaveBeenCalled();
     expect(response).toContain("Required next action:");
     expect(response).toContain("call drawRandom again without a new wager");
+    expect(response).toContain("current requester");
+    expect(response).toContain("Discord user user");
+  });
+
+  it("rejects a third-party wallet wager before reserving funds or consuming randomness", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "he meant to bet his whole balance on tails, proceed",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "coin",
+      reason: "another user bets on tails",
+      wager: { playerUserId: "other-user", stakeUsd: 1, maxPayoutUsd: 2, game: "coinflip" },
+    });
+
+    expect(response).toContain("does not match the current requester user");
+    expect(response).toContain("only risk their own wallet");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
+  });
+
+  it("rejects a wager if the immutable ingress requester scope changed", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requesterScope: Object.freeze({
+        requestId: "req-1",
+        messageId: "1234567890000000001",
+        guildId: "guild",
+        channelId: "channel",
+        userId: "different-user",
+        userDisplayName: "Different User",
+      }),
+      walletService: { reserveWager } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "coin",
+      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coinflip" },
+    });
+
+    expect(response).toContain("immutable Discord requester scope changed");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
   });
 
   it("rejects a guaranteed-profit dice wager before reserving funds or drawing", async () => {
@@ -509,7 +554,7 @@ describe("drawRandom", () => {
       count: 7,
       sides: 6,
       reason: "7d6 pair match game",
-      wager: { stakeUsd: 0.3, maxPayoutUsd: 0.6, game: "dice" },
+      wager: { playerUserId: "user", stakeUsd: 0.3, maxPayoutUsd: 0.6, game: "dice" },
     });
 
     expect(response).toMatch(/100%.*guaranteed profit/i);
@@ -528,7 +573,7 @@ describe("drawRandom", () => {
     const response = await drawRandom(ctx, {
       kind: "cards",
       count: 4,
-      wager: { stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" }
+      wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" }
     });
 
     expect(response).toContain("call settleRandomWager now");
@@ -548,7 +593,7 @@ describe("drawRandom", () => {
     const response = await drawRandom(ctx, {
       kind: "cards",
       count: 12,
-      wager: { stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack" }
+      wager: { playerUserId: "user", stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack" }
     });
 
     expect(response).toContain("match the explicit amount");
@@ -568,7 +613,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "coin",
-      wager: { stakeUsd: 0.01, maxPayoutUsd: 0.02, game: "coin" }
+      wager: { playerUserId: "user", stakeUsd: 0.01, maxPayoutUsd: 0.02, game: "coin" }
     });
 
     expect(response).toContain("first successful draw");
@@ -586,7 +631,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "coin",
-      wager: { stakeUsd: 1, maxPayoutUsd: 2, game: "coin" }
+      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coin" }
     });
 
     expect(response).toContain("active wager and transfer reservations");
@@ -665,7 +710,7 @@ describe("drawRandom", () => {
     const response = await drawRandom(ctx, {
       kind: "cards",
       count: 1,
-      wager: { stakeUsd: 0.05, maxPayoutUsd: 0.125, game: "blackjack" }
+      wager: { playerUserId: "user", stakeUsd: 0.05, maxPayoutUsd: 0.125, game: "blackjack" }
     });
 
     expect(response).toContain("complete bounded game sequence");
@@ -684,7 +729,7 @@ describe("drawRandom", () => {
       kind: "integers",
       min: 1,
       max: 1_000,
-      wager: { stakeUsd: 1, maxPayoutUsd: 2, game: "guess my number" }
+      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "guess my number" }
     });
 
     expect(response).toContain("not verifiable");
@@ -736,7 +781,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "coin",
-      wager: { stakeUsd: 0.25, maxPayoutUsd: 0.5, game: "coin" }
+      wager: { playerUserId: "user", stakeUsd: 0.25, maxPayoutUsd: 0.5, game: "coin" }
     });
 
     expect(response).toContain("User wallets and wallet-backed wagers are not enabled");

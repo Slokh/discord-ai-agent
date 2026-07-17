@@ -35,6 +35,10 @@ export const RANDOM_OUTCOME_RETRY_GUIDANCE =
   "If no draw succeeded, call drawRandom and report its result exactly. If a wallet wager is active and its rules need more automatic chance, call drawRandom again without a new wager. Otherwise call awaitRandomWagerAction for a genuine player decision, or call settleRandomWager exactly once after a final outcome with a payout-consistent outcome and its true resolution source. " +
   "Correct rejected arguments and retry in this turn. Never report or apply a chance outcome or money change until the required tools succeed.";
 
+export const NON_RANDOM_OUTCOME_RETRY_GUIDANCE =
+  "Your previous draft introduced a specific roll, spin, draw, winner, or other chance result that the user did not ask you to perform. " +
+  "Remove the invented random framing and answer the user's actual message conversationally. Do not call drawRandom unless the current request genuinely asks you to execute a chance action. Do not report or apply any random outcome or money change.";
+
 export const RANDOM_OUTCOME_BLOCKED_RESPONSE =
   "I couldn't complete a verified random draw, so I didn't apply or report an outcome. Try that action again.";
 
@@ -140,6 +144,12 @@ export class RandomOutcomeGuard {
     return this.requiresWagerResolution() ? this.requiredWagerTool : null;
   }
 
+  retryGuidance() {
+    return this.requiresRandomWorkflow()
+      ? RANDOM_OUTCOME_RETRY_GUIDANCE
+      : NON_RANDOM_OUTCOME_RETRY_GUIDANCE;
+  }
+
   async inspectDraft(responseContent: string): Promise<RandomOutcomeGuardDecision> {
     if (!this.shouldReject(responseContent)) return "allow";
     const retry = !this.retryAttempted;
@@ -151,6 +161,7 @@ export class RandomOutcomeGuard {
       userText: this.userText,
       responseContent,
       retry,
+      requiresRandomWorkflow: this.requiresRandomWorkflow(),
     });
     return retry ? "retry" : "block";
   }
@@ -178,6 +189,10 @@ export class RandomOutcomeGuard {
       responseContent,
       successfulRandomDraw: this.successfulDraw,
     });
+  }
+
+  private requiresRandomWorkflow() {
+    return this.pendingWagerIds.size > 0 || randomToolForPrompt(this.userText) === "drawRandom";
   }
 }
 
@@ -209,6 +224,7 @@ export async function recordRandomOutcomeGuardEvent(
     userText: string;
     responseContent: string;
     retry: boolean;
+    requiresRandomWorkflow?: boolean;
   },
 ) {
   await recordAgentEvent(ctx, {
@@ -230,7 +246,9 @@ export async function recordRandomOutcomeGuardEvent(
       toolName: "randomOutcomeGuard",
       argumentsSummary: input.userText,
       resultSummary: input.retry
-        ? "rejected unverified outcome; retrying with drawRandom"
+        ? input.requiresRandomWorkflow
+          ? "rejected unverified outcome; retrying verified chance workflow"
+          : "rejected invented random framing; retrying conversational response"
         : undefined,
       error: input.retry ? undefined : "unverified_random_outcome_blocked",
     },

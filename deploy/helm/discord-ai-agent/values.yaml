@@ -60,7 +60,9 @@ config:
   githubRepository: owner/repo
   githubBaseBranch: main
   openRouterChatModel: z-ai/glm-5.2
-  openRouterUtilityModel: ""
+  # Also serves as the one-shot fallback when the primary model times out
+  # before any tool has executed.
+  openRouterUtilityModel: openai/gpt-4o-mini
   # Optional. Defaults to openRouterChatModel when empty.
   openRouterCodegenModel: z-ai/glm-5.2
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b

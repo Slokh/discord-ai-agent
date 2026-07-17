@@ -47,6 +47,12 @@ export type RetrievalSpan = {
 };
 
 const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
+const RECIPROCAL_RANK_K = 60;
+// Break near-ties toward exact lexical evidence without crowding semantic
+// matches out of a small result window. Results present in both legs still
+// rank highest by a wide margin.
+const KEYWORD_RANK_WEIGHT = 1.01;
+const SEMANTIC_RANK_WEIGHT = 1;
 const queryEmbeddingCache = new Map<string, number[]>();
 
 export function resetQueryEmbeddingCacheForTests() {
@@ -230,11 +236,13 @@ export async function resolveSearchChannelIds(input: {
 export function mergeResults(keyword: SearchResult[], vector: SearchResult[]): RankedSearchResult[] {
   const byId = new Map<string, RankedSearchResult>();
   const reciprocalRank = new Map<string, number>();
-  const RRF_K = 60;
 
   for (const [index, result] of keyword.entries()) {
     byId.set(result.messageId, { ...result, matchSources: ["keyword"] });
-    reciprocalRank.set(result.messageId, (reciprocalRank.get(result.messageId) ?? 0) + 1 / (RRF_K + index + 1));
+    reciprocalRank.set(
+      result.messageId,
+      (reciprocalRank.get(result.messageId) ?? 0) + KEYWORD_RANK_WEIGHT / (RECIPROCAL_RANK_K + index + 1),
+    );
   }
 
   for (const [index, result] of vector.entries()) {
@@ -247,7 +255,10 @@ export function mergeResults(keyword: SearchResult[], vector: SearchResult[]): R
     } else {
       byId.set(result.messageId, { ...result, matchSources: ["semantic"] });
     }
-    reciprocalRank.set(result.messageId, (reciprocalRank.get(result.messageId) ?? 0) + 1 / (RRF_K + index + 1));
+    reciprocalRank.set(
+      result.messageId,
+      (reciprocalRank.get(result.messageId) ?? 0) + SEMANTIC_RANK_WEIGHT / (RECIPROCAL_RANK_K + index + 1),
+    );
   }
 
   return [...byId.values()]

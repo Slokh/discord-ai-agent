@@ -59,6 +59,14 @@ describe("prompt context cost controls", () => {
     expect(systemPrompt).not.toContain("use compact lists for tabular/ranking information");
   });
 
+  it("defaults simple Discord questions to one short paragraph", () => {
+    const systemPrompt = String(chatMessages("what does CPU stand for?", "")[0]?.content);
+
+    expect(systemPrompt).toContain("usually get one short paragraph of 1-3 sentences");
+    expect(systemPrompt).toContain("no heading, restatement, recap, or closing offer");
+    expect(systemPrompt).toContain("Use lists or multiple paragraphs only for multi-part, detailed, or evidence-heavy requests");
+  });
+
   it("grounds relative dates and current offers in fresh tool evidence", () => {
     const guidance = String(currentDataGuidance(new Date("2026-07-15T12:00:00.000Z")).content);
 

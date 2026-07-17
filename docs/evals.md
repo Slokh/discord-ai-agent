@@ -59,6 +59,7 @@ Supported prompt fields:
 - `expectedRequestedTools`: local or hosted tools that must be observed in model-requested tool calls, such as `openrouter:web_search`.
 - `mustContain`: case-insensitive answer substrings.
 - `mustNotContain`: case-insensitive forbidden answer substrings.
+- `maxAnswerWords`: optional maximum answer length for concision regressions.
 - `maxLatencyMs`: optional latency ceiling for the prompt.
 - `promptArgs`: extra `scripts/prompt.ts` arguments, such as `--channel=general`.
 - `noMemory`: defaults to `true`.

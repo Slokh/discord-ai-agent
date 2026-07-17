@@ -124,6 +124,8 @@ export type DiscordReplyContextMessage = {
   attachments: DiscordAttachmentContext[];
   createdAt: string | null;
   url: string | null;
+  /** True when Discord exposed this parent through a forwarded message snapshot. */
+  forwarded?: boolean;
 };
 
 export type DiscordReplyContext = DiscordReplyContextMessage & {

@@ -38,6 +38,19 @@ describe("mergeResults", () => {
     expect(merged.find((item) => item.messageId === "c")?.matchSources).toEqual(["semantic"]);
   });
 
+  it("keeps exact keyword evidence ahead of newer semantic-only noise", () => {
+    const exact = result("exact-wingdings-agreement", 1);
+    const semantic = result("semantic-word-game", 1);
+    semantic.createdAt = new Date("2025-01-01T00:00:00Z");
+
+    const merged = mergeResults([exact], [semantic]);
+
+    expect(merged.map((item) => item.messageId)).toEqual([
+      "exact-wingdings-agreement",
+      "semantic-word-game",
+    ]);
+  });
+
   it("formats match-source metadata when available", () => {
     const ranked: RankedSearchResult = { ...result("a", 0.2), matchSources: ["keyword", "semantic"] };
     const formatted = formatSearchResults([ranked]);

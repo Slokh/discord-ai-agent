@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { selectNextRoundToolChoice, WagerResolutionRouter } from "../../src/agent/modelToolRoutes.js";
+import {
+  selectExclusiveWagerTransition,
+  selectNextRoundToolChoice,
+  WagerResolutionRouter,
+} from "../../src/agent/modelToolRoutes.js";
 
 describe("model tool routes", () => {
   it("requires a wager resolution tool before any generic required-tool retry", () => {
@@ -64,5 +68,23 @@ describe("model tool routes", () => {
       forceToolUse: false,
       initialForcedTool: "revealRandomness",
     })).toEqual({ type: "function", function: { name: "revealRandomness" } });
+  });
+
+  it("keeps the safe pause when a model proposes both wager transitions", () => {
+    const route = (name: "drawRandom" | "awaitRandomWagerAction" | "settleRandomWager") => ({
+      id: name,
+      name,
+      arguments: {},
+      argumentsText: "{}",
+    });
+
+    expect(selectExclusiveWagerTransition([
+      route("drawRandom"),
+      route("awaitRandomWagerAction"),
+      route("settleRandomWager"),
+    ])).toEqual([
+      route("drawRandom"),
+      route("awaitRandomWagerAction"),
+    ]);
   });
 });

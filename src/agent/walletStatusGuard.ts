@@ -1,4 +1,5 @@
 import type { AppConfig } from "../config/env.js";
+import { promptExcludesRealWallet } from "./walletPromptIntent.js";
 
 const WALLET_BALANCE_INTENT = /\b(?:wallet|balance|bankroll|casino funds?|available funds?)\b/i;
 const NON_WALLET_BALANCE = /\b(?:bank|checking|savings|credit card|equations?|ledger sheet|balance of power)\b/i;
@@ -30,6 +31,7 @@ export function walletBalanceRouteForPrompt(config: AppConfig, text: string): Fo
     payments.privyAppId &&
     payments.privyAppSecret &&
     WALLET_BALANCE_INTENT.test(normalized) &&
+    !promptExcludesRealWallet(normalized) &&
     !NON_WALLET_BALANCE.test(normalized) &&
     !TRANSFER_INTENT.test(normalized) &&
     !WAGER_OR_GAME_INTENT.test(normalized)

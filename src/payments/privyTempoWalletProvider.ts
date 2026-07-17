@@ -15,6 +15,7 @@ const tip20TransferEvent = [{
     { name: "value", type: "uint256", indexed: false }
   ]
 }] as const;
+const CONFIRMED_BLOCK_RETRY_DELAYS_MS = [100, 300, 600] as const;
 
 export class PrivyTempoWalletProvider implements WalletProvider {
   readonly chainId: number;
@@ -65,12 +66,26 @@ export class PrivyTempoWalletProvider implements WalletProvider {
 
   async getBalance(input: { wallet: ManagedWallet; token: TokenInfo; blockNumber?: bigint }): Promise<bigint> {
     const client = createClient({ chain: this.chain, transport: http() });
-    const balance = await client.token.getBalance({
+    const parameters = {
       account: input.wallet.address,
       token: input.token.address,
-      ...(input.blockNumber == null ? {} : { blockNumber: input.blockNumber }),
-    });
-    return balance.amount;
+    } as const;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const balance = await client.token.getBalance({
+          ...parameters,
+          ...(input.blockNumber == null ? {} : { blockNumber: input.blockNumber }),
+        });
+        return balance.amount;
+      } catch (error) {
+        // A load-balanced RPC can confirm a receipt on one node before another
+        // node can serve that exact block. Briefly retry the pinned block so we
+        // never replace a fresh post-transfer balance with stale "latest" data.
+        const retryDelay = CONFIRMED_BLOCK_RETRY_DELAYS_MS[attempt];
+        if (input.blockNumber == null || retryDelay == null || !isUnavailableBlockError(error)) throw error;
+        await delay(retryDelay);
+      }
+    }
   }
 
   async transfer(input: {
@@ -141,6 +156,25 @@ export class PrivyTempoWalletProvider implements WalletProvider {
       return "pending";
     }
   }
+}
+
+function isUnavailableBlockError(error: unknown): boolean {
+  const details = errorDetails(error).join("\n");
+  return /\b(?:block not found|unknown block|header not found|could not find block)\b/i.test(details) ||
+    (/\brequested resource not found\b/i.test(details) && /\bblock\b/i.test(details));
+}
+
+function errorDetails(error: unknown): string[] {
+  if (typeof error === "string") return [error];
+  if (!(error && typeof error === "object")) return [String(error)];
+  const value = error as { name?: unknown; message?: unknown; shortMessage?: unknown; details?: unknown; cause?: unknown };
+  return [value.name, value.message, value.shortMessage, value.details]
+    .filter((item): item is string => typeof item === "string")
+    .concat(value.cause && value.cause !== error ? errorDetails(value.cause) : []);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 class TransferDeliveryError extends Error {

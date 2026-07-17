@@ -3,6 +3,16 @@
   "name": "core-regressions",
   "prompts": [
     {
+      "id": "response-simple-answer",
+      "category": "response",
+      "prompt": "what does CPU stand for?",
+      "mustContain": [
+        "central processing unit"
+      ],
+      "maxAnswerWords": 25,
+      "notes": "Simple factual questions should receive a direct one-line answer rather than several paragraphs of Discord spam."
+    },
+    {
       "id": "randomness-slots-must-use-rng",
       "category": "generation",
       "prompt": "run 20 weighted slot-machine spins for me",

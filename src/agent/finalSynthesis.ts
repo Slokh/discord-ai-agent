@@ -13,6 +13,7 @@ import {
   BEST_EFFORT_RESPONSE_GUIDANCE,
   CONTEXT_DISCIPLINE_GUIDANCE,
   DISCORD_RESPONSE_STYLE_GUIDANCE,
+  RESPONSE_LENGTH_GUIDANCE,
 } from "./promptBuilder.js";
 import {
   hostedToolMarkupRecoveryResponse,
@@ -61,6 +62,7 @@ export async function synthesizeFinalAnswerWithoutTools(
     startedAt: number;
     modelCallBudget: ModelCallBudget;
     maxTokens?: number;
+    model?: string;
   },
 ): Promise<AgentResponse> {
   const finalStartedAt = Date.now();
@@ -97,6 +99,7 @@ export async function synthesizeFinalAnswerWithoutTools(
       temperature: 0.2,
       maxTokens: input.maxTokens ?? 4096,
       retryPolicy: "expensive",
+      model: input.model,
     },
   });
 
@@ -411,6 +414,7 @@ function finalSynthesisMessages(
       content:
         "Write one natural Discord reply. Lead with the verdict. Be blunt, casual, and decisive; do not pad the answer with neutral caveats or a roll call of weak matches. " +
         DISCORD_RESPONSE_STYLE_GUIDANCE +
+        RESPONSE_LENGTH_GUIDANCE +
         BEST_EFFORT_RESPONSE_GUIDANCE +
         CONTEXT_DISCIPLINE_GUIDANCE +
         "For Discord history claims, use only the provided Discord tool evidence. You have no tools in this step: if the evidence does not answer the question, say plainly what you found and what is missing; never invent facts or pretend to look something up. " +

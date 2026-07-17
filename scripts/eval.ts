@@ -18,6 +18,7 @@ const evalPromptSchema = z.object({
   expectedRequestedTools: z.array(z.string().min(1)).default([]),
   mustContain: z.array(z.string().min(1)).default([]),
   mustNotContain: z.array(z.string().min(1)).default([]),
+  maxAnswerWords: z.number().int().positive().optional(),
   auditMustNotMatch: z
     .array(
       z
@@ -422,6 +423,12 @@ export function evaluatePromptAssertions(
   }
   for (const text of prompt.mustNotContain) {
     if (normalizedAnswer.includes(text.toLowerCase())) failures.push(`answer contained forbidden text: ${text}`);
+  }
+  if (prompt.maxAnswerWords != null) {
+    const wordCount = output.answer.trim() ? output.answer.trim().split(/\s+/u).length : 0;
+    if (wordCount > prompt.maxAnswerWords) {
+      failures.push(`answer length ${wordCount} words exceeded the ${prompt.maxAnswerWords}-word limit`);
+    }
   }
   for (const pattern of prompt.auditMustNotMatch) {
     const regex = new RegExp(pattern, "iu");

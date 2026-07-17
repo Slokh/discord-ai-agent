@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
-import { walletActionToolForPrompt } from "../../src/agent/walletActionGuard.js";
+import { explicitWalletTransferForPrompt, walletActionToolForPrompt } from "../../src/agent/walletActionGuard.js";
 
 describe("wallet action guard", () => {
   const config = loadConfig();
@@ -21,8 +21,19 @@ describe("wallet action guard", () => {
     "again",
     "bet .05 blackjack",
     "put $0.50 on heads",
-    "give me advice about saving $1"
+    "give me advice about saving $1",
+    "don't transfer $1 to Luke",
+    "send Luke $1 in play money"
   ])("does not capture non-transfer prompt: %s", (prompt) => {
     expect(walletActionToolForPrompt(config, prompt)).toBeNull();
+  });
+
+  it.each([
+    ["send luke 1.00", { amountUsd: 1, destination: { kind: "user", reference: "luke" } }],
+    ["give Luke back $1 so he can use it", { amountUsd: 1, destination: { kind: "user", reference: "Luke" } }],
+    ["send $.50 to the bot wallet", { amountUsd: 0.5, destination: { kind: "bot" } }],
+    ["transfer two dollars back to treasury", { amountUsd: 2, destination: { kind: "bot" } }],
+  ] as const)("grounds the transfer in the requester prompt: %s", (prompt, expected) => {
+    expect(explicitWalletTransferForPrompt(prompt)).toEqual(expected);
   });
 });

@@ -39,6 +39,21 @@ export function coerceGeneratedCsvProducerRoutes(
   });
 }
 
+/**
+ * Pausing and settling are mutually exclusive state transitions. Models can
+ * request multiple tools in one response, so keep the safe pause when both
+ * transitions are proposed instead of executing a settlement against state
+ * that was just persisted in the same Discord turn.
+ */
+export function selectExclusiveWagerTransition(
+  routes: AgentToolRoute[],
+): AgentToolRoute[] {
+  const hasPause = routes.some((route) => route.name === "awaitRandomWagerAction");
+  const hasSettlement = routes.some((route) => route.name === "settleRandomWager");
+  if (!hasPause || !hasSettlement) return routes;
+  return routes.filter((route) => route.name !== "settleRandomWager");
+}
+
 export function selectNextRoundToolChoice(input: {
   forceWagerResolution: boolean;
   forceToolUse: boolean;

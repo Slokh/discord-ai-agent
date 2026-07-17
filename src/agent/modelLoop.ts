@@ -45,7 +45,7 @@ import {
   invalidToolCallRecoveryMessage,
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
-import { coerceGeneratedCsvProducerRoutes, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
+import { coerceGeneratedCsvProducerRoutes, selectExclusiveWagerTransition, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
 import { ForcedRandomActionRouter, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
@@ -62,7 +62,7 @@ import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
-import { compactMessagesForModelFallback } from "./modelTimeoutFallback.js";
+import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout } from "./modelTimeoutFallback.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -277,6 +277,12 @@ async function runAgentModelLoopInternal(
           chat,
         });
       } catch (error) {
+        const recovered = hasAttemptedTool && !modelTimeoutFallbackAttempted
+          ? await synthesizeToolEvidenceAfterTimeout(ctx, {
+              error, round: round + 1, roundStartedAt, text, messages, files, memoryEvents, requestLogger, startedAt, modelCallBudget,
+            })
+          : null;
+        if (recovered) return recovered;
         const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
         const canFallback =
           isOpenRouterTimeoutError(error) &&
@@ -294,12 +300,7 @@ async function runAgentModelLoopInternal(
           eventName: "agent.model.timeout_fallback",
           level: "warn",
           summary: `Retrying timed-out model call with ${fallbackModel}`,
-          metadata: {
-            round: round + 1,
-            fallbackModel,
-            originalMessageCount: messages.length,
-            fallbackMessageCount: fallbackMessages.length,
-          },
+          metadata: { round: round + 1, fallbackModel, originalMessageCount: messages.length, fallbackMessageCount: fallbackMessages.length },
         });
         response = await runObservedModelCall(ctx, {
           purpose: "tool_selection_timeout_fallback",
@@ -329,7 +330,7 @@ async function runAgentModelLoopInternal(
       throw error;
     }
 
-    const modelRoutes = coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls));
+    const modelRoutes = selectExclusiveWagerTransition(coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls)));
     freshExternalDataGuard.noteRequestedTools(response.toolCalls.map((call) => call.name));
     const requestedToolRequests = response.toolCalls.map(
       traceToolRequestMetadata,

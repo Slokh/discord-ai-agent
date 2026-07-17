@@ -225,6 +225,17 @@ describe("managed wallet tools", () => {
     expect(ctx.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
   });
 
+  it("recognizes a natural request for the requester's starter dollar", async () => {
+    const request = vi.fn(async () => ({ granted: true, amountUsd: 1, ...transferResult() }));
+    const ctx = context({
+      requestText: "give me my dollar and I'm never giving it back",
+      walletService: { requestStarterFunds: request },
+    });
+
+    await expect(requestStarterFunds(ctx)).resolves.toContain("Added $1 USD from the AI treasury");
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("reports a positive verified balance without issuing starter funds", async () => {
     const request = vi.fn(async () => ({ granted: false, balance: { formatted: "0.25" } }));
     const ctx = context({ requestText: "give me $1 to play again", walletService: { requestStarterFunds: request } });

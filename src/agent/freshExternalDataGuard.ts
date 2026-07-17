@@ -5,7 +5,9 @@ import { recordAgentEvent } from "./runtimeTranscript.js";
 const FRESH_DATA_INTENT =
   /\b(find|search|compare|check|track|book|buy|cheapest|lowest|best|current|live|latest|today|tonight|tomorrow|this (?:week|weekend|month|season|spring|summer|fall|autumn|winter|year)|next (?:week|weekend|month|season|spring|summer|fall|autumn|winter|year))\b/i;
 const TIME_SENSITIVE_SUBJECT =
-  /\b(prices?|fares?|flights?|hotels?|tickets?|availability|schedules?|departures?|arrivals?|weather|forecast|scores?|standings|odds|stocks?|crypto|exchange rates?|resale|listings?|bookable|in stock)\b/i;
+  /\b(prices?|fares?|flights?|hotels?|tickets?|availability|schedules?|departures?|arrivals?|weather|forecast|scores?|standings|stocks?|crypto|exchange rates?|resale|listings?|bookable|in stock)\b/i;
+const LIVE_ODDS_SUBJECT =
+  /(?:\b(?:current|live|latest|today|tonight|tomorrow|sportsbook|bookmaker|betting)\b[\s\S]{0,80}\bodds\b|\bodds\b[\s\S]{0,80}\b(?:current|live|latest|today|tonight|tomorrow|sportsbook|bookmaker|betting)\b)/i;
 const SAFE_NO_EVIDENCE_RESPONSE =
   /\b(what dates|which dates|how long|trip length|which airport|what airport|what location|which location|need (?:a little )?more|couldn't verify|could not verify|can't verify|cannot verify|couldn't pull|could not pull|can't pull|cannot pull|failed before returning|live source|won't guess|will not guess)\b/i;
 const UNSUPPORTED_OFFER_VALUE = /(?:[$€£]\s?\d|\b\d[\d,]*(?:\.\d+)?\s?(?:USD|EUR|GBP)\b)/i;
@@ -77,7 +79,9 @@ export class FreshExternalDataGuard {
 }
 
 export function requiresFreshExternalData(userText: string): boolean {
-  return FRESH_DATA_INTENT.test(userText) && TIME_SENSITIVE_SUBJECT.test(userText);
+  return FRESH_DATA_INTENT.test(userText) && (
+    TIME_SENSITIVE_SUBJECT.test(userText) || LIVE_ODDS_SUBJECT.test(userText)
+  );
 }
 
 export function shouldRejectUngroundedFreshData(input: {

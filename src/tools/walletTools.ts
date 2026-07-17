@@ -473,7 +473,7 @@ function hasExplicitAdminTransferIntent(text: string): boolean {
 }
 
 function hasExplicitStarterFundsIntent(text: string): boolean {
-  return /(?:\$\s*1(?:\.0+)?\b|\b(?:one|1)\s+dollars?\b|\b(?:starter|restart|refill|top\s*me\s*up|start playing|play again)\b)/i.test(text);
+  return /(?:\$\s*1(?:\.0+)?\b|\b(?:one|1)\s+dollars?\b|\b(?:give|send|spot|lend)\s+me\s+(?:my|the|a)\s+dollar\b|\b(?:starter|restart|refill|top\s*me\s*up|start playing|play again)\b)/i.test(text);
 }
 
 function isFundedBalance(balance: { formatted: string; amountAtomic?: bigint }): boolean {

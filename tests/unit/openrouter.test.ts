@@ -327,6 +327,61 @@ describe("OpenRouterClient", () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it("keeps the chat timeout active while consuming the response body", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: () => new Promise<string>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("body aborted")));
+        }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    const request = client.chat({ messages: [{ role: "user", content: "hello" }] });
+    const assertion = expect(request).rejects.toThrow("OpenRouter request timed out after 45000ms");
+
+    await vi.advanceTimersByTimeAsync(45_000);
+
+    await assertion;
+    expect(signal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an in-flight response body when the enclosing request aborts", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: () => new Promise<string>((_resolve, reject) => {
+        if (init?.signal?.aborted) {
+          reject(new Error("body aborted"));
+          return;
+        }
+        init?.signal?.addEventListener("abort", () => reject(new Error("body aborted")));
+      }),
+    }) as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    const request = client.chat({
+      messages: [{ role: "user", content: "hello" }],
+      signal: controller.signal,
+    });
+    const timeoutError = new Error("runtime deadline expired");
+    controller.abort(timeoutError);
+
+    await expect(request).rejects.toBe(timeoutError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("parses DeepSeek DSML tool calls emitted as text", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({

@@ -117,6 +117,7 @@ export class OpenRouterClient {
     temperature?: number;
     maxTokens?: number;
     retryPolicy?: OpenRouterRetryPolicy;
+    signal?: AbortSignal;
   }): Promise<ChatResult> {
     const startedAt = Date.now();
     const model = input.model ?? this.config.chatModel;
@@ -148,7 +149,7 @@ export class OpenRouterClient {
         max_tokens: input.maxTokens ?? 4096
       },
       OPENROUTER_CHAT_TIMEOUT_MS,
-      { retryPolicy: input.retryPolicy }
+      { retryPolicy: input.retryPolicy, signal: input.signal }
     );
 
     const choice = json.choices?.[0];
@@ -312,7 +313,7 @@ export class OpenRouterClient {
     path: string,
     body: Record<string, unknown>,
     timeoutMs: number,
-    options: { retryPolicy?: OpenRouterRetryPolicy; maxAttempts?: number } = {}
+    options: { retryPolicy?: OpenRouterRetryPolicy; maxAttempts?: number; signal?: AbortSignal } = {}
   ): Promise<any> {
     if (!this.config.apiKey) {
       throw new Error("OPENROUTER_API_KEY is required for this operation.");
@@ -324,9 +325,17 @@ export class OpenRouterClient {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = Date.now();
       const abortController = new AbortController();
-      const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+      let timedOut = false;
+      const forwardAbort = () => abortController.abort(options.signal?.reason);
+      if (options.signal?.aborted) forwardAbort();
+      else options.signal?.addEventListener("abort", forwardAbort, { once: true });
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        abortController.abort();
+      }, timeoutMs);
       timeout.unref?.();
       let response: Response;
+      let text: string;
       try {
         response = await fetch(`${this.config.baseUrl}${path}`, {
           method: "POST",
@@ -339,8 +348,11 @@ export class OpenRouterClient {
           body: JSON.stringify(body),
           signal: abortController.signal
         });
+        // Keep the deadline active until the complete body is consumed. Fetch can
+        // resolve as soon as headers arrive while a provider stalls the body stream.
+        text = await response.text();
       } catch (error) {
-        if (abortController.signal.aborted) {
+        if (timedOut) {
           logger.warn(
             {
               provider: "openrouter",
@@ -353,6 +365,11 @@ export class OpenRouterClient {
             "OpenRouter request timed out"
           );
           throw new Error(`OpenRouter request timed out after ${timeoutMs}ms (${path}).`, { cause: error });
+        }
+        if (options.signal?.aborted) {
+          throw options.signal.reason instanceof Error
+            ? options.signal.reason
+            : new Error(`OpenRouter request aborted (${path}).`, { cause: error });
         }
         if (attempt < maxAttempts && isTransientFetchError(error) && options.retryPolicy !== "expensive") {
           const retryDelayMs = OPENROUTER_TRANSIENT_RETRY_DELAYS_MS[attempt - 1] ?? 0;
@@ -374,9 +391,9 @@ export class OpenRouterClient {
         throw error;
       } finally {
         clearTimeout(timeout);
+        options.signal?.removeEventListener("abort", forwardAbort);
       }
 
-      const text = await response.text();
       let json: any;
       try {
         json = text ? JSON.parse(text) : {};

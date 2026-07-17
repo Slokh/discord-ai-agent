@@ -21,6 +21,7 @@ import type {
 } from "../payments/types.js";
 import { paymentRecorder } from "./paymentToolContext.js";
 import type { ToolContext } from "./types.js";
+import { validateWagerFairness } from "./wagerFairness.js";
 
 export type DrawRandomInput = {
   kind?: string;
@@ -77,6 +78,28 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     await auditRng(ctx, "drawRandom", input, wagerValidationError);
     return wagerValidationError;
   }
+  if (input.wager && !ctx.config.payments.userWalletsEnabled) {
+    return "User wallets and wallet-backed wagers are not enabled in this deployment.";
+  }
+  if (input.wager && !ctx.walletService) {
+    return "Wallet-backed wagers are not enabled in this deployment.";
+  }
+  if (input.wager) {
+    const fairnessError = validateWagerFairness({
+      kind,
+      count: input.count,
+      sides: input.sides,
+      min: input.min,
+      max: input.max,
+      description: [ctx.requestText, input.reason, input.wager.game].filter(Boolean).join("\n"),
+      stakeUsd: input.wager.stakeUsd!,
+      maxPayoutUsd: input.wager.maxPayoutUsd!,
+    });
+    if (fairnessError) {
+      await auditRng(ctx, "drawRandom", input, fairnessError);
+      return fairnessError;
+    }
+  }
   if (input.wager && hasUncommittedPlayerSecretWager(ctx.requestText ?? "")) {
     const error = "This real-money wager is not verifiable because its outcome depends on a secret the player can reveal or change after the bot acts. No funds were reserved and no random draw was made. Use play money or a result that was independently committed before the wager.";
     await auditRng(ctx, "drawRandom", input, error);
@@ -91,13 +114,11 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   let wager: WagerReservation | null = null;
   let wagerInteractionMode: WagerInteractionMode | null = null;
   if (input.wager) {
-    if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
-    if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
     const requestId = ctx.requestId ?? ctx.requestMessageId;
     if (!requestId) return "A stable request id is required before a wallet-backed wager can be reserved.";
     try {
       wagerInteractionMode = inferWagerInteractionMode(ctx.requestText ?? "", input.wager.game!);
-      wager = await ctx.walletService.reserveWager(
+      wager = await ctx.walletService!.reserveWager(
         {
           requestId,
           guildId: ctx.guildId,
@@ -215,10 +236,10 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     wager
       ? wagerInteractionMode === "player_decisions"
         ? `The scoped wallet wager is reserved.\nRequired next action: if this verified draw already makes the outcome final with no player choice, call settleRandomWager now with resolutionSource=verified_randomness. Otherwise call awaitRandomWagerAction with complete versioned game state and genuine gameplay choices. Never pause a terminal outcome or invent confirm/settle as a player action. Do not draw again or answer before one of those tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
-        : `The scoped wallet wager is reserved.\nRequired next tool: settleRandomWager. Settle the final outcome exactly once before answering. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
+        : `The scoped wallet wager is reserved.\nRequired next action: if the outcome is final, call settleRandomWager now. If the rules require more automatic chance before the outcome is final, call drawRandom again without a new wager. If a genuine player choice is required, call awaitRandomWagerAction. Do not answer until one of these tools succeeds. The runtime resolves the wager from this Discord game session; do not supply or repeat an internal wager id.`
       : continuingWager
-        ? `This verified draw continues the scoped active wallet wager. Either save the updated state with awaitRandomWagerAction when another player decision is needed, or settle the final outcome exactly once with settleRandomWager before answering.`
-      : null,
+        ? `This verified draw continues the scoped active wallet wager. If more automatic chance is required, call drawRandom again without a new wager. If a genuine player decision is needed, save the updated state with awaitRandomWagerAction. When the outcome is final, call settleRandomWager exactly once before answering.`
+        : null,
     `Report this result exactly as shown. A proof footer is appended to your reply automatically; do not restate or alter the proof details.`
   ].filter((line): line is string => line !== null).join("\n");
 }
@@ -267,7 +288,7 @@ export async function settleRandomWager(
     return "resolutionSource must be verified_randomness or player_decision.";
   }
   if (describesUnfinishedWager(explanation)) {
-    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. Otherwise resolve the remaining deterministic steps and call settleRandomWager again with the final payout.";
+    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. If more automatic chance is required, call drawRandom again without a new wager, apply the verified result, and repeat until the outcome is final. Then call settleRandomWager with the final payout.";
   }
   const wager = await currentWagerForContext(ctx);
   if (!wager) {

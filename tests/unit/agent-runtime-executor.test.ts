@@ -26,4 +26,27 @@ describe("agent runtime prompt executors", () => {
 
     expect(handleAgentRequest).toHaveBeenCalledWith(expect.objectContaining({ requestId: "request-1" }), "hello");
   });
+
+  it("aborts late agent work when the runtime deadline expires", async () => {
+    vi.useFakeTimers();
+    let capturedSignal: AbortSignal | undefined;
+    vi.mocked(handleAgentRequest).mockImplementation(async (ctx) => {
+      capturedSignal = ctx.abortSignal;
+      return await new Promise(() => undefined);
+    });
+    const executor = new InProcessAgentRuntimePromptExecutor();
+    const request = executor.execute({
+      toolContext: { requestId: "request-timeout" } as never,
+      text: "hello",
+      timeoutMs: 1_000,
+      turnEnvelope: { requestId: "request-timeout" } as never,
+    });
+    const assertion = expect(request).rejects.toThrow("timed out after 1000ms");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await assertion;
+    expect(capturedSignal?.aborted).toBe(true);
+    vi.useRealTimers();
+  });
 });

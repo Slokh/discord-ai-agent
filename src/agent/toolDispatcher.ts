@@ -51,7 +51,9 @@ export async function executeLocalToolRoute(
   route: AgentToolRoute,
   originalText: string,
 ): Promise<AgentResponse> {
+  ctx.abortSignal?.throwIfAborted();
   const gate = await restrictedToolGate(ctx, route.name);
+  ctx.abortSignal?.throwIfAborted();
   if (!gate.allowed) return { content: gate.message };
   const discordActionResponse = await executeDiscordActionToolRoute(ctx, route, originalText);
   if (discordActionResponse) return discordActionResponse;

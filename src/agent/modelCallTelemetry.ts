@@ -76,7 +76,10 @@ export async function runObservedModelCall(
   await recordAgentEvent(ctx, { eventName: "agent.model.call.started", summary: input.purpose, metadata: common });
 
   try {
-    const response = await ctx.openRouter.chat(input.chat);
+    const response = await ctx.openRouter.chat({
+      ...input.chat,
+      signal: ctx.abortSignal,
+    });
     // Keep provider latency comparable across revisions. Artifact persistence happens
     // after the provider returns and should remain visible as unattributed runtime work.
     const providerDurationMs = durationMs(startedAt);

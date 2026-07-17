@@ -22,10 +22,16 @@ describe("decideDiscordDeliverySweep", () => {
     });
   });
 
-  it("abandons stale non-terminal executions with a restart notice", () => {
-    const decision = decideDiscordDeliverySweep({ execution: { status: "running", error: null, metadata: {} }, finalText: null });
+  it.each(["queued", "running"] as const)("leaves %s executions pending during a rolling deploy", (status) => {
+    expect(decideDiscordDeliverySweep({ execution: { status, error: null, metadata: {} }, finalText: null }))
+      .toEqual({ action: "wait" });
+  });
+
+  it("abandons an orphaned obligation when its execution is missing", () => {
+    const decision = decideDiscordDeliverySweep({ execution: null, finalText: null });
     expect(decision.action).toBe("abandon");
     if (decision.action !== "abandon") throw new Error("expected abandon decision");
     expect(decision.content).toContain("restarted");
+    expect(decision.error).toContain("missing");
   });
 });

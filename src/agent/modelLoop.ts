@@ -12,6 +12,7 @@ import type {
   AgentTable,
   ToolContext,
 } from "../tools/types.js";
+import { ensureAutomaticStarterFunds } from "../tools/walletTools.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { loadPromptOverlayText } from "./promptOverlay.js";
@@ -60,18 +61,21 @@ import { walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
 import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
+import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
+
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
 ): Promise<AgentResponse> {
   ctx.requestText = userText;
+  const automaticStarterFunds = await ensureAutomaticStarterFunds(ctx);
   const activeGame = await loadActiveGameSession(ctx, userText);
   const randomOutcomeGuard = new RandomOutcomeGuard(ctx, userText);
   if (activeGame?.actionRequested) randomOutcomeGuard.noteActiveWager(activeGame.wager.id);
   const freshExternalDataGuard = new FreshExternalDataGuard(ctx, userText);
   return await randomOutcomeGuard.enforce(
     await freshExternalDataGuard.enforce(
-      await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard, activeGame),
+      await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard, activeGame, automaticStarterFunds),
     ),
   );
 }
@@ -82,6 +86,7 @@ async function runAgentModelLoopInternal(
   randomOutcomeGuard: RandomOutcomeGuard,
   freshExternalDataGuard: FreshExternalDataGuard,
   activeGame: ActiveGameSessionContext | null,
+  automaticStarterFunds: string | null,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
   const text = userText.trim();
@@ -105,6 +110,16 @@ async function runAgentModelLoopInternal(
     },
     promptOverlay,
   );
+  if (automaticStarterFunds) {
+    messages.splice(Math.max(0, messages.length - 1), 0, {
+      role: "system",
+      content: [
+        "Automatic starter funding succeeded before this request. Treat the following as verified wallet evidence.",
+        automaticStarterFunds,
+        "Do not call requestStarterFunds again for this request or repeat the transaction hash; the transfer link is added to the footer. Continue with the user request conversationally.",
+      ].join("\n"),
+    });
+  }
   injectActiveGameSession(messages, activeGame);
   const files: AgentFile[] = [];
   const tables: AgentTable[] = [];
@@ -122,7 +137,10 @@ async function runAgentModelLoopInternal(
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
   const wagerResolutionRouter = new WagerResolutionRouter();
   const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
-  const forcedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
+  const requestedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
+  const forcedWalletActionTool = automaticStarterFunds && requestedWalletActionTool === "requestStarterFunds"
+    ? null
+    : requestedWalletActionTool;
   const forcedRandomAction = new ForcedRandomActionRouter(text, Boolean(ctx.config.payments?.userWalletsEnabled));
   const modelCallBudget: ModelCallBudget = {
     used: 0,
@@ -253,6 +271,7 @@ async function runAgentModelLoopInternal(
           retryPolicy: "expensive",
         },
       });
+      ctx.abortSignal?.throwIfAborted();
       ctx.noteProgress?.();
     } catch (error) {
       await recordAgentEvent(ctx, {
@@ -734,65 +753,4 @@ async function completeDirectToolResponse(
     files: input.files.length > 0 ? input.files : undefined,
     memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
   };
-}
-
-async function skippedRedundantToolResult(
-  ctx: ToolContext,
-  input: { text: string; route: AgentToolRoute; toolUseCount: number },
-): Promise<AgentResponse> {
-  await recordAgentEvent(ctx, {
-    audit: {
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "agentToolRepeatGuard",
-      argumentsSummary: input.text,
-      resultSummary: `skipped redundant ${input.route.name} call ${input.toolUseCount}: ${previewText(input.route.argumentsText, 200)}`,
-    },
-  });
-  return {
-    content: `Skipped redundant ${input.route.name} call. Use the earlier ${input.route.name} evidence already provided in this turn.`,
-  };
-}
-
-function toolRouteKey(route: AgentToolRoute): string {
-  return `${route.name}:${JSON.stringify(canonicalToolArguments(route.arguments ?? {}))}`;
-}
-
-/**
- * Signature for detecting repeated tool results. Strips lines that echo the
- * model's arguments (question/query headers) so a rephrased search that
- * returns identical evidence still counts as a repeat.
- */
-function toolResultSignature(content: string): string {
-  return content
-    .split("\n")
-    .filter((line) => !/^(Question|Effective query):/.test(line))
-    .join("\n")
-    .trim();
-}
-
-function canonicalToolArguments(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    const items = value.map(canonicalToolArguments);
-    if (
-      items.every(
-        (item) =>
-          typeof item === "string" ||
-          typeof item === "number" ||
-          typeof item === "boolean",
-      )
-    ) {
-      return [...items].sort((a, b) => String(a).localeCompare(String(b)));
-    }
-    return items;
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, nested]) => [key, canonicalToolArguments(nested)]),
-    );
-  }
-  return value ?? null;
 }

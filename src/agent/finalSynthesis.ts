@@ -60,6 +60,7 @@ export async function synthesizeFinalAnswerWithoutTools(
     requestLogger: Logger;
     startedAt: number;
     modelCallBudget: ModelCallBudget;
+    maxTokens?: number;
   },
 ): Promise<AgentResponse> {
   const finalStartedAt = Date.now();
@@ -94,7 +95,7 @@ export async function synthesizeFinalAnswerWithoutTools(
     chat: {
       messages: finalSynthesisMessages(input.text, input.memoryEvents),
       temperature: 0.2,
-      maxTokens: 4096,
+      maxTokens: input.maxTokens ?? 4096,
       retryPolicy: "expensive",
     },
   });

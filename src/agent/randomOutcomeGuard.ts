@@ -5,9 +5,7 @@ import { previewText } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
 const SUCCESSFUL_DRAW_PREFIX = "Provably fair draw complete.";
-
-const CHANCE_INTENT =
-  /\b(random(?:ly)?|chance|roll|dice|d\d+|coin|flip|pick|choose|shuffle|draw|deal|cards?|hand|shoe|blackjack|poker|roulette|wheel|craps|slots?|spins?|bet|casino|lottery|raffle|winner)\b/i;
+const SUCCESSFUL_WAGER_SETTLEMENT_PREFIX = "The scoped wallet wager settled.";
 
 const REVEAL_RANDOMNESS_INTENT = /\b(?:reveal|verify|prove)\b[\s\S]{0,80}\b(?:random(?:ness)?|fairness|seed|proof|commitment)\b/i;
 const RANDOM_ACTION = "(?:roll|flip|spin|deal|draw|shuffle|pick|choose|select|play|run|start|bet|wager|stake|risk|put)";
@@ -29,19 +27,12 @@ const STRONG_OUTCOME_PATTERNS = [
   /\b(?:let(?:'s| us) deal|provably fair blackjack)\b[\s\S]{0,220}\b(?:10|[2-9JQKA])[♠♥♦♣]/i,
   /\bcoin\s+(?:landed|lands|came up|result)\b[\s\S]{0,80}\b(?:heads|tails)\b/i,
   /\b(?:the\s+)?(?:winner|selected|picked)\s*(?:is|:|—|-)\s*\S+/i,
-];
-
-const INTENT_OUTCOME_PATTERNS = [
-  /(?:^|\n)\s*(?:result|outcome|draw|roll|spin|flip)\s*(?:is|was|:|—|-)\s*\S+/im,
-  /\b(?:landed on|came up)\s+(?:heads|tails|\d+)\b/i,
-  /\b(?:your hand|dealer (?:shows|upcard))\s*:\s*[^\n]*(?:10|[2-9JQKA])[♠♥♦♣]/i,
-  /\b(?:you|player|dealer|house|they)\s+(?:win|won|lose|lost)\b/i,
   /\b\d{16,}\b/,
 ];
 
 export const RANDOM_OUTCOME_RETRY_GUIDANCE =
   "Your previous draft was rejected because the verified chance workflow is incomplete. " +
-  "If no draw succeeded, call drawRandom and report its result exactly. If a wallet wager is active, either call awaitRandomWagerAction to persist a complete versioned state and ask for the player's next decision, or call settleRandomWager exactly once after a final outcome with a payout-consistent outcome and its true resolution source. " +
+  "If no draw succeeded, call drawRandom and report its result exactly. If a wallet wager is active and its rules need more automatic chance, call drawRandom again without a new wager. Otherwise call awaitRandomWagerAction for a genuine player decision, or call settleRandomWager exactly once after a final outcome with a payout-consistent outcome and its true resolution source. " +
   "Correct rejected arguments and retry in this turn. Never report or apply a chance outcome or money change until the required tools succeed.";
 
 export const RANDOM_OUTCOME_BLOCKED_RESPONSE =
@@ -123,9 +114,15 @@ export class RandomOutcomeGuard {
     }
     if (toolName === "settleRandomWager") {
       const wagerId = content.match(/^Wager\s+(wager_[A-Za-z0-9_-]+)\s+settled\./m)?.[1];
-      if (wagerId) this.pendingWagerIds.delete(wagerId);
-      else if (/^The scoped wallet wager settled\./m.test(content)) this.pendingWagerIds.clear();
-      if (this.pendingWagerIds.size === 0) this.requiredWagerTool = null;
+      const scopedWagerSettled = content.trimStart().startsWith(SUCCESSFUL_WAGER_SETTLEMENT_PREFIX);
+      if (wagerId || scopedWagerSettled) {
+        // A successful settlement is authoritative verified-outcome evidence on
+        // continuation turns, where the original draw happened in an earlier request.
+        this.successfulDraw = true;
+        if (wagerId) this.pendingWagerIds.delete(wagerId);
+        else this.pendingWagerIds.clear();
+        if (this.pendingWagerIds.size === 0) this.requiredWagerTool = null;
+      }
     }
     if (toolName === "awaitRandomWagerAction" && content.startsWith("Wallet game paused for player action.")) {
       const wagerId = content.match(/^Wager:\s+(wager_[A-Za-z0-9_-]+)/m)?.[1];
@@ -200,9 +197,7 @@ export function shouldRejectUnverifiedRandomOutcome(input: {
   if (STRONG_OUTCOME_PATTERNS.some((pattern) => pattern.test(response))) {
     return true;
   }
-  const intent = `${input.userText}\n${input.replyContextText ?? ""}`;
-  return CHANCE_INTENT.test(intent) &&
-    INTENT_OUTCOME_PATTERNS.some((pattern) => pattern.test(response));
+  return false;
 }
 
 export async function recordRandomOutcomeGuardEvent(

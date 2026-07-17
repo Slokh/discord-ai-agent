@@ -1,4 +1,5 @@
 import type { Client, Message } from "discord.js";
+import type { Logger } from "pino";
 import { isOpenRouterContentFilterError } from "../models/openrouter.js";
 import type { DiscordAgentRequestJob } from "../jobs/queue.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
@@ -374,6 +375,7 @@ export async function executeDiscordAgentRequest(
       }
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord response artifact"));
   } catch (error) {
+    await releaseFailedRequestWager(input, request, error, requestLogger);
     if (isOpenRouterContentFilterError(error)) {
       requestLogger.warn(
         {
@@ -523,4 +525,23 @@ export async function executeDiscordAgentRequest(
     });
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention failed");
   }
+}
+
+async function releaseFailedRequestWager(
+  input: DiscordAgentRequestInput,
+  request: DiscordAgentExecutionRequest,
+  error: unknown,
+  requestLogger: Logger,
+) {
+  const explanation = `Agent request failed before wager completion: ${error instanceof Error ? error.message : String(error)}`;
+  await input.walletService?.releaseOpenWagerByRequestId(
+    request.requestId,
+    explanation,
+    async (event) => recordTraceEvent(input.repo, {
+      ...event,
+      metadata: { ...event.metadata, requestId: request.requestId },
+    }),
+  ).catch((releaseError) => {
+    requestLogger.error({ err: releaseError }, "Failed to release wager after agent request failure");
+  });
 }

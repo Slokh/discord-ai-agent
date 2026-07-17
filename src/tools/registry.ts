@@ -1287,7 +1287,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "requestStarterFunds",
     description:
-      "Request the fixed starter amount from the shared AI treasury for the current Discord requester. Use when someone explicitly asks for $1, starter funds, a refill, or money to start playing again. The tool verifies the requester's live onchain balance and transfers only when it is exactly $0; users with any positive balance are ineligible. The requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
+      "Fallback recheck for the current Discord requester's automatic starter funding. The request lifecycle normally sends the fixed starter amount before model/tool selection whenever the verified live balance is exactly $0, so users do not need special wording. Use this tool only to retry an explicit starter/refill request when automatic funding did not complete. Positive balances are ineligible; requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
     userVisible: true,
     mutates: true,
     group: "external",
@@ -1749,7 +1749,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
         wager: {
           type: "object",
           description:
-            "Optional wallet-backed wager. Required before the single atomic draw whenever the user is risking their bot-game balance, including vague repeats of their prior wager. The maximum payout must cover the largest possible total return, including returned stake.",
+            "Optional wallet-backed wager. Interpret the current request in its full conversational context: include a wager when the user authorizes play, including a terse request that combines a calculation with a chosen game or action. Do not create a wager when the user is only asking for advice, a calculation, or a hypothetical. Required before the single atomic draw whenever the user is risking their bot-game balance, including vague repeats of their prior wager. The maximum payout must cover the largest possible total return, including returned stake. Real-money contracts with machine-recognizable rules are probability-checked before reservation and rejected when they guarantee player profit or have expected payout above the stake; put the exact win rule in reason so it can be validated.",
           properties: {
             stakeUsd: { type: "number", description: "Positive USD-denominated stake taken from the user's game wallet." },
             maxPayoutUsd: { type: "number", description: "Maximum possible total payout in USD, including returned stake." },

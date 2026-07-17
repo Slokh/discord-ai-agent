@@ -61,6 +61,7 @@ describe("PrivyTempoWalletProvider", () => {
     mocks.transferSync.mockResolvedValue({
       receipt: {
         transactionHash: `0x${"9".repeat(64)}`,
+        blockNumber: 123n,
         logs: [{
           address: `0x${"3".repeat(40)}`,
           topics: encodeEventTopics({
@@ -89,7 +90,7 @@ describe("PrivyTempoWalletProvider", () => {
       address: `0x${"2".repeat(40)}` as const
     };
 
-    await provider.transfer({
+    const result = await provider.transfer({
       wallet: sender,
       feePayerWallet: sponsor,
       token: { symbol: "USDC.e", address: `0x${"3".repeat(40)}`, decimals: 6 },
@@ -120,6 +121,10 @@ describe("PrivyTempoWalletProvider", () => {
       s: expect.any(String),
       yParity: 0
     }));
+    expect(result).toEqual({
+      transactionHash: `0x${"9".repeat(64)}`,
+      blockNumber: 123n,
+    });
   });
 
   it("refuses a successful receipt that did not deliver to the intended wallet", async () => {

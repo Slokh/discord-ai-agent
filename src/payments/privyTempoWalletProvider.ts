@@ -63,9 +63,13 @@ export class PrivyTempoWalletProvider implements WalletProvider {
     };
   }
 
-  async getBalance(input: { wallet: ManagedWallet; token: TokenInfo }): Promise<bigint> {
+  async getBalance(input: { wallet: ManagedWallet; token: TokenInfo; blockNumber?: bigint }): Promise<bigint> {
     const client = createClient({ chain: this.chain, transport: http() });
-    const balance = await client.token.getBalance({ account: input.wallet.address, token: input.token.address });
+    const balance = await client.token.getBalance({
+      account: input.wallet.address,
+      token: input.token.address,
+      ...(input.blockNumber == null ? {} : { blockNumber: input.blockNumber }),
+    });
     return balance.amount;
   }
 
@@ -76,7 +80,7 @@ export class PrivyTempoWalletProvider implements WalletProvider {
     to: Address;
     amountAtomic: bigint;
     memo: Hex;
-  }): Promise<{ transactionHash: Hex }> {
+  }): Promise<{ transactionHash: Hex; blockNumber?: bigint }> {
     const baseAccount = createViemAccount(this.privy, {
       walletId: input.wallet.providerWalletId,
       address: input.wallet.address
@@ -115,7 +119,10 @@ export class PrivyTempoWalletProvider implements WalletProvider {
         `Tempo confirmed the transaction but did not deliver the expected ${input.token.symbol} transfer`
       );
     }
-    return { transactionHash: result.receipt.transactionHash };
+    return {
+      transactionHash: result.receipt.transactionHash,
+      blockNumber: result.receipt.blockNumber,
+    };
   }
 
   async getTransactionStatus(

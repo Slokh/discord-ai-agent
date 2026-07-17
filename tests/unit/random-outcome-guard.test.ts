@@ -93,6 +93,14 @@ describe("random outcome guard", () => {
     })).toBe(false);
   });
 
+  it("does not turn hypothetical wager planning into a random outcome", () => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "minimum bet to get me on top, blackjack",
+      responseContent: "A natural blackjack win would put you in first place with a $7.64 bet.",
+      successfulRandomDraw: false,
+    })).toBe(false);
+  });
+
   it("recognizes only completed RNG tool results as successful", () => {
     expect(isSuccessfulRandomDrawResult("Provably fair draw complete.\nResult: 2, 5"))
       .toBe(true);
@@ -149,6 +157,44 @@ describe("random outcome guard", () => {
 
     guard.noteToolResult("settleRandomWager", "The scoped wallet wager settled.\nPayout: $2.");
     expect(guard.requiresWagerResolution()).toBe(false);
+  });
+
+  it("accepts a verified settlement on a later player-action turn", async () => {
+    const guard = new RandomOutcomeGuard({} as ToolContext, "Stand");
+    guard.noteActiveWager("wager_abc");
+
+    guard.noteToolResult("settleRandomWager", [
+      "The scoped wallet wager settled.",
+      "Payout: $0.04.",
+      "Net transfer: $0.02 USD (confirmed).",
+      "Calculation: Player 18 beats dealer 17.",
+    ].join("\n"));
+
+    expect(guard.requiresWagerResolution()).toBe(false);
+    await expect(guard.inspectDraft([
+      "You win!",
+      "Your hand: 7♠ A♦",
+      "Dealer: 7♣ Q♦",
+      "Payout: $0.04.",
+    ].join("\n"))).resolves.toBe("allow");
+  });
+
+  it("does not trust a rejected wager settlement as random evidence", async () => {
+    const guard = new RandomOutcomeGuard({
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      repo: {
+        recordTraceEvent: vi.fn(async () => undefined),
+        auditTool: vi.fn(async () => undefined),
+      },
+    } as unknown as ToolContext, "Stand");
+    guard.noteActiveWager("wager_abc");
+
+    guard.noteToolResult("settleRandomWager", "Settlement rejected: the game is unfinished. No transfer was created.");
+
+    expect(guard.requiresWagerResolution()).toBe(true);
+    await expect(guard.inspectDraft("You win. Dealer has 17.")).resolves.toBe("retry");
   });
 
   it("requires resolution but lets the model choose settle or pause for an interactive opening draw", () => {

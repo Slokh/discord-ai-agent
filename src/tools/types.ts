@@ -79,6 +79,8 @@ export type ToolContext = {
     messageId: string;
     attachmentId: string;
   }) => Promise<DiscordAttachmentContext | null>;
+  /** Aborted when the enclosing Discord request times out; late work must not execute tools. */
+  abortSignal?: AbortSignal;
   noteProgress?: () => void;
 };
 

@@ -2,12 +2,40 @@ import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
 import type { PaymentRepository } from "../../src/db/paymentRepository.js";
 import { SHARED_BOT_GUILD_ID, WalletService } from "../../src/payments/walletService.js";
-import type { WalletAccount, WalletProvider, WalletTransfer } from "../../src/payments/types.js";
+import type { WagerReservation, WalletAccount, WalletProvider, WalletTransfer } from "../../src/payments/types.js";
 
 const botAddress = `0x${"1".repeat(40)}` as const;
 const tokenAddress = `0x${"2".repeat(40)}` as const;
 
 describe("WalletService", () => {
+  it("releases an open wager created by a failed request", async () => {
+    const released = {
+      id: "wager-timeout",
+      requestId: "request-timeout",
+      status: "released",
+      awaitingAction: false,
+    } as WagerReservation;
+    const releaseOpenWagerByRequestId = vi.fn(async () => released);
+    const record = vi.fn(async () => undefined);
+    const service = new WalletService(
+      loadConfig().payments,
+      { releaseOpenWagerByRequestId } as unknown as PaymentRepository,
+      providerFake(),
+    );
+
+    await expect(service.releaseOpenWagerByRequestId(
+      "request-timeout",
+      "model timed out",
+      record,
+    )).resolves.toEqual(released);
+
+    expect(releaseOpenWagerByRequestId).toHaveBeenCalledWith("request-timeout", "model timed out");
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "wallet.wager.released_after_request_failure",
+      metadata: expect.objectContaining({ wagerId: "wager-timeout", requestId: "request-timeout" }),
+    }));
+  });
+
   it("does not provision user wallets when the user-wallet feature is disabled", async () => {
     const repo = {
       ensureWalletPlaceholder: vi.fn()
@@ -302,6 +330,14 @@ describe("WalletService", () => {
     config.userWalletsEnabled = true;
     config.initialGrantUsd = 0;
     const provider = providerFake();
+    provider.transfer = vi.fn(async () => ({
+      transactionHash: `0x${"3".repeat(64)}` as const,
+      blockNumber: 77n,
+    }));
+    provider.getBalance = vi.fn(async ({ wallet: target, blockNumber }) => {
+      if (blockNumber === 77n) return target.providerWalletId === sender.providerWalletId ? 8_000_000n : 12_000_000n;
+      return 10_000_000n;
+    });
     const service = new WalletService(config, repo, provider);
 
     const result = await service.transferFromUser({
@@ -322,6 +358,71 @@ describe("WalletService", () => {
       idempotencyKey: expect.stringContaining("request-1")
     }));
     expect(result.transfer.status).toBe("confirmed");
+    expect(result.source.balance.formatted).toBe("8");
+    expect(result.destination.balance.formatted).toBe("12");
+    expect(provider.getBalance).toHaveBeenCalledWith(expect.objectContaining({ blockNumber: 77n }));
+  });
+
+  it("reads a settled wager balance from the confirmed transfer block", async () => {
+    const user = wallet({
+      id: "wallet-user",
+      guildId: "guild-a",
+      ownerKind: "user",
+      discordUserId: "user-a",
+      providerWalletId: "privy-user",
+      address: `0x${"6".repeat(40)}`,
+    });
+    const bot = wallet({ id: "wallet-bot" });
+    const wager = {
+      id: "wager-1",
+      userWalletId: user.id,
+      botWalletId: bot.id,
+    } as WagerReservation;
+    const reserved = transferRecord({
+      id: "transfer-loss",
+      sourceWalletId: user.id,
+      destinationWalletId: bot.id,
+      destinationAddress: bot.address!,
+      purpose: "game_settlement",
+      amountAtomic: 1_040_000n,
+    });
+    const repo = {
+      beginWagerSettlement: vi.fn(async () => ({ wager, transfer: reserved })),
+      getTransfer: vi.fn(async () => reserved),
+      claimTransferSubmission: vi.fn(async () => ({ ...reserved, status: "submitting" })),
+      getWallet: vi.fn(async (id) => id === user.id ? user : bot),
+      ensureWalletPlaceholder: vi.fn(async () => bot),
+      markTransferSubmitted: vi.fn(async () => ({ ...reserved, status: "submitted" })),
+      updateTransferStatus: vi.fn(async (input) => ({ ...reserved, status: input.status })),
+      completeWagerSettlement: vi.fn(async () => undefined),
+      getWager: vi.fn(async () => wager),
+    } as unknown as PaymentRepository;
+    const provider = providerFake();
+    provider.transfer = vi.fn(async () => ({
+      transactionHash: `0x${"3".repeat(64)}` as const,
+      blockNumber: 88n,
+    }));
+    provider.getBalance = vi.fn(async ({ wallet: target, blockNumber }) => {
+      if (target.providerWalletId === user.providerWalletId) return blockNumber === 88n ? 6_230_000n : 7_270_000n;
+      return 100_000_000n;
+    });
+    const service = new WalletService(loadConfig().payments, repo, provider);
+
+    const result = await service.settleWager({
+      wagerId: wager.id,
+      userId: "user-a",
+      requestId: "request-loss",
+      payoutUsd: 0,
+      outcome: "player_loss",
+      resolutionSource: "verified_randomness",
+      explanation: "Coin landed tails",
+    });
+
+    expect(result.userBalance?.formatted).toBe("6.23");
+    expect(provider.getBalance).toHaveBeenCalledWith(expect.objectContaining({
+      wallet: { providerWalletId: user.providerWalletId, address: user.address },
+      blockNumber: 88n,
+    }));
   });
 
   it("issues a requester-bound starter grant only after two guarded $0 balance checks", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   adminTransferWalletFunds,
+  ensureAutomaticStarterFunds,
   getWalletBalance,
   hasExplicitTransferIntent,
   listWalletBalances,
@@ -223,6 +224,26 @@ describe("managed wallet tools", () => {
     expect(result).toContain("Added $1 USD from the AI treasury");
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ requestedByUserId: "requester" }), expect.any(Function));
     expect(ctx.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
+  });
+
+  it("recognizes a natural request for the requester's starter dollar", async () => {
+    const request = vi.fn(async () => ({ granted: true, amountUsd: 1, ...transferResult() }));
+    const ctx = context({
+      requestText: "give me my dollar and I'm never giving it back",
+      walletService: { requestStarterFunds: request },
+    });
+
+    await expect(requestStarterFunds(ctx)).resolves.toContain("Added $1 USD from the AI treasury");
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("leaves positive balances untouched during the automatic starter preflight", async () => {
+    const request = vi.fn(async () => ({ granted: false as const, balance: { formatted: "0.25" } }));
+    const ctx = context({ requestText: "tell me a joke", walletService: { requestStarterFunds: request } });
+
+    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+    expect(ctx.footerLines).toEqual([]);
   });
 
   it("reports a positive verified balance without issuing starter funds", async () => {

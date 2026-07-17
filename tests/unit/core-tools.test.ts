@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { agentUpdateTitleFromRequest, formatAgentTaskResult } from "../../src/tools/agentTaskFormatting.js";
 import {
   createAgentUpdateFromRequest,
@@ -990,6 +991,64 @@ describe("generateImage", () => {
     });
     expect(result.content).toContain("Requested output: transparent background, PNG");
     expect(result.content).toContain("Actual output: image/png (real alpha transparency)");
+  });
+
+  it("removes a simple generated background when transparent output is opaque", async () => {
+    const subject = await sharp({
+      create: { width: 3, height: 3, channels: 3, background: { r: 20, g: 80, b: 180 } }
+    }).png().toBuffer();
+    const opaqueImage = await sharp({
+      create: { width: 9, height: 9, channels: 3, background: { r: 240, g: 236, b: 224 } }
+    }).composite([{ input: subject, left: 3, top: 3 }]).png().toBuffer();
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: {
+        generateImage: vi.fn(async () => ({
+          model: "test/image",
+          raw: {},
+          data: [{ b64_json: opaqueImage.toString("base64"), media_type: "image/png" }]
+        }))
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user"
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, { prompt: "a blue sticker", background: "transparent", outputFormat: "png" });
+    const { data, info } = await sharp(result.files[0]?.data).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const alpha = Array.from({ length: data.length / info.channels }, (_, index) => data[index * info.channels + info.channels - 1]);
+
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]).toMatchObject({ contentType: "image/png", name: expect.stringMatching(/\.png$/) });
+    expect(alpha).toContain(0);
+    expect(alpha).toContain(255);
+    expect(result.content).toContain("Actual output: image/png (real alpha transparency)");
+    expect(result.content).toContain("Automatic background removal: applied");
+  });
+
+  it("does not attach an opaque image when safe background removal cannot isolate a subject", async () => {
+    const opaqueImage = await sharp({
+      create: { width: 5, height: 5, channels: 3, background: { r: 240, g: 236, b: 224 } }
+    }).png().toBuffer();
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: {
+        generateImage: vi.fn(async () => ({
+          model: "test/image",
+          raw: {},
+          data: [{ b64_json: opaqueImage.toString("base64"), media_type: "image/png" }]
+        }))
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user"
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, { prompt: "an empty sticker", background: "transparent", outputFormat: "png" });
+
+    expect(result.files).toEqual([]);
+    expect(result.content).toContain("Transparency validation failed");
+    expect(result.content).toContain("No opaque image was attached");
   });
 
   it("uses returned media types for attached image files and audits estimated cost", async () => {

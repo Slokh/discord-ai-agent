@@ -47,4 +47,15 @@ describe("fresh external data guard", () => {
     expect(requiresFreshExternalData("Explain how airlines price connecting flights."))
       .toBe(false);
   });
+
+  it("does not mistake local game odds for time-sensitive external data", () => {
+    expect(requiresFreshExternalData(
+      "Get me on top by one cent with a complicated dice game where I have the best odds to win.",
+    )).toBe(false);
+  });
+
+  it("still requires fresh evidence for live betting odds", () => {
+    expect(requiresFreshExternalData("Find the best live betting odds for tonight's game."))
+      .toBe(true);
+  });
 });

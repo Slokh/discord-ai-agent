@@ -1306,14 +1306,14 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "transferWalletFunds",
     description:
-      "Transfer real USD out of the current Discord requester's managed wallet. The only allowed destinations are another verified Discord user's managed wallet or the shared bot wallet; arbitrary blockchain addresses are never accepted. Use only when the current prompt explicitly asks to send, pay, tip, give, deposit, return, or transfer money; never use this to charge or settle a game wager. The source, amount, and destination are parsed again from the current requester prompt and remain authoritative even if model arguments differ. A destination can be an ID, mention, username, or display name: pass the provided name directly and the tool will resolve it safely, so do not ask the user for an ID or mention. Ambiguous names fail without transferring. The bot wallet sponsors the network fee. Returns the confirmed transaction and fresh source/destination balances.",
+      "Transfer real USD out of the current Discord requester's managed wallet. The only allowed destinations are another verified Discord user's managed wallet or the shared bot wallet; arbitrary blockchain addresses are never accepted. Use only when the current prompt explicitly asks to send, pay, tip, give, deposit, return, or transfer money; never use this to charge or settle a game wager. The source, amount or explicit entire-balance request, and destination are parsed again from the current requester prompt and remain authoritative even if model arguments differ. A destination can be an ID, mention, username, or display name: pass the provided name directly and the tool will resolve it safely, so do not ask the user for an ID or mention. Ambiguous names fail without transferring. The bot wallet sponsors the network fee. Returns the confirmed transaction and fresh source/destination balances.",
     userVisible: true,
     mutates: true,
     group: "external",
     category: "external",
     toolClass: "external",
     outputContract: ["confirmed USD amount and managed endpoints", "transaction hash and status", "fresh source and destination balances"],
-    examples: ["@ai send $2 to @friend", "@ai transfer $1 back to the bot"],
+    examples: ["@ai send $2 to @friend", "@ai transfer $1 back to the bot", "@ai send my balance to the bot"],
     permissionRequirements: ["explicit_user_request", "requester_scope", "verified_managed_destination", "sufficient_onchain_balance"],
     auditEvents: ["tool_audit_logs", "wallet.transfer.reserved", "wallet.transfer.confirmed"],
     parameters: {
@@ -1330,7 +1330,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "requestStarterFunds",
     description:
-      "Fallback recheck for the current Discord requester's automatic starter funding. The request lifecycle normally sends the fixed starter amount before model/tool selection whenever the verified live balance is exactly $0, so users do not need special wording. Use this tool only to retry an explicit starter/refill request when automatic funding did not complete. Positive balances are ineligible; requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
+      "Fallback recheck for the current Discord requester's automatic starter funding. Before model/tool selection, the request lifecycle normally tops any verified live balance below the configured starter amount up to that target, so users do not need special wording and tiny dust balances cannot block play. Use this tool only to retry an explicit starter/refill request when automatic funding did not complete. Balances already at or above the target are ineligible; requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
     userVisible: true,
     mutates: true,
     group: "external",
@@ -1338,7 +1338,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
     toolClass: "external",
     outputContract: ["eligibility from verified requester balance", "fixed starter amount", "confirmed transaction", "fresh requester and AI balances"],
     examples: ["@ai I'm at $0, can I get $1 to play again?"],
-    permissionRequirements: ["explicit_user_request", "requester_scope", "verified_zero_balance", "configured_wallet_runtime"],
+    permissionRequirements: ["explicit_user_request", "requester_scope", "verified_below_starter_balance", "configured_wallet_runtime"],
     auditEvents: ["tool_audit_logs", "wallet.transfer.reserved", "wallet.transfer.confirmed"],
     parameters: {
       type: "object",

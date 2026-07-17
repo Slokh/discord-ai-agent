@@ -276,6 +276,22 @@ describe("managed wallet tools", () => {
     }), expect.any(Function));
   });
 
+  it("sends the requester's live balance to the bot when explicitly requested", async () => {
+    const transferFromUser = vi.fn(async () => transferResult(`0x${"8".repeat(64)}`, 6_000n));
+    const ctx = context({
+      requestText: "🙂 send it to the bot please 🙂",
+      walletService: { transferFromUser },
+    });
+
+    const result = await transferWalletFunds(ctx, { destination: "bot", amountUsd: 999 });
+
+    expect(result).toContain("Transferred $0.006 USD from your wallet to bot wallet.");
+    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
+      destination: { kind: "bot" },
+      amountUsd: "balance",
+    }), expect.any(Function));
+  });
+
   it("blocks a model-invented transfer when the current prompt is only a vague game repeat", async () => {
     const transferFromUser = vi.fn();
     const ctx = context({ requestText: "again", walletService: { transferFromUser } });
@@ -289,7 +305,7 @@ describe("managed wallet tools", () => {
     expect(hasExplicitTransferIntent("put $0.50 on heads")).toBe(false);
   });
 
-  it("grants the configured starter amount only through the requester-bound zero-balance flow", async () => {
+  it("tops up through the requester-bound starter flow", async () => {
     const transactionHash = `0x${"7".repeat(64)}`;
     const request = vi.fn(async (_input: unknown, record: PaymentEventRecorder) => {
       await record({ eventName: "wallet.transfer.confirmed", summary: "starter", metadata: { transactionHash } });
@@ -315,13 +331,21 @@ describe("managed wallet tools", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("leaves positive balances untouched during the automatic starter preflight", async () => {
-    const request = vi.fn(async () => ({ granted: false as const, balance: { formatted: "0.25" } }));
+  it("leaves balances at or above the starter target untouched during automatic preflight", async () => {
+    const request = vi.fn(async () => ({ granted: false as const, balance: { formatted: "1.25" } }));
     const ctx = context({ requestText: "tell me a joke", walletService: { requestStarterFunds: request } });
 
     await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
     expect(request).toHaveBeenCalledOnce();
     expect(ctx.footerLines).toEqual([]);
+  });
+
+  it("automatically tops a dust balance up to the configured starter target", async () => {
+    const request = vi.fn(async () => ({ granted: true as const, amountUsd: 0.994, ...transferResult() }));
+    const ctx = context({ requestText: "refill then go again", walletService: { requestStarterFunds: request } });
+
+    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toContain("Automatically added $0.994 USD");
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("does not create or fund a real wallet when the prompt explicitly opts into roleplay money", async () => {
@@ -335,11 +359,11 @@ describe("managed wallet tools", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("reports a positive verified balance without issuing starter funds", async () => {
-    const request = vi.fn(async () => ({ granted: false, balance: { formatted: "0.25" } }));
+  it("reports a verified balance already above the starter target without issuing funds", async () => {
+    const request = vi.fn(async () => ({ granted: false, balance: { formatted: "1.25" } }));
     const ctx = context({ requestText: "give me $1 to play again", walletService: { requestStarterFunds: request } });
 
-    await expect(requestStarterFunds(ctx)).resolves.toContain("verified wallet balance is $0.25 USD");
+    await expect(requestStarterFunds(ctx)).resolves.toContain("verified wallet balance is already $1.25 USD");
   });
 
   it("fails closed if requester identity changes after ingress", async () => {
@@ -448,9 +472,9 @@ function walletSummary(balance: string) {
   };
 }
 
-function transferResult(transactionHash = `0x${"9".repeat(64)}`) {
+function transferResult(transactionHash = `0x${"9".repeat(64)}`, amountAtomic = 1_000_000n) {
   return {
-    transfer: { status: "confirmed", transactionHash },
+    transfer: { status: "confirmed", transactionHash, amountAtomic, tokenDecimals: 6 },
     source: { wallet: {}, balance: { formatted: "3" } },
     destination: { wallet: {}, balance: { formatted: "2" } }
   };

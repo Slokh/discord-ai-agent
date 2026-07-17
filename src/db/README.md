@@ -13,7 +13,7 @@ Owns durable Postgres state and query contracts.
 - Process runs, spans, run events, artifacts, and cleanup live in `processRunRepository.ts`.
 - Trace events and tool audit logs live in `auditRepository.ts`.
 - Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `agent_runtime_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters. Per-user turn-limit overrides (`user_budget_overrides`, managed by the `setUserTurnLimit` tool) are the one piece of stored budget state.
-- Wallet accounts and guild/network-scoped wallet directory reads, transfer idempotency, wager exposure, and payment runtime health live in `paymentRepository.ts`, with focused transfer SQL helpers in `paymentTransferPersistence.ts`, requester-scoped wager/RNG reads in `paymentWagerHistory.ts`, and forward-only migrations.
+- Wallet accounts and guild/network-scoped wallet directory reads, transfer idempotency, wager exposure, and payment runtime health live in `paymentRepository.ts`, with focused transfer SQL helpers in `paymentTransferPersistence.ts`, starter top-up invariants in `paymentTransferValidation.ts`, requester-scoped wager/RNG reads in `paymentWagerHistory.ts`, and forward-only migrations.
 - Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history.
 - Exactly-once deployment note claims, baselines, and posted Discord message IDs live in `deploymentAnnouncementRepository.ts`.
 - DB-backed skills, server overlays, and health checks live in `skillsRepository.ts`.

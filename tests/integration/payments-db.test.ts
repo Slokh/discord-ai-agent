@@ -111,7 +111,7 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       .resolves.toMatchObject({ id: first.id, purpose: "user_transfer" });
   });
 
-  it("allows only one starter grant after a shared $0 destination observation", async () => {
+  it("allows only one exact starter top-up after a shared below-target observation", async () => {
     const guildId = `${guildPrefix}${randomUUID()}`;
     const source = await activeWallet(guildId, "bot", null, "31");
     const destination = await activeWallet(guildId, "user", "restart-user", "32");
@@ -125,10 +125,11 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       token: "USDC.e",
       tokenAddress: `0x${"4".repeat(40)}`,
       tokenDecimals: 6,
-      amountAtomic: 1_000_000n,
+      amountAtomic: 994_000n,
       sourceBalanceAtomic: 10_000_000n,
       sourceBalanceObservedAt: destinationBalanceObservedAt,
-      destinationBalanceAtomic: 0n,
+      destinationBalanceAtomic: 6_000n,
+      destinationTargetBalanceAtomic: 1_000_000n,
       destinationBalanceObservedAt
     };
 

@@ -131,6 +131,15 @@ export type WagerReservation = {
   updatedAt: Date;
 };
 
+export type WagerHistoryEntry = {
+  wager: WagerReservation;
+  draw: {
+    kind: string;
+    outcome: Record<string, unknown>;
+    reason: string | null;
+  } | null;
+};
+
 export type PaymentEventRecorder = (input: {
   eventName: string;
   summary: string;

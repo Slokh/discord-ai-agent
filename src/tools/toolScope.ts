@@ -107,7 +107,7 @@ function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
     return Boolean(config.payments?.walletEnabled && config.payments?.userWalletsEnabled);
   }
   if (tool.name === "getWalletBalance") return Boolean(config.payments?.walletEnabled);
-  if (tool.name === "listWalletBalances") return Boolean(config.payments?.walletEnabled && config.payments?.userWalletsEnabled);
+  if (tool.name === "listWalletBalances" || tool.name === "getWagerHistory") return Boolean(config.payments?.walletEnabled && config.payments?.userWalletsEnabled);
   return true;
 }
 

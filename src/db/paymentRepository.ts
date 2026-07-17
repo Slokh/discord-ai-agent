@@ -14,6 +14,7 @@ import { stableId } from "../payments/money.js";
 import { mapAccount, mapTransfer, mapWager } from "./paymentRowMappers.js";
 import { getTransferWithClient, insertTransfer, TRANSFER_COLUMNS } from "./paymentTransferPersistence.js";
 import { validateSettlementEvidence, validateSettlementOutcome } from "./paymentWagerValidation.js";
+import { listWagerHistory, type WagerHistoryQuery } from "./paymentWagerHistory.js";
 
 const ACCOUNT_COLUMNS = `
   id, guild_id, owner_kind, discord_user_id, provider, provider_wallet_id,
@@ -713,7 +714,9 @@ export class PaymentRepository {
     const result = await this.pool.query(`SELECT ${WAGER_COLUMNS} FROM wallet_wager_reservations WHERE id = $1`, [id]);
     return result.rows[0] ? mapWager(result.rows[0]) : null;
   }
-
+  listWagerHistory(input: WagerHistoryQuery) {
+    return listWagerHistory(this.pool, input);
+  }
   async getPaymentsConsoleSnapshot(input: { guildId?: string; limit?: number } = {}): Promise<Record<string, unknown>> {
     const limit = Math.max(1, Math.min(input.limit ?? 100, 500));
     const values: unknown[] = [];
@@ -791,7 +794,6 @@ export class PaymentRepository {
       [input.key, input.status, JSON.stringify(input.details)]
     );
   }
-
 }
 
 const LEGACY_MODERATO_CHAIN_ID = 42431;

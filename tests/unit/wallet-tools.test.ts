@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   adminTransferWalletFunds,
   ensureAutomaticStarterFunds,
+  getWagerHistory,
   getWalletBalance,
   hasExplicitTransferIntent,
   listWalletBalances,
@@ -32,6 +33,36 @@ describe("managed wallet tools", () => {
 
     await expect(getWalletBalance(ctx, { owner: "bot" })).resolves.toContain("Bot wallet: $9.5 USD");
     expect(getBotWalletSummary).toHaveBeenCalledWith("guild", expect.any(Function));
+  });
+
+  it("reads coin-flip results from the canonical requester wager ledger", async () => {
+    const listWagerHistory = vi.fn(async () => ({
+      entries: [{
+        wager: {
+          requestId: "coin-request",
+          channelId: "casino",
+          game: "coinflip",
+          status: "settled",
+          settlementOutcome: "player_loss",
+          stakeAtomic: 620_000n,
+          payoutAtomic: 0n,
+          tokenDecimals: 6,
+          explanation: "Requester bet on heads; the verified result was tails.",
+          createdAt: new Date("2026-07-17T21:52:22.871Z"),
+        },
+        draw: { kind: "coin", outcome: { kind: "coin", values: ["tails"] }, reason: "all-in on heads" },
+      }],
+      hasMore: false,
+    }));
+    const ctx = context({ requestText: "what are the results of my coin flips?", walletService: { listWagerHistory } });
+
+    const result = await getWagerHistory(ctx, { game: "coin", limit: 10 });
+
+    expect(result).toContain("Canonical requester wager ledger matching coin: 1 recent entry; 1 settled (0 wins, 1 loss, 0 pushes); net -$0.62.");
+    expect(result).toContain("Verified draw: coin → tails (all-in on heads)");
+    expect(result).toContain("Stake $0.62 · payout $0 · net -$0.62");
+    expect(result).toContain("https://discord.com/channels/guild/casino/coin-request");
+    expect(listWagerHistory).toHaveBeenCalledWith({ guildId: "guild", userId: "requester", game: "coin", limit: 10 });
   });
 
   it("defaults a bare balance request to the bot when user wallets are disabled", async () => {

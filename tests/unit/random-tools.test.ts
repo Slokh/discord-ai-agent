@@ -572,7 +572,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "cards",
-      count: 4,
+      count: 3,
       wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" }
     });
 
@@ -585,6 +585,26 @@ describe("drawRandom", () => {
     expect(response).toContain("Maximum total payout reserved: $0.8");
   });
 
+  it("rejects a blackjack opening draw that would publish the dealer hole card", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "bet .1 blackjack",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "cards",
+      count: 4,
+      reason: "player and dealer initial blackjack hands",
+      wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" },
+    });
+
+    expect(response).toContain("exactly 3 public cards");
+    expect(response).toContain("never draw the dealer hole card");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
+  });
+
   it("rejects a wager amount inherited from history when the current request is an explicit amount", async () => {
     const reserveWager = vi.fn();
     const { ctx, rngRepo } = fakeContext({
@@ -594,7 +614,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "cards",
-      count: 12,
+      count: 3,
       wager: { playerUserId: "user", stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack" }
     });
 
@@ -739,7 +759,7 @@ describe("drawRandom", () => {
       wager: { playerUserId: "user", stakeUsd: 0.05, maxPayoutUsd: 0.125, game: "blackjack" }
     });
 
-    expect(response).toContain("complete bounded game sequence");
+    expect(response).toContain("exactly 3 public cards");
     expect(reserveWager).not.toHaveBeenCalled();
     expect(rngRepo.sessions.size).toBe(0);
   });

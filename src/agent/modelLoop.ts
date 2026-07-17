@@ -271,6 +271,7 @@ async function runAgentModelLoopInternal(
           retryPolicy: "expensive",
         },
       });
+      ctx.abortSignal?.throwIfAborted();
       ctx.noteProgress?.();
     } catch (error) {
       await recordAgentEvent(ctx, {

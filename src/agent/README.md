@@ -10,7 +10,7 @@ Owns the model loop for one user prompt.
 - Synthesize the final answer and files.
 - Record durable agent-runtime prompt executions through `runtimeLedger.ts`; Discord chat turns execute in-process, while sandboxes are reserved for code-update tasks.
 - Persist replayable Discord turn context through `runtimeEnvelope.ts` before executing a prompt, so future sandbox executors can deserialize the same request boundary.
-- Discord chat prompt execution runs in-process permanently through `runtimeRunner.ts`, `runtimeExecutor.ts`, and `inProcessRuntimeExecutor.ts`; sandboxes are only for code-update tasks.
+- Discord chat prompt execution runs in-process permanently through `runtimeRunner.ts`, `runtimeExecutor.ts`, and `inProcessRuntimeExecutor.ts`; sandboxes are only for code-update tasks. Runtime deadlines propagate an abort signal through model calls and check it before local tool dispatch so timed-out turns cannot resume later and create side effects.
 
 ## Module Map
 

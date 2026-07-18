@@ -5,6 +5,7 @@ Owns the model loop for one user prompt.
 ## Responsibilities
 
 - Build the model input from user text, per-channel memory, reply context, image context, skills, and tool schemas.
+- Add a compact dynamic custom-emoji culture guide containing at most eight requester-visible, high-confidence profiles and exact live mention tokens. Profiles are incrementally learned from human inline usage and reaction targets, relevance-boosted against the current prompt, and let the model choose one inline emote, one validated reaction intent for the source message, or none. Private names, IDs, examples, and reaction directives stay out of the static public prompt and visible reply.
 - Execute model-selected local tools and hosted OpenRouter tools.
 - Record trace spans, tool audit logs, costs, and final response memory.
 - Synthesize the final answer and files.

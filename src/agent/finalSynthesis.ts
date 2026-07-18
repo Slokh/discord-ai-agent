@@ -426,6 +426,7 @@ function finalSynthesisMessages(
         "When naming people from Discord evidence, only use exact handles or IDs shown in the evidence; do not infer real names or display names. " +
         "For data-analysis results, do not invent secondary stats that were not explicitly computed. If the evidence is weak or insufficient, say that briefly and do not list every weak match.",
     },
+    ...(ctx.discordEmojiCulturePrompt ? [{ role: "system" as const, content: ctx.discordEmojiCulturePrompt }] : []),
     {
       role: "user",
       content: [

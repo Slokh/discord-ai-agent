@@ -13,6 +13,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Full-server crawl and incremental message persistence.
 - Code-update task progress rendering back to Discord.
 - Guild emoji uploads use the Discord client callback in `api.ts`, require the guild-level Create Expressions permission, and remain ops-gated at model-tool dispatch.
+- The live available guild emoji cache is mapped to exact static/animated mention tokens in `api.ts`. Message/reaction persistence incrementally updates per-channel emoji culture profiles, and the prompt layer loads at most eight high-confidence profiles visible to the requester. A final private reaction intent is stripped, validated against those learned live choices, and delivered through `responseSink.ts` to the original user message; inline use suppresses the reaction so the bot never does both.
 - Unicode `🐛` reaction add/remove events persist a requester-owned bug marker through `bugMarkerReaction.ts`; removing the reaction, emoji, or message clears the marker.
 - `deploymentAnnouncements.ts` compares the previous and current deployed revisions, produces casual patch notes from bounded GitHub diff evidence, and posts a prominent Markdown heading with a compact linked version footer once to the configured release-notes channel when the bot becomes ready.
 

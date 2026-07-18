@@ -15,6 +15,7 @@ const REQUESTED_RANDOM_ACTION = new RegExp(`\\b(?:please|let(?:'s| us)|can you|c
 const DISCUSSION_PREFIX = /^\s*(?:what|which|why|how|should|is|are|do|does|did|tell|explain)\b/i;
 const EXECUTION_OVERRIDE = /\b(?:please|for me|right now|go ahead|can you|could you|would you|let(?:'s| us))\b/i;
 const WHOLE_BALANCE_WAGER = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
+const DISCORD_CUSTOM_EMOJI = /<a?:[A-Za-z0-9_]+:\d+>/g;
 
 const STRONG_OUTCOME_PATTERNS = [
   /^\s*Roll:\s*\d+\b/im,
@@ -207,7 +208,9 @@ export function shouldRejectUnverifiedRandomOutcome(input: {
   successfulRandomDraw: boolean;
 }): boolean {
   if (input.successfulRandomDraw) return false;
-  const response = input.responseContent.trim();
+  // Discord snowflake IDs are long enough to resemble generated random values.
+  // Ignore only complete custom-emoji mentions while preserving other long numbers.
+  const response = input.responseContent.replace(DISCORD_CUSTOM_EMOJI, "").trim();
   if (!response) return false;
   if (STRONG_OUTCOME_PATTERNS.some((pattern) => pattern.test(response))) {
     return true;

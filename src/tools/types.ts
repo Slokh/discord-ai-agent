@@ -74,6 +74,11 @@ export type ToolContext = {
     userId: string;
   }) => Promise<DiscordUserAvatarResult | null>;
   fetchDiscordGuildMembers?: (input: { guildId: string }) => Promise<DiscordGuildMemberSummary[]>;
+  discordGuildEmojis?: DiscordGuildEmojiSummary[];
+  /** Exact learned custom-emoji mentions eligible as a reaction to the current source message. */
+  discordEmojiReactionChoices?: string[];
+  /** Bounded dynamic culture guidance reused by tool-backed final synthesis. */
+  discordEmojiCulturePrompt?: string;
   fetchDiscordAttachment?: (input: {
     channelId: string;
     messageId: string;
@@ -89,6 +94,13 @@ export type DiscordGuildMemberSummary = {
   username: string | null;
   displayName: string | null;
   isBot: boolean;
+};
+
+export type DiscordGuildEmojiSummary = {
+  id: string;
+  name: string;
+  animated: boolean;
+  mention: string;
 };
 
 export type DiscordUserAvatarResult = {
@@ -159,6 +171,8 @@ export type AgentResponse = {
   tables?: AgentTable[];
   /** Non-model footer lines rendered as Discord subtext under the reply. */
   footerLines?: string[];
+  /** Validated custom-emoji mention to add to the Discord message that triggered this response. */
+  sourceMessageReaction?: string;
   storedContent?: string;
   memoryEvents?: Array<{
     role: "tool";

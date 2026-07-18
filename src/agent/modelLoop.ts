@@ -22,8 +22,7 @@ import {
   synthesizeFinalAnswerWithoutTools,
 } from "./finalSynthesis.js";
 import {
-  chatMessages,
-  loadServerOverlay,
+  chatMessages, loadServerOverlay, prepareDiscordEmojiPromptContext,
   replyContextAttachmentCount,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -92,12 +91,12 @@ async function runAgentModelLoopInternal(
   const startedAt = Date.now();
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
-
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
   const serverOverlay = await loadServerOverlay(ctx);
   const promptOverlay = await loadPromptOverlayText(
     ctx.config.promptOverlayPath,
   );
+  const discordEmojiContext = await prepareDiscordEmojiPromptContext(ctx, text);
   const messages: ChatMessage[] = chatMessages(
     text,
     skills,
@@ -110,6 +109,7 @@ async function runAgentModelLoopInternal(
       userDisplayName: ctx.userDisplayName,
     },
     promptOverlay,
+    discordEmojiContext,
   );
   if (automaticStarterFunds) {
     messages.splice(Math.max(0, messages.length - 1), 0, {

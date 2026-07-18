@@ -101,6 +101,17 @@ describe("random outcome guard", () => {
     })).toBe(false);
   });
 
+  it.each([
+    "Nice work <:party:123456789012345678>",
+    "Nice work.\n<!-- discord-reaction:<a:party:123456789012345678> -->",
+  ])("does not mistake a Discord custom emoji ID for a random result: %s", (responseContent) => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "nice",
+      responseContent,
+      successfulRandomDraw: false,
+    })).toBe(false);
+  });
+
   it("recognizes only completed RNG tool results as successful", () => {
     expect(isSuccessfulRandomDrawResult("Provably fair draw complete.\nResult: 2, 5"))
       .toBe(true);

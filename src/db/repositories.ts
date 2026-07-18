@@ -7,10 +7,12 @@ import * as processRunRepository from "./processRunRepository.js";
 import * as agentTaskRepository from "./agentTaskRepository.js";
 import * as discordArchiveRepository from "./discordArchiveRepository.js";
 import * as discordBugMarkerRepository from "./discordBugMarkerRepository.js";
+import * as discordEmojiUsageRepository from "./discordEmojiUsageRepository.js";
 import * as deploymentAnnouncementRepository from "./deploymentAnnouncementRepository.js";
 import * as retrievalRepository from "./retrievalRepository.js";
 import type { PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
 export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
+export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./discordEmojiUsageRepository.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
 // for repository-permissions.test.ts import-compatibility coverage:
@@ -426,12 +428,25 @@ export class DiscordAiAgentRepository {
     joinedAt?: Date | null;
     raw?: unknown;
   }) { return discordArchiveRepository.upsertGuildMember(this.pool, input); }
-  upsertMessage(input: PersistedMessage) { return discordArchiveRepository.upsertMessage(this.pool, input); }
-  markMessageDeleted(messageId: string) { return discordArchiveRepository.markMessageDeleted(this.pool, messageId); }
+  async upsertMessage(input: PersistedMessage) {
+    const stored = await discordArchiveRepository.upsertMessage(this.pool, input);
+    const usage = discordEmojiUsageRepository.emojiUsageEntriesFromMessage(input);
+    if (stored.messageExisted || usage.length > 0) {
+      await discordEmojiUsageRepository.replaceDiscordEmojiUsageForMessage(this.pool, input);
+    }
+    return stored;
+  }
+  async markMessageDeleted(messageId: string) {
+    await discordArchiveRepository.markMessageDeleted(this.pool, messageId);
+    await discordEmojiUsageRepository.clearDiscordEmojiUsageForMessage(this.pool, messageId);
+  }
   setDiscordBugMarker(input: { guildId: string; channelId: string; messageId: string; userId: string; present: boolean }) { return discordBugMarkerRepository.setDiscordBugMarker(this.pool, input); }
   clearDiscordBugMarkersForMessage(input: { guildId: string; messageId: string }) { return discordBugMarkerRepository.clearDiscordBugMarkersForMessage(this.pool, input); }
   isUserPrivacyDeleted(userId: string) { return discordArchiveRepository.isUserPrivacyDeleted(this.pool, userId); }
-  requestUserDeletion(userId: string) { return discordArchiveRepository.requestUserDeletion(this.pool, userId); }
+  async requestUserDeletion(userId: string) {
+    await discordArchiveRepository.requestUserDeletion(this.pool, userId);
+    await discordEmojiUsageRepository.clearDiscordEmojiUsageForAuthor(this.pool, userId);
+  }
   setChannelExcluded(input: {
     channelId: string;
     excluded: boolean;
@@ -464,6 +479,7 @@ export class DiscordAiAgentRepository {
   listDiscordUserAliases(input: { guildId: string; userId?: string; query?: string; limit?: number }) { return discordArchiveRepository.listDiscordUserAliases(this.pool, input); }
   getVisibleIndexedChannelIds(guildId: string, visibleChannelIds: string[]) { return retrievalRepository.getVisibleIndexedChannelIds(this.pool, guildId, visibleChannelIds); }
   listDiscordBugMarkers(input: { guildId: string; userId: string; visibleChannelIds: string[]; limit: number }): Promise<DiscordBugMarker[]> { return discordBugMarkerRepository.listDiscordBugMarkers(this.pool, input); }
+  listDiscordEmojiCultureProfiles(input: { guildId: string; visibleChannelIds: string[]; emojiIds: string[]; queryText?: string; limit?: number }) { return discordEmojiUsageRepository.listDiscordEmojiCultureProfiles(this.pool, input); }
   keywordSearch(input: {
     guildId: string;
     visibleChannelIds: string[];

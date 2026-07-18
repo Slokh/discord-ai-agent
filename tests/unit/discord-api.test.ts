@@ -1,6 +1,6 @@
 import { PermissionFlagsBits } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
-import { classifyDiscordWriteError, createDiscordGuildEmoji, discordWrite, fetchDiscordAttachment, fetchDiscordGuildMembers } from "../../src/discord/api.js";
+import { classifyDiscordWriteError, createDiscordGuildEmoji, discordWrite, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers } from "../../src/discord/api.js";
 
 const logger = { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as any;
 
@@ -81,6 +81,23 @@ describe("Discord write API", () => {
       { userId: "2", username: "zed", displayName: "Zed", isBot: false }
     ]);
     expect(fetchMembers).toHaveBeenCalledOnce();
+  });
+
+  it("reads and sorts the live usable custom emoji palette from the guild cache", async () => {
+    const emojis = new Map([
+      ["2", { id: "2", name: "wave", animated: true, available: true }],
+      ["1", { id: "1", name: "party", animated: false, available: true }],
+      ["3", { id: "3", name: "disabled", animated: false, available: false }],
+      ["4", { id: "4", name: null, animated: false, available: true }],
+    ]);
+    const client = {
+      guilds: { cache: new Map([["guild", { emojis: { cache: emojis } }]]) },
+    } as any;
+
+    await expect(fetchDiscordGuildEmojis(client, "guild")).resolves.toEqual([
+      { id: "1", name: "party", animated: false, mention: "<:party:1>" },
+      { id: "2", name: "wave", animated: true, mention: "<a:wave:2>" },
+    ]);
   });
 
   it("creates a guild emoji only when the bot has Create Expressions", async () => {

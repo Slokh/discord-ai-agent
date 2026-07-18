@@ -9,7 +9,7 @@ import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } 
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
-import { createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
+import { createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
 import { discordChannelThreadKey } from "./mentionParsing.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { loadAgentRuntimeInputLines, prepareDiscordAgentTurn, replayPreparedDiscordAgentTurn } from "./turnPreparation.js";
@@ -198,6 +198,10 @@ export async function executeDiscordAgentRequest(
       artifactId: request.inputLinesArtifactId,
       requestLogger
     });
+    const discordGuildEmojis = await fetchDiscordGuildEmojis(client, turnEnvelope.guildId).catch((error) => {
+      requestLogger.warn({ err: error }, "Failed to load the live Discord guild emoji palette");
+      return [];
+    });
     const toolContext: ToolContext = {
       config: input.config,
       repo: input.repo,
@@ -250,6 +254,7 @@ export async function executeDiscordAgentRequest(
       createDiscordEmoji: async (emojiInput) => createDiscordGuildEmoji(client, turnEnvelope.guildId, emojiInput),
       fetchDiscordUserAvatar: async ({ userId }) => fetchDiscordUserAvatar(client, turnEnvelope.guildId, userId),
       fetchDiscordGuildMembers: async () => fetchDiscordGuildMembers(client, turnEnvelope.guildId),
+      discordGuildEmojis,
       fetchDiscordAttachment: async ({ channelId, messageId, attachmentId }) =>
         fetchDiscordAttachment(client, { channelId, messageId, attachmentId })
     };
@@ -263,6 +268,16 @@ export async function executeDiscordAgentRequest(
       inputLinesArtifactId: request.inputLinesArtifactId ?? null,
       inputLines
     });
+    const sourceMessageReaction = response.sourceMessageReaction
+      && discordGuildEmojis.some((emoji) => emoji.mention === response.sourceMessageReaction)
+      ? response.sourceMessageReaction
+      : undefined;
+    if (response.sourceMessageReaction && !sourceMessageReaction) {
+      requestLogger.warn(
+        { requestedReaction: response.sourceMessageReaction },
+        "Ignored agent source-message reaction because it is not in the live guild emoji palette",
+      );
+    }
     await recordAgentRuntimeSpan({
       agentRuntime: input.agentRuntime,
       session: agentRuntimeExecution.session,
@@ -279,7 +294,8 @@ export async function executeDiscordAgentRequest(
         inputLinesArtifactId: request.inputLinesArtifactId ?? null,
         responseChars: response.content.length,
         fileCount: response.files?.length ?? 0,
-        memoryEventCount: response.memoryEvents?.length ?? 0
+        memoryEventCount: response.memoryEvents?.length ?? 0,
+        sourceMessageReaction: sourceMessageReaction ?? null
       }
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to record agent runtime span"));
 
@@ -287,7 +303,8 @@ export async function executeDiscordAgentRequest(
       {
         responseChars: response.content.length,
         fileCount: response.files?.length ?? 0,
-        memoryEventCount: response.memoryEvents?.length ?? 0
+        memoryEventCount: response.memoryEvents?.length ?? 0,
+        sourceMessageReaction: sourceMessageReaction ?? null
       },
       "Agent response ready"
     );
@@ -299,7 +316,8 @@ export async function executeDiscordAgentRequest(
         inputLinesArtifactId: request.inputLinesArtifactId ?? null,
         responseChars: response.content.length,
         fileCount: response.files?.length ?? 0,
-        memoryEventCount: response.memoryEvents?.length ?? 0
+        memoryEventCount: response.memoryEvents?.length ?? 0,
+        sourceMessageReaction: sourceMessageReaction ?? null
       }
     });
     const traceFooter = discordTraceFooter(input.config, request.requestId, request.messageStartedAt);
@@ -310,6 +328,24 @@ export async function executeDiscordAgentRequest(
         footer: response.footerLines?.length ? { ...traceFooter, extraLines: response.footerLines } : traceFooter
       })
     ).message;
+    const reactionOutcome = sourceMessageReaction
+      ? await responseSink.addSourceMessageReactions([sourceMessageReaction])
+      : null;
+    if (sourceMessageReaction) {
+      await recordTraceEvent(input.repo, {
+        eventName: "discord.response.reaction",
+        level: reactionOutcome?.added.length ? "info" : "warn",
+        summary: reactionOutcome?.added.length
+          ? "Added learned custom-emote reaction to source message"
+          : "Failed to add learned custom-emote reaction to source message",
+        metadata: {
+          emoji: sourceMessageReaction,
+          sourceMessageId: message.id,
+          added: reactionOutcome?.added.length === 1,
+          failureCount: reactionOutcome?.failed.length ?? 0,
+        },
+      }).catch((error) => requestLogger.warn({ err: error }, "Failed to record learned emoji reaction trace"));
+    }
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
     await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord final response");
@@ -356,6 +392,7 @@ export async function executeDiscordAgentRequest(
         metadata: {
           discordUrl: finalReply.url,
           responseRedacted,
+          sourceMessageReaction: reactionOutcome?.added[0] ?? null,
           files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
         }
       }
@@ -364,7 +401,7 @@ export async function executeDiscordAgentRequest(
     await recordTraceEvent(input.repo, {
       eventName: "discord.mention.handled",
       summary: "Discord mention handled",
-      metadata: { replyMessageId: finalReply.id },
+      metadata: { replyMessageId: finalReply.id, sourceMessageReaction: reactionOutcome?.added[0] ?? null },
       durationMs: durationMs(request.messageStartedAt)
     });
     await storeAgentRuntimeResponseArtifact({
@@ -378,6 +415,7 @@ export async function executeDiscordAgentRequest(
         replyMessageId: finalReply.id,
         discordUrl: finalReply.url,
         responseRedacted,
+        sourceMessageReaction: reactionOutcome?.added[0] ?? null,
         files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
       }
     }).catch((error) => requestLogger.warn({ err: error }, "Failed to store Discord response artifact"));

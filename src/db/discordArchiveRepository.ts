@@ -161,7 +161,7 @@ export async function upsertMessage(pool: DbPool, input: PersistedMessage) {
     const upserted = await pool.query(
       `
         WITH existing AS (
-          SELECT normalized_content
+          SELECT id, normalized_content
           FROM messages
           WHERE id = $1
         ),
@@ -194,7 +194,9 @@ export async function upsertMessage(pool: DbPool, input: PersistedMessage) {
             updated_at = now()
           RETURNING id
         )
-        SELECT existing.normalized_content AS previous_normalized_content
+        SELECT
+          existing.id AS previous_message_id,
+          existing.normalized_content AS previous_normalized_content
         FROM upserted
         LEFT JOIN existing ON true
       `,
@@ -249,6 +251,7 @@ export async function upsertMessage(pool: DbPool, input: PersistedMessage) {
         ]
       );
     }
+    return { messageExisted: upserted.rows[0]?.previous_message_id != null };
   }
 
 export async function markMessageDeleted(pool: DbPool, messageId: string) {

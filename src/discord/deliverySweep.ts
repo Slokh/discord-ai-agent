@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { Client, Message } from "discord.js";
 import type { Logger } from "pino";
 import { agentRuntimeTurnInputText, type AgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
@@ -7,7 +6,6 @@ import type { AgentRuntimeRepository, AgentRuntimeExecutionRecord } from "../db/
 import type { DeliveryObligationsRepository, DiscordDeliveryObligationRecord } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
-import { prepareDiscordPresentation, type PreparedDiscordPresentation } from "./components/renderer.js";
 import {
   DISCORD_DELIVERY_INTENT_ARTIFACT_KIND,
   discordDeliveryIntentFiles,
@@ -15,7 +13,8 @@ import {
   type DiscordDeliveryIntent,
 } from "./deliveryIntent.js";
 import { discordEdit, discordReply } from "./api.js";
-import { DiscordResponseSink, formatDiscordResponseFooter } from "./responseSink.js";
+import { DiscordResponseSink } from "./responseSink.js";
+import { deliverDiscordPresentation } from "./presentationDelivery.js";
 
 const RESTART_NOTICE = "I was restarted before finishing this reply — please re-ask.";
 
@@ -132,61 +131,30 @@ async function deliverIntent(
   intent: DiscordDeliveryIntent,
   envelope: AgentRuntimeTurnEnvelope | null,
 ) {
-  const sink = new DiscordResponseSink({ client: input.client, sourceMessage: source, statusMessage: status, maxReplyChars: input.maxReplyChars, logger: input.logger });
+  const sink = new DiscordResponseSink({ client: input.client, sourceMessage: source, statusMessage: status, maxReplyChars: input.maxReplyChars, deliveryKey: intent.deliveryKey, logger: input.logger });
   const files = discordDeliveryIntentFiles(intent);
-  let prepared: PreparedDiscordPresentation | null = intent.presentation
-    ? await Promise.resolve().then(() => prepareDiscordPresentation({
-        presentation: intent.presentation!,
-        content: intent.content,
-        footer: formatDiscordResponseFooter(intent.footer),
-        fileNames: files.map((file) => file.name),
-        premiumSkuIds: input.premiumSkuIds,
-      })).catch((error) => {
-        input.logger.warn({ err: error, executionId: execution.executionId }, "Recovered Discord presentation was invalid; using plain response");
-        return null;
-      })
-    : null;
-  let generationId: string | null = null;
-  if (prepared?.registrations.length) {
-    generationId = randomUUID();
-    try {
-      await input.repo.createDiscordComponentActionGeneration({
-        generationId,
-        originatingExecutionId: execution.executionId,
-        guildId: obligation.guildId,
-        channelId: obligation.channelId,
-        sourceMessageId: obligation.sourceMessageId,
-        ownerUserId: intent.presentation?.audience === "requester" ? envelope?.userId ?? null : null,
-        audience: intent.presentation?.audience ?? "requester",
-        actions: prepared.registrations.map(({ token, action, singleUse }) => ({ token, action, singleUse })),
-        expiresAt: new Date(Date.now() + (intent.presentation?.expiresInMinutes ?? 1_440) * 60_000),
-      });
-    } catch (error) {
-      input.logger.warn({ err: error, executionId: execution.executionId }, "Failed to restore Discord component actions; using plain response");
-      generationId = null;
-      prepared = null;
-    }
-  }
-  const result = await sink.sendFinal({ content: intent.content, files, footer: intent.footer, presentation: prepared });
-  let reply = result.message;
-  let richPresentationDelivered = result.usedRichPresentation;
-  if (prepared && result.usedRichPresentation && generationId) {
-    try {
-      await input.repo.activateDiscordComponentActionGeneration({ generationId, responseMessageId: reply.id, expectedActionCount: prepared.registrations.length });
-    } catch (error) {
-      await input.repo.cancelDiscordComponentActionGeneration({ generationId }).catch(() => undefined);
-      reply = await sink.replaceRichPresentationWithFallback(prepared) ?? reply;
-      richPresentationDelivered = false;
-    }
-  } else if (generationId) {
-    await input.repo.cancelDiscordComponentActionGeneration({ generationId }).catch(() => undefined);
-  }
+  const delivery = await deliverDiscordPresentation({
+    responseSink: sink,
+    repo: input.repo,
+    logger: input.logger,
+    executionId: execution.executionId,
+    guildId: obligation.guildId,
+    channelId: obligation.channelId,
+    sourceMessageId: obligation.sourceMessageId,
+    requesterUserId: intent.requesterUserId,
+    content: intent.content,
+    files,
+    footer: intent.footer,
+    presentation: intent.presentation,
+    premiumSkuIds: input.premiumSkuIds,
+  });
+  const { reply, richPresentationDelivered, actionGenerationId } = delivery;
   const reaction = intent.sourceMessageReaction ? await sink.addSourceMessageReactions([intent.sourceMessageReaction]) : null;
   await input.obligations.markDelivered({
     executionId: execution.executionId,
     statusChannelId: reply.channelId,
     statusMessageId: reply.id,
-    metadata: { swept: true, recoveredFromIntent: true, richPresentationDelivered, actionGenerationId: generationId },
+    metadata: { swept: true, recoveredFromIntent: true, richPresentationDelivered, actionGenerationId },
   });
   const session = await input.agentRuntime.getSession({ sessionId: execution.sessionId });
   await finishAgentRuntimePromptExecution({
@@ -200,7 +168,7 @@ async function deliverIntent(
     responseContent: intent.storedContent,
     durationMs: Math.max(0, Date.now() - execution.createdAt.getTime()),
     executorName: execution.harness,
-  });
+  }).catch((error) => input.logger.warn({ err: error, executionId: execution.executionId, replyMessageId: reply.id }, "Failed to reconcile recovered agent execution"));
   if (envelope) {
     await input.repo.appendConversationTurn({
       threadKey: envelope.threadKey,
@@ -226,7 +194,7 @@ async function deliverIntent(
           files: files.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })),
         },
       },
-    });
+    }).catch((error) => input.logger.warn({ err: error, executionId: execution.executionId, replyMessageId: reply.id }, "Failed to reconcile recovered conversation memory"));
   }
   input.logger.info({ executionId: execution.executionId, replyMessageId: reply.id, richPresentationDelivered }, "Recovered durable Discord delivery intent");
 }

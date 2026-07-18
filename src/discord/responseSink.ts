@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { AttachmentBuilder, MessageFlags, type Client, type Message, type MessageCreateOptions } from "discord.js";
 import type { Logger } from "pino";
 import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
@@ -39,6 +40,7 @@ export class DiscordResponseSink {
   private readonly logger: Logger;
   private readonly loadingReactionEmoji: string;
   private readonly loadingReactionMatch: DiscordReactionMatch;
+  private readonly deliveryNonce: string | null;
   private statusMessage: Message | null;
   private loadingReaction: Awaited<ReturnType<Message["react"]>> | null = null;
   private acknowledgementAttempted = false;
@@ -50,6 +52,7 @@ export class DiscordResponseSink {
     logger: Logger;
     loadingReactionEmoji?: string;
     statusMessage?: Message | null;
+    deliveryKey?: string | null;
   }) {
     this.client = input.client;
     this.sourceMessage = input.sourceMessage;
@@ -57,6 +60,7 @@ export class DiscordResponseSink {
     this.logger = input.logger;
     this.loadingReactionEmoji = input.loadingReactionEmoji?.trim() || DEFAULT_DISCORD_LOADING_REACTION;
     this.loadingReactionMatch = parseDiscordReactionMatch(this.loadingReactionEmoji);
+    this.deliveryNonce = input.deliveryKey ? discordDeliveryNonce(input.deliveryKey) : null;
     this.statusMessage = input.statusMessage ?? null;
   }
 
@@ -105,7 +109,7 @@ export class DiscordResponseSink {
       this.logger.warn({ statusMessageId: this.statusMessage.id }, "Discord status message disappeared; creating a fresh reply");
       this.statusMessage = null;
     }
-    const replied = await discordReply(this.sourceMessage, cleanContent, { logger: this.logger });
+    const replied = await discordReply(this.sourceMessage, this.withDeliveryNonce(cleanContent), { logger: this.logger });
     if (!replied.ok) throw replied.error;
     this.statusMessage = replied.value;
     return this.statusMessage;
@@ -178,18 +182,19 @@ export class DiscordResponseSink {
     const channel = this.sourceMessage.channel;
     const sendable = isSendableChannel(channel) ? channel : null;
     let previousMessageId = firstMessage.id;
+    let continuationIndex = 1;
     for (let i = 1; i < chunks.length; i++) {
       const isLast = i === chunks.length - 1;
       const content = isLast && footerLine ? `${chunks[i]}${separator}${footerLine}` : chunks[i];
       if (!sendable) continue;
       if (content.length <= this.maxReplyChars) {
-        const sentResult = await discordSend(sendable, this.continuationPayload(content, previousMessageId), { logger: this.logger });
+        const sentResult = await discordSend(sendable, this.continuationPayload(content, previousMessageId, continuationIndex++), { logger: this.logger });
         if (!sentResult.ok) throw sentResult.error;
         const sent = sentResult.value;
         previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
       } else {
         for (const overflow of splitForDiscord(content, this.maxReplyChars)) {
-          const sentResult = await discordSend(sendable, this.continuationPayload(overflow, previousMessageId), { logger: this.logger });
+          const sentResult = await discordSend(sendable, this.continuationPayload(overflow, previousMessageId, continuationIndex++), { logger: this.logger });
           if (!sentResult.ok) throw sentResult.error;
           const sent = sentResult.value;
           previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
@@ -265,11 +270,12 @@ export class DiscordResponseSink {
     }
   }
 
-  private continuationPayload(content: string, referenceMessageId: string): MessageCreateOptions {
+  private continuationPayload(content: string, referenceMessageId: string, index: number): MessageCreateOptions {
     return {
       content,
       reply: { messageReference: referenceMessageId, failIfNotExists: false },
-      allowedMentions: { parse: [], repliedUser: false }
+      allowedMentions: { parse: [], repliedUser: false },
+      ...this.nonceFields(index),
     };
   }
 
@@ -281,7 +287,7 @@ export class DiscordResponseSink {
       this.logger.warn({ statusMessageId: this.statusMessage.id }, "Discord status message disappeared; creating a fresh reply");
       this.statusMessage = null;
     }
-    const replied = await discordReply(this.sourceMessage, payload, { logger: this.logger });
+    const replied = await discordReply(this.sourceMessage, this.withDeliveryNonce(payload), { logger: this.logger });
     if (!replied.ok) throw replied.error;
     return replied.value;
   }
@@ -289,6 +295,20 @@ export class DiscordResponseSink {
   private statusUsesComponentsV2() {
     return Boolean(this.statusMessage?.flags.has(MessageFlags.IsComponentsV2));
   }
+
+  private withDeliveryNonce(payload: string | MessageCreateOptions, index = 0): string | MessageCreateOptions {
+    if (!this.deliveryNonce) return payload;
+    const normalized = typeof payload === "string" ? { content: payload } : payload;
+    return { ...normalized, ...this.nonceFields(index) };
+  }
+
+  private nonceFields(index: number): Pick<MessageCreateOptions, "nonce" | "enforceNonce"> {
+    return this.deliveryNonce ? { nonce: `${this.deliveryNonce}${index.toString(36).padStart(2, "0")}`, enforceNonce: true } : {};
+  }
+}
+
+export function discordDeliveryNonce(deliveryKey: string): string {
+  return createHash("sha256").update(deliveryKey).digest("hex").slice(0, 20);
 }
 
 export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | null) {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_DISCORD_LOADING_REACTION, DiscordResponseSink } from "../../src/discord/responseSink.js";
+import { DEFAULT_DISCORD_LOADING_REACTION, DiscordResponseSink, discordDeliveryNonce } from "../../src/discord/responseSink.js";
 
 describe("DiscordResponseSink", () => {
   it("acknowledges with a loading reaction and replies final content when no status message exists", async () => {
@@ -19,6 +19,22 @@ describe("DiscordResponseSink", () => {
     expect(sourceMessage.reply).toHaveBeenCalledWith({ content: "done" });
     expect(reaction.users.remove).toHaveBeenCalledWith("bot-user");
     expect(result.usedStatusMessage).toBe(false);
+  });
+
+  it("uses stable enforced nonces to make retried message creation idempotent", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({
+      client: fakeClient(), sourceMessage: sourceMessage as any, maxReplyChars: 2_000,
+      deliveryKey: "request-1", logger: fakeLogger() as any,
+    });
+
+    await sink.sendFinal({ content: "done" });
+
+    expect(sourceMessage.reply).toHaveBeenCalledWith({
+      content: "done",
+      nonce: `${discordDeliveryNonce("request-1")}00`,
+      enforceNonce: true,
+    });
   });
 
   it("appends a Discord subtext trace footer to final replies", async () => {

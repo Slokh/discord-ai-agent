@@ -30,6 +30,8 @@ describe("decideDiscordDeliverySweep", () => {
 
   it("recovers a durable delivery intent even if shutdown left the execution running", () => {
     const intent = createDiscordDeliveryIntent({
+      deliveryKey: "request-1",
+      requesterUserId: "user-1",
       content: "done",
       presentation: { version: 1, audience: "requester", components: [{ type: "text", content: "Rich" }] },
       files: [{ name: "result.txt", data: Buffer.from("result"), contentType: "text/plain" }],
@@ -43,7 +45,7 @@ describe("decideDiscordDeliverySweep", () => {
   });
 
   it("stores only explicitly redacted response text in a durable intent", () => {
-    const intent = createDiscordDeliveryIntent({ content: "private original", storedContent: "[redacted]" });
+    const intent = createDiscordDeliveryIntent({ deliveryKey: "request-1", requesterUserId: "user-1", content: "private original", storedContent: "[redacted]" });
     expect(intent).toEqual(expect.objectContaining({ content: "[redacted]", storedContent: "[redacted]", responseRedacted: true }));
     expect(serializeDiscordDeliveryIntent(intent)).not.toContain("private original");
   });

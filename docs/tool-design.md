@@ -38,6 +38,8 @@ File inspection should be format-led rather than prompt-led. Add parsers behind 
 
 Local tools that return structured `AgentResponse` may include an additive status envelope: `status` (`ok`, `error`, or `partial`), stable snake_case `errorCode`, `retryable`, and `limitation`. These fields are metadata only; human-readable `content` remains the primary model-facing text. Omitted `status` means success/ok. Use `limitation` for truncated or partial results.
 
+The JSON Schema in `src/tools/registry.ts` is the canonical runtime input contract for every local tool. `toolContractValidation.ts` compiles all schemas and rejects malformed JSON, missing required fields, wrong types, unknown properties, and invalid enums before permission gates or implementations run. A domain may derive that schema from a stronger typed source—as Discord presentations do from Zod—but it must not maintain a separate looser runtime parser. Deployment scoping may narrow advertised capabilities (for example configured premium Discord SKUs); the final deterministic boundary still validates the live capability.
+
 ## Change Workflow
 
 Before changing prompts or tool behavior:

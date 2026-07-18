@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { Client, Message } from "discord.js";
 import type { Logger } from "pino";
 import { isOpenRouterContentFilterError } from "../models/openrouter.js";
@@ -12,9 +11,9 @@ import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
 import { createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
 import { discordChannelThreadKey } from "./mentionParsing.js";
-import { DiscordResponseSink, formatDiscordResponseFooter } from "./responseSink.js";
-import { prepareDiscordPresentation } from "./components/renderer.js";
+import { DiscordResponseSink } from "./responseSink.js";
 import { createDiscordDeliveryIntent, DISCORD_DELIVERY_INTENT_ARTIFACT_KIND, serializeDiscordDeliveryIntent } from "./deliveryIntent.js";
+import { deliverDiscordPresentation } from "./presentationDelivery.js";
 import { loadAgentRuntimeInputLines, prepareDiscordAgentTurn, replayPreparedDiscordAgentTurn } from "./turnPreparation.js";
 import {
   attachPromptTasksToDiscordReply,
@@ -82,7 +81,8 @@ export async function runQueuedAgentRuntimeExecution(
     maxReplyChars: input.config.maxReplyChars,
     logger: requestLogger,
     loadingReactionEmoji: input.config.discord.loadingReaction,
-    statusMessage
+    statusMessage,
+    deliveryKey: job.runId
   });
   if ((turnEnvelope?.requestKind ?? "message") === "message") await responseSink.acknowledge();
   if (job.agentExecutionId) {
@@ -327,12 +327,14 @@ export async function executeDiscordAgentRequest(
         memoryEventCount: response.memoryEvents?.length ?? 0,
         sourceMessageReaction: sourceMessageReaction ?? null
       }
-    });
+    }).catch((error) => requestLogger.warn({ err: error }, "Failed to record agent response ready trace"));
     const traceFooter = discordTraceFooter(input.config, request.requestId, request.messageStartedAt);
     const formattedFooter = response.footerLines?.length ? { ...traceFooter, extraLines: response.footerLines } : traceFooter;
     const storedResponseContent = response.storedContent ?? response.content;
     const responseRedacted = Boolean(response.storedContent);
     const deliveryIntent = createDiscordDeliveryIntent({
+      deliveryKey: request.requestId,
+      requesterUserId: turnEnvelope.userId,
       content: response.content,
       storedContent: response.storedContent,
       footer: formattedFooter,
@@ -380,78 +382,28 @@ export async function executeDiscordAgentRequest(
         metadata: { deliveryIntentArtifactId, deliveryIntentSchemaVersion: deliveryIntent.schemaVersion },
       }).catch((error) => requestLogger.warn({ err: error }, "Failed to link Discord delivery intent to obligation"));
     }
-    let preparedPresentation = response.discordPresentation
-      ? await Promise.resolve().then(() => prepareDiscordPresentation({
-          presentation: response.discordPresentation!,
-          content: response.content,
-          footer: formatDiscordResponseFooter(formattedFooter),
-          fileNames: response.files?.map((file) => file.name),
-          premiumSkuIds: input.config.discord.premiumSkuIds,
-        })).catch((error) => {
-          requestLogger.warn({ err: error }, "Failed to prepare Discord rich presentation; using plain response");
-          return null;
-        })
-      : null;
-    let actionGenerationId: string | null = null;
-    if (preparedPresentation?.registrations.length) {
-      actionGenerationId = randomUUID();
-      try {
-        await input.repo.createDiscordComponentActionGeneration({
-          generationId: actionGenerationId,
-          originatingExecutionId: agentRuntimeExecution.executionId,
-          guildId: turnEnvelope.guildId,
-          channelId: turnEnvelope.channelId,
-          sourceMessageId: message.id,
-          ownerUserId: response.discordPresentation?.audience === "requester" ? turnEnvelope.userId : null,
-          audience: response.discordPresentation?.audience ?? "requester",
-          actions: preparedPresentation.registrations.map(({ token, action, singleUse }) => ({ token, action, singleUse })),
-          expiresAt: new Date(Date.now() + (response.discordPresentation?.expiresInMinutes ?? 1_440) * 60_000),
-        });
-      } catch (error) {
-        requestLogger.warn({ err: error }, "Failed to persist Discord component action generation; using plain response");
-        actionGenerationId = null;
-        preparedPresentation = null;
-      }
-    }
-    const finalResult = await responseSink.sendFinal({
+    const delivery = await deliverDiscordPresentation({
+      responseSink,
+      repo: input.repo,
+      logger: requestLogger,
+      executionId: agentRuntimeExecution.executionId,
+      guildId: turnEnvelope.guildId,
+      channelId: turnEnvelope.channelId,
+      sourceMessageId: message.id,
+      requesterUserId: turnEnvelope.userId,
       content: response.content,
       files: response.files,
       footer: formattedFooter,
-      presentation: preparedPresentation,
+      presentation: response.discordPresentation,
+      premiumSkuIds: input.config.discord.premiumSkuIds,
     });
-    let finalReply = finalResult.message;
-    let richPresentationDelivered = finalResult.usedRichPresentation;
-    if (preparedPresentation && finalResult.usedRichPresentation && actionGenerationId) {
-      try {
-        await input.repo.activateDiscordComponentActionGeneration({
-          generationId: actionGenerationId,
-          responseMessageId: finalReply.id,
-          expectedActionCount: preparedPresentation.registrations.length,
-        });
-      } catch (error) {
-        requestLogger.error({ err: error, replyMessageId: finalReply.id, actionGenerationId }, "Failed to activate delivered Discord component actions");
-        await input.repo.cancelDiscordComponentActionGeneration({ generationId: actionGenerationId }).catch(() => undefined);
-        finalReply = await responseSink.replaceRichPresentationWithFallback(preparedPresentation) ?? finalReply;
-        richPresentationDelivered = false;
-      }
-    } else if (actionGenerationId) {
-      await input.repo.cancelDiscordComponentActionGeneration({ generationId: actionGenerationId }).catch((error) => {
-        requestLogger.warn({ err: error, actionGenerationId }, "Failed to cancel undelivered Discord component actions");
-      });
-    }
-    if (!richPresentationDelivered || !actionGenerationId) {
-      await input.repo.cancelDiscordComponentActionsForResponseMessage({
-        guildId: turnEnvelope.guildId,
-        channelId: finalReply.channelId,
-        responseMessageId: finalReply.id,
-      }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to invalidate replaced Discord component actions"));
-    }
+    const { reply: finalReply, richPresentationDelivered, actionGenerationId, preparedPresentation } = delivery;
     await recordTraceEvent(input.repo, {
       eventName: richPresentationDelivered ? "discord.presentation.delivered" : response.discordPresentation ? "discord.presentation.fallback" : "discord.response.delivered",
       level: response.discordPresentation && !richPresentationDelivered ? "warn" : "info",
       summary: richPresentationDelivered ? "Delivered Discord Components V2 presentation" : response.discordPresentation ? "Delivered safe fallback after rich presentation failure" : "Delivered Discord response",
       metadata: { replyMessageId: finalReply.id, requestedRichPresentation: Boolean(response.discordPresentation), actionCount: preparedPresentation?.registrations.length ?? 0, actionGenerationId },
-    });
+    }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to record Discord delivery trace"));
     const reactionOutcome = sourceMessageReaction
       ? await responseSink.addSourceMessageReactions([sourceMessageReaction])
       : null;
@@ -471,7 +423,8 @@ export async function executeDiscordAgentRequest(
       }).catch((error) => requestLogger.warn({ err: error }, "Failed to record learned emoji reaction trace"));
     }
     await markDiscordDeliveryDelivered(input, agentRuntimeExecution.executionId, finalReply, requestLogger);
-    await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger);
+    await attachPromptTasksToDiscordReply(input, request.requestId, finalReply, requestLogger)
+      .catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to reconcile prompt tasks after Discord delivery"));
     requestLogger.info({ replyMessageId: finalReply.id }, "Sent Discord final response");
     await finishAgentRuntimePromptExecution({
       agentRuntime: input.agentRuntime,
@@ -519,14 +472,14 @@ export async function executeDiscordAgentRequest(
           files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
         }
       }
-    });
+    }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to append delivered Discord turn to conversation memory"));
     requestLogger.info({ durationMs: durationMs(request.messageStartedAt) }, "Discord mention handled");
     await recordTraceEvent(input.repo, {
       eventName: "discord.mention.handled",
       summary: "Discord mention handled",
       metadata: { replyMessageId: finalReply.id, sourceMessageReaction: reactionOutcome?.added[0] ?? null },
       durationMs: durationMs(request.messageStartedAt)
-    });
+    }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to record Discord mention completion trace"));
     const presentationArtifactId = response.discordPresentation
       ? await storeAgentRuntimeResponseArtifact({
           agentRuntime: input.agentRuntime,

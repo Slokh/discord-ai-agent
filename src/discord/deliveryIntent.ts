@@ -8,6 +8,8 @@ export const DISCORD_DELIVERY_INTENT_ARTIFACT_KIND = "discord_delivery_intent";
 
 const discordDeliveryIntentSchema = z.object({
   schemaVersion: z.literal(1),
+  deliveryKey: z.string().min(1).max(200),
+  requesterUserId: z.string().min(1).max(100),
   content: z.string(),
   storedContent: z.string(),
   responseRedacted: z.boolean(),
@@ -28,6 +30,8 @@ const discordDeliveryIntentSchema = z.object({
 export type DiscordDeliveryIntent = z.infer<typeof discordDeliveryIntentSchema>;
 
 export function createDiscordDeliveryIntent(input: {
+  deliveryKey: string;
+  requesterUserId: string;
   content: string;
   storedContent?: string;
   footer?: DiscordResponseFooter | null;
@@ -38,6 +42,8 @@ export function createDiscordDeliveryIntent(input: {
   validateDiscordAttachmentNames(input.files?.map((file) => file.name) ?? []);
   return discordDeliveryIntentSchema.parse({
     schemaVersion: 1,
+    deliveryKey: input.deliveryKey,
+    requesterUserId: input.requesterUserId,
     // Explicitly redacted responses remain redacted at rest. Recovery favors privacy over reproducing secret text.
     content: input.storedContent ?? input.content,
     storedContent: input.storedContent ?? input.content,

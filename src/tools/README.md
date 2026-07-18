@@ -5,6 +5,8 @@ Owns model-facing local tool contracts and implementations.
 ## Responsibilities
 
 - `registry.ts`: names, descriptions, schemas, examples, output contracts, and tool taxonomy exposed to the model.
+- `toolContractValidation.ts`: compiles every local tool's advertised JSON Schema and validates raw model arguments against that same contract before permissions, budgets, or implementations run.
+- `toolDeployment.ts`: applies deployment capability narrowing once for both the model-visible schema and runtime validator (currently wallet-backed wager fields and configured premium Discord SKUs).
 - `agentTaskTools.ts`: model-facing code-update task creation, status, retry/cancel, deployment status, and task log snippets.
 - `agentTaskFormatting.ts`: code-update task titles, task result messages, compact timing/cache lines, and shared duration formatting.
 - `discordHistoryFormatting.ts`: Discord history search syntax, date coercion, no-results text, and history evidence/summary formatting.
@@ -36,7 +38,7 @@ Owns model-facing local tool contracts and implementations.
 
 ## Tests
 
-- Tool schemas and taxonomy: `tests/unit/tool-registry.test.ts`.
+- Tool schemas, runtime validation, and taxonomy: `tests/unit/tool-registry.test.ts` and `tests/unit/tool-contract-validation.test.ts`.
 - Tool scoping and argument coercion: `tests/unit/tool-scope.test.ts` and `tests/unit/tool-arguments.test.ts`.
 - Tool behavior: focused `tests/unit/*-tools.test.ts` files; `tests/unit/core-tools.test.ts` covers shared/compatibility behavior.
 - End-to-end model/tool behavior: `tests/integration/agent.test.ts`.

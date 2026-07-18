@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assertToolRegistryContractsValid, validateToolCallArguments } from "../../src/tools/toolContractValidation.js";
+import { loadConfig } from "../../src/config/env.js";
 
 describe("tool contract validation", () => {
   it("compiles every model-facing local tool schema", () => {
@@ -15,5 +16,16 @@ describe("tool contract validation", () => {
   it("rejects malformed or non-object JSON even for argument-free tools", () => {
     expect(validateToolCallArguments({ name: "listTools", arguments: {}, argumentsText: "not-json" }).ok).toBe(false);
     expect(validateToolCallArguments({ name: "listTools", arguments: {}, argumentsText: "[]" }).ok).toBe(false);
+  });
+
+  it("validates against the same deployment-narrowed schema shown to the model", () => {
+    const base = loadConfig();
+    const config = { ...base, discord: { ...base.discord, premiumSkuIds: [] } };
+    expect(validateToolCallArguments({
+      name: "composeDiscordResponse",
+      argumentsText: JSON.stringify({ components: [{ type: "action_row", components: [{ type: "button", style: "premium", skuId: "123456789012345678" }] }] }),
+      arguments: { components: [{ type: "action_row", components: [{ type: "button", style: "premium", skuId: "123456789012345678" }] }] },
+      config,
+    }).ok).toBe(false);
   });
 });

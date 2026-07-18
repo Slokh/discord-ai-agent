@@ -134,6 +134,7 @@ export async function handleMessageCreate(
     sourceMessage: message,
     maxReplyChars: input.config.maxReplyChars,
     loadingReactionEmoji: input.config.discord.loadingReaction,
+    deliveryKey: requestId,
     logger: requestLogger
   });
   const budgetDecision = await checkIngressBudget(input, {

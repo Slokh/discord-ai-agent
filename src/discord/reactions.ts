@@ -292,7 +292,8 @@ async function regenerateDiscordAgentReply(input: {
     maxReplyChars: ctx.config.maxReplyChars,
     loadingReactionEmoji: ctx.config.discord.loadingReaction,
     logger: reactionLogger,
-    statusMessage: replyMessage
+    statusMessage: replyMessage,
+    deliveryKey: run.runId
   });
   await responseSink.acknowledge();
   await responseSink.updateStatus("Regenerating that response...").catch((error) => {

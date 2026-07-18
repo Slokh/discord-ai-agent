@@ -21,6 +21,7 @@ import { logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
 import { announceDeployment } from "./deploymentAnnouncements.js";
 import { handleDiscordRichInteraction } from "./components/interactionHandler.js";
+import { DiscordInteractionResponder } from "./components/interactionResponder.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -223,9 +224,7 @@ export function createDiscordAiAgentBot(input: {
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!acceptingRequests) {
       if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
-        const payload = { content: "I’m restarting right now. Please try that control again in a moment.", flags: MessageFlags.Ephemeral } as const;
-        const response = interaction.deferred || interaction.replied ? interaction.followUp(payload) : interaction.reply(payload);
-        await response.catch((error) => logger.debug({ err: error, interactionId: interaction.id }, "Failed to reject Discord interaction while draining"));
+        await new DiscordInteractionResponder(interaction).ephemeral("I’m restarting right now. Please try that control again in a moment.");
       }
       return;
     }

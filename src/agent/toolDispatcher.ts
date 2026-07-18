@@ -53,7 +53,7 @@ export async function executeLocalToolRoute(
   originalText: string,
 ): Promise<AgentResponse> {
   ctx.abortSignal?.throwIfAborted();
-  const invalidArguments = invalidToolCallResponse(route);
+  const invalidArguments = invalidToolCallResponse({ ...route, config: ctx.config });
   if (invalidArguments) return invalidArguments;
   const gate = await restrictedToolGate(ctx, route.name);
   ctx.abortSignal?.throwIfAborted();

@@ -7,6 +7,7 @@ import {
   type ToolGroup,
   type ToolRegistryEntry,
 } from "./registry.js";
+import { toolForDeployment } from "./toolDeployment.js";
 
 export type ToolScopeInput = {
   text: string;
@@ -110,15 +111,6 @@ function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
   if (tool.name === "getWalletBalance") return Boolean(config.payments?.walletEnabled);
   if (tool.name === "listWalletBalances" || tool.name === "getWagerHistory") return Boolean(config.payments?.walletEnabled && config.payments?.userWalletsEnabled);
   return true;
-}
-
-function toolForDeployment(tool: ToolRegistryEntry, config: AppConfig): ToolRegistryEntry {
-  if (tool.name !== "drawRandom" || config.payments?.userWalletsEnabled) return tool;
-  const properties = tool.parameters.properties;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return tool;
-  const withoutWager = { ...properties } as Record<string, unknown>;
-  delete withoutWager.wager;
-  return { ...tool, parameters: { ...tool.parameters, properties: withoutWager } };
 }
 
 function isToolGroup(value: string): value is ToolGroup {

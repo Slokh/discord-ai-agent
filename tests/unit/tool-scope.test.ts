@@ -48,6 +48,20 @@ describe("tool scoping", () => {
     expect(rich.localTools.some((tool) => tool.name === "composeDiscordResponse")).toBe(true);
   });
 
+  it("scopes premium component variants to deployment capabilities", () => {
+    withEnv({ DISCORD_PREMIUM_SKU_IDS: "" }, () => {
+      const tool = scopedToolset({ config: loadConfig(), groups: new Set(["presentation"]) }).localTools.find((candidate) => candidate.name === "composeDiscordResponse")!;
+      expect(JSON.stringify(tool.parameters)).not.toContain('"premium"');
+      expect(tool.description).toContain("available in this deployment: none");
+    });
+    withEnv({ DISCORD_PREMIUM_SKU_IDS: "123456789012345678" }, () => {
+      const tool = scopedToolset({ config: loadConfig(), groups: new Set(["presentation"]) }).localTools.find((candidate) => candidate.name === "composeDiscordResponse")!;
+      const schema = JSON.stringify(tool.parameters);
+      expect(schema).toContain('"premium"');
+      expect(schema).toContain('"enum":["123456789012345678"]');
+    });
+  });
+
   it("exposes the reveal tool for an explicit randomness reveal", () => {
     const config = loadConfig();
     const groups = selectToolGroups({ text: "Reveal randomness", hasImageAttachments: false, replyContext: true, config });

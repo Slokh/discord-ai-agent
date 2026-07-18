@@ -130,6 +130,67 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     })).resolves.toEqual([]);
   });
 
+  it("loads custom emoji meaning examples only from visible, privacy-safe messages", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const visibleChannelId = `channel-${randomUUID()}`;
+    const hiddenChannelId = `channel-${randomUUID()}`;
+    const inlineAuthorId = `user-${randomUUID()}`;
+    const reactionAuthorId = `user-${randomUUID()}`;
+    const emojiId = "123456789012345678";
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: visibleChannelId, guildId, name: "visible", type: 0 });
+    await repo.upsertChannel({ id: hiddenChannelId, guildId, name: "hidden", type: 0 });
+    await repo.upsertMessage({
+      id: `message-${randomUUID()}`,
+      guildId,
+      channelId: visibleChannelId,
+      authorId: inlineAuthorId,
+      authorUsername: "inline-user",
+      content: `we actually shipped it <:party:${emojiId}>`,
+      normalizedContent: "we actually shipped it party",
+      createdAt: new Date("2026-07-18T00:00:00Z")
+    });
+    await repo.upsertMessage({
+      id: `message-${randomUUID()}`,
+      guildId,
+      channelId: visibleChannelId,
+      authorId: reactionAuthorId,
+      authorUsername: "reaction-user",
+      content: "the build is red again",
+      normalizedContent: "the build is red again",
+      raw: { reactions: [{ emojiId, emojiName: "party", animated: false, count: 3 }] },
+      createdAt: new Date("2026-07-18T00:01:00Z")
+    });
+    await repo.upsertMessage({
+      id: `message-${randomUUID()}`,
+      guildId,
+      channelId: hiddenChannelId,
+      authorId: `user-${randomUUID()}`,
+      authorUsername: "hidden-user",
+      content: `secret meaning <:party:${emojiId}>`,
+      normalizedContent: "secret meaning party",
+      createdAt: new Date("2026-07-18T00:02:00Z")
+    });
+
+    await expect(repo.listDiscordEmojiUsageExamples({
+      guildId,
+      visibleChannelIds: [visibleChannelId],
+      emojiIds: [emojiId]
+    })).resolves.toEqual([
+      expect.objectContaining({ emojiId, kind: "reaction", content: "the build is red again" }),
+      expect.objectContaining({ emojiId, kind: "inline", content: `we actually shipped it <:party:${emojiId}>` })
+    ]);
+
+    await repo.requestUserDeletion(inlineAuthorId);
+    await expect(repo.listDiscordEmojiUsageExamples({
+      guildId,
+      visibleChannelIds: [visibleChannelId],
+      emojiIds: [emojiId]
+    })).resolves.toEqual([
+      expect.objectContaining({ emojiId, kind: "reaction", content: "the build is red again" })
+    ]);
+  });
+
   it("claims each deployment announcement once and tracks the latest posted revision", async () => {
     const guildId = `guild-${randomUUID()}`;
     const revision = randomUUID().replaceAll("-", "");

@@ -22,8 +22,7 @@ import {
   synthesizeFinalAnswerWithoutTools,
 } from "./finalSynthesis.js";
 import {
-  chatMessages,
-  loadServerOverlay,
+  chatMessages, loadDiscordEmojiPromptContext, loadServerOverlay,
   replyContextAttachmentCount,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -109,7 +108,7 @@ async function runAgentModelLoopInternal(
       userDisplayName: ctx.userDisplayName,
     },
     promptOverlay,
-    ctx.discordGuildEmojis,
+    await loadDiscordEmojiPromptContext(ctx),
   );
   if (automaticStarterFunds) {
     messages.splice(Math.max(0, messages.length - 1), 0, {

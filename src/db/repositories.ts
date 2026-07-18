@@ -7,10 +7,12 @@ import * as processRunRepository from "./processRunRepository.js";
 import * as agentTaskRepository from "./agentTaskRepository.js";
 import * as discordArchiveRepository from "./discordArchiveRepository.js";
 import * as discordBugMarkerRepository from "./discordBugMarkerRepository.js";
+import * as discordEmojiUsageRepository from "./discordEmojiUsageRepository.js";
 import * as deploymentAnnouncementRepository from "./deploymentAnnouncementRepository.js";
 import * as retrievalRepository from "./retrievalRepository.js";
 import type { PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
 export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
+export type { DiscordEmojiUsageExample } from "./discordEmojiUsageRepository.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
 // for repository-permissions.test.ts import-compatibility coverage:
@@ -464,6 +466,7 @@ export class DiscordAiAgentRepository {
   listDiscordUserAliases(input: { guildId: string; userId?: string; query?: string; limit?: number }) { return discordArchiveRepository.listDiscordUserAliases(this.pool, input); }
   getVisibleIndexedChannelIds(guildId: string, visibleChannelIds: string[]) { return retrievalRepository.getVisibleIndexedChannelIds(this.pool, guildId, visibleChannelIds); }
   listDiscordBugMarkers(input: { guildId: string; userId: string; visibleChannelIds: string[]; limit: number }): Promise<DiscordBugMarker[]> { return discordBugMarkerRepository.listDiscordBugMarkers(this.pool, input); }
+  listDiscordEmojiUsageExamples(input: { guildId: string; visibleChannelIds: string[]; emojiIds: string[]; candidateLimit?: number }) { return discordEmojiUsageRepository.listDiscordEmojiUsageExamples(this.pool, input); }
   keywordSearch(input: {
     guildId: string;
     visibleChannelIds: string[];

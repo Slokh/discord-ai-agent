@@ -113,6 +113,8 @@ function ModelRound({ snapshot, call, index }: { snapshot: RunSnapshot; call: Mo
           <Fact label="Tokens" value={`${formatNumber(call.usage.inputTokens)} in · ${formatNumber(call.usage.outputTokens)} out`} />
           <Fact label="Cache" value={formatPercent(call.usage.inputTokens ? call.usage.cachedInputTokens / call.usage.inputTokens : null)} />
           <Fact label="Cost" value={call.costUsd > 0 ? `$${call.costUsd.toFixed(6)}` : "unknown"} />
+          {Object.keys(call.serverToolUse).length > 0 && <Fact label="Server tools" value={formatServerToolUse(call.serverToolUse)} />}
+          {call.urlCitationCount > 0 && <Fact label="URL citations" value={formatNumber(call.urlCitationCount)} />}
         </dl>
         <PromptSections sections={call.promptSections} totalBytes={totalSectionBytes} />
       </div>
@@ -133,6 +135,10 @@ function ModelRound({ snapshot, call, index }: { snapshot: RunSnapshot; call: Mo
       </div>
     </article>
   );
+}
+
+function formatServerToolUse(usage: Record<string, number>) {
+  return Object.entries(usage).map(([name, count]) => `${humanize(name)}: ${formatNumber(count)}`).join(" · ");
 }
 
 function PromptSections({ sections, totalBytes }: { sections: PromptSectionView[]; totalBytes: number }) {

@@ -812,11 +812,13 @@ describe("agent router", () => {
         content: "Fresh search results do not expose a bookable fare without exact travel dates. How long should the trip be?",
         model: "router-model",
         raw: {},
-        toolCalls: [{
-          id: "hosted-search-1",
-          name: "openrouter:web_search",
-          argumentsText: JSON.stringify({ query: "NYC Japan nonstop round trip fall 2026 fares" }),
-        }],
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{ url: "https://example.com/current-fares", title: "Current fares" }],
       });
     const ctx = {
       config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
@@ -856,6 +858,150 @@ describe("agent router", () => {
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.fresh_external_data_guard.rejected"))
       .toBe(true);
+    expect(traceEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "agent.model.round.complete",
+        metadata: expect.objectContaining({
+          requestedToolCalls: ["openrouter:web_search"],
+          serverToolUse: expect.objectContaining({ web_search_requests: 1 }),
+          urlCitationCount: 1,
+        }),
+      }),
+    ]));
+  });
+
+  it("accepts transparent hosted search evidence on the first round without a duplicate retry", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi.fn(async () => ({
+      content: "Fresh sportsbook results list Spain at +125 and Argentina at +260.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+      serverToolUse: {
+        web_search_requests: 2,
+        tool_calls_requested: 2,
+        tool_calls_executed: 2,
+      },
+      urlCitations: [{ url: "https://example.com/current-odds", title: "Current odds" }],
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "current odds on World Cup final");
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(response.content).toContain("Spain at +125");
+    expect(traceEvents.some((event) => event.eventName === "agent.fresh_external_data_guard.rejected"))
+      .toBe(false);
+    expect(traceEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "agent.model.round.complete",
+        metadata: expect.objectContaining({
+          requestedToolCalls: ["openrouter:web_search"],
+          serverToolUse: expect.objectContaining({ web_search_requests: 2 }),
+          urlCitationCount: 1,
+        }),
+      }),
+    ]));
+  });
+
+  it("still blocks a second ungrounded live-data draft when no fresh evidence was observed", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "The current World Cup final odds are France +180 and Brazil +220.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "France remain favorites at +180, with Brazil at +220.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "current odds on World Cup final");
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ toolChoice: "required" }));
+    expect(response.content).toContain("couldn't verify live results with a fresh source");
+  });
+
+  it("does not let an empty cited search bless a later tool-free live-data hallucination", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{ url: "https://example.com/current-odds", title: "Current odds" }],
+      })
+      .mockResolvedValueOnce({
+        content: "The current World Cup final odds are France +180 and Brazil +220.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "current odds on World Cup final");
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(response.content).toContain("couldn't verify live results with a fresh source");
+    expect(response.content).not.toContain("France +180");
   });
 
   it("stops recovery calls at the per-turn model call ceiling", async () => {

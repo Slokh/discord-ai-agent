@@ -26,10 +26,17 @@ const valid = {
 describe("versioned runtime event metadata", () => {
   it("accepts valid model-call metadata", () => {
     expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.started", valid)).not.toThrow();
+    expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.completed", {
+      ...valid,
+      serverToolUse: { web_search_requests: 2, tool_calls_executed: 2 },
+      urlCitationCount: 7,
+    })).not.toThrow();
   });
 
   it("rejects malformed versioned model-call metadata", () => {
     expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.completed", { ...valid, promptBytes: -1 })).toThrow();
+    expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.completed", { ...valid, serverToolUse: { web_search_requests: -1 } })).toThrow();
+    expect(() => assertVersionedRuntimeEventMetadata("agent.model.call.completed", { ...valid, urlCitationCount: 1.5 })).toThrow();
   });
 
   it("rejects unversioned runtime events at the write boundary", () => {

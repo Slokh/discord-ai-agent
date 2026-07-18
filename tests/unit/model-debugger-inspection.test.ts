@@ -19,6 +19,8 @@ describe("model debugger run inspection", () => {
           usage: { inputTokens: 8_000, outputTokens: 120, cachedInputTokens: 4_000 },
           estimatedCostUsd: 0.0042,
           requestedToolCalls: ["searchDiscordHistory"],
+          serverToolUse: { web_search_requests: 2, tool_calls_executed: 2 },
+          urlCitationCount: 7,
           promptSections: [
             { name: "base_system_prompt", bytes: 20_000, estimatedTokens: 5_000 },
             { name: "current_user_request", bytes: 200, estimatedTokens: 50 },
@@ -40,6 +42,8 @@ describe("model debugger run inspection", () => {
     expect(output).toContain("Tool Selection: test/model");
     expect(output).toContain("Base System Prompt=5,000t/19.5KB");
     expect(output).toContain("requested=searchDiscordHistory");
+    expect(output).toContain("server=web_search_requests:2,tool_calls_executed:2");
+    expect(output).toContain("citations=7");
     expect(output).toContain("prompts=1 responses=1");
   });
 

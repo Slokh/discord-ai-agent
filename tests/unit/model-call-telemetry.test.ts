@@ -27,6 +27,8 @@ describe("runObservedModelCall", () => {
       model: "test/model",
       finishReason: "stop",
       usage: { inputTokens: 20, outputTokens: 4, totalTokens: 24, cachedInputTokens: 10 },
+      serverToolUse: { web_search_requests: 1, tool_calls_executed: 1 },
+      urlCitations: [{ url: "https://example.com/result", title: "Result" }],
       estimatedCostUsd: 0.001,
       toolCalls: [],
       raw: {},
@@ -47,6 +49,9 @@ describe("runObservedModelCall", () => {
         promptBytes: expect.any(Number),
         toolSchemaBytes: 2,
         usage: expect.objectContaining({ inputTokens: 20, cachedInputTokens: 10 }),
+        serverToolUse: { web_search_requests: 1, tool_calls_executed: 1 },
+        urlCitationCount: 1,
+        requestedToolCalls: ["openrouter:web_search"],
         estimatedCostUsd: 0.001,
       }),
     }));
@@ -73,6 +78,8 @@ describe("runObservedModelCall", () => {
       model: "test/model",
       finishReason: "tool_calls",
       usage: { inputTokens: 30, outputTokens: 6 },
+      serverToolUse: { web_search_requests: 1 },
+      urlCitations: [{ url: "https://example.com/result", title: "Result" }],
       estimatedCostUsd: 0.002,
       toolCalls: [{ id: "call-1", name: "searchDiscordHistory", argumentsText: "{\"query\":\"hello\"}" }],
       raw: {},
@@ -97,12 +104,18 @@ describe("runObservedModelCall", () => {
 
     expect(storeArtifact).toHaveBeenCalledTimes(2);
     expect(storeArtifact).toHaveBeenCalledWith(expect.objectContaining({ kind: "model_prompt", contentType: "application/json" }));
-    expect(storeArtifact).toHaveBeenCalledWith(expect.objectContaining({ kind: "model_response", content: expect.stringContaining("final answer") }));
+    expect(storeArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "model_response",
+      content: expect.stringMatching(/"serverToolUse"[\s\S]*"web_search_requests": 1[\s\S]*"urlCitations"/),
+    }));
     expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.model.call.completed",
       metadata: expect.objectContaining({
         promptArtifactId: "model_prompt-artifact",
         responseArtifactId: "model_response-artifact",
+        serverToolUse: { web_search_requests: 1 },
+        urlCitationCount: 1,
+        requestedToolCalls: ["searchDiscordHistory", "openrouter:web_search"],
         promptSections: expect.arrayContaining([expect.objectContaining({ name: "base_system_prompt" })]),
         toolSchemas: [expect.objectContaining({ name: "searchDiscordHistory", type: "local" })],
       }),

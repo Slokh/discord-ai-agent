@@ -53,14 +53,31 @@ export function stringArrayMetadata(value: unknown) {
 export function timelineToolRequests(step: Pick<TimelineTextStep, "title" | "metadata">): TimelineToolRequest[] {
   if (!isModelRoundTimelineStep(step)) return [];
   const structuredSelected = toolRequestArrayMetadata(step.metadata.selectedLocalToolRequests);
-  if (structuredSelected.length > 0) return structuredSelected;
   const enrichedRequests = toolRequestArrayMetadata(step.metadata.timelineToolRequests);
-  if (enrichedRequests.length > 0) return enrichedRequests;
   const structuredRequested = toolRequestArrayMetadata(step.metadata.requestedToolRequests);
-  if (structuredRequested.length > 0) return structuredRequested;
   const selectedTools = stringArrayMetadata(step.metadata.selectedLocalTools).map((name) => ({ name }));
-  if (selectedTools.length > 0) return selectedTools;
-  return stringArrayMetadata(step.metadata.requestedToolCalls).map((name) => ({ name }));
+  const detailed = structuredSelected.length > 0
+    ? structuredSelected
+    : enrichedRequests.length > 0
+      ? enrichedRequests
+      : structuredRequested.length > 0
+        ? structuredRequested
+        : selectedTools;
+  const observed = stringArrayMetadata(step.metadata.requestedToolCalls).map((name) => ({ name }));
+  if (detailed.length === 0) return observed;
+
+  // Structured requests only describe client-executed tools. Keep their arguments,
+  // then append transparent provider tools (for example hosted web search) that are
+  // only represented by name in requestedToolCalls.
+  const represented = new Map<string, number>();
+  for (const request of detailed) represented.set(request.name, (represented.get(request.name) ?? 0) + 1);
+  const extra = observed.filter((request) => {
+    const remaining = represented.get(request.name) ?? 0;
+    if (remaining <= 0) return true;
+    represented.set(request.name, remaining - 1);
+    return false;
+  });
+  return [...detailed, ...extra];
 }
 
 function toolRequestArrayMetadata(value: unknown): TimelineToolRequest[] {

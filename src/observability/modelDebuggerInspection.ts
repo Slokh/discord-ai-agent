@@ -14,6 +14,8 @@ type ModelCallFact = {
   cachedInputTokens: number;
   costUsd: number;
   requestedTools: string[];
+  serverToolUse: Record<string, number>;
+  urlCitationCount: number;
   sections: Array<{ name: string; bytes: number; estimatedTokens: number }>;
 };
 
@@ -38,7 +40,7 @@ export function formatModelDebuggerInspection(snapshot: RunSnapshot): string {
   ];
   for (const [index, call] of calls.slice(0, 6).entries()) {
     lines.push(
-      `- Call ${index + 1} ${humanize(call.purpose)}: ${call.model} | ${formatDuration(call.durationMs)} | ${formatNumber(call.inputTokens)} in/${formatNumber(call.outputTokens)} out/${formatNumber(call.cachedInputTokens)} cached${call.costUsd > 0 ? ` | cost=$${call.costUsd.toFixed(6)}` : ""} | prompt=${formatBytes(call.promptBytes)} schemas=${formatBytes(call.toolSchemaBytes)}${call.requestedTools.length > 0 ? ` | requested=${call.requestedTools.join(",")}` : ""}`,
+      `- Call ${index + 1} ${humanize(call.purpose)}: ${call.model} | ${formatDuration(call.durationMs)} | ${formatNumber(call.inputTokens)} in/${formatNumber(call.outputTokens)} out/${formatNumber(call.cachedInputTokens)} cached${call.costUsd > 0 ? ` | cost=$${call.costUsd.toFixed(6)}` : ""} | prompt=${formatBytes(call.promptBytes)} schemas=${formatBytes(call.toolSchemaBytes)}${call.requestedTools.length > 0 ? ` | requested=${call.requestedTools.join(",")}` : ""}${Object.keys(call.serverToolUse).length > 0 ? ` | server=${formatServerToolUse(call.serverToolUse)}` : ""}${call.urlCitationCount > 0 ? ` | citations=${call.urlCitationCount}` : ""}`,
     );
     if (call.sections.length > 0) {
       lines.push(`  Prompt sections: ${call.sections.slice(0, 8).map((section) => `${humanize(section.name)}=${formatNumber(section.estimatedTokens)}t/${formatBytes(section.bytes)}`).join("; ")}`);
@@ -78,6 +80,8 @@ function modelCallFacts(snapshot: RunSnapshot): ModelCallFact[] {
       cachedInputTokens: positiveNumber(usage.cachedInputTokens),
       costUsd: positiveNumber(metadata.estimatedCostUsd),
       requestedTools: stringArray(metadata.requestedToolCalls),
+      serverToolUse: numberRecord(metadata.serverToolUse),
+      urlCitationCount: positiveNumber(metadata.urlCitationCount),
       sections: promptSections(metadata.promptSections),
     };
   });
@@ -104,7 +108,9 @@ function promptSections(value: unknown) {
 function record(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function stringValue(value: unknown) { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function stringArray(value: unknown) { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
+function numberRecord(value: unknown) { return Object.fromEntries(Object.entries(record(value)).flatMap(([key, item]) => { const number = positiveNumber(item); return number > 0 ? [[key, number]] : []; })); }
 function positiveNumber(value: unknown) { const number = typeof value === "string" ? Number(value) : value; return typeof number === "number" && Number.isFinite(number) && number > 0 ? number : 0; }
+function formatServerToolUse(value: Record<string, number>) { return Object.entries(value).map(([key, count]) => `${key}:${count}`).join(","); }
 function formatDuration(value: number) { return value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${Math.round(value)}ms`; }
 function formatBytes(value: number) { return value >= 1024 ? `${(value / 1024).toFixed(1)}KB` : `${Math.round(value)}B`; }
 function formatNumber(value: number) { return new Intl.NumberFormat("en-US").format(value); }

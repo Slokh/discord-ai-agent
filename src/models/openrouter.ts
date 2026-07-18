@@ -46,12 +46,21 @@ export type ChatResult = {
   raw: unknown;
   finishReason?: string;
   usage?: OpenRouterTokenUsage;
+  serverToolUse?: Record<string, number>;
+  urlCitations?: OpenRouterUrlCitation[];
   estimatedCostUsd?: number;
   toolCalls: Array<{
     id: string;
     name: string;
     argumentsText: string;
   }>;
+};
+
+export type OpenRouterUrlCitation = {
+  url: string;
+  title?: string;
+  startIndex?: number;
+  endIndex?: number;
 };
 
 export type OpenRouterTokenUsage = {
@@ -105,6 +114,10 @@ const OPENROUTER_EMBEDDING_TIMEOUT_MS = 20_000;
 const OPENROUTER_INTERACTIVE_EMBEDDING_TIMEOUT_MS = 4_000;
 const OPENROUTER_IMAGE_TIMEOUT_MS = 120_000;
 const OPENROUTER_TRANSIENT_RETRY_DELAYS_MS = [500, 1_500];
+const MAX_SERVER_TOOL_USE_ENTRIES = 32;
+const MAX_URL_CITATIONS = 20;
+const MAX_CITATION_URL_CHARS = 2_048;
+const MAX_CITATION_TITLE_CHARS = 300;
 
 export class OpenRouterClient {
   constructor(private readonly config: AppConfig["openRouter"]) {}
@@ -180,6 +193,8 @@ export class OpenRouterClient {
       raw: json,
       finishReason,
       usage: extractTokenUsage(json),
+      serverToolUse: extractServerToolUse(json),
+      urlCitations: extractUrlCitations(message),
       estimatedCostUsd: extractEstimatedCostUsd(json),
       toolCalls
     };
@@ -191,6 +206,8 @@ export class OpenRouterClient {
         durationMs: durationMs(startedAt),
         finishReason: result.finishReason,
         usage: result.usage,
+        serverToolUse: result.serverToolUse,
+        urlCitationCount: result.urlCitations?.length ?? 0,
         outputChars: result.content.length,
         toolCalls: result.toolCalls.map((call) => call.name),
         estimatedCostUsd: result.estimatedCostUsd
@@ -540,6 +557,57 @@ function extractTokenUsage(json: any): OpenRouterTokenUsage | undefined {
   };
   const compact = Object.fromEntries(Object.entries(normalized).filter(([, value]) => value != null)) as OpenRouterTokenUsage;
   return Object.keys(compact).length > 0 ? compact : undefined;
+}
+
+function extractServerToolUse(json: any): Record<string, number> | undefined {
+  const normalized: Record<string, number> = {};
+  const sources = [json?.usage?.server_tool_use, json?.usage?.server_tool_use_details];
+  for (const source of sources) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+    for (const [rawKey, rawValue] of Object.entries(source).slice(0, MAX_SERVER_TOOL_USE_ENTRIES)) {
+      const key = rawKey.trim().slice(0, 80);
+      const parsed = typeof rawValue === "string" ? Number(rawValue) : rawValue;
+      if (!key || typeof parsed !== "number" || !Number.isFinite(parsed) || parsed < 0) continue;
+      normalized[key] = Math.max(normalized[key] ?? 0, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(parsed)));
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function extractUrlCitations(message: any): OpenRouterUrlCitation[] | undefined {
+  if (!Array.isArray(message?.annotations)) return undefined;
+  const citations: OpenRouterUrlCitation[] = [];
+  const seen = new Set<string>();
+  for (const annotation of message.annotations) {
+    if (citations.length >= MAX_URL_CITATIONS) break;
+    if (annotation?.type !== "url_citation") continue;
+    const source = annotation.url_citation;
+    const url = boundedString(source?.url, MAX_CITATION_URL_CHARS);
+    if (!url || !/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    const title = boundedString(source?.title, MAX_CITATION_TITLE_CHARS);
+    const startIndex = nonNegativeInteger(source?.start_index);
+    const endIndex = nonNegativeInteger(source?.end_index);
+    citations.push({
+      url,
+      ...(title ? { title } : {}),
+      ...(startIndex != null ? { startIndex } : {}),
+      ...(endIndex != null ? { endIndex } : {}),
+    });
+  }
+  return citations.length > 0 ? citations : undefined;
+}
+
+function boundedString(value: unknown, maxChars: number) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized ? normalized.slice(0, maxChars) : undefined;
+}
+
+function nonNegativeInteger(value: unknown) {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  if (typeof parsed !== "number" || !Number.isFinite(parsed) || parsed < 0) return undefined;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(parsed));
 }
 
 function firstNumber(...values: unknown[]): number | undefined {

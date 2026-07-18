@@ -58,6 +58,8 @@ const modelCallMetadataSchema = z.object({
   estimatedCostUsd: z.number().nonnegative().optional(),
   outputChars: z.number().int().nonnegative().optional(),
   requestedToolCalls: z.array(z.string()).optional(),
+  serverToolUse: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  urlCitationCount: z.number().int().nonnegative().optional(),
   promptArtifactId: z.string().nullable().optional(),
   responseArtifactId: z.string().nullable().optional(),
   error: z.string().optional(),

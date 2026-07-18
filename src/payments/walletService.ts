@@ -126,7 +126,7 @@ export class WalletService {
     guildId: string;
     requestedByUserId: string;
     destination: { kind: "bot" } | { kind: "user"; userId: string };
-    amountUsd: number;
+    amountUsd: number | "balance";
     requestId: string;
   }, record?: PaymentEventRecorder) {
     const source = await this.ensureUserWallet(
@@ -137,12 +137,15 @@ export class WalletService {
       ? await this.ensureBotWallet(input.guildId, record)
       : await this.ensureUserWallet({ guildId: input.guildId, userId: input.destination.userId }, record);
     if (destination.id === source.id) throw new Error("You cannot transfer USD to your own wallet");
+    const amountUsd = input.amountUsd === "balance"
+      ? Number((await this.getBalance(source)).formatted)
+      : input.amountUsd;
     return await this.createAndSubmitManagedTransfer({
       guildId: input.guildId,
       requestedByUserId: input.requestedByUserId,
       source,
       destination,
-      amountUsd: input.amountUsd,
+      amountUsd,
       requestId: input.requestId,
       purpose: "user_transfer"
     }, record);
@@ -185,21 +188,23 @@ export class WalletService {
       this.ensureUserWallet({ guildId: input.guildId, userId: input.requestedByUserId }, record)
     ]);
     const currentBalance = await this.getBalance(destination);
-    if (currentBalance.amountAtomic !== 0n) {
+    const targetBalanceAtomic = usdToAtomic(this.config.initialGrantUsd, currentBalance.token.decimals);
+    if (currentBalance.amountAtomic >= targetBalanceAtomic) {
       return { granted: false as const, wallet: destination, balance: currentBalance };
     }
+    const amountUsd = Number(atomicToUsd(targetBalanceAtomic - currentBalance.amountAtomic, currentBalance.token.decimals));
     const result = await this.createAndSubmitManagedTransfer({
       guildId: input.guildId,
       requestedByUserId: input.requestedByUserId,
       source,
       destination,
-      amountUsd: this.config.initialGrantUsd,
+      amountUsd,
       requestId: input.requestId,
       purpose: "starter_grant",
-      requireEmptyDestination: true,
-      metadata: { reason: "requester_zero_balance_restart" }
+      starterTargetBalanceAtomic: targetBalanceAtomic,
+      metadata: { reason: "requester_below_starter_balance" }
     }, record);
-    return { granted: true as const, amountUsd: this.config.initialGrantUsd, ...result };
+    return { granted: true as const, amountUsd, ...result };
   }
 
   async recordBotWalletHealth(record?: PaymentEventRecorder): Promise<{
@@ -559,7 +564,7 @@ export class WalletService {
     amountUsd: number;
     requestId: string;
     purpose: "user_transfer" | "admin_transfer" | "starter_grant";
-    requireEmptyDestination?: boolean;
+    starterTargetBalanceAtomic?: bigint;
     metadata?: Record<string, unknown>;
   }, record?: PaymentEventRecorder): Promise<{
     transfer: WalletTransfer;
@@ -572,13 +577,10 @@ export class WalletService {
     const balancesObservedAt = new Date();
     const [sourceBalanceAtomic, destinationBalanceAtomic] = await Promise.all([
       this.provider.getBalance({ wallet: activeManagedWallet(input.source), token }),
-      input.requireEmptyDestination
+      input.starterTargetBalanceAtomic !== undefined
         ? this.provider.getBalance({ wallet: activeManagedWallet(input.destination), token })
         : Promise.resolve(undefined)
     ]);
-    if (input.requireEmptyDestination && destinationBalanceAtomic !== 0n) {
-      throw new Error("Starter funds are only available when your verified wallet balance is exactly $0");
-    }
     const transfer = await this.repo.createManagedTransfer({
       guildId: input.guildId,
       requestedByUserId: input.requestedByUserId,
@@ -592,7 +594,8 @@ export class WalletService {
       sourceBalanceAtomic,
       sourceBalanceObservedAt: balancesObservedAt,
       destinationBalanceAtomic,
-      destinationBalanceObservedAt: input.requireEmptyDestination ? balancesObservedAt : undefined,
+      destinationTargetBalanceAtomic: input.starterTargetBalanceAtomic,
+      destinationBalanceObservedAt: input.starterTargetBalanceAtomic === undefined ? undefined : balancesObservedAt,
       idempotencyKey: `managed:${input.requestId}:${input.purpose}:${input.source.id}:${input.destination.id}:${amountAtomic}`,
       metadata: input.metadata
     });

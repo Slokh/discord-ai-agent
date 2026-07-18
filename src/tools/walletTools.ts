@@ -316,7 +316,6 @@ export async function transferWalletFunds(
   // The requester's current prompt is authoritative. Model-proposed arguments
   // remain in the tool contract for selection, but cannot resize or redirect a
   // transfer if the model resolved a name or amount incorrectly.
-  const amountUsd = requestedTransfer.amountUsd;
   let destination: { kind: "bot" } | { kind: "user"; userId: string };
   let destinationLabel: string;
   if (requestedTransfer.destination.kind === "bot") {
@@ -335,9 +334,12 @@ export async function transferWalletFunds(
     guildId: actor.guildId,
     requestedByUserId: actor.userId,
     destination,
-    amountUsd,
+    amountUsd: requestedTransfer.amountUsd,
     requestId: actor.requestId
   }, paymentRecorder(ctx));
+  const amountUsd = requestedTransfer.amountUsd === "balance"
+    ? Number(atomicToUsd(result.transfer.amountAtomic, result.transfer.tokenDecimals))
+    : requestedTransfer.amountUsd;
   const content = formatManagedTransfer(result, amountUsd, "your wallet", destinationLabel);
   await audit(ctx, "transferWalletFunds", `$${amountUsd} to ${destinationLabel}`, content);
   return content;
@@ -357,7 +359,7 @@ export async function requestStarterFunds(ctx: ToolContext): Promise<string> {
     requestId: actor.requestId
   }, paymentRecorder(ctx));
   if (!result.granted) {
-    const content = `Starter funds are only available at exactly $0. Your verified wallet balance is $${result.balance.formatted} USD.`;
+    const content = `Starter funds top wallets up to $${money(ctx.config.payments.initialGrantUsd ?? 1)} USD. Your verified wallet balance is already $${result.balance.formatted} USD.`;
     await audit(ctx, "requestStarterFunds", "requester", content);
     return content;
   }
@@ -373,11 +375,10 @@ export async function requestStarterFunds(ctx: ToolContext): Promise<string> {
 }
 
 /**
- * Deterministic per-request wallet preflight. Every requester with an exactly
- * zero verified balance receives the configured starter amount before the
- * model can choose a wallet or game tool. Positive balances are left alone by
- * WalletService, and its guarded second balance check serializes concurrent
- * zero-balance requests.
+ * Deterministic per-request wallet preflight. Every requester below the
+ * configured starter balance is topped up to that amount before the model can
+ * choose a wallet or game tool. Its guarded second balance check serializes
+ * concurrent top-up requests.
  */
 export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<string | null> {
   if (!ctx.config.payments?.walletEnabled || !ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
@@ -395,13 +396,13 @@ export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<str
     }, paymentRecorder(ctx));
     if (!result.granted) return null;
     const content = [
-      `Automatically added $${money(result.amountUsd)} USD from the AI treasury because your verified balance was $0.`,
+      `Automatically added $${money(result.amountUsd)} USD from the AI treasury to restore your verified balance to the $${money(ctx.config.payments.initialGrantUsd ?? 1)} starter amount.`,
       `Status: ${result.transfer.status}`,
       `Transaction: ${result.transfer.transactionHash ?? "pending reconciliation"}`,
       `Your balance: $${result.destination.balance.formatted} USD`,
       `AI balance: $${result.source.balance.formatted} USD`,
     ].join("\n");
-    await audit(ctx, "automaticStarterFunds", "requester_zero_balance", content);
+    await audit(ctx, "automaticStarterFunds", "requester_below_starter_balance", content);
     return content;
   } catch (error) {
     await recordAgentEvent(ctx, {
@@ -413,7 +414,7 @@ export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<str
         channelId: ctx.channelId,
         userId: ctx.userId,
         toolName: "automaticStarterFunds",
-        argumentsSummary: "requester_zero_balance_preflight",
+        argumentsSummary: "requester_below_starter_balance_preflight",
         error: error instanceof Error ? error.message : String(error),
       },
     }).catch(() => undefined);

@@ -5,7 +5,7 @@ import type { WagerReservation } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
-  it("automatically grants starter funds before handling any zero-balance user request", async () => {
+  it("automatically tops up starter funds before handling a below-target user request", async () => {
     const transactionHash = `0x${"8".repeat(64)}`;
     const requestStarterFunds = vi.fn(async (_input, record) => {
       await record({

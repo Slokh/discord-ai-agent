@@ -4,8 +4,24 @@ import { buildDiscordModal, discordComponentToken, prepareDiscordPresentation } 
 import { parseDiscordPresentation } from "../../src/discord/components/validation.js";
 import { restrictedToolGate } from "../../src/agent/toolGate.js";
 import { handleDiscordRichInteraction } from "../../src/discord/components/interactionHandler.js";
+import { composeDiscordResponse } from "../../src/tools/discordPresentationTools.js";
 
 describe("Discord rich components", () => {
+  it("stores a validated presentation through the model-facing composition tool", async () => {
+    const context: Record<string, unknown> = {};
+    const result = await composeDiscordResponse(context as any, {
+      audience: "requester",
+      components: [{ type: "text", content: "## Result" }],
+    });
+
+    expect(context.discordPresentation).toEqual(expect.objectContaining({
+      version: 1,
+      audience: "requester",
+      components: [{ type: "text", content: "## Result" }],
+    }));
+    expect(result.content).toContain("Registered a Discord Components V2 presentation");
+  });
+
   it("validates and compiles the complete message component surface", async () => {
     const presentation = parseDiscordPresentation({
       version: 1,

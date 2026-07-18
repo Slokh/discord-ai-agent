@@ -12,6 +12,7 @@ describe("config", () => {
         "RELEASE_NOTES_CHANNEL_ID",
         "BOT_NAME",
         "DISCORD_LOADING_REACTION",
+        "DISCORD_PREMIUM_SKU_IDS",
         "RUN_MIGRATIONS",
         "OPENROUTER_CHAT_MODEL",
         "OPENROUTER_CODEGEN_MODEL",
@@ -57,6 +58,7 @@ describe("config", () => {
         expect(config.discord.guildId).toBe("");
         expect(config.discord.botName).toBe("ai");
         expect(config.discord.loadingReaction).toBe("⏳");
+        expect(config.discord.premiumSkuIds).toEqual([]);
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
         expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
@@ -199,6 +201,15 @@ describe("config", () => {
   it("allows configuring the Discord loading reaction", () => {
     withEnv({ DISCORD_LOADING_REACTION: "<a:loading:123456789012345678>" }, () => {
       expect(loadConfig().discord.loadingReaction).toBe("<a:loading:123456789012345678>");
+    });
+  });
+
+  it("validates and parses configured Discord premium SKU capabilities", () => {
+    withEnv({ DISCORD_PREMIUM_SKU_IDS: "123456789012345678, 223456789012345678" }, () => {
+      expect(loadConfig().discord.premiumSkuIds).toEqual(["123456789012345678", "223456789012345678"]);
+    });
+    withEnv({ DISCORD_PREMIUM_SKU_IDS: "not-a-snowflake" }, () => {
+      expect(() => loadConfig()).toThrow(/premium.*snowflakes/i);
     });
   });
 

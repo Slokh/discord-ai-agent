@@ -1,4 +1,4 @@
-import { MessageFlags, type Client, type Interaction, type MessageComponentInteraction, type ModalSubmitInteraction } from "discord.js";
+import { type Client, type Interaction, type Message } from "discord.js";
 import { enqueueAgentRuntimeSessionExecution } from "../../agent/runtimeControlPlane.js";
 import { agentRuntimeTurnInputText, type AgentRuntimeTurnEnvelope } from "../../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution } from "../../agent/runtimeLedger.js";
@@ -11,6 +11,8 @@ import { DiscordResponseSink } from "../responseSink.js";
 import { fetchDiscordMessage, recordTraceEvent, type DiscordAgentRequestInput } from "../requestContext.js";
 import { prepareDiscordAgentTurn } from "../turnPreparation.js";
 import { buildDiscordModal, discordComponentToken } from "./renderer.js";
+import { normalizeMessageComponentInteraction, normalizeModalSubmission } from "./interactionNormalization.js";
+import { DiscordInteractionResponder } from "./interactionResponder.js";
 
 export async function handleDiscordRichInteraction(
   input: DiscordAgentRequestInput,
@@ -18,19 +20,20 @@ export async function handleDiscordRichInteraction(
   interaction: Interaction,
 ): Promise<boolean> {
   if (!isSupportedInteraction(interaction)) return false;
-  const rich = interaction as any;
+  const rich = interaction;
+  const responder = new DiscordInteractionResponder(rich);
   const parsed = discordComponentToken(rich.customId);
   if (!parsed) return false;
   if (parsed.submission && parsed.kind !== "modal") {
-    await replyInteractionError(rich, "That control has an invalid submission type.");
+    await responder.ephemeral("That control has an invalid submission type.");
     return true;
   }
-  if (!rich.guildId || !rich.channelId || !rich.message) {
-    await replyInteractionError(rich, "That control is not attached to a server message.");
+  if (!hasGuildMessageScope(rich)) {
+    await responder.ephemeral("That control is not attached to a server message.");
     return true;
   }
   if (input.config.discord.guildId && rich.guildId !== input.config.discord.guildId) {
-    await replyInteractionError(rich, "That control is not available in this server.");
+    await responder.ephemeral("That control is not available in this server.");
     return true;
   }
 
@@ -38,10 +41,10 @@ export async function handleDiscordRichInteraction(
   try {
     if (!modalLaunch) {
       if (rich.isModalSubmit() && !rich.isFromMessage()) {
-        await replyInteractionError(rich, "That form is no longer attached to a message.");
+        await responder.ephemeral("That form is no longer attached to a message.");
         return true;
       }
-      await rich.deferUpdate();
+      await responder.acknowledgeUpdate();
     }
     const resolutionPromise = input.repo.resolveDiscordComponentAction({
       token: parsed.token,
@@ -55,30 +58,30 @@ export async function handleDiscordRichInteraction(
       ? await withinModalResponseDeadline(resolutionPromise)
       : await resolutionPromise;
     if (!resolution.ok) {
-      await replyInteractionError(rich, interactionErrorMessage(resolution.reason));
+      await responder.ephemeral(interactionErrorMessage(resolution.reason));
       return true;
     }
     const action = resolution.record.action;
     if (modalLaunch) {
       if (action.type !== "modal") {
-        await replyInteractionError(rich, "That control no longer matches its saved action.");
+        await responder.ephemeral("That control no longer matches its saved action.");
         return true;
       }
-      await rich.showModal(buildDiscordModal(rich.customId, action.modal!));
+      await responder.showModal(buildDiscordModal(rich.customId, action.modal!));
       return true;
     }
     const actionMatches = parsed.kind === "modal" ? action.type === "modal" : action.type !== "modal";
     const interactionMatches = parsed.submission ? rich.isModalSubmit() : rich.isMessageComponent();
     if (!actionMatches || !interactionMatches) {
-      await replyInteractionError(rich, "That control no longer matches its saved action.");
+      await responder.ephemeral("That control no longer matches its saved action.");
       return true;
     }
     await runWithTrace({ traceId: rich.id, requestId: rich.id, guildId: rich.guildId, channelId: rich.channelId, userId: rich.user.id, messageId: rich.message.id }, async () => {
-      await enqueueInteractionTurn(input, client, rich, parsed.token, resolution.record.sourceMessageId, resolution.record.originatingExecutionId, action.prompt, parsed.submission ? "modal" : "component");
+      await enqueueInteractionTurn(input, client, rich, parsed.token, resolution.record.sourceMessageId, resolution.record.originatingExecutionId, action.prompt, parsed.submission ? "modal" : "component", action.metadata);
     });
   } catch (error) {
     logger.error({ err: error, interactionId: rich.id }, "Discord rich interaction failed");
-    await replyInteractionError(rich, "I couldn't process that control. Please try again.");
+    await responder.ephemeral("I couldn't process that control. Please try again.");
     return true;
   }
   return true;
@@ -87,31 +90,26 @@ export async function handleDiscordRichInteraction(
 async function enqueueInteractionTurn(
   input: DiscordAgentRequestInput,
   client: Client,
-  interaction: any,
+  interaction: ScopedRichInteraction,
   token: string,
   sourceMessageId: string,
   originatingExecutionId: string,
   basePrompt: string,
   requestKind: "component" | "modal",
+  actionMetadata?: DiscordStoredActionMetadata,
 ) {
   const startedAt = Date.now();
   const sourceMessage = await fetchDiscordMessage(client, interaction.channelId, sourceMessageId);
   if (!sourceMessage.inGuild()) throw new Error("Rich component source message is no longer a guild message.");
   if (await input.repo.isUserInteractionBlocked({ guildId: interaction.guildId!, userId: interaction.user.id })) return;
-  const values: string[] | undefined = interaction.isMessageComponent() && Array.isArray(interaction.values) ? [...interaction.values] : undefined;
-  const submission = interaction.isModalSubmit() ? modalSubmission(interaction) : undefined;
-  const fields = submission?.fields;
-  const interactionContext: NonNullable<AgentRuntimeTurnEnvelope["interaction"]> = {
-    messageId: interaction.message.id,
-    customId: interaction.customId,
-    componentType: interaction.isModalSubmit() ? "modal_submit" : interaction.componentType.toString(),
-    values,
-    fields,
-  };
+  const normalizedModal = interaction.isModalSubmit() ? normalizeModalSubmission(interaction) : undefined;
+  const interactionContext: NonNullable<AgentRuntimeTurnEnvelope["interaction"]> = interaction.isModalSubmit()
+    ? normalizedModal!.submission
+    : normalizeMessageComponentInteraction(interaction);
   const modelInputText = agentRuntimeTurnInputText({ text: basePrompt, interaction: interactionContext });
   const budget = await checkIngressBudget(input, { guildId: interaction.guildId!, channelId: interaction.channelId, userId: interaction.user.id, requestId: interaction.id, text: modelInputText });
   if (!budget.allowed) {
-    await interaction.followUp({ content: budget.message, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+    await new DiscordInteractionResponder(interaction).ephemeral(budget.message);
     return;
   }
   const consumed = await input.repo.resolveDiscordComponentAction({
@@ -123,7 +121,7 @@ async function enqueueInteractionTurn(
     consume: true,
   });
   if (!consumed.ok) {
-    await replyInteractionError(interaction, interactionErrorMessage(consumed.reason));
+    await new DiscordInteractionResponder(interaction).ephemeral(interactionErrorMessage(consumed.reason));
     return;
   }
   const displayName = interaction.inGuild() && interaction.member && "displayName" in interaction.member
@@ -150,11 +148,11 @@ async function enqueueInteractionTurn(
     userId: interaction.user.id,
     userDisplayName: displayName,
     interaction: interactionContext,
-    requestAttachments: submission?.attachments,
+    requestAttachments: normalizedModal?.attachments,
   };
   const prepared = await prepareDiscordAgentTurn({ context: input, client, message: sourceMessage, responseSink, request, agentRuntimeExecution: runtime, requestLogger: logger, source: `discord.${requestKind}` });
   await input.deliveryObligations?.upsertPending({ executionId: runtime.executionId, threadKey, guildId: interaction.guildId!, channelId: interaction.channelId, statusChannelId: interaction.message.channelId, statusMessageId: interaction.message.id, sourceMessageId, metadata: { requestId: interaction.id, requestKind } });
-  await recordTraceEvent(input.repo, { eventName: "discord.component.accepted", summary: `Accepted Discord ${requestKind} interaction`, metadata: { originatingExecutionId, interactionExecutionId: runtime.executionId, sourceMessageId }, durationMs: durationMs(startedAt) });
+  await recordTraceEvent(input.repo, { eventName: "discord.component.accepted", summary: `Accepted Discord ${requestKind} interaction`, metadata: { originatingExecutionId, interactionExecutionId: runtime.executionId, sourceMessageId, actionMetadata: actionMetadata ?? null }, durationMs: durationMs(startedAt) });
   if (input.jobs) {
     if (!input.agentRuntime) throw new Error("Agent runtime repository is required to enqueue Discord interactions.");
     await enqueueAgentRuntimeSessionExecution({
@@ -167,28 +165,16 @@ async function enqueueInteractionTurn(
   await executeDiscordAgentRequest(input, client, sourceMessage, responseSink, { ...request, turnEnvelope: prepared.turnEnvelope, inputLinesArtifactId: prepared.inputLinesArtifactId });
 }
 
-function isSupportedInteraction(interaction: Interaction): boolean {
+type SupportedRichInteraction = Extract<Interaction, { customId: string }>;
+type ScopedRichInteraction = SupportedRichInteraction & { guildId: string; channelId: string; message: Message };
+type DiscordStoredActionMetadata = { componentPath: string; label?: string };
+
+function isSupportedInteraction(interaction: Interaction): interaction is SupportedRichInteraction {
   return interaction.isMessageComponent() || interaction.isModalSubmit();
 }
 
-function modalSubmission(interaction: ModalSubmitInteraction): { fields: Record<string, unknown>; attachments: Array<{ id: string; url: string; proxyUrl?: string | null; filename?: string | null; contentType?: string | null; sizeBytes?: number | null; width?: number | null; height?: number | null; description?: string | null }> } {
-  const fields: Record<string, unknown> = {};
-  const attachments: Array<{ id: string; url: string; proxyUrl?: string | null; filename?: string | null; contentType?: string | null; sizeBytes?: number | null; width?: number | null; height?: number | null; description?: string | null }> = [];
-  for (const [key, component] of (interaction.fields as any).fields ?? []) {
-    const uploaded = component.attachments
-      ? [...component.attachments.values()].map((attachment: any) => ({ id: attachment.id, url: attachment.url, proxyUrl: attachment.proxyURL, filename: attachment.name, contentType: attachment.contentType, sizeBytes: attachment.size, width: attachment.width, height: attachment.height, description: attachment.description }))
-      : [];
-    attachments.push(...uploaded);
-    fields[key] = uploaded.length
-      ? uploaded.map((attachment: any) => ({ id: attachment.id, name: attachment.filename, size: attachment.sizeBytes }))
-      : component.value ?? component.values ?? null;
-  }
-  return { fields, attachments };
-}
-
-async function replyInteractionError(interaction: MessageComponentInteraction | ModalSubmitInteraction, content: string) {
-  if (interaction.deferred || interaction.replied) await interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => undefined);
-  else await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+function hasGuildMessageScope(interaction: SupportedRichInteraction): interaction is ScopedRichInteraction {
+  return Boolean(interaction.guildId && interaction.channelId && interaction.message);
 }
 
 function interactionErrorMessage(reason: string) {

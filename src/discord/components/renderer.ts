@@ -26,18 +26,23 @@ export type PreparedDiscordPresentation = {
   registrations: DiscordActionRegistration[];
 };
 
+export const MAX_DISCORD_ATTACHMENTS = 10;
+
 /** Purely compiles a validated semantic presentation. Persistence and delivery happen later. */
 export function prepareDiscordPresentation(input: {
   presentation: DiscordPresentation;
   content: string;
   footer?: string | null;
   fileNames?: string[];
+  premiumSkuIds?: string[];
   tokenFactory?: () => string;
 }): PreparedDiscordPresentation {
   const registrations: DiscordActionRegistration[] = [];
   const tokenFactory = input.tokenFactory ?? (() => randomBytes(18).toString("base64url"));
+  const fileNames = validateDiscordAttachmentNames(input.fileNames ?? []);
+  const premiumSkuIds = new Set(input.premiumSkuIds ?? []);
   const displayedFiles = new Set(collectReferencedAttachmentNames(input.presentation.components));
-  const availableFiles = new Set(input.fileNames ?? []);
+  const availableFiles = new Set(fileNames);
   for (const name of displayedFiles) {
     if (!availableFiles.has(name)) throw new Error(`Discord file component references missing attachment: ${name}`);
   }
@@ -60,8 +65,11 @@ export function prepareDiscordPresentation(input: {
     registrations.push({ token, customId, action, singleUse });
     return customId;
   };
+  const inertCustomId = () => `ai:v1:x:${tokenFactory()}`;
   const components: any[] = [...bodyComponents];
-  for (const component of input.presentation.components) components.push(compileMessageComponent(component, register));
+  for (const [index, component] of input.presentation.components.entries()) {
+    components.push(compileMessageComponent(component, `components.${index}`, register, inertCustomId, premiumSkuIds));
+  }
   for (const name of automaticFileNames) components.push({ type: 13, file: { url: `attachment://${name}` } });
   components.push(...footerComponents);
 
@@ -70,7 +78,7 @@ export function prepareDiscordPresentation(input: {
     fallbackPayload: plainDiscordComponentsV2Payload({
       content: input.content.trim() || "Done.",
       footer: input.footer,
-      fileNames: input.fileNames,
+      fileNames,
     }),
     registrations,
   };
@@ -81,13 +89,24 @@ export function plainDiscordComponentsV2Payload(input: {
   footer?: string | null;
   fileNames?: string[];
 }): MessageCreateOptions | MessageEditOptions {
+  const fileNames = validateDiscordAttachmentNames(input.fileNames ?? []);
   const components: any[] = [
     ...textDisplayComponents(input.content.trim() || "Done."),
-    ...(input.fileNames ?? []).map((name) => ({ type: 13, file: { url: `attachment://${name}` } })),
+    ...fileNames.map((name) => ({ type: 13, file: { url: `attachment://${name}` } })),
     ...textDisplayComponents(input.footer ?? ""),
   ];
   if (countCompiledComponents(components) > 40) throw new Error("Discord Components V2 fallback exceeds the 40-component limit.");
   return componentsV2Payload(components);
+}
+
+export function validateDiscordAttachmentNames(fileNames: string[]): string[] {
+  if (fileNames.length > MAX_DISCORD_ATTACHMENTS) {
+    throw new Error(`Discord allows at most ${MAX_DISCORD_ATTACHMENTS} attachments per message.`);
+  }
+  const normalized = fileNames.map((name) => name.trim());
+  if (normalized.some((name) => !name)) throw new Error("Discord attachment filenames must not be empty.");
+  if (new Set(normalized).size !== normalized.length) throw new Error("Discord attachment filenames must be unique within a message.");
+  return normalized;
 }
 
 function componentsV2Payload(components: any[]): MessageCreateOptions | MessageEditOptions {
@@ -148,16 +167,19 @@ export function buildDiscordModal(customId: string, modal: DiscordModalSpec): Mo
 
 function compileMessageComponent(
   component: DiscordMessageComponentSpec | DiscordContainerChildSpec,
+  path: string,
   register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
+  inertCustomId: () => string,
+  premiumSkuIds: ReadonlySet<string>,
 ): any {
   switch (component.type) {
     case "text": return { type: 10, content: component.content };
-    case "action_row": return compileActionRow(component, register);
+    case "action_row": return compileActionRow(component, path, register, inertCustomId, premiumSkuIds);
     case "section": return {
       type: 9,
       components: component.text.map((content) => ({ type: 10, content })),
       accessory: component.accessory.type === "button"
-        ? compileButton(component.accessory, register)
+        ? compileButton(component.accessory, `${path}.accessory`, register, inertCustomId, premiumSkuIds)
         : compileThumbnail(component.accessory),
     };
     case "media_gallery": return { type: 12, items: component.items.map((item) => ({ media: { url: item.url }, description: item.description, spoiler: item.spoiler })) };
@@ -167,43 +189,58 @@ function compileMessageComponent(
       type: 17,
       accent_color: component.accentColor,
       spoiler: component.spoiler,
-      components: component.components.map((child) => compileMessageComponent(child, register)),
+      components: component.components.map((child, index) => compileMessageComponent(child, `${path}.components.${index}`, register, inertCustomId, premiumSkuIds)),
     };
   }
 }
 
 function compileActionRow(
   row: DiscordActionRowSpec,
+  path: string,
   register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
+  inertCustomId: () => string,
+  premiumSkuIds: ReadonlySet<string>,
 ) {
   return {
     type: 1,
-    components: row.components.map((component) => component.type === "button" ? compileButton(component, register) : compileSelect(component, register)),
+    components: row.components.map((component, index) => component.type === "button"
+      ? compileButton(component, `${path}.components.${index}`, register, inertCustomId, premiumSkuIds)
+      : compileSelect(component, `${path}.components.${index}`, register, inertCustomId)),
   };
 }
 
 function compileButton(
   button: DiscordButtonSpec,
+  path: string,
   register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
+  inertCustomId: () => string,
+  premiumSkuIds: ReadonlySet<string>,
 ) {
-  if (button.style === "premium") return { type: 2, style: 6, sku_id: button.skuId, disabled: button.disabled };
+  if (button.style === "premium") {
+    if (!premiumSkuIds.has(button.skuId)) throw new Error(`Discord premium button SKU is not configured: ${button.skuId}`);
+    return { type: 2, style: 6, sku_id: button.skuId, disabled: button.disabled };
+  }
   const common = { type: 2, label: button.label, emoji: button.emoji, disabled: button.disabled };
   if (button.style === "link") return { ...common, style: 5, url: button.url };
   const style = { primary: 1, secondary: 2, success: 3, danger: 4 }[button.style];
   const stored: DiscordStoredComponentAction = button.action.type === "modal"
-    ? { type: "modal", prompt: button.action.prompt, modal: button.action.modal }
-    : { type: "continue", prompt: button.action.prompt };
-  return { ...common, style, custom_id: register(stored, button.action.singleUse) };
+    ? { type: "modal", prompt: button.action.prompt, modal: button.action.modal, metadata: { componentPath: path, label: button.label } }
+    : { type: "continue", prompt: button.action.prompt, metadata: { componentPath: path, label: button.label } };
+  return { ...common, style, custom_id: button.disabled ? inertCustomId() : register(stored, button.action.singleUse) };
 }
 
 function compileSelect(
   select: DiscordSelectSpec,
+  path: string,
   register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
+  inertCustomId: () => string,
 ) {
   const type = { string_select: 3, user_select: 5, role_select: 6, mentionable_select: 7, channel_select: 8 }[select.type];
   const base: any = {
     type,
-    custom_id: register({ type: "select", prompt: select.prompt }, select.singleUse),
+    custom_id: select.disabled
+      ? inertCustomId()
+      : register({ type: "select", prompt: select.prompt, metadata: { componentPath: path, label: select.placeholder ?? select.type } }, select.singleUse),
     placeholder: select.placeholder,
     min_values: select.minValues,
     max_values: select.maxValues,

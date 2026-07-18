@@ -335,6 +335,7 @@ export async function executeDiscordAgentRequest(
           content: response.content,
           footer: formatDiscordResponseFooter(formattedFooter),
           fileNames: response.files?.map((file) => file.name),
+          premiumSkuIds: input.config.discord.premiumSkuIds,
         })).catch((error) => {
           requestLogger.warn({ err: error }, "Failed to prepare Discord rich presentation; using plain response");
           return null;

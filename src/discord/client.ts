@@ -56,8 +56,8 @@ export function createDiscordAiAgentBot(input: {
       ],
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
     });
-  let acceptingMessages = true;
-  const activeMessageHandlers = new Set<Promise<void>>();
+  let acceptingRequests = true;
+  const activeRequestHandlers = new Set<Promise<void>>();
   let componentActionCleanupTimer: NodeJS.Timeout | null = null;
 
   client.once(Events.ClientReady, (readyClient) => {
@@ -117,7 +117,7 @@ export function createDiscordAiAgentBot(input: {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    if (!acceptingMessages) {
+    if (!acceptingRequests) {
       logger.info({ messageId: message.id, channelId: message.channelId }, "Ignoring Discord message while bot is draining");
       return;
     }
@@ -126,11 +126,11 @@ export function createDiscordAiAgentBot(input: {
         logger.error({ err: error, messageId: message.id }, "Message handler failed");
       });
     });
-    activeMessageHandlers.add(handler);
+    activeRequestHandlers.add(handler);
     try {
       await handler;
     } finally {
-      activeMessageHandlers.delete(handler);
+      activeRequestHandlers.delete(handler);
     }
   });
 
@@ -219,19 +219,35 @@ export function createDiscordAiAgentBot(input: {
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
-    if (await handleDiscordRichInteraction(input, client, interaction).catch((error) => {
-      logger.error({ err: error, interactionId: interaction.id }, "Discord rich interaction handler failed");
-      return false;
-    })) return;
-    if (!interaction.isChatInputCommand() || interaction.commandName !== "ai") return;
-    await interaction
-      .reply({
-        content: "Discord AI Agent slash commands are disabled. Mention me with `@ai status` or `@ai tools` instead.",
-        flags: MessageFlags.Ephemeral
-      })
-      .catch((error) => {
-        logger.warn({ err: error }, "Failed to reply to stale slash command interaction");
-      });
+    if (!acceptingRequests) {
+      if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
+        const payload = { content: "I’m restarting right now. Please try that control again in a moment.", flags: MessageFlags.Ephemeral } as const;
+        const response = interaction.deferred || interaction.replied ? interaction.followUp(payload) : interaction.reply(payload);
+        await response.catch((error) => logger.debug({ err: error, interactionId: interaction.id }, "Failed to reject Discord interaction while draining"));
+      }
+      return;
+    }
+    const handler = (async () => {
+      if (await handleDiscordRichInteraction(input, client, interaction).catch((error) => {
+        logger.error({ err: error, interactionId: interaction.id }, "Discord rich interaction handler failed");
+        return false;
+      })) return;
+      if (!interaction.isChatInputCommand() || interaction.commandName !== "ai") return;
+      await interaction
+        .reply({
+          content: "Discord AI Agent slash commands are disabled. Mention me with `@ai status` or `@ai tools` instead.",
+          flags: MessageFlags.Ephemeral
+        })
+        .catch((error) => {
+          logger.warn({ err: error }, "Failed to reply to stale slash command interaction");
+        });
+    })();
+    activeRequestHandlers.add(handler);
+    try {
+      await handler;
+    } finally {
+      activeRequestHandlers.delete(handler);
+    }
   });
 
   return {
@@ -241,13 +257,13 @@ export function createDiscordAiAgentBot(input: {
       await client.login(input.config.discord.token);
     },
     drain: async (timeoutMs = 30_000) => {
-      acceptingMessages = false;
-      if (activeMessageHandlers.size === 0) return;
-      logger.info({ activeMessageHandlers: activeMessageHandlers.size, timeoutMs }, "Waiting for active Discord message handlers to drain");
-      await waitForActiveHandlers(activeMessageHandlers, timeoutMs);
+      acceptingRequests = false;
+      if (activeRequestHandlers.size === 0) return;
+      logger.info({ activeRequestHandlers: activeRequestHandlers.size, timeoutMs }, "Waiting for active Discord request handlers to drain");
+      await waitForActiveHandlers(activeRequestHandlers, timeoutMs);
     },
     destroy: () => {
-      acceptingMessages = false;
+      acceptingRequests = false;
       if (componentActionCleanupTimer) clearInterval(componentActionCleanupTimer);
       client.destroy();
     }

@@ -1,6 +1,7 @@
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { ConversationMessage } from "../db/repositories.js";
 import type { DiscordAttachmentContext, DiscordReplyContext } from "../tools/types.js";
+import type { DiscordInteractionSubmission } from "../discord/components/interactionNormalization.js";
 
 export type AgentRuntimeConversationMessageSnapshot = {
   id: number;
@@ -42,13 +43,7 @@ export type AgentRuntimeTurnEnvelope = {
     statusChannelId: string | null;
     statusMessageId: string | null;
   };
-  interaction?: {
-    messageId: string;
-    customId: string;
-    componentType: string;
-    values?: string[];
-    fields?: Record<string, unknown>;
-  } | null;
+  interaction?: DiscordInteractionSubmission | null;
   createdAt: string;
 };
 
@@ -267,9 +262,9 @@ export function agentRuntimeInputLinesFromEnvelope(envelope: AgentRuntimeTurnEnv
 export function agentRuntimeTurnInputText(input: Pick<AgentRuntimeTurnEnvelope, "text" | "interaction">): string {
   if (!input.interaction) return input.text;
   const submitted = {
-    componentType: input.interaction.componentType,
-    ...(input.interaction.values?.length ? { values: input.interaction.values } : {}),
-    ...(input.interaction.fields && Object.keys(input.interaction.fields).length ? { fields: input.interaction.fields } : {}),
+    schemaVersion: input.interaction.schemaVersion,
+    component: input.interaction.component,
+    ...(input.interaction.fields?.length ? { fields: input.interaction.fields } : {}),
   };
   return [
     "[Model-authored Discord component action]",

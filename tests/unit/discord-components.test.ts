@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { MessageFlags } from "discord.js";
+import { ComponentType, MessageFlags } from "discord.js";
 import { buildDiscordModal, discordComponentToken, prepareDiscordPresentation } from "../../src/discord/components/renderer.js";
 import { parseDiscordPresentation } from "../../src/discord/components/validation.js";
 import { restrictedToolGate } from "../../src/agent/toolGate.js";
 import { handleDiscordRichInteraction } from "../../src/discord/components/interactionHandler.js";
 import { composeDiscordResponse } from "../../src/tools/discordPresentationTools.js";
 import { decodeDiscordComponentAction, encodeDiscordComponentAction } from "../../src/discord/components/actionCodec.js";
+import { normalizeModalSubmission } from "../../src/discord/components/interactionNormalization.js";
 
 describe("Discord rich components", () => {
   it("stores a validated presentation through the model-facing composition tool", async () => {
@@ -190,12 +191,90 @@ describe("Discord rich components", () => {
     expect(() => prepareDiscordPresentation({ presentation, content: "Report", fileNames: [] })).toThrow(/missing attachment/i);
   });
 
+  it("does not persist actions for disabled controls", () => {
+    const presentation = parseDiscordPresentation({ components: [{ type: "action_row", components: [
+      { type: "button", label: "Disabled", style: "primary", disabled: true, action: { type: "continue", prompt: "Never run" } },
+    ] }, { type: "action_row", components: [
+      { type: "string_select", prompt: "Never select", disabled: true, options: [{ label: "A", value: "a" }] },
+    ] }] });
+    const prepared = prepareDiscordPresentation({ presentation, content: "Done", tokenFactory: () => "abcdefghijklmnopqrstuvwx" });
+    const payload = prepared.payload as any;
+
+    expect(prepared.registrations).toEqual([]);
+    expect(payload.components[1].components[0].custom_id).toMatch(/^ai:v1:x:/);
+    expect(payload.components[2].components[0].custom_id).toMatch(/^ai:v1:x:/);
+    expect(discordComponentToken(payload.components[1].components[0].custom_id)).toBeNull();
+  });
+
+  it("gates premium buttons to configured application SKUs", () => {
+    const presentation = parseDiscordPresentation({ components: [{ type: "action_row", components: [
+      { type: "button", style: "premium", skuId: "123456789012345678" },
+    ] }] });
+
+    expect(() => prepareDiscordPresentation({ presentation, content: "Upgrade" })).toThrow(/SKU is not configured/i);
+    expect(() => prepareDiscordPresentation({ presentation, content: "Upgrade", premiumSkuIds: ["123456789012345678"] })).not.toThrow();
+  });
+
+  it("enforces Discord attachment count and filename uniqueness before delivery", () => {
+    const presentation = parseDiscordPresentation({ components: [{ type: "text", content: "Files" }] });
+    expect(() => prepareDiscordPresentation({ presentation, content: "Files", fileNames: ["same.txt", "same.txt"] })).toThrow(/unique/i);
+    expect(() => prepareDiscordPresentation({ presentation, content: "Files", fileNames: Array.from({ length: 11 }, (_, index) => `${index}.txt`) })).toThrow(/at most 10/i);
+  });
+
+  it("records deterministic component metadata with stored actions", () => {
+    const presentation = parseDiscordPresentation({ components: [{ type: "container", components: [{ type: "action_row", components: [
+      { type: "button", label: "Continue", style: "primary", action: { type: "continue", prompt: "Continue" } },
+    ] }] }] });
+    const prepared = prepareDiscordPresentation({ presentation, content: "Ready", tokenFactory: () => "abcdefghijklmnopqrstuvwx" });
+    expect(prepared.registrations[0]?.action).toEqual(expect.objectContaining({
+      metadata: { componentPath: "components.0.components.0.components.0", label: "Continue" },
+    }));
+  });
+
   it("round-trips only supported versioned stored actions", () => {
     const encoded = encodeDiscordComponentAction({ type: "continue", prompt: "Explain more" });
     expect(decodeDiscordComponentAction(encoded)).toEqual({ type: "continue", prompt: "Explain more" });
     expect(decodeDiscordComponentAction({ ...encoded, version: 2 })).toBeNull();
     expect(decodeDiscordComponentAction({ ...encoded, kind: "select" })).toBeNull();
     expect(decodeDiscordComponentAction({ ...encoded, payload: { type: "continue", prompt: "" } })).toBeNull();
+  });
+
+  it("normalizes every modal submission field without leaking transport identifiers", () => {
+    const attachment = {
+      id: "attachment-1", name: "report.csv", size: 42, contentType: "text/csv",
+      url: "https://cdn.example/report.csv", proxyURL: "https://proxy.example/report.csv",
+      width: null, height: null, description: null,
+    };
+    const normalized = normalizeModalSubmission({
+      message: { id: "response-message" },
+      fields: { fields: new Map([
+        ["text", { type: ComponentType.TextInput, value: "hello" }],
+        ["string", { type: ComponentType.StringSelect, values: ["a"] }],
+        ["user", { type: ComponentType.UserSelect, values: ["user-1"] }],
+        ["role", { type: ComponentType.RoleSelect, values: ["role-1"] }],
+        ["mention", { type: ComponentType.MentionableSelect, values: ["user-2", "role-2"] }],
+        ["channel", { type: ComponentType.ChannelSelect, values: ["channel-1"] }],
+        ["file", { type: ComponentType.FileUpload, attachments: new Map([[attachment.id, attachment]]) }],
+        ["radio", { type: ComponentType.RadioGroup, value: "option-1" }],
+        ["checks", { type: ComponentType.CheckboxGroup, values: ["one", "two"] }],
+        ["agree", { type: ComponentType.Checkbox, value: true }],
+      ]) },
+      customId: "ai:v1:m:secret-token:submit",
+    } as any);
+
+    expect(normalized.submission).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      messageId: "response-message",
+      component: { type: "modal_submit" },
+      fields: expect.arrayContaining([
+        { key: "text", type: "text_input", value: "hello" },
+        { key: "string", type: "string_select", values: ["a"] },
+        { key: "agree", type: "checkbox", value: true },
+        { key: "file", type: "file_upload", files: [{ id: "attachment-1", name: "report.csv", sizeBytes: 42, contentType: "text/csv" }] },
+      ]),
+    }));
+    expect(normalized.attachments).toEqual([expect.objectContaining({ id: "attachment-1", filename: "report.csv" })]);
+    expect(JSON.stringify(normalized.submission)).not.toContain("secret-token");
   });
 
   it("blocks generic component turns from authorizing mutating tools", async () => {
@@ -238,11 +317,11 @@ describe("Discord rich components", () => {
       channelId: "channel",
       message: { id: "response" },
       user: { id: "other" },
-      deferred: true,
+      deferred: false,
       replied: false,
       isMessageComponent: () => true,
       isModalSubmit: () => false,
-      deferUpdate: vi.fn(async () => { events.push("defer"); }),
+      deferUpdate: vi.fn(async () => { events.push("defer"); interaction.deferred = true; }),
       followUp,
     } as any;
     const repo = { resolveDiscordComponentAction: vi.fn(async () => { events.push("resolve"); return { ok: false, reason: "wrong_user" }; }) };

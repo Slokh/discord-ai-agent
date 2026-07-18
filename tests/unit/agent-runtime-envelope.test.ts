@@ -238,18 +238,17 @@ describe("agent runtime envelope", () => {
     const text = agentRuntimeTurnInputText({
       text: "Compare the selected choices",
       interaction: {
+        schemaVersion: 1,
         messageId: "response",
-        customId: "opaque",
-        componentType: "string_select",
-        values: ["one", "two"],
-        fields: { note: "current user text" },
+        component: { type: "string_select", values: ["one", "two"] },
+        fields: [{ key: "note", type: "text_input", value: "current user text" }],
       },
     });
 
     expect(text).toContain("[Model-authored Discord component action]\nCompare the selected choices");
     expect(text).toContain("[Current user-submitted Discord interaction data]");
     expect(text).toContain('"values":["one","two"]');
-    expect(text).toContain('"note":"current user text"');
+    expect(text).toContain('"key":"note","type":"text_input","value":"current user text"');
     expect(text).not.toContain("opaque");
   });
 });

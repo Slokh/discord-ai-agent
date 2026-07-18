@@ -178,10 +178,14 @@ export const discordPresentationSchema = z.object({
   }
 });
 
+const discordStoredActionMetadataShape = {
+  metadata: z.object({ componentPath: shortText(200), label: shortText(100).optional() }).optional(),
+};
+
 export const discordStoredComponentActionV1Schema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("continue"), prompt: shortText(2_000) }),
-  z.object({ type: z.literal("select"), prompt: shortText(2_000) }),
-  z.object({ type: z.literal("modal"), prompt: shortText(2_000), modal: discordModalSchema }),
+  z.object({ type: z.literal("continue"), prompt: shortText(2_000), ...discordStoredActionMetadataShape }),
+  z.object({ type: z.literal("select"), prompt: shortText(2_000), ...discordStoredActionMetadataShape }),
+  z.object({ type: z.literal("modal"), prompt: shortText(2_000), modal: discordModalSchema, ...discordStoredActionMetadataShape }),
 ]);
 
 export type DiscordComponentAudience = z.infer<typeof discordPresentationSchema>["audience"];

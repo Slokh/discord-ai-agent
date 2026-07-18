@@ -97,14 +97,16 @@ export async function sendDiscordPollMessage(
     throw new Error("This channel does not support sending poll messages.");
   }
   try {
-    const posted = await send.call(channel, {
+    const result = await discordWrite(() => send.call(channel, {
       poll: {
         question: { text: input.question },
         answers: input.answers.map((text) => ({ text })),
         duration: input.durationHours,
         allowMultiselect: input.allowMultiselect
       }
-    });
+    }), { logger: defaultLogger }, "send_poll");
+    if (!result.ok) throw result.error;
+    const posted = result.value;
     return {
       messageId: posted.id,
       channelId: posted.channelId,

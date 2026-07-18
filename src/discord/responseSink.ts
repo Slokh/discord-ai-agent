@@ -3,7 +3,7 @@ import type { Logger } from "pino";
 import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
-import { plainDiscordComponentsV2Payload, type PreparedDiscordPresentation } from "./components/renderer.js";
+import { plainDiscordComponentsV2Payload, validateDiscordAttachmentNames, type PreparedDiscordPresentation } from "./components/renderer.js";
 import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
 
 export const DEFAULT_DISCORD_LOADING_REACTION = "⏳";
@@ -112,6 +112,7 @@ export class DiscordResponseSink {
   }
 
   async sendFinal(input: { content: string; files?: AgentFile[]; footer?: DiscordResponseFooter | null; presentation?: PreparedDiscordPresentation | null }): Promise<DiscordResponseResult> {
+    validateDiscordAttachmentNames(input.files?.map((file) => file.name) ?? []);
     const files = input.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }));
     const footerLine = formatDiscordResponseFooter(input.footer);
     const rawBody = input.content.trim() || "Done.";

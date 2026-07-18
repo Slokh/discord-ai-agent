@@ -3,6 +3,7 @@ import type { ConversationMessage, ServerOverlay } from "../db/repositories.js";
 import type {
   AgentResponse,
   DiscordAttachmentContext,
+  DiscordGuildEmojiSummary,
   DiscordReplyContext,
   ToolContext,
 } from "../tools/types.js";
@@ -43,6 +44,7 @@ export function chatMessages(
   serverOverlay?: ServerOverlay,
   requester?: { userId: string; userDisplayName: string },
   promptOverlay?: string,
+  discordGuildEmojis: DiscordGuildEmojiSummary[] = [],
 ): ChatMessage[] {
   return [
     {
@@ -100,6 +102,7 @@ export function chatMessages(
     },
     ...serverOverlayMessagesForPrompt(serverOverlay),
     ...promptOverlayMessagesForPrompt(promptOverlay),
+    ...discordGuildEmojiMessagesForPrompt(discordGuildEmojis),
     ...sessionMessagesForPrompt(sessionMessages, {
       includeToolResultBodies:
         Boolean(replyContext) || referencesPriorToolResults(text),
@@ -113,6 +116,17 @@ export function chatMessages(
     },
     { role: "user" as const, content: text },
   ];
+}
+
+function discordGuildEmojiMessagesForPrompt(emojis: DiscordGuildEmojiSummary[]): ChatMessage[] {
+  if (emojis.length === 0) return [];
+  return [{
+    role: "system",
+    content:
+      "Live custom emojis available in this Discord server are listed below. In casual replies, use a fitting custom emoji naturally and sparingly when it adds personality; using none is fine. " +
+      "Copy an exact mention token from this palette so Discord renders it. Never invent an emoji name or ID, use plain :name: syntax, wrap the token in code formatting, or dump the palette into the reply.\n" +
+      emojis.map((emoji) => emoji.mention).join(" "),
+  }];
 }
 
 function referencesPriorToolResults(text: string) {

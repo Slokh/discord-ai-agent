@@ -67,6 +67,19 @@ describe("prompt context cost controls", () => {
     expect(systemPrompt).toContain("Use lists or multiple paragraphs only for multi-part, detailed, or evidence-heavy requests");
   });
 
+  it("teaches the model exact live server emoji mentions without changing the static prompt", () => {
+    const messages = chatMessages("nice", "", [], undefined, [], undefined, undefined, undefined, [
+      { id: "1", name: "party", animated: false, mention: "<:party:1>" },
+      { id: "2", name: "wave", animated: true, mention: "<a:wave:2>" },
+    ]);
+    const prompt = messages.map((message) => String(message.content)).join("\n");
+
+    expect(prompt).toContain("Live custom emojis available in this Discord server");
+    expect(prompt).toContain("naturally and sparingly");
+    expect(prompt).toContain("<:party:1> <a:wave:2>");
+    expect(prompt).toContain("Never invent an emoji name or ID");
+  });
+
   it("grounds relative dates and current offers in fresh tool evidence", () => {
     const guidance = String(currentDataGuidance(new Date("2026-07-15T12:00:00.000Z")).content);
 

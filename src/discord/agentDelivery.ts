@@ -9,7 +9,7 @@ import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } 
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
-import { createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
+import { createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
 import { discordChannelThreadKey } from "./mentionParsing.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { loadAgentRuntimeInputLines, prepareDiscordAgentTurn, replayPreparedDiscordAgentTurn } from "./turnPreparation.js";
@@ -198,6 +198,10 @@ export async function executeDiscordAgentRequest(
       artifactId: request.inputLinesArtifactId,
       requestLogger
     });
+    const discordGuildEmojis = await fetchDiscordGuildEmojis(client, turnEnvelope.guildId).catch((error) => {
+      requestLogger.warn({ err: error }, "Failed to load the live Discord guild emoji palette");
+      return [];
+    });
     const toolContext: ToolContext = {
       config: input.config,
       repo: input.repo,
@@ -250,6 +254,7 @@ export async function executeDiscordAgentRequest(
       createDiscordEmoji: async (emojiInput) => createDiscordGuildEmoji(client, turnEnvelope.guildId, emojiInput),
       fetchDiscordUserAvatar: async ({ userId }) => fetchDiscordUserAvatar(client, turnEnvelope.guildId, userId),
       fetchDiscordGuildMembers: async () => fetchDiscordGuildMembers(client, turnEnvelope.guildId),
+      discordGuildEmojis,
       fetchDiscordAttachment: async ({ channelId, messageId, attachmentId }) =>
         fetchDiscordAttachment(client, { channelId, messageId, attachmentId })
     };

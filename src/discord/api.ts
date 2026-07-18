@@ -1,6 +1,6 @@
 import { PermissionFlagsBits, type Client, type GuildMember, type Message, type MessageCreateOptions, type MessageEditOptions, type MessagePayload, type MessageReaction } from "discord.js";
 import type { Logger } from "pino";
-import type { DiscordAttachmentContext, DiscordGuildMemberSummary, DiscordUserAvatarResult } from "../tools/types.js";
+import type { DiscordAttachmentContext, DiscordGuildEmojiSummary, DiscordGuildMemberSummary, DiscordUserAvatarResult } from "../tools/types.js";
 import { logger as defaultLogger } from "../util/logger.js";
 import { discordRetryDelayMs, retryAfterMsFromDiscordError } from "./crawler.js";
 
@@ -138,6 +138,23 @@ export async function createDiscordGuildEmoji(
     mention: emoji.toString(),
     url: emoji.imageURL({ extension: "webp", size: 128 }),
   };
+}
+
+export async function fetchDiscordGuildEmojis(
+  client: Client,
+  guildId: string,
+): Promise<DiscordGuildEmojiSummary[]> {
+  const guild = client.guilds.cache.get(guildId) ?? (await client.guilds.fetch(guildId));
+  return [...guild.emojis.cache.values()]
+    .filter((emoji) => Boolean(emoji.name) && emoji.available !== false)
+    .map((emoji) => ({
+      id: emoji.id,
+      name: emoji.name!,
+      animated: Boolean(emoji.animated),
+      mention: `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+    .slice(0, 100);
 }
 
 export async function fetchDiscordUserAvatar(

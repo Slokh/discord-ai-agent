@@ -47,6 +47,7 @@ export function createDiscordAiAgentBot(input: {
     new Client({
       intents: [
         GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildExpressions,
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,

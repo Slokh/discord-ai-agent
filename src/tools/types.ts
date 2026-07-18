@@ -74,6 +74,7 @@ export type ToolContext = {
     userId: string;
   }) => Promise<DiscordUserAvatarResult | null>;
   fetchDiscordGuildMembers?: (input: { guildId: string }) => Promise<DiscordGuildMemberSummary[]>;
+  discordGuildEmojis?: DiscordGuildEmojiSummary[];
   fetchDiscordAttachment?: (input: {
     channelId: string;
     messageId: string;
@@ -89,6 +90,13 @@ export type DiscordGuildMemberSummary = {
   username: string | null;
   displayName: string | null;
   isBot: boolean;
+};
+
+export type DiscordGuildEmojiSummary = {
+  id: string;
+  name: string;
+  animated: boolean;
+  mention: string;
 };
 
 export type DiscordUserAvatarResult = {

@@ -92,7 +92,6 @@ async function runAgentModelLoopInternal(
   const startedAt = Date.now();
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
-
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
   const serverOverlay = await loadServerOverlay(ctx);
   const promptOverlay = await loadPromptOverlayText(
@@ -110,6 +109,7 @@ async function runAgentModelLoopInternal(
       userDisplayName: ctx.userDisplayName,
     },
     promptOverlay,
+    ctx.discordGuildEmojis,
   );
   if (automaticStarterFunds) {
     messages.splice(Math.max(0, messages.length - 1), 0, {

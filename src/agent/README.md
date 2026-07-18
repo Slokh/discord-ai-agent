@@ -5,6 +5,7 @@ Owns the model loop for one user prompt.
 ## Responsibilities
 
 - Build the model input from user text, per-channel memory, reply context, image context, skills, and tool schemas.
+- Add the current server's bounded live custom-emoji palette as dynamic prompt context, keeping server-specific names and IDs out of the static public prompt.
 - Execute model-selected local tools and hosted OpenRouter tools.
 - Record trace spans, tool audit logs, costs, and final response memory.
 - Synthesize the final answer and files.

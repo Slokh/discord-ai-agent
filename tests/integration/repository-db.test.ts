@@ -499,6 +499,19 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(agentRuntimeRepo.getArtifact({ artifactId: artifact.artifactId })).resolves.toEqual(
       expect.objectContaining({ content: expect.not.stringContaining("ghp_") })
     );
+    const binaryData = Buffer.from([0, 1, 2, 3, 255]);
+    const binaryArtifact = await agentRuntimeRepo.storeBinaryArtifact({
+      sessionId,
+      executionId,
+      kind: "discord_delivery_file",
+      name: "result.bin",
+      data: binaryData,
+      contentType: "application/octet-stream",
+    });
+    expect(binaryArtifact).toEqual(expect.objectContaining({ sizeBytes: binaryData.length, redacted: false }));
+    await expect(agentRuntimeRepo.getBinaryArtifact({ artifactId: binaryArtifact.artifactId })).resolves.toEqual(
+      expect.objectContaining({ data: binaryData }),
+    );
     const expiredArtifact = await agentRuntimeRepo.storeArtifact({
       sessionId,
       executionId,

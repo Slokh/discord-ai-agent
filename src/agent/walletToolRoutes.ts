@@ -14,6 +14,7 @@ import {
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentToolRoute } from "./routerShared.js";
+import { numberArgument, recordArgument, stringArgument, stringArrayArgument } from "./toolHandlers/arguments.js";
 
 export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolRoute): Promise<AgentResponse | null> {
   if (route.name === "awaitRandomWagerAction") {
@@ -75,28 +76,4 @@ export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolR
     return { content: cleanResponse(await reconcileWalletTransfers(ctx), ctx.config.maxReplyChars) };
   }
   return null;
-}
-
-function stringArgument(args: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = args?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function numberArgument(args: Record<string, unknown> | undefined, key: string): number | undefined {
-  const value = args?.[key];
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
-  return undefined;
-}
-
-function recordArgument(args: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
-  const value = args?.[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-function stringArrayArgument(args: Record<string, unknown> | undefined, key: string): string[] | undefined {
-  const value = args?.[key];
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
 }

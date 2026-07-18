@@ -64,12 +64,15 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         "019_discord_component_actions",
         "020_discord_component_action_generations",
         "021_discord_component_action_expiry_index",
+        "022_agent_runtime_binary_artifacts",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
       await expect(client.query("SELECT count(*)::int AS count FROM discord_emoji_channel_profiles"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM discord_component_actions"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM agent_runtime_artifact_blobs"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);

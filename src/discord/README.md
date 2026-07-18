@@ -4,12 +4,12 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 
 ## Responsibilities
 
-- Bot login, guild scoping, message/reaction/edit/delete events, and mention detection.
+- Bot login, guild scoping, message/reaction/edit/delete events, and mention detection. `taskSupervisor.ts` provides one admission/error/drain lifecycle for every asynchronous gateway and startup task so deploys cannot accept untracked reaction or maintenance work.
 - Reply context, request attachments, image metadata, permissions, and channel visibility.
 - Response sink for acknowledgements, lazy status messages, final replies, attachments, and cleanup.
 - Components V2 validation and side-effect-free rendering, capability-aware V2 delivery, opaque durable action generations, and requester-scoped typed click/modal ingress live under `components/`; see [`../../docs/discord-rich-components.md`](../../docs/discord-rich-components.md).
-- `api.ts` wraps Discord writes (reply/edit/send/react/delete) with shared retry/error classification; user-visible rendering should route through it rather than calling message methods directly.
-- Delivery obligations are persisted for in-flight agent-runtime turns. Before Discord writes, `deliveryIntent.ts` stores a versioned replayable response (including rich layout and files); startup sweeping can safely complete it with stable enforced message nonces, or post a conservative restart notice when no response was ready.
+- `api.ts` is the typed outbound Discord mutation boundary for replies, edits, sends, reactions, guild expressions, bot profile changes, and one-shot interaction responses. Interaction callbacks disable retries but still return classified/logged failures.
+- Delivery obligations are persisted for in-flight agent-runtime turns. Before Discord writes, `deliveryIntent.ts` stores a versioned replayable response and references bounded binary file artifacts by size and SHA-256 instead of base64-embedding them in JSON. Startup sweeping validates file integrity, retains v1 read compatibility, and safely completes delivery with stable enforced message nonces or posts a conservative restart notice when no response was ready.
 - Queue handoff into durable agent runtime executions.
 - Full-server crawl and incremental message persistence.
 - Code-update task progress rendering back to Discord.
@@ -29,7 +29,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 
 ## Tests
 
-- Discord client behavior: `tests/unit/discord-client.test.ts`.
+- Discord client behavior: `tests/unit/discord-client.test.ts`; lifecycle admission/draining: `tests/unit/discord-task-supervisor.test.ts`.
 - Agent execution delivery and response lifecycle: `tests/unit/agent-delivery.test.ts` and `tests/unit/discord-response-sink.test.ts`.
 - Reply context and permissions: `tests/unit/discord-reply-context.test.ts` and `tests/unit/discord-permissions.test.ts`.
 - Delivery write/sweep helpers: `tests/unit/discord-api.test.ts` and `tests/unit/discord-delivery-sweep.test.ts`.

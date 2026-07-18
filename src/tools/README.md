@@ -4,9 +4,12 @@ Owns model-facing local tool contracts and implementations.
 
 ## Responsibilities
 
-- `registry.ts`: names, descriptions, schemas, examples, output contracts, and tool taxonomy exposed to the model.
+- `contracts/`: focused, compile-time checked contract families containing names, descriptions, schemas, examples, output contracts, and tool taxonomy exposed to the model.
+- `toolDefinition.ts`: canonical tool names/types plus `defineTool` and fail-fast contract-to-handler binding.
+- `registry.ts`: small aggregation/index/cache layer for contract families and hosted tools; model definitions are cached by contract identity.
+- `../agent/toolHandlers/`: focused execution adapters by the same coarse families; `toolDispatcher.ts` is only the validation/gating/delegation boundary and an O(1) handler lookup.
 - `toolContractValidation.ts`: compiles every local tool's advertised JSON Schema and validates raw model arguments against that same contract before permissions, budgets, or implementations run.
-- `toolDeployment.ts`: applies deployment capability narrowing once for both the model-visible schema and runtime validator (currently wallet-backed wager fields and configured premium Discord SKUs).
+- `toolDeployment.ts`: applies and caches deployment capability narrowing once for both the model-visible schema and runtime validator (currently wallet-backed wager fields and configured premium Discord SKUs).
 - `agentTaskTools.ts`: model-facing code-update task creation, status, retry/cancel, deployment status, and task log snippets.
 - `agentTaskFormatting.ts`: code-update task titles, task result messages, compact timing/cache lines, and shared duration formatting.
 - `discordHistoryFormatting.ts`: Discord history search syntax, date coercion, no-results text, and history evidence/summary formatting.
@@ -34,7 +37,7 @@ Owns model-facing local tool contracts and implementations.
 - If the model chose the wrong capability, update tool descriptions/schema/examples and add a registry or agent test.
 - If the tool returned weak data, update the implementation and closest domain query.
 - If the requested behavior is durable storage/indexing/retrieval, fix the owning data lifecycle first; do not rely on prompt/tool wording alone.
-- If adding a new tool, add registry metadata, implementation, audit behavior, and at least one unit or integration test.
+- If adding a new tool, define it in the owning `contracts/` family, bind its implementation through the typed handler registry (or an explicit delegated high-risk router), add audit behavior, and add at least one unit or integration test. Startup fails on missing or unknown handlers.
 
 ## Tests
 
@@ -45,7 +48,7 @@ Owns model-facing local tool contracts and implementations.
 
 ## Structure
 
-Implementation lives directly in focused modules by tool family: Discord resolvers/retrieval/summary/ops, agent memory, generated files, images, skills, code-update tasks, spend, Spotify, and response formatting. Add new tools to the owning family module and expose them through `registry.ts`.
+Implementation lives directly in focused modules by tool family: Discord resolvers/retrieval/summary/ops, agent memory, generated files, images, skills, code-update tasks, spend, Spotify, and response formatting. Add contracts to the matching `contracts/` family; `registry.ts` aggregates them without owning individual schemas.
 
 ## Tool Groups and Scoped Toolsets
 

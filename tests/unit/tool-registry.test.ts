@@ -81,6 +81,10 @@ describe("toolRegistry", () => {
     expect(renderToolList()).toContain("web_search");
   });
 
+  it("reuses compiled model definitions for stable scoped toolsets", () => {
+    expect(toolDefinitionsForModel()).toBe(toolDefinitionsForModel());
+  });
+
   it("derives the rich presentation tool contract from the exhaustive runtime schema", () => {
     const tool = toolRegistry.find((entry) => entry.name === "composeDiscordResponse");
     const schema = JSON.stringify(tool?.parameters);

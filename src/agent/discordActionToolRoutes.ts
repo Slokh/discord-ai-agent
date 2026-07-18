@@ -5,6 +5,7 @@ import { composeDiscordResponse } from "../tools/discordPresentationTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentToolRoute } from "./routerShared.js";
+import { booleanArgument, numberArgument, stringArgument, stringArrayArgument } from "./toolHandlers/arguments.js";
 
 export async function executeDiscordActionToolRoute(
   ctx: ToolContext,
@@ -45,31 +46,4 @@ export async function executeDiscordActionToolRoute(
     };
   }
   return null;
-}
-
-function stringArgument(args: Record<string, unknown> | undefined, key: string) {
-  const value = args?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function stringArrayArgument(args: Record<string, unknown> | undefined, key: string) {
-  const value = args?.[key];
-  if (!Array.isArray(value)) return undefined;
-  const strings = value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim());
-  return strings.length ? strings : undefined;
-}
-
-function numberArgument(args: Record<string, unknown> | undefined, key: string) {
-  const value = args?.[key];
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
-  return undefined;
-}
-
-function booleanArgument(args: Record<string, unknown> | undefined, key: string) {
-  const value = args?.[key];
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string" && /^(true|yes|1)$/i.test(value)) return true;
-  if (typeof value === "string" && /^(false|no|0)$/i.test(value)) return false;
-  return undefined;
 }

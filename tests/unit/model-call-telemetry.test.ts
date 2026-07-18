@@ -106,7 +106,7 @@ describe("runObservedModelCall", () => {
     expect(storeArtifact).toHaveBeenCalledWith(expect.objectContaining({ kind: "model_prompt", contentType: "application/json" }));
     expect(storeArtifact).toHaveBeenCalledWith(expect.objectContaining({
       kind: "model_response",
-      content: expect.stringMatching(/"serverToolUse"[\s\S]*"web_search_requests": 1[\s\S]*"urlCitations"/),
+      content: expect.stringMatching(/"serverToolUse"[\s\S]*"web_search_requests":\s*1[\s\S]*"urlCitations"/),
     }));
     expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.model.call.completed",

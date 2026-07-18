@@ -4,7 +4,7 @@ The bot should stay model-led: users write normal `@ai ...` prompts, the model c
 
 ## Tool Taxonomy
 
-Every model-facing tool has a class in `src/tools/registry.ts`. The class and output contract are injected into the function description sent to the model.
+Every model-facing tool has a class in a focused module under `src/tools/contracts/`. `src/tools/registry.ts` aggregates and indexes those definitions; the class and output contract are injected into the function description sent to the model.
 
 | Class | Purpose |
 | --- | --- |
@@ -38,7 +38,7 @@ File inspection should be format-led rather than prompt-led. Add parsers behind 
 
 Local tools that return structured `AgentResponse` may include an additive status envelope: `status` (`ok`, `error`, or `partial`), stable snake_case `errorCode`, `retryable`, and `limitation`. These fields are metadata only; human-readable `content` remains the primary model-facing text. Omitted `status` means success/ok. Use `limitation` for truncated or partial results.
 
-The JSON Schema in `src/tools/registry.ts` is the canonical runtime input contract for every local tool. `toolContractValidation.ts` compiles all schemas and rejects malformed JSON, missing required fields, wrong types, unknown properties, and invalid enums before permission gates or implementations run. A domain may derive that schema from a stronger typed source—as Discord presentations do from Zod—but it must not maintain a separate looser runtime parser. Deployment scoping may narrow advertised capabilities (for example configured premium Discord SKUs); the final deterministic boundary still validates the live capability.
+The JSON Schema in the owning `src/tools/contracts/` module is the canonical runtime input contract for every local tool. `defineTool` checks each contract, the startup handler binder fails on missing/unknown execution handlers, and `toolContractValidation.ts` compiles all schemas and rejects malformed JSON, missing required fields, wrong types, unknown properties, and invalid enums before permission gates or implementations run. A domain may derive that schema from a stronger typed source—as Discord presentations do from Zod—but it must not maintain a separate looser runtime parser. Deployment scoping may narrow advertised capabilities (for example configured premium Discord SKUs); the final deterministic boundary still validates the live capability.
 
 ## Change Workflow
 

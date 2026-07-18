@@ -4,10 +4,18 @@ import type { DiscordAttachmentContext, DiscordGuildEmojiSummary, DiscordGuildMe
 import { logger as defaultLogger } from "../util/logger.js";
 import { discordRetryDelayMs, retryAfterMsFromDiscordError } from "./crawler.js";
 
-export type DiscordWriteFailureReason = "unknown_message" | "missing_access" | "missing_permissions" | "rate_limited";
+export type DiscordWriteFailureReason = "unknown_message" | "missing_access" | "missing_permissions" | "rate_limited" | "unknown";
 export type DiscordWriteResult<T> = { ok: true; value: T } | { ok: false; reason: DiscordWriteFailureReason; error: unknown; retryAfterMs?: number };
 
-export type DiscordWriteOptions = { logger: Logger; retries?: number; baseDelayMs?: number; maxDelayMs?: number; sleep?: (ms: number) => Promise<void> };
+export type DiscordWriteOptions = {
+  logger: Logger;
+  retries?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  /** Interaction callbacks are one-shot; callers can request a typed failure instead of throwing. */
+  throwUnknown?: boolean;
+};
 
 type ReplyPayload = string | MessagePayload | MessageCreateOptions;
 type EditPayload = string | MessagePayload | MessageEditOptions;
@@ -57,6 +65,10 @@ export async function discordWrite<T>(operation: () => Promise<T>, options: Disc
         continue;
       }
       if (classification === "rate_limited") return { ok: false, reason: classification, error, retryAfterMs: retryAfterMsFromDiscordError(error) };
+      if (options.throwUnknown === false) {
+        options.logger.warn({ err: error, action, reason: classification ?? "unknown" }, "Discord write failed");
+        return { ok: false, reason: classification ?? "unknown", error };
+      }
       throw error;
     }
   }
@@ -128,11 +140,13 @@ export async function createDiscordGuildEmoji(
   if (!botMember.permissions.has(PermissionFlagsBits.CreateGuildExpressions)) {
     throw new Error("the bot role needs Discord's Create Expressions permission");
   }
-  const emoji = await guild.emojis.create({
-    attachment: input.image,
-    name: input.name,
-    reason: input.auditLogReason,
-  });
+  const result = await discordWrite(() => guild.emojis.create({
+      attachment: input.image,
+      name: input.name,
+      reason: input.auditLogReason,
+    }), { logger: defaultLogger, retries: 0 }, "create_guild_emoji");
+  if (!result.ok) throw result.error;
+  const emoji = result.value;
   return {
     id: emoji.id,
     name: emoji.name ?? input.name,
@@ -140,6 +154,26 @@ export async function createDiscordGuildEmoji(
     mention: emoji.toString(),
     url: emoji.imageURL({ extension: "webp", size: 128 }),
   };
+}
+
+export type DiscordBotProfileUpdate = { id?: string; avatar?: string | null; username?: string };
+
+/** Central REST mutation boundary for bot profile changes that discord.js does not expose with a typed result. */
+export async function updateDiscordBotAvatar(token: string, dataUri: string): Promise<{
+  response: Response;
+  profile?: DiscordBotProfileUpdate;
+}> {
+  const response = await fetch("https://discord.com/api/v10/users/@me", {
+    method: "PATCH",
+    headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ avatar: dataUri }),
+  });
+  if (!response.ok) return { response };
+  try {
+    return { response, profile: await response.json() as DiscordBotProfileUpdate };
+  } catch {
+    return { response };
+  }
 }
 
 export async function fetchDiscordGuildEmojis(

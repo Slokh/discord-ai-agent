@@ -66,6 +66,7 @@ describe("model toolset", () => {
     const ctx = context();
     const state = initialToolsetState(ctx, "hello there");
     const tools = currentScopedToolset(ctx, state);
+    expect(currentScopedToolset(ctx, state)).toBe(tools);
 
     expect(state).toEqual({
       groups: new Set(["core", "external"]),

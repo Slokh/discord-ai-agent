@@ -1,8 +1,19 @@
 import type { AppConfig } from "../config/env.js";
 import type { ToolRegistryEntry } from "./registry.js";
 
+const deploymentToolCache = new Map<string, ToolRegistryEntry>();
+
 /** Narrow a canonical tool contract to capabilities available in this deployment. */
 export function toolForDeployment(tool: ToolRegistryEntry, config: AppConfig): ToolRegistryEntry {
+  const key = `${tool.name}|wallet:${Boolean(config.payments?.userWalletsEnabled)}|premium:${(config.discord?.premiumSkuIds ?? []).join(",")}`;
+  const cached = deploymentToolCache.get(key);
+  if (cached) return cached;
+  const scoped = scopeToolForDeployment(tool, config);
+  deploymentToolCache.set(key, scoped);
+  return scoped;
+}
+
+function scopeToolForDeployment(tool: ToolRegistryEntry, config: AppConfig): ToolRegistryEntry {
   if (tool.name === "composeDiscordResponse") {
     const premiumSkuIds = config.discord?.premiumSkuIds ?? [];
     return {

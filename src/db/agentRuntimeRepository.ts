@@ -107,6 +107,10 @@ export type AgentRuntimeArtifactContent = AgentRuntimeArtifactRecord & {
   content: string;
 };
 
+export type AgentRuntimeBinaryArtifactContent = AgentRuntimeArtifactRecord & {
+  data: Buffer;
+};
+
 export type AgentRuntimeSandboxLeaseRecord = {
   sandboxId: string;
   repo: string;
@@ -574,6 +578,87 @@ export class AgentRuntimeRepository {
       metadata: { artifactId, kind: input.kind, sizeBytes }
     }).catch(() => undefined);
     return rowToAgentRuntimeArtifact(result.rows[0]);
+  }
+
+  async storeBinaryArtifact(input: {
+    sessionId: string;
+    executionId?: string | null;
+    kind: string;
+    name: string;
+    data: Buffer;
+    contentType?: string | null;
+    metadata?: Record<string, unknown>;
+    expiresAt?: Date | null;
+  }): Promise<AgentRuntimeArtifactRecord> {
+    const sizeBytes = input.data.length;
+    const expiresAt = input.expiresAt ?? defaultArtifactExpiresAt(sizeBytes);
+    const artifactId = `artifact-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const sha256 = createHash("sha256").update(input.data).digest("hex");
+    const client = await this.pool.connect();
+    let row: unknown;
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `
+          INSERT INTO agent_runtime_artifacts(
+            artifact_id, session_id, execution_id, kind, name, content_type,
+            size_bytes, preview, redacted, expires_at, metadata
+          )
+          VALUES ($1, $2, $3, $4, $5, coalesce($6, 'application/octet-stream'), $7, $8, false, $9, $10::jsonb)
+          RETURNING *
+        `,
+        [
+          artifactId,
+          input.sessionId,
+          input.executionId ?? null,
+          input.kind,
+          input.name,
+          input.contentType ?? null,
+          sizeBytes,
+          `[binary artifact: ${sizeBytes} bytes]`,
+          expiresAt,
+          JSON.stringify({
+            ...(input.metadata ?? {}),
+            sha256,
+            binary: true,
+            retention: expiresAt ? { reason: "large_artifact", days: LARGE_ARTIFACT_RETENTION_DAYS } : null,
+          }),
+        ],
+      );
+      await client.query("INSERT INTO agent_runtime_artifact_blobs(artifact_id, content) VALUES ($1, $2)", [artifactId, input.data]);
+      await client.query("COMMIT");
+      row = result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+    await this.recordEvent({
+      sessionId: input.sessionId,
+      executionId: input.executionId,
+      kind: "artifact",
+      eventName: "codegen.artifact",
+      summary: `Stored binary artifact ${input.name}.`,
+      metadata: { artifactId, kind: input.kind, sizeBytes, sha256, binary: true },
+    }).catch(() => undefined);
+    return rowToAgentRuntimeArtifact(row);
+  }
+
+  async getBinaryArtifact(input: { artifactId: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT artifact.*, blob.content
+        FROM agent_runtime_artifacts artifact
+        JOIN agent_runtime_artifact_blobs blob USING (artifact_id)
+        WHERE artifact.artifact_id = $1
+          AND (artifact.expires_at IS NULL OR artifact.expires_at > now())
+      `,
+      [input.artifactId],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return { ...rowToAgentRuntimeArtifact(row), data: Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content) };
   }
 
   async getArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> {

@@ -63,12 +63,12 @@ export async function sweepDiscordDeliveryObligations(input: {
   if (!input.agentRuntime) return;
   const agentRuntime = input.agentRuntime;
   const pending = await input.obligations.listPendingOlderThan({ olderThanMs: input.olderThanMs ?? 30_000, limit: input.limit ?? 25 });
-  for (const obligation of pending) {
+  await mapWithConcurrency(pending, 4, async (obligation) => {
     await sweepOne({ ...input, agentRuntime }, obligation).catch(async (error) => {
       input.logger.warn({ err: error, executionId: obligation.executionId }, "Discord delivery obligation sweep failed");
       await input.obligations.markAbandoned({ executionId: obligation.executionId, error: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
     });
-  }
+  });
 }
 
 type SweepInput = {
@@ -132,7 +132,10 @@ async function deliverIntent(
   envelope: AgentRuntimeTurnEnvelope | null,
 ) {
   const sink = new DiscordResponseSink({ client: input.client, sourceMessage: source, statusMessage: status, maxReplyChars: input.maxReplyChars, deliveryKey: intent.deliveryKey, logger: input.logger });
-  const files = discordDeliveryIntentFiles(intent);
+  const files = await discordDeliveryIntentFiles(intent, async (artifactId) => {
+    const artifact = await input.agentRuntime.getBinaryArtifact({ artifactId });
+    return artifact?.data;
+  });
   const delivery = await deliverDiscordPresentation({
     responseSink: sink,
     repo: input.repo,
@@ -232,4 +235,15 @@ async function fetchMessage(client: Client, channelId: string, messageId: string
 
 function isTerminalStatus(status: string | undefined) {
   return status === "succeeded" || status === "failed" || status === "no_changes" || status === "cancelled";
+}
+
+async function mapWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      await worker(items[index]);
+    }
+  }));
 }

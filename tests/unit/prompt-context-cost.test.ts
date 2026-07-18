@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   chatMessages,
   currentDataGuidance,
+  discordEmojiReactionChoices,
   loadDiscordEmojiPromptContext,
   toolResultContentForPrompt,
 } from "../../src/agent/promptBuilder.js";
@@ -92,7 +93,9 @@ describe("prompt context cost controls", () => {
     const prompt = messages.map((message) => String(message.content)).join("\n");
 
     expect(prompt).toContain("compact server-emoji culture guide");
-    expect(prompt).toContain("use at most one fitting emote naturally");
+    expect(prompt).toContain("choose at most one fitting emote treatment");
+    expect(prompt).toContain("<!-- discord-reaction:MENTION -->");
+    expect(prompt).toContain("Never choose both inline use and a reaction");
     expect(prompt).toContain("<:party:1> (6 observed messages)");
     expect(prompt).not.toContain("<a:wave:2>");
     expect(prompt).toContain("Never invent an emoji name or ID");
@@ -116,6 +119,39 @@ describe("prompt context cost controls", () => {
       queryText: "finally shipped",
       limit: 8,
     });
+  });
+
+  it("offers source-message reactions only for learned reaction patterns", () => {
+    const emojis = [
+      { id: "1", name: "party", animated: false, mention: "<:party:1>" },
+      { id: "2", name: "wave", animated: true, mention: "<a:wave:2>" },
+    ];
+    const baseProfile = {
+      inlineUses: 3,
+      reactionUses: 3,
+      messageCount: 4,
+      lastUsedAt: new Date("2026-07-18T00:00:00Z"),
+    };
+    const profiles = [
+      {
+        ...baseProfile,
+        emojiId: "1",
+        examples: [{
+          emojiId: "1", kind: "reaction" as const, messageId: "message-1",
+          content: "we shipped", createdAt: new Date("2026-07-18T00:00:00Z"),
+        }],
+      },
+      {
+        ...baseProfile,
+        emojiId: "2",
+        examples: [{
+          emojiId: "2", kind: "inline" as const, messageId: "message-2",
+          content: "hello", createdAt: new Date("2026-07-18T00:00:00Z"),
+        }],
+      },
+    ];
+
+    expect(discordEmojiReactionChoices({ emojis, profiles })).toEqual(["<:party:1>"]);
   });
 
   it("bounds learned emoji culture context instead of injecting the full palette", () => {

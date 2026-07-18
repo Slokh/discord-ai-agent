@@ -22,7 +22,7 @@ import {
   synthesizeFinalAnswerWithoutTools,
 } from "./finalSynthesis.js";
 import {
-  chatMessages, loadDiscordEmojiPromptContext, loadServerOverlay,
+  chatMessages, loadServerOverlay, prepareDiscordEmojiPromptContext,
   replyContextAttachmentCount,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -96,6 +96,7 @@ async function runAgentModelLoopInternal(
   const promptOverlay = await loadPromptOverlayText(
     ctx.config.promptOverlayPath,
   );
+  const discordEmojiContext = await prepareDiscordEmojiPromptContext(ctx, text);
   const messages: ChatMessage[] = chatMessages(
     text,
     skills,
@@ -108,7 +109,7 @@ async function runAgentModelLoopInternal(
       userDisplayName: ctx.userDisplayName,
     },
     promptOverlay,
-    await loadDiscordEmojiPromptContext(ctx, text),
+    discordEmojiContext,
   );
   if (automaticStarterFunds) {
     messages.splice(Math.max(0, messages.length - 1), 0, {

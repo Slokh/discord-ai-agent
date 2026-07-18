@@ -298,6 +298,21 @@ describe("DiscordResponseSink", () => {
     expect(outcome.failed).toEqual([]);
   });
 
+  it("adds a learned reaction to the original user message", async () => {
+    const sourceMessage = fakeMessage({ id: "source-1" });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    const outcome = await sink.addSourceMessageReactions(["<:party:123>"]);
+
+    expect(sourceMessage.react).toHaveBeenCalledWith("<:party:123>");
+    expect(outcome).toEqual({ added: ["<:party:123>"], failed: [] });
+  });
+
   it("defaults the addReactions target to the current status message", async () => {
     const statusMessage = fakeMessage({ id: "status-1", channelId: "channel-1", url: "https://discord/status-1" });
     const editedStatusMessage = fakeMessage({ id: "status-1", channelId: "channel-1", url: "https://discord/status-1" });

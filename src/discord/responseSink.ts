@@ -195,6 +195,10 @@ export class DiscordResponseSink {
     return outcome;
   }
 
+  async addSourceMessageReactions(emojis: string[]): Promise<DiscordReactionOutcome> {
+    return this.addReactions({ emojis, message: this.sourceMessage });
+  }
+
   async clearAcknowledgement() {
     const botUserId = this.client.user?.id;
     if (!botUserId) return;

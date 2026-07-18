@@ -21,6 +21,7 @@ import type {
 } from "../payments/types.js";
 import { paymentRecorder } from "./paymentToolContext.js";
 import type { ToolContext } from "./types.js";
+import { ensureAgentTurnOutput } from "./turnOutput.js";
 import { validateWagerFairness } from "./wagerFairness.js";
 import { wagerRequester } from "./wagerRequesterScope.js";
 import { effectiveMaximumPayoutUsd, requestSelectsAllowedWagerAction } from "./wagerTerms.js";
@@ -250,7 +251,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
       `🎲 fair-play commit sha256:${commitment} · client seed ${clientSeed} · reply "reveal randomness" to verify`
     );
   }
-  ctx.footerLines?.push(...footerLines);
+  ensureAgentTurnOutput(ctx).addFooterLines(...footerLines);
 
   await auditRng(ctx, "drawRandom", input, `session ${sessionId} nonce ${draw.nonce}: ${draw.summary}`);
 
@@ -449,7 +450,7 @@ export async function revealRandomness(ctx: ToolContext): Promise<string> {
     .map((draw) => `- nonce ${draw.nonce} · ${draw.kind}${draw.reason ? ` (${draw.reason})` : ""} → ${summarizeStoredOutcome(draw.outcome)}`);
   if (draws.length > MAX_REVEAL_DRAW_LINES) drawLines.push(`- … and ${draws.length - MAX_REVEAL_DRAW_LINES} more draws (see the verifier output)`);
 
-  ctx.footerLines?.push(
+  ensureAgentTurnOutput(ctx).addFooterLines(
     `🎲 revealed session ${revealed.id} · server seed ${revealed.serverSeed} · client seed ${revealed.clientSeed ?? "unset"}`,
     `🎲 next fair-play commit sha256:${successor.commitment}`
   );

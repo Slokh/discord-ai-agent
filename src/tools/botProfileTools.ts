@@ -1,5 +1,5 @@
 import { summarizeForAudit } from "../util/text.js";
-import type { ToolContext } from "./types.js";
+import type { AgentFile, ToolContext } from "./types.js";
 import { imageReferencesForInput } from "./imageTools.js";
 
 export type UpdateBotAvatarInput = {
@@ -115,7 +115,7 @@ async function resolveAvatarSource(ctx: ToolContext, input: UpdateBotAvatarInput
     return { kind: "url", url: explicitUrl, label: `explicit URL: ${explicitUrl}` };
   }
 
-  const generatedImage = pickGeneratedImage(ctx.generatedFiles);
+  const generatedImage = pickGeneratedImage(ctx.turnOutput?.files);
   if (generatedImage) {
     return {
       kind: "buffer",
@@ -137,7 +137,7 @@ async function resolveAvatarSource(ctx: ToolContext, input: UpdateBotAvatarInput
   return { kind: "url", url: reference.url, label: reference.label };
 }
 
-function pickGeneratedImage(files: ToolContext["generatedFiles"]): { name: string; data: Buffer; contentType?: string } | undefined {
+function pickGeneratedImage(files: AgentFile[] | undefined): { name: string; data: Buffer; contentType?: string } | undefined {
   for (const file of files ?? []) {
     const contentType = (file.contentType ?? "").toLowerCase();
     const isImage = contentType.startsWith("image/") || /\.(?:png|jpe?g|webp|gif)$/i.test(file.name);

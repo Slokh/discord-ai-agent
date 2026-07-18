@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAgentRequest } from "../../src/agent/router.js";
 import { runAgentModelLoop } from "../../src/agent/modelLoop.js";
+import { ensureAgentTurnOutput } from "../../src/tools/turnOutput.js";
 
 vi.mock("../../src/agent/modelLoop.js", () => ({ runAgentModelLoop: vi.fn() }));
 vi.mock("../../src/agent/runtimeTranscript.js", () => ({ recordAgentEvent: vi.fn() }));
@@ -11,7 +12,7 @@ describe("agent router response decoration", () => {
   it("turns a validated private emoji directive into source-message reaction metadata", async () => {
     vi.mocked(runAgentModelLoop).mockImplementation(async (ctx) => {
       ctx.discordEmojiReactionChoices = ["<:party:123>"];
-      ctx.footerLines?.push("transfer footer");
+      ensureAgentTurnOutput(ctx).addFooterLines("transfer footer");
       return { content: "We are so back.\n<!-- discord-reaction:<:party:123> -->" };
     });
 

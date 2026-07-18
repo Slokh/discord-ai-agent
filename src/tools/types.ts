@@ -39,12 +39,8 @@ export type ToolContext = {
   sessionMessages?: ConversationMessage[];
   replyContext?: DiscordReplyContext;
   requestAttachments?: DiscordAttachmentContext[];
-  generatedFiles?: AgentFile[];
-  generatedTables?: AgentTable[];
-  /** Non-model footer lines appended verbatim to the final Discord reply (e.g. RNG fairness proofs). */
-  footerLines?: string[];
-  /** Validated model-selected Discord Components V2 presentation for the final reply. */
-  discordPresentation?: DiscordPresentation;
+  /** Turn-scoped output collector shared by model tools and final synthesis. */
+  turnOutput?: AgentTurnOutput;
   requestId?: string;
   /** Exact current user request, available to tools that need request-level validation. */
   requestText?: string;
@@ -164,6 +160,21 @@ export type AgentTable = {
   rows: Array<Record<string, AgentTableCell>>;
   description?: string;
   sourceFileName?: string;
+};
+
+export type AgentTurnOutput = {
+  files: AgentFile[];
+  tables: AgentTable[];
+  footerLines: string[];
+  presentation?: DiscordPresentation;
+  addFooterLines: (...lines: string[]) => void;
+  setPresentation: (presentation: DiscordPresentation) => void;
+  snapshot: () => Readonly<{
+    files: AgentFile[];
+    tables: AgentTable[];
+    footerLines: string[];
+    presentation?: DiscordPresentation;
+  }>;
 };
 
 export type AgentResponse = {

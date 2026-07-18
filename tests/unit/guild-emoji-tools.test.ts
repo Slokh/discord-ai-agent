@@ -2,6 +2,7 @@ import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordEmoji } from "../../src/tools/guildEmojiTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
+import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";
 
 const PNG_PIXEL = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
@@ -9,6 +10,8 @@ const PNG_PIXEL = Buffer.from(
 );
 
 function context(overrides: Partial<ToolContext> = {}): ToolContext {
+  const turnOutput = createAgentTurnOutput();
+  turnOutput.files.push({ name: "wizard.png", data: PNG_PIXEL, contentType: "image/png" });
   return {
     config: { maxReplyChars: 1_800 },
     repo: { auditTool: vi.fn(async () => undefined) },
@@ -17,7 +20,7 @@ function context(overrides: Partial<ToolContext> = {}): ToolContext {
     userId: "owner",
     userDisplayName: "Owner",
     visibleChannelIds: ["channel"],
-    generatedFiles: [{ name: "wizard.png", data: PNG_PIXEL, contentType: "image/png" }],
+    turnOutput,
     ...overrides,
   } as unknown as ToolContext;
 }
@@ -60,8 +63,10 @@ describe("createDiscordEmoji", () => {
       create: { width: 8, height: 8, channels: 3, background: { r: 220, g: 220, b: 220 } },
     }).jpeg().toBuffer();
     const create = vi.fn();
+    const turnOutput = createAgentTurnOutput();
+    turnOutput.files.push({ name: "checkerboard.jpg", data: opaqueJpeg, contentType: "image/jpeg" });
     const ctx = context({
-      generatedFiles: [{ name: "checkerboard.jpg", data: opaqueJpeg, contentType: "image/jpeg" }],
+      turnOutput,
       createDiscordEmoji: create,
     });
 
@@ -83,8 +88,10 @@ describe("createDiscordEmoji", () => {
       mention: "<:tile:emoji-opaque>",
       url: "https://cdn.discordapp.com/emojis/emoji-opaque.webp",
     }));
+    const turnOutput = createAgentTurnOutput();
+    turnOutput.files.push({ name: "tile.jpg", data: opaqueJpeg, contentType: "image/jpeg" });
     const ctx = context({
-      generatedFiles: [{ name: "tile.jpg", data: opaqueJpeg, contentType: "image/jpeg" }],
+      turnOutput,
       createDiscordEmoji: create,
     });
 
@@ -102,7 +109,7 @@ describe("createDiscordEmoji", () => {
       mention: "<:pixel:emoji-2>",
       url: "https://cdn.discordapp.com/emojis/emoji-2.webp",
     }));
-    const ctx = context({ generatedFiles: [], createDiscordEmoji: create });
+    const ctx = context({ turnOutput: createAgentTurnOutput(), createDiscordEmoji: create });
     const dataUrl = `data:image/png;base64,${PNG_PIXEL.toString("base64")}`;
 
     await expect(createDiscordEmoji(ctx, { name: "pixel", imageUrl: dataUrl }))
@@ -121,7 +128,7 @@ describe("createDiscordEmoji", () => {
   });
 
   it("explains when no image source is available", async () => {
-    const ctx = context({ generatedFiles: [], createDiscordEmoji: vi.fn() });
+    const ctx = context({ turnOutput: createAgentTurnOutput(), createDiscordEmoji: vi.fn() });
     await expect(createDiscordEmoji(ctx, { name: "wizard", useContextImage: false }))
       .resolves.toContain("generated, attached, or replied-to image");
   });

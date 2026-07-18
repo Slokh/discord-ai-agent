@@ -186,9 +186,9 @@ function compileButton(
   button: DiscordButtonSpec,
   register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
 ) {
+  if (button.style === "premium") return { type: 2, style: 6, sku_id: button.skuId, disabled: button.disabled };
   const common = { type: 2, label: button.label, emoji: button.emoji, disabled: button.disabled };
   if (button.style === "link") return { ...common, style: 5, url: button.url };
-  if (button.style === "premium") return { type: 2, style: 6, sku_id: button.skuId, disabled: button.disabled };
   const style = { primary: 1, secondary: 2, success: 3, danger: 4 }[button.style];
   const stored: DiscordStoredComponentAction = button.action.type === "modal"
     ? { type: "modal", prompt: button.action.prompt, modal: button.action.modal }

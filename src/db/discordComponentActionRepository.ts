@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DiscordComponentAudience, DiscordStoredComponentAction } from "../discord/components/types.js";
+import { decodeDiscordComponentAction, encodeDiscordComponentAction } from "../discord/components/actionCodec.js";
 import type { DbPool } from "./pool.js";
 
 export type DiscordComponentActionRecord = {
@@ -12,6 +13,7 @@ export type DiscordComponentActionRecord = {
   ownerUserId: string | null;
   audience: DiscordComponentAudience;
   action: DiscordStoredComponentAction;
+  actionSchemaVersion: number;
   singleUse: boolean;
   state: "pending" | "active" | "consumed" | "expired" | "cancelled";
   expiresAt: Date;
@@ -36,11 +38,12 @@ export async function createDiscordComponentActionGeneration(pool: DbPool, input
   const values: unknown[] = [];
   const rows = input.actions.map((registration, index) => {
     const offset = index * 14;
+    const encoded = encodeDiscordComponentAction(registration.action);
     values.push(
       hash(registration.token), input.generationId, input.originatingExecutionId, input.guildId,
       input.channelId, input.sourceMessageId, input.ownerUserId ?? null, input.audience,
-      registration.action.type, JSON.stringify(registration.action), registration.singleUse,
-      input.expiresAt, 1, "pending",
+      encoded.kind, JSON.stringify(encoded.payload), registration.singleUse,
+      input.expiresAt, encoded.version, "pending",
     );
     return `(${Array.from({ length: 14 }, (_, parameter) => `$${offset + parameter + 1}`).join(",")})`;
   });
@@ -166,11 +169,17 @@ export async function resolveDiscordComponentAction(pool: DbPool, input: {
       await client.query("COMMIT");
       return { ok: false, reason: "expired" };
     }
+    const action = decodeDiscordComponentAction({
+      version: row.action_schema_version,
+      kind: row.action_kind,
+      payload: row.payload,
+    });
+    if (!action) return await rollback(client, "unavailable");
     if (Boolean(row.single_use) && input.consume !== false) {
       await client.query(`UPDATE discord_component_actions SET state='consumed', consumed_at=now(), updated_at=now() WHERE token_hash=$1`, [hash(input.token)]);
     }
     await client.query("COMMIT");
-    return { ok: true, record: rowToRecord(row) };
+    return { ok: true, record: rowToRecord(row, action) };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -188,12 +197,12 @@ function hash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function rowToRecord(row: any): DiscordComponentActionRecord {
+function rowToRecord(row: any, action: DiscordStoredComponentAction): DiscordComponentActionRecord {
   return {
     generationId: String(row.generation_id), originatingExecutionId: String(row.originating_execution_id),
     guildId: String(row.guild_id), channelId: String(row.channel_id), sourceMessageId: String(row.source_message_id),
     responseMessageId: row.response_message_id == null ? null : String(row.response_message_id),
     ownerUserId: row.owner_user_id == null ? null : String(row.owner_user_id), audience: row.audience,
-    action: row.payload, singleUse: Boolean(row.single_use), state: row.state, expiresAt: new Date(row.expires_at),
+    action, actionSchemaVersion: Number(row.action_schema_version), singleUse: Boolean(row.single_use), state: row.state, expiresAt: new Date(row.expires_at),
   };
 }

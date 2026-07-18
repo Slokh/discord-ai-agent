@@ -1,6 +1,7 @@
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
 import type { PaymentEventRecorder } from "../payments/types.js";
 import type { ToolContext } from "./types.js";
+import { ensureAgentTurnOutput } from "./turnOutput.js";
 
 const TEMPO_TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
 
@@ -26,6 +27,5 @@ export function appendTempoTransactionFooter(ctx: ToolContext, transactionHash: 
     : "https://explore.tempo.xyz";
   const url = `${explorer}/tx/${transactionHash}`;
   const line = `💸 [transfer](<${url}>)`;
-  const footerLines = (ctx.footerLines = ctx.footerLines ?? []);
-  if (!footerLines.includes(line)) footerLines.push(line);
+  ensureAgentTurnOutput(ctx).addFooterLines(line);
 }

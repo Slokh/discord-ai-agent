@@ -5,6 +5,7 @@ import { parseDiscordPresentation } from "../../src/discord/components/validatio
 import { restrictedToolGate } from "../../src/agent/toolGate.js";
 import { handleDiscordRichInteraction } from "../../src/discord/components/interactionHandler.js";
 import { composeDiscordResponse } from "../../src/tools/discordPresentationTools.js";
+import { decodeDiscordComponentAction, encodeDiscordComponentAction } from "../../src/discord/components/actionCodec.js";
 
 describe("Discord rich components", () => {
   it("stores a validated presentation through the model-facing composition tool", async () => {
@@ -14,7 +15,7 @@ describe("Discord rich components", () => {
       components: [{ type: "text", content: "## Result" }],
     });
 
-    expect(context.discordPresentation).toEqual(expect.objectContaining({
+    expect((context.turnOutput as any)?.presentation).toEqual(expect.objectContaining({
       version: 1,
       audience: "requester",
       components: [{ type: "text", content: "## Result" }],
@@ -187,6 +188,14 @@ describe("Discord rich components", () => {
   it("validates referenced attachments before generating action registrations", () => {
     const presentation = parseDiscordPresentation({ components: [{ type: "file", url: "attachment://missing.csv" }] });
     expect(() => prepareDiscordPresentation({ presentation, content: "Report", fileNames: [] })).toThrow(/missing attachment/i);
+  });
+
+  it("round-trips only supported versioned stored actions", () => {
+    const encoded = encodeDiscordComponentAction({ type: "continue", prompt: "Explain more" });
+    expect(decodeDiscordComponentAction(encoded)).toEqual({ type: "continue", prompt: "Explain more" });
+    expect(decodeDiscordComponentAction({ ...encoded, version: 2 })).toBeNull();
+    expect(decodeDiscordComponentAction({ ...encoded, kind: "select" })).toBeNull();
+    expect(decodeDiscordComponentAction({ ...encoded, payload: { type: "continue", prompt: "" } })).toBeNull();
   });
 
   it("blocks generic component turns from authorizing mutating tools", async () => {

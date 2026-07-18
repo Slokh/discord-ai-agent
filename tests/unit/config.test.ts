@@ -205,8 +205,8 @@ describe("config", () => {
   });
 
   it("validates and parses configured Discord premium SKU capabilities", () => {
-    withEnv({ DISCORD_PREMIUM_SKU_IDS: "123456789012345678, 223456789012345678" }, () => {
-      expect(loadConfig().discord.premiumSkuIds).toEqual(["123456789012345678", "223456789012345678"]);
+    withEnv({ DISCORD_PREMIUM_SKU_IDS: "123456789012345678, 111111111111111111" }, () => {
+      expect(loadConfig().discord.premiumSkuIds).toEqual(["123456789012345678", "111111111111111111"]);
     });
     withEnv({ DISCORD_PREMIUM_SKU_IDS: "not-a-snowflake" }, () => {
       expect(() => loadConfig()).toThrow(/premium.*snowflakes/i);

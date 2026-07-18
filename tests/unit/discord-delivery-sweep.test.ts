@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decideDiscordDeliverySweep } from "../../src/discord/deliverySweep.js";
+import { createDiscordDeliveryIntent, discordDeliveryIntentFiles, parseDiscordDeliveryIntent, serializeDiscordDeliveryIntent } from "../../src/discord/deliveryIntent.js";
 
 describe("decideDiscordDeliverySweep", () => {
   it("delivers terminal executions with stored response text", () => {
@@ -25,6 +26,26 @@ describe("decideDiscordDeliverySweep", () => {
   it.each(["queued", "running"] as const)("leaves %s executions pending during a rolling deploy", (status) => {
     expect(decideDiscordDeliverySweep({ execution: { status, error: null, metadata: {} }, finalText: null }))
       .toEqual({ action: "wait" });
+  });
+
+  it("recovers a durable delivery intent even if shutdown left the execution running", () => {
+    const intent = createDiscordDeliveryIntent({
+      content: "done",
+      presentation: { version: 1, audience: "requester", components: [{ type: "text", content: "Rich" }] },
+      files: [{ name: "result.txt", data: Buffer.from("result"), contentType: "text/plain" }],
+    });
+    expect(decideDiscordDeliverySweep({ execution: { status: "running", error: null, metadata: {} }, deliveryIntent: intent })).toEqual({
+      action: "deliver_intent",
+      intent,
+    });
+    const decoded = parseDiscordDeliveryIntent(serializeDiscordDeliveryIntent(intent));
+    expect(discordDeliveryIntentFiles(decoded)).toEqual([{ name: "result.txt", data: Buffer.from("result"), contentType: "text/plain" }]);
+  });
+
+  it("stores only explicitly redacted response text in a durable intent", () => {
+    const intent = createDiscordDeliveryIntent({ content: "private original", storedContent: "[redacted]" });
+    expect(intent).toEqual(expect.objectContaining({ content: "[redacted]", storedContent: "[redacted]", responseRedacted: true }));
+    expect(serializeDiscordDeliveryIntent(intent)).not.toContain("private original");
   });
 
   it("abandons an orphaned obligation when its execution is missing", () => {

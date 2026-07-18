@@ -74,8 +74,10 @@ export function createDiscordAiAgentBot(input: {
         client: readyClient,
         obligations: input.deliveryObligations,
         agentRuntime: input.agentRuntime,
+        repo: input.repo,
         logger,
-        maxReplyChars: input.config.maxReplyChars
+        maxReplyChars: input.config.maxReplyChars,
+        premiumSkuIds: input.config.discord.premiumSkuIds
       }).catch((error) => logger.warn({ err: error }, "Discord delivery obligation startup sweep failed"));
     }
     const expireComponentActions = () => void input.repo.expireDiscordComponentActions({ limit: 2_000 })

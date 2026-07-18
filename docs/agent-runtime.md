@@ -13,7 +13,7 @@ The runtime tables are:
 - `agent_runtime_artifacts` and `agent_runtime_artifact_chunks`: replay and diagnostic payloads such as Discord turn envelopes, `input_lines`, transcripts, and large artifacts.
 - `agent_runtime_sandbox_leases`: warm local-process sandbox slot leases for code-update workers.
 
-`AgentRuntimeRepository` is the single repository class for this ledger. Fresh installs use the squashed `migrations/001_initial.sql` baseline; existing pre-squash databases run `scripts/legacy-schema-transition.sql` once to rename legacy runtime tables/columns in place while preserving data.
+`AgentRuntimeRepository` is the single repository class for this ledger. Fresh installs apply the squashed `migrations/001_initial.sql` baseline and every later numbered forward migration; existing pre-squash databases run `scripts/legacy-schema-transition.sql` once before applying the current migration chain, preserving legacy runtime data in place.
 
 ## Control API
 

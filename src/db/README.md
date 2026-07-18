@@ -28,11 +28,12 @@ Owns durable Postgres state and query contracts.
 
 ## Scaling Notes
 
-- Filtered vector search currently takes the filtered branch in `retrievalRepository.ts`, which gathers a permission/date/channel-filtered candidate set before ranking by vector distance. That branch bypasses the IVFFLAT index on `message_embeddings.embedding`; revisit with ANN-first candidate escalation or an HNSW index before any deployment approaches roughly 1M indexed messages.
+- Vector retrieval starts from the permission-agnostic HNSW `halfvec` candidate set, then applies guild, visible-channel, privacy, author/topic, and date filters. Filtered searches escalate the ANN candidate limit once when the first pass cannot fill the requested result count. At larger scale, measure filtered recall, candidate inflation, `hnsw.ef_search`, and per-guild skew before changing index or partition strategy.
 
 ## Tests
 
 - DB-backed behavior: `tests/integration/repository-db.test.ts`.
+- Queue/task, migration upgrade, RNG, and payment invariants: `tests/integration/jobs-db.test.ts`, `tests/integration/migration-upgrade-db.test.ts`, `tests/integration/rng-db.test.ts`, and `tests/integration/payments-db.test.ts`.
 - Non-DB retrieval helpers: `tests/unit/search.test.ts`.
 - Run-console API snapshots: `tests/unit/internal-api-runs.test.ts`.
 

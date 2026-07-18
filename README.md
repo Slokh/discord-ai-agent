@@ -23,19 +23,22 @@ The project is built for friend groups, clubs, small communities, and teams that
 
 ```text
 Discord mention
-  -> bot/control plane
-  -> model chooses tools
+  -> bot ingress + acknowledgement
+  -> durable agent-runtime execution + pg-boss queue
+  -> worker runs the model and chooses tools
   -> Postgres memory, Discord tools, web tools, image tools
-  -> durable agent task when code changes are requested
-  -> sandboxed code-update run (local process by default, Kubernetes Job optional)
-  -> GitHub PR
-  -> Discord reply edited with progress/final result
+  -> worker delivers the final Discord response
+
+If a code change is requested:
+  -> durable code-update task
+  -> sandboxed run (local process by default, Kubernetes Job optional)
+  -> GitHub PR + Discord progress/final result
 ```
 
-The app has three roles, runnable as one process (`all`) or split across services:
+The app has three roles, runnable as one fully configured process (`all`) or split across services:
 
-- `bot`: Discord gateway process and user-facing responses. Chat and memory work with this role alone.
-- `worker`: crawling, embeddings, queue processing, code-update task execution, reconciliation, and cleanup. Needed for history indexing and code-update PRs.
+- `bot`: Discord gateway, request ingress, immediate acknowledgements, and background/task notifications.
+- `worker`: queued chat prompt execution and final Discord delivery, plus crawling, embeddings, code-update tasks, reconciliation, and cleanup. Normal chat needs a Discord-agent worker as well as the bot role.
 - `api`: internal callback API for sandbox task progress and the run console. Needed for code-update PRs and debugging UI.
 
 Postgres with `pgvector` is the source of truth for Discord history, embeddings, skills, traces, the `agent_runtime_*` execution ledger, task projections, and sandbox runs.
@@ -57,6 +60,18 @@ Postgres with `pgvector` is the source of truth for Discord history, embeddings,
 - Code-update PRs through sandboxed agent tasks
 - Structured logs and trace/agent-runtime event inspection
 
+## Documentation
+
+New contributors and coding agents should start with the [documentation guide](docs/README.md). Its short onboarding path covers:
+
+1. [product principles](docs/product-principles.md) — intended UX, goals, tradeoffs, and non-goals;
+2. [architecture](docs/architecture.md) — production roles, sources of truth, and end-to-end flows;
+3. [source ownership](src/README.md) — which domain owns a change and its closest tests;
+4. [engineering workflow](docs/engineering-guide.md) — feature design, debugging, verification, and PR handoff;
+5. [tool design](docs/tool-design.md) — model-facing capability contracts.
+
+The root [coding-agent guide](AGENTS.md) contains the concise mandatory rules. Folder READMEs are ownership contracts; active and historical plans are labeled in the documentation guide so completed checklists are not mistaken for current work.
+
 ## Requirements
 
 - Node.js 22+
@@ -69,7 +84,7 @@ Optional, for code-update PRs:
 - A GitHub repository the bot can push to
 - A fine-grained GitHub token (or GitHub App credentials)
 
-That is the whole stack. Docker Compose plus `npm run dev` is the supported deployment for a private server with friends; Kubernetes is an optional advanced isolation mode (see [Advanced deployment](#advanced-deployment)).
+That is the whole stack. Local Postgres plus the `bot` and `worker` roles is the supported private-server setup; Kubernetes is an optional advanced isolation mode (see [Advanced deployment](#advanced-deployment)).
 
 ## Quickstart
 
@@ -106,14 +121,20 @@ npm run invite-url
 
 The generated member-level invite includes Create Expressions so the bot can upload custom server emoji when an authorized operator asks it to.
 
-Invite the bot, then run:
+Invite the bot, then run the gateway and prompt worker in separate terminals:
 
 ```bash
 npm run preflight
 npm run dev
 ```
 
-`npm run dev` starts the `bot` role, which covers chat and conversation memory. Run `npm run worker` (history indexing, code-update tasks) and `npm run api` (task callbacks, run console) in separate terminals when you need those features, or set `DISCORD_AI_AGENT_PROCESS_ROLE=all` to run everything in one process.
+```bash
+npm run worker
+```
+
+The copied `.env.example` keeps `WORKER_TASK_ENABLED=false`, so this minimal worker handles chat, crawl, embeddings, retention, and reconciliation without requiring GitHub/code-update credentials. The `bot` role acknowledges and enqueues the request; the Discord-agent worker executes it and completes final delivery.
+
+To enable code-update PRs, configure the GitHub and task-signing variables, set `WORKER_TASK_ENABLED=true`, and also run `npm run api` for callbacks and the run console. `DISCORD_AI_AGENT_PROCESS_ROLE=all` is available only when the API/task configuration required by every combined role is present.
 
 Try:
 
@@ -182,11 +203,7 @@ npm run sandbox-cache:prune
 npm run sandbox-cache:clear
 ```
 
-For the durable agent runtime, code-update task ledger, and sandbox lease model, see [docs/agent-runtime.md](docs/agent-runtime.md).
-For a concise coding-agent map of the repo, see [docs/architecture.md](docs/architecture.md).
-For source ownership maps used by coding agents, start with [src/README.md](src/README.md) and the nearest folder README.
-For the current improvement roadmap, see [docs/improvement-plan.md](docs/improvement-plan.md).
-For the post-hardening engineering targets and active foundation work, see [docs/continuation-plan.md](docs/continuation-plan.md).
+For the durable agent runtime, code-update task ledger, and sandbox lease model, see [docs/agent-runtime.md](docs/agent-runtime.md). The [documentation guide](docs/README.md) links the current product/engineering references and clearly separates active strategy from completed plans.
 
 ## Advanced Deployment
 
@@ -263,10 +280,10 @@ Common optional settings:
 | `BUDGET_GUILD_DAILY_USD` | `10` | Per-guild daily cap over `tool_audit_logs.estimated_cost_usd`; set to `-1` for unlimited |
 | `BOT_OWNER_USER_ID` / `CODEGEN_ALLOWLIST_USER_IDS` / `OPS_ALLOWLIST_USER_IDS` | unset | Restricted tool allowlists as Discord user IDs. If an allowlist is empty and owner is set, restricted tools default to owner-only; if owner is unset, they are open |
 | `IMAGE_TOOLS_ALLOWLIST_ONLY` | `false` | When true, image generation also requires owner/ops allowlist membership |
-| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all`. Chat/memory need `bot`; indexing and code-update tasks need `worker`; sandbox callbacks and the run console need `api`. Use `all` for a single-process setup |
+| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all`. Chat needs `bot` for ingress/delivery and a worker with `WORKER_DISCORD_AGENT_ENABLED=true` for execution. Sandbox callbacks and the run console need `api`. Use `all` only with the complete combined-role configuration. |
 | `RUN_MIGRATIONS` | `true` | Run migrations on process startup; Helm runtime pods set this to `false` because migrations run as a hook |
 
-Database schema setup is intentionally simple for new installs: `migrations/001_initial.sql` is the single baseline migration. If you are upgrading a database created before the migration squash, run `scripts/legacy-schema-transition.sql` once to rename the old runtime tables/columns in place before using the current baseline.
+Fresh installs apply the squashed `migrations/001_initial.sql` baseline followed by every later numbered forward migration. If you are upgrading a database created before the migration squash, run `scripts/legacy-schema-transition.sql` once to rename the old runtime tables/columns in place before applying the current migration chain.
 
 ## Private Content And The Overlay Boundary
 

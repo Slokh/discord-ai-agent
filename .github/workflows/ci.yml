@@ -23,6 +23,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run docs:check
       - run: npx vitest run --coverage
       - run: npm run test:coverage:changed
       # Production dependency findings remain visible in the log, but only a

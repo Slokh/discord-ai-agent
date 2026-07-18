@@ -3105,20 +3105,50 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const sessionId = `agent-session-${suffix}`;
     const executionId = `agent-execution-${suffix}`;
     const token = `token-${suffix}`;
+    const generationId = `generation-${suffix}`;
     await agentRuntimeRepo.upsertSession({ sessionId, threadKey: `discord:guild-${suffix}:channel-${suffix}`, title: "components", request: "components", requestedBy: "test" });
     await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "succeeded" });
-    await repo.createDiscordComponentAction({
-      token, originatingExecutionId: executionId, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`,
+    await repo.createDiscordComponentActionGeneration({
+      generationId, originatingExecutionId: executionId, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`,
       sourceMessageId: `message-${suffix}`, ownerUserId: `user-${suffix}`, audience: "requester",
-      action: { type: "continue", prompt: "Show more" }, singleUse: true, expiresAt: new Date(Date.now() + 60_000),
+      actions: [{ token, action: { type: "continue", prompt: "Show more" }, singleUse: true }], expiresAt: new Date(Date.now() + 60_000),
     });
-    await expect(repo.bindDiscordComponentActions({ tokens: [token], responseMessageId: `response-${suffix}` })).resolves.toBe(1);
+    await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: `user-${suffix}` }))
+      .resolves.toEqual({ ok: false, reason: "wrong_message" });
+    await expect(repo.activateDiscordComponentActionGeneration({ generationId, responseMessageId: `response-${suffix}`, expectedActionCount: 1 })).resolves.toBe(1);
     await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: "user-other" }))
       .resolves.toEqual({ ok: false, reason: "wrong_user" });
     await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: `user-${suffix}` }))
       .resolves.toEqual(expect.objectContaining({ ok: true, record: expect.objectContaining({ singleUse: true, action: { type: "continue", prompt: "Show more" } }) }));
     await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: `user-${suffix}` }))
       .resolves.toEqual({ ok: false, reason: "consumed" });
+  });
+
+  it("atomically replaces active component generations for the same response", async () => {
+    const suffix = randomUUID();
+    const sessionId = `agent-session-${suffix}`;
+    const executionId = `agent-execution-${suffix}`;
+    const responseMessageId = `response-${suffix}`;
+    await agentRuntimeRepo.upsertSession({ sessionId, threadKey: `discord:guild-${suffix}:channel-${suffix}`, title: "components", request: "components", requestedBy: "test" });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "succeeded" });
+    const create = async (generationId: string, token: string) => {
+      await repo.createDiscordComponentActionGeneration({
+        generationId, originatingExecutionId: executionId, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`,
+        sourceMessageId: `message-${suffix}`, ownerUserId: null, audience: "channel",
+        actions: [{ token, action: { type: "continue", prompt: generationId }, singleUse: false }], expiresAt: new Date(Date.now() + 60_000),
+      });
+      await repo.activateDiscordComponentActionGeneration({ generationId, responseMessageId, expectedActionCount: 1 });
+    };
+    await create(`generation-a-${suffix}`, `token-a-${suffix}`);
+    await create(`generation-b-${suffix}`, `token-b-${suffix}`);
+
+    await expect(repo.resolveDiscordComponentAction({ token: `token-a-${suffix}`, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId, userId: "user" }))
+      .resolves.toEqual({ ok: false, reason: "unavailable" });
+    await expect(repo.resolveDiscordComponentAction({ token: `token-b-${suffix}`, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId, userId: "user" }))
+      .resolves.toEqual(expect.objectContaining({ ok: true }));
+    await expect(repo.cancelDiscordComponentActionsForResponseMessage({ guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId })).resolves.toBe(1);
+    await expect(repo.resolveDiscordComponentAction({ token: `token-b-${suffix}`, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId, userId: "user" }))
+      .resolves.toEqual({ ok: false, reason: "unavailable" });
   });
 });
 

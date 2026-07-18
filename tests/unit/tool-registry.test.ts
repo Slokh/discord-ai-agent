@@ -81,6 +81,19 @@ describe("toolRegistry", () => {
     expect(renderToolList()).toContain("web_search");
   });
 
+  it("derives the rich presentation tool contract from the exhaustive runtime schema", () => {
+    const tool = toolRegistry.find((entry) => entry.name === "composeDiscordResponse");
+    const schema = JSON.stringify(tool?.parameters);
+
+    expect(schema).toContain('"media_gallery"');
+    expect(schema).toContain('"mentionable_select"');
+    expect(schema).toContain('"file_upload"');
+    expect(schema).toContain('"radio_group"');
+    expect(schema).toContain('"checkbox_group"');
+    expect(schema).not.toContain('"additionalProperties":true');
+    expect(Buffer.byteLength(schema, "utf8")).toBeLessThan(30_000);
+  });
+
   it("routes wallet balances through verified onchain USD", () => {
     const tool = toolRegistry.find((entry) => entry.name === "getWalletBalance");
 

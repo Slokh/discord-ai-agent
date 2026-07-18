@@ -108,7 +108,7 @@ export type DiscordModalFieldSpec =
   | { type: "file_upload"; key: string; label: string; description?: string; required?: boolean; minValues?: number; maxValues?: number }
   | { type: "radio_group"; key: string; label: string; description?: string; required?: boolean; options: Array<{ label: string; value: string; description?: string; default?: boolean }> }
   | { type: "checkbox_group"; key: string; label: string; description?: string; required?: boolean; minValues?: number; maxValues?: number; options: Array<{ label: string; value: string; description?: string; default?: boolean }> }
-  | { type: "checkbox"; key: string; label: string; description?: string; required?: boolean; default?: boolean };
+  | { type: "checkbox"; key: string; label: string; description?: string; default?: boolean };
 
 export type DiscordModalSpec = {
   title: string;

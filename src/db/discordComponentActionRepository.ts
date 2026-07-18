@@ -3,6 +3,7 @@ import type { DiscordComponentAudience, DiscordStoredComponentAction } from "../
 import type { DbPool } from "./pool.js";
 
 export type DiscordComponentActionRecord = {
+  generationId: string;
   originatingExecutionId: string;
   guildId: string;
   channelId: string;
@@ -12,43 +13,131 @@ export type DiscordComponentActionRecord = {
   audience: DiscordComponentAudience;
   action: DiscordStoredComponentAction;
   singleUse: boolean;
-  state: "active" | "consumed" | "expired";
+  state: "pending" | "active" | "consumed" | "expired" | "cancelled";
   expiresAt: Date;
 };
 
 export type DiscordComponentActionResolution =
   | { ok: true; record: DiscordComponentActionRecord }
-  | { ok: false; reason: "not_found" | "expired" | "consumed" | "wrong_message" | "wrong_user" | "wrong_scope" };
+  | { ok: false; reason: "not_found" | "unavailable" | "expired" | "consumed" | "wrong_message" | "wrong_user" | "wrong_scope" };
 
-export async function createDiscordComponentAction(pool: DbPool, input: {
-  token: string;
+export async function createDiscordComponentActionGeneration(pool: DbPool, input: {
+  generationId: string;
   originatingExecutionId: string;
   guildId: string;
   channelId: string;
   sourceMessageId: string;
   ownerUserId?: string | null;
   audience: DiscordComponentAudience;
-  action: DiscordStoredComponentAction;
-  singleUse: boolean;
+  actions: Array<{ token: string; action: DiscordStoredComponentAction; singleUse: boolean }>;
   expiresAt: Date;
 }) {
-  await pool.query(
+  if (input.actions.length === 0) return 0;
+  const values: unknown[] = [];
+  const rows = input.actions.map((registration, index) => {
+    const offset = index * 14;
+    values.push(
+      hash(registration.token), input.generationId, input.originatingExecutionId, input.guildId,
+      input.channelId, input.sourceMessageId, input.ownerUserId ?? null, input.audience,
+      registration.action.type, JSON.stringify(registration.action), registration.singleUse,
+      input.expiresAt, 1, "pending",
+    );
+    return `(${Array.from({ length: 14 }, (_, parameter) => `$${offset + parameter + 1}`).join(",")})`;
+  });
+  const result = await pool.query(
     `INSERT INTO discord_component_actions(
-       token_hash, originating_execution_id, guild_id, channel_id, source_message_id,
-       owner_user_id, audience, action_kind, payload, single_use, expires_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)`,
-    [hash(input.token), input.originatingExecutionId, input.guildId, input.channelId, input.sourceMessageId,
-      input.ownerUserId ?? null, input.audience, input.action.type, JSON.stringify(input.action), input.singleUse, input.expiresAt],
+       token_hash, generation_id, originating_execution_id, guild_id, channel_id, source_message_id,
+       owner_user_id, audience, action_kind, payload, single_use, expires_at, action_schema_version, state
+     ) VALUES ${rows.join(",")}`,
+    values,
   );
+  return result.rowCount ?? 0;
 }
 
-export async function bindDiscordComponentActions(pool: DbPool, input: { tokens: string[]; responseMessageId: string }) {
-  if (input.tokens.length === 0) return 0;
-  await pool.query(`UPDATE discord_component_actions SET state='expired', updated_at=now() WHERE state='active' AND expires_at <= now()`);
-  const hashes = input.tokens.map(hash);
+export async function activateDiscordComponentActionGeneration(pool: DbPool, input: {
+  generationId: string;
+  responseMessageId: string;
+  expectedActionCount: number;
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const generation = await client.query(
+      `SELECT token_hash, guild_id, channel_id, state, response_message_id
+         FROM discord_component_actions WHERE generation_id=$1 FOR UPDATE`,
+      [input.generationId],
+    );
+    if (generation.rows.length !== input.expectedActionCount) {
+      throw new Error(`Discord component generation ${input.generationId} expected ${input.expectedActionCount} actions but found ${generation.rows.length}.`);
+    }
+    if (generation.rows.length === 0) {
+      await client.query("COMMIT");
+      return 0;
+    }
+    for (const row of generation.rows) {
+      const canActivate = row.state === "pending"
+        || (row.state === "active" && String(row.response_message_id) === input.responseMessageId);
+      if (!canActivate) throw new Error(`Discord component generation ${input.generationId} is ${row.state}, not pending.`);
+    }
+    const scope = generation.rows[0]!;
+    await client.query(
+      `UPDATE discord_component_actions
+          SET state='cancelled', updated_at=now()
+        WHERE guild_id=$1 AND channel_id=$2 AND response_message_id=$3
+          AND generation_id<>$4 AND state='active'`,
+      [scope.guild_id, scope.channel_id, input.responseMessageId, input.generationId],
+    );
+    const activated = await client.query(
+      `UPDATE discord_component_actions
+          SET response_message_id=$2, state='active', updated_at=now()
+        WHERE generation_id=$1 AND state='pending'`,
+      [input.generationId, input.responseMessageId],
+    );
+    await client.query("COMMIT");
+    return (activated.rowCount ?? 0) || generation.rows.length;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function cancelDiscordComponentActionGeneration(pool: DbPool, input: { generationId: string }) {
   const result = await pool.query(
-    `UPDATE discord_component_actions SET response_message_id=$2, updated_at=now() WHERE token_hash=ANY($1::text[]) AND state='active'`,
-    [hashes, input.responseMessageId],
+    `UPDATE discord_component_actions SET state='cancelled', updated_at=now()
+      WHERE generation_id=$1 AND state IN ('pending','active')`,
+    [input.generationId],
+  );
+  return result.rowCount ?? 0;
+}
+
+export async function cancelDiscordComponentActionsForResponseMessage(pool: DbPool, input: {
+  guildId: string;
+  channelId: string;
+  responseMessageId: string;
+}) {
+  const result = await pool.query(
+    `UPDATE discord_component_actions SET state='cancelled', updated_at=now()
+      WHERE guild_id=$1 AND channel_id=$2 AND response_message_id=$3 AND state='active'`,
+    [input.guildId, input.channelId, input.responseMessageId],
+  );
+  return result.rowCount ?? 0;
+}
+
+export async function expireDiscordComponentActions(pool: DbPool, input: { limit?: number } = {}) {
+  const limit = Math.max(1, Math.min(input.limit ?? 1_000, 10_000));
+  const result = await pool.query(
+    `WITH expired AS (
+       SELECT token_hash FROM discord_component_actions
+        WHERE state IN ('pending','active') AND expires_at <= now()
+        ORDER BY expires_at ASC LIMIT $1 FOR UPDATE SKIP LOCKED
+     )
+     UPDATE discord_component_actions AS actions
+        SET state='expired', updated_at=now()
+       FROM expired
+      WHERE actions.token_hash=expired.token_hash`,
+    [limit],
   );
   return result.rowCount ?? 0;
 }
@@ -71,6 +160,7 @@ export async function resolveDiscordComponentAction(pool: DbPool, input: {
     if (row.response_message_id == null || String(row.response_message_id) !== input.responseMessageId) return await rollback(client, "wrong_message");
     if (row.owner_user_id != null && String(row.owner_user_id) !== input.userId) return await rollback(client, "wrong_user");
     if (row.state === "consumed") return await rollback(client, "consumed");
+    if (row.state === "pending" || row.state === "cancelled") return await rollback(client, "unavailable");
     if (row.state !== "active" || new Date(row.expires_at).getTime() <= Date.now()) {
       await client.query(`UPDATE discord_component_actions SET state='expired', updated_at=now() WHERE token_hash=$1`, [hash(input.token)]);
       await client.query("COMMIT");
@@ -100,7 +190,7 @@ function hash(token: string) {
 
 function rowToRecord(row: any): DiscordComponentActionRecord {
   return {
-    originatingExecutionId: String(row.originating_execution_id),
+    generationId: String(row.generation_id), originatingExecutionId: String(row.originating_execution_id),
     guildId: String(row.guild_id), channelId: String(row.channel_id), sourceMessageId: String(row.source_message_id),
     responseMessageId: row.response_message_id == null ? null : String(row.response_message_id),
     ownerUserId: row.owner_user_id == null ? null : String(row.owner_user_id), audience: row.audience,

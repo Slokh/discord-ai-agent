@@ -21,8 +21,11 @@ export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./dis
 
 export class DiscordAiAgentRepository {
   constructor(private readonly pool: DbPool) {}
-  createDiscordComponentAction(input: Parameters<typeof discordComponentActionRepository.createDiscordComponentAction>[1]) { return discordComponentActionRepository.createDiscordComponentAction(this.pool, input); }
-  bindDiscordComponentActions(input: Parameters<typeof discordComponentActionRepository.bindDiscordComponentActions>[1]) { return discordComponentActionRepository.bindDiscordComponentActions(this.pool, input); }
+  createDiscordComponentActionGeneration(input: Parameters<typeof discordComponentActionRepository.createDiscordComponentActionGeneration>[1]) { return discordComponentActionRepository.createDiscordComponentActionGeneration(this.pool, input); }
+  activateDiscordComponentActionGeneration(input: Parameters<typeof discordComponentActionRepository.activateDiscordComponentActionGeneration>[1]) { return discordComponentActionRepository.activateDiscordComponentActionGeneration(this.pool, input); }
+  cancelDiscordComponentActionGeneration(input: Parameters<typeof discordComponentActionRepository.cancelDiscordComponentActionGeneration>[1]) { return discordComponentActionRepository.cancelDiscordComponentActionGeneration(this.pool, input); }
+  cancelDiscordComponentActionsForResponseMessage(input: Parameters<typeof discordComponentActionRepository.cancelDiscordComponentActionsForResponseMessage>[1]) { return discordComponentActionRepository.cancelDiscordComponentActionsForResponseMessage(this.pool, input); }
+  expireDiscordComponentActions(input?: Parameters<typeof discordComponentActionRepository.expireDiscordComponentActions>[1]) { return discordComponentActionRepository.expireDiscordComponentActions(this.pool, input); }
   resolveDiscordComponentAction(input: Parameters<typeof discordComponentActionRepository.resolveDiscordComponentAction>[1]) { return discordComponentActionRepository.resolveDiscordComponentAction(this.pool, input); }
   claimDeploymentAnnouncement(input: deploymentAnnouncementRepository.DeploymentAnnouncementClaim) { return deploymentAnnouncementRepository.claimDeploymentAnnouncement(this.pool, input); }
   recordDeploymentBaseline(input: Omit<deploymentAnnouncementRepository.DeploymentAnnouncementClaim, "previousRevision">) { return deploymentAnnouncementRepository.recordDeploymentBaseline(this.pool, input); }

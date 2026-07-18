@@ -62,6 +62,7 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         "017_deployment_announcements",
         "018_discord_emoji_culture",
         "019_discord_component_actions",
+        "020_discord_component_action_generations",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }

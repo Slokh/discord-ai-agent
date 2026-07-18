@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { MessageFlags, ModalBuilder, type MessageCreateOptions, type MessageEditOptions } from "discord.js";
+import { splitForDiscord } from "../../util/text.js";
 import type {
   DiscordActionRowSpec,
   DiscordButtonSpec,
@@ -21,60 +22,116 @@ export type DiscordActionRegistration = {
 
 export type PreparedDiscordPresentation = {
   payload: MessageCreateOptions | MessageEditOptions;
+  fallbackPayload: MessageCreateOptions | MessageEditOptions;
   registrations: DiscordActionRegistration[];
 };
 
-export async function prepareDiscordPresentation(input: {
+/** Purely compiles a validated semantic presentation. Persistence and delivery happen later. */
+export function prepareDiscordPresentation(input: {
   presentation: DiscordPresentation;
   content: string;
   footer?: string | null;
   fileNames?: string[];
-  register: (input: { token: string; action: DiscordStoredComponentAction; singleUse: boolean }) => Promise<void>;
-}): Promise<PreparedDiscordPresentation> {
+  tokenFactory?: () => string;
+}): PreparedDiscordPresentation {
   const registrations: DiscordActionRegistration[] = [];
-  const compileInteractive = async (action: DiscordStoredComponentAction, singleUse = false) => {
-    const token = randomBytes(18).toString("base64url");
-    const customId = `ai:v1:${token}`;
-    await input.register({ token, action, singleUse });
+  const tokenFactory = input.tokenFactory ?? (() => randomBytes(18).toString("base64url"));
+  const displayedFiles = new Set(collectReferencedAttachmentNames(input.presentation.components));
+  const availableFiles = new Set(input.fileNames ?? []);
+  for (const name of displayedFiles) {
+    if (!availableFiles.has(name)) throw new Error(`Discord file component references missing attachment: ${name}`);
+  }
+
+  const automaticFileNames = [...availableFiles].filter((name) => !displayedFiles.has(name));
+  const bodyComponents = textDisplayComponents(input.content);
+  const footerComponents = textDisplayComponents(input.footer ?? "");
+  const projectedCount = bodyComponents.length
+    + countSemanticComponents(input.presentation.components)
+    + automaticFileNames.length
+    + footerComponents.length;
+  if (projectedCount > 40) {
+    throw new Error(`Discord Components V2 allows at most 40 total components; compiled response has ${projectedCount}.`);
+  }
+
+  const register = (action: DiscordStoredComponentAction, singleUse = false) => {
+    const token = tokenFactory();
+    const kind = action.type === "modal" ? "m" : "a";
+    const customId = `ai:v1:${kind}:${token}`;
     registrations.push({ token, customId, action, singleUse });
     return customId;
   };
-  const components: any[] = [];
-  if (input.content.trim()) components.push({ type: 10, content: input.content.trim() });
-  for (const component of input.presentation.components) {
-    components.push(await compileMessageComponent(component, compileInteractive));
-  }
-  const displayedFiles = new Set(collectDisplayedAttachmentNames(input.presentation.components));
-  for (const name of input.fileNames ?? []) {
-    if (!displayedFiles.has(name)) components.push({ type: 13, file: { url: `attachment://${name}` } });
-  }
-  if (input.footer?.trim()) components.push({ type: 10, content: input.footer.trim() });
-  const componentCount = countCompiledComponents(components);
-  if (componentCount > 40) throw new Error(`Discord Components V2 allows at most 40 total components; compiled response has ${componentCount}.`);
+  const components: any[] = [...bodyComponents];
+  for (const component of input.presentation.components) components.push(compileMessageComponent(component, register));
+  for (const name of automaticFileNames) components.push({ type: 13, file: { url: `attachment://${name}` } });
+  components.push(...footerComponents);
+
   return {
-    payload: {
-      content: null,
-      embeds: [],
-      flags: MessageFlags.IsComponentsV2,
-      components: components as any,
-      allowedMentions: { parse: [], repliedUser: false },
-    },
+    payload: componentsV2Payload(components),
+    fallbackPayload: plainDiscordComponentsV2Payload({
+      content: input.content.trim() || "Done.",
+      footer: input.footer,
+      fileNames: input.fileNames,
+    }),
     registrations,
   };
+}
+
+export function plainDiscordComponentsV2Payload(input: {
+  content: string;
+  footer?: string | null;
+  fileNames?: string[];
+}): MessageCreateOptions | MessageEditOptions {
+  const components: any[] = [
+    ...textDisplayComponents(input.content.trim() || "Done."),
+    ...(input.fileNames ?? []).map((name) => ({ type: 13, file: { url: `attachment://${name}` } })),
+    ...textDisplayComponents(input.footer ?? ""),
+  ];
+  if (countCompiledComponents(components) > 40) throw new Error("Discord Components V2 fallback exceeds the 40-component limit.");
+  return componentsV2Payload(components);
+}
+
+function componentsV2Payload(components: any[]): MessageCreateOptions | MessageEditOptions {
+  return {
+    content: null,
+    embeds: [],
+    flags: MessageFlags.IsComponentsV2,
+    components: components as any,
+    allowedMentions: { parse: [], repliedUser: false },
+  };
+}
+
+function textDisplayComponents(value: string): Array<{ type: 10; content: string }> {
+  const trimmed = value.trim();
+  return trimmed ? splitForDiscord(trimmed, 4_000).map((content) => ({ type: 10 as const, content })) : [];
+}
+
+function countSemanticComponents(components: Array<DiscordMessageComponentSpec | DiscordContainerChildSpec>): number {
+  let count = 0;
+  for (const component of components) {
+    count += 1;
+    if (component.type === "container") count += countSemanticComponents(component.components);
+    if (component.type === "action_row") count += component.components.length;
+    if (component.type === "section") count += component.text.length + 1;
+  }
+  return count;
 }
 
 function countCompiledComponents(components: any[]): number {
   return components.reduce((total, component) => {
     const nested = Array.isArray(component.components) ? countCompiledComponents(component.components) : 0;
-    const accessory = component.accessory ? 1 : 0;
-    return total + 1 + nested + accessory;
+    return total + 1 + nested + (component.accessory ? 1 : 0);
   }, 0);
 }
 
-function collectDisplayedAttachmentNames(components: DiscordMessageComponentSpec[]): string[] {
+function collectReferencedAttachmentNames(components: DiscordMessageComponentSpec[]): string[] {
   const names: string[] = [];
+  const collectUrl = (url: string) => {
+    if (url.startsWith("attachment://")) names.push(url.slice("attachment://".length));
+  };
   const visit = (component: DiscordMessageComponentSpec | DiscordContainerChildSpec) => {
-    if (component.type === "file" && component.url.startsWith("attachment://")) names.push(component.url.slice("attachment://".length));
+    if (component.type === "file") collectUrl(component.url);
+    if (component.type === "media_gallery") component.items.forEach((item) => collectUrl(item.url));
+    if (component.type === "section" && component.accessory.type === "thumbnail") collectUrl(component.accessory.url);
     if (component.type === "container") component.components.forEach(visit);
   };
   components.forEach(visit);
@@ -83,16 +140,16 @@ function collectDisplayedAttachmentNames(components: DiscordMessageComponentSpec
 
 export function buildDiscordModal(customId: string, modal: DiscordModalSpec): ModalBuilder {
   return ModalBuilder.from({
-    custom_id: `${customId}:modal`,
+    custom_id: `${customId}:submit`,
     title: modal.title,
     components: modal.fields.map(compileModalField),
   } as any);
 }
 
-async function compileMessageComponent(
+function compileMessageComponent(
   component: DiscordMessageComponentSpec | DiscordContainerChildSpec,
-  register: (action: DiscordStoredComponentAction, singleUse?: boolean) => Promise<string>,
-): Promise<any> {
+  register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
+): any {
   switch (component.type) {
     case "text": return { type: 10, content: component.content };
     case "action_row": return compileActionRow(component, register);
@@ -100,7 +157,7 @@ async function compileMessageComponent(
       type: 9,
       components: component.text.map((content) => ({ type: 10, content })),
       accessory: component.accessory.type === "button"
-        ? await compileButton(component.accessory, register)
+        ? compileButton(component.accessory, register)
         : compileThumbnail(component.accessory),
     };
     case "media_gallery": return { type: 12, items: component.items.map((item) => ({ media: { url: item.url }, description: item.description, spoiler: item.spoiler })) };
@@ -110,24 +167,24 @@ async function compileMessageComponent(
       type: 17,
       accent_color: component.accentColor,
       spoiler: component.spoiler,
-      components: await Promise.all(component.components.map((child) => compileMessageComponent(child, register))),
+      components: component.components.map((child) => compileMessageComponent(child, register)),
     };
   }
 }
 
-async function compileActionRow(
+function compileActionRow(
   row: DiscordActionRowSpec,
-  register: (action: DiscordStoredComponentAction, singleUse?: boolean) => Promise<string>,
+  register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
 ) {
   return {
     type: 1,
-    components: await Promise.all(row.components.map((component) => component.type === "button" ? compileButton(component, register) : compileSelect(component, register))),
+    components: row.components.map((component) => component.type === "button" ? compileButton(component, register) : compileSelect(component, register)),
   };
 }
 
-async function compileButton(
+function compileButton(
   button: DiscordButtonSpec,
-  register: (action: DiscordStoredComponentAction, singleUse?: boolean) => Promise<string>,
+  register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
 ) {
   const common = { type: 2, label: button.label, emoji: button.emoji, disabled: button.disabled };
   if (button.style === "link") return { ...common, style: 5, url: button.url };
@@ -136,17 +193,17 @@ async function compileButton(
   const stored: DiscordStoredComponentAction = button.action.type === "modal"
     ? { type: "modal", prompt: button.action.prompt, modal: button.action.modal }
     : { type: "continue", prompt: button.action.prompt };
-  return { ...common, style, custom_id: await register(stored, button.action.singleUse) };
+  return { ...common, style, custom_id: register(stored, button.action.singleUse) };
 }
 
-async function compileSelect(
+function compileSelect(
   select: DiscordSelectSpec,
-  register: (action: DiscordStoredComponentAction, singleUse?: boolean) => Promise<string>,
+  register: (action: DiscordStoredComponentAction, singleUse?: boolean) => string,
 ) {
   const type = { string_select: 3, user_select: 5, role_select: 6, mentionable_select: 7, channel_select: 8 }[select.type];
   const base: any = {
     type,
-    custom_id: await register({ type: "select", prompt: select.prompt }, select.singleUse),
+    custom_id: register({ type: "select", prompt: select.prompt }, select.singleUse),
     placeholder: select.placeholder,
     min_values: select.minValues,
     max_values: select.maxValues,
@@ -171,15 +228,15 @@ function compileModalField(field: DiscordModalFieldSpec): any {
     case "user_select": return label({ type: 5, custom_id: field.key, placeholder: field.placeholder, required: field.required, min_values: field.minValues, max_values: field.maxValues, default_values: field.defaultValues });
     case "role_select": return label({ type: 6, custom_id: field.key, placeholder: field.placeholder, required: field.required, min_values: field.minValues, max_values: field.maxValues, default_values: field.defaultValues });
     case "mentionable_select": return label({ type: 7, custom_id: field.key, placeholder: field.placeholder, required: field.required, min_values: field.minValues, max_values: field.maxValues, default_values: field.defaultValues });
-    case "channel_select": return label({ type: 8, custom_id: field.key, placeholder: field.placeholder, required: field.required, min_values: field.minValues, max_values: field.maxValues, channel_types: (field as any).channelTypes, default_values: field.defaultValues });
+    case "channel_select": return label({ type: 8, custom_id: field.key, placeholder: field.placeholder, required: field.required, min_values: field.minValues, max_values: field.maxValues, channel_types: field.channelTypes, default_values: field.defaultValues });
     case "file_upload": return label({ type: 19, custom_id: field.key, required: field.required, min_values: field.minValues, max_values: field.maxValues });
     case "radio_group": return label({ type: 21, custom_id: field.key, required: field.required, options: field.options });
     case "checkbox_group": return label({ type: 22, custom_id: field.key, required: field.required, min_values: field.minValues, max_values: field.maxValues, options: field.options });
-    case "checkbox": return label({ type: 23, custom_id: field.key, required: field.required, default: field.default });
+    case "checkbox": return label({ type: 23, custom_id: field.key, default: field.default });
   }
 }
 
-export function discordComponentToken(customId: string): { token: string; modal: boolean } | null {
-  const match = /^ai:v1:([A-Za-z0-9_-]{20,32})(:modal)?$/.exec(customId);
-  return match ? { token: match[1]!, modal: Boolean(match[2]) } : null;
+export function discordComponentToken(customId: string): { token: string; kind: "action" | "modal"; submission: boolean } | null {
+  const match = /^ai:v1:([am]):([A-Za-z0-9_-]{20,32})(:submit)?$/.exec(customId);
+  return match ? { token: match[2]!, kind: match[1] === "m" ? "modal" : "action", submission: Boolean(match[3]) } : null;
 }

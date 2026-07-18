@@ -1,9 +1,9 @@
-import { AttachmentBuilder, type Client, type Message, type MessageCreateOptions } from "discord.js";
+import { AttachmentBuilder, MessageFlags, type Client, type Message, type MessageCreateOptions } from "discord.js";
 import type { Logger } from "pino";
 import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
-import type { PreparedDiscordPresentation } from "./components/renderer.js";
+import { plainDiscordComponentsV2Payload, type PreparedDiscordPresentation } from "./components/renderer.js";
 import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
 
 export const DEFAULT_DISCORD_LOADING_REACTION = "⏳";
@@ -93,7 +93,10 @@ export class DiscordResponseSink {
   async updateStatus(content: string): Promise<Message> {
     const cleanContent = cleanResponse(content, this.maxReplyChars);
     if (this.statusMessage) {
-      const edited = await discordEdit(this.statusMessage, cleanContent, { logger: this.logger });
+      const payload = this.statusUsesComponentsV2()
+        ? plainDiscordComponentsV2Payload({ content: cleanContent })
+        : cleanContent;
+      const edited = await discordEdit(this.statusMessage, payload as Parameters<Message["edit"]>[0], { logger: this.logger });
       if (edited.ok) {
         this.statusMessage = edited.value;
         return this.statusMessage;
@@ -136,6 +139,22 @@ export class DiscordResponseSink {
       } catch (error) {
         this.logger.warn({ err: error }, "Discord rejected rich presentation; falling back to plain response");
       }
+    }
+
+    if (this.statusUsesComponentsV2()) {
+      const usedStatusMessage = true;
+      const payload = {
+        ...plainDiscordComponentsV2Payload({
+          content: body,
+          footer: footerLine,
+          fileNames: input.files?.map((file) => file.name),
+        }),
+        ...(files?.length ? { files } : {}),
+      } as MessageCreateOptions;
+      const message = await this.editStatusOrReply(payload);
+      this.statusMessage = message;
+      await this.clearAcknowledgement();
+      return { message, usedStatusMessage, usedRichPresentation: false };
     }
 
     if (singleMessageContent.length <= this.maxReplyChars) {
@@ -184,6 +203,17 @@ export class DiscordResponseSink {
   async sendError(content: string, footer?: DiscordResponseFooter | null): Promise<DiscordResponseResult> {
     const result = await this.sendFinal({ content, footer });
     return result;
+  }
+
+  async replaceRichPresentationWithFallback(presentation: PreparedDiscordPresentation): Promise<Message | null> {
+    if (!this.statusMessage) return null;
+    const edited = await discordEdit(this.statusMessage, presentation.fallbackPayload as Parameters<Message["edit"]>[0], { logger: this.logger });
+    if (!edited.ok) {
+      this.logger.error({ err: edited.error, statusMessageId: this.statusMessage.id }, "Failed to replace inactive Discord controls with a safe fallback");
+      return null;
+    }
+    this.statusMessage = edited.value;
+    return this.statusMessage;
   }
 
   async addReactions(input: DiscordAddReactionsInput): Promise<DiscordReactionOutcome> {
@@ -253,6 +283,10 @@ export class DiscordResponseSink {
     const replied = await discordReply(this.sourceMessage, payload, { logger: this.logger });
     if (!replied.ok) throw replied.error;
     return replied.value;
+  }
+
+  private statusUsesComponentsV2() {
+    return Boolean(this.statusMessage?.flags.has(MessageFlags.IsComponentsV2));
   }
 }
 

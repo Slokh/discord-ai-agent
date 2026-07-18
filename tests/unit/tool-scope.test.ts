@@ -39,7 +39,7 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
   });
 
-  it("loads rich presentation schemas only for explicit native-UI requests", () => {
+  it("preloads rich presentation schemas for explicit native-UI requests", () => {
     const config = loadConfig();
     const ordinary = scopedToolset({ config, groups: selectToolGroups({ text: "hello there", hasImageAttachments: false, config }) });
     const rich = scopedToolset({ config, groups: selectToolGroups({ text: "show these as interactive buttons", hasImageAttachments: false, config }) });

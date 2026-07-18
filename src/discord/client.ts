@@ -58,6 +58,7 @@ export function createDiscordAiAgentBot(input: {
     });
   let acceptingMessages = true;
   const activeMessageHandlers = new Set<Promise<void>>();
+  let componentActionCleanupTimer: NodeJS.Timeout | null = null;
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(
@@ -77,6 +78,14 @@ export function createDiscordAiAgentBot(input: {
         maxReplyChars: input.config.maxReplyChars
       }).catch((error) => logger.warn({ err: error }, "Discord delivery obligation startup sweep failed"));
     }
+    const expireComponentActions = () => void input.repo.expireDiscordComponentActions({ limit: 2_000 })
+      .then((expired) => {
+        if (expired > 0) logger.info({ expired }, "Expired stale Discord component actions");
+      })
+      .catch((error) => logger.warn({ err: error }, "Discord component action expiry sweep failed"));
+    expireComponentActions();
+    componentActionCleanupTimer = setInterval(expireComponentActions, 60 * 60_000);
+    componentActionCleanupTimer.unref?.();
     void announceDeployment({
       client: readyClient,
       config: input.config,
@@ -239,6 +248,7 @@ export function createDiscordAiAgentBot(input: {
     },
     destroy: () => {
       acceptingMessages = false;
+      if (componentActionCleanupTimer) clearInterval(componentActionCleanupTimer);
       client.destroy();
     }
   };

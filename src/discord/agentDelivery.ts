@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { Client, Message } from "discord.js";
 import type { Logger } from "pino";
 import { isOpenRouterContentFilterError } from "../models/openrouter.js";
 import type { DiscordAgentRequestJob } from "../jobs/queue.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
-import { assertAgentRuntimeTurnEnvelopeScope, loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
+import { agentRuntimeTurnInputText, assertAgentRuntimeTurnEnvelopeScope, loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { ToolContext } from "../tools/types.js";
@@ -266,7 +267,7 @@ export async function executeDiscordAgentRequest(
     };
     const response = await agentExecutor.execute({
       toolContext,
-      text: request.text,
+      text: agentRuntimeTurnInputText(turnEnvelope),
       timeoutMs: input.config.chatTimeouts.hardMs,
       hardTimeoutMs: input.config.chatTimeouts.hardMs,
       silenceTimeoutMs: input.config.chatTimeouts.silenceMs,
@@ -328,50 +329,76 @@ export async function executeDiscordAgentRequest(
     });
     const traceFooter = discordTraceFooter(input.config, request.requestId, request.messageStartedAt);
     const formattedFooter = response.footerLines?.length ? { ...traceFooter, extraLines: response.footerLines } : traceFooter;
-    const preparedPresentation = response.discordPresentation
-      ? await prepareDiscordPresentation({
-          presentation: response.discordPresentation,
+    let preparedPresentation = response.discordPresentation
+      ? await Promise.resolve().then(() => prepareDiscordPresentation({
+          presentation: response.discordPresentation!,
           content: response.content,
           footer: formatDiscordResponseFooter(formattedFooter),
           fileNames: response.files?.map((file) => file.name),
-          register: async ({ token, action, singleUse }) => {
-            await input.repo.createDiscordComponentAction({
-              token,
-              originatingExecutionId: agentRuntimeExecution.executionId,
-              guildId: turnEnvelope.guildId,
-              channelId: turnEnvelope.channelId,
-              sourceMessageId: message.id,
-              ownerUserId: response.discordPresentation?.audience === "requester" ? turnEnvelope.userId : null,
-              audience: response.discordPresentation?.audience ?? "requester",
-              action,
-              singleUse,
-              expiresAt: new Date(Date.now() + (response.discordPresentation?.expiresInMinutes ?? 1_440) * 60_000),
-            });
-          },
-        }).catch((error) => {
+        })).catch((error) => {
           requestLogger.warn({ err: error }, "Failed to prepare Discord rich presentation; using plain response");
           return null;
         })
       : null;
-    const finalResult =
-      await responseSink.sendFinal({
-        content: response.content,
-        files: response.files,
-        footer: formattedFooter,
-        presentation: preparedPresentation,
+    let actionGenerationId: string | null = null;
+    if (preparedPresentation?.registrations.length) {
+      actionGenerationId = randomUUID();
+      try {
+        await input.repo.createDiscordComponentActionGeneration({
+          generationId: actionGenerationId,
+          originatingExecutionId: agentRuntimeExecution.executionId,
+          guildId: turnEnvelope.guildId,
+          channelId: turnEnvelope.channelId,
+          sourceMessageId: message.id,
+          ownerUserId: response.discordPresentation?.audience === "requester" ? turnEnvelope.userId : null,
+          audience: response.discordPresentation?.audience ?? "requester",
+          actions: preparedPresentation.registrations.map(({ token, action, singleUse }) => ({ token, action, singleUse })),
+          expiresAt: new Date(Date.now() + (response.discordPresentation?.expiresInMinutes ?? 1_440) * 60_000),
+        });
+      } catch (error) {
+        requestLogger.warn({ err: error }, "Failed to persist Discord component action generation; using plain response");
+        actionGenerationId = null;
+        preparedPresentation = null;
+      }
+    }
+    const finalResult = await responseSink.sendFinal({
+      content: response.content,
+      files: response.files,
+      footer: formattedFooter,
+      presentation: preparedPresentation,
+    });
+    let finalReply = finalResult.message;
+    let richPresentationDelivered = finalResult.usedRichPresentation;
+    if (preparedPresentation && finalResult.usedRichPresentation && actionGenerationId) {
+      try {
+        await input.repo.activateDiscordComponentActionGeneration({
+          generationId: actionGenerationId,
+          responseMessageId: finalReply.id,
+          expectedActionCount: preparedPresentation.registrations.length,
+        });
+      } catch (error) {
+        requestLogger.error({ err: error, replyMessageId: finalReply.id, actionGenerationId }, "Failed to activate delivered Discord component actions");
+        await input.repo.cancelDiscordComponentActionGeneration({ generationId: actionGenerationId }).catch(() => undefined);
+        finalReply = await responseSink.replaceRichPresentationWithFallback(preparedPresentation) ?? finalReply;
+        richPresentationDelivered = false;
+      }
+    } else if (actionGenerationId) {
+      await input.repo.cancelDiscordComponentActionGeneration({ generationId: actionGenerationId }).catch((error) => {
+        requestLogger.warn({ err: error, actionGenerationId }, "Failed to cancel undelivered Discord component actions");
       });
-    const finalReply = finalResult.message;
-    if (preparedPresentation && finalResult.usedRichPresentation) {
-      await input.repo.bindDiscordComponentActions({
-        tokens: preparedPresentation.registrations.map((registration) => registration.token),
+    }
+    if (!richPresentationDelivered || !actionGenerationId) {
+      await input.repo.cancelDiscordComponentActionsForResponseMessage({
+        guildId: turnEnvelope.guildId,
+        channelId: finalReply.channelId,
         responseMessageId: finalReply.id,
-      }).catch((error) => requestLogger.error({ err: error, replyMessageId: finalReply.id }, "Failed to bind delivered Discord component actions"));
+      }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to invalidate replaced Discord component actions"));
     }
     await recordTraceEvent(input.repo, {
-      eventName: finalResult.usedRichPresentation ? "discord.presentation.delivered" : response.discordPresentation ? "discord.presentation.fallback" : "discord.response.delivered",
-      level: response.discordPresentation && !finalResult.usedRichPresentation ? "warn" : "info",
-      summary: finalResult.usedRichPresentation ? "Delivered Discord Components V2 presentation" : response.discordPresentation ? "Delivered plain fallback after rich presentation failure" : "Delivered Discord response",
-      metadata: { replyMessageId: finalReply.id, requestedRichPresentation: Boolean(response.discordPresentation), actionCount: preparedPresentation?.registrations.length ?? 0 },
+      eventName: richPresentationDelivered ? "discord.presentation.delivered" : response.discordPresentation ? "discord.presentation.fallback" : "discord.response.delivered",
+      level: response.discordPresentation && !richPresentationDelivered ? "warn" : "info",
+      summary: richPresentationDelivered ? "Delivered Discord Components V2 presentation" : response.discordPresentation ? "Delivered safe fallback after rich presentation failure" : "Delivered Discord response",
+      metadata: { replyMessageId: finalReply.id, requestedRichPresentation: Boolean(response.discordPresentation), actionCount: preparedPresentation?.registrations.length ?? 0, actionGenerationId },
     });
     const reactionOutcome = sourceMessageReaction
       ? await responseSink.addSourceMessageReactions([sourceMessageReaction])
@@ -421,7 +448,7 @@ export async function executeDiscordAgentRequest(
         discordMessageId: request.requestId,
         authorId: turnEnvelope.userId,
         authorDisplayName: userDisplayName,
-        content: request.text,
+        content: agentRuntimeTurnInputText(turnEnvelope),
         createdAt: new Date(turnEnvelope.messageCreatedAt),
         metadata: {
           discordUrl: turnEnvelope.discordUrl,
@@ -451,6 +478,20 @@ export async function executeDiscordAgentRequest(
       metadata: { replyMessageId: finalReply.id, sourceMessageReaction: reactionOutcome?.added[0] ?? null },
       durationMs: durationMs(request.messageStartedAt)
     });
+    const presentationArtifactId = response.discordPresentation
+      ? await storeAgentRuntimeResponseArtifact({
+          agentRuntime: input.agentRuntime,
+          session: agentRuntimeExecution.session,
+          executionId: agentRuntimeExecution.executionId,
+          traceId: request.requestId,
+          name: "Discord presentation plan",
+          content: JSON.stringify(response.discordPresentation, null, 2),
+          metadata: { replyMessageId: finalReply.id, richPresentationDelivered, actionGenerationId },
+        }).catch((error) => {
+          requestLogger.warn({ err: error }, "Failed to store Discord presentation artifact");
+          return null;
+        })
+      : null;
     await storeAgentRuntimeResponseArtifact({
       agentRuntime: input.agentRuntime,
       session: agentRuntimeExecution.session,
@@ -462,6 +503,9 @@ export async function executeDiscordAgentRequest(
         replyMessageId: finalReply.id,
         discordUrl: finalReply.url,
         responseRedacted,
+        presentationArtifactId,
+        richPresentationDelivered,
+        actionGenerationId,
         sourceMessageReaction: reactionOutcome?.added[0] ?? null,
         files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
       }

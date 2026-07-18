@@ -1,5 +1,6 @@
 import { MessageFlags, type Client, type Interaction, type MessageComponentInteraction, type ModalSubmitInteraction } from "discord.js";
 import { enqueueAgentRuntimeSessionExecution } from "../../agent/runtimeControlPlane.js";
+import { agentRuntimeTurnInputText, type AgentRuntimeTurnEnvelope } from "../../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution } from "../../agent/runtimeLedger.js";
 import { durationMs, logger } from "../../util/logger.js";
 import { runWithTrace } from "../../util/trace.js";
@@ -20,54 +21,66 @@ export async function handleDiscordRichInteraction(
   const rich = interaction as any;
   const parsed = discordComponentToken(rich.customId);
   if (!parsed) return false;
-  if (!rich.guildId || !rich.channelId || !rich.message) return true;
-  if (input.config.discord.guildId && rich.guildId !== input.config.discord.guildId) return true;
+  if (parsed.submission && parsed.kind !== "modal") {
+    await replyInteractionError(rich, "That control has an invalid submission type.");
+    return true;
+  }
+  if (!rich.guildId || !rich.channelId || !rich.message) {
+    await replyInteractionError(rich, "That control is not attached to a server message.");
+    return true;
+  }
+  if (input.config.discord.guildId && rich.guildId !== input.config.discord.guildId) {
+    await replyInteractionError(rich, "That control is not available in this server.");
+    return true;
+  }
 
-  const resolution = await input.repo.resolveDiscordComponentAction({
-    token: parsed.token,
-    guildId: rich.guildId,
-    channelId: rich.channelId,
-    responseMessageId: rich.message.id,
-    userId: rich.user.id,
-    consume: parsed.modal,
-  });
-  if (!resolution.ok) {
-    await replyInteractionError(rich, interactionErrorMessage(resolution.reason));
-    return true;
-  }
-  const action = resolution.record.action;
-  if (!parsed.modal && action.type === "modal") {
-    await rich.showModal(buildDiscordModal(rich.customId, action.modal!));
-    return true;
-  }
-  if (parsed.modal !== (action.type === "modal")) {
-    await replyInteractionError(rich, "That control no longer matches its saved action.");
-    return true;
-  }
-  if (!parsed.modal) {
-    const consumed = await input.repo.resolveDiscordComponentAction({
+  const modalLaunch = parsed.kind === "modal" && !parsed.submission && rich.isMessageComponent();
+  try {
+    if (!modalLaunch) {
+      if (rich.isModalSubmit() && !rich.isFromMessage()) {
+        await replyInteractionError(rich, "That form is no longer attached to a message.");
+        return true;
+      }
+      await rich.deferUpdate();
+    }
+    const resolutionPromise = input.repo.resolveDiscordComponentAction({
       token: parsed.token,
       guildId: rich.guildId,
       channelId: rich.channelId,
       responseMessageId: rich.message.id,
       userId: rich.user.id,
-      consume: true,
+      consume: false,
     });
-    if (!consumed.ok) {
-      await replyInteractionError(rich, interactionErrorMessage(consumed.reason));
+    const resolution = modalLaunch
+      ? await withinModalResponseDeadline(resolutionPromise)
+      : await resolutionPromise;
+    if (!resolution.ok) {
+      await replyInteractionError(rich, interactionErrorMessage(resolution.reason));
       return true;
     }
-  }
-
-  if (rich.isModalSubmit() && rich.isFromMessage()) await rich.deferUpdate();
-  else if (rich.isMessageComponent()) await rich.deferUpdate();
-  else {
-    await replyInteractionError(rich, "That form is no longer attached to a message.");
+    const action = resolution.record.action;
+    if (modalLaunch) {
+      if (action.type !== "modal") {
+        await replyInteractionError(rich, "That control no longer matches its saved action.");
+        return true;
+      }
+      await rich.showModal(buildDiscordModal(rich.customId, action.modal!));
+      return true;
+    }
+    const actionMatches = parsed.kind === "modal" ? action.type === "modal" : action.type !== "modal";
+    const interactionMatches = parsed.submission ? rich.isModalSubmit() : rich.isMessageComponent();
+    if (!actionMatches || !interactionMatches) {
+      await replyInteractionError(rich, "That control no longer matches its saved action.");
+      return true;
+    }
+    await runWithTrace({ traceId: rich.id, requestId: rich.id, guildId: rich.guildId, channelId: rich.channelId, userId: rich.user.id, messageId: rich.message.id }, async () => {
+      await enqueueInteractionTurn(input, client, rich, parsed.token, resolution.record.sourceMessageId, resolution.record.originatingExecutionId, action.prompt, parsed.submission ? "modal" : "component");
+    });
+  } catch (error) {
+    logger.error({ err: error, interactionId: rich.id }, "Discord rich interaction failed");
+    await replyInteractionError(rich, "I couldn't process that control. Please try again.");
     return true;
   }
-  await runWithTrace({ traceId: rich.id, requestId: rich.id, guildId: rich.guildId, channelId: rich.channelId, userId: rich.user.id, messageId: rich.message.id }, async () => {
-    await enqueueInteractionTurn(input, client, rich, resolution.record.sourceMessageId, action.prompt, parsed.modal ? "modal" : "component");
-  });
   return true;
 }
 
@@ -75,7 +88,9 @@ async function enqueueInteractionTurn(
   input: DiscordAgentRequestInput,
   client: Client,
   interaction: any,
+  token: string,
   sourceMessageId: string,
+  originatingExecutionId: string,
   basePrompt: string,
   requestKind: "component" | "modal",
 ) {
@@ -86,14 +101,29 @@ async function enqueueInteractionTurn(
   const values: string[] | undefined = interaction.isMessageComponent() && Array.isArray(interaction.values) ? [...interaction.values] : undefined;
   const submission = interaction.isModalSubmit() ? modalSubmission(interaction) : undefined;
   const fields = submission?.fields;
-  const text = [
-    basePrompt,
-    values?.length ? `Selected values: ${JSON.stringify(values)}` : null,
-    fields && Object.keys(fields).length ? `Submitted fields: ${JSON.stringify(fields)}` : null,
-  ].filter(Boolean).join("\n");
-  const budget = await checkIngressBudget(input, { guildId: interaction.guildId!, channelId: interaction.channelId, userId: interaction.user.id, requestId: interaction.id, text });
+  const interactionContext: NonNullable<AgentRuntimeTurnEnvelope["interaction"]> = {
+    messageId: interaction.message.id,
+    customId: interaction.customId,
+    componentType: interaction.isModalSubmit() ? "modal_submit" : interaction.componentType.toString(),
+    values,
+    fields,
+  };
+  const modelInputText = agentRuntimeTurnInputText({ text: basePrompt, interaction: interactionContext });
+  const budget = await checkIngressBudget(input, { guildId: interaction.guildId!, channelId: interaction.channelId, userId: interaction.user.id, requestId: interaction.id, text: modelInputText });
   if (!budget.allowed) {
     await interaction.followUp({ content: budget.message, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+    return;
+  }
+  const consumed = await input.repo.resolveDiscordComponentAction({
+    token,
+    guildId: interaction.guildId!,
+    channelId: interaction.channelId,
+    responseMessageId: interaction.message.id,
+    userId: interaction.user.id,
+    consume: true,
+  });
+  if (!consumed.ok) {
+    await replyInteractionError(interaction, interactionErrorMessage(consumed.reason));
     return;
   }
   const displayName = interaction.inGuild() && interaction.member && "displayName" in interaction.member
@@ -103,7 +133,7 @@ async function enqueueInteractionTurn(
   const runtime = await ensureAgentRuntimePromptExecution({
     agentRuntime: input.agentRuntime,
     guildId: interaction.guildId!, channelId: interaction.channelId, userId: interaction.user.id, userDisplayName: displayName,
-    threadKey, requestId: interaction.id, text, rawContent: text, discordUrl: interaction.message.url,
+    threadKey, requestId: interaction.id, text: basePrompt, rawContent: basePrompt, discordUrl: interaction.message.url,
     status: "queued", source: `discord.${requestKind}`, executorName: input.agentExecutor?.name ?? "in-process", appRevision: input.config.appRevision, config: input.config,
   });
   if (!runtime) throw new Error("Could not create the agent runtime ledger for the Discord interaction.");
@@ -112,31 +142,25 @@ async function enqueueInteractionTurn(
     requestId: interaction.id,
     agentSessionId: runtime.session.sessionId,
     agentExecutionId: runtime.executionId,
-    text,
-    rawContent: text,
+    text: basePrompt,
+    rawContent: basePrompt,
     botRoleIds: [],
     messageStartedAt: startedAt,
     requestKind,
     userId: interaction.user.id,
     userDisplayName: displayName,
-    interaction: {
-      messageId: interaction.message.id,
-      customId: interaction.customId,
-      componentType: interaction.isModalSubmit() ? "modal_submit" : interaction.componentType.toString(),
-      values,
-      fields,
-    },
+    interaction: interactionContext,
     requestAttachments: submission?.attachments,
   };
   const prepared = await prepareDiscordAgentTurn({ context: input, client, message: sourceMessage, responseSink, request, agentRuntimeExecution: runtime, requestLogger: logger, source: `discord.${requestKind}` });
   await input.deliveryObligations?.upsertPending({ executionId: runtime.executionId, threadKey, guildId: interaction.guildId!, channelId: interaction.channelId, statusChannelId: interaction.message.channelId, statusMessageId: interaction.message.id, sourceMessageId, metadata: { requestId: interaction.id, requestKind } });
-  await recordTraceEvent(input.repo, { eventName: "discord.component.accepted", summary: `Accepted Discord ${requestKind} interaction`, metadata: { originatingExecutionId: runtime.executionId, sourceMessageId }, durationMs: durationMs(startedAt) });
+  await recordTraceEvent(input.repo, { eventName: "discord.component.accepted", summary: `Accepted Discord ${requestKind} interaction`, metadata: { originatingExecutionId, interactionExecutionId: runtime.executionId, sourceMessageId }, durationMs: durationMs(startedAt) });
   if (input.jobs) {
     if (!input.agentRuntime) throw new Error("Agent runtime repository is required to enqueue Discord interactions.");
     await enqueueAgentRuntimeSessionExecution({
       agentRuntime: input.agentRuntime, jobs: input.jobs, session: runtime.session,
       execution: { executionId: runtime.executionId, traceId: interaction.id }, threadKey,
-      queue: { runId: interaction.id, traceId: interaction.id, guildId: interaction.guildId, channelId: interaction.channelId, messageId: sourceMessageId, userId: interaction.user.id, responseChannelId: interaction.message.channelId, responseMessageId: interaction.message.id, turnEnvelopeArtifactId: prepared.turnEnvelopeArtifactId, inputLinesArtifactId: prepared.inputLinesArtifactId, text, rawContent: text, mentionKind: requestKind, botRoleIds: [], requesterDisplayName: displayName, enqueuedAt: new Date().toISOString() },
+      queue: { runId: interaction.id, traceId: interaction.id, guildId: interaction.guildId, channelId: interaction.channelId, messageId: sourceMessageId, userId: interaction.user.id, responseChannelId: interaction.message.channelId, responseMessageId: interaction.message.id, turnEnvelopeArtifactId: prepared.turnEnvelopeArtifactId, inputLinesArtifactId: prepared.inputLinesArtifactId, text: basePrompt, rawContent: basePrompt, mentionKind: requestKind, botRoleIds: [], requesterDisplayName: displayName, enqueuedAt: new Date().toISOString() },
     });
     return;
   }
@@ -155,7 +179,9 @@ function modalSubmission(interaction: ModalSubmitInteraction): { fields: Record<
       ? [...component.attachments.values()].map((attachment: any) => ({ id: attachment.id, url: attachment.url, proxyUrl: attachment.proxyURL, filename: attachment.name, contentType: attachment.contentType, sizeBytes: attachment.size, width: attachment.width, height: attachment.height, description: attachment.description }))
       : [];
     attachments.push(...uploaded);
-    fields[key] = component.value ?? component.values ?? uploaded.map((attachment: any) => ({ id: attachment.id, name: attachment.filename, size: attachment.sizeBytes })) ?? null;
+    fields[key] = uploaded.length
+      ? uploaded.map((attachment: any) => ({ id: attachment.id, name: attachment.filename, size: attachment.sizeBytes }))
+      : component.value ?? component.values ?? null;
   }
   return { fields, attachments };
 }
@@ -170,4 +196,19 @@ function interactionErrorMessage(reason: string) {
   if (reason === "expired") return "That control has expired. Ask me to create a fresh one.";
   if (reason === "consumed") return "That control has already been used.";
   return "That control is no longer available.";
+}
+
+async function withinModalResponseDeadline<T>(promise: Promise<T>, timeoutMs = 2_000): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("Discord modal action lookup exceeded its response deadline.")), timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }

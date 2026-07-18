@@ -219,7 +219,7 @@ type AgentRuntimeUserInputLine = {
 };
 
 export function agentRuntimeInputLinesFromEnvelope(envelope: AgentRuntimeTurnEnvelope): string[] {
-  const content: AgentRuntimeInputContentBlock[] = [{ type: "text", text: envelope.text }];
+  const content: AgentRuntimeInputContentBlock[] = [{ type: "text", text: agentRuntimeTurnInputText(envelope) }];
   for (const attachment of envelope.requestAttachments) {
     if (!isImageAttachment(attachment)) continue;
     content.push({
@@ -262,6 +262,21 @@ export function agentRuntimeInputLinesFromEnvelope(envelope: AgentRuntimeTurnEnv
     }
   };
   return [JSON.stringify(line)];
+}
+
+export function agentRuntimeTurnInputText(input: Pick<AgentRuntimeTurnEnvelope, "text" | "interaction">): string {
+  if (!input.interaction) return input.text;
+  const submitted = {
+    componentType: input.interaction.componentType,
+    ...(input.interaction.values?.length ? { values: input.interaction.values } : {}),
+    ...(input.interaction.fields && Object.keys(input.interaction.fields).length ? { fields: input.interaction.fields } : {}),
+  };
+  return [
+    "[Model-authored Discord component action]",
+    input.text,
+    "[Current user-submitted Discord interaction data]",
+    JSON.stringify(submitted),
+  ].join("\n");
 }
 
 export function promptTextFromAgentRuntimeInputLines(inputLines: string[] | undefined): string | null {

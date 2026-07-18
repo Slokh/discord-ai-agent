@@ -7,7 +7,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Bot login, guild scoping, message/reaction/edit/delete events, and mention detection.
 - Reply context, request attachments, image metadata, permissions, and channel visibility.
 - Response sink for acknowledgements, lazy status messages, final replies, attachments, and cleanup.
-- Components V2 validation/rendering, opaque durable actions, and requester-scoped click/modal ingress live under `components/`; see [`../../docs/discord-rich-components.md`](../../docs/discord-rich-components.md).
+- Components V2 validation and side-effect-free rendering, capability-aware V2 delivery, opaque durable action generations, and requester-scoped typed click/modal ingress live under `components/`; see [`../../docs/discord-rich-components.md`](../../docs/discord-rich-components.md).
 - `api.ts` wraps Discord writes (reply/edit/send/react/delete) with shared retry/error classification; user-visible rendering should route through it rather than calling message methods directly.
 - Delivery obligations are persisted for in-flight agent-runtime turns and swept on bot startup to complete terminal replies or post a conservative restart notice.
 - Queue handoff into durable agent runtime executions.

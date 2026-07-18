@@ -1,4 +1,5 @@
 import type { FunctionToolDefinition, OpenRouterServerToolDefinition, ToolDefinition } from "../models/openrouter.js";
+import { discordPresentationToolParameters } from "../discord/components/validation.js";
 
 export type ToolName =
   | "listTools"
@@ -175,23 +176,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
     toolClass: "generation",
     outputContract: ["validated Components V2 presentation", "requester or channel audience", "durable bounded interaction actions"],
     examples: ["Show results as a card with source links", "Let me choose one of these channels", "Ask me for the remaining event details"],
-    parameters: {
-      type: "object",
-      properties: {
-        version: { type: "number", enum: [1] },
-        audience: { type: "string", enum: ["requester", "channel"], description: "Who may use interactive controls. Default requester." },
-        expiresInMinutes: { type: "number", description: "Interaction lifetime, 1 minute to 7 days. Defaults to 24 hours." },
-        components: {
-          type: "array",
-          minItems: 1,
-          maxItems: 40,
-          description: "Typed component objects using camelCase fields. Shapes: text={type:'text',content}; separator={type:'separator',divider?,spacing:'small'|'large'}; thumbnail={type:'thumbnail',url,description?,spoiler?} as a section accessory; media_gallery={type:'media_gallery',items:[{url,description?,spoiler?}]}; file={type:'file',url}; section={type:'section',text:[markdown strings],accessory:button|thumbnail}; container={type:'container',accentColor?,spoiler?,components:[children]}; action_row={type:'action_row',components:[up to 5 buttons OR exactly 1 select]}. Button shapes use {type:'button',label?,emoji?,disabled?,style}; interactive styles primary|secondary|success|danger add action={type:'continue',prompt,singleUse?} or action={type:'modal',prompt,singleUse?,modal:{title,fields}}; link adds url; premium adds skuId. Select types string_select, user_select, role_select, mentionable_select, channel_select use prompt, placeholder?,minValues?,maxValues?,disabled?,singleUse?; string_select adds options:[{label,value,description?,emoji?,default?}], channel_select may add channelTypes. Modal fields are text or labeled inputs with key: text_input, every select type, file_upload, radio_group with options, checkbox_group with options, and checkbox. Never supply custom IDs.",
-          items: { type: "object", additionalProperties: true },
-        },
-      },
-      required: ["components"],
-      additionalProperties: false,
-    },
+    parameters: discordPresentationToolParameters,
   },
   {
     name: "findDiscordUsers",

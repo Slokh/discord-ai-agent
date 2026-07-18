@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  agentRuntimeTurnInputText,
   assertAgentRuntimeTurnEnvelopeScope,
   buildAgentRuntimeTurnEnvelope,
   loadAgentRuntimeTurnEnvelope,
@@ -231,6 +232,25 @@ describe("agent runtime envelope", () => {
         content: "fresh memory"
       })
     ]);
+  });
+
+  it("keeps model-authored actions and current user submissions distinct in model input", () => {
+    const text = agentRuntimeTurnInputText({
+      text: "Compare the selected choices",
+      interaction: {
+        messageId: "response",
+        customId: "opaque",
+        componentType: "string_select",
+        values: ["one", "two"],
+        fields: { note: "current user text" },
+      },
+    });
+
+    expect(text).toContain("[Model-authored Discord component action]\nCompare the selected choices");
+    expect(text).toContain("[Current user-submitted Discord interaction data]");
+    expect(text).toContain('"values":["one","two"]');
+    expect(text).toContain('"note":"current user text"');
+    expect(text).not.toContain("opaque");
   });
 });
 

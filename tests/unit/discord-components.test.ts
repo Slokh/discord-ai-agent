@@ -27,21 +27,25 @@ describe("Discord rich components", () => {
         { type: "container", accentColor: 0x5865f2, components: [{ type: "text", content: "Inside" }] },
       ],
     });
-    const register = vi.fn(async () => undefined);
-    const prepared = await prepareDiscordPresentation({ presentation, content: "Summary", fileNames: ["report.csv"], register });
+    let tokenIndex = 0;
+    const prepared = prepareDiscordPresentation({
+      presentation,
+      content: "Summary",
+      fileNames: ["report.csv"],
+      tokenFactory: () => `abcdefghijklmnopqrst${String(tokenIndex++).padStart(4, "0")}`,
+    });
     const payload = prepared.payload as any;
 
     expect(payload.flags).toBe(MessageFlags.IsComponentsV2);
     expect(payload.content).toBeNull();
     expect(payload.components.map((component: any) => component.type)).toEqual([10, 9, 12, 13, 14, 1, 1, 1, 1, 1, 1, 17]);
-    expect(register).toHaveBeenCalledTimes(6);
     expect(prepared.registrations).toHaveLength(6);
     expect(prepared.registrations.every((item) => discordComponentToken(item.customId)?.token === item.token)).toBe(true);
     expect(payload.components.filter((component: any) => component.type === 13)).toHaveLength(1);
   });
 
   it("compiles every current modal input type", () => {
-    const modal = buildDiscordModal("ai:v1:abcdefghijklmnopqrstuvwx", {
+    const modal = buildDiscordModal("ai:v1:m:abcdefghijklmnopqrstuvwx", {
       title: "All inputs",
       fields: [
         { type: "text", content: "Fill this out" },
@@ -52,11 +56,11 @@ describe("Discord rich components", () => {
       ],
     }).toJSON() as any;
 
-    expect(modal.custom_id).toMatch(/:modal$/);
+    expect(modal.custom_id).toMatch(/:submit$/);
     expect(modal.components.map((component: any) => component.type)).toEqual([10, 18, 18, 18, 18]);
     expect(modal.components.slice(1).map((component: any) => component.component.type)).toEqual([4, 21, 22, 19]);
 
-    const selectors = buildDiscordModal("ai:v1:abcdefghijklmnopqrstuvwx", {
+    const selectors = buildDiscordModal("ai:v1:m:abcdefghijklmnopqrstuvwx", {
       title: "Selectors",
       fields: [
         { type: "string_select", key: "string", label: "String", options: [{ label: "A", value: "a" }] },
@@ -68,7 +72,7 @@ describe("Discord rich components", () => {
     }).toJSON() as any;
     expect(selectors.components.map((component: any) => component.component.type)).toEqual([3, 5, 6, 7, 8]);
 
-    const checkbox = buildDiscordModal("ai:v1:abcdefghijklmnopqrstuvwx", {
+    const checkbox = buildDiscordModal("ai:v1:m:abcdefghijklmnopqrstuvwx", {
       title: "Checkbox",
       fields: [{ type: "checkbox", key: "agree", label: "Agree" }],
     }).toJSON() as any;
@@ -82,12 +86,33 @@ describe("Discord rich components", () => {
     ] }] })).toThrow(/only that select/i);
   });
 
-  it("counts final text and nested components against Discord's 40-component limit", async () => {
+  it("counts final text and nested components against Discord's 40-component limit", () => {
     const presentation = parseDiscordPresentation({
       components: Array.from({ length: 39 }, (_, index) => ({ type: "text", content: `line ${index}` })),
     });
-    await expect(prepareDiscordPresentation({ presentation, content: "body", footer: "footer", register: async () => undefined }))
-      .rejects.toThrow(/at most 40/);
+    expect(() => prepareDiscordPresentation({ presentation, content: "body", footer: "footer" }))
+      .toThrow(/at most 40/);
+  });
+
+  it("rejects cross-field constraints that Discord would reject", () => {
+    expect(() => parseDiscordPresentation({ components: [{ type: "action_row", components: [{
+      type: "string_select", prompt: "Choose", maxValues: 2, options: [{ label: "A", value: "a" }],
+    }] }] })).toThrow(/available options/i);
+    expect(() => parseDiscordPresentation({ components: [{ type: "action_row", components: [{
+      type: "button", label: "Open", style: "primary", action: { type: "modal", prompt: "Use form", modal: {
+        title: "Form", fields: [{ type: "text_input", key: "x", label: "X", minLength: 10, maxLength: 2 }],
+      } },
+    }] }] })).toThrow(/minLength/i);
+    expect(() => parseDiscordPresentation({ components: [{ type: "action_row", components: [{
+      type: "button", label: "Open", style: "primary", action: { type: "modal", prompt: "Use form", modal: {
+        title: "Form", fields: [{ type: "file_upload", key: "file", label: "File", required: true, minValues: 0 }],
+      } },
+    }] }] })).toThrow(/required file upload/i);
+  });
+
+  it("validates referenced attachments before generating action registrations", () => {
+    const presentation = parseDiscordPresentation({ components: [{ type: "file", url: "attachment://missing.csv" }] });
+    expect(() => prepareDiscordPresentation({ presentation, content: "Report", fileNames: [] })).toThrow(/missing attachment/i);
   });
 
   it("blocks generic component turns from authorizing mutating tools", async () => {
@@ -99,7 +124,7 @@ describe("Discord rich components", () => {
     const showModal = vi.fn(async () => undefined);
     const interaction = {
       id: "interaction",
-      customId: "ai:v1:abcdefghijklmnopqrstuvwx",
+      customId: "ai:v1:m:abcdefghijklmnopqrstuvwx",
       guildId: "guild",
       channelId: "channel",
       message: { id: "response" },
@@ -110,7 +135,7 @@ describe("Discord rich components", () => {
     } as any;
     const repo = {
       resolveDiscordComponentAction: vi.fn(async () => ({ ok: true, record: {
-        sourceMessageId: "source",
+        sourceMessageId: "source", originatingExecutionId: "origin",
         action: { type: "modal", prompt: "Plan it", modal: { title: "Plan", fields: [{ type: "text_input", key: "topic", label: "Topic" }] } },
       } })),
     };
@@ -121,23 +146,26 @@ describe("Discord rich components", () => {
   });
 
   it("returns an ephemeral error for a requester-scoped control used by someone else", async () => {
-    const reply = vi.fn(async () => undefined);
+    const events: string[] = [];
+    const followUp = vi.fn(async () => undefined);
     const interaction = {
       id: "interaction",
-      customId: "ai:v1:abcdefghijklmnopqrstuvwx",
+      customId: "ai:v1:a:abcdefghijklmnopqrstuvwx",
       guildId: "guild",
       channelId: "channel",
       message: { id: "response" },
       user: { id: "other" },
-      deferred: false,
+      deferred: true,
       replied: false,
       isMessageComponent: () => true,
       isModalSubmit: () => false,
-      reply,
+      deferUpdate: vi.fn(async () => { events.push("defer"); }),
+      followUp,
     } as any;
-    const repo = { resolveDiscordComponentAction: vi.fn(async () => ({ ok: false, reason: "wrong_user" })) };
+    const repo = { resolveDiscordComponentAction: vi.fn(async () => { events.push("resolve"); return { ok: false, reason: "wrong_user" }; }) };
 
     expect(await handleDiscordRichInteraction({ config: { discord: { guildId: "guild" } }, repo } as any, {} as any, interaction)).toBe(true);
-    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("belongs") }));
+    expect(events).toEqual(["defer", "resolve"]);
+    expect(followUp).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("belongs") }));
   });
 });

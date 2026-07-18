@@ -1,18 +1,20 @@
 # Pre-Release Hardening Plan
 
-This is the concrete cleanup/hardening checklist to complete before new feature work. It comes from a full-repo review (2026-07) plus a reference review of `paradigmxyz/centaur` and `tempoxyz/centaur-tempo`.
+> **Status: completed historical plan (2026-07).** This checklist records the cleanup/hardening work and architectural decisions that produced the current foundation. Do not treat checked items, old file sizes, or workstream ordering as current tasks without re-auditing the repository.
+
+This plan came from a full-repo review plus a reference review of `paradigmxyz/centaur` and `tempoxyz/centaur-tempo`.
 
 Relationship to other docs:
 
 - `docs/improvement-plan.md` is the long-term product roadmap (phases and exit criteria).
-- This file is the tactical plan: workstreams, tasks, and verification for the current cleanup pass.
+- This file is the completed tactical record: workstreams, tasks, and verification for that cleanup pass.
 - When a task here changes architecture, update `docs/architecture.md` in the same PR.
 
-How to use this file:
+How to use this file now:
 
-- Check off tasks as they merge. Keep the checkbox line intact so progress stays visible in diffs.
-- Tasks are sized to be independently shippable (one PR each, sometimes a few small ones per PR).
-- Do not start WS6 (structural splits) before WS2 (ledger consolidation) lands.
+- Use the decisions below to understand why the runtime has its current shape.
+- Verify current source and active docs before reviving any deferred idea.
+- Put new prioritized work in issues or a newly labeled active plan instead of reopening this historical checklist in place.
 
 ## Decisions
 
@@ -165,7 +167,7 @@ Goal: no unbounded tables; a long-running deployment stays small without manual 
 - [x] Add a configurable retention job (worker-side, like `artifactRetention.ts`) for: `trace_events`, `tool_audit_logs`, `task_events`, `process_run_*`, `codegen_events`, `sandbox_command_events` (default 30–90 days), and embedding-batch process runs/artifacts (7–14 days).
 - [x] Conversation-memory compaction: after N turns per thread key, summarize older turns into a snapshot row and prune raw rows (`conversation_messages`).
 - [x] Add missing hot-path indexes (migration 009): `tool_audit_logs(guild_id, created_at DESC)`; `process_run_artifacts(expires_at) WHERE expires_at IS NOT NULL`; `agent_tasks(updated_at DESC, created_at DESC)`; partial index for stale-running task scans; partial live-message indexes for backlog/recent scans.
-- [x] Document (not fix) the filtered vector-search scaling limit in `src/db/README.md`: the filtered branch bypasses the IVFFLAT index; revisit with ANN-first + candidate escalation or an HNSW index if any deployment approaches ~1M messages.
+- [x] Document the original filtered vector-search scaling limit. This was later superseded by HNSW ANN-first retrieval with filtered candidate escalation; see the current `src/db/README.md`.
 
 Exit criteria: retention job covered by a DB-gated test; steady-state DB size bounded; `EXPLAIN` on the hot queries uses the new indexes.
 
@@ -304,4 +306,4 @@ Baseline as of 2026-07: verify green (466 passed / 56 skipped), scan:release gre
 
 ## Post-plan cleanup (completed)
 
-The settled runtime cleanup removed the compatibility surfaces that were still present while this checklist was being executed: the `src/tools/coreTools.ts` barrel/facade is gone, durable workflow code and tables are gone, `task_events` and its dual-write/fallback path are gone, and the former `codegen_*` runtime ledger has been renamed to `agent_runtime_*` with `harness_thread_id`. Migrations are now squashed into the single `migrations/001_initial.sql` baseline, with `scripts/legacy-schema-transition.sql` for one-time upgrades of pre-squash databases. Legacy `/api/codegen/*` routes were removed in favor of `/api/agent/sessions/:threadKey` and `/api/tasks/status`.
+The settled runtime cleanup removed the compatibility surfaces that were still present while this checklist was being executed: the `src/tools/coreTools.ts` barrel/facade is gone, durable workflow code and tables are gone, `task_events` and its dual-write/fallback path are gone, and the former `codegen_*` runtime ledger has been renamed to `agent_runtime_*` with `harness_thread_id`. At plan completion, the schema had been squashed into `migrations/001_initial.sql`, with `scripts/legacy-schema-transition.sql` for one-time upgrades of pre-squash databases; later numbered forward migrations now follow that baseline. Legacy `/api/codegen/*` routes were removed in favor of `/api/agent/sessions/:threadKey` and `/api/tasks/status`.

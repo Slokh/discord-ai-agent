@@ -14,3 +14,9 @@ Owns pg-boss setup, queue handoff helpers, and worker dispatch.
 - Put lifecycle facts in the smallest owner that represents that lifecycle. Queue setup belongs in `queue.ts`; task enqueue bookkeeping belongs in `agentTaskEnqueue.ts`; execution start/progress belongs in the execution backend and repository lifecycle methods.
 - Do not reset task-linked executions to `queued` after pg-boss accepts a job. Fast workers may already have marked the same execution `running`.
 - Keep job payloads small and replayable. Durable context should live in Postgres artifacts or repository rows, with the job carrying ids needed to resume the work.
+
+## Tests
+
+- Queue/task handoff helpers: `tests/unit/agent-task-enqueue.test.ts` and `tests/unit/agent-task-runtime-write.test.ts`.
+- Warm sandbox leases: `tests/unit/sandbox-lease-scheduler.test.ts`.
+- Atomic pg-boss and task lifecycle behavior: `tests/integration/jobs-db.test.ts`.

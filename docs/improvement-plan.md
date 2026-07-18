@@ -1,8 +1,8 @@
 # Improvement Plan
 
-This is the working plan for moving Discord AI Agent from prototype to a reliable private-server assistant.
+> **Status: active strategy.** This document defines the long-term reliability loops and exit criteria. It is not a prioritized issue tracker; confirm current work in open issues/PRs and the present architecture before implementing an unchecked idea.
 
-For the current tactical cleanup/hardening checklist (workstreams, tasks, and verification before new feature work), see `docs/pre-release-plan.md`.
+The original pre-release hardening checklist is complete and retained in [`pre-release-plan.md`](pre-release-plan.md) as architectural history. The completed post-hardening foundation is recorded in [`continuation-plan.md`](continuation-plan.md).
 
 ## North Star
 

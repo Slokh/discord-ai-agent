@@ -28,7 +28,8 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 ## Tests
 
 - Discord client behavior: `tests/unit/discord-client.test.ts`.
-- Response lifecycle: `tests/unit/discord-response-sink.test.ts`.
+- Agent execution delivery and response lifecycle: `tests/unit/agent-delivery.test.ts` and `tests/unit/discord-response-sink.test.ts`.
+- Reply context and permissions: `tests/unit/discord-reply-context.test.ts` and `tests/unit/discord-permissions.test.ts`.
 - Delivery write/sweep helpers: `tests/unit/discord-api.test.ts` and `tests/unit/discord-delivery-sweep.test.ts`.
 - Task rendering: `tests/unit/task-notifications.test.ts`.
 - Crawl/persistence: `tests/unit/crawler.test.ts` and `tests/unit/message-persistence.test.ts`.

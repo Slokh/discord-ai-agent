@@ -1,6 +1,8 @@
 # Continuation Plan
 
-This plan follows the completed pre-release hardening checklist. It is the working foundation plan for continued product development.
+> **Status: completed foundation snapshot.** This plan records the post-hardening observability, latency, retrieval, and quality baseline that has landed. It is retained for decision history and operating targets, not as a queue of remaining work.
+
+New feature work should follow [`product-principles.md`](product-principles.md), [`architecture.md`](architecture.md), and [`engineering-guide.md`](engineering-guide.md), then use current issues/PRs for prioritization.
 
 ## Operating targets
 
@@ -13,7 +15,7 @@ This plan follows the completed pre-release hardening checklist. It is the worki
 - Delivery recovery: zero terminal executions left with pending delivery obligations after reconciliation.
 - Test isolation: zero application rows left in the developer database by DB-backed tests.
 
-## Current foundation work
+## Completed foundation work
 
 - [x] Add one observed model-call telemetry contract for routing, synthesis, and recovery calls.
 - [x] Add prompt/tool-schema byte counts, fingerprints, offered tools, token/cache use, cost, latency, and outcome metadata.
@@ -34,7 +36,7 @@ This plan follows the completed pre-release hardening checklist. It is the worki
 - [x] Emit only changed run snapshots on the console stream, with lightweight heartbeats.
 - [x] Add aggregate audited cost and active-session metrics.
 
-## Next implementation slices
+## Completed implementation slices
 
 ### Typed runtime trace
 

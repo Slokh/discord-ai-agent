@@ -48,7 +48,11 @@ Owns the model loop for one user prompt.
 ## Tests
 
 - End-to-end agent behavior: `tests/integration/agent.test.ts`.
-- Tool schema/behavior: `tests/unit/tool-registry.test.ts` and `tests/unit/core-tools.test.ts`.
+- Prompt composition and context budgets: `tests/unit/prompt-context-cost.test.ts`.
+- Toolset/route behavior: `tests/unit/model-toolset.test.ts` and `tests/unit/model-tool-routes.test.ts`.
+- Runtime ledger, envelope, runner, and executor: `tests/unit/agent-runtime-*.test.ts`, `tests/unit/runtime-envelope-lines.test.ts`, and `tests/unit/in-process-runtime-executor.test.ts`.
+- High-consequence guards: focused `tests/unit/*-guard.test.ts` files plus `tests/unit/random-tools.test.ts`.
+- Tool schema/behavior: `tests/unit/tool-registry.test.ts` and the focused tool-family tests listed in `src/tools/README.md`.
 
 ## Discord chat runtime ledger
 

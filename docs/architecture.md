@@ -1,16 +1,43 @@
 # Architecture Map
 
-This file is the short map for coding agents. Prefer this and the nearest `src/**/README.md` over rereading the whole repository before making a targeted change.
+This file is the short runtime map for coding agents. Read [`product-principles.md`](product-principles.md) for the behavior being protected, then prefer this file and the nearest `src/**/README.md` over rereading the whole repository before making a targeted change. Use [`engineering-guide.md`](engineering-guide.md) for feature workflow and verification.
 
 ## Runtime Shape
 
 Discord AI Agent is a TypeScript Node app with three production roles:
 
-- `bot`: Discord gateway, mention detection, response rendering, per-channel conversation memory.
-- `worker`: queue consumers for crawl, embeddings, agent runtime executions, code-update tasks, reconciliation, and cleanup.
+- `bot`: Discord gateway, mention detection, immediate acknowledgements, queue handoff, and background/task notifications.
+- `worker`: queue consumers for chat agent-runtime execution and final Discord delivery, crawl, embeddings, code-update tasks, reconciliation, and cleanup.
 - `api`: internal control plane for sandbox callbacks, run console APIs, metrics, and authenticated debugging UI.
 
 Postgres is the durable source of truth for Discord messages, embeddings, skills, conversation memory, traces, process runs, task projections, sandbox runs, and the canonical `agent_runtime_*` session/execution/message/event/artifact ledger.
+
+## Architectural Laws
+
+These constraints are intentional. Do not treat them as temporary implementation accidents:
+
+- Discord chat prompt execution runs in-process. Sandboxes are reserved for code-update tasks.
+- The `agent_runtime_*` ledger is the canonical execution history for chat and code-update work. Task and run views are projections, not competing ledgers.
+- Discord code owns delivery obligations and rendering; it does not own execution truth.
+- The immutable current requester and visible-channel set scope every tool call. Prior memory and model arguments cannot replace them.
+- The model owns semantic intent and presentation. Code owns permissions, live money, randomness, mutation authorization, durable transitions, retries, and exact delivery metadata.
+- User-facing Discord interaction remains commandless. Operator scripts and the authenticated console are recovery/debugging surfaces, not required user flows.
+- Private server content stays in `.discord-ai-agent/` or Postgres and is enforced by the release scanner.
+
+## Sources Of Truth
+
+| State | Canonical owner | Common readers/projections |
+| --- | --- | --- |
+| Prompt executions and code-update attempts | `src/db/agentRuntimeRepository.ts` | `src/observability/runs.ts`, console, task status |
+| Discord messages, attachments, aliases, exclusions | Focused Discord archive repositories in `src/db/` | Retrieval, stats, crawl, and memory modules |
+| Conversation continuity | Conversation memory repository | `src/agent/promptBuilder.ts` |
+| Request identity and reply scope | Stored turn envelope from `src/agent/runtimeEnvelope.ts` | Runtime runner and `ToolContext` guards |
+| Pending Discord rendering | Delivery obligations repository | Discord delivery sweeps and `responseSink.ts` |
+| Wallet transfers and wagers | Payment repository plus receipt-verified chain state | Wallet service, payment tools, payments console |
+| Provable chance outcomes | RNG repository | Random tools, proof footers, verifier script |
+| Server overlays and learned skills | Postgres | Prompt/skill loaders and management tools |
+
+When a new feature needs durable state, extend the focused owner that represents its lifecycle. Do not introduce a convenience table or transcript that becomes a second source of truth.
 
 ## Core Flows
 
@@ -45,7 +72,7 @@ For durable knowledge changes such as excluding a channel, deleting indexed hist
 2. `src/tools/agentTaskTools.ts` edits the Discord status message with progress, creates the `runCodingAgent` tool message plus task-linked execution in the durable session, and then enqueues the sandbox worker. `src/jobs/agentTaskEnqueue.ts` writes the same canonical runtime records when a caller has not already created them.
 3. `src/jobs/agentTaskEnqueue.ts` owns the queue handoff transaction, then `src/jobs/queue.ts` claims the task and launches the configured execution backend.
 4. `src/execution/backend.ts` starts either a Kubernetes Job or local process sandbox.
-5. `src/execution/sandboxRunner.ts` prepares the repo, prompt, cache, harness config, tests, scan, push, and PR. Use `src/execution/README.md` before changing this path.
+5. `src/execution/runnerPipeline.ts` orchestrates repo preparation, prompt/context, dependency cache, harness execution, tests, scan, push, and PR creation; `src/execution/sandboxRunner.ts` is the compatibility entrypoint. Use `src/execution/README.md` before changing this path.
 6. Sandbox callbacks hit `src/control/internalApi.ts`, which persists command events, artifacts, spans, and terminal output. Worker lifecycle state such as start, warm-lease attachment, sandbox-run attachment, progress, and completion is recorded as `agent.task.*` runtime events.
 7. `src/discord/taskNotifications.ts` edits the original Discord status message with current progress and final PR/failure details from canonical `agent.task.*` runtime events. The run console, trace log inspection, and model-facing task-status tool use the same event stream for code-update task progress.
 
@@ -91,5 +118,6 @@ The base repo ships neutral defaults. Server-specific content lives outside Git 
 - Do not inject long implementation-specific file lists into prompts when a stable domain README or ownership map can guide the agent.
 - If a request mentions tool names as part of a product behavior, classify the product behavior first. Tool-name anchors should only dominate when the task is about tool schemas, routing, arguments, or contracts.
 - For answer quality, add or update eval prompts before tuning prompts/tools.
+- For any complex feature, include requester scope, durable state, delivery, typed observability, recovery, focused tests, and docs in the design before implementing only the happy path.
 
-For the broader implementation roadmap, see `docs/improvement-plan.md`. For the current pre-release cleanup/hardening checklist, see `docs/pre-release-plan.md`.
+For the broader strategy, see [`improvement-plan.md`](improvement-plan.md). [`continuation-plan.md`](continuation-plan.md) and [`pre-release-plan.md`](pre-release-plan.md) are completed foundation/history records, not current task queues.

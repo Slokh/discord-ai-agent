@@ -36,7 +36,8 @@ Owns model-facing local tool contracts and implementations.
 ## Tests
 
 - Tool schemas and taxonomy: `tests/unit/tool-registry.test.ts`.
-- Tool behavior: `tests/unit/core-tools.test.ts`.
+- Tool scoping and argument coercion: `tests/unit/tool-scope.test.ts` and `tests/unit/tool-arguments.test.ts`.
+- Tool behavior: focused `tests/unit/*-tools.test.ts` files; `tests/unit/core-tools.test.ts` covers shared/compatibility behavior.
 - End-to-end model/tool behavior: `tests/integration/agent.test.ts`.
 
 ## Structure

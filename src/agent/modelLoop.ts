@@ -108,7 +108,7 @@ async function runAgentModelLoopInternal(
       userDisplayName: ctx.userDisplayName,
     },
     promptOverlay,
-    await loadDiscordEmojiPromptContext(ctx),
+    await loadDiscordEmojiPromptContext(ctx, text),
   );
   if (automaticStarterFunds) {
     messages.splice(Math.max(0, messages.length - 1), 0, {

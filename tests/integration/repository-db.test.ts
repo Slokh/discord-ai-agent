@@ -130,12 +130,13 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     })).resolves.toEqual([]);
   });
 
-  it("loads custom emoji meaning examples only from visible, privacy-safe messages", async () => {
+  it("maintains compact custom emoji profiles from visible, privacy-safe indexed usage", async () => {
     const guildId = `guild-${randomUUID()}`;
     const visibleChannelId = `channel-${randomUUID()}`;
     const hiddenChannelId = `channel-${randomUUID()}`;
     const inlineAuthorId = `user-${randomUUID()}`;
     const reactionAuthorId = `user-${randomUUID()}`;
+    const reactionMessageId = `message-${randomUUID()}`;
     const emojiId = "123456789012345678";
     await repo.upsertGuild({ id: guildId, name: "test" });
     await repo.upsertChannel({ id: visibleChannelId, guildId, name: "visible", type: 0 });
@@ -151,7 +152,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       createdAt: new Date("2026-07-18T00:00:00Z")
     });
     await repo.upsertMessage({
-      id: `message-${randomUUID()}`,
+      id: reactionMessageId,
       guildId,
       channelId: visibleChannelId,
       authorId: reactionAuthorId,
@@ -164,6 +165,17 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.upsertMessage({
       id: `message-${randomUUID()}`,
       guildId,
+      channelId: visibleChannelId,
+      authorId: reactionAuthorId,
+      authorUsername: "reaction-user",
+      content: "production survived somehow",
+      normalizedContent: "production survived somehow",
+      raw: { reactions: [{ emojiId, emojiName: "party", animated: false, count: 2 }] },
+      createdAt: new Date("2026-07-18T00:01:30Z")
+    });
+    await repo.upsertMessage({
+      id: `message-${randomUUID()}`,
+      guildId,
       channelId: hiddenChannelId,
       authorId: `user-${randomUUID()}`,
       authorUsername: "hidden-user",
@@ -172,22 +184,57 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       createdAt: new Date("2026-07-18T00:02:00Z")
     });
 
-    await expect(repo.listDiscordEmojiUsageExamples({
+    await expect(repo.listDiscordEmojiCultureProfiles({
+      guildId,
+      visibleChannelIds: [visibleChannelId],
+      emojiIds: [emojiId],
+      queryText: "shipped",
+      limit: 8
+    })).resolves.toEqual([
+      expect.objectContaining({
+        emojiId,
+        inlineUses: 1,
+        reactionUses: 5,
+        messageCount: 3,
+        examples: expect.arrayContaining([
+          expect.objectContaining({ kind: "reaction", content: "the build is red again" }),
+          expect.objectContaining({ kind: "inline", content: `we actually shipped it <:party:${emojiId}>` })
+        ])
+      })
+    ]);
+
+    await repo.upsertMessage({
+      id: reactionMessageId,
+      guildId,
+      channelId: visibleChannelId,
+      authorId: reactionAuthorId,
+      authorUsername: "reaction-user",
+      content: "the build is red again",
+      normalizedContent: "the build is red again",
+      raw: { reactions: [{ emojiId, emojiName: "party", animated: false, count: 5, me: true }] },
+      createdAt: new Date("2026-07-18T00:01:00Z")
+    });
+    await expect(repo.listDiscordEmojiCultureProfiles({
       guildId,
       visibleChannelIds: [visibleChannelId],
       emojiIds: [emojiId]
     })).resolves.toEqual([
-      expect.objectContaining({ emojiId, kind: "reaction", content: "the build is red again" }),
-      expect.objectContaining({ emojiId, kind: "inline", content: `we actually shipped it <:party:${emojiId}>` })
+      expect.objectContaining({ emojiId, inlineUses: 1, reactionUses: 6, messageCount: 3 })
     ]);
 
     await repo.requestUserDeletion(inlineAuthorId);
-    await expect(repo.listDiscordEmojiUsageExamples({
+    await expect(repo.listDiscordEmojiCultureProfiles({
       guildId,
       visibleChannelIds: [visibleChannelId],
       emojiIds: [emojiId]
     })).resolves.toEqual([
-      expect.objectContaining({ emojiId, kind: "reaction", content: "the build is red again" })
+      expect.objectContaining({
+        emojiId,
+        inlineUses: 0,
+        reactionUses: 6,
+        messageCount: 2,
+        examples: [expect.objectContaining({ kind: "reaction", content: "the build is red again" })]
+      })
     ]);
   });
 

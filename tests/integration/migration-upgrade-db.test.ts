@@ -53,6 +53,19 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await client.query("INSERT INTO agent_run_feedback(run_id, rating, capture_eval) VALUES ('execution', 'good', true)");
       await expect(client.query("SELECT count(*)::int AS count FROM agent_run_feedback")).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 1 })] }));
+      for (const version of [
+        "012_starter_grants",
+        "013_wager_request_idempotency",
+        "014_durable_game_sessions",
+        "015_verified_wager_settlement",
+        "016_discord_bug_markers",
+        "017_deployment_announcements",
+        "018_discord_emoji_culture",
+      ]) {
+        await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
+      }
+      await expect(client.query("SELECT count(*)::int AS count FROM discord_emoji_channel_profiles"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

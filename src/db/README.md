@@ -6,7 +6,7 @@ Owns durable Postgres state and query contracts.
 
 - Discord guilds, channels, users, messages, attachments, edits/deletes, aliases, crawl cursors, interaction blocks, and exclusions live in `discordArchiveRepository.ts`.
 - Requester-owned Discord bug-marker writes, privacy cleanup, and permission-filtered inbox reads live in `discordBugMarkerRepository.ts`.
-- Recent human custom-emoji message usage and reaction-target examples live in `discordEmojiUsageRepository.ts`; reads are bounded, channel-permission filtered, exclusion-aware, and privacy-deletion safe before entering dynamic prompt context.
+- Normalized custom-emoji inline/reaction evidence and per-channel culture profiles live in `discordEmojiUsageRepository.ts`. Evidence is updated when archived messages, edits, deletes, or reactions change; request-time reads use indexed profiles instead of scanning raw message history and remain channel-permission filtered, exclusion-aware, and privacy-deletion safe.
 - Message embeddings and embedding backlog selection live in `embeddingRepository.ts`.
 - Permission-aware retrieval, search, attachment search, and message context live in `retrievalRepository.ts`; stats and topic candidates live in `retrievalStatsRepository.ts`.
 - Conversation sessions and per-channel agent memory live in `conversationMemoryRepository.ts`.

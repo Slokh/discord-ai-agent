@@ -141,6 +141,7 @@ export async function hostedToolMarkupRecoveryResponse(
   const response = await runObservedModelCall(ctx, {
     purpose: "hosted_tool_markup_recovery",
     chat: {
+      model: ctx.config.openRouter?.utilityModel?.trim() || undefined,
       messages: [...messages, ...hostedToolRetryMessages(intendedHostedTools)],
       tools: openRouterServerToolDefinitionsForModel(),
       temperature: 0.2,

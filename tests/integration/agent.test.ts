@@ -3209,7 +3209,10 @@ describe("agent router", () => {
   it("recovers when a hosted OpenRouter tool call leaks as text", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
-      config: { maxReplyChars: 1800 },
+      config: {
+        maxReplyChars: 1800,
+        openRouter: { utilityModel: "utility/recovery" }
+      },
       repo: {
         auditTool
       },
@@ -3242,6 +3245,7 @@ describe("agent router", () => {
 
     expect(response.content).toBe("Check your rank from the game's ranked mode screen.");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
+    expect((ctx.openRouter.chat as any).mock.calls[1][0].model).toBe("utility/recovery");
     expect((ctx.openRouter.chat as any).mock.calls[1][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_fetch" })]));
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
   });

@@ -45,6 +45,7 @@ import type { AgentToolRoute } from "./routerShared.js";
 import { restrictedToolGate } from "./toolGate.js";
 import { executeWalletToolRoute } from "./walletToolRoutes.js";
 import { executeDiscordActionToolRoute } from "./discordActionToolRoutes.js";
+import { invalidToolCallResponse } from "../tools/toolContractValidation.js";
 
 export async function executeLocalToolRoute(
   ctx: ToolContext,
@@ -52,6 +53,8 @@ export async function executeLocalToolRoute(
   originalText: string,
 ): Promise<AgentResponse> {
   ctx.abortSignal?.throwIfAborted();
+  const invalidArguments = invalidToolCallResponse(route);
+  if (invalidArguments) return invalidArguments;
   const gate = await restrictedToolGate(ctx, route.name);
   ctx.abortSignal?.throwIfAborted();
   if (!gate.allowed) return { content: gate.message };

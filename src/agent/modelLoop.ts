@@ -9,7 +9,6 @@ import { cleanResponse } from "../tools/responseFormatting.js";
 import type {
   AgentFile,
   AgentResponse,
-  AgentTable,
   ToolContext,
 } from "../tools/types.js";
 import { ensureAutomaticStarterFunds } from "../tools/walletTools.js";
@@ -125,8 +124,7 @@ async function runAgentModelLoopInternal(
   injectActiveGameSession(messages, activeGame);
   const turnOutput = createAgentTurnOutput();
   ctx.turnOutput = turnOutput;
-  const files: AgentFile[] = turnOutput.files;
-  const tables: AgentTable[] = turnOutput.tables;
+  const { files, tables } = turnOutput;
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
   const successfulToolCallKeys = new Set<string>();

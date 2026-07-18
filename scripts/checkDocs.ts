@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -137,14 +138,30 @@ function markdownAnchors(content: string) {
   return anchors;
 }
 
-function githubHeadingSlug(heading: string) {
-  return heading
+export function githubHeadingSlug(heading: string) {
+  return stripMarkdownHtmlTags(heading)
     .toLowerCase()
-    .replace(/<[^>]+>/g, "")
     .replace(/[`*_~]/g, "")
     .replace(/[^\p{L}\p{N}\s-]/gu, "")
     .trim()
     .replace(/\s+/g, "-");
 }
 
-await main();
+function stripMarkdownHtmlTags(input: string) {
+  let result = "";
+  let tagDepth = 0;
+  for (const character of input) {
+    if (character === "<") {
+      tagDepth += 1;
+    } else if (character === ">" && tagDepth > 0) {
+      tagDepth -= 1;
+    } else if (tagDepth === 0) {
+      result += character;
+    }
+  }
+  return result;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await main();
+}

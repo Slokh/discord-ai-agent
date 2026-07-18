@@ -44,7 +44,7 @@ describe("agent runtime envelope", () => {
 
     expect(envelope).toEqual(
       expect.objectContaining({
-        schemaVersion: 1,
+        schemaVersion: 2,
         source: "discord",
         requestId: "message-1",
         threadKey: "discord:guild:channel",

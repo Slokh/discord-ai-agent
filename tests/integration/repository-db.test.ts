@@ -3099,9 +3099,31 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
     await expect(repo.getRunFeedback(runId)).resolves.toEqual(expect.objectContaining({ note: "Missed the source", expectedBehavior: "Search first" }));
   });
+
+  it("binds, scopes, and transactionally consumes Discord component actions", async () => {
+    const suffix = randomUUID();
+    const sessionId = `agent-session-${suffix}`;
+    const executionId = `agent-execution-${suffix}`;
+    const token = `token-${suffix}`;
+    await agentRuntimeRepo.upsertSession({ sessionId, threadKey: `discord:guild-${suffix}:channel-${suffix}`, title: "components", request: "components", requestedBy: "test" });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "succeeded" });
+    await repo.createDiscordComponentAction({
+      token, originatingExecutionId: executionId, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`,
+      sourceMessageId: `message-${suffix}`, ownerUserId: `user-${suffix}`, audience: "requester",
+      action: { type: "continue", prompt: "Show more" }, singleUse: true, expiresAt: new Date(Date.now() + 60_000),
+    });
+    await expect(repo.bindDiscordComponentActions({ tokens: [token], responseMessageId: `response-${suffix}` })).resolves.toBe(1);
+    await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: "user-other" }))
+      .resolves.toEqual({ ok: false, reason: "wrong_user" });
+    await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: `user-${suffix}` }))
+      .resolves.toEqual(expect.objectContaining({ ok: true, record: expect.objectContaining({ singleUse: true, action: { type: "continue", prompt: "Show more" } }) }));
+    await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: `user-${suffix}` }))
+      .resolves.toEqual({ ok: false, reason: "consumed" });
+  });
 });
 
 async function cleanupTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");
   await pool.query(

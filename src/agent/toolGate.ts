@@ -1,4 +1,4 @@
-import type { ToolName } from "../tools/registry.js";
+import { toolRegistry, type ToolName } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
 
 /**
@@ -20,6 +20,9 @@ const RESTRICTED_TOOL_MESSAGES: Partial<Record<ToolName, string>> = {
 export type ToolGateDecision = { allowed: true } | { allowed: false; message: string };
 
 export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): Promise<ToolGateDecision> {
+  if (ctx.mutationAuthorizedByCurrentInput === false && toolRegistry.find((tool) => tool.name === toolName)?.mutates) {
+    return { allowed: false, message: "This component follow-up cannot authorize a mutating action. Ask the user to state that action explicitly in a new Discord message." };
+  }
   if (toolName === "runCodingAgent" || toolName === "retryAgentTask") {
     if (!isAllowed(ctx, ctx.config.allowlists?.codegenUserIds ?? [])) return denied(toolName);
     const limit = ctx.config.budget?.userCodegenPerDay ?? -1;

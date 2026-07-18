@@ -366,6 +366,15 @@
         "revealRandomness"
       ],
       "notes": "Fairness verification requests must use revealRandomness to publish the server seed."
+    },
+    {
+      "id": "presentation-explicit-buttons",
+      "category": "presentation",
+      "prompt": "Give me three Discord buttons to choose whether I want a short summary, detailed explanation, or source links.",
+      "expectedTools": [
+        "composeDiscordResponse"
+      ],
+      "notes": "Explicit native Discord UI requests should load the scoped presentation capability and produce validated semantic controls."
     }
   ]
 }

@@ -18,6 +18,7 @@ export async function handleAgentRequest(
       ...response,
       content: emojiIntent.content,
       sourceMessageReaction: emojiIntent.sourceMessageReaction,
+      discordPresentation: ctx.discordPresentation,
     };
     return footerLines.length > 0 ? { ...decorated, footerLines: [...footerLines] } : decorated;
   } catch (error) {

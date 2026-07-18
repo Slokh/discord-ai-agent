@@ -211,6 +211,22 @@ describe("DiscordResponseSink", () => {
     });
   });
 
+  it("delivers a prepared Components V2 response through the shared sink", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: sourceMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
+
+    const result = await sink.sendFinal({
+      content: "fallback",
+      presentation: {
+        payload: { content: null, flags: 32768, components: [{ type: 10, content: "rich" }] as any },
+        registrations: [],
+      },
+    });
+
+    expect(sourceMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: null, flags: 32768 }));
+    expect(result.usedRichPresentation).toBe(true);
+  });
+
   it("falls back to cached loading reaction cleanup when the acknowledgement reaction was not captured", async () => {
     const reaction = fakeReaction({ id: "123456789012345678", name: "loading" });
     const sourceMessage = fakeMessage({

@@ -61,10 +61,13 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         "016_discord_bug_markers",
         "017_deployment_announcements",
         "018_discord_emoji_culture",
+        "019_discord_component_actions",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
       await expect(client.query("SELECT count(*)::int AS count FROM discord_emoji_channel_profiles"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM discord_component_actions"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);

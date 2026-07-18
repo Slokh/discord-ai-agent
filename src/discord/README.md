@@ -7,6 +7,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Bot login, guild scoping, message/reaction/edit/delete events, and mention detection.
 - Reply context, request attachments, image metadata, permissions, and channel visibility.
 - Response sink for acknowledgements, lazy status messages, final replies, attachments, and cleanup.
+- Components V2 validation/rendering, opaque durable actions, and requester-scoped click/modal ingress live under `components/`; see [`../../docs/discord-rich-components.md`](../../docs/discord-rich-components.md).
 - `api.ts` wraps Discord writes (reply/edit/send/react/delete) with shared retry/error classification; user-visible rendering should route through it rather than calling message methods directly.
 - Delivery obligations are persisted for in-flight agent-runtime turns and swept on bot startup to complete terminal replies or post a conservative restart notice.
 - Queue handoff into durable agent runtime executions.
@@ -20,6 +21,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 ## Change Routing
 
 - User-visible response timing/status bugs start in `responseSink.ts`, then client/task notification wiring.
+- Rich layout, component compilation, click/modal scope, or expiry bugs start in `components/`, then `responseSink.ts` and `discordComponentActionRepository.ts`.
 - Message indexing or deletion behavior starts in `messagePersistence.ts` and `crawler.ts`, then repository storage.
 - Permission bugs start in `permissions.ts`, then retrieval filtering.
 - Code-update progress rendering starts in `taskNotifications.ts`.
@@ -31,6 +33,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Agent execution delivery and response lifecycle: `tests/unit/agent-delivery.test.ts` and `tests/unit/discord-response-sink.test.ts`.
 - Reply context and permissions: `tests/unit/discord-reply-context.test.ts` and `tests/unit/discord-permissions.test.ts`.
 - Delivery write/sweep helpers: `tests/unit/discord-api.test.ts` and `tests/unit/discord-delivery-sweep.test.ts`.
+- Rich rendering and safety: `tests/unit/discord-components.test.ts`; delivery integration stays in `tests/unit/discord-response-sink.test.ts`.
 - Task rendering: `tests/unit/task-notifications.test.ts`.
 - Crawl/persistence: `tests/unit/crawler.test.ts` and `tests/unit/message-persistence.test.ts`.
 - Bug-marker reactions: `tests/unit/bug-marker-reaction.test.ts`.

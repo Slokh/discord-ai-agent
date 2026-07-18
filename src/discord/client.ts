@@ -20,6 +20,7 @@ import { discordMessageTraceContext, recordTraceEvent } from "./requestContext.j
 import { logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
 import { announceDeployment } from "./deploymentAnnouncements.js";
+import { handleDiscordRichInteraction } from "./components/interactionHandler.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -209,6 +210,10 @@ export function createDiscordAiAgentBot(input: {
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
+    if (await handleDiscordRichInteraction(input, client, interaction).catch((error) => {
+      logger.error({ err: error, interactionId: interaction.id }, "Discord rich interaction handler failed");
+      return false;
+    })) return;
     if (!interaction.isChatInputCommand() || interaction.commandName !== "ai") return;
     await interaction
       .reply({

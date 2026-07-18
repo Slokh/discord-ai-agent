@@ -50,6 +50,7 @@ export type ToolName =
   | "searchSpotify"
   | "getSpotifyItem"
   | "createDiscordPoll"
+  | "composeDiscordResponse"
   | "createDiscordEmoji"
   | "updateBotAvatar"
   | "setUserTurnLimit"
@@ -62,6 +63,7 @@ export type ToolGroup =
   | "core"
   | "discord-retrieval"
   | "generated-data"
+  | "presentation"
   | "discord-action"
   | "image"
   | "spotify"
@@ -73,6 +75,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
   "core",
   "discord-retrieval",
   "generated-data",
+  "presentation",
   "discord-action",
   "image",
   "spotify",
@@ -140,7 +143,7 @@ export const toolRegistry: ToolRegistryEntry[] = [
   {
     name: "requestAdditionalTools",
     description:
-      "Escalation valve: request additional tool groups when the current scoped tools are insufficient. Use this instead of guessing when a needed capability is missing.",
+      "Escalation valve: request additional tool groups when the current scoped tools are insufficient, including presentation for useful native Discord UI. Use this instead of guessing when a needed capability is missing.",
     userVisible: false,
     mutates: false,
     group: "core",
@@ -160,6 +163,35 @@ export const toolRegistry: ToolRegistryEntry[] = [
       required: ["reason"],
       additionalProperties: false
     }
+  },
+  {
+    name: "composeDiscordResponse",
+    description:
+      "Design an optional Discord Components V2 presentation for the final reply. Use only when native layout or interaction materially improves the answer: clear next-action buttons, bounded choices, a form, media gallery, attached-file display, or a genuinely scannable card. Do not decorate simple answers. Final response text is automatically rendered above these components. Supports all current Discord message components: action_row, button, string_select, user_select, role_select, mentionable_select, channel_select, section, text, thumbnail, media_gallery, file, separator, and container. Buttons may continue the conversation, open a modal, navigate to a link, or use a configured premium SKU. Modal fields support text, text_input, all select types, file_upload, radio_group, checkbox_group, and checkbox. Generic component actions never authorize money, wager, admin, deletion, or other mutations.",
+    userVisible: true,
+    mutates: false,
+    group: "presentation",
+    category: "discord",
+    toolClass: "generation",
+    outputContract: ["validated Components V2 presentation", "requester or channel audience", "durable bounded interaction actions"],
+    examples: ["Show results as a card with source links", "Let me choose one of these channels", "Ask me for the remaining event details"],
+    parameters: {
+      type: "object",
+      properties: {
+        version: { type: "number", enum: [1] },
+        audience: { type: "string", enum: ["requester", "channel"], description: "Who may use interactive controls. Default requester." },
+        expiresInMinutes: { type: "number", description: "Interaction lifetime, 1 minute to 7 days. Defaults to 24 hours." },
+        components: {
+          type: "array",
+          minItems: 1,
+          maxItems: 40,
+          description: "Typed component objects using camelCase fields. Shapes: text={type:'text',content}; separator={type:'separator',divider?,spacing:'small'|'large'}; thumbnail={type:'thumbnail',url,description?,spoiler?} as a section accessory; media_gallery={type:'media_gallery',items:[{url,description?,spoiler?}]}; file={type:'file',url}; section={type:'section',text:[markdown strings],accessory:button|thumbnail}; container={type:'container',accentColor?,spoiler?,components:[children]}; action_row={type:'action_row',components:[up to 5 buttons OR exactly 1 select]}. Button shapes use {type:'button',label?,emoji?,disabled?,style}; interactive styles primary|secondary|success|danger add action={type:'continue',prompt,singleUse?} or action={type:'modal',prompt,singleUse?,modal:{title,fields}}; link adds url; premium adds skuId. Select types string_select, user_select, role_select, mentionable_select, channel_select use prompt, placeholder?,minValues?,maxValues?,disabled?,singleUse?; string_select adds options:[{label,value,description?,emoji?,default?}], channel_select may add channelTypes. Modal fields are text or labeled inputs with key: text_input, every select type, file_upload, radio_group with options, checkbox_group with options, and checkbox. Never supply custom IDs.",
+          items: { type: "object", additionalProperties: true },
+        },
+      },
+      required: ["components"],
+      additionalProperties: false,
+    },
   },
   {
     name: "findDiscordUsers",
@@ -2035,6 +2067,7 @@ function defaultToolCategory(name: ToolName): NonNullable<ToolRegistryEntry["cat
 const toolClassByName: Record<ToolName, ToolClass> = {
   listTools: "ops",
   requestAdditionalTools: "ops",
+  composeDiscordResponse: "generation",
   findDiscordUsers: "resolver",
   findDiscordChannels: "resolver",
   searchDiscordHistory: "retrieval",
@@ -2116,6 +2149,7 @@ function defaultToolExamples(name: ToolName): string[] {
   const examples: Record<ToolName, string> = {
     listTools: "@ai tools",
     requestAdditionalTools: "@ai I need another capability",
+    composeDiscordResponse: "@ai show these choices as buttons",
     findDiscordUsers: "@ai find user tyler",
     findDiscordChannels: "@ai find channel movies",
     searchDiscordHistory: "@ai what did we say about job hunting?",

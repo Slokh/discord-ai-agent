@@ -14,6 +14,7 @@ describe("toolRegistry", () => {
     expect(toolRegistry.map((tool) => tool.name)).toEqual([
       "listTools",
       "requestAdditionalTools",
+      "composeDiscordResponse",
       "findDiscordUsers",
       "findDiscordChannels",
       "searchDiscordHistory",

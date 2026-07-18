@@ -1,6 +1,7 @@
 import { updateBotAvatar } from "../tools/botProfileTools.js";
 import { createDiscordPoll } from "../tools/discordPollTools.js";
 import { createDiscordEmoji } from "../tools/guildEmojiTools.js";
+import { composeDiscordResponse } from "../tools/discordPresentationTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentToolRoute } from "./routerShared.js";
@@ -10,6 +11,9 @@ export async function executeDiscordActionToolRoute(
   route: AgentToolRoute,
   originalText: string,
 ): Promise<AgentResponse | null> {
+  if (route.name === "composeDiscordResponse") {
+    return composeDiscordResponse(ctx, route.arguments ?? {});
+  }
   if (route.name === "createDiscordPoll") {
     return {
       content: cleanResponse(await createDiscordPoll(ctx, {

@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
+import type { PreparedDiscordPresentation } from "./components/renderer.js";
 import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
 
 export const DEFAULT_DISCORD_LOADING_REACTION = "⏳";
@@ -11,6 +12,7 @@ const ACKNOWLEDGEMENT_FALLBACK_CONTENT = "Working on it...";
 export type DiscordResponseResult = {
   message: Message;
   usedStatusMessage: boolean;
+  usedRichPresentation: boolean;
 };
 
 export type DiscordResponseFooter = {
@@ -106,7 +108,7 @@ export class DiscordResponseSink {
     return this.statusMessage;
   }
 
-  async sendFinal(input: { content: string; files?: AgentFile[]; footer?: DiscordResponseFooter | null }): Promise<DiscordResponseResult> {
+  async sendFinal(input: { content: string; files?: AgentFile[]; footer?: DiscordResponseFooter | null; presentation?: PreparedDiscordPresentation | null }): Promise<DiscordResponseResult> {
     const files = input.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }));
     const footerLine = formatDiscordResponseFooter(input.footer);
     const rawBody = input.content.trim() || "Done.";
@@ -120,13 +122,29 @@ export class DiscordResponseSink {
     const separator = "\n\n";
     const singleMessageContent = footerLine ? `${body}${separator}${footerLine}` : body;
 
+    if (input.presentation) {
+      const usedStatusMessage = Boolean(this.statusMessage);
+      try {
+        const richPayload = {
+          ...input.presentation.payload,
+          ...(files?.length ? { files } : {}),
+        } as MessageCreateOptions;
+        const message = await this.editStatusOrReply(richPayload);
+        this.statusMessage = message;
+        await this.clearAcknowledgement();
+        return { message, usedStatusMessage, usedRichPresentation: true };
+      } catch (error) {
+        this.logger.warn({ err: error }, "Discord rejected rich presentation; falling back to plain response");
+      }
+    }
+
     if (singleMessageContent.length <= this.maxReplyChars) {
       const payload = files?.length ? { content: singleMessageContent, files } : { content: singleMessageContent };
       const usedStatusMessage = Boolean(this.statusMessage);
       const message = await this.editStatusOrReply(payload);
       this.statusMessage = message;
       await this.clearAcknowledgement();
-      return { message, usedStatusMessage };
+      return { message, usedStatusMessage, usedRichPresentation: false };
     }
 
     const reservedForFooter = footerLine ? separator.length + footerLine.length : 0;
@@ -160,7 +178,7 @@ export class DiscordResponseSink {
     }
 
     await this.clearAcknowledgement();
-    return { message: firstMessage, usedStatusMessage };
+    return { message: firstMessage, usedStatusMessage, usedRichPresentation: false };
   }
 
   async sendError(content: string, footer?: DiscordResponseFooter | null): Promise<DiscordResponseResult> {

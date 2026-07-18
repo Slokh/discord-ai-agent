@@ -11,7 +11,8 @@ import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
 import { createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
 import { discordChannelThreadKey } from "./mentionParsing.js";
-import { DiscordResponseSink } from "./responseSink.js";
+import { DiscordResponseSink, formatDiscordResponseFooter } from "./responseSink.js";
+import { prepareDiscordPresentation } from "./components/renderer.js";
 import { loadAgentRuntimeInputLines, prepareDiscordAgentTurn, replayPreparedDiscordAgentTurn } from "./turnPreparation.js";
 import {
   attachPromptTasksToDiscordReply,
@@ -81,7 +82,7 @@ export async function runQueuedAgentRuntimeExecution(
     loadingReactionEmoji: input.config.discord.loadingReaction,
     statusMessage
   });
-  await responseSink.acknowledge();
+  if ((turnEnvelope?.requestKind ?? "message") === "message") await responseSink.acknowledge();
   if (job.agentExecutionId) {
     await input.deliveryObligations?.upsertPending({
       executionId: job.agentExecutionId,
@@ -103,7 +104,10 @@ export async function runQueuedAgentRuntimeExecution(
     rawContent: job.rawContent,
     botRoleIds: job.botRoleIds,
     messageStartedAt: parseDateMs(job.enqueuedAt) ?? Date.now(),
-    turnEnvelope
+    turnEnvelope,
+    requestKind: turnEnvelope?.requestKind ?? "message",
+    userId: job.userId,
+    userDisplayName: job.requesterDisplayName,
   });
 }
 
@@ -123,16 +127,17 @@ export async function executeDiscordAgentRequest(
     guildId,
     channelId: message.channelId,
     messageId: message.id,
-    userId: message.author.id,
+    userId: request.userId ?? request.turnEnvelope?.userId ?? message.author.id,
     inputLinesArtifactId: request.inputLinesArtifactId ?? null
   });
   const fallbackThreadKey = discordChannelThreadKey(guildId, message.channelId);
-  const fallbackUserDisplayName = message.member?.displayName ?? message.author.username;
+  const fallbackUserDisplayName = request.userDisplayName ?? message.member?.displayName ?? message.author.username;
+  const requesterId = request.userId ?? request.turnEnvelope?.userId ?? message.author.id;
   const agentRuntimeExecution = await ensureAgentRuntimePromptExecution({
     agentRuntime: input.agentRuntime,
     guildId,
     channelId: message.channelId,
-    userId: message.author.id,
+    userId: requesterId,
     userDisplayName: fallbackUserDisplayName,
     threadKey: request.turnEnvelope?.threadKey ?? fallbackThreadKey,
     agentSessionId: request.agentSessionId,
@@ -142,7 +147,7 @@ export async function executeDiscordAgentRequest(
     rawContent: request.rawContent,
     discordUrl: message.url,
     status: "running",
-    source: "discord.worker",
+    source: `discord.${request.requestKind ?? request.turnEnvelope?.requestKind ?? "worker"}`,
     executorName: agentExecutor.name,
     appRevision: input.config.appRevision,
     config: input.config
@@ -185,10 +190,10 @@ export async function executeDiscordAgentRequest(
   try {
     assertAgentRuntimeTurnEnvelopeScope(turnEnvelope, {
       requestId: request.requestId,
-      messageId: message.id,
+      sourceMessageId: message.id,
       guildId: message.guildId,
       channelId: message.channelId,
-      userId: message.author.id
+      userId: requesterId
     });
     const agentStartedAt = Date.now();
     const inputLines = await loadAgentRuntimeInputLines({
@@ -219,7 +224,7 @@ export async function executeDiscordAgentRequest(
       userDisplayName,
       requesterScope: Object.freeze({
         requestId: turnEnvelope.requestId,
-        messageId: message.id,
+        messageId: turnEnvelope.requestId,
         guildId: turnEnvelope.guildId,
         channelId: turnEnvelope.channelId,
         userId: turnEnvelope.userId,
@@ -234,6 +239,7 @@ export async function executeDiscordAgentRequest(
       requestAttachments,
       requestId: request.requestId,
       requestMessageId: turnEnvelope.requestId,
+      mutationAuthorizedByCurrentInput: (turnEnvelope.requestKind ?? "message") === "message",
       statusChannelId: responseSink.statusChannelId,
       statusMessageId: responseSink.statusMessageId,
       noteProgress: () => undefined,
@@ -321,13 +327,52 @@ export async function executeDiscordAgentRequest(
       }
     });
     const traceFooter = discordTraceFooter(input.config, request.requestId, request.messageStartedAt);
-    const finalReply = (
+    const formattedFooter = response.footerLines?.length ? { ...traceFooter, extraLines: response.footerLines } : traceFooter;
+    const preparedPresentation = response.discordPresentation
+      ? await prepareDiscordPresentation({
+          presentation: response.discordPresentation,
+          content: response.content,
+          footer: formatDiscordResponseFooter(formattedFooter),
+          fileNames: response.files?.map((file) => file.name),
+          register: async ({ token, action, singleUse }) => {
+            await input.repo.createDiscordComponentAction({
+              token,
+              originatingExecutionId: agentRuntimeExecution.executionId,
+              guildId: turnEnvelope.guildId,
+              channelId: turnEnvelope.channelId,
+              sourceMessageId: message.id,
+              ownerUserId: response.discordPresentation?.audience === "requester" ? turnEnvelope.userId : null,
+              audience: response.discordPresentation?.audience ?? "requester",
+              action,
+              singleUse,
+              expiresAt: new Date(Date.now() + (response.discordPresentation?.expiresInMinutes ?? 1_440) * 60_000),
+            });
+          },
+        }).catch((error) => {
+          requestLogger.warn({ err: error }, "Failed to prepare Discord rich presentation; using plain response");
+          return null;
+        })
+      : null;
+    const finalResult =
       await responseSink.sendFinal({
         content: response.content,
         files: response.files,
-        footer: response.footerLines?.length ? { ...traceFooter, extraLines: response.footerLines } : traceFooter
-      })
-    ).message;
+        footer: formattedFooter,
+        presentation: preparedPresentation,
+      });
+    const finalReply = finalResult.message;
+    if (preparedPresentation && finalResult.usedRichPresentation) {
+      await input.repo.bindDiscordComponentActions({
+        tokens: preparedPresentation.registrations.map((registration) => registration.token),
+        responseMessageId: finalReply.id,
+      }).catch((error) => requestLogger.error({ err: error, replyMessageId: finalReply.id }, "Failed to bind delivered Discord component actions"));
+    }
+    await recordTraceEvent(input.repo, {
+      eventName: finalResult.usedRichPresentation ? "discord.presentation.delivered" : response.discordPresentation ? "discord.presentation.fallback" : "discord.response.delivered",
+      level: response.discordPresentation && !finalResult.usedRichPresentation ? "warn" : "info",
+      summary: finalResult.usedRichPresentation ? "Delivered Discord Components V2 presentation" : response.discordPresentation ? "Delivered plain fallback after rich presentation failure" : "Delivered Discord response",
+      metadata: { replyMessageId: finalReply.id, requestedRichPresentation: Boolean(response.discordPresentation), actionCount: preparedPresentation?.registrations.length ?? 0 },
+    });
     const reactionOutcome = sourceMessageReaction
       ? await responseSink.addSourceMessageReactions([sourceMessageReaction])
       : null;
@@ -373,13 +418,15 @@ export async function executeDiscordAgentRequest(
       threadKey,
       turnId: request.requestId,
       user: {
-        discordMessageId: message.id,
-        authorId: message.author.id,
+        discordMessageId: request.requestId,
+        authorId: turnEnvelope.userId,
         authorDisplayName: userDisplayName,
         content: request.text,
-        createdAt: message.createdAt,
+        createdAt: new Date(turnEnvelope.messageCreatedAt),
         metadata: {
-          discordUrl: message.url,
+          discordUrl: turnEnvelope.discordUrl,
+          requestKind: turnEnvelope.requestKind ?? "message",
+          sourceMessageId: message.id,
           rawContent: request.rawContent,
           attachments: requestAttachments
         }

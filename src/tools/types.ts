@@ -6,6 +6,7 @@ import type { RngRepository } from "../db/rngRepository.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import type { JobRuntime } from "../jobs/queue.js";
 import type { WalletService } from "../payments/walletService.js";
+import type { DiscordPresentation } from "../discord/components/types.js";
 
 export type ToolContext = {
   config: AppConfig;
@@ -42,11 +43,15 @@ export type ToolContext = {
   generatedTables?: AgentTable[];
   /** Non-model footer lines appended verbatim to the final Discord reply (e.g. RNG fairness proofs). */
   footerLines?: string[];
+  /** Validated model-selected Discord Components V2 presentation for the final reply. */
+  discordPresentation?: DiscordPresentation;
   requestId?: string;
   /** Exact current user request, available to tools that need request-level validation. */
   requestText?: string;
   /** Discord id of the message that triggered this request; assigned by Discord, not the bot. */
   requestMessageId?: string;
+  /** False for model-authored generic component follow-ups; mutating tools must fail closed. */
+  mutationAuthorizedByCurrentInput?: boolean;
   statusChannelId?: string;
   statusMessageId?: string;
   visibleIndexedChannelIds?: string[];
@@ -169,6 +174,8 @@ export type AgentResponse = {
   limitation?: string;
   files?: AgentFile[];
   tables?: AgentTable[];
+  /** Validated Discord Components V2 presentation rendered by the Discord delivery boundary. */
+  discordPresentation?: DiscordPresentation;
   /** Non-model footer lines rendered as Discord subtext under the reply. */
   footerLines?: string[];
   /** Validated custom-emoji mention to add to the Discord message that triggered this response. */

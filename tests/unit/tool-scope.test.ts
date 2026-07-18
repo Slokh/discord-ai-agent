@@ -39,6 +39,15 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
   });
 
+  it("loads rich presentation schemas only for explicit native-UI requests", () => {
+    const config = loadConfig();
+    const ordinary = scopedToolset({ config, groups: selectToolGroups({ text: "hello there", hasImageAttachments: false, config }) });
+    const rich = scopedToolset({ config, groups: selectToolGroups({ text: "show these as interactive buttons", hasImageAttachments: false, config }) });
+
+    expect(ordinary.localTools.some((tool) => tool.name === "composeDiscordResponse")).toBe(false);
+    expect(rich.localTools.some((tool) => tool.name === "composeDiscordResponse")).toBe(true);
+  });
+
   it("exposes the reveal tool for an explicit randomness reveal", () => {
     const config = loadConfig();
     const groups = selectToolGroups({ text: "Reveal randomness", hasImageAttachments: false, replyContext: true, config });
@@ -310,7 +319,7 @@ describe("tool scoping", () => {
       expect(requested.localTools.some((tool) => tool.name === "searchSpotify")).toBe(true);
 
       const all = requestAdditionalToolGroups({ currentGroups: new Set(["core", "external"]), config });
-      expect(all.groups).toEqual(new Set(["core", "external", "discord-retrieval", "generated-data", "discord-action", "image", "spotify", "codegen", "ops"]));
+      expect(all.groups).toEqual(new Set(["core", "external", "discord-retrieval", "generated-data", "presentation", "discord-action", "image", "spotify", "codegen", "ops"]));
       expect(all.localTools.some((tool) => tool.name === "runCodingAgent")).toBe(true);
 
       const invalid = requestAdditionalToolGroups({

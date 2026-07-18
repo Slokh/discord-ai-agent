@@ -28,8 +28,12 @@ const select: z.ZodTypeAny = z.discriminatedUnion("type", [
   z.object({ type: z.literal("mentionable_select"), ...selectBase, defaultValues: z.array(defaultValue(z.enum(["user", "role"]))).max(25).optional() }),
   z.object({ type: z.literal("channel_select"), ...selectBase, channelTypes: z.array(z.number().int().min(0).max(16)).max(16).optional(), defaultValues: z.array(defaultValue(z.literal("channel"))).max(25).optional() }),
 ]).superRefine((value, ctx) => {
-  if (value.minValues != null && value.maxValues != null && value.minValues > value.maxValues) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "minValues cannot exceed maxValues." });
-  if (value.type === "string_select") validateOptions(value, ctx, 25);
+  validateChoiceCardinality(value, ctx, {
+    availableCount: value.type === "string_select" ? value.options.length : undefined,
+    defaults: choiceDefaults(value),
+  });
+  validateUniqueDefaults(value, ctx);
+  if (value.type === "string_select") validateUniqueOptionValues(value.options, ctx);
 });
 const text = z.object({ type: z.literal("text"), content: shortText(4_000) });
 const thumbnail = z.object({ type: z.literal("thumbnail"), url: mediaUrl, description: z.string().max(1_024).optional(), spoiler: z.boolean().optional() });
@@ -61,19 +65,22 @@ const modalField: z.ZodTypeAny = z.discriminatedUnion("type", [
 const modal = z.object({ title: shortText(45), fields: z.array(modalField).min(1).max(5) }).superRefine((value, ctx) => {
   const keys = value.fields.flatMap((field: { type: string; key?: string }) => field.type === "text" || !field.key ? [] : [field.key]);
   if (new Set(keys).size !== keys.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Modal field keys must be unique." });
-  for (const field of value.fields as Array<{ minValues?: number; maxValues?: number }>) {
-    if (field.minValues != null && field.maxValues != null && field.minValues > field.maxValues) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Modal minValues cannot exceed maxValues." });
-  }
   for (const field of value.fields as Array<Record<string, any>>) {
     if (field.type === "text_input" && field.minLength != null && field.maxLength != null && field.minLength > field.maxLength) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Text input minLength cannot exceed maxLength." });
     }
-    if (field.type === "file_upload" && field.minValues === 0 && field.required !== false) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A required file upload cannot have minValues 0." });
+    if (supportsChoiceCardinality(field.type)) {
+      validateChoiceCardinality(field, ctx, {
+        availableCount: Array.isArray(field.options) ? field.options.length : undefined,
+        defaultMax: field.type === "checkbox_group" ? field.options.length : 1,
+        defaults: choiceDefaults(field),
+        requiredSupported: true,
+      });
+      validateUniqueDefaults(field, ctx);
+      if (Array.isArray(field.options)) validateUniqueOptionValues(field.options, ctx);
     }
-    if (field.type === "string_select" || field.type === "checkbox_group") validateOptions(field as any, ctx, field.options.length);
     if (field.type === "radio_group") {
-      validateOptions(field as any, ctx, 1);
+      validateUniqueOptionValues(field.options, ctx);
       if ((field.options as Array<{ default?: boolean }>).filter((option) => option.default).length > 1) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A radio group can have at most one default option." });
       }
@@ -111,22 +118,75 @@ function countComponents(components: unknown[]): number {
   return count;
 }
 
-function validateOptions(
-  value: { options: Array<{ value: string; default?: boolean }>; minValues?: number; maxValues?: number },
+type ChoiceCardinalityValue = {
+  required?: boolean;
+  minValues?: number;
+  maxValues?: number;
+};
+
+type ChoiceDefaults = {
+  count: number;
+  provided: boolean;
+};
+
+function validateChoiceCardinality(
+  value: ChoiceCardinalityValue,
   ctx: z.RefinementCtx,
-  maxAllowed: number,
+  rules: {
+    availableCount?: number;
+    defaultMax?: number;
+    defaults?: ChoiceDefaults;
+    requiredSupported?: boolean;
+  } = {},
 ) {
-  if (new Set(value.options.map((option) => option.value)).size !== value.options.length) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Option values must be unique." });
+  const effectiveMin = value.minValues ?? 1;
+  const effectiveMax = value.maxValues ?? rules.defaultMax ?? 1;
+  if (effectiveMin > effectiveMax) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "minValues cannot exceed maxValues." });
   }
-  if (value.maxValues != null && value.maxValues > Math.min(value.options.length, maxAllowed)) {
+  if (rules.requiredSupported && value.required !== false && effectiveMin === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A required choice cannot have minValues 0." });
+  }
+  if (rules.availableCount != null && effectiveMax > rules.availableCount) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "maxValues cannot exceed the number of available options." });
   }
-  if (value.minValues != null && value.minValues > value.options.length) {
+  if (rules.availableCount != null && effectiveMin > rules.availableCount) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "minValues cannot exceed the number of available options." });
   }
-  const defaultCount = value.options.filter((option) => option.default).length;
-  if (value.maxValues != null && defaultCount > value.maxValues) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Default options cannot exceed maxValues." });
+  if (rules.defaults?.provided && (rules.defaults.count < effectiveMin || rules.defaults.count > effectiveMax)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "The number of default values must be within minValues and maxValues." });
   }
+}
+
+function choiceDefaults(value: Record<string, any>): ChoiceDefaults {
+  if (Array.isArray(value.defaultValues)) return { count: value.defaultValues.length, provided: true };
+  if (Array.isArray(value.options)) {
+    const count = value.options.filter((option: { default?: boolean }) => option.default).length;
+    return { count, provided: count > 0 };
+  }
+  return { count: 0, provided: false };
+}
+
+function validateUniqueDefaults(value: Record<string, any>, ctx: z.RefinementCtx) {
+  if (!Array.isArray(value.defaultValues)) return;
+  const keys = value.defaultValues.map((item: { id: string; type: string }) => `${item.type}:${item.id}`);
+  if (new Set(keys).size !== keys.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Default values must be unique." });
+  }
+}
+
+function validateUniqueOptionValues(options: Array<{ value: string }>, ctx: z.RefinementCtx) {
+  if (new Set(options.map((option) => option.value)).size !== options.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Option values must be unique." });
+  }
+}
+
+function supportsChoiceCardinality(type: string) {
+  return type === "string_select"
+    || type === "user_select"
+    || type === "role_select"
+    || type === "mentionable_select"
+    || type === "channel_select"
+    || type === "file_upload"
+    || type === "checkbox_group";
 }

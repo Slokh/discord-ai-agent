@@ -123,7 +123,65 @@ describe("Discord rich components", () => {
       type: "button", label: "Open", style: "primary", action: { type: "modal", prompt: "Use form", modal: {
         title: "Form", fields: [{ type: "file_upload", key: "file", label: "File", required: true, minValues: 0 }],
       } },
-    }] }] })).toThrow(/required file upload/i);
+    }] }] })).toThrow(/required choice/i);
+  });
+
+  it.each([
+    { type: "string_select", key: "choice", label: "Choice", options: [{ label: "A", value: "a" }], minValues: 0 },
+    { type: "user_select", key: "user", label: "User", minValues: 0 },
+    { type: "role_select", key: "role", label: "Role", minValues: 0 },
+    { type: "mentionable_select", key: "mention", label: "Mention", minValues: 0 },
+    { type: "channel_select", key: "channel", label: "Channel", minValues: 0 },
+    { type: "checkbox_group", key: "checks", label: "Checks", options: [{ label: "A", value: "a" }], minValues: 0 },
+    { type: "file_upload", key: "file", label: "File", minValues: 0 },
+  ])("enforces required choice cardinality for $type", (field) => {
+    expect(() => parseDiscordPresentation({ components: [{ type: "action_row", components: [{
+      type: "button", label: "Open", style: "primary", action: { type: "modal", prompt: "Use form", modal: {
+        title: "Form", fields: [field],
+      } },
+    }] }] })).toThrow(/required choice/i);
+
+    expect(() => parseDiscordPresentation({ components: [{ type: "action_row", components: [{
+      type: "button", label: "Open", style: "primary", action: { type: "modal", prompt: "Use form", modal: {
+        title: "Form", fields: [{ ...field, required: false }],
+      } },
+    }] }] })).not.toThrow();
+  });
+
+  it("validates supplied defaults against effective choice bounds", () => {
+    const messageSelect = (component: Record<string, unknown>) => ({
+      components: [{ type: "action_row", components: [component] }],
+    });
+
+    expect(() => parseDiscordPresentation(messageSelect({
+      type: "string_select", prompt: "Choose", options: [
+        { label: "A", value: "a", default: true },
+        { label: "B", value: "b", default: true },
+      ],
+    }))).toThrow(/default values.*minValues.*maxValues/i);
+
+    expect(() => parseDiscordPresentation(messageSelect({
+      type: "user_select", prompt: "Choose", defaultValues: [
+        { id: "123456789012345", type: "user" },
+        { id: "123456789012346", type: "user" },
+      ],
+    }))).toThrow(/default values.*minValues.*maxValues/i);
+
+    expect(() => parseDiscordPresentation(messageSelect({
+      type: "string_select", prompt: "Choose", minValues: 2, maxValues: 2, options: [
+        { label: "A", value: "a", default: true },
+        { label: "B", value: "b", default: true },
+      ],
+    }))).not.toThrow();
+  });
+
+  it("rejects duplicate auto-populated defaults generically", () => {
+    expect(() => parseDiscordPresentation({ components: [{ type: "action_row", components: [{
+      type: "mentionable_select", prompt: "Choose", defaultValues: [
+        { id: "123456789012345", type: "user" },
+        { id: "123456789012345", type: "user" },
+      ],
+    }] }] })).toThrow(/default values must be unique/i);
   });
 
   it("validates referenced attachments before generating action registrations", () => {

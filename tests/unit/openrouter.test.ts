@@ -194,6 +194,69 @@ describe("OpenRouterClient", () => {
     );
   });
 
+  it("normalizes transparent server-tool usage and bounded URL citations", async () => {
+    const annotations = Array.from({ length: 24 }, (_, index) => ({
+      type: "url_citation",
+      url_citation: {
+        url: `https://example.com/result-${index}`,
+        title: `Result ${index} ${"x".repeat(400)}`,
+        content: `scraped content ${index}`,
+        start_index: index,
+        end_index: index + 5,
+      },
+    }));
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model: "test/chat",
+        choices: [{ message: { content: "Grounded answer", annotations } }],
+        usage: {
+          server_tool_use_details: {
+            web_search_requests: "2",
+            tool_calls_requested: 2,
+            tool_calls_executed: 2,
+          },
+        },
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new OpenRouterClient(config).chat({
+      messages: [{ role: "user", content: "current result" }],
+      tools: [{ type: "openrouter:web_search" }],
+      toolChoice: "required",
+    });
+
+    expect(result.toolCalls).toEqual([]);
+    expect(result.serverToolUse).toEqual({
+      web_search_requests: 2,
+      tool_calls_requested: 2,
+      tool_calls_executed: 2,
+    });
+    expect(result.urlCitations).toHaveLength(20);
+    expect(result.urlCitations?.[0]).toEqual({
+      url: "https://example.com/result-0",
+      title: expect.stringMatching(/^Result 0 x+$/),
+      startIndex: 0,
+      endIndex: 5,
+    });
+    expect(result.urlCitations?.[0]?.title).toHaveLength(300);
+    expect(JSON.stringify(result.urlCitations)).not.toContain("scraped content");
+  });
+
+  it("normalizes the legacy server-tool usage field", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: "Grounded answer" } }],
+      usage: { server_tool_use: { web_search_requests: 1 } },
+    })));
+
+    const result = await new OpenRouterClient(config).chat({
+      messages: [{ role: "user", content: "current result" }],
+      tools: [{ type: "openrouter:web_search" }],
+    });
+
+    expect(result.serverToolUse).toEqual({ web_search_requests: 1 });
+  });
+
   it("adds Anthropic cache_control only to the first system message", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ choices: [{ message: { content: "ok" } }] }));
     vi.stubGlobal("fetch", fetchMock);

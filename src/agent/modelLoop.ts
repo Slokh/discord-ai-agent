@@ -39,7 +39,7 @@ import {
   appendAgentRuntimeToolResult,
   recordAgentEvent,
 } from "./runtimeTranscript.js";
-import { runObservedModelCall } from "./modelCallTelemetry.js";
+import { modelToolObservation, runObservedModelCall } from "./modelCallTelemetry.js";
 import {
   invalidToolCallNames,
   invalidToolCallRecoveryMessage,
@@ -329,9 +329,9 @@ async function runAgentModelLoopInternal(
       });
       throw error;
     }
-
     const modelRoutes = selectExclusiveWagerTransition(coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls)));
-    freshExternalDataGuard.noteRequestedTools(response.toolCalls.map((call) => call.name));
+    freshExternalDataGuard.noteModelResponse(response);
+    const toolObservation = modelToolObservation(response);
     const requestedToolRequests = response.toolCalls.map(
       traceToolRequestMetadata,
     );
@@ -344,7 +344,7 @@ async function runAgentModelLoopInternal(
         finishReason: response.finishReason,
         usage: response.usage,
         outputChars: response.content.length,
-        requestedToolCalls: response.toolCalls.map((call) => call.name),
+        ...toolObservation,
         requestedToolRequests,
         selectedLocalTools: modelRoutes.map((route) => route.name),
         selectedLocalToolRequests,
@@ -364,21 +364,21 @@ async function runAgentModelLoopInternal(
         finishReason: response.finishReason,
         usage: response.usage,
         outputChars: response.content.length,
-        requestedToolCalls: response.toolCalls.map((call) => call.name),
+        ...toolObservation,
         selectedLocalTools: modelRoutes.map((route) => route.name),
         estimatedCostUsd: response.estimatedCostUsd,
       },
     });
     await recordAgentEvent(ctx, {
       eventName: "agent.model.round.complete",
-      summary: `Round ${round + 1}: ${modelRoutes.map((route) => route.name).join(", ") || "no local tools"}`,
+      summary: `Round ${round + 1}: ${toolObservation.requestedToolCalls.join(", ") || "no tools"}`,
       metadata: {
         round: round + 1,
         model: response.model,
         finishReason: response.finishReason,
         usage: response.usage,
         outputChars: response.content.length,
-        requestedToolCalls: response.toolCalls.map((call) => call.name),
+        ...toolObservation,
         requestedToolRequests,
         selectedLocalTools: modelRoutes.map((route) => route.name),
         selectedLocalToolRequests,

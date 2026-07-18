@@ -1,11 +1,37 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { ChatMessage, OpenRouterClient, ToolDefinition } from "../models/openrouter.js";
+import type { ChatMessage, ChatResult, OpenRouterClient, ToolDefinition } from "../models/openrouter.js";
 import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 import { runtimeVersionMetadata } from "../observability/runtimeVersions.js";
 
 type ChatInput = Parameters<OpenRouterClient["chat"]>[0];
+
+const SERVER_TOOL_USAGE_NAMES: Record<string, string> = {
+  web_search_requests: "openrouter:web_search",
+  web_fetch_requests: "openrouter:web_fetch",
+  datetime_requests: "openrouter:datetime",
+};
+
+export function observedModelToolNames(
+  response: Pick<ChatResult, "toolCalls" | "serverToolUse">,
+) {
+  const names = new Set((response.toolCalls ?? []).map((call) => call.name));
+  for (const [usageKey, toolName] of Object.entries(SERVER_TOOL_USAGE_NAMES)) {
+    if ((response.serverToolUse?.[usageKey] ?? 0) > 0) names.add(toolName);
+  }
+  return [...names];
+}
+
+export function modelToolObservation(
+  response: Pick<ChatResult, "toolCalls" | "serverToolUse" | "urlCitations">,
+) {
+  return {
+    requestedToolCalls: observedModelToolNames(response),
+    serverToolUse: response.serverToolUse,
+    urlCitationCount: response.urlCitations?.length ?? 0,
+  };
+}
 
 export async function runObservedModelCall(
   ctx: ToolContext,
@@ -80,6 +106,7 @@ export async function runObservedModelCall(
       ...input.chat,
       signal: ctx.abortSignal,
     });
+    const observation = modelToolObservation(response);
     // Keep provider latency comparable across revisions. Artifact persistence happens
     // after the provider returns and should remain visible as unattributed runtime work.
     const providerDurationMs = durationMs(startedAt);
@@ -98,6 +125,8 @@ export async function runObservedModelCall(
           content: response.content,
           toolCalls: response.toolCalls ?? [],
           usage: response.usage ?? null,
+          serverToolUse: response.serverToolUse ?? null,
+          urlCitations: response.urlCitations ?? [],
           estimatedCostUsd: response.estimatedCostUsd ?? null,
         }, null, 2),
         metadata: {
@@ -105,7 +134,9 @@ export async function runObservedModelCall(
           model: response.model,
           finishReason: response.finishReason ?? null,
           outputChars: response.content.length,
-          requestedToolCalls: (response.toolCalls ?? []).map((call) => call.name),
+          requestedToolCalls: observation.requestedToolCalls,
+          serverToolUse: response.serverToolUse ?? null,
+          urlCitationCount: response.urlCitations?.length ?? 0,
         },
       }),
     ]);
@@ -114,9 +145,11 @@ export async function runObservedModelCall(
       model: response.model,
       finishReason: response.finishReason,
       usage: response.usage,
+      serverToolUse: response.serverToolUse,
+      urlCitationCount: response.urlCitations?.length ?? 0,
       estimatedCostUsd: response.estimatedCostUsd,
       outputChars: response.content.length,
-      requestedToolCalls: (response.toolCalls ?? []).map((call) => call.name),
+      requestedToolCalls: observation.requestedToolCalls,
       promptArtifactId,
       responseArtifactId,
     };

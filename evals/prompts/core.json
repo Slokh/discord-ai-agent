@@ -199,6 +199,18 @@
       "notes": "Current public facts should not over-index on Discord history."
     },
     {
+      "id": "web-current-sports-odds",
+      "category": "web",
+      "prompt": "what are the current betting odds for the World Cup final?",
+      "expectedRequestedTools": [
+        "openrouter:web_search"
+      ],
+      "mustNotContain": [
+        "I couldn't verify live results"
+      ],
+      "notes": "Current odds require a real hosted web search; transparent server-tool usage must count as grounded evidence even when no client-side tool call is returned."
+    },
+    {
       "id": "web-specific-game-help",
       "category": "web",
       "prompt": "how can i see my ranked ladder position in vaultbreakers?",

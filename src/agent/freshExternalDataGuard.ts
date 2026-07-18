@@ -1,3 +1,4 @@
+import type { ChatResult } from "../models/openrouter.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { previewText } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
@@ -11,7 +12,7 @@ const LIVE_ODDS_SUBJECT =
 const SAFE_NO_EVIDENCE_RESPONSE =
   /\b(what dates|which dates|how long|trip length|which airport|what airport|what location|which location|need (?:a little )?more|couldn't verify|could not verify|can't verify|cannot verify|couldn't pull|could not pull|can't pull|cannot pull|failed before returning|live source|won't guess|will not guess)\b/i;
 const UNSUPPORTED_OFFER_VALUE = /(?:[$€£]\s?\d|\b\d[\d,]*(?:\.\d+)?\s?(?:USD|EUR|GBP)\b)/i;
-const FRESH_EVIDENCE_TOOLS = new Set(["openrouter:web_search", "openrouter:web_fetch"]);
+const FRESH_EVIDENCE_SERVER_USAGE_KEYS = ["web_search_requests", "web_fetch_requests"] as const;
 
 export const FRESH_EXTERNAL_DATA_RETRY_GUIDANCE =
   "Your previous draft was rejected because it answered a time-sensitive request without fresh tool evidence. " +
@@ -32,8 +33,8 @@ export class FreshExternalDataGuard {
     private readonly userText: string,
   ) {}
 
-  noteRequestedTools(toolNames: string[]) {
-    if (toolNames.some((name) => FRESH_EVIDENCE_TOOLS.has(name))) {
+  noteModelResponse(response: Pick<ChatResult, "content" | "serverToolUse" | "urlCitations">) {
+    if (response.content.trim() && hasFreshExternalToolEvidence(response)) {
       this.freshEvidenceObserved = true;
     }
   }
@@ -76,6 +77,17 @@ export class FreshExternalDataGuard {
   blockedResponse(input: Omit<AgentResponse, "content"> = {}): AgentResponse {
     return { ...input, content: FRESH_EXTERNAL_DATA_BLOCKED_RESPONSE };
   }
+}
+
+export function hasFreshExternalToolEvidence(
+  response: Pick<ChatResult, "serverToolUse" | "urlCitations">,
+) {
+  // Server-tool usage proves that a lookup was attempted, but only structured
+  // provider citations prove that usable external evidence reached the answer.
+  // A failed/empty search must not unlock unsupported live claims.
+  return (response.urlCitations?.length ?? 0) > 0 && FRESH_EVIDENCE_SERVER_USAGE_KEYS.some(
+    (key) => (response.serverToolUse?.[key] ?? 0) > 0,
+  );
 }
 
 export function requiresFreshExternalData(userText: string): boolean {

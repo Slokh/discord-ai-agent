@@ -134,6 +134,28 @@ describe("run console timeline", () => {
     ]);
   });
 
+  it("keeps transparent server tools alongside structured local tool requests", () => {
+    const requests = timelineToolRequests(
+      timelineStep({
+        id: "mixed-model-tools",
+        kind: "model",
+        title: "Agent model round complete",
+        summary: "Round 1",
+        createdAt: atMs(0),
+        durationMs: 100,
+        metadata: {
+          selectedLocalToolRequests: [{ id: "call_1", name: "getDiscordStats", argumentsText: "{}" }],
+          requestedToolCalls: ["getDiscordStats", "openrouter:web_search"],
+        },
+      }),
+    );
+
+    expect(requests).toEqual([
+      { id: "call_1", name: "getDiscordStats", argumentsText: "{}" },
+      { name: "openrouter:web_search" },
+    ]);
+  });
+
   it("promotes related child runs as visible timeline rows", () => {
     const steps = relatedRunTimelineSteps(
       [

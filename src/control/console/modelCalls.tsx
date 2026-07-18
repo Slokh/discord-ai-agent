@@ -40,6 +40,8 @@ export type ModelCallView = {
   costUsd: number;
   usage: ModelUsage;
   requestedTools: string[];
+  serverToolUse: Record<string, number>;
+  urlCitationCount: number;
   offeredTools: string[];
   promptSections: PromptSectionView[];
   toolSchemas: ToolSchemaView[];
@@ -80,6 +82,8 @@ function modelCallFromEvent(event: RunEvent): ModelCallView {
       cachedInputTokens: numberValue(usage.cachedInputTokens),
     },
     requestedTools: stringArray(metadata.requestedToolCalls),
+    serverToolUse: numberRecord(metadata.serverToolUse),
+    urlCitationCount: numberValue(metadata.urlCitationCount),
     offeredTools: stringArray(metadata.offeredTools),
     promptSections: promptSections(metadata.promptSections),
     toolSchemas: toolSchemas(metadata.toolSchemas),
@@ -109,6 +113,15 @@ function stringValue(value: unknown) {
 
 function stringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function numberRecord(value: unknown) {
+  return Object.fromEntries(
+    Object.entries(record(value)).flatMap(([key, item]) => {
+      const number = numberValue(item);
+      return number >= 0 ? [[key, number]] : [];
+    }),
+  );
 }
 
 function promptSections(value: unknown): PromptSectionView[] {

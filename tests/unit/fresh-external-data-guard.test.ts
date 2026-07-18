@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { requiresFreshExternalData, shouldRejectUngroundedFreshData } from "../../src/agent/freshExternalDataGuard.js";
+import { hasFreshExternalToolEvidence, requiresFreshExternalData, shouldRejectUngroundedFreshData } from "../../src/agent/freshExternalDataGuard.js";
 
 describe("fresh external data guard", () => {
   it("requires fresh evidence for natural-language live flight shopping", () => {
@@ -57,5 +57,19 @@ describe("fresh external data guard", () => {
   it("still requires fresh evidence for live betting odds", () => {
     expect(requiresFreshExternalData("Find the best live betting odds for tonight's game."))
       .toBe(true);
+  });
+
+  it("requires structured citations instead of treating a search attempt as usable evidence", () => {
+    expect(hasFreshExternalToolEvidence({
+      serverToolUse: { web_search_requests: 1, tool_calls_executed: 1 },
+      urlCitations: [],
+    })).toBe(false);
+    expect(hasFreshExternalToolEvidence({
+      serverToolUse: { web_search_requests: 1, tool_calls_executed: 1 },
+      urlCitations: [{ url: "https://example.com/current-odds" }],
+    })).toBe(true);
+    expect(hasFreshExternalToolEvidence({
+      urlCitations: [{ url: "https://example.com/current-odds" }],
+    })).toBe(false);
   });
 });

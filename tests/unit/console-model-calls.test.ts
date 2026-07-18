@@ -27,6 +27,8 @@ describe("console model-call projection", () => {
           outputChars: 42,
           finishReason: "stop",
           estimatedCostUsd: 0.002,
+          serverToolUse: { web_search_requests: 2, tool_calls_executed: 2 },
+          urlCitationCount: 7,
           usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 4 },
         },
       }],
@@ -45,6 +47,8 @@ describe("console model-call projection", () => {
         promptArtifactId: "prompt-1",
         responseArtifactId: "response-1",
         costUsd: 0.002,
+        serverToolUse: { web_search_requests: 2, tool_calls_executed: 2 },
+        urlCitationCount: 7,
         usage: expect.objectContaining({ inputTokens: 10, outputTokens: 5, cachedInputTokens: 4 }),
       }),
     ]);

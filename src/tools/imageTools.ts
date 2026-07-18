@@ -8,6 +8,9 @@ import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForR
 
 const DEFAULT_VISION_MODEL = "google/gemini-3.1-flash-lite";
 const MAX_IMAGE_REFERENCES = 4;
+const MAX_INLINE_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_INLINE_VISION_TOTAL_BYTES = 20 * 1024 * 1024;
+const VISION_IMAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
 
 export type GenerateImageInput = {
   prompt: string;
@@ -101,6 +104,7 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
     messageIdOrUrl: input.messageIdOrUrl,
     useContextImages: input.useContextImages ?? true
   });
+  const prepared = await inlineDiscordCdnImageReferences(ctx, references);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -113,7 +117,11 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
       messageIdOrUrl: input.messageIdOrUrl,
       useContextImages: input.useContextImages ?? true
     }),
-    resultSummary: summarizeForAudit({ imageCount: references.length })
+    resultSummary: summarizeForAudit({
+      imageCount: references.length,
+      inlinedDiscordImages: prepared.inlined,
+      discordImageInlineFailures: prepared.failed
+    })
   });
 
   if (references.length === 0) {
@@ -138,7 +146,10 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
               `Images supplied: ${references.length}\n` +
               references.map((reference, index) => `${index + 1}. ${reference.label}`).join("\n")
           },
-          ...references.map((reference): ChatContentPart => ({ type: "image_url", image_url: { url: reference.url } }))
+          ...prepared.references.map((reference): ChatContentPart => ({
+            type: "image_url",
+            image_url: { url: reference.url }
+          }))
         ]
       }
     ],
@@ -161,6 +172,99 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
   return [`Vision result (${references.length} image${references.length === 1 ? "" : "s"}):`, response.content.trim(), "", "Images:", labels]
     .filter(Boolean)
     .join("\n");
+}
+
+async function inlineDiscordCdnImageReferences(
+  ctx: ToolContext,
+  references: ImageReferenceContext[]
+): Promise<{ references: ImageReferenceContext[]; inlined: number; failed: number }> {
+  let remainingBytes = MAX_INLINE_VISION_TOTAL_BYTES;
+  let inlined = 0;
+  let failed = 0;
+  const prepared: ImageReferenceContext[] = [];
+  for (const reference of references) {
+    if (!isDiscordCdnUrl(reference.url) || remainingBytes <= 0) {
+      prepared.push(reference);
+      continue;
+    }
+    try {
+      const result = await fetchDiscordImageDataUri(
+        reference.url,
+        Math.min(MAX_INLINE_VISION_IMAGE_BYTES, remainingBytes),
+        ctx.abortSignal
+      );
+      prepared.push({ ...reference, url: result.dataUri, contentType: result.contentType });
+      remainingBytes -= result.bytes;
+      inlined += 1;
+    } catch (error) {
+      if (ctx.abortSignal?.aborted) throw error;
+      prepared.push(reference);
+      failed += 1;
+    }
+  }
+  return { references: prepared, inlined, failed };
+}
+
+function isDiscordCdnUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === "https:" && (hostname === "cdn.discordapp.com" || hostname === "media.discordapp.net");
+  } catch {
+    return false;
+  }
+}
+
+async function fetchDiscordImageDataUri(url: string, maxBytes: number, abortSignal?: AbortSignal) {
+  const controller = new AbortController();
+  const abortFromRequest = () => controller.abort(abortSignal?.reason);
+  abortSignal?.addEventListener("abort", abortFromRequest, { once: true });
+  const timeout = setTimeout(() => controller.abort(), VISION_IMAGE_DOWNLOAD_TIMEOUT_MS);
+  timeout.unref?.();
+  try {
+    let response = await fetch(url, { signal: controller.signal, redirect: "error" });
+    const fallbackUrl = discordEmojiPngFallbackUrl(url);
+    if (response.status === 415 && fallbackUrl) {
+      await response.body?.cancel();
+      response = await fetch(fallbackUrl, { signal: controller.signal, redirect: "error" });
+    }
+    if (!response.ok) throw new Error(`Discord CDN returned HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    if (!contentType.startsWith("image/")) throw new Error("Discord CDN response was not an image");
+    const declaredBytes = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+      throw new Error(`Discord image exceeds the ${maxBytes}-byte vision limit`);
+    }
+    if (!response.body) throw new Error("Discord CDN response had no body");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      total += chunk.length;
+      if (total > maxBytes) {
+        controller.abort();
+        throw new Error(`Discord image exceeds the ${maxBytes}-byte vision limit`);
+      }
+      chunks.push(chunk);
+    }
+    const data = Buffer.concat(chunks, total);
+    return { dataUri: `data:${contentType};base64,${data.toString("base64")}`, contentType, bytes: total };
+  } finally {
+    clearTimeout(timeout);
+    abortSignal?.removeEventListener("abort", abortFromRequest);
+  }
+}
+
+function discordEmojiPngFallbackUrl(value: string) {
+  const url = new URL(value);
+  if (url.hostname.toLowerCase() !== "cdn.discordapp.com" || !/^\/emojis\/[^/]+\.gif$/i.test(url.pathname)) {
+    return undefined;
+  }
+  url.pathname = url.pathname.replace(/\.gif$/i, ".png");
+  return url.toString();
 }
 
 export async function generateImage(

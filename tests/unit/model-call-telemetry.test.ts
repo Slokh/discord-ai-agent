@@ -122,6 +122,39 @@ describe("runObservedModelCall", () => {
     }));
   });
 
+  it("omits inline image payloads from debugger artifacts while sending them to the provider", async () => {
+    const imagePayload = Buffer.from("private-image-bytes").toString("base64");
+    const dataUrl = `data:image/png;base64,${imagePayload}`;
+    const chat = vi.fn(async () => ({
+      content: "image result",
+      model: "test/model",
+      toolCalls: [],
+      raw: {},
+    }));
+    const ctx = context(chat);
+    const storeArtifact = vi.fn(async (input: { kind: string }) => ({ artifactId: `${input.kind}-artifact` }));
+    ctx.agentRuntime = { storeArtifact, recordEvent: vi.fn(async () => undefined) } as never;
+    ctx.agentRuntimeSession = { sessionId: "session-1", traceId: "trace-1" } as never;
+    ctx.agentRuntimeExecutionId = "execution-1";
+
+    await runObservedModelCall(ctx, {
+      purpose: "discord_image_inspection",
+      chat: {
+        messages: [{
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: dataUrl } }],
+        }],
+      },
+    });
+
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: dataUrl } }] }],
+    }));
+    const promptArtifact = storeArtifact.mock.calls.find(([input]) => input.kind === "model_prompt")?.[0] as unknown as { content: string };
+    expect(promptArtifact.content).toContain("inline image omitted");
+    expect(promptArtifact.content).not.toContain(imagePayload);
+  });
+
   it("attributes prompt bytes to stable debugger sections", () => {
     expect(promptSectionTelemetry([
       { role: "system", content: "base" },

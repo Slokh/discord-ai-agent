@@ -1201,6 +1201,11 @@ describe("generateImage", () => {
 
   it("inspects current Discord image attachments with a vision model", async () => {
     const auditTool = vi.fn(async () => undefined);
+    const imageBytes = Buffer.from("discord-image");
+    const fetchMock = vi.fn(async () => new Response(imageBytes, {
+      headers: { "content-type": "image/png", "content-length": String(imageBytes.length) }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
     const chat = vi.fn(async () => ({
       content: "It looks like a dashboard screenshot.",
       model: "vision-model",
@@ -1236,7 +1241,10 @@ describe("generateImage", () => {
             role: "user",
             content: expect.arrayContaining([
               expect.objectContaining({ type: "text", text: expect.stringContaining("what is this?") }),
-              { type: "image_url", image_url: { url: "https://cdn.discordapp.com/screenshot.png" } }
+              {
+                type: "image_url",
+                image_url: { url: `data:image/png;base64,${imageBytes.toString("base64")}` }
+              }
             ])
           })
         ])
@@ -1244,9 +1252,116 @@ describe("generateImage", () => {
     );
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectDiscordImages" }));
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectDiscordImagesResult", model: "vision-model" }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cdn.discordapp.com/screenshot.png",
+      expect.objectContaining({ redirect: "error" })
+    );
+  });
+
+  it("does not server-fetch non-Discord explicit image URLs for vision inspection", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const chat = vi.fn(async () => ({
+      content: "The public image is visible.",
+      model: "vision-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user"
+    } as unknown as ToolContext;
+
+    await inspectDiscordImages(ctx, {
+      question: "what is this?",
+      imageUrls: ["https://example.com/public.png"],
+      useContextImages: false
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            { type: "image_url", image_url: { url: "https://example.com/public.png" } }
+          ])
+        })
+      ])
+    }));
+  });
+
+  it("inlines explicit Discord CDN URLs before vision inspection", async () => {
+    const firstImage = Buffer.from("first-discord-image");
+    const secondImage = Buffer.from("second-discord-image");
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("second.gif")) {
+        return new Response("unsupported emoji format", {
+          status: 415,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const body = url.endsWith("first.png") ? firstImage : secondImage;
+      return new Response(body, {
+        headers: { "content-type": "image/png", "content-length": String(body.length) }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const chat = vi.fn(async () => ({
+      content: "Both Discord images are visible.",
+      model: "vision-model",
+      raw: {},
+      toolCalls: []
+    }));
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user"
+    } as unknown as ToolContext;
+
+    await inspectDiscordImages(ctx, {
+      question: "compare these",
+      imageUrls: [
+        "https://cdn.discordapp.com/emojis/first.png",
+        "https://cdn.discordapp.com/emojis/second.gif"
+      ],
+      useContextImages: false
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cdn.discordapp.com/emojis/second.png",
+      expect.objectContaining({ redirect: "error" })
+    );
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${firstImage.toString("base64")}` }
+            },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${secondImage.toString("base64")}` }
+            }
+          ])
+        })
+      ])
+    }));
   });
 
   it("refreshes an indexed Discord image URL before vision inspection", async () => {
+    const imageBytes = Buffer.from("fresh-discord-image");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(imageBytes, {
+      headers: { "content-type": "image/png", "content-length": String(imageBytes.length) }
+    })));
     const messageAttachments = vi.fn(async () => [
       {
         attachmentId: "attachment-1",
@@ -1309,7 +1424,10 @@ describe("generateImage", () => {
         expect.objectContaining({
           role: "user",
           content: expect.arrayContaining([
-            { type: "image_url", image_url: { url: "https://cdn.discordapp.com/fresh.png" } }
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${imageBytes.toString("base64")}` }
+            }
           ])
         })
       ])

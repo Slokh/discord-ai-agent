@@ -83,7 +83,7 @@ export async function runObservedModelCall(
       maxTokens: input.chat.maxTokens ?? 4096,
       temperature: input.chat.temperature ?? null,
       toolChoice: input.chat.toolChoice ?? "auto",
-      messages: input.chat.messages.map((message, index) => ({
+      messages: modelMessagesForArtifact(input.chat.messages).map((message, index) => ({
         index,
         section: promptMessageSection(message, index, input.chat.messages.length),
         ...message,
@@ -230,7 +230,25 @@ function toolSchemaTelemetry(tools: ToolDefinition[]) {
 
 function textContent(message: ChatMessage) {
   if (typeof message.content === "string") return message.content;
-  return message.content.map((part) => part.type === "text" ? part.text : `[image ${part.image_url.url}]`).join("\n");
+  return message.content.map((part) => part.type === "text" ? part.text : `[image ${imageUrlForArtifact(part.image_url.url)}]`).join("\n");
+}
+
+function modelMessagesForArtifact(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => typeof message.content === "string" ? message : {
+    ...message,
+    content: message.content.map((part) => part.type === "text" ? part : {
+      ...part,
+      image_url: { url: imageUrlForArtifact(part.image_url.url) },
+    }),
+  });
+}
+
+function imageUrlForArtifact(url: string) {
+  if (!/^data:image\//i.test(url)) return url;
+  const separator = url.indexOf(",");
+  const header = separator >= 0 ? url.slice(5, separator) : "image/unknown";
+  const payload = separator >= 0 ? url.slice(separator + 1) : url;
+  return `[inline image omitted; ${header}; encodedChars=${payload.length}; sha256=${sha256(payload)}]`;
 }
 
 function messageCharacters(message: ChatMessage) {

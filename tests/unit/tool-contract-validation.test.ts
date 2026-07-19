@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertToolRegistryContractsValid, validateToolCallArguments } from "../../src/tools/toolContractValidation.js";
+import { assertToolRegistryContractsValid, invalidToolCallResponse, validateToolCallArguments } from "../../src/tools/toolContractValidation.js";
 import { loadConfig } from "../../src/config/env.js";
 
 describe("tool contract validation", () => {
@@ -27,5 +27,24 @@ describe("tool contract validation", () => {
       arguments: { components: [{ type: "action_row", components: [{ type: "button", style: "premium", skuId: "123456789012345678" }] }] },
       config,
     }).ok).toBe(false);
+  });
+
+  it("returns a contract-owned valid example after structured argument errors", () => {
+    const response = invalidToolCallResponse({
+      name: "composeDiscordResponse",
+      argumentsText: JSON.stringify({ components: [{ type: 1 }] }),
+      arguments: { components: [{ type: 1 }] },
+      config: loadConfig(),
+    });
+
+    expect(response).toEqual(expect.objectContaining({
+      status: "error",
+      errorCode: "invalid_tool_arguments",
+      retryable: true,
+      content: expect.stringContaining("Canonical valid example"),
+    }));
+    expect(response?.content).toContain('"type":"action_row"');
+    expect(response?.content).toContain('"action":{"type":"continue"');
+    expect(response?.content).not.toContain("custom_id");
   });
 });

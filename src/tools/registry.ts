@@ -96,7 +96,12 @@ export function toolByName(name: string): ToolRegistryEntry | undefined {
 }
 
 function toolDescriptionForModel(tool: ToolRegistryEntry): string {
-  return `${tool.description}\nTool class: ${tool.toolClass}. Returns: ${tool.outputContract.join("; ")}.`;
+  const argumentExample = tool.argumentExamples[0];
+  return [
+    tool.description,
+    `Tool class: ${tool.toolClass}. Returns: ${tool.outputContract.join("; ")}.`,
+    argumentExample ? `Example arguments: ${JSON.stringify(argumentExample)}` : "",
+  ].filter(Boolean).join("\n");
 }
 
 let cachedToolContracts: ToolContract[] | undefined;
@@ -113,7 +118,8 @@ export function toolContracts(): ToolContract[] {
     outputContract: tool.outputContract,
     permissionRequirements: tool.permissionRequirements,
     auditEvents: tool.auditEvents,
-    examples: tool.examples
+    examples: tool.examples,
+    argumentExamples: tool.argumentExamples,
   }));
 }
 

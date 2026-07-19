@@ -4182,6 +4182,87 @@ describe("agent router", () => {
     );
   });
 
+  it("delivers a valid rich presentation from the single current-turn output collector", async () => {
+    const components = [{
+      type: "action_row",
+      components: [{
+        type: "button",
+        label: "Short summary",
+        style: "primary",
+        action: { type: "continue", prompt: "Give me the short summary." },
+      }],
+    }];
+    const chat = vi.fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "compose",
+          name: "composeDiscordResponse",
+          argumentsText: JSON.stringify({ components: JSON.stringify(components) }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Pick one:",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = presentationTestContext(chat);
+
+    const response = await handleAgentRequest(ctx, "Give me a Discord button for a short summary");
+
+    expect(response.content).toBe("Pick one:");
+    expect(response.discordPresentation).toEqual(expect.objectContaining({
+      version: 1,
+      audience: "requester",
+      components,
+    }));
+    expect(ctx.turnOutput?.presentation).toBe(response.discordPresentation);
+  });
+
+  it("cannot claim rich controls were sent after presentation validation failed", async () => {
+    const wireComponents = [{
+      type: 1,
+      components: [{ type: 2, style: 1, label: "One", custom_id: "one" }],
+    }];
+    const chat = vi.fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "compose-invalid",
+          name: "composeDiscordResponse",
+          argumentsText: JSON.stringify({ components: JSON.stringify(wireComponents) }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here are the clickable buttons.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = presentationTestContext(chat);
+
+    const response = await handleAgentRequest(ctx, "Give me a Discord button example");
+
+    expect(response.discordPresentation).toBeUndefined();
+    expect(response.content).toContain("couldn't create the interactive Discord components");
+    expect(response.content).not.toContain("clickable buttons");
+    const secondRequest = (chat.mock.calls as any[])[1]?.[0];
+    expect(secondRequest.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "tool",
+        content: expect.stringContaining("Canonical valid example"),
+      }),
+    ]));
+    expect(ctx.repo.recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.rich_presentation_guard.blocked",
+    }));
+  });
+
   it("audits failed agent requests before surfacing the error to Discord", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
@@ -4243,6 +4324,31 @@ function fakeAgentRuntimeContext() {
     agentRuntimeExecutionId: "agent-execution-prompt",
     requestId: "prompt-message-1"
   };
+}
+
+function presentationTestContext(chat: ReturnType<typeof vi.fn>) {
+  return {
+    config: {
+      maxReplyChars: 1800,
+      toolsetScoping: true,
+      openRouter: {},
+      discord: { premiumSkuIds: [] },
+      payments: { walletEnabled: false, userWalletsEnabled: false },
+    },
+    repo: {
+      auditTool: vi.fn(async () => undefined),
+      recordTraceEvent: vi.fn(async () => undefined),
+    },
+    openRouter: { chat },
+    guildId: "g",
+    channelId: "c",
+    userId: "u",
+    userDisplayName: "User",
+    visibleChannelIds: ["c"],
+    sessionMessages: [],
+    requestId: "presentation-request",
+    requestMessageId: "presentation-request",
+  } as unknown as ToolContext;
 }
 
 function codeUpdateTestConfig() {

@@ -7,6 +7,8 @@ export type AgentToolRoute = {
   name: ToolName;
   arguments?: Record<string, unknown>;
   argumentsText: string;
+  /** True when a schema-directed, semantics-preserving argument repair was applied. */
+  argumentsNormalized?: boolean;
 };
 
 export type ModelCallBudget = {

@@ -8,7 +8,7 @@ Owns model-facing local tool contracts and implementations.
 - `toolDefinition.ts`: canonical tool names/types plus `defineTool`, generic class/policy defaults, and fail-fast contract-to-handler binding.
 - `registry.ts`: small aggregation/index/cache layer for contract families and hosted tools; model definitions are cached by contract identity.
 - `../agent/toolHandlers/`: focused execution adapters by the same coarse families; `toolDispatcher.ts` is only the validation/gating/delegation boundary and an O(1) handler lookup.
-- `toolContractValidation.ts`: compiles every local tool's advertised JSON Schema and validates raw model arguments against that same contract before permissions, budgets, or implementations run.
+- `toolContractValidation.ts`: compiles every local tool's advertised JSON Schema, validates contract-owned canonical argument examples, and validates normalized model arguments against that same contract before permissions, budgets, or implementations run.
 - `toolDeployment.ts`: applies and caches deployment capability narrowing once for both the model-visible schema and runtime validator (currently wallet-backed wager fields and configured premium Discord SKUs).
 - `agentTaskTools.ts`: model-facing code-update task creation, status, retry/cancel, deployment status, and task log snippets.
 - `agentTaskFormatting.ts`: code-update task titles, task result messages, compact timing/cache lines, and shared duration formatting.

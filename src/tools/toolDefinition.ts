@@ -32,11 +32,12 @@ export type ToolRegistryEntry = {
   examples: string[];
   permissionRequirements: string[];
   auditEvents: string[];
+  argumentExamples: Record<string, unknown>[];
   parameters: FunctionToolDefinition["function"]["parameters"];
 };
 
-type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents"> &
-  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents">>;
+type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples"> &
+  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples">>;
 
 export type ToolContract = {
   name: ToolName;
@@ -51,6 +52,7 @@ export type ToolContract = {
   permissionRequirements: string[];
   auditEvents: string[];
   examples: string[];
+  argumentExamples: Record<string, unknown>[];
 };
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
@@ -78,7 +80,8 @@ export function defineTool<const T extends ToolDefinitionInput>(definition: T): 
           ? ["requester_visible_discord_channels", "tool_audit_log"]
           : ["tool_audit_log"]
     ),
-    auditEvents: definition.auditEvents ?? ["tool_audit_logs", "trace_events"]
+    auditEvents: definition.auditEvents ?? ["tool_audit_logs", "trace_events"],
+    argumentExamples: definition.argumentExamples ?? [],
   };
 }
 

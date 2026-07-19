@@ -61,7 +61,8 @@ import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRou
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
 import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout } from "./modelTimeoutFallback.js";
-import { createAgentTurnOutput } from "../tools/turnOutput.js";
+import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
+import { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -71,13 +72,11 @@ export async function runAgentModelLoop(
   const automaticStarterFunds = await ensureAutomaticStarterFunds(ctx);
   const activeGame = await loadActiveGameSession(ctx, userText);
   const randomOutcomeGuard = new RandomOutcomeGuard(ctx, userText);
+  const richPresentationOutcomeGuard = new RichPresentationOutcomeGuard(ctx);
   if (activeGame?.actionRequested) randomOutcomeGuard.noteActiveWager(activeGame.wager.id);
   const freshExternalDataGuard = new FreshExternalDataGuard(ctx, userText);
-  return await randomOutcomeGuard.enforce(
-    await freshExternalDataGuard.enforce(
-      await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard, activeGame, automaticStarterFunds),
-    ),
-  );
+  const response = await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard, richPresentationOutcomeGuard, activeGame, automaticStarterFunds);
+  return await richPresentationOutcomeGuard.enforce(await randomOutcomeGuard.enforce(await freshExternalDataGuard.enforce(response)));
 }
 
 async function runAgentModelLoopInternal(
@@ -85,6 +84,7 @@ async function runAgentModelLoopInternal(
   userText: string,
   randomOutcomeGuard: RandomOutcomeGuard,
   freshExternalDataGuard: FreshExternalDataGuard,
+  richPresentationOutcomeGuard: RichPresentationOutcomeGuard,
   activeGame: ActiveGameSessionContext | null,
   automaticStarterFunds: string | null,
 ): Promise<AgentResponse> {
@@ -122,8 +122,7 @@ async function runAgentModelLoopInternal(
     });
   }
   injectActiveGameSession(messages, activeGame);
-  const turnOutput = createAgentTurnOutput();
-  ctx.turnOutput = turnOutput;
+  const turnOutput = ensureAgentTurnOutput(ctx);
   const { files, tables } = turnOutput;
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
@@ -328,7 +327,7 @@ async function runAgentModelLoopInternal(
       });
       throw error;
     }
-    const modelRoutes = selectExclusiveWagerTransition(coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls)));
+    const modelRoutes = selectExclusiveWagerTransition(coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls, currentToolset.localTools)));
     freshExternalDataGuard.noteModelResponse(response);
     const toolObservation = modelToolObservation(response);
     const requestedToolRequests = response.toolCalls.map(
@@ -525,6 +524,7 @@ async function runAgentModelLoopInternal(
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
       forcedRandomAction.noteToolResult(route.name, result.status);
+      richPresentationOutcomeGuard.noteToolResult(route.name);
       randomOutcomeGuard.noteToolResult(route.name, result.content);
       wagerResolutionRouter.arm(randomOutcomeGuard.requiresWagerResolution(), randomOutcomeGuard.requiredWagerResolutionTool());
       const isRepeatedToolResult =

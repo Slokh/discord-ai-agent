@@ -3,6 +3,9 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const discordRetrievalPart2ToolContracts = [
   defineTool({
     name: "getRecentDiscordMessages",
+    category: "discord",
+    toolClass: "retrieval",
+    examples: ["@ai what just happened in here?"],
     description: "Get recent indexed messages from the current channel or specified visible channels.",
     userVisible: true,
     mutates: false,
@@ -31,6 +34,9 @@ export const discordRetrievalPart2ToolContracts = [
 
   defineTool({
     name: "getDiscordMessageContext",
+    category: "discord",
+    toolClass: "retrieval",
+    examples: ["@ai show the context around this message link"],
     description:
       "Get an indexed Discord message plus nearby messages from the same channel using a specific Discord message link or message ID. Use for exact-message context, replies, or surrounding conversation. Do not use this to analyze broad search results; searchDiscordHistory evidence already includes message URLs.",
     userVisible: true,
@@ -82,6 +88,9 @@ export const discordRetrievalPart2ToolContracts = [
 
   defineTool({
     name: "searchDiscordAttachments",
+    category: "discord",
+    toolClass: "retrieval",
+    examples: ["@ai find the image of nachos"],
     description:
       "Search indexed Discord attachments by filename, content type, surrounding message text, author, or channel. Returns attachment URLs and message links. For understanding what is in an image, call inspectDiscordImages after finding the relevant image URL.",
     userVisible: true,

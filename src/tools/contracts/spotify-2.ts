@@ -3,6 +3,7 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const spotifyPart2ToolContracts = [
   defineTool({
     name: "searchSpotify",
+    examples: ["@ai search Spotify for Running Up That Hill"],
     description:
       "Search Spotify's public catalog for tracks, artists, albums, playlists, shows, episodes, or audiobooks using the Spotify Web API. Use this when the user asks to find music or podcasts/audiobooks on Spotify by name. Results are deterministic Spotify metadata and should be returned directly with Spotify links.",
     userVisible: true,
@@ -35,6 +36,7 @@ export const spotifyPart2ToolContracts = [
 
   defineTool({
     name: "getSpotifyItem",
+    examples: ["@ai what is this Spotify track? https://open.spotify.com/track/abc123"],
     description:
       "Fetch deterministic public Spotify details for one track, artist, album, playlist, show, episode, audiobook, or chapter. Use this for Spotify item URLs/URIs, or for a bare Spotify ID when the type is known. For full playlist track lists, use getSpotifyPlaylistTracks; for album track lists, use getSpotifyAlbumTracks; for artist release lists, use getSpotifyArtistDiscography.",
     userVisible: true,

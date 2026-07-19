@@ -5,7 +5,7 @@ Owns model-facing local tool contracts and implementations.
 ## Responsibilities
 
 - `contracts/`: focused, compile-time checked contract families containing names, descriptions, schemas, examples, output contracts, and tool taxonomy exposed to the model.
-- `toolDefinition.ts`: canonical tool names/types plus `defineTool` and fail-fast contract-to-handler binding.
+- `toolDefinition.ts`: canonical tool names/types plus `defineTool`, generic class/policy defaults, and fail-fast contract-to-handler binding.
 - `registry.ts`: small aggregation/index/cache layer for contract families and hosted tools; model definitions are cached by contract identity.
 - `../agent/toolHandlers/`: focused execution adapters by the same coarse families; `toolDispatcher.ts` is only the validation/gating/delegation boundary and an O(1) handler lookup.
 - `toolContractValidation.ts`: compiles every local tool's advertised JSON Schema and validates raw model arguments against that same contract before permissions, budgets, or implementations run.
@@ -42,6 +42,7 @@ Owns model-facing local tool contracts and implementations.
 ## Tests
 
 - Tool schemas, runtime validation, and taxonomy: `tests/unit/tool-registry.test.ts` and `tests/unit/tool-contract-validation.test.ts`.
+- Per-family handler ownership, complete routing, and fail-fast drift checks: `tests/unit/tool-handler-conformance.test.ts`.
 - Tool scoping and argument coercion: `tests/unit/tool-scope.test.ts` and `tests/unit/tool-arguments.test.ts`.
 - Tool behavior: focused `tests/unit/*-tools.test.ts` files; `tests/unit/core-tools.test.ts` covers shared/compatibility behavior.
 - End-to-end model/tool behavior: `tests/integration/agent.test.ts`.

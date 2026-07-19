@@ -3,6 +3,9 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const codegenToolContracts = [
   defineTool({
     name: "runCodingAgent",
+    category: "coding",
+    toolClass: "coding",
+    examples: ["@ai debug the failing CI on that PR"],
     description:
       "Start an isolated sandbox task for Discord AI Agent code, repository, GitHub PR, CI, deployment, or self-update work. The bot will update the same Discord reply with progress and the PR link when the task finishes. Use when the user asks the agent to update itself, add, build, implement, change behavior, debug or fix failing CI/checks/tests, inspect a PR/repo failure, or continue work from a previous code-update task. Prefer this over hosted web tools for GitHub, CI, PR, or repository debugging because the sandbox has repo checkout, shell, tests, and gh CLI access.",
     userVisible: true,
@@ -44,6 +47,8 @@ export const codegenToolContracts = [
 
   defineTool({
     name: "getAgentTaskStatus",
+    toolClass: "coding",
+    examples: ["@ai what happened to the last update?"],
     description:
       "Look up quick status for the current or recent code-update task: progress events, sandbox command output snippets, PR link, and GitHub PR/CI check status when available. Use for read-only status questions like whether an update is done, what PR was opened, or what the latest task ID is. If the user asks to debug, investigate, explain, or fix a GitHub/CI/check/test/repo failure, call runCodingAgent so the sandbox can use gh CLI, logs, repo files, and tests.",
     userVisible: true,
@@ -68,6 +73,8 @@ export const codegenToolContracts = [
 
   defineTool({
     name: "listAgentTasks",
+    toolClass: "coding",
+    examples: ["@ai show recent update tasks"],
     description:
       "List recent visible code-update tasks with their statuses. Use when a user asks for task history, queued work, previous PR attempts, or what updates are in progress.",
     userVisible: true,
@@ -96,6 +103,8 @@ export const codegenToolContracts = [
 
   defineTool({
     name: "retryAgentTask",
+    toolClass: "coding",
+    examples: ["@ai retry that update"],
     description:
       "Retry a failed, no-change, or cancelled code-update task using the original request. Use when a user asks to retry, rerun, or try again after a code-update task did not complete.",
     userVisible: true,
@@ -116,6 +125,8 @@ export const codegenToolContracts = [
 
   defineTool({
     name: "cancelAgentTask",
+    toolClass: "coding",
+    examples: ["@ai cancel the current update"],
     description:
       "Cancel an active queued or running code-update task. Use when a user asks to stop, cancel, abort, or kill an in-progress self-update.",
     userVisible: true,

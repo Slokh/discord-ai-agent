@@ -3,6 +3,7 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const generatedDataToolContracts = [
   defineTool({
     name: "readGeneratedFile",
+    examples: ["@ai show me the first rows of the file you just generated"],
     description:
       "Read a bounded text chunk from a file produced by an earlier tool call in the same agent turn. Use this for generated text or CSV files when the user asks to inspect file contents, see examples, or when a small preview is enough. For exact counts, filters, or rankings over CSV files, use queryGeneratedCsv instead of reading the whole file.",
     userVisible: true,
@@ -37,6 +38,7 @@ export const generatedDataToolContracts = [
 
   defineTool({
     name: "queryGeneratedCsv",
+    examples: ["@ai rank the artists in the CSV you just generated"],
     description:
       "Run deterministic tabular queries over a CSV file produced by an earlier tool call in the same agent turn. Use this for exact row counts, top values, filters, rankings, and sample rows from generated CSVs instead of asking the model to count or parse raw CSV text. This is generic generated-file infrastructure and is not specific to any provider.",
     userVisible: true,
@@ -103,6 +105,7 @@ export const generatedDataToolContracts = [
 
   defineTool({
     name: "queryGeneratedTable",
+    examples: ["@ai rank the artists in the table you just generated"],
     description:
       "Run deterministic tabular queries over a structured table artifact produced by an earlier tool call in the same agent turn. Use this for exact row counts, top values, filters, rankings, and sample rows from generated tables without reading raw attachment text. This is generic generated-artifact infrastructure and is not specific to any provider.",
     userVisible: true,

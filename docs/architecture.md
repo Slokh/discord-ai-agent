@@ -28,7 +28,7 @@ These constraints are intentional. Do not treat them as temporary implementation
 
 | State | Canonical owner | Common readers/projections |
 | --- | --- | --- |
-| Prompt executions and code-update attempts | `src/db/agentRuntimeRepository.ts` | `src/observability/runs.ts`, console, task status |
+| Prompt executions and code-update attempts | `src/db/agentRuntimeRepository.ts` with focused artifact persistence in `src/db/agentRuntimeArtifactRepository.ts` | `src/observability/runs.ts`, console, task status |
 | Discord messages, attachments, aliases, exclusions | Focused Discord archive repositories in `src/db/` | Retrieval, stats, crawl, and memory modules |
 | Conversation continuity | Conversation memory repository | `src/agent/promptBuilder.ts` |
 | Request identity and reply scope | Stored turn envelope from `src/agent/runtimeEnvelope.ts` | Runtime runner and `ToolContext` guards |

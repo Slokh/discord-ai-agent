@@ -3,6 +3,9 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const discordRetrievalPart1ToolContracts = [
   defineTool({
     name: "findDiscordUsers",
+    category: "discord",
+    toolClass: "resolver",
+    examples: ["@ai find user tyler"],
     description:
       "Intermediate resolver: find Discord users by username, display name, nickname-like text, mention, or ID before filtering history/stats by author. Do not answer from this alone when the user asked what someone said, did, or has been up to; call the relevant history, summary, or stats tool next.",
     userVisible: true,
@@ -27,6 +30,9 @@ export const discordRetrievalPart1ToolContracts = [
 
   defineTool({
     name: "findDiscordChannels",
+    category: "discord",
+    toolClass: "resolver",
+    examples: ["@ai find channel movies"],
     description:
       "Intermediate resolver: find visible Discord channels, threads, or forums by name, mention, or ID before filtering history/stats by channel. Do not answer from this alone when the user asked what happened in a channel; call the relevant history, summary, topics, or stats tool next.",
     userVisible: true,
@@ -51,6 +57,9 @@ export const discordRetrievalPart1ToolContracts = [
 
   defineTool({
     name: "searchDiscordHistory",
+    category: "discord",
+    toolClass: "retrieval",
+    examples: ["@ai what did we say about job hunting?"],
     description:
       "Search permission-filtered indexed Discord history using hybrid keyword and semantic vector retrieval. Use for questions about what people in this Discord server said, sent, remembered, or asked before. Do not use for public web facts unless the user asks what this server said about them. Prefer a short focused search phrase, not the entire user request. Use authorIds/authorQueries for messages written by someone; use aboutUserIds/aboutUserQueries for messages about or mentioning someone. Use structured person/channel filters after findDiscordUsers/findDiscordChannels when names are ambiguous. One or two distinct searches is usually enough before answering. Supports filter syntax like from:name, in:channel, after:YYYY-MM-DD, before:YYYY-MM-DD.",
     userVisible: true,
@@ -113,6 +122,8 @@ export const discordRetrievalPart1ToolContracts = [
 
   defineTool({
     name: "getRecentAgentMemory",
+    toolClass: "memory",
+    examples: ["@ai what did you just say?"],
     description:
       "Get recent Discord AI Agent conversation memory from the current channel. Use for questions about what the agent previously said, did, generated, linked, opened, or needs to continue. Do not use for factual claims about server history; use Discord history/stat tools for that.",
     userVisible: true,
@@ -137,6 +148,8 @@ export const discordRetrievalPart1ToolContracts = [
 
   defineTool({
     name: "getAgentMemoryStats",
+    toolClass: "memory",
+    examples: ["@ai how many turns have you completed since this message?"],
     description:
       "Count or inspect Discord AI Agent's completed assistant turns in the current channel. Use for questions like how many turns/replies/actions the bot completed, especially since a specific Discord message, message link, or anchor phrase. This queries agent memory and indexed channel messages; do not approximate this with Discord history search.",
     userVisible: true,

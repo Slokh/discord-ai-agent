@@ -3,6 +3,9 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const discordActionPart1ToolContracts = [
   defineTool({
     name: "undoConversationTurns",
+    category: "discord",
+    toolClass: "memory",
+    examples: ["@ai undo that"],
     description:
       "Undo the agent's most recent reply turns in the current Discord channel by removing them from persistent memory and, when possible, deleting the bot reply messages. Use when the user asks to undo, forget, delete, or remove the agent's previous response.",
     userVisible: true,
@@ -22,6 +25,7 @@ export const discordActionPart1ToolContracts = [
 
   defineTool({
     name: "createDiscordPoll",
+    examples: ["@ai make a poll: what day should we play, Friday or Saturday?"],
     description:
       "Create a native Discord poll in the current channel using Discord's poll message API (v10). Use this when the user asks to schedule, vote, pick a time, choose between options, run a straw poll, or create any poll-like question with multiple answers. Discord native polls render in the channel and let members click an answer. The bot must have Send Messages permission in the channel. Supports up to 10 answer options; duration defaults to 24 hours and is capped at 168 hours per Discord limits; allow_multiselect defaults to true since scheduling polls usually allow multiple answers.",
     userVisible: true,
@@ -59,6 +63,7 @@ export const discordActionPart1ToolContracts = [
 
   defineTool({
     name: "createDiscordEmoji",
+    examples: ["@ai upload this image as a server emoji named nacho_wizard"],
     description:
       "Create a custom emoji in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, or create a server/custom emoji. The image is normalized to a 128x128 WebP with transparent padding under Discord's 256 KiB limit; existing source backgrounds are never falsely treated as transparency. Generated sources require verified alpha by default and fail before upload when they are opaque. Short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
     userVisible: true,
@@ -99,6 +104,7 @@ export const discordActionPart1ToolContracts = [
 
   defineTool({
     name: "updateBotAvatar",
+    examples: ["@ai change your avatar to this image: https://example.com/avatar.png"],
     description:
       "Update the bot's own Discord profile avatar using an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Uses the Discord Modify Current User API (PATCH /users/@me with a base64 data-URI avatar). Requires the bot token from environment config. Use this when the user asks to change, set, or update the bot's avatar/profile picture. Discord accepts PNG, JPEG, WebP, or GIF avatars; large or unsupported images are rejected before the API call. Handle rate limits, permission errors, and invalid image URLs gracefully.",
     userVisible: true,

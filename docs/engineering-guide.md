@@ -86,7 +86,7 @@ Avoid these failure modes:
 
 1. Read [`tool-design.md`](tool-design.md) and [`../src/tools/README.md`](../src/tools/README.md).
 2. Decide whether an existing tool can gain a generic argument/result before adding another name.
-3. Add registry taxonomy, group, schema, examples, permission requirements, audit events, and output contract in `src/tools/registry.ts`.
+3. Define taxonomy, group, schema, examples, permission requirements, audit events, and output contract beside the tool in its focused `src/tools/contracts/` family. `defineTool` materializes generic class/policy defaults; `registry.ts` only aggregates and indexes complete contracts.
 4. Implement it in the focused tool-family module, not the registry.
 5. Add deployment gating or toolset scoping only when the capability is unavailable or materially costly.
 6. Return compact structured evidence and explicit limitations.

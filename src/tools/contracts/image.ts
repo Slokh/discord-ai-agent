@@ -3,6 +3,9 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const imageToolContracts = [
   defineTool({
     name: "inspectDiscordImages",
+    category: "discord",
+    toolClass: "image",
+    examples: ["@ai what is in this screenshot?"],
     description:
       "Use a vision model to inspect images from the current Discord request, the replied-to message chain, explicit image URLs, or a Discord message link/ID. Use this when the user asks what is shown in an attached/replied image, screenshot, meme, chart, photo, or visual Discord attachment. Do not use it for text-only history questions.",
     userVisible: true,
@@ -35,6 +38,7 @@ export const imageToolContracts = [
 
   defineTool({
     name: "getDiscordUserAvatar",
+    examples: ["@ai enhance my profile picture"],
     description:
       "Resolve a visible Discord user by username, display name, mention, or user ID and return their avatar image URL(s) from Discord's CDN. Use this when the user asks to enhance, inspect, describe, or zoom into their own or someone else's profile picture/avatar/pfp. After this tool returns an avatar URL, call inspectDiscordImages with that URL as an imageUrls entry so the vision model can describe or enhance it. Works for any visible user in the server; resolution prefers an exact user ID or mention, then indexed username/display-name matches.",
     userVisible: true,
@@ -62,6 +66,9 @@ export const imageToolContracts = [
 
   defineTool({
     name: "generateImage",
+    category: "generation",
+    toolClass: "generation",
+    examples: ["@ai make an image of a wizard eating nachos"],
     description:
       "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for explicit make/draw/generate/regenerate requests and edits like 'make this into...', 'modify this', or 'use the attached image as a reference'. Do not call it for diagnosis-only questions such as why an image has a background or what format it uses unless the user also asks to change or regenerate the image. For emojis, stickers, cutouts, or background removal, request background=transparent and outputFormat=png; the tool also infers those settings from an explicit transparent/emoji/sticker prompt and reports the actual returned format and alpha status.",
     userVisible: true,

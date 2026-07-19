@@ -15,7 +15,8 @@ const walletToolNames = new Set<ToolName>([
   "awaitRandomWagerAction", "getWalletBalance", "listWalletBalances", "getWagerHistory", "transferWalletFunds",
   "requestStarterFunds", "adminTransferWalletFunds", "reconcileWalletTransfers",
 ]);
-const localToolHandlers = bindToolHandlers(toolRegistry, handlerDefinitions, ["requestAdditionalTools", ...discordActionToolNames, ...walletToolNames]);
+export const delegatedToolNames: readonly ToolName[] = Object.freeze(["requestAdditionalTools", ...discordActionToolNames, ...walletToolNames]);
+const localToolHandlers = bindToolHandlers(toolRegistry, handlerDefinitions, delegatedToolNames);
 
 export async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, originalText: string): Promise<AgentResponse> {
   ctx.abortSignal?.throwIfAborted();

@@ -1,12 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DbPool } from "./pool.js";
-import { redactSensitiveText } from "../observability/redaction.js";
 import { assertVersionedRuntimeEventMetadata, normalizeRuntimeEventMetadata } from "../observability/runtimeEventSchema.js";
 import { currentTraceContext } from "../util/trace.js";
+import {
+  AgentRuntimeArtifactRepository,
+  type AgentRuntimeArtifactContent,
+  type AgentRuntimeArtifactRecord,
+  type AgentRuntimeBinaryArtifactContent,
+  type StoreAgentRuntimeArtifactInput,
+  type StoreAgentRuntimeBinaryArtifactInput,
+} from "./agentRuntimeArtifactRepository.js";
 
-const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
-const LARGE_ARTIFACT_RETENTION_DAYS = 14;
-const ARTIFACT_CHUNK_CHARS = 60_000;
+export type {
+  AgentRuntimeArtifactContent,
+  AgentRuntimeArtifactRecord,
+  AgentRuntimeBinaryArtifactContent,
+} from "./agentRuntimeArtifactRepository.js";
 
 export type AgentRuntimeStatus = "queued" | "running" | "succeeded" | "failed" | "no_changes" | "cancelled";
 
@@ -88,29 +97,6 @@ export type AgentRuntimeEventRecord = {
   createdAt: Date;
 };
 
-export type AgentRuntimeArtifactRecord = {
-  artifactId: string;
-  sessionId: string;
-  executionId: string | null;
-  kind: string;
-  name: string;
-  contentType: string;
-  sizeBytes: number;
-  preview: string;
-  redacted: boolean;
-  expiresAt: Date | null;
-  metadata: Record<string, unknown>;
-  createdAt: Date;
-};
-
-export type AgentRuntimeArtifactContent = AgentRuntimeArtifactRecord & {
-  content: string;
-};
-
-export type AgentRuntimeBinaryArtifactContent = AgentRuntimeArtifactRecord & {
-  data: Buffer;
-};
-
 export type AgentRuntimeSandboxLeaseRecord = {
   sandboxId: string;
   repo: string;
@@ -125,7 +111,11 @@ export type AgentRuntimeSandboxLeaseRecord = {
 };
 
 export class AgentRuntimeRepository {
-  constructor(private readonly pool: DbPool) {}
+  private readonly artifacts: AgentRuntimeArtifactRepository;
+
+  constructor(private readonly pool: DbPool) {
+    this.artifacts = new AgentRuntimeArtifactRepository(pool, (input) => this.recordEvent(input));
+  }
 
   async getSession(input: { sessionId?: string | null; threadKey?: string | null }): Promise<AgentRuntimeSessionRecord | undefined> {
     const result = await this.pool.query(
@@ -516,194 +506,32 @@ export class AgentRuntimeRepository {
     return result.rows.map(rowToAgentRuntimeEvent);
   }
 
-  async storeArtifact(input: {
-    sessionId: string;
-    executionId?: string | null;
-    kind: string;
-    name: string;
-    content: string;
-    contentType?: string | null;
-    metadata?: Record<string, unknown>;
-    expiresAt?: Date | null;
-  }): Promise<AgentRuntimeArtifactRecord> {
-    const redacted = redactSensitiveText(input.content);
-    const content = redacted.text;
-    const sizeBytes = Buffer.byteLength(content, "utf8");
-    const expiresAt = input.expiresAt ?? defaultArtifactExpiresAt(sizeBytes);
-    const artifactId = `artifact-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    const chunks = chunkString(content, ARTIFACT_CHUNK_CHARS);
-    const result = await this.pool.query(
-      `
-        INSERT INTO agent_runtime_artifacts(
-          artifact_id, session_id, execution_id, kind, name, content_type,
-          size_bytes, preview, redacted, expires_at, metadata
-        )
-        VALUES ($1, $2, $3, $4, $5, coalesce($6, 'text/plain'), $7, $8, true, $9, $10::jsonb)
-        RETURNING *
-      `,
-      [
-        artifactId,
-        input.sessionId,
-        input.executionId ?? null,
-        input.kind,
-        input.name,
-        input.contentType ?? null,
-        sizeBytes,
-        content.slice(0, 2000),
-        expiresAt,
-        JSON.stringify({
-          ...(input.metadata ?? {}),
-          redactionCount: redacted.redactionCount,
-          redactionKinds: redacted.redactionKinds,
-          retention: expiresAt ? { reason: "large_artifact", days: LARGE_ARTIFACT_RETENTION_DAYS } : null
-        })
-      ]
-    );
-    if (chunks.length > 0) {
-      await this.pool.query(
-        `
-          INSERT INTO agent_runtime_artifact_chunks(artifact_id, chunk_index, content)
-          SELECT $1, item.index, item.content
-          FROM jsonb_to_recordset($2::jsonb) AS item(index integer, content text)
-        `,
-        [artifactId, JSON.stringify(chunks.map((contentChunk, index) => ({ index, content: contentChunk })))]
-      );
-    }
-    await this.recordEvent({
-      sessionId: input.sessionId,
-      executionId: input.executionId,
-      kind: "artifact",
-      eventName: "codegen.artifact",
-      summary: `Stored artifact ${input.name}.`,
-      metadata: { artifactId, kind: input.kind, sizeBytes }
-    }).catch(() => undefined);
-    return rowToAgentRuntimeArtifact(result.rows[0]);
+  storeArtifact(input: StoreAgentRuntimeArtifactInput): Promise<AgentRuntimeArtifactRecord> {
+    return this.artifacts.storeArtifact(input);
   }
 
-  async storeBinaryArtifact(input: {
-    sessionId: string;
-    executionId?: string | null;
-    kind: string;
-    name: string;
-    data: Buffer;
-    contentType?: string | null;
-    metadata?: Record<string, unknown>;
-    expiresAt?: Date | null;
-  }): Promise<AgentRuntimeArtifactRecord> {
-    const sizeBytes = input.data.length;
-    const expiresAt = input.expiresAt ?? defaultArtifactExpiresAt(sizeBytes);
-    const artifactId = `artifact-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    const sha256 = createHash("sha256").update(input.data).digest("hex");
-    const client = await this.pool.connect();
-    let row: unknown;
-    try {
-      await client.query("BEGIN");
-      const result = await client.query(
-        `
-          INSERT INTO agent_runtime_artifacts(
-            artifact_id, session_id, execution_id, kind, name, content_type,
-            size_bytes, preview, redacted, expires_at, metadata
-          )
-          VALUES ($1, $2, $3, $4, $5, coalesce($6, 'application/octet-stream'), $7, $8, false, $9, $10::jsonb)
-          RETURNING *
-        `,
-        [
-          artifactId,
-          input.sessionId,
-          input.executionId ?? null,
-          input.kind,
-          input.name,
-          input.contentType ?? null,
-          sizeBytes,
-          `[binary artifact: ${sizeBytes} bytes]`,
-          expiresAt,
-          JSON.stringify({
-            ...(input.metadata ?? {}),
-            sha256,
-            binary: true,
-            retention: expiresAt ? { reason: "large_artifact", days: LARGE_ARTIFACT_RETENTION_DAYS } : null,
-          }),
-        ],
-      );
-      await client.query("INSERT INTO agent_runtime_artifact_blobs(artifact_id, content) VALUES ($1, $2)", [artifactId, input.data]);
-      await client.query("COMMIT");
-      row = result.rows[0];
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
-    await this.recordEvent({
-      sessionId: input.sessionId,
-      executionId: input.executionId,
-      kind: "artifact",
-      eventName: "codegen.artifact",
-      summary: `Stored binary artifact ${input.name}.`,
-      metadata: { artifactId, kind: input.kind, sizeBytes, sha256, binary: true },
-    }).catch(() => undefined);
-    return rowToAgentRuntimeArtifact(row);
+  storeBinaryArtifact(input: StoreAgentRuntimeBinaryArtifactInput): Promise<AgentRuntimeArtifactRecord> {
+    return this.artifacts.storeBinaryArtifact(input);
   }
 
-  async getBinaryArtifact(input: { artifactId: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
-    const result = await this.pool.query(
-      `
-        SELECT artifact.*, blob.content
-        FROM agent_runtime_artifacts artifact
-        JOIN agent_runtime_artifact_blobs blob USING (artifact_id)
-        WHERE artifact.artifact_id = $1
-          AND (artifact.expires_at IS NULL OR artifact.expires_at > now())
-      `,
-      [input.artifactId],
-    );
-    const row = result.rows[0];
-    if (!row) return undefined;
-    return { ...rowToAgentRuntimeArtifact(row), data: Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content) };
+  getBinaryArtifact(input: { artifactId: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
+    return this.artifacts.getBinaryArtifact(input);
   }
 
-  async getArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> {
-    const [artifact, chunks] = await Promise.all([
-      this.pool.query("SELECT * FROM agent_runtime_artifacts WHERE artifact_id = $1", [input.artifactId]),
-      this.pool.query("SELECT content FROM agent_runtime_artifact_chunks WHERE artifact_id = $1 ORDER BY chunk_index ASC", [input.artifactId])
-    ]);
-    if (!artifact.rows[0]) return undefined;
-    return {
-      ...rowToAgentRuntimeArtifact(artifact.rows[0]),
-      content: chunks.rows.map((row) => String(row.content ?? "")).join("")
-    };
+  getArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> {
+    return this.artifacts.getArtifact(input);
   }
 
-  async getLatestArtifactContentForExecution(input: { executionId: string; kind: string }): Promise<AgentRuntimeArtifactContent | undefined> {
-    const result = await this.pool.query(
-      `SELECT artifact_id FROM agent_runtime_artifacts WHERE execution_id = $1 AND kind = $2 AND (expires_at IS NULL OR expires_at > now()) ORDER BY created_at DESC, artifact_id DESC LIMIT 1`,
-      [input.executionId, input.kind]
-    );
-    const artifactId = result.rows[0]?.artifact_id;
-    return artifactId ? this.getArtifact({ artifactId: String(artifactId) }) : undefined;
+  getLatestArtifactContentForExecution(input: { executionId: string; kind: string }): Promise<AgentRuntimeArtifactContent | undefined> {
+    return this.artifacts.getLatestArtifactContentForExecution(input);
   }
 
-  async getLatestResponseText(input: { executionId: string }): Promise<string | undefined> {
-    const artifact = await this.getLatestArtifactContentForExecution({ executionId: input.executionId, kind: "response" });
-    return artifact?.content;
+  getLatestResponseText(input: { executionId: string }): Promise<string | undefined> {
+    return this.artifacts.getLatestResponseText(input);
   }
 
-  async cleanupExpiredArtifacts(limit = 500): Promise<number> {
-    const result = await this.pool.query(
-      `
-        WITH expired AS (
-          SELECT artifact_id
-          FROM agent_runtime_artifacts
-          WHERE expires_at IS NOT NULL
-            AND expires_at <= now()
-          ORDER BY expires_at ASC, artifact_id ASC
-          LIMIT $1
-        )
-        DELETE FROM agent_runtime_artifacts
-        WHERE artifact_id IN (SELECT artifact_id FROM expired)
-      `,
-      [Math.max(1, Math.min(5000, Math.trunc(limit)))]
-    );
-    return result.rowCount ?? 0;
+  cleanupExpiredArtifacts(limit = 500): Promise<number> {
+    return this.artifacts.cleanupExpiredArtifacts(limit);
   }
 
   async upsertSandboxLease(input: {
@@ -933,23 +761,6 @@ function rowToAgentRuntimeEvent(row: any): AgentRuntimeEventRecord {
   };
 }
 
-function rowToAgentRuntimeArtifact(row: any): AgentRuntimeArtifactRecord {
-  return {
-    artifactId: String(row.artifact_id),
-    sessionId: String(row.session_id),
-    executionId: row.execution_id == null ? null : String(row.execution_id),
-    kind: String(row.kind),
-    name: String(row.name),
-    contentType: String(row.content_type ?? "text/plain"),
-    sizeBytes: Number(row.size_bytes ?? 0),
-    preview: String(row.preview ?? ""),
-    redacted: Boolean(row.redacted),
-    expiresAt: row.expires_at == null ? null : new Date(row.expires_at),
-    metadata: jsonObject(row.metadata),
-    createdAt: new Date(row.created_at)
-  };
-}
-
 function rowToAgentRuntimeSandboxLease(row: any): AgentRuntimeSandboxLeaseRecord {
   return {
     sandboxId: String(row.sandbox_id),
@@ -967,20 +778,6 @@ function rowToAgentRuntimeSandboxLease(row: any): AgentRuntimeSandboxLeaseRecord
 
 function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function chunkString(value: string, size: number) {
-  if (!value) return [];
-  const chunks: string[] = [];
-  for (let index = 0; index < value.length; index += size) {
-    chunks.push(value.slice(index, index + size));
-  }
-  return chunks;
-}
-
-function defaultArtifactExpiresAt(sizeBytes: number) {
-  if (sizeBytes <= LARGE_ARTIFACT_BYTES) return null;
-  return new Date(Date.now() + LARGE_ARTIFACT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 }
 
 export function agentRuntimeSessionId(threadKey: string) {

@@ -3,6 +3,7 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const spotifyPart1ToolContracts = [
   defineTool({
     name: "getSpotifyPlaylistTracks",
+    examples: ["@ai list all the tracks in this Spotify playlist: https://open.spotify.com/playlist/abc123"],
     description:
       "Fetch a Spotify playlist's track list with Spotify's Web API, using current playlist item pagination and attaching the full list as CSV and text by default when available. Use this for Spotify playlist URLs/URIs or playlist IDs, especially when the user asks for every track. The result also exposes a queryable generated table for exact follow-up counts, filters, and rankings. Do not use web_fetch on open.spotify.com for playlist track lists. If Spotify denies playlist item access, return the limitation clearly instead of guessing.",
     userVisible: true,
@@ -35,6 +36,7 @@ export const spotifyPart1ToolContracts = [
 
   defineTool({
     name: "getSpotifyAlbumTracks",
+    examples: ["@ai list the tracks on this Spotify album: https://open.spotify.com/album/abc123"],
     description:
       "Fetch a Spotify album's ordered track list with Spotify's Web API and attach the full list as CSV and text by default when available. Use this for Spotify album URLs/URIs or album IDs when the user asks what tracks are on an album, wants album duration, or wants an album tracklist. The result also exposes a queryable generated table for exact follow-up counts, filters, and rankings.",
     userVisible: true,
@@ -67,6 +69,7 @@ export const spotifyPart1ToolContracts = [
 
   defineTool({
     name: "getSpotifyArtistDiscography",
+    examples: ["@ai show me this artist's Spotify discography: https://open.spotify.com/artist/abc123"],
     description:
       "Fetch a Spotify artist's public discography: albums, singles, compilations, and appearances. Use this for artist URLs/URIs or artist IDs when the user asks for releases, discography, albums, singles, or where to start with an artist. The result attaches the release list as CSV and text by default and exposes a queryable generated table.",
     userVisible: true,
@@ -104,6 +107,7 @@ export const spotifyPart1ToolContracts = [
 
   defineTool({
     name: "getSpotifyPlaylistStats",
+    examples: ["@ai give me fun stats for this Spotify playlist: https://open.spotify.com/playlist/abc123"],
     description:
       "Compute deterministic, fun stats from a Spotify playlist track list: total duration, explicit count, local/unavailable count, top artists, top albums, unique artists, and repeated artists. Use this for quick rating or summarizing a playlist without using deprecated audio features or recommendations. For custom filters/rankings over the full playlist rows, export a CSV with getSpotifyPlaylistTracks and query it with queryGeneratedCsv.",
     userVisible: true,
@@ -131,6 +135,7 @@ export const spotifyPart1ToolContracts = [
 
   defineTool({
     name: "compareSpotifyPlaylists",
+    examples: ["@ai compare these two Spotify playlists: https://open.spotify.com/playlist/abc123 and https://open.spotify.com/playlist/def456"],
     description:
       "Compare two Spotify playlists using public playlist item metadata: shared tracks, shared artists, unique tracks, and a track-overlap score. Use this when the user asks how similar two playlists are, what overlaps, or what one playlist has that the other does not.",
     userVisible: true,

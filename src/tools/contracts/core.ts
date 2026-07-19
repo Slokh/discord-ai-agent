@@ -3,6 +3,9 @@ import { defineTool, TOOL_GROUPS, type ToolRegistryEntry } from "../toolDefiniti
 export const coreToolContracts = [
   defineTool({
     name: "listTools",
+    category: "ops",
+    toolClass: "ops",
+    examples: ["@ai tools"],
     description: "List Discord AI Agent's available local and hosted tools.",
     userVisible: true,
     mutates: false,
@@ -16,6 +19,7 @@ export const coreToolContracts = [
 
   defineTool({
     name: "requestAdditionalTools",
+    examples: ["@ai I need another capability"],
     description:
       "Escalation valve: request additional tool groups when the current scoped tools are insufficient, including presentation for useful native Discord UI. Use this instead of guessing when a needed capability is missing.",
     userVisible: false,

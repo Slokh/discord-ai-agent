@@ -6,6 +6,8 @@ The bot should stay model-led: users write normal `@ai ...` prompts, the model c
 
 Every model-facing tool has a class in a focused module under `src/tools/contracts/`. `src/tools/registry.ts` aggregates and indexes those definitions; the class and output contract are injected into the function description sent to the model.
 
+Each family definition explicitly owns the tool's category, class, group, schema, examples, and any specialized permissions, audit events, or output promise. `defineTool` materializes generic class-level output and policy defaults into a complete `ToolRegistryEntry`; the registry must never reconstruct metadata from a tool-name switch or map.
+
 | Class | Purpose |
 | --- | --- |
 | `resolver` | Resolve names, channels, mentions, or IDs before another tool uses structured filters. |

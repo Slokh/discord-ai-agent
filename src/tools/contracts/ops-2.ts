@@ -3,6 +3,9 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const opsPart2ToolContracts = [
   defineTool({
     name: "reportStatus",
+    category: "ops",
+    toolClass: "ops",
+    examples: ["@ai status"],
     description: "Report local database, crawl, and tool status.",
     userVisible: true,
     mutates: false,
@@ -16,6 +19,7 @@ export const opsPart2ToolContracts = [
 
   defineTool({
     name: "setUserTurnLimit",
+    examples: ["@ai limit tyler to 5 posts per day"],
     description:
       "Set, clear, or list per-user daily AI turn limits. Use this when the requester asks to limit, throttle, rate-limit, or unlimit how many times a specific user can use the AI per day, or to review the current limits. A set limit overrides the global default and is enforced at Discord ingress before any model call, counted across all channels, and resets at midnight UTC. turnsPerDay accepts a positive daily cap (like 5), 0 to reject every turn, or -1 for unlimited. Pass the target's Discord user ID or mention; use findDiscordUsers to resolve a name to an ID first. Restricted to the bot owner or ops allowlist.",
     userVisible: true,

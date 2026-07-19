@@ -3,6 +3,9 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 export const opsPart1ToolContracts = [
   defineTool({
     name: "createSkillDraft",
+    category: "memory",
+    toolClass: "memory",
+    examples: ["@ai learn this for next time: movie night is on Fridays"],
     description:
       "Create or update a private database-backed Markdown skill. Use only when the user explicitly asks the agent to learn, remember, save, or update durable behavior/knowledge for next time.",
     userVisible: true,
@@ -27,6 +30,9 @@ export const opsPart1ToolContracts = [
 
   defineTool({
     name: "manageSkills",
+    category: "memory",
+    toolClass: "memory",
+    examples: ["@ai what are all your skills?"],
     description:
       "List the complete skill inventory, resolve a skill's exact name, or enable, disable, or delete private database-backed skills. Always use action=list instead of inferring the full inventory from prompt context. For content changes, list/resolve the skill first, then call createSkillDraft with its exact name.",
     userVisible: true,
@@ -47,6 +53,8 @@ export const opsPart1ToolContracts = [
 
   defineTool({
     name: "getDeploymentStatus",
+    toolClass: "ops",
+    examples: ["@ai deployment status"],
     description:
       "Report the running deployment revision, uptime, database health, active or stale code-update tasks, agent task metrics, and recent tasks. Use after deploys or when users ask whether the deployed bot is healthy or whether codegen is stuck.",
     userVisible: true,
@@ -62,6 +70,8 @@ export const opsPart1ToolContracts = [
 
   defineTool({
     name: "getSpendSummary",
+    toolClass: "ops",
+    examples: ["@ai how much have we spent today?"],
     description:
       "Report estimated model/tool spend for this Discord guild from tool audit logs. Use when ops users ask how much the bot has spent today or this month, or which tools/users drove spend.",
     userVisible: true,
@@ -81,6 +91,7 @@ export const opsPart1ToolContracts = [
 
   defineTool({
     name: "inspectAgentLogs",
+    toolClass: "ops",
     description:
       "Inspect Discord AI Agent's own normalized run diagnostics, model rounds, prompt composition, critical path, trace events, task events, terminal command events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. When the user is replying to the run or bot response, omit traceId to resolve the reply chain automatically. Use detail=model_io only when the user explicitly asks to inspect the exact model input, output, or prompt; returned excerpts are permission-filtered, secret-redacted, and bounded.",
     userVisible: true,

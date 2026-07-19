@@ -1,6 +1,6 @@
 import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const discordRetrievalPart3ToolContracts = [
+export const discordStatsSummaryToolContracts = [
   defineTool({
     name: "getDiscordStats",
     category: "discord",

@@ -5,15 +5,14 @@ import {
   explicitChannelMentionIds,
   explicitRoleMentionIds,
   explicitUserMentionIds,
-  handleUndoCrossReaction,
   hasExplicitBotAddress,
   hasExplicitBotMention,
   isSelfMessage,
-  persistReactionMessage,
   resolveBotMentionContext,
   shouldProcessGuildEvent,
   stripBotAddress
-} from "../../src/discord/client.js";
+} from "../../src/discord/mentionParsing.js";
+import { handleUndoCrossReaction, persistReactionMessage } from "../../src/discord/reactions.js";
 
 describe("isSelfMessage", () => {
   it("detects messages authored by the current bot user", () => {

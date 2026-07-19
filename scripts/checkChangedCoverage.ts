@@ -1,16 +1,17 @@
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { isTypeOnlyTypescriptSource } from "./coverageSource.js";
 
 const reportPath = path.resolve(process.argv[2] ?? "coverage/coverage-final.json");
-const minimum = Number(process.env.CHANGED_FILE_COVERAGE_MIN ?? 50);
+const minimum = Number(process.env.CHANGED_FILE_COVERAGE_MIN ?? 60);
 const enforcedPrefixes = ["src/agent/", "src/config/", "src/memory/", "src/models/", "src/observability/", "src/tools/"];
 const dbBackedCoverageFiles = new Set(["src/observability/dataRetention.ts"]);
 const report = JSON.parse(await readFile(reportPath, "utf8")) as Record<string, { s: Record<string, number> }>;
 const base = process.env.COVERAGE_BASE_REF ?? "origin/main";
 const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", `${base}...HEAD`, "--", "src/**/*.ts", "src/**/*.tsx"], { encoding: "utf8" })
-  .trim().split("\n").filter((file) => enforcedPrefixes.some((prefix) => file.startsWith(prefix)) && !dbBackedCoverageFiles.has(file));
+  .trim().split("\n").filter((file) => existsSync(file) && enforcedPrefixes.some((prefix) => file.startsWith(prefix)) && !dbBackedCoverageFiles.has(file));
 const failures: string[] = [];
 const groupedCoverage = new Map<string, number[]>();
 for (const file of files) {

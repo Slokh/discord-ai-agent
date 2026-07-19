@@ -44,3 +44,31 @@ export type AgentTaskCompletionEvent = {
   error?: string | null;
   metadata?: Record<string, unknown>;
 };
+
+export type CodegenHarness = "codex" | "opencode";
+
+export type SandboxEnv = {
+  taskId: string;
+  traceId: string;
+  sandboxRunId: string;
+  taskTitle: string;
+  taskRequest: string;
+  requestedBy: string;
+  targetBranch: string | null;
+  targetPullRequestNumber: number | null;
+  targetPullRequestUrl: string | null;
+  controlPlaneInternalUrl: string;
+  taskToken: string;
+  taskSigningSecret: string;
+  githubToken: string;
+  githubRepository: string;
+  githubBaseBranch: string;
+  openRouterApiKey: string;
+  openRouterChatModel: string;
+  openRouterCodegenModel: string;
+  codegenHarness: CodegenHarness;
+  sandboxCacheDir: string;
+  sandboxStartedAtMs: number | null;
+};
+
+export type TaskTimings = Record<string, number>;

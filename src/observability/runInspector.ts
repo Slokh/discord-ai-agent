@@ -1,6 +1,6 @@
 import type { ProcessRunArtifactContent } from "../db/repositories.js";
 import { formatOpenCodeTranscriptDiagnostics, parseOpenCodeTranscript } from "./openCodeTranscript.js";
-import type { RunAgentTranscriptMessage, RunArtifactSummary, RunSnapshot, RunSpan, RunSummary, RunTerminalEntry } from "./runs.js";
+import type { RunAgentTranscriptMessage, RunArtifactSummary, RunSnapshot, RunSpan, RunSummary, RunTerminalEntry } from "./runTypes.js";
 
 export type RunInspectionOptions = {
   eventLimit?: number;

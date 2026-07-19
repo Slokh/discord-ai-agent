@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, assertExecutionConfig, assertOpenRouterConfig, assertPaymentConfig, assertTaskCallbackConfig, loadConfig } from "./config/env.js";
-import { startInternalApi } from "./control/internalApi.js";
+import { startInternalApi } from "./control/internalApiServer.js";
 import { BudgetRepository } from "./db/budgetRepository.js";
 import { RngRepository } from "./db/rngRepository.js";
 import { DeliveryObligationsRepository } from "./db/deliveryObligationsRepository.js";

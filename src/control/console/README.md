@@ -10,6 +10,9 @@ Owns the React debugging UI for runs, traces, artifacts, terminal output, and co
 - `codexTranscript.ts`: Codex app-server transcript parsing for timeline and artifact rendering.
 - `timelineText.ts`: pure timeline display names, summary suppression, and requested-tool argument formatting.
 - `timelineModel.ts`: pure timeline normalization, de-duplication, timing, and parent/child grouping.
+- `timelineCore.tsx` and `codegenTimeline.ts`: generic and codegen-specific trace projection; codegen artifact mapping stays in `codegenArtifacts.ts`.
+- `timelineView.tsx` and `transcriptViews.tsx`: timeline and transcript rendering without transport or projection ownership.
+- `paymentsDashboard.tsx`, `consolePrimitives.tsx`, and `consoleFormat.ts`: focused payment, primitive, and formatting ownership.
 - `runInbox.tsx`, `overviewView.tsx`, and `detailViews.tsx`: focused list and detail surfaces.
 - `runDashboard.tsx`, `runComparison.tsx`, and `runFeedback.tsx`: aggregate debugging, purpose-level regression comparison, and private eval capture.
 - `promptDebugger.tsx`, `criticalPath.ts`, and `modelCalls.tsx`: exact observed model inputs/outputs, prompt composition, tool rounds, token/cache/cost accounting, and bottleneck recommendations.
@@ -34,6 +37,6 @@ Owns the React debugging UI for runs, traces, artifacts, terminal output, and co
 - API data contracts: `tests/unit/internal-api-runs.test.ts`.
 - Model-call projection, critical-path analysis, comparison, and routing: `tests/unit/console-model-calls.test.ts`, `tests/unit/console-critical-path.test.ts`, `tests/unit/console-run-comparison.test.ts`, and `tests/unit/console-routing.test.ts`.
 
-## Migration Direction
+## Boundaries
 
-Keep `App.tsx` as the app shell. New implementation should move into focused components/hooks/utilities for list, overview, timeline, terminal, artifacts, jump search, and formatting.
+`App.tsx` is only the application shell and run-selection state. Projection, transcript rendering, payments, formatting, and reusable primitives stay in their focused modules.

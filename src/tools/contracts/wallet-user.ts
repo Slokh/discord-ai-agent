@@ -1,6 +1,6 @@
 import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const externalPart1ToolContracts = [
+export const walletUserToolContracts = [
   defineTool({
     name: "getWalletBalance",
     description:

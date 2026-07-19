@@ -1,6 +1,6 @@
 import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const opsPart1ToolContracts = [
+export const skillDiagnosticToolContracts = [
   defineTool({
     name: "createSkillDraft",
     category: "memory",

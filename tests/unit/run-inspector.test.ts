@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, formatSeconds, selectArtifacts } from "../../src/observability/runInspector.js";
-import type { RunSnapshot, RunSummary } from "../../src/observability/runs.js";
+import type { RunSnapshot, RunSummary } from "../../src/observability/runTypes.js";
 
 describe("run inspector formatting", () => {
   it("formats a compact debugger report for a run snapshot", () => {

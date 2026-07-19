@@ -1,29 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { redactSensitiveText } from "../observability/redaction.js";
 import type { DbPool } from "./pool.js";
+import { rowToAgentRuntimeArtifact, rowToAgentRuntimeArtifactContent } from "./runtimeMappers.js";
+import type { AgentRuntimeArtifactContent, AgentRuntimeArtifactRecord } from "./types.js";
+
+export type { AgentRuntimeArtifactContent, AgentRuntimeArtifactRecord } from "./types.js";
 
 const LARGE_ARTIFACT_BYTES = 2 * 1024 * 1024;
 const LARGE_ARTIFACT_RETENTION_DAYS = 14;
 const ARTIFACT_CHUNK_CHARS = 60_000;
-
-export type AgentRuntimeArtifactRecord = {
-  artifactId: string;
-  sessionId: string;
-  executionId: string | null;
-  kind: string;
-  name: string;
-  contentType: string;
-  sizeBytes: number;
-  preview: string;
-  redacted: boolean;
-  expiresAt: Date | null;
-  metadata: Record<string, unknown>;
-  createdAt: Date;
-};
-
-export type AgentRuntimeArtifactContent = AgentRuntimeArtifactRecord & {
-  content: string;
-};
 
 export type AgentRuntimeBinaryArtifactContent = AgentRuntimeArtifactRecord & {
   data: Buffer;
@@ -242,31 +227,6 @@ export class AgentRuntimeArtifactRepository {
     );
     return result.rowCount ?? 0;
   }
-}
-
-function rowToAgentRuntimeArtifact(row: any): AgentRuntimeArtifactRecord {
-  return {
-    artifactId: String(row.artifact_id),
-    sessionId: String(row.session_id),
-    executionId: row.execution_id == null ? null : String(row.execution_id),
-    kind: String(row.kind),
-    name: String(row.name),
-    contentType: String(row.content_type ?? "text/plain"),
-    sizeBytes: Number(row.size_bytes ?? 0),
-    preview: String(row.preview ?? ""),
-    redacted: Boolean(row.redacted),
-    expiresAt: row.expires_at == null ? null : new Date(row.expires_at),
-    metadata: jsonObject(row.metadata),
-    createdAt: new Date(row.created_at),
-  };
-}
-
-function rowToAgentRuntimeArtifactContent(row: any): AgentRuntimeArtifactContent {
-  return { ...rowToAgentRuntimeArtifact(row), content: String(row.content ?? "") };
-}
-
-function jsonObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function chunkString(value: string, size: number) {

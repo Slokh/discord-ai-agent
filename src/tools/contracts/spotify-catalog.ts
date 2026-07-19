@@ -1,6 +1,6 @@
 import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const spotifyPart2ToolContracts = [
+export const spotifyCatalogToolContracts = [
   defineTool({
     name: "searchSpotify",
     examples: ["@ai search Spotify for Running Up That Hill"],

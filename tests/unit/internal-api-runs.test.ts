@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig, type AppConfig } from "../../src/config/env.js";
-import { startInternalApi, type InternalApiRuntime } from "../../src/control/internalApi.js";
+import { startInternalApi, type InternalApiRuntime } from "../../src/control/internalApiServer.js";
 import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
 import type {
   AgentRuntimeArtifactContent,

@@ -26,23 +26,7 @@ import { validateWagerFairness } from "./wagerFairness.js";
 import { wagerRequester } from "./wagerRequesterScope.js";
 import { effectiveMaximumPayoutUsd, requestSelectsAllowedWagerAction } from "./wagerTerms.js";
 import { validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
-
-export type DrawRandomInput = {
-  kind?: string;
-  count?: number;
-  min?: number;
-  max?: number;
-  sides?: number;
-  options?: string[];
-  deckCount?: number;
-  reason?: string;
-  wager?: {
-    playerUserId?: string;
-    stakeUsd?: number;
-    maxPayoutUsd?: number;
-    game?: string;
-  };
-};
+import type { DrawRandomInput } from "./randomTypes.js";
 
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;

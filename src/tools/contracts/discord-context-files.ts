@@ -1,6 +1,6 @@
 import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const discordRetrievalPart2ToolContracts = [
+export const discordContextFileToolContracts = [
   defineTool({
     name: "getRecentDiscordMessages",
     category: "discord",

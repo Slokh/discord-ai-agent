@@ -1,6 +1,6 @@
 import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const discordActionPart2ToolContracts = [
+export const randomWagerActionToolContracts = [
   defineTool({
     name: "awaitRandomWagerAction",
     examples: ["@ai hit"],

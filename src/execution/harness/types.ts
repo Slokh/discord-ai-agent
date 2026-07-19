@@ -1,7 +1,7 @@
 import type { CodegenContextPack } from "../contextPack.js";
-import type { SandboxEnv } from "../sandboxEnv.js";
+import type { CodegenHarness, SandboxEnv } from "../types.js";
 
-export type CodegenHarness = "codex" | "opencode";
+export type { CodegenHarness } from "../types.js";
 
 export type AgentAttemptSummary = {
   attempt: number;

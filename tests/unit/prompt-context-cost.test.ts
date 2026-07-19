@@ -10,7 +10,7 @@ import {
   REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT,
   SESSION_CONTEXT_MESSAGE_LIMIT,
   sessionContextMessageLimitForReplyContext,
-} from "../../src/discord/client.js";
+} from "../../src/discord/turnPreparation.js";
 import type { ConversationMessage } from "../../src/db/repositories.js";
 import { loadConfig } from "../../src/config/env.js";
 import { toolDefinitionsForModel } from "../../src/tools/registry.js";

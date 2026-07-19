@@ -1,18 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   agentTranscriptFlowItems,
-  codegenTimelineTrace,
+  relatedRunTimelineSteps,
+} from "../../src/control/console/timelineCore.js";
+import { codegenTimelineTrace } from "../../src/control/console/codegenTimeline.js";
+import {
   compactTimelineSteps,
   enrichModelRoundToolRequests,
   groupTimelineSteps,
-  relatedRunTimelineSteps,
   summedStepDuration,
+  type TimelineStep
+} from "../../src/control/console/timelineModel.js";
+import {
   timelineStepSummaryText,
   timelineSummaryText,
   timelineTitleText,
-  timelineToolRequests,
-  type TimelineStep
-} from "../../src/control/console/App.js";
+  timelineToolRequests
+} from "../../src/control/console/timelineText.js";
 import { parseCodexTranscript } from "../../src/control/console/codexTranscript.js";
 import type { RunArtifact, RunEvent, RunSnapshot, RunSpan } from "../../src/control/console/types.js";
 import { parseOpenCodeTranscript } from "../../src/observability/openCodeTranscript.js";

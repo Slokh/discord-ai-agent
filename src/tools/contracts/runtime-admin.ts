@@ -1,6 +1,6 @@
 import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const opsPart2ToolContracts = [
+export const runtimeAdminToolContracts = [
   defineTool({
     name: "reportStatus",
     category: "ops",

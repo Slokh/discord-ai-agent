@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../../src/observability/redaction.js";
-import { diagnosticsForRun, extractDiscordMessageId, getRunSnapshot, relatedRunSummaries, summaryFromTask } from "../../src/observability/runs.js";
+import { diagnosticsForRun, extractDiscordMessageId, getRunSnapshot, relatedRunSummaries } from "../../src/observability/runs.js";
+import { summaryFromTask } from "../../src/observability/runRecordMappers.js";
 import type { AgentTaskRecord, DiscordAiAgentRepository, ProcessRunRecord } from "../../src/db/repositories.js";
-import type { RunEvent, RunSummary } from "../../src/observability/runs.js";
+import type { RunEvent, RunSummary } from "../../src/observability/runTypes.js";
 
 describe("observability redaction", () => {
   it("redacts common secret shapes before artifact persistence", () => {

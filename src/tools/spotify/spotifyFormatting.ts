@@ -17,7 +17,7 @@ import type {
   SpotifySearchType,
   SpotifyShow,
   SpotifyTrack
-} from "./spotifyTools.js";
+} from "./spotifyTypes.js";
 
 export function formatSearchResults(
   query: string,

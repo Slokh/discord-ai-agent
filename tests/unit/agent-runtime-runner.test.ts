@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAgentRuntimeRunner } from "../../src/agent/runtimeRunner.js";
 import { loadConfig } from "../../src/config/env.js";
-import { runQueuedAgentRuntimeExecution } from "../../src/discord/client.js";
+import { runQueuedAgentRuntimeExecution } from "../../src/discord/agentDelivery.js";
 
-vi.mock("../../src/discord/client.js", () => ({
+vi.mock("../../src/discord/agentDelivery.js", () => ({
   runQueuedAgentRuntimeExecution: vi.fn(async () => undefined)
 }));
 

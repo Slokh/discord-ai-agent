@@ -1,4 +1,4 @@
-import type { RunSummary } from "./runs.js";
+import type { RunSummary } from "./runTypes.js";
 
 export type RunCount = {
   name: string;

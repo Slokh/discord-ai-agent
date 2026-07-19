@@ -1,6 +1,6 @@
 import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const discordActionPart1ToolContracts = [
+export const discordActionToolContracts = [
   defineTool({
     name: "undoConversationTurns",
     category: "discord",

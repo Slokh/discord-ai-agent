@@ -1,4 +1,4 @@
-type CodegenHarness = "codex" | "opencode";
+import type { CodegenHarness } from "./types.js";
 export type CodegenAttemptSummaryForDiagnosis = {
   attempt: number;
   command: "app-server" | "exec" | "resume" | "opencode-run";

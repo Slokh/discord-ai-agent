@@ -259,25 +259,3 @@ export function createDiscordAiAgentBot(input: {
     }
   };
 }
-
-// Compatibility re-exports: prefer importing from the focused modules directly.
-export {
-  deletedMessageIdsForConfiguredGuild,
-  discordChannelThreadKey,
-  explicitChannelMentionIds,
-  explicitRoleMentionIds,
-  explicitUserMentionIds,
-  hasExplicitBotAddress,
-  hasExplicitBotMention,
-  isSelfMessage,
-  resolveBotMentionContext,
-  shouldProcessGuildEvent,
-  stripBotAddress
-} from "./mentionParsing.js";
-export {
-  REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT,
-  SESSION_CONTEXT_MESSAGE_LIMIT,
-  sessionContextMessageLimitForReplyContext
-} from "./turnPreparation.js";
-export { runQueuedAgentRuntimeExecution } from "./agentDelivery.js";
-export { handleUndoCrossReaction, persistReactionMessage } from "./reactions.js";

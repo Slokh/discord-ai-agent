@@ -5,7 +5,7 @@ import type { BudgetRepository } from "../db/budgetRepository.js";
 import type { RngRepository } from "../db/rngRepository.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
-import { runQueuedAgentRuntimeExecution } from "../discord/client.js";
+import { runQueuedAgentRuntimeExecution } from "../discord/agentDelivery.js";
 import type { AgentRuntimeExecutionRunner } from "../jobs/queue.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
 import { InProcessAgentRuntimePromptExecutor } from "./runtimeExecutor.js";

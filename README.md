@@ -239,6 +239,7 @@ Common optional settings:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
+| `DISCORD_PREMIUM_SKU_IDS` | unset | Comma-separated Discord application SKU snowflakes exposed to the agent for premium Components V2 buttons; all other SKU values fail closed |
 | `OPENROUTER_CHAT_MODEL` | `z-ai/glm-5.2` | Main agent model |
 | `OPENROUTER_UTILITY_MODEL` | main agent model | Lower-cost utility model and one-shot fallback for a primary timeout before any tool executes; production Helm defaults to `openai/gpt-4o-mini` |
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |

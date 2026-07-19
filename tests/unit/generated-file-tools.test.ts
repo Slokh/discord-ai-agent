@@ -1,8 +1,38 @@
 import { describe, expect, it, vi } from "vitest";
 import { queryGeneratedCsv, queryGeneratedTable, readGeneratedFile } from "../../src/tools/generatedFileTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
+import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";
 
 function fakeContext(): ToolContext {
+  const turnOutput = createAgentTurnOutput();
+  turnOutput.files.push(
+    {
+      name: "playlist.csv",
+      contentType: "text/csv",
+      data: Buffer.from(
+        [
+          '"position","track","artists","album","duration","explicit","local","added_at","spotify_url"',
+          '"1","Old Song","Old Artist","Old Album","3:00","false","false","2024-01-01","https://example.test/old"',
+          '"2","New Song","Radiohead, Thom Yorke","Kid A","4:00","false","false","2025-08-01","https://example.test/new"',
+          '"3","Another New Song","Radiohead","Kid A","5:00","false","false","2025-09-01","https://example.test/new2"',
+          '"4","Other New Song","Kate Bush","Hounds of Love","3:30","false","false","2025-10-01","https://example.test/new3"'
+        ].join("\n"),
+        "utf8"
+      )
+    },
+    { name: "notes.txt", contentType: "text/plain", data: Buffer.from("hello generated file", "utf8") },
+  );
+  turnOutput.tables.push({
+    name: "playlist",
+    sourceFileName: "playlist.csv",
+    columns: ["position", "track", "artists", "album", "duration", "explicit", "local", "added_at", "spotify_url"],
+    rows: [
+      { position: 1, track: "Old Song", artists: "Old Artist", album: "Old Album", duration: "3:00", explicit: false, local: false, added_at: "2024-01-01", spotify_url: "https://example.test/old" },
+      { position: 2, track: "New Song", artists: "Radiohead, Thom Yorke", album: "Kid A", duration: "4:00", explicit: false, local: false, added_at: "2025-08-01", spotify_url: "https://example.test/new" },
+      { position: 3, track: "Another New Song", artists: "Radiohead", album: "Kid A", duration: "5:00", explicit: false, local: false, added_at: "2025-09-01", spotify_url: "https://example.test/new2" },
+      { position: 4, track: "Other New Song", artists: "Kate Bush", album: "Hounds of Love", duration: "3:30", explicit: false, local: false, added_at: "2025-10-01", spotify_url: "https://example.test/new3" },
+    ],
+  });
   return {
     config: { maxReplyChars: 1800 } as unknown as ToolContext["config"],
     repo: { auditTool: vi.fn(async () => undefined) } as unknown as ToolContext["repo"],
@@ -11,80 +41,7 @@ function fakeContext(): ToolContext {
     userId: "user",
     userDisplayName: "User",
     visibleChannelIds: [],
-    generatedFiles: [
-      {
-        name: "playlist.csv",
-        contentType: "text/csv",
-        data: Buffer.from(
-          [
-            '"position","track","artists","album","duration","explicit","local","added_at","spotify_url"',
-            '"1","Old Song","Old Artist","Old Album","3:00","false","false","2024-01-01","https://example.test/old"',
-            '"2","New Song","Radiohead, Thom Yorke","Kid A","4:00","false","false","2025-08-01","https://example.test/new"',
-            '"3","Another New Song","Radiohead","Kid A","5:00","false","false","2025-09-01","https://example.test/new2"',
-            '"4","Other New Song","Kate Bush","Hounds of Love","3:30","false","false","2025-10-01","https://example.test/new3"'
-          ].join("\n"),
-          "utf8"
-        )
-      },
-      {
-        name: "notes.txt",
-        contentType: "text/plain",
-        data: Buffer.from("hello generated file", "utf8")
-      }
-    ],
-    generatedTables: [
-      {
-        name: "playlist",
-        sourceFileName: "playlist.csv",
-        columns: ["position", "track", "artists", "album", "duration", "explicit", "local", "added_at", "spotify_url"],
-        rows: [
-          {
-            position: 1,
-            track: "Old Song",
-            artists: "Old Artist",
-            album: "Old Album",
-            duration: "3:00",
-            explicit: false,
-            local: false,
-            added_at: "2024-01-01",
-            spotify_url: "https://example.test/old"
-          },
-          {
-            position: 2,
-            track: "New Song",
-            artists: "Radiohead, Thom Yorke",
-            album: "Kid A",
-            duration: "4:00",
-            explicit: false,
-            local: false,
-            added_at: "2025-08-01",
-            spotify_url: "https://example.test/new"
-          },
-          {
-            position: 3,
-            track: "Another New Song",
-            artists: "Radiohead",
-            album: "Kid A",
-            duration: "5:00",
-            explicit: false,
-            local: false,
-            added_at: "2025-09-01",
-            spotify_url: "https://example.test/new2"
-          },
-          {
-            position: 4,
-            track: "Other New Song",
-            artists: "Kate Bush",
-            album: "Hounds of Love",
-            duration: "3:30",
-            explicit: false,
-            local: false,
-            added_at: "2025-10-01",
-            spotify_url: "https://example.test/new3"
-          }
-        ]
-      }
-    ]
+    turnOutput,
   } as unknown as ToolContext;
 }
 
@@ -172,14 +129,14 @@ describe("generated file tools", () => {
 
   it("points CSV queries at generated tables when no CSV file exists", async () => {
     const ctx = fakeContext();
-    ctx.generatedFiles = [
-      ...(ctx.generatedFiles?.filter((file) => file.name === "notes.txt") ?? []),
+    ctx.turnOutput!.files.splice(0, ctx.turnOutput!.files.length,
+      ...ctx.turnOutput!.files.filter((file) => file.name === "notes.txt"),
       {
         name: "summary.txt",
         contentType: "text/plain",
         data: Buffer.from("another generated text file", "utf8")
-      }
-    ];
+      },
+    );
 
     const result = await queryGeneratedCsv(ctx, { operation: "profile" });
 

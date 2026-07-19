@@ -1,6 +1,7 @@
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { ConversationMessage } from "../db/repositories.js";
 import type { DiscordAttachmentContext, DiscordReplyContext } from "../tools/types.js";
+import type { DiscordInteractionSubmission } from "../discord/components/interactionNormalization.js";
 
 export type AgentRuntimeConversationMessageSnapshot = {
   id: number;
@@ -16,9 +17,11 @@ export type AgentRuntimeConversationMessageSnapshot = {
 };
 
 export type AgentRuntimeTurnEnvelope = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   source: "discord";
+  requestKind?: "message" | "component" | "modal";
   requestId: string;
+  sourceMessageId?: string;
   threadKey: string;
   guildId: string;
   channelId: string;
@@ -40,11 +43,14 @@ export type AgentRuntimeTurnEnvelope = {
     statusChannelId: string | null;
     statusMessageId: string | null;
   };
+  interaction?: DiscordInteractionSubmission | null;
   createdAt: string;
 };
 
 export function buildAgentRuntimeTurnEnvelope(input: {
   requestId: string;
+  requestKind?: "message" | "component" | "modal";
+  sourceMessageId?: string;
   threadKey: string;
   guildId: string;
   channelId: string;
@@ -65,11 +71,14 @@ export function buildAgentRuntimeTurnEnvelope(input: {
   statusChannelId?: string | null;
   statusMessageId?: string | null;
   createdAt?: Date;
+  interaction?: AgentRuntimeTurnEnvelope["interaction"];
 }): AgentRuntimeTurnEnvelope {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: "discord",
+    requestKind: input.requestKind ?? "message",
     requestId: input.requestId,
+    sourceMessageId: input.sourceMessageId ?? input.requestId,
     threadKey: input.threadKey,
     guildId: input.guildId,
     channelId: input.channelId,
@@ -91,17 +100,18 @@ export function buildAgentRuntimeTurnEnvelope(input: {
       statusChannelId: input.statusChannelId ?? null,
       statusMessageId: input.statusMessageId ?? null
     },
+    interaction: input.interaction ?? null,
     createdAt: (input.createdAt ?? new Date()).toISOString()
   };
 }
 
 export function assertAgentRuntimeTurnEnvelopeScope(
   envelope: AgentRuntimeTurnEnvelope,
-  request: { requestId: string; messageId: string; guildId: string | null; channelId: string; userId: string }
+  request: { requestId: string; sourceMessageId?: string; messageId?: string; guildId: string | null; channelId: string; userId: string }
 ): void {
   const mismatches: string[] = [];
   if (envelope.requestId !== request.requestId) mismatches.push("requestId");
-  if (envelope.requestId !== request.messageId) mismatches.push("messageId");
+  if ((envelope.sourceMessageId ?? envelope.requestId) !== (request.sourceMessageId ?? request.messageId)) mismatches.push("sourceMessageId");
   if (envelope.guildId !== request.guildId) mismatches.push("guildId");
   if (envelope.channelId !== request.channelId) mismatches.push("channelId");
   if (envelope.userId !== request.userId) mismatches.push("userId");
@@ -162,7 +172,7 @@ export async function loadAgentRuntimeTurnEnvelope(input: {
   const artifact = await input.agentRuntime.getArtifact({ artifactId: input.artifactId });
   if (!artifact?.content) return null;
   const parsed = JSON.parse(artifact.content) as AgentRuntimeTurnEnvelope;
-  if (parsed.schemaVersion !== 1 || parsed.source !== "discord") {
+  if ((parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) || parsed.source !== "discord") {
     throw new Error(`Unsupported agent runtime turn envelope artifact: ${input.artifactId}`);
   }
   return parsed;
@@ -204,7 +214,7 @@ type AgentRuntimeUserInputLine = {
 };
 
 export function agentRuntimeInputLinesFromEnvelope(envelope: AgentRuntimeTurnEnvelope): string[] {
-  const content: AgentRuntimeInputContentBlock[] = [{ type: "text", text: envelope.text }];
+  const content: AgentRuntimeInputContentBlock[] = [{ type: "text", text: agentRuntimeTurnInputText(envelope) }];
   for (const attachment of envelope.requestAttachments) {
     if (!isImageAttachment(attachment)) continue;
     content.push({
@@ -247,6 +257,21 @@ export function agentRuntimeInputLinesFromEnvelope(envelope: AgentRuntimeTurnEnv
     }
   };
   return [JSON.stringify(line)];
+}
+
+export function agentRuntimeTurnInputText(input: Pick<AgentRuntimeTurnEnvelope, "text" | "interaction">): string {
+  if (!input.interaction) return input.text;
+  const submitted = {
+    schemaVersion: input.interaction.schemaVersion,
+    component: input.interaction.component,
+    ...(input.interaction.fields?.length ? { fields: input.interaction.fields } : {}),
+  };
+  return [
+    "[Model-authored Discord component action]",
+    input.text,
+    "[Current user-submitted Discord interaction data]",
+    JSON.stringify(submitted),
+  ].join("\n");
 }
 
 export function promptTextFromAgentRuntimeInputLines(inputLines: string[] | undefined): string | null {

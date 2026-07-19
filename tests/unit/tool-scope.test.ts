@@ -39,6 +39,29 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "createDiscordPoll")).toBe(false);
   });
 
+  it("preloads rich presentation schemas for explicit native-UI requests", () => {
+    const config = loadConfig();
+    const ordinary = scopedToolset({ config, groups: selectToolGroups({ text: "hello there", hasImageAttachments: false, config }) });
+    const rich = scopedToolset({ config, groups: selectToolGroups({ text: "show these as interactive buttons", hasImageAttachments: false, config }) });
+
+    expect(ordinary.localTools.some((tool) => tool.name === "composeDiscordResponse")).toBe(false);
+    expect(rich.localTools.some((tool) => tool.name === "composeDiscordResponse")).toBe(true);
+  });
+
+  it("scopes premium component variants to deployment capabilities", () => {
+    withEnv({ DISCORD_PREMIUM_SKU_IDS: "" }, () => {
+      const tool = scopedToolset({ config: loadConfig(), groups: new Set(["presentation"]) }).localTools.find((candidate) => candidate.name === "composeDiscordResponse")!;
+      expect(JSON.stringify(tool.parameters)).not.toContain('"premium"');
+      expect(tool.description).toContain("available in this deployment: none");
+    });
+    withEnv({ DISCORD_PREMIUM_SKU_IDS: "123456789012345678" }, () => {
+      const tool = scopedToolset({ config: loadConfig(), groups: new Set(["presentation"]) }).localTools.find((candidate) => candidate.name === "composeDiscordResponse")!;
+      const schema = JSON.stringify(tool.parameters);
+      expect(schema).toContain('"premium"');
+      expect(schema).toContain('"enum":["123456789012345678"]');
+    });
+  });
+
   it("exposes the reveal tool for an explicit randomness reveal", () => {
     const config = loadConfig();
     const groups = selectToolGroups({ text: "Reveal randomness", hasImageAttachments: false, replyContext: true, config });
@@ -310,7 +333,7 @@ describe("tool scoping", () => {
       expect(requested.localTools.some((tool) => tool.name === "searchSpotify")).toBe(true);
 
       const all = requestAdditionalToolGroups({ currentGroups: new Set(["core", "external"]), config });
-      expect(all.groups).toEqual(new Set(["core", "external", "discord-retrieval", "generated-data", "discord-action", "image", "spotify", "codegen", "ops"]));
+      expect(all.groups).toEqual(new Set(["core", "external", "discord-retrieval", "generated-data", "presentation", "discord-action", "image", "spotify", "codegen", "ops"]));
       expect(all.localTools.some((tool) => tool.name === "runCodingAgent")).toBe(true);
 
       const invalid = requestAdditionalToolGroups({

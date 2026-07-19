@@ -19,6 +19,7 @@ The root [`AGENTS.md`](../AGENTS.md) contains the concise rules automatically su
 | Document | Use it for |
 | --- | --- |
 | [`agent-runtime.md`](agent-runtime.md) | Canonical agent sessions, executions, events, artifacts, and code-update task leases. |
+| [`discord-rich-components.md`](discord-rich-components.md) | Components V2 rendering, durable actions, interactions, modals, safety, and ownership. |
 | [`evals.md`](evals.md) | Prompt regression suites, private evals, assertions, and comparisons. |
 | [`wallets.md`](wallets.md) | Managed-wallet ownership, live balances, transfers, starter funding, wagers, and reconciliation. |
 | [`provable-rng.md`](provable-rng.md) | Commit-reveal randomness, reply-chain sessions, verification, and known limitations. |

@@ -11,6 +11,7 @@ import {
 } from "../../src/tools/walletTools.js";
 import type { PaymentEventRecorder } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
+import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";
 
 describe("managed wallet tools", () => {
   it("returns the requester's verified onchain USD balance without exposing a token ticker", async () => {
@@ -194,7 +195,7 @@ describe("managed wallet tools", () => {
 
     expect(result).toContain("Transferred $2 USD from your wallet to Friend's wallet.");
     expect(result).toContain("Source balance: $3 USD");
-    expect(ctx.footerLines).toEqual([
+    expect(ctx.turnOutput?.footerLines).toEqual([
       `💸 [transfer](<https://explore.tempo.xyz/tx/0x${"9".repeat(64)}>)`
     ]);
     expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
@@ -317,7 +318,7 @@ describe("managed wallet tools", () => {
 
     expect(result).toContain("Added $1 USD from the AI treasury");
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ requestedByUserId: "requester" }), expect.any(Function));
-    expect(ctx.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
+    expect(ctx.turnOutput?.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
   });
 
   it("recognizes a natural request for the requester's starter dollar", async () => {
@@ -337,7 +338,7 @@ describe("managed wallet tools", () => {
 
     await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
     expect(request).toHaveBeenCalledOnce();
-    expect(ctx.footerLines).toEqual([]);
+    expect(ctx.turnOutput?.footerLines).toEqual([]);
   });
 
   it("automatically tops a dust balance up to the configured starter target", async () => {
@@ -449,7 +450,7 @@ function context(input: {
     repo: { auditTool, ...(input.repo ?? {}) },
     walletService: input.walletService,
     fetchDiscordGuildMembers: input.fetchDiscordGuildMembers,
-    footerLines: []
+    turnOutput: createAgentTurnOutput()
   } as unknown as ToolContext;
 }
 

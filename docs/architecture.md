@@ -28,7 +28,7 @@ These constraints are intentional. Do not treat them as temporary implementation
 
 | State | Canonical owner | Common readers/projections |
 | --- | --- | --- |
-| Prompt executions and code-update attempts | `src/db/agentRuntimeRepository.ts` | `src/observability/runs.ts`, console, task status |
+| Prompt executions and code-update attempts | `src/db/agentRuntimeRepository.ts` with focused artifact persistence in `src/db/agentRuntimeArtifactRepository.ts` | `src/observability/runs.ts`, console, task status |
 | Discord messages, attachments, aliases, exclusions | Focused Discord archive repositories in `src/db/` | Retrieval, stats, crawl, and memory modules |
 | Conversation continuity | Conversation memory repository | `src/agent/promptBuilder.ts` |
 | Request identity and reply scope | Stored turn envelope from `src/agent/runtimeEnvelope.ts` | Runtime runner and `ToolContext` guards |
@@ -48,11 +48,11 @@ When a new feature needs durable state, extend the focused owner that represents
 3. Queued execution loads that turn envelope when available, builds a `ToolContext`, and calls the selected prompt executor. The generic `/api/agent/sessions/:threadKey/execute` endpoint accepts durable `input_lines` artifacts and can enqueue this runtime job when called with Discord delivery context, which lets future chat adapters stay thin and route through the durable session API. Discord ingress and the API share the same `src/agent/runtimeControlPlane.ts` queue-handoff helper so the durable session event stream records `agent.execution.job_enqueued` consistently.
 4. `src/agent/router.ts` sends the user request, channel memory, reply context, image context, skills, and tool schemas to the model.
    The first chat message is the large static system prompt so provider prefix caching can reuse it; requester identity, loaded skills, overlays, session memory, reply context, attachments, and the current user request are appended after that stable prefix. `src/models/openrouter.ts` leaves implicit-cache providers alone and adds an Anthropic-only `cache_control` marker to that first system message; `runs:inspect` surfaces `cached_input` from provider usage metadata.
-5. The model selects local tools from `src/tools/registry.ts` or OpenRouter-hosted tools.
-6. Local tools execute through focused tool-family modules registered in `src/tools/registry.ts`; use `src/tools/README.md` to find the owning module before editing.
+5. The model selects local tools aggregated by `src/tools/registry.ts` from focused contract families or OpenRouter-hosted tools. Deployment capabilities narrow and cache local schemas, and the same compiled schemas validate raw arguments before gates or implementations execute.
+6. Local tools execute through a fail-fast typed handler registry plus explicit high-risk delegated routers; turn-scoped files, tables, footer lines, and rich presentation flow through one `AgentTurnOutput` collector. Use `src/tools/README.md` to find the owning family before editing.
 7. Every provider call records a versioned `agent.model.call.*` runtime event with purpose, deployed revision, prompt/schema fingerprints and sizes, model, token/cache use, estimated cost, latency, tool selection, and outcome. Tool actions remain separately audited.
-8. The router returns the final response/files.
-9. `src/discord/responseSink.ts` renders the loading reaction, status message, final reply, attachments, or errors, then the agent-runtime execution is marked terminal.
+8. The router returns the final response/files. Discord persists a versioned delivery manifest before the first network write; bounded files are stored once as binary artifacts and referenced by size/checksum.
+9. `src/discord/presentationDelivery.ts` and `responseSink.ts` render the loading reaction, status message, final reply, Components V2 tree, attachments, or errors with stable enforced nonces. All asynchronous gateway work is supervised through one drain boundary; startup recovery verifies binary artifacts, replays the same intent, and reconciles the execution/memory ledgers without duplicating the Discord message.
 
 End state: the canonical execution ledger is the agent-runtime session event stream. Chat turns execute in-process against that ledger; sandboxes are reserved for code-update tasks; Discord-specific code owns delivery obligations (acknowledgements, status edits, final replies, files, and cleanup), not execution state.
 

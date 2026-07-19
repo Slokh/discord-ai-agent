@@ -19,6 +19,7 @@ import {
   settleRandomWager
 } from "../../src/tools/randomTools.js";
 import type { DiscordReplyContext, ToolContext } from "../../src/tools/types.js";
+import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";
 
 /** In-memory mirror of RngRepository's transactional interface (single-threaded, no locking needed). */
 class FakeRngRepository {
@@ -206,7 +207,8 @@ class FakeRngRepository {
 
 function fakeContext(overrides: Partial<ToolContext> = {}): { ctx: ToolContext; rngRepo: FakeRngRepository; footerLines: string[] } {
   const rngRepo = new FakeRngRepository();
-  const footerLines: string[] = [];
+  const turnOutput = createAgentTurnOutput();
+  const footerLines = turnOutput.footerLines;
   const ctx = {
     config: { maxReplyChars: 1800, payments: { userWalletsEnabled: true } },
     repo: { auditTool: vi.fn(async () => undefined) },
@@ -219,7 +221,7 @@ function fakeContext(overrides: Partial<ToolContext> = {}): { ctx: ToolContext; 
     threadKey: "guild:channel",
     requestId: "req-1",
     requestMessageId: "1234567890000000001",
-    footerLines,
+    turnOutput,
     ...overrides
   } as unknown as ToolContext;
   return { ctx, rngRepo, footerLines };

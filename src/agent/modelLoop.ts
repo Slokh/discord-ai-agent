@@ -9,7 +9,6 @@ import { cleanResponse } from "../tools/responseFormatting.js";
 import type {
   AgentFile,
   AgentResponse,
-  AgentTable,
   ToolContext,
 } from "../tools/types.js";
 import { ensureAutomaticStarterFunds } from "../tools/walletTools.js";
@@ -62,6 +61,7 @@ import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRou
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
 import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout } from "./modelTimeoutFallback.js";
+import { createAgentTurnOutput } from "../tools/turnOutput.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -122,10 +122,9 @@ async function runAgentModelLoopInternal(
     });
   }
   injectActiveGameSession(messages, activeGame);
-  const files: AgentFile[] = [];
-  const tables: AgentTable[] = [];
-  ctx.generatedFiles = files;
-  ctx.generatedTables = tables;
+  const turnOutput = createAgentTurnOutput();
+  ctx.turnOutput = turnOutput;
+  const { files, tables } = turnOutput;
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const toolUseCounts = new Map<ToolName, number>();
   const successfulToolCallKeys = new Set<string>();

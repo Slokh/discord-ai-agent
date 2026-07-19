@@ -12,6 +12,7 @@ const SERVER_TOOL_USAGE_NAMES: Record<string, string> = {
   web_fetch_requests: "openrouter:web_fetch",
   datetime_requests: "openrouter:datetime",
 };
+const serializedToolCache = new WeakMap<object, string>();
 
 export function observedModelToolNames(
   response: Pick<ChatResult, "toolCalls" | "serverToolUse">,
@@ -39,12 +40,16 @@ export async function runObservedModelCall(
 ) {
   const callId = `model-call-${randomUUID()}`;
   const startedAt = Date.now();
-  const promptBytes = Buffer.byteLength(JSON.stringify(input.chat.messages), "utf8");
-  const toolSchemaBytes = Buffer.byteLength(JSON.stringify(input.chat.tools ?? []), "utf8");
-  const promptFingerprint = sha256(JSON.stringify(input.chat.messages));
-  const toolSchemaFingerprint = sha256(JSON.stringify(input.chat.tools ?? []));
-  const promptSections = promptSectionTelemetry(input.chat.messages);
-  const toolSchemas = toolSchemaTelemetry(input.chat.tools ?? []);
+  const serializedMessages = input.chat.messages.map((message) => JSON.stringify(message));
+  const serializedTools = (input.chat.tools ?? []).map(serializeTool);
+  const promptJson = `[${serializedMessages.join(",")}]`;
+  const toolSchemaJson = `[${serializedTools.join(",")}]`;
+  const promptBytes = Buffer.byteLength(promptJson, "utf8");
+  const toolSchemaBytes = Buffer.byteLength(toolSchemaJson, "utf8");
+  const promptFingerprint = sha256(promptJson);
+  const toolSchemaFingerprint = sha256(toolSchemaJson);
+  const promptSections = promptSectionTelemetry(input.chat.messages, serializedMessages);
+  const toolSchemas = toolSchemaTelemetry(input.chat.tools ?? [], serializedTools);
   const common = {
     schemaVersion: 1,
     callId,
@@ -56,8 +61,8 @@ export async function runObservedModelCall(
     promptBytes,
     promptFingerprint,
     promptSections,
-    messageBytesByRole: input.chat.messages.reduce<Record<string, number>>((totals, message) => {
-      totals[message.role] = (totals[message.role] ?? 0) + Buffer.byteLength(JSON.stringify(message), "utf8");
+    messageBytesByRole: input.chat.messages.reduce<Record<string, number>>((totals, message, index) => {
+      totals[message.role] = (totals[message.role] ?? 0) + Buffer.byteLength(serializedMessages[index], "utf8");
       return totals;
     }, {}),
     toolCount: input.chat.tools?.length ?? 0,
@@ -75,7 +80,7 @@ export async function runObservedModelCall(
     callId,
     kind: "model_prompt",
     name: `Model prompt · ${input.purpose}`,
-    content: JSON.stringify({
+    content: () => JSON.stringify({
       schemaVersion: 1,
       callId,
       purpose: input.purpose,
@@ -89,7 +94,7 @@ export async function runObservedModelCall(
         ...message,
       })),
       tools: input.chat.tools ?? [],
-    }, null, 2),
+    }),
     metadata: {
       purpose: input.purpose,
       promptFingerprint,
@@ -116,7 +121,7 @@ export async function runObservedModelCall(
         callId,
         kind: "model_response",
         name: `Model response · ${input.purpose}`,
-        content: JSON.stringify({
+        content: () => JSON.stringify({
           schemaVersion: 1,
           callId,
           purpose: input.purpose,
@@ -128,7 +133,7 @@ export async function runObservedModelCall(
           serverToolUse: response.serverToolUse ?? null,
           urlCitations: response.urlCitations ?? [],
           estimatedCostUsd: response.estimatedCostUsd ?? null,
-        }, null, 2),
+        }),
         metadata: {
           purpose: input.purpose,
           model: response.model,
@@ -184,11 +189,11 @@ export type PromptSectionTelemetry = {
   roles: string[];
 };
 
-export function promptSectionTelemetry(messages: ChatMessage[]): PromptSectionTelemetry[] {
+export function promptSectionTelemetry(messages: ChatMessage[], serialized = messages.map((message) => JSON.stringify(message))): PromptSectionTelemetry[] {
   const sections = new Map<string, PromptSectionTelemetry>();
   messages.forEach((message, index) => {
     const name = promptMessageSection(message, index, messages.length);
-    const bytes = Buffer.byteLength(JSON.stringify(message), "utf8");
+    const bytes = Buffer.byteLength(serialized[index], "utf8");
     const characters = messageCharacters(message);
     const current = sections.get(name) ?? { name, bytes: 0, characters: 0, messageCount: 0, estimatedTokens: 0, roles: [] };
     current.bytes += bytes;
@@ -220,12 +225,23 @@ function promptMessageSection(message: ChatMessage, index: number, count: number
   return "other_system_context";
 }
 
-function toolSchemaTelemetry(tools: ToolDefinition[]) {
-  return tools.map((tool) => ({
+function toolSchemaTelemetry(tools: ToolDefinition[], serialized = tools.map(serializeTool)) {
+  return tools.map((tool, index) => ({
     name: tool.type === "function" ? tool.function.name : tool.type,
     type: tool.type === "function" ? "local" : "hosted",
-    bytes: Buffer.byteLength(JSON.stringify(tool), "utf8"),
+    bytes: Buffer.byteLength(serialized[index], "utf8"),
   }));
+}
+
+function serializeTool(tool: ToolDefinition): string {
+  if (typeof tool === "object" && tool !== null) {
+    const cached = serializedToolCache.get(tool);
+    if (cached) return cached;
+    const serialized = JSON.stringify(tool);
+    serializedToolCache.set(tool, serialized);
+    return serialized;
+  }
+  return JSON.stringify(tool);
 }
 
 function textContent(message: ChatMessage) {
@@ -257,7 +273,7 @@ function messageCharacters(message: ChatMessage) {
 
 async function storeModelCallArtifact(
   ctx: ToolContext,
-  input: { callId: string; kind: "model_prompt" | "model_response"; name: string; content: string; metadata: Record<string, unknown> },
+  input: { callId: string; kind: "model_prompt" | "model_response"; name: string; content: () => string; metadata: Record<string, unknown> },
 ) {
   if (!ctx.agentRuntime || typeof ctx.agentRuntime.storeArtifact !== "function" || !ctx.agentRuntimeSession || !ctx.agentRuntimeExecutionId) return null;
   return ctx.agentRuntime.storeArtifact({
@@ -265,7 +281,7 @@ async function storeModelCallArtifact(
     executionId: ctx.agentRuntimeExecutionId,
     kind: input.kind,
     name: input.name,
-    content: input.content,
+    content: input.content(),
     contentType: "application/json",
     metadata: { schemaVersion: 1, callId: input.callId, traceId: ctx.requestId ?? null, ...input.metadata },
   }).then((artifact) => artifact.artifactId).catch((error) => {

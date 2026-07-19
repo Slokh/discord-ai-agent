@@ -29,6 +29,12 @@ describe("Discord write API", () => {
     await expect(discordWrite(async () => 42, { logger })).resolves.toEqual({ ok: true, value: 42 });
   });
 
+  it("returns typed unknown failures for one-shot interaction writes", async () => {
+    const error = new Error("interaction expired");
+    await expect(discordWrite(async () => { throw error; }, { logger, retries: 0, throwUnknown: false }, "interaction_reply"))
+      .resolves.toEqual({ ok: false, reason: "unknown", error });
+  });
+
   it("refreshes attachment metadata from the Discord message", async () => {
     const attachment = {
       id: "attachment-1",

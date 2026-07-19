@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { renderMetrics, uiAuthSessionToken, verifyUiAuthorization } from "../../src/control/internalApi.js";
+import { uiAuthSessionToken, verifyUiAuthorization } from "../../src/control/internalApiAuth.js";
+import { renderMetrics } from "../../src/control/internalApiMetrics.js";
 
 describe("internal API UI authorization", () => {
   it("allows UI access when no password is configured", () => {

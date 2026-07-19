@@ -19,13 +19,16 @@ export type ToolsetState = {
   groups: Set<ToolGroup>;
   expandedAll: boolean;
 };
+const scopedToolsetCache = new WeakMap<ToolsetState, ScopedToolset>();
 
 export function initialToolsetState(ctx: ToolContext, text: string): ToolsetState {
   if (!ctx.config.toolsetScoping) {
-    return { groups: new Set(TOOL_GROUPS), expandedAll: true };
+    const groups = new Set(TOOL_GROUPS);
+    const state = { groups, expandedAll: true };
+    scopedToolsetCache.set(state, scopedToolset({ config: ctx.config, groups }));
+    return state;
   }
-  return {
-    groups: selectToolGroups({
+  const groups = selectToolGroups({
       text,
       hasImageAttachments: hasImageContext(ctx.requestAttachments, ctx.replyContext),
       hasFileAttachments: hasFileContext(ctx.requestAttachments, ctx.replyContext),
@@ -34,13 +37,18 @@ export function initialToolsetState(ctx: ToolContext, text: string): ToolsetStat
         ? [ctx.replyContext.content, ...ctx.replyContext.chain.map((message) => message.content)].join("\n")
         : undefined,
       config: ctx.config,
-    }),
-    expandedAll: false,
-  };
+    });
+  const state = { groups, expandedAll: false };
+  scopedToolsetCache.set(state, scopedToolset({ config: ctx.config, groups }));
+  return state;
 }
 
 export function currentScopedToolset(ctx: ToolContext, state: ToolsetState): ScopedToolset {
-  return scopedToolset({ config: ctx.config, groups: state.groups });
+  const cached = scopedToolsetCache.get(state);
+  if (cached) return cached;
+  const scoped = scopedToolset({ config: ctx.config, groups: state.groups });
+  scopedToolsetCache.set(state, scoped);
+  return scoped;
 }
 
 export function handleAdditionalToolsRequest(

@@ -2,7 +2,8 @@ import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { DiscordAiAgentRepository } from "../src/db/repositories.js";
 import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, selectArtifacts } from "../src/observability/runInspector.js";
-import { getRunSnapshot, listRunSummaries, resolveRunReference, type RunSnapshot, type RunSummary } from "../src/observability/runs.js";
+import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../src/observability/runs.js";
+import type { RunSnapshot, RunSummary } from "../src/observability/runTypes.js";
 
 type Args = {
   reference: string;

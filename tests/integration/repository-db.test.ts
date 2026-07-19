@@ -499,6 +499,19 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(agentRuntimeRepo.getArtifact({ artifactId: artifact.artifactId })).resolves.toEqual(
       expect.objectContaining({ content: expect.not.stringContaining("ghp_") })
     );
+    const binaryData = Buffer.from([0, 1, 2, 3, 255]);
+    const binaryArtifact = await agentRuntimeRepo.storeBinaryArtifact({
+      sessionId,
+      executionId,
+      kind: "discord_delivery_file",
+      name: "result.bin",
+      data: binaryData,
+      contentType: "application/octet-stream",
+    });
+    expect(binaryArtifact).toEqual(expect.objectContaining({ sizeBytes: binaryData.length, redacted: false }));
+    await expect(agentRuntimeRepo.getBinaryArtifact({ artifactId: binaryArtifact.artifactId })).resolves.toEqual(
+      expect.objectContaining({ data: binaryData }),
+    );
     const expiredArtifact = await agentRuntimeRepo.storeArtifact({
       sessionId,
       executionId,
@@ -3099,9 +3112,61 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     );
     await expect(repo.getRunFeedback(runId)).resolves.toEqual(expect.objectContaining({ note: "Missed the source", expectedBehavior: "Search first" }));
   });
+
+  it("binds, scopes, and transactionally consumes Discord component actions", async () => {
+    const suffix = randomUUID();
+    const sessionId = `agent-session-${suffix}`;
+    const executionId = `agent-execution-${suffix}`;
+    const token = `token-${suffix}`;
+    const generationId = `generation-${suffix}`;
+    await agentRuntimeRepo.upsertSession({ sessionId, threadKey: `discord:guild-${suffix}:channel-${suffix}`, title: "components", request: "components", requestedBy: "test" });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "succeeded" });
+    await repo.createDiscordComponentActionGeneration({
+      generationId, originatingExecutionId: executionId, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`,
+      sourceMessageId: `message-${suffix}`, ownerUserId: `user-${suffix}`, audience: "requester",
+      actions: [{ token, action: { type: "continue", prompt: "Show more" }, singleUse: true }], expiresAt: new Date(Date.now() + 60_000),
+    });
+    await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: `user-${suffix}` }))
+      .resolves.toEqual({ ok: false, reason: "wrong_message" });
+    await expect(repo.activateDiscordComponentActionGeneration({ generationId, responseMessageId: `response-${suffix}`, expectedActionCount: 1 })).resolves.toBe(1);
+    await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: "user-other" }))
+      .resolves.toEqual({ ok: false, reason: "wrong_user" });
+    await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: `user-${suffix}` }))
+      .resolves.toEqual(expect.objectContaining({ ok: true, record: expect.objectContaining({ singleUse: true, action: { type: "continue", prompt: "Show more" } }) }));
+    await expect(repo.resolveDiscordComponentAction({ token, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId: `response-${suffix}`, userId: `user-${suffix}` }))
+      .resolves.toEqual({ ok: false, reason: "consumed" });
+  });
+
+  it("atomically replaces active component generations for the same response", async () => {
+    const suffix = randomUUID();
+    const sessionId = `agent-session-${suffix}`;
+    const executionId = `agent-execution-${suffix}`;
+    const responseMessageId = `response-${suffix}`;
+    await agentRuntimeRepo.upsertSession({ sessionId, threadKey: `discord:guild-${suffix}:channel-${suffix}`, title: "components", request: "components", requestedBy: "test" });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "succeeded" });
+    const create = async (generationId: string, token: string) => {
+      await repo.createDiscordComponentActionGeneration({
+        generationId, originatingExecutionId: executionId, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`,
+        sourceMessageId: `message-${suffix}`, ownerUserId: null, audience: "channel",
+        actions: [{ token, action: { type: "continue", prompt: generationId }, singleUse: false }], expiresAt: new Date(Date.now() + 60_000),
+      });
+      await repo.activateDiscordComponentActionGeneration({ generationId, responseMessageId, expectedActionCount: 1 });
+    };
+    await create(`generation-a-${suffix}`, `token-a-${suffix}`);
+    await create(`generation-b-${suffix}`, `token-b-${suffix}`);
+
+    await expect(repo.resolveDiscordComponentAction({ token: `token-a-${suffix}`, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId, userId: "user" }))
+      .resolves.toEqual({ ok: false, reason: "unavailable" });
+    await expect(repo.resolveDiscordComponentAction({ token: `token-b-${suffix}`, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId, userId: "user" }))
+      .resolves.toEqual(expect.objectContaining({ ok: true }));
+    await expect(repo.cancelDiscordComponentActionsForResponseMessage({ guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId })).resolves.toBe(1);
+    await expect(repo.resolveDiscordComponentAction({ token: `token-b-${suffix}`, guildId: `guild-${suffix}`, channelId: `channel-${suffix}`, responseMessageId, userId: "user" }))
+      .resolves.toEqual({ ok: false, reason: "unavailable" });
+  });
 });
 
 async function cleanupTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");
   await pool.query(

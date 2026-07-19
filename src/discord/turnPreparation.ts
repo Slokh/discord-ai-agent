@@ -48,8 +48,12 @@ export async function prepareDiscordAgentTurn(input: {
   if (!guildId || !guild) throw new Error("Discord agent request message is not attached to a guild.");
   const botUserId = input.client.user?.id ?? "";
   const threadKey = discordChannelThreadKey(guildId, input.message.channelId);
-  const userDisplayName = input.message.member?.displayName ?? input.message.author.username;
-  const requestAttachments = discordAttachmentContextsFromMessage(input.message);
+  const requesterId = input.request.userId ?? input.message.author.id;
+  const requesterMember = requesterId === input.message.author.id
+    ? input.message.member ?? (await guild.members.fetch(requesterId))
+    : await guild.members.fetch(requesterId);
+  const userDisplayName = input.request.userDisplayName ?? requesterMember.displayName ?? requesterMember.user.username;
+  const requestAttachments = input.request.requestAttachments ?? discordAttachmentContextsFromMessage(input.message);
   await input.context.repo.ensureConversationSession({
     threadKey,
     guildId,
@@ -62,7 +66,7 @@ export async function prepareDiscordAgentTurn(input: {
   input.requestLogger.debug({ threadKey, source: input.source }, "Ensured conversation session");
 
   const permissionStartedAt = Date.now();
-  const member = input.message.member ?? (await guild.members.fetch(input.message.author.id));
+  const member = requesterMember;
   const mentionedChannelIds = explicitChannelMentionIds(input.request.rawContent);
   const mentionedUserIds = explicitUserMentionIds(input.request.rawContent, botUserId);
   const referencedChannelId = input.message.reference?.channelId ?? null;
@@ -157,10 +161,12 @@ export async function prepareDiscordAgentTurn(input: {
 
   const turnEnvelope = buildAgentRuntimeTurnEnvelope({
     requestId: input.request.requestId,
+    requestKind: input.request.requestKind,
+    sourceMessageId: input.message.id,
     threadKey,
     guildId,
     channelId: input.message.channelId,
-    userId: input.message.author.id,
+    userId: requesterId,
     userDisplayName,
     botUserId,
     botRoleIds: input.request.botRoleIds,
@@ -175,7 +181,8 @@ export async function prepareDiscordAgentTurn(input: {
     requestAttachments,
     sessionMessages: priorSessionMessages,
     statusChannelId: input.responseSink.statusChannelId,
-    statusMessageId: input.responseSink.statusMessageId
+    statusMessageId: input.responseSink.statusMessageId,
+    interaction: input.request.interaction,
   });
   const turnEnvelopeArtifactId = await storeAgentRuntimeTurnEnvelope({
     agentRuntime: input.context.agentRuntime,

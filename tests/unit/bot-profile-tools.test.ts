@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { updateBotAvatar } from "../../src/tools/botProfileTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
+import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -146,10 +147,10 @@ describe("updateBotAvatar", () => {
   });
 
   it("uses a generated image file as the avatar source when imageUrl is omitted", async () => {
+    const turnOutput = createAgentTurnOutput();
+    turnOutput.files.push({ name: "gen-avatar.png", data: PNG_PIXEL, contentType: "image/png" });
     const ctx = fakeContext({
-      generatedFiles: [
-        { name: "gen-avatar.png", data: PNG_PIXEL, contentType: "image/png" }
-      ]
+      turnOutput,
     });
     let captured: { url: string; body?: string } | undefined;
     stubFetchWith((url, init) => {

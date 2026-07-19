@@ -111,7 +111,7 @@ async function resolveEmojiSource(ctx: ToolContext, input: CreateDiscordEmojiInp
     return { kind: "url", url: explicitUrl, label: "explicit image URL" };
   }
 
-  const generated = [...(ctx.generatedFiles ?? [])].reverse().find((file) =>
+  const generated = [...(ctx.turnOutput?.files ?? [])].reverse().find((file) =>
     file.data.length > 0 && ((file.contentType ?? "").startsWith("image/") || /\.(?:png|jpe?g|gif|webp|avif)$/i.test(file.name))
   );
   if (generated) {

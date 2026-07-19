@@ -28,6 +28,25 @@ import {
   playlistTracksTable,
   spotifySearchResultCount
 } from "./spotifyFormatting.js";
+import type {
+  AlbumTrackFormat,
+  ArtistDiscographyGroup,
+  PlaylistTrackFormat,
+  SpotifyAlbum,
+  SpotifyAlbumTrack,
+  SpotifyArtist,
+  SpotifyAudiobook,
+  SpotifyChapter,
+  SpotifyConfig,
+  SpotifyEpisode,
+  SpotifyItemType,
+  SpotifyPagedResponse,
+  SpotifyPlaylist,
+  SpotifyPlaylistTrack,
+  SpotifySearchType,
+  SpotifyShow,
+  SpotifyTrack,
+} from "./spotifyTypes.js";
 
 const SPOTIFY_API_BASE = "https://api.spotify.com/v1";
 const SPOTIFY_AUTH_URL = "https://accounts.spotify.com/api/token";
@@ -44,121 +63,10 @@ const DEFAULT_SEARCH_LIMIT = 5;
 const MAX_SEARCH_LIMIT = 10;
 const SPOTIFY_STORED_CONTENT = "Spotify response omitted from conversation memory and artifacts.";
 
-export type SpotifyConfig = {
-  clientId?: string;
-  clientSecret?: string;
-  market?: string;
-};
-
-export type SpotifyItemType = "track" | "artist" | "album" | "playlist" | "show" | "episode" | "audiobook" | "chapter";
-export type SpotifySearchType = Exclude<SpotifyItemType, "chapter">;
-export type PlaylistTrackFormat = "text" | "csv" | "both";
-export type AlbumTrackFormat = "text" | "csv" | "both";
-export type ArtistDiscographyGroup = "album" | "single" | "appears_on" | "compilation";
-
 type SpotifyToken = {
   clientId: string;
   accessToken: string;
   expiresAt: number;
-};
-
-export type SpotifyExternalUrls = {
-  spotify?: string;
-};
-
-export type SpotifyArtist = {
-  id: string;
-  name?: string;
-  external_urls?: SpotifyExternalUrls;
-};
-
-export type SpotifyAlbum = {
-  id: string;
-  name?: string;
-  album_type?: string;
-  release_date?: string;
-  total_tracks?: number;
-  artists?: SpotifyArtist[];
-  external_urls?: SpotifyExternalUrls;
-};
-
-export type SpotifyShow = {
-  id: string;
-  name?: string;
-  publisher?: string;
-  description?: string;
-  total_episodes?: number;
-  external_urls?: SpotifyExternalUrls;
-};
-
-export type SpotifyEpisode = {
-  id: string;
-  name?: string;
-  description?: string;
-  release_date?: string;
-  duration_ms?: number;
-  explicit?: boolean;
-  external_urls?: SpotifyExternalUrls;
-  show?: SpotifyShow;
-};
-
-export type SpotifyAudiobook = {
-  id: string;
-  name?: string;
-  authors?: Array<{ name?: string }>;
-  narrators?: Array<{ name?: string }>;
-  publisher?: string;
-  total_chapters?: number;
-  external_urls?: SpotifyExternalUrls;
-};
-
-export type SpotifyChapter = {
-  id: string;
-  name?: string;
-  duration_ms?: number;
-  chapter_number?: number;
-  external_urls?: SpotifyExternalUrls;
-  audiobook?: SpotifyAudiobook;
-};
-
-export type SpotifyTrack = {
-  id?: string;
-  name?: string;
-  duration_ms?: number;
-  explicit?: boolean;
-  artists?: SpotifyArtist[];
-  album?: SpotifyAlbum;
-  external_urls?: SpotifyExternalUrls;
-  type?: string;
-  uri?: string;
-};
-
-export type SpotifyPlaylist = {
-  id: string;
-  name?: string;
-  description?: string;
-  owner?: { id?: string; display_name?: string; external_urls?: SpotifyExternalUrls };
-  tracks?: { total?: number };
-  external_urls?: SpotifyExternalUrls;
-};
-
-export type SpotifyPlaylistTrack = {
-  added_at?: string | null;
-  is_local?: boolean;
-  item?: SpotifyTrack | null;
-  track?: SpotifyTrack | null;
-};
-
-export type SpotifyAlbumTrack = SpotifyTrack & {
-  track_number?: number;
-};
-
-export type SpotifyPagedResponse<T> = {
-  items?: T[];
-  next?: string | null;
-  limit?: number;
-  offset?: number;
-  total?: number;
 };
 
 class SpotifyApiError extends Error {

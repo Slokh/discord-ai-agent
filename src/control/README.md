@@ -12,7 +12,7 @@ Owns internal HTTP APIs, sandbox callbacks, metrics, and debugging surfaces.
 
 ## Change Routing
 
-- API shape changes start in `internalApi.ts`, then update console API clients and tests.
+- API shape changes start in the focused `internalApi*` owner: `internalApi.ts` for route dispatch, `internalApiParsers.ts` for boundary validation, `internalApiAuth.ts` for authentication, `internalApiStreams.ts` for SSE, and `internalApiServer.ts` for lifecycle. Then update console API clients and tests.
 - Centaur-style runtime work should add agent-session behavior under `/api/agent/sessions`.
 - Run normalization and diagnostics usually belong in `src/observability/` before React rendering.
 - Console-only layout changes belong under `src/control/console/`.
@@ -23,6 +23,6 @@ Owns internal HTTP APIs, sandbox callbacks, metrics, and debugging surfaces.
 - Run API snapshots: `tests/unit/internal-api-runs.test.ts`.
 - Console derivation/render helpers: `tests/unit/run-console-timeline.test.ts`, `tests/unit/console-model-calls.test.ts`, `tests/unit/console-critical-path.test.ts`, and `tests/unit/console-run-comparison.test.ts`.
 
-## Migration Direction
+## Boundaries
 
-Keep large API/console entrypoints as facades. New implementation should separate route handlers, auth helpers, run APIs, callback APIs, and React view modules.
+Keep HTTP transport, authentication, parsing, streaming, metrics, and server lifecycle independent. `internalApi.ts` dispatches authenticated domain operations and must not become a compatibility facade.

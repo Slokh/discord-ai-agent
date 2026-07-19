@@ -366,6 +366,24 @@
         "revealRandomness"
       ],
       "notes": "Fairness verification requests must use revealRandomness to publish the server seed."
+    },
+    {
+      "id": "presentation-explicit-buttons",
+      "category": "presentation",
+      "prompt": "Give me three Discord buttons to choose whether I want a short summary, detailed explanation, or source links.",
+      "expectedTools": [
+        "composeDiscordResponse"
+      ],
+      "notes": "Explicit native Discord UI requests should load the scoped presentation capability and produce validated semantic controls."
+    },
+    {
+      "id": "presentation-agent-chosen-bounded-choice",
+      "category": "presentation",
+      "prompt": "Help the group settle on a game night. Ask everyone whether Friday, Saturday, or Sunday works best, then use their answer to suggest the next step.",
+      "expectedTools": [
+        "composeDiscordResponse"
+      ],
+      "notes": "The agent should discover the presentation capability for a bounded group choice even when the user does not explicitly request buttons or a select menu."
     }
   ]
 }

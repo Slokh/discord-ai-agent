@@ -15,7 +15,8 @@ Owns durable Postgres state and query contracts.
 - Trace events and tool audit logs live in `auditRepository.ts`.
 - Budget/spend reads live in `budgetRepository.ts` and intentionally derive from existing `agent_runtime_executions`, `agent_tasks`, and `tool_audit_logs` rows instead of maintaining separate counters. Per-user turn-limit overrides (`user_budget_overrides`, managed by the `setUserTurnLimit` tool) are the one piece of stored budget state.
 - Wallet accounts and guild/network-scoped wallet directory reads, transfer idempotency, wager exposure, and payment runtime health live in `paymentRepository.ts`, with focused transfer SQL helpers in `paymentTransferPersistence.ts`, starter top-up invariants in `paymentTransferValidation.ts`, requester-scoped wager/RNG reads in `paymentWagerHistory.ts`, and forward-only migrations.
-- Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history.
+- Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history. Replayable attachment bytes use `agent_runtime_artifact_blobs`, keyed to normal artifact metadata with cascade cleanup and bounded retention owned by `agentRuntimeArtifactRepository.ts`.
+- Opaque requester/channel-scoped component action generations, batch creation, atomic activation/replacement, bounded expiry, and transactional single-use consumption live in `discordComponentActionRepository.ts`; canonical interaction execution remains in `agent_runtime_*`.
 - Exactly-once deployment note claims, baselines, and posted Discord message IDs live in `deploymentAnnouncementRepository.ts`.
 - DB-backed skills, server overlays, and health checks live in `skillsRepository.ts`.
 - `repositories.ts` is a compatibility facade that delegates to the focused modules; shared types live in `types.ts`, with only cross-domain helpers left in `shared.ts`.
@@ -24,7 +25,7 @@ Owns durable Postgres state and query contracts.
 
 - Storage/indexing/exclusion changes start here, then update crawler/persistence/retrieval callers.
 - Retrieval behavior changes usually touch `retrievalRepository.ts` or `retrievalStatsRepository.ts` plus `src/memory/search.ts`.
-- Agent-runtime/task/run-console persistence changes usually touch `agentRuntimeRepository.ts`, `agentTaskRepository.ts`/`agentTaskReadRepository.ts`/`agentTaskRuntimeReadRepository.ts`, `processRunRepository.ts`, plus `src/observability/runs.ts`.
+- Agent-runtime/task/run-console persistence changes usually touch `agentRuntimeRepository.ts`, `agentRuntimeArtifactRepository.ts`, `agentTaskRepository.ts`/`agentTaskReadRepository.ts`/`agentTaskRuntimeReadRepository.ts`, `processRunRepository.ts`, plus `src/observability/runs.ts`.
 
 ## Scaling Notes
 
@@ -39,4 +40,4 @@ Owns durable Postgres state and query contracts.
 
 ## Structure
 
-`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, and skills. `agentRuntimeRepository.ts` owns the shared `agent_runtime_*` ledger tables: sessions, executions, events, messages, artifacts/chunks, and sandbox leases. Add new queries to the owning focused module, not the facade.
+`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, and skills. `agentRuntimeRepository.ts` owns shared sessions, executions, events, messages, and sandbox leases; `agentRuntimeArtifactRepository.ts` owns text chunks, binary blobs, integrity metadata, retention, and artifact cleanup behind the same public repository surface. Add new queries to the owning focused module, not the facade.

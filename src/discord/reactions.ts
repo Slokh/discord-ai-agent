@@ -3,7 +3,7 @@ import type { Logger } from "pino";
 import type { AppConfig } from "../config/env.js";
 import type { DiscordAiAgentRepository, ProcessRunRecord } from "../db/repositories.js";
 import { logger } from "../util/logger.js";
-import { deleteDiscordMessageById, discordSend } from "./api.js";
+import { deleteDiscordMessageById, discordRemoveReaction, discordSend } from "./api.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import { executeDiscordAgentRequest } from "./agentDelivery.js";
@@ -233,7 +233,8 @@ async function removeRegenerationReactionFor(
   );
   if (!target) return;
   try {
-    await target.users.remove(reactorId);
+    const result = await discordRemoveReaction(target, reactorId, { logger: requestLogger });
+    if (!result.ok) throw result.error;
     requestLogger.debug({ emoji: target.emoji.name }, "Removed regeneration reaction");
   } catch (error) {
     requestLogger.warn({ err: error, emoji: target.emoji.name }, "Failed to remove regeneration reaction");
@@ -292,7 +293,8 @@ async function regenerateDiscordAgentReply(input: {
     maxReplyChars: ctx.config.maxReplyChars,
     loadingReactionEmoji: ctx.config.discord.loadingReaction,
     logger: reactionLogger,
-    statusMessage: replyMessage
+    statusMessage: replyMessage,
+    deliveryKey: run.runId
   });
   await responseSink.acknowledge();
   await responseSink.updateStatus("Regenerating that response...").catch((error) => {

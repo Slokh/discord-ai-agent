@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatModelDebuggerInspection, formatModelIoCaptures } from "../../src/observability/modelDebuggerInspection.js";
-import type { RunSnapshot } from "../../src/observability/runs.js";
+import type { RunSnapshot } from "../../src/observability/runTypes.js";
 
 describe("model debugger run inspection", () => {
   it("summarizes model rounds, prompt composition, tools, cache use, and critical-path gaps", () => {

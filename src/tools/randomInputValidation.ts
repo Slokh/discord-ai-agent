@@ -1,5 +1,5 @@
 import { MAX_DECK_COUNT } from "../rng/provable.js";
-import type { DrawRandomInput } from "./randomTools.js";
+import type { DrawRandomInput } from "./randomTypes.js";
 
 const MAX_COUNT = 100;
 const MAX_OPTIONS = 100;

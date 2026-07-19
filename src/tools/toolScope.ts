@@ -7,6 +7,7 @@ import {
   type ToolGroup,
   type ToolRegistryEntry,
 } from "./registry.js";
+import { toolForDeployment } from "./toolDeployment.js";
 
 export type ToolScopeInput = {
   text: string;
@@ -33,6 +34,7 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   if (input.hasFileAttachments) groups.add("discord-retrieval");
   if (input.replyContext && hasAny(text, REPLY_FILE_KEYWORDS)) groups.add("discord-retrieval");
   if (hasAny(text, GENERATED_DATA_KEYWORDS)) groups.add("generated-data");
+  if (hasAny(text, PRESENTATION_KEYWORDS)) groups.add("presentation");
   if (hasAny(text, DISCORD_ACTION_KEYWORDS)) groups.add("discord-action");
   if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("discord-action");
   if (input.hasImageAttachments || hasAny(text, IMAGE_KEYWORDS)) groups.add("image");
@@ -111,15 +113,6 @@ function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
   return true;
 }
 
-function toolForDeployment(tool: ToolRegistryEntry, config: AppConfig): ToolRegistryEntry {
-  if (tool.name !== "drawRandom" || config.payments?.userWalletsEnabled) return tool;
-  const properties = tool.parameters.properties;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return tool;
-  const withoutWager = { ...properties } as Record<string, unknown>;
-  delete withoutWager.wager;
-  return { ...tool, parameters: { ...tool.parameters, properties: withoutWager } };
-}
-
 function isToolGroup(value: string): value is ToolGroup {
   return (TOOL_GROUPS as string[]).includes(value);
 }
@@ -161,6 +154,11 @@ const REPLY_FILE_KEYWORDS = [
 const GENERATED_DATA_KEYWORDS = [
   /\b(csv|table|spreadsheet|generated file|generated result|download|rows?|columns?)\b/,
   /\b(that|the|previous|earlier)\b.*\b(file|list|result|table|csv)\b/,
+];
+
+const PRESENTATION_KEYWORDS = [
+  /\b(buttons?|dropdown|select menu|modal|form|card|gallery|interactive|pagination|paginate|rich components?|components v2)\b/,
+  /\b(show|format|present|render|display)\b.*\b(card|buttons?|gallery|form|menu|interactive)\b/,
 ];
 
 const DISCORD_ACTION_KEYWORDS = [

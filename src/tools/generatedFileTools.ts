@@ -346,7 +346,7 @@ function tableCellToString(value: unknown): string {
 }
 
 function resolveGeneratedFile(ctx: ToolContext, input: { fileName?: string; fileIndex?: number }): { file?: AgentFile; index: number; reason?: string } {
-  const files = ctx.generatedFiles ?? [];
+  const files = ctx.turnOutput?.files ?? [];
   if (files.length === 0) return { index: -1, reason: "no_generated_files" };
   if (input.fileName) {
     const requested = input.fileName.trim().toLowerCase();
@@ -366,7 +366,7 @@ function resolveGeneratedFile(ctx: ToolContext, input: { fileName?: string; file
 function resolveGeneratedCsvFile(ctx: ToolContext, input: { fileName?: string; fileIndex?: number }): { file?: AgentFile; index: number; reason?: string } {
   if (input.fileName || input.fileIndex != null) return resolveGeneratedFile(ctx, input);
 
-  const files = ctx.generatedFiles ?? [];
+  const files = ctx.turnOutput?.files ?? [];
   if (files.length === 0) return { index: -1, reason: "no_generated_files" };
 
   const csvFiles = files.map((file, index) => ({ file, index })).filter(({ file }) => isCsvFile(file));
@@ -377,7 +377,7 @@ function resolveGeneratedCsvFile(ctx: ToolContext, input: { fileName?: string; f
 }
 
 function resolveGeneratedTable(ctx: ToolContext, input: { tableName?: string; tableIndex?: number }): { table?: AgentTable; index: number; reason?: string } {
-  const tables = ctx.generatedTables ?? [];
+  const tables = ctx.turnOutput?.tables ?? [];
   if (tables.length === 0) return { index: -1, reason: "no_generated_tables" };
   if (input.tableName) {
     const requested = input.tableName.trim().toLowerCase();
@@ -395,7 +395,7 @@ function resolveGeneratedTable(ctx: ToolContext, input: { tableName?: string; ta
 }
 
 function generatedFileNotFoundMessage(ctx: ToolContext, reason: string | undefined): string {
-  const files = ctx.generatedFiles ?? [];
+  const files = ctx.turnOutput?.files ?? [];
   if (reason === "no_generated_files") return "No generated files are available yet. Call a tool that produces a file first.";
   if (reason === "no_csv_files") {
     const available = files.map((file, index) => `${index + 1}. ${file.name} (${file.contentType || "unknown"}, ${file.data.length} bytes)`).join("\n");
@@ -423,7 +423,7 @@ function generatedTableNotFoundMessage(ctx: ToolContext, reason: string | undefi
 }
 
 function generatedTableList(ctx: ToolContext): string {
-  return (ctx.generatedTables ?? [])
+  return (ctx.turnOutput?.tables ?? [])
     .map((table, index) => `${index + 1}. ${table.name} (${table.rows.length} rows, columns: ${table.columns.join(", ")})`)
     .join("\n");
 }

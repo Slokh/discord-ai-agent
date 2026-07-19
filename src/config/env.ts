@@ -52,6 +52,7 @@ const defaults = {
   discordGuildId: "",
   discordBotName: "ai",
   discordLoadingReaction: "⏳",
+  discordPremiumSkuIds: "",
   databaseUrl: defaultDatabaseUrl(),
   embeddingDimensions: 1536,
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
@@ -146,6 +147,10 @@ const envSchema = z.object({
   DISCORD_GUILD_ID: z.string().default(defaults.discordGuildId),
   BOT_NAME: z.string().default(defaults.discordBotName),
   DISCORD_LOADING_REACTION: nonEmptyStringWithDefault(defaults.discordLoadingReaction),
+  DISCORD_PREMIUM_SKU_IDS: z.string().trim().default(defaults.discordPremiumSkuIds).refine(
+    (value) => value === "" || value.split(",").every((id) => /^\d{17,20}$/.test(id.trim())),
+    "DISCORD_PREMIUM_SKU_IDS must be a comma-separated list of Discord snowflakes."
+  ),
 
   DATABASE_URL: z.string().default(defaults.databaseUrl),
   EMBEDDING_DIMENSIONS: z.coerce.number().int().refine((value) => value === 1536, {
@@ -274,7 +279,8 @@ export function loadConfig() {
       clientId: parsed.data.DISCORD_CLIENT_ID,
       guildId: parsed.data.DISCORD_GUILD_ID,
       botName: parsed.data.BOT_NAME,
-      loadingReaction: parsed.data.DISCORD_LOADING_REACTION
+      loadingReaction: parsed.data.DISCORD_LOADING_REACTION,
+      premiumSkuIds: parsed.data.DISCORD_PREMIUM_SKU_IDS.split(",").map((id) => id.trim()).filter(Boolean)
     },
     databaseUrl: parsed.data.DATABASE_URL,
     embeddingDimensions: parsed.data.EMBEDDING_DIMENSIONS,

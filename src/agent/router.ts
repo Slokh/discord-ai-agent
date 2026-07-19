@@ -2,13 +2,14 @@ import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { runAgentModelLoop } from "./modelLoop.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 import { extractDiscordEmojiResponseIntent } from "./emojiResponseIntent.js";
+import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 
 export async function handleAgentRequest(
   ctx: ToolContext,
   userText: string,
 ): Promise<AgentResponse> {
   try {
-    const footerLines = (ctx.footerLines = ctx.footerLines ?? []);
+    const turnOutput = ensureAgentTurnOutput(ctx);
     const response = await runAgentModelLoop(ctx, userText);
     const emojiIntent = extractDiscordEmojiResponseIntent(
       response.content,
@@ -18,8 +19,9 @@ export async function handleAgentRequest(
       ...response,
       content: emojiIntent.content,
       sourceMessageReaction: emojiIntent.sourceMessageReaction,
+      discordPresentation: turnOutput.presentation,
     };
-    return footerLines.length > 0 ? { ...decorated, footerLines: [...footerLines] } : decorated;
+    return turnOutput.footerLines.length > 0 ? { ...decorated, footerLines: [...turnOutput.footerLines] } : decorated;
   } catch (error) {
     await recordAgentEvent(ctx, {
       eventName: "agent.request.failed",

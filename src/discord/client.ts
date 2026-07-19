@@ -20,6 +20,9 @@ import { discordMessageTraceContext, recordTraceEvent } from "./requestContext.j
 import { logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
 import { announceDeployment } from "./deploymentAnnouncements.js";
+import { handleDiscordRichInteraction } from "./components/interactionHandler.js";
+import { DiscordInteractionResponder } from "./components/interactionResponder.js";
+import { DiscordTaskSupervisor } from "./taskSupervisor.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -55,8 +58,8 @@ export function createDiscordAiAgentBot(input: {
       ],
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
     });
-  let acceptingMessages = true;
-  const activeMessageHandlers = new Set<Promise<void>>();
+  const taskSupervisor = new DiscordTaskSupervisor(logger);
+  let componentActionCleanupTimer: NodeJS.Timeout | null = null;
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(
@@ -68,22 +71,38 @@ export function createDiscordAiAgentBot(input: {
       "Discord AI Agent Discord bot is online"
     );
     if (input.deliveryObligations && input.agentRuntime) {
-      void sweepDiscordDeliveryObligations({
+      const obligations = input.deliveryObligations;
+      const agentRuntime = input.agentRuntime;
+      void taskSupervisor.run({ kind: "maintenance", label: "delivery_startup_sweep", task: () => sweepDiscordDeliveryObligations({
         client: readyClient,
-        obligations: input.deliveryObligations,
-        agentRuntime: input.agentRuntime,
+        obligations,
+        agentRuntime,
+        repo: input.repo,
         logger,
-        maxReplyChars: input.config.maxReplyChars
-      }).catch((error) => logger.warn({ err: error }, "Discord delivery obligation startup sweep failed"));
+        maxReplyChars: input.config.maxReplyChars,
+        premiumSkuIds: input.config.discord.premiumSkuIds
+      }) });
     }
-    void announceDeployment({
+    const expireComponentActions = () => void taskSupervisor.run({
+      kind: "maintenance",
+      label: "component_action_expiry",
+      task: async () => {
+        const expired = await input.repo.expireDiscordComponentActions({ limit: 2_000 });
+        if (expired > 0) logger.info({ expired }, "Expired stale Discord component actions");
+      },
+    });
+    expireComponentActions();
+    componentActionCleanupTimer = setInterval(expireComponentActions, 60 * 60_000);
+    componentActionCleanupTimer.unref?.();
+    void taskSupervisor.run({ kind: "maintenance", label: "deployment_announcement", task: async () => {
+      const result = await announceDeployment({
       client: readyClient,
       config: input.config,
       repo: input.repo,
       openRouter: input.openRouter
-    }).then((result) => {
+      });
       if (result !== "disabled" && result !== "duplicate") logger.info({ result, revision: input.config.appRevision }, "Deployment announcement lifecycle completed");
-    }).catch((error) => logger.warn({ err: error, revision: input.config.appRevision }, "Deployment announcement failed"));
+    } });
   });
 
   client.on(Events.ShardDisconnect, (event, shardId) => {
@@ -106,26 +125,15 @@ export function createDiscordAiAgentBot(input: {
     logger.error({ err: error }, "Discord client error");
   });
 
-  client.on(Events.MessageCreate, async (message) => {
-    if (!acceptingMessages) {
-      logger.info({ messageId: message.id, channelId: message.channelId }, "Ignoring Discord message while bot is draining");
-      return;
-    }
-    const handler = runWithTrace(discordMessageTraceContext(message), async () => {
-      await handleMessageCreate(input, client, message).catch((error) => {
-        logger.error({ err: error, messageId: message.id }, "Message handler failed");
-      });
-    });
-    activeMessageHandlers.add(handler);
-    try {
-      await handler;
-    } finally {
-      activeMessageHandlers.delete(handler);
-    }
-  });
+  client.on(Events.MessageCreate, (message) => void taskSupervisor.run({
+    kind: "request",
+    label: "message_create",
+    logContext: { messageId: message.id, channelId: message.channelId },
+    task: () => runWithTrace(discordMessageTraceContext(message), () => handleMessageCreate(input, client, message)),
+  }));
 
-  client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
-    await runWithTrace(discordMessageTraceContext(newMessage), async () => {
+  client.on(Events.MessageUpdate, (_oldMessage, newMessage) => void taskSupervisor.run({ kind: "maintenance", label: "message_update", task: () =>
+    runWithTrace(discordMessageTraceContext(newMessage), async () => {
       try {
         const fetched = newMessage.partial ? await newMessage.fetch() : newMessage;
         if (fetched.inGuild()) {
@@ -138,24 +146,24 @@ export function createDiscordAiAgentBot(input: {
       } catch (error) {
         logger.warn({ err: error }, "Failed to persist message update");
       }
-    });
-  });
+    }),
+  }));
 
-  client.on(Events.MessageDelete, async (message) => {
-    await runWithTrace(discordMessageTraceContext(message), async () => {
+  client.on(Events.MessageDelete, (message) => void taskSupervisor.run({ kind: "maintenance", label: "message_delete", task: () =>
+    runWithTrace(discordMessageTraceContext(message), async () => {
       if (!shouldProcessGuildEvent(input.config.discord.guildId, message.guildId)) return;
       if (message.id) await input.repo.markMessageDeleted(message.id).catch(() => undefined);
       await recordTraceEvent(input.repo, { eventName: "discord.message.deleted", summary: "Marked Discord message deleted" });
-    });
-  });
+    }),
+  }));
 
-  client.on(Events.MessageBulkDelete, async (messages) => {
+  client.on(Events.MessageBulkDelete, (messages) => void taskSupervisor.run({ kind: "maintenance", label: "message_bulk_delete", task: async () => {
     const messageIds = deletedMessageIdsForConfiguredGuild(messages.values(), input.config.discord.guildId);
     await Promise.all(messageIds.map((messageId) => input.repo.markMessageDeleted(messageId).catch(() => undefined)));
-  });
+  } }));
 
-  client.on(Events.MessageReactionAdd, async (reaction, user) => {
-    await runWithTrace(discordMessageTraceContext(reaction.message), async () => {
+  client.on(Events.MessageReactionAdd, (reaction, user) => void taskSupervisor.run({ kind: "request", label: "reaction_add", task: () =>
+    runWithTrace(discordMessageTraceContext(reaction.message), async () => {
       if (user && !isSelfUser(user, client.user?.id)) {
         const handled = await handleUndoCrossReaction(input, client, reaction, user).catch((error) => {
           logger.warn({ err: error }, "Failed to handle ❌ undo reaction");
@@ -174,11 +182,11 @@ export function createDiscordAiAgentBot(input: {
           logger.warn({ err: error }, "Failed to handle regenerate reply reaction");
         })
       ]);
-    });
-  });
+    }),
+  }));
 
-  client.on(Events.MessageReactionRemove, async (reaction, user) => {
-    await runWithTrace(discordMessageTraceContext(reaction.message), async () => {
+  client.on(Events.MessageReactionRemove, (reaction, user) => void taskSupervisor.run({ kind: "maintenance", label: "reaction_remove", task: () =>
+    runWithTrace(discordMessageTraceContext(reaction.message), async () => {
       await Promise.all([
         persistReactionMessageUpdate(input, reaction).catch((error) => {
           logger.warn({ err: error }, "Failed to persist reaction remove");
@@ -187,38 +195,52 @@ export function createDiscordAiAgentBot(input: {
           logger.warn({ err: error }, "Failed to remove Discord bug marker");
         })
       ]);
-    });
-  });
+    }),
+  }));
 
-  client.on(Events.MessageReactionRemoveEmoji, async (reaction) => {
-    await runWithTrace(discordMessageTraceContext(reaction.message), async () => {
+  client.on(Events.MessageReactionRemoveEmoji, (reaction) => void taskSupervisor.run({ kind: "maintenance", label: "reaction_remove_emoji", task: () =>
+    runWithTrace(discordMessageTraceContext(reaction.message), async () => {
       await persistReactionMessageUpdate(input, reaction).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction emoji removal");
       });
       await clearDiscordBugMarkersForReaction(input, reaction);
-    });
-  });
+    }),
+  }));
 
-  client.on(Events.MessageReactionRemoveAll, async (message) => {
-    await runWithTrace(discordMessageTraceContext(message), async () => {
+  client.on(Events.MessageReactionRemoveAll, (message) => void taskSupervisor.run({ kind: "maintenance", label: "reaction_remove_all", task: () =>
+    runWithTrace(discordMessageTraceContext(message), async () => {
       await persistReactionMessage(input, message).catch((error) => {
         logger.warn({ err: error }, "Failed to persist reaction clear");
       });
       await clearDiscordBugMarkersForMessage(input, message);
-    });
-  });
+    }),
+  }));
 
-  client.on(Events.InteractionCreate, async (interaction) => {
-    if (!interaction.isChatInputCommand() || interaction.commandName !== "ai") return;
-    await interaction
-      .reply({
-        content: "Discord AI Agent slash commands are disabled. Mention me with `@ai status` or `@ai tools` instead.",
-        flags: MessageFlags.Ephemeral
-      })
-      .catch((error) => {
-        logger.warn({ err: error }, "Failed to reply to stale slash command interaction");
-      });
-  });
+  client.on(Events.InteractionCreate, (interaction) => void taskSupervisor.run({
+    kind: "request",
+    label: "interaction_create",
+    logContext: { interactionId: interaction.id },
+    onRejected: async () => {
+      if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
+        await new DiscordInteractionResponder(interaction, logger).ephemeral("I’m restarting right now. Please try that control again in a moment.");
+      }
+    },
+    task: async () => {
+      if (await handleDiscordRichInteraction(input, client, interaction).catch((error) => {
+        logger.error({ err: error, interactionId: interaction.id }, "Discord rich interaction handler failed");
+        return false;
+      })) return;
+      if (!interaction.isChatInputCommand() || interaction.commandName !== "ai") return;
+      await interaction
+        .reply({
+          content: "Discord AI Agent slash commands are disabled. Mention me with `@ai status` or `@ai tools` instead.",
+          flags: MessageFlags.Ephemeral
+        })
+        .catch((error) => {
+          logger.warn({ err: error }, "Failed to reply to stale slash command interaction");
+        });
+    },
+  }));
 
   return {
     client,
@@ -227,47 +249,13 @@ export function createDiscordAiAgentBot(input: {
       await client.login(input.config.discord.token);
     },
     drain: async (timeoutMs = 30_000) => {
-      acceptingMessages = false;
-      if (activeMessageHandlers.size === 0) return;
-      logger.info({ activeMessageHandlers: activeMessageHandlers.size, timeoutMs }, "Waiting for active Discord message handlers to drain");
-      await waitForActiveHandlers(activeMessageHandlers, timeoutMs);
+      if (componentActionCleanupTimer) clearInterval(componentActionCleanupTimer);
+      await taskSupervisor.drain(timeoutMs);
     },
     destroy: () => {
-      acceptingMessages = false;
+      taskSupervisor.stopAccepting();
+      if (componentActionCleanupTimer) clearInterval(componentActionCleanupTimer);
       client.destroy();
     }
   };
 }
-
-async function waitForActiveHandlers(activeHandlers: Set<Promise<void>>, timeoutMs: number) {
-  if (activeHandlers.size === 0) return;
-  await Promise.race([
-    Promise.allSettled([...activeHandlers]),
-    new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, timeoutMs);
-      timeout.unref?.();
-    })
-  ]);
-}
-
-// Compatibility re-exports: prefer importing from the focused modules directly.
-export {
-  deletedMessageIdsForConfiguredGuild,
-  discordChannelThreadKey,
-  explicitChannelMentionIds,
-  explicitRoleMentionIds,
-  explicitUserMentionIds,
-  hasExplicitBotAddress,
-  hasExplicitBotMention,
-  isSelfMessage,
-  resolveBotMentionContext,
-  shouldProcessGuildEvent,
-  stripBotAddress
-} from "./mentionParsing.js";
-export {
-  REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT,
-  SESSION_CONTEXT_MESSAGE_LIMIT,
-  sessionContextMessageLimitForReplyContext
-} from "./turnPreparation.js";
-export { runQueuedAgentRuntimeExecution } from "./agentDelivery.js";
-export { handleUndoCrossReaction, persistReactionMessage } from "./reactions.js";

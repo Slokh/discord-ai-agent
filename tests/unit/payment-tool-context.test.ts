@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { appendTempoTransactionFooter, paymentRecorder } from "../../src/tools/paymentToolContext.js";
 import type { ToolContext } from "../../src/tools/types.js";
+import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";
 
 describe("payment tool context", () => {
   it.each([
@@ -23,7 +24,7 @@ describe("payment tool context", () => {
       metadata: { transactionHash }
     });
 
-    expect(ctx.footerLines).toEqual([
+    expect(ctx.turnOutput?.footerLines).toEqual([
       `💸 [transfer](<${explorer}/tx/${transactionHash}>)`
     ]);
     expect(recordTraceEvent).toHaveBeenCalledTimes(2);
@@ -35,7 +36,7 @@ describe("payment tool context", () => {
     appendTempoTransactionFooter(ctx, "0xabc");
     appendTempoTransactionFooter(ctx, undefined);
 
-    expect(ctx.footerLines).toEqual([]);
+    expect(ctx.turnOutput?.footerLines).toEqual([]);
   });
 });
 
@@ -50,6 +51,6 @@ function context(network: "mainnet" | "moderato", recordTraceEvent: ReturnType<t
     visibleChannelIds: ["channel"],
     requestId: "request",
     requestMessageId: "message",
-    footerLines: []
+    turnOutput: createAgentTurnOutput()
   } as unknown as ToolContext;
 }

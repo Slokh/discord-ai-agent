@@ -1,4 +1,4 @@
-import type { RunSnapshot } from "./runs.js";
+import type { RunSnapshot } from "./runTypes.js";
 import { redactSensitiveText } from "./redaction.js";
 import { truncateForDiscord } from "../util/text.js";
 

@@ -1,6 +1,7 @@
 import { summarizeForAudit } from "../util/text.js";
-import type { ToolContext } from "./types.js";
+import type { AgentFile, ToolContext } from "./types.js";
 import { imageReferencesForInput } from "./imageTools.js";
+import { updateDiscordBotAvatar } from "../discord/api.js";
 
 export type UpdateBotAvatarInput = {
   imageUrl?: string;
@@ -8,7 +9,6 @@ export type UpdateBotAvatarInput = {
   useContextImage?: boolean;
 };
 
-const DISCORD_API_BASE = "https://discord.com/api/v10";
 const MAX_AVATAR_BYTES = 8_000_000;
 const ALLOWED_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const DATA_URI_CONTENT_TYPES: Record<string, string> = {
@@ -55,15 +55,9 @@ export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarIn
   }
 
   let response: Response;
+  let profile: { avatar?: string | null; id?: string; username?: string } | undefined;
   try {
-    response = await fetch(`${DISCORD_API_BASE}/users/@me`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bot ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ avatar: dataUri })
-    });
+    ({ response, profile } = await updateDiscordBotAvatar(token, dataUri));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await auditAvatar(ctx, input, `discord api network error: ${message}`, true, { sourceLabel: source.label });
@@ -83,8 +77,7 @@ export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarIn
 
   let newAvatarUrl: string | undefined;
   try {
-    const json = (await response.json()) as { avatar?: string | null; id?: string; username?: string };
-    newAvatarUrl = json.id && json.avatar ? `https://cdn.discordapp.com/avatars/${json.id}/${json.avatar}.png` : undefined;
+    newAvatarUrl = profile?.id && profile.avatar ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png` : undefined;
   } catch {
     // Non-fatal: the PATCH succeeded even if we could not parse the body.
   }
@@ -115,7 +108,7 @@ async function resolveAvatarSource(ctx: ToolContext, input: UpdateBotAvatarInput
     return { kind: "url", url: explicitUrl, label: `explicit URL: ${explicitUrl}` };
   }
 
-  const generatedImage = pickGeneratedImage(ctx.generatedFiles);
+  const generatedImage = pickGeneratedImage(ctx.turnOutput?.files);
   if (generatedImage) {
     return {
       kind: "buffer",
@@ -137,7 +130,7 @@ async function resolveAvatarSource(ctx: ToolContext, input: UpdateBotAvatarInput
   return { kind: "url", url: reference.url, label: reference.label };
 }
 
-function pickGeneratedImage(files: ToolContext["generatedFiles"]): { name: string; data: Buffer; contentType?: string } | undefined {
+function pickGeneratedImage(files: AgentFile[] | undefined): { name: string; data: Buffer; contentType?: string } | undefined {
   for (const file of files ?? []) {
     const contentType = (file.contentType ?? "").toLowerCase();
     const isImage = contentType.startsWith("image/") || /\.(?:png|jpe?g|webp|gif)$/i.test(file.name);

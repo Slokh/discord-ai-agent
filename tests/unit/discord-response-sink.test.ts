@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_DISCORD_LOADING_REACTION, DiscordResponseSink } from "../../src/discord/responseSink.js";
+import { DEFAULT_DISCORD_LOADING_REACTION, DiscordResponseSink, discordDeliveryNonce } from "../../src/discord/responseSink.js";
 
 describe("DiscordResponseSink", () => {
   it("acknowledges with a loading reaction and replies final content when no status message exists", async () => {
@@ -19,6 +19,22 @@ describe("DiscordResponseSink", () => {
     expect(sourceMessage.reply).toHaveBeenCalledWith({ content: "done" });
     expect(reaction.users.remove).toHaveBeenCalledWith("bot-user");
     expect(result.usedStatusMessage).toBe(false);
+  });
+
+  it("uses stable enforced nonces to make retried message creation idempotent", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({
+      client: fakeClient(), sourceMessage: sourceMessage as any, maxReplyChars: 2_000,
+      deliveryKey: "request-1", logger: fakeLogger() as any,
+    });
+
+    await sink.sendFinal({ content: "done" });
+
+    expect(sourceMessage.reply).toHaveBeenCalledWith({
+      content: "done",
+      nonce: `${discordDeliveryNonce("request-1")}00`,
+      enforceNonce: true,
+    });
   });
 
   it("appends a Discord subtext trace footer to final replies", async () => {
@@ -209,6 +225,67 @@ describe("DiscordResponseSink", () => {
       content: "image",
       files: [expect.objectContaining({ name: "image.png" })]
     });
+  });
+
+  it("delivers a prepared Components V2 response through the shared sink", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: sourceMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
+
+    const result = await sink.sendFinal({
+      content: "fallback",
+      presentation: {
+        payload: { content: null, flags: 32768, components: [{ type: 10, content: "rich" }] as any },
+        fallbackPayload: { content: null, flags: 32768, components: [{ type: 10, content: "fallback" }] as any },
+        registrations: [],
+      },
+    });
+
+    expect(sourceMessage.reply).toHaveBeenCalledWith(expect.objectContaining({ content: null, flags: 32768 }));
+    expect(result.usedRichPresentation).toBe(true);
+  });
+
+  it("keeps plain follow-up output in Components V2 when editing a rich interaction message", async () => {
+    const statusMessage = fakeMessage({
+      id: "rich-message",
+      flags: { has: vi.fn(() => true) },
+    });
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: sourceMessage as any, statusMessage: statusMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
+
+    const result = await sink.sendFinal({ content: "plain follow-up" });
+
+    expect(statusMessage.edit).toHaveBeenCalledWith(expect.objectContaining({
+      content: null,
+      flags: 32768,
+      components: [expect.objectContaining({ type: 10, content: "plain follow-up" })],
+    }));
+    expect(result.usedRichPresentation).toBe(false);
+  });
+
+  it("renders progress updates as Text Display components for Components V2 targets", async () => {
+    const statusMessage = fakeMessage({ flags: { has: vi.fn(() => true) } });
+    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: fakeMessage() as any, statusMessage: statusMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
+
+    await sink.updateStatus("still working");
+
+    expect(statusMessage.edit).toHaveBeenCalledWith(expect.objectContaining({
+      flags: 32768,
+      components: [expect.objectContaining({ type: 10, content: "still working" })],
+    }));
+  });
+
+  it("removes inactive controls with the compiled non-interactive fallback", async () => {
+    const statusMessage = fakeMessage({ flags: { has: vi.fn(() => true) } });
+    const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: fakeMessage() as any, statusMessage: statusMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });
+    const fallbackPayload = { content: null, flags: 32768, components: [{ type: 10, content: "safe fallback" }] as any };
+
+    await sink.replaceRichPresentationWithFallback({
+      payload: { content: null, flags: 32768, components: [{ type: 1, components: [{ type: 2 }] }] as any },
+      fallbackPayload,
+      registrations: [],
+    });
+
+    expect(statusMessage.edit).toHaveBeenCalledWith(fallbackPayload);
   });
 
   it("falls back to cached loading reaction cleanup when the acknowledgement reaction was not captured", async () => {
@@ -454,6 +531,7 @@ function fakeMessage(overrides: Record<string, unknown> = {}) {
     react: vi.fn(async (_emoji: string) => fakeReaction()),
     reply: vi.fn(async () => fakeMessage({ id: "reply-1" })),
     edit: vi.fn(async () => fakeMessage({ id: "edited-1" })),
+    flags: { has: vi.fn(() => false) },
     reactions: {
       cache: {
         get: vi.fn(() => null),

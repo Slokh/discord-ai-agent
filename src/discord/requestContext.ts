@@ -39,6 +39,11 @@ export type DiscordAgentExecutionRequest = {
   botRoleIds: string[];
   messageStartedAt: number;
   turnEnvelope?: AgentRuntimeTurnEnvelope | null;
+  requestKind?: "message" | "component" | "modal";
+  userId?: string;
+  userDisplayName?: string;
+  interaction?: AgentRuntimeTurnEnvelope["interaction"];
+  requestAttachments?: AgentRuntimeTurnEnvelope["requestAttachments"];
 };
 
 export type PreparedDiscordAgentTurn = {

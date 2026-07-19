@@ -1,8 +1,10 @@
-import { AttachmentBuilder, type Client, type Message, type MessageCreateOptions } from "discord.js";
+import { createHash } from "node:crypto";
+import { AttachmentBuilder, MessageFlags, type Client, type Message, type MessageCreateOptions } from "discord.js";
 import type { Logger } from "pino";
 import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
 import type { AgentFile } from "../tools/types.js";
+import { plainDiscordComponentsV2Payload, validateDiscordAttachmentNames, type PreparedDiscordPresentation } from "./components/renderer.js";
 import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
 
 export const DEFAULT_DISCORD_LOADING_REACTION = "⏳";
@@ -11,6 +13,7 @@ const ACKNOWLEDGEMENT_FALLBACK_CONTENT = "Working on it...";
 export type DiscordResponseResult = {
   message: Message;
   usedStatusMessage: boolean;
+  usedRichPresentation: boolean;
 };
 
 export type DiscordResponseFooter = {
@@ -37,6 +40,7 @@ export class DiscordResponseSink {
   private readonly logger: Logger;
   private readonly loadingReactionEmoji: string;
   private readonly loadingReactionMatch: DiscordReactionMatch;
+  private readonly deliveryNonce: string | null;
   private statusMessage: Message | null;
   private loadingReaction: Awaited<ReturnType<Message["react"]>> | null = null;
   private acknowledgementAttempted = false;
@@ -48,6 +52,7 @@ export class DiscordResponseSink {
     logger: Logger;
     loadingReactionEmoji?: string;
     statusMessage?: Message | null;
+    deliveryKey?: string | null;
   }) {
     this.client = input.client;
     this.sourceMessage = input.sourceMessage;
@@ -55,6 +60,7 @@ export class DiscordResponseSink {
     this.logger = input.logger;
     this.loadingReactionEmoji = input.loadingReactionEmoji?.trim() || DEFAULT_DISCORD_LOADING_REACTION;
     this.loadingReactionMatch = parseDiscordReactionMatch(this.loadingReactionEmoji);
+    this.deliveryNonce = input.deliveryKey ? discordDeliveryNonce(input.deliveryKey) : null;
     this.statusMessage = input.statusMessage ?? null;
   }
 
@@ -91,7 +97,10 @@ export class DiscordResponseSink {
   async updateStatus(content: string): Promise<Message> {
     const cleanContent = cleanResponse(content, this.maxReplyChars);
     if (this.statusMessage) {
-      const edited = await discordEdit(this.statusMessage, cleanContent, { logger: this.logger });
+      const payload = this.statusUsesComponentsV2()
+        ? plainDiscordComponentsV2Payload({ content: cleanContent })
+        : cleanContent;
+      const edited = await discordEdit(this.statusMessage, payload as Parameters<Message["edit"]>[0], { logger: this.logger });
       if (edited.ok) {
         this.statusMessage = edited.value;
         return this.statusMessage;
@@ -100,13 +109,14 @@ export class DiscordResponseSink {
       this.logger.warn({ statusMessageId: this.statusMessage.id }, "Discord status message disappeared; creating a fresh reply");
       this.statusMessage = null;
     }
-    const replied = await discordReply(this.sourceMessage, cleanContent, { logger: this.logger });
+    const replied = await discordReply(this.sourceMessage, this.withDeliveryNonce(cleanContent), { logger: this.logger });
     if (!replied.ok) throw replied.error;
     this.statusMessage = replied.value;
     return this.statusMessage;
   }
 
-  async sendFinal(input: { content: string; files?: AgentFile[]; footer?: DiscordResponseFooter | null }): Promise<DiscordResponseResult> {
+  async sendFinal(input: { content: string; files?: AgentFile[]; footer?: DiscordResponseFooter | null; presentation?: PreparedDiscordPresentation | null }): Promise<DiscordResponseResult> {
+    validateDiscordAttachmentNames(input.files?.map((file) => file.name) ?? []);
     const files = input.files?.map((file) => new AttachmentBuilder(file.data, { name: file.name }));
     const footerLine = formatDiscordResponseFooter(input.footer);
     const rawBody = input.content.trim() || "Done.";
@@ -120,13 +130,45 @@ export class DiscordResponseSink {
     const separator = "\n\n";
     const singleMessageContent = footerLine ? `${body}${separator}${footerLine}` : body;
 
+    if (input.presentation) {
+      const usedStatusMessage = Boolean(this.statusMessage);
+      try {
+        const richPayload = {
+          ...input.presentation.payload,
+          ...(files?.length ? { files } : {}),
+        } as MessageCreateOptions;
+        const message = await this.editStatusOrReply(richPayload);
+        this.statusMessage = message;
+        await this.clearAcknowledgement();
+        return { message, usedStatusMessage, usedRichPresentation: true };
+      } catch (error) {
+        this.logger.warn({ err: error }, "Discord rejected rich presentation; falling back to plain response");
+      }
+    }
+
+    if (this.statusUsesComponentsV2()) {
+      const usedStatusMessage = true;
+      const payload = {
+        ...plainDiscordComponentsV2Payload({
+          content: body,
+          footer: footerLine,
+          fileNames: input.files?.map((file) => file.name),
+        }),
+        ...(files?.length ? { files } : {}),
+      } as MessageCreateOptions;
+      const message = await this.editStatusOrReply(payload);
+      this.statusMessage = message;
+      await this.clearAcknowledgement();
+      return { message, usedStatusMessage, usedRichPresentation: false };
+    }
+
     if (singleMessageContent.length <= this.maxReplyChars) {
       const payload = files?.length ? { content: singleMessageContent, files } : { content: singleMessageContent };
       const usedStatusMessage = Boolean(this.statusMessage);
       const message = await this.editStatusOrReply(payload);
       this.statusMessage = message;
       await this.clearAcknowledgement();
-      return { message, usedStatusMessage };
+      return { message, usedStatusMessage, usedRichPresentation: false };
     }
 
     const reservedForFooter = footerLine ? separator.length + footerLine.length : 0;
@@ -140,18 +182,19 @@ export class DiscordResponseSink {
     const channel = this.sourceMessage.channel;
     const sendable = isSendableChannel(channel) ? channel : null;
     let previousMessageId = firstMessage.id;
+    let continuationIndex = 1;
     for (let i = 1; i < chunks.length; i++) {
       const isLast = i === chunks.length - 1;
       const content = isLast && footerLine ? `${chunks[i]}${separator}${footerLine}` : chunks[i];
       if (!sendable) continue;
       if (content.length <= this.maxReplyChars) {
-        const sentResult = await discordSend(sendable, this.continuationPayload(content, previousMessageId), { logger: this.logger });
+        const sentResult = await discordSend(sendable, this.continuationPayload(content, previousMessageId, continuationIndex++), { logger: this.logger });
         if (!sentResult.ok) throw sentResult.error;
         const sent = sentResult.value;
         previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
       } else {
         for (const overflow of splitForDiscord(content, this.maxReplyChars)) {
-          const sentResult = await discordSend(sendable, this.continuationPayload(overflow, previousMessageId), { logger: this.logger });
+          const sentResult = await discordSend(sendable, this.continuationPayload(overflow, previousMessageId, continuationIndex++), { logger: this.logger });
           if (!sentResult.ok) throw sentResult.error;
           const sent = sentResult.value;
           previousMessageId = (sent as Message | undefined)?.id ?? previousMessageId;
@@ -160,12 +203,23 @@ export class DiscordResponseSink {
     }
 
     await this.clearAcknowledgement();
-    return { message: firstMessage, usedStatusMessage };
+    return { message: firstMessage, usedStatusMessage, usedRichPresentation: false };
   }
 
   async sendError(content: string, footer?: DiscordResponseFooter | null): Promise<DiscordResponseResult> {
     const result = await this.sendFinal({ content, footer });
     return result;
+  }
+
+  async replaceRichPresentationWithFallback(presentation: PreparedDiscordPresentation): Promise<Message | null> {
+    if (!this.statusMessage) return null;
+    const edited = await discordEdit(this.statusMessage, presentation.fallbackPayload as Parameters<Message["edit"]>[0], { logger: this.logger });
+    if (!edited.ok) {
+      this.logger.error({ err: edited.error, statusMessageId: this.statusMessage.id }, "Failed to replace inactive Discord controls with a safe fallback");
+      return null;
+    }
+    this.statusMessage = edited.value;
+    return this.statusMessage;
   }
 
   async addReactions(input: DiscordAddReactionsInput): Promise<DiscordReactionOutcome> {
@@ -216,11 +270,12 @@ export class DiscordResponseSink {
     }
   }
 
-  private continuationPayload(content: string, referenceMessageId: string): MessageCreateOptions {
+  private continuationPayload(content: string, referenceMessageId: string, index: number): MessageCreateOptions {
     return {
       content,
       reply: { messageReference: referenceMessageId, failIfNotExists: false },
-      allowedMentions: { parse: [], repliedUser: false }
+      allowedMentions: { parse: [], repliedUser: false },
+      ...this.nonceFields(index),
     };
   }
 
@@ -232,10 +287,28 @@ export class DiscordResponseSink {
       this.logger.warn({ statusMessageId: this.statusMessage.id }, "Discord status message disappeared; creating a fresh reply");
       this.statusMessage = null;
     }
-    const replied = await discordReply(this.sourceMessage, payload, { logger: this.logger });
+    const replied = await discordReply(this.sourceMessage, this.withDeliveryNonce(payload), { logger: this.logger });
     if (!replied.ok) throw replied.error;
     return replied.value;
   }
+
+  private statusUsesComponentsV2() {
+    return Boolean(this.statusMessage?.flags.has(MessageFlags.IsComponentsV2));
+  }
+
+  private withDeliveryNonce(payload: string | MessageCreateOptions, index = 0): string | MessageCreateOptions {
+    if (!this.deliveryNonce) return payload;
+    const normalized = typeof payload === "string" ? { content: payload } : payload;
+    return { ...normalized, ...this.nonceFields(index) };
+  }
+
+  private nonceFields(index: number): Pick<MessageCreateOptions, "nonce" | "enforceNonce"> {
+    return this.deliveryNonce ? { nonce: `${this.deliveryNonce}${index.toString(36).padStart(2, "0")}`, enforceNonce: true } : {};
+  }
+}
+
+export function discordDeliveryNonce(deliveryKey: string): string {
+  return createHash("sha256").update(deliveryKey).digest("hex").slice(0, 20);
 }
 
 export function formatDiscordResponseFooter(footer?: DiscordResponseFooter | null) {

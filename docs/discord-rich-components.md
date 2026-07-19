@@ -31,7 +31,7 @@ Code validates the complete tree, enforces Discord limits, compiles it through a
 
 ## Lifecycle
 
-1. The model calls `composeDiscordResponse`; validation stores the presentation on the current tool context.
+1. The model calls `composeDiscordResponse`; generic structured-argument normalization safely unwraps double-encoded object/array fields, then canonical validation stores the presentation on the single current-turn output collector. Numeric Discord wire types, `custom_id`, and other protocol-owned fields remain invalid.
 2. Final synthesis produces normal concise response text.
 3. Code stores the complete validated delivery intent before the first Discord write. The pure Discord adapter then compiles response text, presentation, footer, and files and validates the final 40-component payload.
 4. Interactive actions are batch-created as one pending generation. Delivery uses stable enforced nonces, sends the payload, then one transaction binds and activates that generation while cancelling the previous generation for the same message.
@@ -49,6 +49,7 @@ Code validates the complete tree, enforces Discord limits, compiles it through a
 - A Components V2 message allows at most 40 total components. Structural and field limits are validated before delivery.
 - Once a message uses Components V2, all later status and final edits remain Components V2; plain follow-ups are rendered as Text Display components because Discord does not allow removing the flag.
 - Compilation or persistence failure falls back before delivery. Delivery or activation failure cancels the pending generation, replaces interactive controls with a non-interactive Components V2 fallback when necessary, and records `discord.presentation.fallback`.
+- A failed composition attempt cannot be presented as success: if no validated presentation was registered, a deterministic outcome guard replaces any model-authored success claim with an honest retry message and records `agent.rich_presentation_guard.blocked`.
 - Successful rich delivery records `discord.presentation.delivered`; accepted clicks/submissions record `discord.component.accepted`.
 - Startup recovery replays the complete delivery intent, creates fresh opaque action tokens, reconciles the execution and conversation ledger, and uses the same stable enforced message nonces so a retry returns the recent matching message instead of creating a duplicate.
 - Opaque action tokens contain no secrets or authoritative action arguments. Only their hashes are stored.

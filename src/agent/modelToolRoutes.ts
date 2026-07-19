@@ -2,23 +2,33 @@ import {
   toolByName,
   toolSupportsCsvFormat,
   type ToolName,
+  type ToolRegistryEntry,
 } from "../tools/registry.js";
 import { previewText } from "../util/logger.js";
 import type { AgentToolRoute } from "./routerShared.js";
-import { parseToolArguments } from "./toolArguments.js";
+import { coerceStructuredToolArgumentStrings, parseToolArgumentsWithMetadata } from "./toolArguments.js";
 
 export function selectModelToolRoutes(
   toolCalls: Array<{ id: string; name: string; argumentsText: string }>,
+  availableTools?: readonly ToolRegistryEntry[],
 ): AgentToolRoute[] {
   const routes: AgentToolRoute[] = [];
   for (const call of toolCalls) {
-    const tool = toolByName(call.name);
+    const tool = availableTools?.find((candidate) => candidate.name === call.name) ?? toolByName(call.name);
     if (!tool) continue;
+    const parsed = parseToolArgumentsWithMetadata(call.argumentsText);
+    const parsedArguments = parsed.value;
+    const coercedArguments = coerceStructuredToolArgumentStrings(
+      parsedArguments,
+      tool.parameters as Record<string, unknown>,
+    );
+    const argumentsNormalized = parsed.repaired || coercedArguments !== parsedArguments;
     routes.push({
       id: call.id,
       name: tool.name,
-      arguments: parseToolArguments(call.argumentsText),
-      argumentsText: call.argumentsText,
+      arguments: coercedArguments,
+      argumentsText: argumentsNormalized ? JSON.stringify(coercedArguments) : call.argumentsText,
+      argumentsNormalized: argumentsNormalized || undefined,
     });
   }
   return routes;
@@ -99,10 +109,12 @@ export function traceToolRequestMetadata(call: {
   id: string;
   name: string;
   argumentsText: string;
+  argumentsNormalized?: boolean;
 }) {
   return {
     id: call.id,
     name: call.name,
     argumentsText: previewText(call.argumentsText, 2_000),
+    argumentsNormalized: call.argumentsNormalized || undefined,
   };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   openRouterServerToolRegistry,
+  localToolDefinitionsForModel,
   renderToolList,
   TOOL_GROUPS,
   toolContracts,
@@ -96,6 +97,12 @@ describe("toolRegistry", () => {
     expect(schema).toContain('"checkbox_group"');
     expect(schema).not.toContain('"additionalProperties":true');
     expect(Buffer.byteLength(schema, "utf8")).toBeLessThan(30_000);
+    expect(tool?.argumentExamples[0]).toEqual(expect.objectContaining({
+      components: expect.any(Array),
+    }));
+    const definition = localToolDefinitionsForModel([tool!])[0];
+    expect(definition?.function.description).toContain("Example arguments:");
+    expect(definition?.function.description).toContain('"type":"action_row"');
   });
 
   it("routes wallet balances through verified onchain USD", () => {

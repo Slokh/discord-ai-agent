@@ -36,8 +36,14 @@ export function invalidToolCallResponse(input: {
   config?: AppConfig;
 }): AgentResponse | null {
   const validation = validateToolCallArguments(input);
-  return validation.ok ? null : {
-    content: `Invalid arguments for ${input.name}: ${validation.message}. Retry with arguments matching the advertised tool schema.`,
+  if (validation.ok) return null;
+  const example = validArgumentExample(input.name, input.config);
+  return {
+    content: [
+      `Invalid arguments for ${input.name}: ${validation.message}.`,
+      "Retry with arguments matching the advertised tool schema.",
+      example ? `Canonical valid example: ${JSON.stringify(example)}` : "",
+    ].filter(Boolean).join(" "),
     status: "error",
     errorCode: "invalid_tool_arguments",
     retryable: true,
@@ -55,7 +61,14 @@ function deploymentValidatorFor(tool: ToolRegistryEntry, config: AppConfig): Val
 
 /** Compile every contract eagerly in verification/tests so invalid schemas fail before a model call. */
 export function assertToolRegistryContractsValid(): void {
-  for (const tool of toolRegistry) validatorFor(tool);
+  for (const tool of toolRegistry) {
+    const validator = validatorFor(tool);
+    for (const example of tool.argumentExamples) {
+      if (!validator(example)) {
+        throw new Error(`Invalid argument example for ${tool.name}: ${formatValidationErrors(validator.errors ? [...validator.errors] : [])}`);
+      }
+    }
+  }
 }
 
 function validatorFor(tool: ToolRegistryEntry): ValidateFunction {
@@ -64,6 +77,13 @@ function validatorFor(tool: ToolRegistryEntry): ValidateFunction {
   const validator = ajv.compile(tool.parameters as object);
   validators.set(tool.name, validator);
   return validator;
+}
+
+function validArgumentExample(name: ToolName, config?: AppConfig): Record<string, unknown> | undefined {
+  const tool = toolByName(name);
+  if (!tool) return undefined;
+  const validator = config ? deploymentValidatorFor(tool, config) : validatorFor(tool);
+  return tool.argumentExamples.find((example) => validator(example));
 }
 
 function isJsonObject(value: string): boolean {

@@ -25,9 +25,11 @@ Owns the model loop for one user prompt.
 - `modelRecovery.ts`: leaked hosted-tool markup detection, stripping, recovery calls, and malformed-output artifacts.
 - `invalidToolCallRecovery.ts`: one-shot full-context recovery when a model emits malformed or unavailable function names.
 - `modelToolset.ts`: initial scoped tool selection, same-turn tool-group expansion, and image-context checks used by the model loop.
+- `toolArguments.ts`: conservative JSON parsing plus schema-directed recovery for provider-double-encoded top-level object and array fields; normalized routes remain subject to canonical tool validation.
 - `randomOutcomeGuard.ts`: detects fresh chance outcomes that lack a successful `drawRandom` result, drives one in-turn retry, and provides the fail-closed response used by the model loop.
 - `modelTimeoutFallback.ts`: trims oldest conversational history for the one safe utility-model retry allowed before tools execute, and performs tool-free utility-model synthesis when the primary model times out after tools have already gathered evidence.
 - `freshExternalDataGuard.ts`: detects time-sensitive price, fare, schedule, availability, and similar answers that lack fresh web evidence, drives one retrieval retry, and fails closed instead of publishing invented live data.
+- `richPresentationOutcomeGuard.ts`: fails closed when rich presentation composition was attempted but no validated presentation reached the turn-output collector, preventing text from claiming missing controls.
 - `walletStatusGuard.ts`: forces wallet balance prompts through the managed wallet balance tool without capturing bank, game, or unrelated balance requests.
 - `modelLoop.ts` runs requester-scoped automatic starter funding before model/tool selection; `walletActionGuard.ts` still forces explicit USD transfers and fallback restart prompts through guarded wallet tools without capturing wagers.
 - `deterministicWalletRoute.ts`: executes balance-guard routes directly against managed wallet tools without a model-selection hop, then gives the verified evidence to normal conversational synthesis while preserving tool transcripts and telemetry.

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../../src/observability/redaction.js";
 import { diagnosticsForRun, extractDiscordMessageId, getRunSnapshot, relatedRunSummaries } from "../../src/observability/runs.js";
-import { summaryFromTask } from "../../src/observability/runRecordMappers.js";
-import type { AgentTaskRecord, DiscordAiAgentRepository, ProcessRunRecord } from "../../src/db/repositories.js";
+import { summaryFromAgentExecution, summaryFromTask } from "../../src/observability/runRecordMappers.js";
+import type { AgentRuntimeChatExecution, AgentTaskRecord, DiscordAiAgentRepository, ProcessRunRecord } from "../../src/db/repositories.js";
 import type { RunEvent, RunSummary } from "../../src/observability/runTypes.js";
 
 describe("observability redaction", () => {
@@ -41,6 +41,37 @@ describe("run summaries", () => {
         links: expect.objectContaining({ pullRequest: "https://github.com/example/repo/pull/1" })
       })
     );
+  });
+
+  it("projects an agent execution using its durable Discord trace scope", () => {
+    const execution: AgentRuntimeChatExecution = {
+      executionId: "execution-1",
+      sessionId: "session-1",
+      traceId: "trace-1",
+      sessionTraceId: "session-trace-1",
+      status: "succeeded",
+      title: "Discord reply",
+      request: "Answer the member",
+      requestedBy: "user-1",
+      error: null,
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      metadata: { discordMessageId: "message-1", replyUrl: "https://discord.com/reply" },
+      sessionMetadata: { discordUrl: "https://discord.com/message" },
+      createdAt: new Date("2026-07-18T12:00:00Z"),
+      startedAt: new Date("2026-07-18T12:00:01Z"),
+      completedAt: new Date("2026-07-18T12:00:03Z"),
+      updatedAt: new Date("2026-07-18T12:00:03Z")
+    };
+
+    expect(summaryFromAgentExecution(execution)).toEqual(expect.objectContaining({
+      runId: "trace-1",
+      messageId: "message-1",
+      source: "agent_runtime",
+      durationMs: 2_000,
+      links: { discordMessage: "https://discord.com/message", discordReply: "https://discord.com/reply" }
+    }));
   });
 
   it("derives related child runs from the shared trace while excluding the selected task", () => {

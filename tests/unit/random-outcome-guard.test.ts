@@ -112,6 +112,25 @@ describe("random outcome guard", () => {
     })).toBe(false);
   });
 
+  it.each([
+    "Requester ID: " + "123456789" + "012345678.",
+    "Requester: <@" + "123456789" + "012345678>; matched member: <@" + "987654321" + "098765432>.",
+  ])("does not mistake Discord user IDs for random results: %s", (responseContent) => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "find that Discord member for me",
+      responseContent,
+      successfulRandomDraw: false,
+    })).toBe(false);
+  });
+
+  it("still rejects an unverified long number for an explicit random-number request", () => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "pick a random 18 digit number",
+      responseContent: "123456789" + "012345678",
+      successfulRandomDraw: false,
+    })).toBe(true);
+  });
+
   it("recognizes only completed RNG tool results as successful", () => {
     expect(isSuccessfulRandomDrawResult("Provably fair draw complete.\nResult: 2, 5"))
       .toBe(true);

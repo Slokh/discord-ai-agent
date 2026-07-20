@@ -16,6 +16,8 @@ const DISCUSSION_PREFIX = /^\s*(?:what|which|why|how|should|is|are|do|does|did|t
 const EXECUTION_OVERRIDE = /\b(?:please|for me|right now|go ahead|can you|could you|would you|let(?:'s| us))\b/i;
 const WHOLE_BALANCE_WAGER = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
 const DISCORD_CUSTOM_EMOJI = /<a?:[A-Za-z0-9_]+:\d+>/g;
+const LONG_NUMBER = /\b\d{16,}\b/;
+const LONG_NUMBER_OUTCOME_CONTEXT = /\b(?:random|winning|lottery|raffle|drawn|selected|picked|\d{1,3}-digit)\s+(?:number|value)\b/i;
 
 const STRONG_OUTCOME_PATTERNS = [
   /^\s*Roll:\s*\d+\b/im,
@@ -28,7 +30,6 @@ const STRONG_OUTCOME_PATTERNS = [
   /\b(?:let(?:'s| us) deal|provably fair blackjack)\b[\s\S]{0,220}\b(?:10|[2-9JQKA])[♠♥♦♣]/i,
   /\bcoin\s+(?:landed|lands|came up|result)\b[\s\S]{0,80}\b(?:heads|tails)\b/i,
   /\b(?:the\s+)?(?:winner|selected|picked)\s*(?:is|:|—|-)\s*\S+/i,
-  /\b\d{16,}\b/,
 ];
 
 export const RANDOM_OUTCOME_RETRY_GUIDANCE =
@@ -208,14 +209,16 @@ export function shouldRejectUnverifiedRandomOutcome(input: {
   successfulRandomDraw: boolean;
 }): boolean {
   if (input.successfulRandomDraw) return false;
-  // Discord snowflake IDs are long enough to resemble generated random values.
-  // Ignore only complete custom-emoji mentions while preserving other long numbers.
+  // Discord custom emoji IDs are metadata, not chance outcomes.
   const response = input.responseContent.replace(DISCORD_CUSTOM_EMOJI, "").trim();
   if (!response) return false;
   if (STRONG_OUTCOME_PATTERNS.some((pattern) => pattern.test(response))) {
     return true;
   }
-  return false;
+  if (!LONG_NUMBER.test(response)) return false;
+  return LONG_NUMBER_OUTCOME_CONTEXT.test(response)
+    || randomToolForPrompt(input.userText) === "drawRandom"
+    || Boolean(input.replyContextText && randomToolForPrompt(input.replyContextText) === "drawRandom");
 }
 
 export async function recordRandomOutcomeGuardEvent(

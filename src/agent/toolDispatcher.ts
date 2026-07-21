@@ -10,7 +10,7 @@ import { handlerDefinitions } from "./toolHandlers/index.js";
 
 export { stringArgument, stringArrayArgument } from "./toolHandlers/arguments.js";
 
-const discordActionToolNames = new Set<ToolName>(["composeDiscordResponse", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji"]);
+const discordActionToolNames = new Set<ToolName>(["composeDiscordResponse", "addDiscordReaction", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji"]);
 const walletToolNames = new Set<ToolName>([
   "awaitRandomWagerAction", "getWalletBalance", "listWalletBalances", "getWagerHistory", "transferWalletFunds",
   "requestStarterFunds", "adminTransferWalletFunds", "reconcileWalletTransfers",

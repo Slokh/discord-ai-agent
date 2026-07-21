@@ -59,6 +59,11 @@ export type ToolContext = {
     durationHours: number;
     allowMultiselect: boolean;
   }) => Promise<{ messageId: string; channelId: string; url: string }>;
+  addDiscordReaction?: (input: {
+    channelId: string;
+    messageId: string;
+    emoji: string;
+  }) => Promise<{ messageId: string; channelId: string; url: string; emoji: string }>;
   createDiscordEmoji?: (input: {
     name: string;
     image: Buffer;

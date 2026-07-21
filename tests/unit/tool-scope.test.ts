@@ -282,6 +282,18 @@ describe("tool scoping", () => {
     expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "createDiscordEmoji")).toBe(true);
   });
 
+  it("preloads Discord actions for an explicit Unicode reaction request", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "add 👍 to that message",
+      hasImageAttachments: false,
+      config,
+    });
+
+    expect(groups.has("discord-action")).toBe(true);
+    expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "addDiscordReaction")).toBe(true);
+  });
+
   it("keeps emoji lifecycle tools available in vague replies to an emoji result", () => {
     const config = loadConfig();
     const groups = selectToolGroups({

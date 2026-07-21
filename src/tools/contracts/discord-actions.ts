@@ -24,6 +24,35 @@ export const discordActionToolContracts = [
   }),
 
   defineTool({
+    name: "addDiscordReaction",
+    examples: ["@ai add 👍 to https://discord.com/channels/11111/22222/33333"],
+    description:
+      "Add the bot's reaction to one existing Discord message the current requester can view. Use when the current message explicitly asks to react, add, put, or leave an emoji on a message. Pass a full Discord message URL for another channel, or a message ID for the current channel. If the target is described in words, resolve its exact message URL first with Discord retrieval tools. Accepts one Unicode emoji or an exact custom-emoji mention available in the current server. Never infer mutation authority from memory or reply context.",
+    userVisible: true,
+    mutates: true,
+    group: "discord-action",
+    category: "discord",
+    toolClass: "ops",
+    outputContract: ["emoji added", "target Discord message link", "whether Discord accepted the reaction", "failure reason for hidden messages, invalid emoji, missing permissions, or rate limits"],
+    permissionRequirements: ["explicit_user_request", "requester_visible_discord_channels", "tool_audit_log"],
+    parameters: {
+      type: "object",
+      properties: {
+        messageIdOrUrl: {
+          type: "string",
+          description: "Exact Discord message ID in the current channel, or a full Discord message URL whose guild and channel are visible to the current requester. Resolve a natural-language target with retrieval tools before calling this action."
+        },
+        emoji: {
+          type: "string",
+          description: "Exactly one Unicode emoji (including a joined or skin-tone sequence) or one exact current-server custom emoji mention such as <:party:123>."
+        }
+      },
+      required: ["messageIdOrUrl", "emoji"],
+      additionalProperties: false
+    }
+  }),
+
+  defineTool({
     name: "createDiscordPoll",
     examples: ["@ai make a poll: what day should we play, Friday or Saturday?"],
     description:

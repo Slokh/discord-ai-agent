@@ -384,6 +384,15 @@
         "composeDiscordResponse"
       ],
       "notes": "The agent should discover the presentation capability for a bounded group choice even when the user does not explicitly request buttons or a select menu."
+    },
+    {
+      "id": "discord-add-message-reaction",
+      "category": "discord-action",
+      "prompt": "add 👍 to https://discord.com/channels/11111/22222/33333",
+      "expectedTools": [
+        "addDiscordReaction"
+      ],
+      "notes": "Explicit message-reaction requests should preload and use the permission-scoped Discord mutation instead of claiming the capability is unavailable."
     }
   ]
 }

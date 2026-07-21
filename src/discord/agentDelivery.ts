@@ -9,7 +9,7 @@ import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } 
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentFile, ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
-import { createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
+import { addDiscordMessageReaction, createDiscordGuildEmoji, deleteDiscordMessageById, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers, fetchDiscordUserAvatar, sendDiscordPollMessage } from "./api.js";
 import { discordChannelThreadKey } from "./mentionParsing.js";
 import { DiscordResponseSink } from "./responseSink.js";
 import {
@@ -268,6 +268,7 @@ export async function executeDiscordAgentRequest(
         return deleted;
       },
       sendDiscordPoll: async (pollInput) => sendDiscordPollMessage(message, pollInput),
+      addDiscordReaction: async (reactionInput) => addDiscordMessageReaction(client, turnEnvelope.guildId, reactionInput),
       createDiscordEmoji: async (emojiInput) => createDiscordGuildEmoji(client, turnEnvelope.guildId, emojiInput),
       fetchDiscordUserAvatar: async ({ userId }) => fetchDiscordUserAvatar(client, turnEnvelope.guildId, userId),
       fetchDiscordGuildMembers: async () => fetchDiscordGuildMembers(client, turnEnvelope.guildId),

@@ -1,5 +1,6 @@
 import { updateBotAvatar } from "../tools/botProfileTools.js";
 import { createDiscordPoll } from "../tools/discordPollTools.js";
+import { addDiscordReaction } from "../tools/discordReactionTools.js";
 import { createDiscordEmoji } from "../tools/guildEmojiTools.js";
 import { composeDiscordResponse } from "../tools/discordPresentationTools.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
@@ -14,6 +15,14 @@ export async function executeDiscordActionToolRoute(
 ): Promise<AgentResponse | null> {
   if (route.name === "composeDiscordResponse") {
     return composeDiscordResponse(ctx, route.arguments ?? {});
+  }
+  if (route.name === "addDiscordReaction") {
+    return {
+      content: cleanResponse(await addDiscordReaction(ctx, {
+        messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
+        emoji: stringArgument(route.arguments, "emoji"),
+      }, originalText), ctx.config.maxReplyChars),
+    };
   }
   if (route.name === "createDiscordPoll") {
     return {

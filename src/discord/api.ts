@@ -40,6 +40,31 @@ export async function discordRemoveReaction(reaction: { users: { remove: (userId
   return discordWrite(() => reaction.users.remove(userId), options, "remove_reaction");
 }
 
+export async function addDiscordMessageReaction(
+  client: Client,
+  guildId: string,
+  input: { channelId: string; messageId: string; emoji: string },
+): Promise<{ messageId: string; channelId: string; url: string; emoji: string }> {
+  const channel = await client.channels.fetch(input.channelId);
+  const messages = (channel as { messages?: { fetch?: (messageId: string) => Promise<Message> } } | null)?.messages;
+  if (!messages?.fetch) throw new Error("the target Discord channel does not expose messages");
+  const message = await messages.fetch(input.messageId);
+  if (!message.inGuild() || message.guildId !== guildId) {
+    throw new Error("the target Discord message is outside the current server");
+  }
+  const result = await discordReact(message, input.emoji, { logger: defaultLogger });
+  if (!result.ok) {
+    const reason = result.reason.replaceAll("_", " ");
+    throw new Error(`Discord rejected the reaction (${reason})`, { cause: result.error });
+  }
+  return {
+    messageId: message.id,
+    channelId: message.channelId,
+    url: message.url,
+    emoji: input.emoji,
+  };
+}
+
 export async function discordDeleteMessage(messages: { delete: (messageId: string) => Promise<unknown> }, messageId: string, options: DiscordWriteOptions): Promise<DiscordWriteResult<unknown>> {
   return discordWrite(() => messages.delete(messageId), options, "delete");
 }

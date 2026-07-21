@@ -13,6 +13,7 @@ type DiscordReactionTarget = {
 };
 
 const DISCORD_MESSAGE_URL = /^https?:\/\/(?:www\.)?discord(?:app)?\.com\/channels\/(\d{5,25})\/(\d{5,25})\/(\d{5,25})\/?$/i;
+const DISCORD_MESSAGE_URL_IN_TEXT = /https?:\/\/(?:www\.)?discord(?:app)?\.com\/channels\/(\d{5,25})\/(\d{5,25})\/(\d{5,25})\/?/giu;
 const DISCORD_ID = /^\d{5,25}$/;
 const CUSTOM_EMOJI = /^<a?:[A-Za-z0-9_]{2,32}:\d{5,25}>$/;
 const UNICODE_EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]\uFE0F?\u20E3/u;
@@ -24,7 +25,8 @@ export async function addDiscordReaction(
   currentRequestText: string,
 ): Promise<string> {
   const emoji = input.emoji?.trim() ?? "";
-  if (ctx.mutationAuthorizedByCurrentInput !== true || !EXPLICIT_REACTION_INTENT.test(currentRequestText)) {
+  const targetNamedInCurrentRequest = requestNamesReactionTarget(currentRequestText, input.messageIdOrUrl);
+  if (ctx.mutationAuthorizedByCurrentInput !== true || (!EXPLICIT_REACTION_INTENT.test(currentRequestText) && !targetNamedInCurrentRequest)) {
     return auditReactionFailure(ctx, input, "missing_explicit_current_turn_intent",
       "I can only add a reaction when the current Discord message explicitly asks me to react or add an emoji.");
   }
@@ -79,6 +81,17 @@ export async function addDiscordReaction(
     });
     return `I could not add that Discord reaction: ${message}`;
   }
+}
+
+function requestNamesReactionTarget(currentRequestText: string, rawTarget: string | undefined): boolean {
+  const target = rawTarget?.trim();
+  if (!target) return false;
+  const parsedTarget = target.match(DISCORD_MESSAGE_URL);
+  if (!parsedTarget) return false;
+  for (const match of currentRequestText.matchAll(DISCORD_MESSAGE_URL_IN_TEXT)) {
+    if (match[1] === parsedTarget[1] && match[2] === parsedTarget[2] && match[3] === parsedTarget[3]) return true;
+  }
+  return false;
 }
 
 export function parseDiscordReactionTarget(

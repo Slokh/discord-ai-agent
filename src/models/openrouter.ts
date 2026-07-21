@@ -444,7 +444,7 @@ export class OpenRouterClient {
         if (attempt < maxAttempts && isRetryableOpenRouterStatus(response.status)) {
           const retryDelayMs = retryDelayMsForResponse(response, attempt, options.retryPolicy ?? "cheap");
           if (retryDelayMs == null) {
-            throw new Error(`OpenRouter request failed (${response.status}): ${details.message}`);
+            throw new OpenRouterHttpError({ status: response.status, message: details.message, code: details.code });
           }
           logger.warn(
             {
@@ -461,7 +461,7 @@ export class OpenRouterClient {
           await sleep(retryDelayMs);
           continue;
         }
-        throw new Error(`OpenRouter request failed (${response.status}): ${details.message}`);
+        throw new OpenRouterHttpError({ status: response.status, message: details.message, code: details.code });
       }
 
       logger.debug(
@@ -511,6 +511,18 @@ export class OpenRouterContentFilterError extends Error {
   }
 }
 
+export class OpenRouterHttpError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(input: { status: number; message: string; code?: string }) {
+    super(`OpenRouter request failed (${input.status}): ${input.message}`);
+    this.name = "OpenRouterHttpError";
+    this.status = input.status;
+    this.code = input.code;
+  }
+}
+
 export class OpenRouterTimeoutError extends Error {
   readonly timeoutMs: number;
   readonly path: string;
@@ -529,6 +541,10 @@ export function isOpenRouterTimeoutError(error: unknown): error is OpenRouterTim
 
 export function isOpenRouterContentFilterError(error: unknown): error is OpenRouterContentFilterError {
   return error instanceof OpenRouterContentFilterError;
+}
+
+export function isOpenRouterHttpError(error: unknown): error is OpenRouterHttpError {
+  return error instanceof OpenRouterHttpError;
 }
 
 function extractEstimatedCostUsd(json: any): number | undefined {

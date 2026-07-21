@@ -16,8 +16,13 @@ const DISCUSSION_PREFIX = /^\s*(?:what|which|why|how|should|is|are|do|does|did|t
 const EXECUTION_OVERRIDE = /\b(?:please|for me|right now|go ahead|can you|could you|would you|let(?:'s| us))\b/i;
 const WHOLE_BALANCE_WAGER = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
 const DISCORD_CUSTOM_EMOJI = /<a?:[A-Za-z0-9_]+:\d+>/g;
+const DISCORD_SNOWFLAKE_METADATA = /<[@#][!&]?\d+>|https?:\/\/(?:www\.)?discord(?:app)?\.com\/channels\/\d+\/\d+\/\d+/gi;
 const LONG_NUMBER = /\b\d{16,}\b/;
-const LONG_NUMBER_OUTCOME_CONTEXT = /\b(?:random|winning|lottery|raffle|drawn|selected|picked|\d{1,3}-digit)\s+(?:number|value)\b/i;
+const OUTCOME_NUMBER_CONTEXT = "(?:random|winning|lottery|raffle|drawn|selected|picked|\\d{1,3}-digit)\\s+(?:number|value)";
+const LONG_NUMBER_WITH_OUTCOME_CONTEXT = new RegExp(
+  `(?:\\b${OUTCOME_NUMBER_CONTEXT}\\b[\\s\\S]{0,80}\\b\\d{16,}\\b|\\b\\d{16,}\\b[\\s\\S]{0,80}\\b${OUTCOME_NUMBER_CONTEXT}\\b)`,
+  "i",
+);
 
 const STRONG_OUTCOME_PATTERNS = [
   /^\s*Roll:\s*\d+\b/im,
@@ -210,13 +215,16 @@ export function shouldRejectUnverifiedRandomOutcome(input: {
 }): boolean {
   if (input.successfulRandomDraw) return false;
   // Discord custom emoji IDs are metadata, not chance outcomes.
-  const response = input.responseContent.replace(DISCORD_CUSTOM_EMOJI, "").trim();
+  const response = input.responseContent
+    .replace(DISCORD_CUSTOM_EMOJI, "")
+    .replace(DISCORD_SNOWFLAKE_METADATA, "")
+    .trim();
   if (!response) return false;
   if (STRONG_OUTCOME_PATTERNS.some((pattern) => pattern.test(response))) {
     return true;
   }
   if (!LONG_NUMBER.test(response)) return false;
-  return LONG_NUMBER_OUTCOME_CONTEXT.test(response)
+  return LONG_NUMBER_WITH_OUTCOME_CONTEXT.test(response)
     || randomToolForPrompt(input.userText) === "drawRandom"
     || Boolean(input.replyContextText && randomToolForPrompt(input.replyContextText) === "drawRandom");
 }

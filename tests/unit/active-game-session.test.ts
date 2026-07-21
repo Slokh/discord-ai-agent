@@ -12,6 +12,8 @@ describe("active game sessions", () => {
     expect(getActiveGameSession).toHaveBeenCalledWith({
       threadKey: "guild:channel:rng-root:root_message",
       userId: "user",
+      threadKeyPrefix: "guild:channel:rng-root:",
+      replyMessageIds: ["previous_reply", "root_message"],
     });
     expect(active?.actionRequested).toBe(true);
   });
@@ -50,7 +52,13 @@ function context(getActiveGameSession: ReturnType<typeof vi.fn>): ToolContext {
     userId: "user",
     threadKey: "guild:channel",
     requestMessageId: "reply_message",
-    replyContext: { rootMessageId: "root_message" },
+    replyContext: {
+      rootMessageId: "root_message",
+      chain: [
+        { messageId: "previous_reply" },
+        { messageId: "root_message" },
+      ],
+    },
     walletService: { getActiveGameSession },
   } as unknown as ToolContext;
 }

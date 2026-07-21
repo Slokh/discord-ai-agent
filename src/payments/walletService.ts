@@ -301,10 +301,17 @@ export class WalletService {
     });
   }
 
-  getActiveGameSession(input: { threadKey: string; userId: string }): Promise<WagerReservation | null> {
+  getActiveGameSession(input: {
+    threadKey: string;
+    userId: string;
+    threadKeyPrefix?: string;
+    replyMessageIds?: string[];
+  }): Promise<WagerReservation | null> {
     return this.repo.getActiveGameWager({
       threadKey: input.threadKey,
-      requestedByUserId: input.userId
+      requestedByUserId: input.userId,
+      threadKeyPrefix: input.threadKeyPrefix,
+      replyMessageIds: input.replyMessageIds,
     });
   }
 

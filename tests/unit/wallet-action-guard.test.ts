@@ -32,6 +32,7 @@ describe("wallet action guard", () => {
 
   it.each([
     ["send luke 1.00", { amountUsd: 1, destination: { kind: "user", reference: "luke" } }],
+    ["send luke 1", { amountUsd: 1, destination: { kind: "user", reference: "luke" } }],
     ["give Luke back $1 so he can use it", { amountUsd: 1, destination: { kind: "user", reference: "Luke" } }],
     ["send $.50 to the bot wallet", { amountUsd: 0.5, destination: { kind: "bot" } }],
     ["transfer two dollars back to treasury", { amountUsd: 2, destination: { kind: "bot" } }],

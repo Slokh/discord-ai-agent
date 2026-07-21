@@ -354,6 +354,18 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
       threadKey: wager.threadKey,
       requestedByUserId: "game-user",
     })).resolves.toMatchObject({ id: wager.id, decisionState: first.decisionState });
+    await expect(repo.getActiveGameWager({
+      threadKey: `${guildId}:channel:rng-root:truncated-context-root`,
+      threadKeyPrefix: `${guildId}:channel:rng-root:`,
+      replyMessageIds: [wager.requestId!],
+      requestedByUserId: "game-user",
+    })).resolves.toMatchObject({ id: wager.id, decisionState: first.decisionState });
+    await expect(repo.getActiveGameWager({
+      threadKey: `${guildId}:other-channel:rng-root:truncated-context-root`,
+      threadKeyPrefix: `${guildId}:other-channel:rng-root:`,
+      replyMessageIds: [wager.requestId!],
+      requestedByUserId: "game-user",
+    })).resolves.toBeNull();
 
     await expect(repo.saveGameDecision({
       wagerId: wager.id,

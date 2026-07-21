@@ -3,10 +3,12 @@ import type { ToolContext } from "../../src/tools/types.js";
 import type { AgentToolRoute } from "../../src/agent/routerShared.js";
 
 const createDiscordPoll = vi.fn();
+const addDiscordReaction = vi.fn();
 const updateBotAvatar = vi.fn();
 const createDiscordEmoji = vi.fn();
 
 vi.mock("../../src/tools/discordPollTools.js", () => ({ createDiscordPoll }));
+vi.mock("../../src/tools/discordReactionTools.js", () => ({ addDiscordReaction }));
 vi.mock("../../src/tools/botProfileTools.js", () => ({ updateBotAvatar }));
 vi.mock("../../src/tools/guildEmojiTools.js", () => ({ createDiscordEmoji }));
 
@@ -22,6 +24,7 @@ describe("executeDiscordActionToolRoute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createDiscordPoll.mockResolvedValue("poll created");
+    addDiscordReaction.mockResolvedValue("reaction added");
     updateBotAvatar.mockResolvedValue("avatar updated");
     createDiscordEmoji.mockResolvedValue("emoji created");
   });
@@ -39,6 +42,17 @@ describe("executeDiscordActionToolRoute", () => {
       durationHours: 48,
       allowMultiselect: false,
     });
+  });
+
+  it("routes Discord reaction arguments with the exact current request", async () => {
+    await expect(executeDiscordActionToolRoute(ctx, route("addDiscordReaction", {
+      messageIdOrUrl: " message ",
+      emoji: " 👍 ",
+    }), "add 👍 to that message")).resolves.toEqual({ content: "reaction added" });
+    expect(addDiscordReaction).toHaveBeenCalledWith(ctx, {
+      messageIdOrUrl: "message",
+      emoji: "👍",
+    }, "add 👍 to that message");
   });
 
   it("routes avatar image context arguments", async () => {

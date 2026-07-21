@@ -9,6 +9,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Response sink for acknowledgements, lazy status messages, final replies, attachments, and cleanup.
 - Components V2 validation and side-effect-free rendering, capability-aware V2 delivery, opaque durable action generations, and requester-scoped typed click/modal ingress live under `components/`; see [`../../docs/discord-rich-components.md`](../../docs/discord-rich-components.md).
 - `api.ts` is the typed outbound Discord mutation boundary for replies, edits, sends, reactions, guild expressions, bot profile changes, and one-shot interaction responses. Interaction callbacks disable retries but still return classified/logged failures.
+- Model-requested message reactions resolve an exact message ID or URL, enforce the requester's live visible-channel set before entering `api.ts`, validate the emoji against Unicode or the current guild palette, and require explicit reaction intent in the current user message.
 - Delivery obligations are persisted for in-flight agent-runtime turns. Before Discord writes, `deliveryIntent.ts` stores a versioned replayable response and references bounded binary file artifacts by size and SHA-256 instead of base64-embedding them in JSON. Startup sweeping validates file integrity, retains v1 read compatibility, and safely completes delivery with stable enforced message nonces or posts a conservative restart notice when no response was ready.
 - Queue handoff into durable agent runtime executions.
 - Full-server crawl and incremental message persistence.

@@ -1,6 +1,6 @@
 import { PermissionFlagsBits } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
-import { classifyDiscordWriteError, createDiscordGuildEmoji, discordWrite, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers } from "../../src/discord/api.js";
+import { addDiscordMessageReaction, classifyDiscordWriteError, createDiscordGuildEmoji, discordWrite, fetchDiscordAttachment, fetchDiscordGuildEmojis, fetchDiscordGuildMembers } from "../../src/discord/api.js";
 
 const logger = { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as any;
 
@@ -27,6 +27,50 @@ describe("Discord write API", () => {
 
   it("returns success", async () => {
     await expect(discordWrite(async () => 42, { logger })).resolves.toEqual({ ok: true, value: 42 });
+  });
+
+  it("fetches a guild message and adds a reaction through the retrying write boundary", async () => {
+    const react = vi.fn(async () => ({ emoji: { name: "👍" } }));
+    const message = {
+      id: "message",
+      channelId: "channel",
+      guildId: "guild",
+      url: "https://discord.com/channels/guild/channel/message",
+      inGuild: () => true,
+      react,
+    };
+    const fetchMessage = vi.fn(async () => message);
+    const client = { channels: { fetch: vi.fn(async () => ({ messages: { fetch: fetchMessage } })) } } as any;
+
+    await expect(addDiscordMessageReaction(client, "guild", {
+      channelId: "channel",
+      messageId: "message",
+      emoji: "👍",
+    })).resolves.toEqual({
+      messageId: "message",
+      channelId: "channel",
+      url: "https://discord.com/channels/guild/channel/message",
+      emoji: "👍",
+    });
+    expect(react).toHaveBeenCalledWith("👍");
+  });
+
+  it("refuses to react when the fetched message is outside the current guild", async () => {
+    const react = vi.fn();
+    const client = {
+      channels: {
+        fetch: vi.fn(async () => ({
+          messages: { fetch: vi.fn(async () => ({ inGuild: () => true, guildId: "other", react })) },
+        })),
+      },
+    } as any;
+
+    await expect(addDiscordMessageReaction(client, "guild", {
+      channelId: "channel",
+      messageId: "message",
+      emoji: "👍",
+    })).rejects.toThrow(/outside the current server/);
+    expect(react).not.toHaveBeenCalled();
   });
 
   it("returns typed unknown failures for one-shot interaction writes", async () => {

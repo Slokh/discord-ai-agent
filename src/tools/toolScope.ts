@@ -36,6 +36,7 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   if (hasAny(text, GENERATED_DATA_KEYWORDS)) groups.add("generated-data");
   if (hasAny(text, PRESENTATION_KEYWORDS)) groups.add("presentation");
   if (hasAny(text, DISCORD_ACTION_KEYWORDS)) groups.add("discord-action");
+  if (DISCORD_REACTION_INTENT.test(input.text)) groups.add("discord-action");
   if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("discord-action");
   if (input.hasImageAttachments || hasAny(text, IMAGE_KEYWORDS)) groups.add("image");
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
@@ -168,6 +169,8 @@ const DISCORD_ACTION_KEYWORDS = [
   /\b(random|randomly|randomness|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
   /\b(reveal)\b.*\b(random|randomness|seed|proof|commitment)\b/,
 ];
+
+const DISCORD_REACTION_INTENT = /(?:\b(?:react|add|put|place|leave)\b[\s\S]{0,80}(?:\p{Extended_Pictographic}|\b(?:emoji|emote|reaction)\b)|(?:\p{Extended_Pictographic}|\b(?:emoji|emote|reaction)\b)[\s\S]{0,80}\b(?:react|add|put|place|leave)\b)/iu;
 
 const EMOJI_CONTEXT = /\b(?:custom|server)\s+emojis?\b|<a?:[a-z0-9_]+:\d+>/i;
 

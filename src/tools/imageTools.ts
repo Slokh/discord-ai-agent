@@ -1,4 +1,4 @@
-import { isOpenRouterContentFilterError, type ChatContentPart, type ImageReference } from "../models/openrouter.js";
+import { isOpenRouterContentFilterError, isOpenRouterHttpError, type ChatContentPart, type ImageReference } from "../models/openrouter.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
@@ -288,18 +288,23 @@ export async function generateImage(
       ...(background ? { background } : {}),
     });
   } catch (error) {
-    if (!isOpenRouterContentFilterError(error)) throw error;
+    const contentFilterBlocked = isOpenRouterContentFilterError(error);
+    const requestRejected = isOpenRouterHttpError(error) && error.status === 400;
+    if (!contentFilterBlocked && !requestRejected) throw error;
+    const errorCode = contentFilterBlocked ? "image_generation_blocked" : "image_generation_request_rejected";
     await ctx.repo.auditTool({
       guildId: ctx.guildId,
       channelId: ctx.channelId,
       userId: ctx.userId,
       toolName: "generateImage",
       argumentsSummary: summarizeForAudit({ prompt, referenceImageCount: references.length, outputFormat, background }),
-      resultSummary: "image_generation_blocked",
-      error: "image_generation_blocked",
+      resultSummary: errorCode,
+      error: errorCode,
     });
     return {
-      content: "Image generation was blocked by the provider's safety filter, so no image was created. Explain that briefly and conversationally, then offer a safe adjustment to the request. Do not expose provider errors or claim that an image was attached.",
+      content: contentFilterBlocked
+        ? "Image generation was blocked by the provider's safety filter, so no image was created. Explain that briefly and conversationally, then offer a safe adjustment to the request. Do not expose provider errors or claim that an image was attached."
+        : "The image provider could not accept that image request, so no image was created. Explain that briefly and conversationally, then offer to retry with a simpler request. Do not expose provider errors or claim that an image was attached.",
       files: [],
       status: "error",
     };

@@ -123,6 +123,17 @@ describe("random outcome guard", () => {
     })).toBe(false);
   });
 
+  it("does not combine an unrelated Discord ID with distant summary wording into a random result", () => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "summarize the recent discussion",
+      responseContent: [
+        "<@123456789012345678> contributed several messages to the discussion.",
+        "The selected value for the report was based on the requested date range.",
+      ].join("\n\n"),
+      successfulRandomDraw: false,
+    })).toBe(false);
+  });
+
   it("still rejects an unverified long number for an explicit random-number request", () => {
     expect(shouldRejectUnverifiedRandomOutcome({
       userText: "pick a random 18 digit number",

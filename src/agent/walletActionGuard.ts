@@ -9,11 +9,11 @@ export type ExplicitWalletTransfer = {
 
 const USD_AMOUNT_SOURCE = "(?:\\$\\s*(?:\\d+(?:\\.\\d+)?|\\.\\d+)|\\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\\s+dollars?\\b)";
 const USD_AMOUNT = new RegExp(USD_AMOUNT_SOURCE, "i");
-const BARE_DECIMAL_AMOUNT = /(?:^|\s)(?:\d+\.\d+|\.\d+)(?=$|\s|[,.!?;])/i;
+const BARE_NUMERIC_AMOUNT = /(?:^|\s)(?:\d+(?:\.\d+)?|\.\d+)(?=$|\s|[,.!?;])/i;
 const STARTER_REQUEST = /\b(?:starter|restart|refill|top\s*me\s*up|start playing|play again)\b/i;
 const TRANSFER_REQUEST = /\b(?:send|transfer|pay|tip|deposit|return|refund|give)\b/i;
 const WAGER_CONTEXT = /\b(?:bet|wager|casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|heads|tails)\b/i;
-const AMOUNT_AFTER_VERB = new RegExp(`${USD_AMOUNT_SOURCE}|(?:^|\\s)(?:\\d+\\.\\d+|\\.\\d+)(?=$|\\s|[,.!?;])`, "i");
+const AMOUNT_AFTER_VERB = new RegExp(`${USD_AMOUNT_SOURCE}|(?:^|\\s)(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?=$|\\s|[,.!?;])`, "i");
 const BOT_DESTINATION = /^(?:(?:the|shared)\s+)?(?:ai|bot|treasury)(?:['’]s)?(?:\s+wallet)?$|^(?:you|your\s+wallet|yours)$/i;
 const WORD_AMOUNTS: Readonly<Record<string, number>> = {
   one: 1,
@@ -53,7 +53,7 @@ export function explicitWalletTransferForPrompt(text: string): ExplicitWalletTra
   const afterVerb = normalized.slice((verb.index ?? 0) + verb[0].length).trim();
   const balanceTransfer = parseBalanceTransfer(afterVerb);
   if (balanceTransfer) return balanceTransfer;
-  if (!USD_AMOUNT.test(normalized) && !BARE_DECIMAL_AMOUNT.test(normalized)) return null;
+  if (!USD_AMOUNT.test(normalized) && !BARE_NUMERIC_AMOUNT.test(normalized)) return null;
   const amountMatch = AMOUNT_AFTER_VERB.exec(afterVerb);
   if (!amountMatch) return null;
   const amountText = amountMatch[0].trim();

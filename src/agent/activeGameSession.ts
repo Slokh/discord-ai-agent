@@ -16,7 +16,14 @@ export async function loadActiveGameSession(
   if (!ctx.config.payments?.userWalletsEnabled || !ctx.walletService) return null;
   const threadKey = wagerThreadKeyForContext(ctx);
   if (!threadKey) return null;
-  const wager = await ctx.walletService.getActiveGameSession({ threadKey, userId: ctx.userId });
+  const threadKeyPrefix = ctx.threadKey?.trim() ? `${ctx.threadKey.trim()}:rng-root:` : undefined;
+  const replyMessageIds = ctx.replyContext?.chain.map((message) => message.messageId) ?? [];
+  const wager = await ctx.walletService.getActiveGameSession({
+    threadKey,
+    userId: ctx.userId,
+    threadKeyPrefix,
+    replyMessageIds,
+  });
   if (!wager) return null;
   return { wager, actionRequested: matchesAllowedAction(userText, wager.allowedActions) };
 }

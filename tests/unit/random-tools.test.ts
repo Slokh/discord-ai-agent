@@ -662,6 +662,25 @@ describe("drawRandom", () => {
     expect(response).toContain("gas fees are paid by the bot fee payer");
   });
 
+  it("returns insufficient bot payout capacity as a recoverable tool result", async () => {
+    const reserveWager = vi.fn(async () => {
+      throw new Error("The bot wallet cannot cover this wager's maximum payout");
+    });
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "I bet $1 on heads",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "coin",
+      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coin" }
+    });
+
+    expect(response).toContain("bot wallet cannot currently cover the maximum payout");
+    expect(response).toContain("No funds were reserved");
+    expect(rngRepo.sessions.size).toBe(0);
+  });
+
   it("refuses to consume randomness for a real-money game until a wallet wager is supplied", async () => {
     const reserveWager = vi.fn();
     const getCurrentWager = vi.fn(async () => null);

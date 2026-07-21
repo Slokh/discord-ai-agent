@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
-import { OpenRouterContentFilterError } from "../../src/models/openrouter.js";
+import { OpenRouterContentFilterError, OpenRouterHttpError } from "../../src/models/openrouter.js";
 import { agentUpdateTitleFromRequest, formatAgentTaskResult } from "../../src/tools/agentTaskFormatting.js";
 import {
   createAgentUpdateFromRequest,
@@ -1008,6 +1008,31 @@ describe("generateImage", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "generateImage",
       error: "image_generation_blocked",
+    }));
+  });
+
+  it("returns a recoverable tool error when the image provider rejects the request", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      repo: { auditTool },
+      openRouter: {
+        generateImage: vi.fn(async () => {
+          throw new OpenRouterHttpError({ status: 400, message: "invalid image parameters" });
+        }),
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, "an image request rejected by the provider");
+
+    expect(result).toMatchObject({ status: "error", files: [] });
+    expect(result.content).toContain("could not accept that image request");
+    expect(result.content).not.toContain("invalid image parameters");
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      error: "image_generation_request_rejected",
     }));
   });
 

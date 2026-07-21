@@ -53,11 +53,41 @@ describe("addDiscordReaction", () => {
     expect(sender).toHaveBeenCalledWith({ channelId: "22222", messageId: "66666", emoji: "<:party:55555>" });
   });
 
+  it("accepts model-led reaction intent when the current request contains the exact target URL", async () => {
+    const sender = vi.fn(async (input) => ({
+      guildId: "11111",
+      url: "https://discord.com/channels/11111/44444/66666",
+      ...input,
+    }));
+    const ctx = context({ addDiscordReaction: sender });
+    const target = "https://discord.com/channels/11111/44444/66666";
+
+    await expect(addDiscordReaction(ctx, {
+      messageIdOrUrl: target,
+      emoji: "👍",
+    }, `boost this ${target}`)).resolves.toContain("Added 👍");
+
+    expect(sender).toHaveBeenCalledWith({ channelId: "44444", messageId: "66666", emoji: "👍" });
+  });
+
   it("fails closed without explicit current-turn reaction intent", async () => {
     const sender = vi.fn();
     const ctx = context({ addDiscordReaction: sender });
 
     const result = await addDiscordReaction(ctx, { messageIdOrUrl: "66666", emoji: "👍" }, "tell me what happened");
+
+    expect(result).toContain("current Discord message explicitly asks");
+    expect(sender).not.toHaveBeenCalled();
+  });
+
+  it("does not let an exact target from prior context authorize a reaction", async () => {
+    const sender = vi.fn();
+    const ctx = context({ addDiscordReaction: sender });
+
+    const result = await addDiscordReaction(ctx, {
+      messageIdOrUrl: "https://discord.com/channels/11111/44444/66666",
+      emoji: "👍",
+    }, "tell me what happened");
 
     expect(result).toContain("current Discord message explicitly asks");
     expect(sender).not.toHaveBeenCalled();

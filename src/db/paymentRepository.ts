@@ -16,6 +16,7 @@ import { getTransferWithClient, insertTransfer, TRANSFER_COLUMNS } from "./payme
 import { validateStarterTopUp } from "./paymentTransferValidation.js";
 import { validateSettlementEvidence, validateSettlementOutcome } from "./paymentWagerValidation.js";
 import { listWagerHistory, type WagerHistoryQuery } from "./paymentWagerHistory.js";
+import { getActiveGameWager, getCurrentWager } from "./paymentWagerReadRepository.js";
 
 const ACCOUNT_COLUMNS = `
   id, guild_id, owner_kind, discord_user_id, provider, provider_wallet_id,
@@ -496,26 +497,17 @@ export class PaymentRepository {
     return mapWager(result.rows[0]);
   }
 
-  async getActiveGameWager(input: { threadKey: string; requestedByUserId: string }): Promise<WagerReservation | null> {
-    const result = await this.pool.query(
-      `SELECT ${WAGER_COLUMNS} FROM wallet_wager_reservations
-       WHERE thread_key = $1 AND requested_by_user_id = $2
-         AND status = 'drawn' AND awaiting_action = true AND expires_at > now()
-       ORDER BY updated_at DESC LIMIT 1`,
-      [input.threadKey, input.requestedByUserId]
-    );
-    return result.rows[0] ? mapWager(result.rows[0]) : null;
+  async getActiveGameWager(input: {
+    threadKey: string;
+    requestedByUserId: string;
+    threadKeyPrefix?: string;
+    replyMessageIds?: string[];
+  }): Promise<WagerReservation | null> {
+    return getActiveGameWager(this.pool, input);
   }
 
   async getCurrentWager(input: { threadKey: string; requestedByUserId: string }): Promise<WagerReservation | null> {
-    const result = await this.pool.query(
-      `SELECT ${WAGER_COLUMNS} FROM wallet_wager_reservations
-       WHERE thread_key = $1 AND requested_by_user_id = $2
-         AND status = 'drawn' AND expires_at > now()
-       ORDER BY updated_at DESC LIMIT 1`,
-      [input.threadKey, input.requestedByUserId]
-    );
-    return result.rows[0] ? mapWager(result.rows[0]) : null;
+    return getCurrentWager(this.pool, input);
   }
 
   async saveGameDecision(input: {

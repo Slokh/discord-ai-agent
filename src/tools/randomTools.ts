@@ -159,6 +159,11 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
         await auditRng(ctx, "drawRandom", input, result);
         return result;
       }
+      if (/bot wallet cannot cover this wager's maximum payout/i.test(message)) {
+        const result = "The wager could not be reserved because the bot wallet cannot currently cover the maximum payout. No funds were reserved and no random draw was made. Try a smaller stake or lower-payout game.";
+        await auditRng(ctx, "drawRandom", input, result);
+        return result;
+      }
       throw error;
     }
   }

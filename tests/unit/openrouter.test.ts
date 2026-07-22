@@ -10,7 +10,8 @@ const config = {
   codegenModel: "test/codegen",
   utilityModel: "test/utility",
   embeddingModel: "test/embed",
-  imageModel: "test/image"
+  imageModel: "test/image",
+  transcriptionModel: "test/transcription"
 };
 
 describe("OpenRouterClient", () => {
@@ -84,6 +85,35 @@ describe("OpenRouterClient", () => {
       "https://openrouter.test/api/v1/images",
       expect.objectContaining({
         body: JSON.stringify({ model: "test/image", prompt: "blue square" })
+      })
+    );
+  });
+
+  it("uses the OpenRouter transcription endpoint without logging transcript content", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model: "test/transcription",
+        text: "A short fictional transcript.",
+        usage: { seconds: 3.5, cost: "0.0007" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    await expect(client.transcribeAudio({ data: Buffer.from("media"), format: "mp4" })).resolves.toMatchObject({
+      model: "test/transcription",
+      text: "A short fictional transcript.",
+      durationSeconds: 3.5,
+      estimatedCostUsd: 0.0007
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://openrouter.test/api/v1/audio/transcriptions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          model: "test/transcription",
+          input_audio: { data: Buffer.from("media").toString("base64"), format: "mp4" }
+        })
       })
     );
   });

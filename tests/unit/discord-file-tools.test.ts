@@ -62,6 +62,49 @@ describe("inspectDiscordFile", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "inspectDiscordFile" }));
   });
 
+  it("transcribes a permission-visible video attachment and keeps transcript text out of event metadata", async () => {
+    const recordTraceEvent = vi.fn(async () => undefined);
+    const transcribeAudio = vi.fn(async () => ({
+      text: "A fictional speaker describes a launch checklist.",
+      model: "test/transcription",
+      raw: {},
+      durationSeconds: 8,
+      estimatedCostUsd: 0.001
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array([0, 1, 2, 3]), { headers: { "content-type": "video/mp4" } }))
+    );
+    const ctx = {
+      repo: {
+        messageAttachments: vi.fn(async () => [{
+          ...attachmentRow("video-1", "clip.mp4"),
+          contentType: "video/mp4",
+          sizeBytes: 4
+        }]),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent
+      },
+      openRouter: { transcribeAudio },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      visibleIndexedChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const result = await inspectDiscordFile(ctx, { messageIdOrUrl: "123456789012345678" });
+
+    expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
+    expect(result).toContain("Parser: openrouter-transcription");
+    expect(result).toContain("A fictional speaker describes a launch checklist.");
+    expect(recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "discord.file.transcribed",
+      metadata: expect.objectContaining({ model: "test/transcription", format: "mp4", extractedChars: 49 })
+    }));
+    expect(JSON.stringify(recordTraceEvent.mock.calls)).not.toContain("launch checklist");
+  });
+
   it("inspects a bounded file batch and deduplicates identical extracted content", async () => {
     const fetchMock = vi.fn(async () => new Response("shared setup notes", { headers: { "content-type": "text/plain" } }));
     vi.stubGlobal("fetch", fetchMock);

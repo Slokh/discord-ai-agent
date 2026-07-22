@@ -23,6 +23,7 @@ export function runtimeVersionMetadata(config?: AppConfig | null) {
       utilityModel: openRouter.utilityModel,
       embeddingModel: openRouter.embeddingModel,
       imageModel: openRouter.imageModel,
+      transcriptionModel: openRouter.transcriptionModel,
       embeddingDimensions: config.embeddingDimensions,
       maxHistoryResults: config.maxHistoryResults,
       maxThreadSummaryMessages: config.maxThreadSummaryMessages,

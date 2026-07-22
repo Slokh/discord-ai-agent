@@ -61,6 +61,7 @@ const defaults = {
   openRouterChatModel: "z-ai/glm-5.2",
   openRouterEmbeddingModel: "qwen/qwen3-embedding-8b",
   openRouterImageModel: "google/gemini-3.1-flash-image",
+  openRouterTranscriptionModel: "openai/whisper-large-v3-turbo",
   githubRepository: "owner/repo" as string,
   githubBaseBranch: "main",
   githubAppId: "",
@@ -165,6 +166,7 @@ const envSchema = z.object({
   OPENROUTER_UTILITY_MODEL: z.string().optional(),
   OPENROUTER_EMBEDDING_MODEL: z.string().default(defaults.openRouterEmbeddingModel),
   OPENROUTER_IMAGE_MODEL: z.string().default(defaults.openRouterImageModel),
+  OPENROUTER_TRANSCRIPTION_MODEL: z.string().default(defaults.openRouterTranscriptionModel),
 
   GITHUB_TOKEN: z.string().optional(),
   GITHUB_REPOSITORY: z.string().default(defaults.githubRepository),
@@ -291,7 +293,8 @@ export function loadConfig() {
       codegenModel,
       utilityModel,
       embeddingModel: parsed.data.OPENROUTER_EMBEDDING_MODEL,
-      imageModel: parsed.data.OPENROUTER_IMAGE_MODEL
+      imageModel: parsed.data.OPENROUTER_IMAGE_MODEL,
+      transcriptionModel: parsed.data.OPENROUTER_TRANSCRIPTION_MODEL
     },
     github: {
       token: parsed.data.GITHUB_TOKEN,

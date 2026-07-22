@@ -3000,6 +3000,62 @@ describe("agent router", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "tool_round_limit" }));
   });
 
+  it("synthesizes after a full resolver and retrieval chain consumes every tool round", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const toolCall = (round: number, name: string, argumentsValue: Record<string, unknown>) => ({
+      content: "",
+      model: `tool-model-${round}`,
+      raw: {},
+      toolCalls: [{ id: `call-${round}`, name, argumentsText: JSON.stringify(argumentsValue) }]
+    });
+    const ctx = {
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: true, openRouter: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        findDiscordUsers: vi.fn(async () => [{
+          id: "member-1",
+          username: "fictional-member",
+          globalName: "Fictional Member",
+          isBot: false,
+          messageCount: 4
+        }]),
+        recentMessagesFromChannels: vi.fn(async () => [agentSearchResult({ messageId: "recent-1" })]),
+        messageContext: vi.fn(async () => [agentSearchResult({ messageId: "123456789012345678" })]),
+        auditTool
+      },
+      openRouter: {
+        chat: vi
+          .fn()
+          .mockResolvedValueOnce(toolCall(1, "requestAdditionalTools", { groups: ["discord-retrieval"], reason: "Need server history" }))
+          .mockResolvedValueOnce(toolCall(2, "findDiscordUsers", { query: "fictional member" }))
+          .mockResolvedValueOnce(toolCall(3, "getRecentDiscordMessages", { authorIds: ["member-1"], limit: 10 }))
+          .mockResolvedValueOnce(toolCall(4, "getDiscordMessageContext", { messageIdOrUrl: "123456789012345678" }))
+          .mockResolvedValueOnce({
+            content: "The concise fictional update is ready.",
+            model: "final-model",
+            raw: {},
+            toolCalls: []
+          })
+      },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"]
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "summarize the fictional member's recent update");
+
+    expect(response.content).toBe("The concise fictional update is ready.");
+    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(5);
+    expect((ctx.openRouter.chat as any).mock.calls[4][0].tools).toBeUndefined();
+    expect(ctx.repo.findDiscordUsers).toHaveBeenCalledTimes(1);
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledTimes(1);
+    expect(ctx.repo.messageContext).toHaveBeenCalledTimes(1);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "tool_round_limit" }));
+  });
+
   it("synthesizes a final answer when the model returns empty content after tool evidence", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {

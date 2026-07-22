@@ -61,13 +61,14 @@ Because RNG proof footers publish every draw immediately, an opening blackjack d
 
 ## Discord File Inspection
 
-`inspectDiscordFile` accepts a Discord message link/ID or uses attachments from the current request and reply chain. Explicit historical messages are resolved through permission-filtered indexed attachment metadata, then refreshed through the Discord API before download so expired CDN URLs do not become permanent failures. Up to eight matches totaling 20 MiB are inspected in one bounded batch by default. Identical extracted content and common metadata are emitted once so related setup/document collections do not multiply prompt tokens.
+`inspectDiscordFile` accepts a Discord message link/ID or uses attachments from the current request and reply chain. Explicit historical messages are resolved through permission-filtered indexed attachment metadata, then refreshed through the Discord API before download so expired CDN URLs do not become permanent failures. Up to eight matches totaling 20 MiB are inspected in one bounded batch by default. Identical extracted content and common metadata are emitted once so related setup/document collections do not multiply prompt tokens. Common audio and video files are transcribed through the configured OpenRouter transcription model; transcript text stays in the untrusted tool result while events and audits contain only safe metadata.
 
 Inspection is bounded and non-executing: downloads are limited to 20 MiB, archive entry names and expansion sizes are validated, extracted text is capped, and file content is marked as untrusted model evidence. The parser registry currently provides:
 
 - UTF-8/UTF-16 text and normalized JSON, including common source/config/data extensions.
 - DOCX, PPTX, and XLSX text extraction plus safe generic ZIP listings.
 - Image detection that directs visual questions to `inspectDiscordImages`.
+- Bounded audio/video transcription for common Discord media formats.
 - PDF container metadata and explicit notice that semantic PDF text extraction is not yet available.
 - Bounded printable-string fallback for unknown binary formats.
 - iRacing `.sto` opaque-container metadata, high-entropy payload identity, filename-derived qualifying/race/wet hints, and structured embedded UTF-16 setup notes. Garage values remain opaque and must never be inferred from the notes or characterized as compressed, encoded, or encrypted without verified evidence.
@@ -76,7 +77,7 @@ Inspection is bounded and non-executing: downloads are limited to 20 MiB, archiv
 
 For exact iRacing values, load the `.sto` in the simulator and attach either a Garage HTML export, an `.ibt` telemetry recording containing SDK `CarSetup` data, or clear Garage screenshots. HTML is the smallest deterministic interchange format; `.ibt` adds session context; screenshots use the existing image-inspection path. The offline `.sto` parser remains useful for file identity, purpose/weather filename hints, opaque-payload comparison, and embedded notes, but it is not presented as setup analysis.
 
-Successful fetches and inspections record `discord.file.fetched` and `discord.file.inspected` runtime events with byte count, parser, type, latency, and extracted-character count. Failures record `discord.file.fetch_failed`. Raw extracted content is not written to audit summaries or event metadata.
+Successful fetches, inspections, and transcriptions record `discord.file.fetched`, `discord.file.inspected`, and `discord.file.transcribed` runtime events with byte count, parser/model, type/format, latency, and extracted-character count. Failures record `discord.file.fetch_failed` or `discord.file.transcription_failed`. Raw extracted content and transcripts are not written to audit summaries or event metadata.
 
 ## Discord Self-Debugging
 

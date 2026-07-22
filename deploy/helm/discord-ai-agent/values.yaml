@@ -67,6 +67,7 @@ config:
   openRouterCodegenModel: z-ai/glm-5.2
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
+  openRouterTranscriptionModel: openai/whisper-large-v3-turbo
   embeddingDimensions: "1536"
   discordAgentResponseTimeoutMs: "1800000"
   agentPromptMaxConcurrency: "4"

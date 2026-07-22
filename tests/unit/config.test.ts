@@ -17,6 +17,7 @@ describe("config", () => {
         "OPENROUTER_CHAT_MODEL",
         "OPENROUTER_CODEGEN_MODEL",
         "OPENROUTER_UTILITY_MODEL",
+        "OPENROUTER_TRANSCRIPTION_MODEL",
         "GITHUB_REPOSITORY",
         "INTERNAL_API_HOST",
         "INTERNAL_API_PORT",
@@ -64,6 +65,7 @@ describe("config", () => {
         expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
         expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
         expect(config.openRouter.utilityModel).toBe("z-ai/glm-5.2");
+        expect(config.openRouter.transcriptionModel).toBe("openai/whisper-large-v3-turbo");
         expect(config.github.repository).toBe("owner/repo");
         expect(config.internalApi.host).toBe("0.0.0.0");
         expect(config.internalApi.port).toBe(8080);

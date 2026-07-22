@@ -1,5 +1,8 @@
 import type { AppConfig } from "../config/env.js";
 import { durationMs, logger } from "../util/logger.js";
+import { transcribeAudioViaOpenRouter, type TranscriptionInput, type TranscriptionResult } from "./openrouterTranscription.js";
+
+export type { TranscriptionResult } from "./openrouterTranscription.js";
 
 export type ChatContentPart =
   | { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } }
@@ -324,6 +327,11 @@ export class OpenRouterClient {
       "OpenRouter image response"
     );
     return result;
+  }
+
+  async transcribeAudio(input: TranscriptionInput): Promise<TranscriptionResult> {
+    return transcribeAudioViaOpenRouter(input, this.config.transcriptionModel, (path, body, timeoutMs, options) =>
+      this.request(path, body, timeoutMs, options));
   }
 
   private async request(

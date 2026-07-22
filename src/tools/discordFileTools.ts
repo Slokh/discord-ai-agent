@@ -27,6 +27,7 @@ const MAX_CONTEXT_CANDIDATES = 20;
 const MAX_BATCH_FILES = 8;
 const MAX_BATCH_BYTES = 20 * 1024 * 1024;
 const MAX_BATCH_EXTRACTED_CHARS = 20_000;
+const MAX_TRANSCRIPT_CHARS = 20_000;
 const IRACING_IBT_HEADER_BYTES = 144;
 const MAX_IRACING_SESSION_INFO_BYTES = 2 * 1024 * 1024;
 const MAX_IRACING_SESSION_INFO_OFFSET = 4 * 1024 * 1024;
@@ -177,12 +178,64 @@ async function inspectCandidate(
     durationMs: fetchDurationMs
   });
   const parseStartedAt = Date.now();
-  const inspection = inspectFileBytes({
-    data: fetched.data,
-    filename: attachment.filename,
-    declaredContentType: attachment.contentType,
-    responseContentType: fetched.contentType
-  });
+  let inspection: FileInspection;
+  const mediaFormat = transcriptionFormat(
+    attachment.filename,
+    attachment.contentType,
+    fetched.contentType
+  );
+  if (mediaFormat) {
+    try {
+      const transcript = await ctx.openRouter.transcribeAudio({
+        data: fetched.data,
+        format: mediaFormat,
+        signal: ctx.abortSignal
+      });
+      const extractedText = transcript.text.slice(0, MAX_TRANSCRIPT_CHARS);
+      inspection = {
+        parser: "openrouter-transcription",
+        detectedType: fetched.contentType || attachment.contentType || `audio/${mediaFormat}`,
+        summary: `Transcribed the attached audio/video${extractedText.length < transcript.text.length ? " (truncated to the inspection limit)" : ""}.`,
+        extractedText,
+        metadata: {
+          bytes: fetched.data.length,
+          format: mediaFormat,
+          model: transcript.model,
+          durationSeconds: transcript.durationSeconds ?? null,
+          truncated: extractedText.length < transcript.text.length
+        },
+        sha256: createHash("sha256").update(fetched.data).digest("hex")
+      };
+      await recordFileEvent(ctx, "discord.file.transcribed", "Transcribed Discord media attachment", {
+        attachmentId: attachment.id,
+        messageId: candidate.messageId,
+        bytes: fetched.downloadedBytes,
+        format: mediaFormat,
+        model: transcript.model,
+        extractedChars: extractedText.length,
+        durationSeconds: transcript.durationSeconds,
+        estimatedCostUsd: transcript.estimatedCostUsd,
+        durationMs: durationMs(parseStartedAt)
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await recordFileEvent(ctx, "discord.file.transcription_failed", "Could not transcribe Discord media attachment", {
+        attachmentId: attachment.id,
+        messageId: candidate.messageId,
+        bytes: fetched.downloadedBytes,
+        format: mediaFormat,
+        durationMs: durationMs(parseStartedAt)
+      });
+      return `media transcription failed: ${message}`;
+    }
+  } else {
+    inspection = inspectFileBytes({
+      data: fetched.data,
+      filename: attachment.filename,
+      declaredContentType: attachment.contentType,
+      responseContentType: fetched.contentType
+    });
+  }
   if (!fetched.complete) {
     inspection.metadata.sourceFileBytes = fetched.sourceBytes;
     inspection.metadata.inspectionBytes = fetched.data.length;
@@ -202,6 +255,30 @@ async function inspectCandidate(
     durationMs: parseDurationMs
   });
   return { candidate, attachment, inspection, bytes: fetched.downloadedBytes, fetchDurationMs, parseDurationMs };
+}
+
+function transcriptionFormat(
+  filename?: string | null,
+  declaredContentType?: string | null,
+  responseContentType?: string | null
+): string | null {
+  const extension = filename?.trim().toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  if (extension && ["flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"].includes(extension)) {
+    return extension;
+  }
+  const contentType = (responseContentType || declaredContentType || "").split(";", 1)[0].trim().toLowerCase();
+  return ({
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "video/mp4": "mp4",
+    "audio/ogg": "ogg",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/webm": "webm",
+    "video/webm": "webm"
+  } as Record<string, string>)[contentType] ?? null;
 }
 
 function renderBatchInspection(

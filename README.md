@@ -245,6 +245,7 @@ Common optional settings:
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
+| `OPENROUTER_TRANSCRIPTION_MODEL` | `openai/whisper-large-v3-turbo` | Audio/video transcription model |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | unset | Optional Spotify client-credentials integration for public catalog and high-level playlist/album/artist tools |
 | `WALLET_ENABLED` | `false` | Opt into the shared Privy bot-wallet runtime. See [docs/wallets.md](docs/wallets.md). |
 | `USER_WALLETS_ENABLED` | `false` | Separately opt into automatic Discord user wallets, initial grants, balance tools, transfers, and wallet-backed wagers. |

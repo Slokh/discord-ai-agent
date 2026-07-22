@@ -129,7 +129,7 @@ export const discordContextFileToolContracts = [
   defineTool({
     name: "inspectDiscordFile",
     description:
-      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. Use this for requests to read, open, parse, identify, summarize, compare, or inspect files and documents. It fetches fresh Discord CDN URLs, applies strict aggregate download/extraction limits, detects real formats, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact iRacing setup values from simulator Garage HTML exports or SDK .ibt telemetry containing CarSetup data. Multiple files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim Discord files are inaccessible before trying this tool.",
+      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. Use this for requests to read, open, parse, identify, summarize, compare, inspect, or transcribe files and media. It fetches fresh Discord CDN URLs, applies strict aggregate download/extraction limits, detects real formats, transcribes common audio/video attachments, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, audio/video transcription, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact iRacing setup values from simulator Garage HTML exports or SDK .ibt telemetry containing CarSetup data. Multiple files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim Discord files or media are inaccessible before trying this tool; if none is attached, ask the user to attach it or reply to it.",
     userVisible: true,
     mutates: false,
     group: "discord-retrieval",
@@ -139,16 +139,18 @@ export const discordContextFileToolContracts = [
       "permission-checked attachment identity and source message",
       "detected file type, parser, size, and SHA-256",
       "bounded extracted content labeled as untrusted data",
+      "bounded audio/video transcript labeled as untrusted data when media is supplied",
       "explicit parser limitations or safe failure reason"
     ],
     examples: [
       "@ai read the file I replied to",
       "@ai inspect the .sto file in this message",
       "@ai analyze the loaded setup in this iRacing .ibt telemetry file",
-      "@ai summarize the attached DOCX"
+      "@ai summarize the attached DOCX",
+      "@ai transcribe the video I replied to"
     ],
     permissionRequirements: ["requester_visible_discord_channels"],
-    auditEvents: ["tool_audit_logs", "discord.file.fetched", "discord.file.inspected"],
+    auditEvents: ["tool_audit_logs", "discord.file.fetched", "discord.file.inspected", "discord.file.transcribed"],
     parameters: {
       type: "object",
       properties: {

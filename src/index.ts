@@ -54,7 +54,8 @@ async function main() {
       openRouter: {
         chatModel: config.openRouter.chatModel,
         embeddingModel: config.openRouter.embeddingModel,
-        imageModel: config.openRouter.imageModel
+        imageModel: config.openRouter.imageModel,
+        transcriptionModel: config.openRouter.transcriptionModel
       },
       github: {
         repository: config.github.repository,

@@ -52,6 +52,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.openRouterEmbeddingModel | quote }}
 - name: OPENROUTER_IMAGE_MODEL
   value: {{ .Values.config.openRouterImageModel | quote }}
+- name: OPENROUTER_TRANSCRIPTION_MODEL
+  value: {{ .Values.config.openRouterTranscriptionModel | quote }}
 - name: EMBEDDING_DIMENSIONS
   value: {{ .Values.config.embeddingDimensions | quote }}
 - name: DISCORD_AGENT_RESPONSE_TIMEOUT_MS

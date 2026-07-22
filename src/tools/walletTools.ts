@@ -20,6 +20,9 @@ type WalletDirectoryRow = {
   address: string;
   status: string;
 };
+type DiscordGuildMembers = Awaited<ReturnType<NonNullable<ToolContext["fetchDiscordGuildMembers"]>>>;
+
+const liveGuildMembersByTurn = new WeakMap<ToolContext, Promise<DiscordGuildMembers>>();
 
 export async function getWalletBalance(
   ctx: ToolContext,
@@ -537,11 +540,9 @@ async function resolveWalletUser(ctx: ToolContext, value: string): Promise<
   const query = value.trim();
   if (!query) return { ok: false, message: "A Discord user name, mention, or ID is required." };
   const normalizedQuery = query.toLocaleLowerCase();
-  const liveMatches = ctx.fetchDiscordGuildMembers
-    ? (await ctx.fetchDiscordGuildMembers({ guildId: ctx.guildId })).filter((member) =>
-        !member.isBot && [member.displayName, member.username].some((name) => name?.toLocaleLowerCase() === normalizedQuery)
-      )
-    : [];
+  const liveMatches = (await liveDiscordGuildMembers(ctx)).filter((member) =>
+    !member.isBot && [member.displayName, member.username].some((name) => name?.toLocaleLowerCase() === normalizedQuery)
+  );
   if (liveMatches.length === 1) {
     const member = liveMatches[0]!;
     return { ok: true, target: { userId: member.userId, displayName: member.displayName || member.username || member.userId } };
@@ -572,6 +573,23 @@ async function resolveWalletUser(ctx: ToolContext, value: string): Promise<
     ok: false,
     message: `"${query}" matches multiple Discord members (${matches.map((match) => `${match.displayName} · ${match.userId}`).join(", ")}). Ask again with the exact name or mention; no transfer was made.`
   };
+}
+
+function liveDiscordGuildMembers(ctx: ToolContext): Promise<DiscordGuildMembers> {
+  if (!ctx.fetchDiscordGuildMembers) return Promise.resolve([]);
+  const cached = liveGuildMembersByTurn.get(ctx);
+  if (cached) return cached;
+  const lookup = ctx.fetchDiscordGuildMembers({ guildId: ctx.guildId }).catch(async () => {
+    await recordAgentEvent(ctx, {
+      eventName: "wallet.member_lookup.live_failed",
+      level: "warn",
+      summary: "Fell back to indexed Discord member references after a live guild lookup failed",
+      metadata: { fallback: "permission_filtered_index" }
+    });
+    return [];
+  });
+  liveGuildMembersByTurn.set(ctx, lookup);
+  return lookup;
 }
 
 async function adminEndpoint(

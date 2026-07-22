@@ -21,7 +21,7 @@ import {
   synthesizeFinalAnswerWithoutTools,
 } from "./finalSynthesis.js";
 import {
-  chatMessages, loadServerOverlay, prepareDiscordEmojiPromptContext,
+  chatMessages, CURRENT_REQUEST_RESPONSE_REMINDER, loadServerOverlay, prepareDiscordEmojiPromptContext,
   replyContextAttachmentCount,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -652,7 +652,7 @@ async function runAgentModelLoopInternal(
         });
       }
     }
-
+    messages.push({ role: "system", content: CURRENT_REQUEST_RESPONSE_REMINDER });
     if (redundantToolReason) {
       return await synthesizeFinalAnswerWithoutTools(ctx, {
         reason: redundantToolReason,

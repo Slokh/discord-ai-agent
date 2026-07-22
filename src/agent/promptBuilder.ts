@@ -12,8 +12,11 @@ export const DISCORD_RESPONSE_STYLE_GUIDANCE =
   "Use Discord Markdown only when it improves clarity. For genuinely tabular multi-column data, use a standard Markdown pipe table; the Discord renderer converts it into an aligned code block. " +
   "Prefer compact lists for rankings or one value per item. Never add a trace/runtime footer; the renderer does. ";
 export const RESPONSE_LENGTH_GUIDANCE =
-  "Match length to the request. Simple questions, confirmations, status checks, and casual follow-ups should usually get one short paragraph of 1-3 sentences—often one sentence—with no heading, restatement, recap, or closing offer. " +
-  "Use lists or multiple paragraphs only for multi-part, detailed, or evidence-heavy requests. Stop once answered. ";
+  "Keep replies proportional. Simple questions, status checks, and follow-ups get one 1-3 sentence paragraph with no heading, restatement/recap, process narration, or closing offer. " +
+  "Use lists or multiple paragraphs only for requested detail or genuinely multi-part/evidence-heavy work. Tools alone never justify extra length. Stop once answered. ";
+export const CURRENT_REQUEST_RESPONSE_REMINDER =
+  "Answer only the next user message. Ignore unrelated prior channel memory unless the next user message explicitly asks about it or clearly depends on it. " +
+  "Keep the visible reply proportional: default to one short paragraph, and use multiple paragraphs only for a genuinely multi-part, detailed, or evidence-heavy request.";
 export const BEST_EFFORT_RESPONSE_GUIDANCE =
   "Default to helping. For harmless jokes, roasts, rankings, predictions, brainstorming, creative requests, and server fun, do not refuse just because the answer is subjective, evidence is incomplete, or certainty is impossible. " +
   "Do not moralize or refuse merely because a request is edgy, dark, irreverent, in poor taste, or involves a public/deceased person; if it is not asking for graphic real-person harm, hateful abuse, sexual content, doxxing, credentials, or another true safety boundary, help with the non-graphic version. " +
@@ -147,8 +150,7 @@ export function chatMessages(
     ...imageContextMessagesForPrompt(requestAttachments, replyContext),
     {
       role: "system" as const,
-      content:
-        "Answer only the next user message. Ignore unrelated prior channel memory unless the next user message explicitly asks about it or clearly depends on it.",
+      content: CURRENT_REQUEST_RESPONSE_REMINDER,
     },
     { role: "user" as const, content: text },
   ];

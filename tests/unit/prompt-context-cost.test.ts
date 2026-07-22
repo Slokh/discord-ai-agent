@@ -62,11 +62,15 @@ describe("prompt context cost controls", () => {
   });
 
   it("defaults simple Discord questions to one short paragraph", () => {
-    const systemPrompt = String(chatMessages("what does CPU stand for?", "")[0]?.content);
+    const messages = chatMessages("what does CPU stand for?", "");
+    const systemPrompt = String(messages[0]?.content);
+    const currentRequestReminder = String(messages.at(-2)?.content);
 
-    expect(systemPrompt).toContain("usually get one short paragraph of 1-3 sentences");
-    expect(systemPrompt).toContain("no heading, restatement, recap, or closing offer");
-    expect(systemPrompt).toContain("Use lists or multiple paragraphs only for multi-part, detailed, or evidence-heavy requests");
+    expect(systemPrompt).toContain("get one 1-3 sentence paragraph");
+    expect(systemPrompt).toContain("no heading, restatement/recap, process narration, or closing offer");
+    expect(systemPrompt).toContain("Tools alone never justify extra length");
+    expect(currentRequestReminder).toContain("default to one short paragraph");
+    expect(currentRequestReminder).toContain("use multiple paragraphs only for a genuinely multi-part, detailed, or evidence-heavy request");
   });
 
   it("teaches the model exact live server emoji mentions without changing the static prompt", () => {

@@ -7,8 +7,6 @@ import type { ToolContext } from "../tools/types.js";
  */
 
 const RESTRICTED_TOOL_MESSAGES: Partial<Record<ToolName, string>> = {
-  runCodingAgent: "Code-update tasks are restricted to the bot owner or codegen allowlist.",
-  retryAgentTask: "Retrying code-update tasks is restricted to the bot owner or codegen allowlist.",
   updateBotAvatar: "Avatar updates are restricted to the bot owner or ops allowlist.",
   createDiscordEmoji: "Server emoji uploads are restricted to the bot owner or ops allowlist.",
   setUserTurnLimit: "User turn limits are restricted to the bot owner or ops allowlist.",
@@ -24,7 +22,6 @@ export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): 
     return { allowed: false, message: "This component follow-up cannot authorize a mutating action. Ask the user to state that action explicitly in a new Discord message." };
   }
   if (toolName === "runCodingAgent" || toolName === "retryAgentTask") {
-    if (!isAllowed(ctx, ctx.config.allowlists?.codegenUserIds ?? [])) return denied(toolName);
     const limit = ctx.config.budget?.userCodegenPerDay ?? -1;
     if (limit >= 0 && ctx.budgetRepo) {
       const count = await ctx.budgetRepo.countUserCodegenTasksSince({ guildId: ctx.guildId, userId: ctx.userId, since: startOfUtcDay(new Date()) });

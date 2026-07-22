@@ -72,18 +72,20 @@ model, and records a durable claim so restarts and replica overlap do not
 double-post. A first startup without a known previous revision records a
 baseline and waits for the next real diff.
 
-Optional permission keys (strongly recommended): the chart maps these into every
-pod when present in the same Secret. Without them, restricted tools (code-update
-tasks, avatar updates, per-user turn limits, allowlist-only image generation)
-are open to every guild member.
+Optional administrative permission keys (strongly recommended): the chart maps
+these into every pod when present in the same Secret. Without them, restricted
+administrative tools such as avatar updates and per-user turn limits are open to
+every guild member. Code-update tasks are intentionally available to every
+member and remain protected by per-user daily limits, sandbox isolation, CI,
+and branch protection.
 
 ```bash
 kubectl -n discord-ai-agent patch secret discord-ai-agent-env --type merge -p \
   '{"stringData":{"BOT_OWNER_USER_ID":"<your discord user id>"}}'
 ```
 
-Also supported: `OPS_ALLOWLIST_USER_IDS`, `CODEGEN_ALLOWLIST_USER_IDS`
-(comma-separated user IDs), and `IMAGE_TOOLS_ALLOWLIST_ONLY` (`true`/`false`).
+Also supported: `OPS_ALLOWLIST_USER_IDS` (comma-separated user IDs) and
+`IMAGE_TOOLS_ALLOWLIST_ONLY` (`true`/`false`).
 Pods read the Secret at startup, so restart deployments after changing keys:
 
 ```bash

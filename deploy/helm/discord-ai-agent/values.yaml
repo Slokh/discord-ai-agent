@@ -110,7 +110,6 @@ config:
   controlUiAuthPasswordSecretKey: CONTROL_UI_AUTH_PASSWORD
   botOwnerUserIdSecretKey: BOT_OWNER_USER_ID
   opsAllowlistUserIdsSecretKey: OPS_ALLOWLIST_USER_IDS
-  codegenAllowlistUserIdsSecretKey: CODEGEN_ALLOWLIST_USER_IDS
   imageToolsAllowlistOnlySecretKey: IMAGE_TOOLS_ALLOWLIST_ONLY
   controlUiPublicUrl: ""
 

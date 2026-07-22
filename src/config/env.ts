@@ -115,7 +115,6 @@ const defaults = {
   budgetUserCodegenPerDay: 1,
   budgetGuildDailyUsd: 10,
   botOwnerUserId: "",
-  codegenAllowlistUserIds: "",
   opsAllowlistUserIds: "",
   imageToolsAllowlistOnly: false,
   chatSilenceTimeoutMs: 120_000,
@@ -231,7 +230,6 @@ const envSchema = z.object({
   BUDGET_USER_CODEGEN_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserCodegenPerDay),
   BUDGET_GUILD_DAILY_USD: z.coerce.number().min(-1).default(defaults.budgetGuildDailyUsd),
   BOT_OWNER_USER_ID: z.string().default(defaults.botOwnerUserId),
-  CODEGEN_ALLOWLIST_USER_IDS: z.string().default(defaults.codegenAllowlistUserIds),
   OPS_ALLOWLIST_USER_IDS: z.string().default(defaults.opsAllowlistUserIds),
   IMAGE_TOOLS_ALLOWLIST_ONLY: booleanFromEnv.default(defaults.imageToolsAllowlistOnly),
   CHAT_SILENCE_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(60 * 60 * 1000).default(defaults.chatSilenceTimeoutMs),
@@ -373,7 +371,6 @@ export function loadConfig() {
     },
     allowlists: {
       ownerUserId: parsed.data.BOT_OWNER_USER_ID.trim() || null,
-      codegenUserIds: parseCsvIds(parsed.data.CODEGEN_ALLOWLIST_USER_IDS),
       opsUserIds: parseCsvIds(parsed.data.OPS_ALLOWLIST_USER_IDS),
       imageToolsAllowlistOnly: parsed.data.IMAGE_TOOLS_ALLOWLIST_ONLY ?? defaults.imageToolsAllowlistOnly
     },

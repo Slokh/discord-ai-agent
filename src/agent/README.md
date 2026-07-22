@@ -20,7 +20,7 @@ Owns the model loop for one user prompt.
 - `toolRepeatGuard.ts`: canonical tool-call/result signatures and redundant-call audit responses.
 - `promptBuilder.ts`: system prompt, requester/skills/overlay/session/reply/image prompt sections, tool-result prompt truncation.
 - `toolDispatcher.ts`: local tool dispatch and tool-argument coercion.
-- `toolGate.ts`: restricted-tool permission gate (owner/ops/codegen allowlists) and per-day budget checks applied before dispatch.
+- `toolGate.ts`: restricted administrative-tool permission gate (owner/ops allowlists) and per-day budget checks applied before dispatch. Code-update starts and retries are open to every member but retain the per-user codegen limit.
 - `finalSynthesis.ts`: forced final synthesis, empty-response recovery, model-call-ceiling fallback, tool-evidence fallback rendering.
 - `modelRecovery.ts`: leaked hosted-tool markup detection, stripping, recovery calls, and malformed-output artifacts.
 - `invalidToolCallRecovery.ts`: one-shot full-context recovery when a model emits malformed or unavailable function names.

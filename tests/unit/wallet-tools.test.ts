@@ -230,6 +230,45 @@ describe("managed wallet tools", () => {
     }), expect.any(Function));
   });
 
+  it("falls back to permission-filtered indexed identity when the live member roster is rate-limited", async () => {
+    const transferFromUser = vi.fn(async () => transferResult());
+    const fetchDiscordGuildMembers = vi.fn(async () => {
+      throw new Error("Request with opcode 8 was rate limited. Retry after 0.6 seconds.");
+    });
+    const findDiscordUsers = vi.fn(async () => [{
+      id: "luke-id",
+      username: "lukester",
+      globalName: "Luke",
+      aliases: [],
+      isBot: false,
+      messageCount: 1,
+      lastMessageAt: new Date(),
+      score: 90
+    }]);
+    const ctx = context({
+      requestText: "give luke back $1 so he can use it",
+      walletService: { transferFromUser },
+      fetchDiscordGuildMembers,
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        findDiscordUsers
+      }
+    });
+
+    const first = await transferWalletFunds(ctx, {});
+    const second = await transferWalletFunds(ctx, {});
+
+    expect(first).toContain("Luke's wallet");
+    expect(second).toContain("Luke's wallet");
+    expect(fetchDiscordGuildMembers).toHaveBeenCalledTimes(1);
+    expect(findDiscordUsers).toHaveBeenCalledTimes(2);
+    expect(transferFromUser).toHaveBeenCalledTimes(2);
+    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
+      destination: { kind: "user", userId: "luke-id" },
+      amountUsd: 1
+    }), expect.any(Function));
+  });
+
   it("accepts a bare decimal as money in an explicit named transfer", async () => {
     const transferFromUser = vi.fn(async () => transferResult());
     const ctx = context({

@@ -3175,13 +3175,13 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
   });
 
-  it("retries an initial model timeout once with the utility model before any tool runs", async () => {
+  it("corrects a false transcription refusal from the initial timeout fallback", async () => {
     const traceEvents: any[] = [];
     const chat = vi
       .fn()
       .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
       .mockResolvedValueOnce({
-        content: "That request survived a slow primary model.",
+        content: "I can't transcribe video in this environment.",
         model: "fast/fallback",
         raw: {},
         toolCalls: [],
@@ -3204,18 +3204,37 @@ describe("agent router", () => {
       userDisplayName: "User",
       visibleChannelIds: ["c"],
       sessionMessages: [],
+      requestAttachments: [],
+      replyContext: {
+        messageId: "parent",
+        rootMessageId: "parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "u",
+        authorDisplayName: "User",
+        authorIsBot: false,
+        content: "Can you transcribe this video?",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
     } as unknown as ToolContext;
 
-    const response = await handleAgentRequest(ctx, "ordinary banter");
+    const response = await handleAgentRequest(ctx, "try again");
 
-    expect(response.content).toContain("survived a slow primary model");
+    expect(response.content).toBe(
+      "I can transcribe common audio and video attachments. Attach the media here or reply to the Discord message containing it, and I’ll transcribe it.",
+    );
     expect(chat).toHaveBeenCalledTimes(2);
     expect((chat.mock.calls[0]?.[0] as any).model).toBeUndefined();
     expect((chat.mock.calls[1]?.[0] as any).model).toBe("fast/fallback");
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.capability_claim.corrected")).toBe(true);
   });
 
-  it("falls back to tool-free utility synthesis when the primary model times out after a tool", async () => {
+  it("corrects a false transcription refusal from tool-evidence timeout synthesis", async () => {
     const traceEvents: any[] = [];
     const chat = vi
       .fn()
@@ -3223,11 +3242,11 @@ describe("agent router", () => {
         content: "",
         model: "slow/primary",
         raw: {},
-        toolCalls: [{ id: "list-call", name: "listTools", argumentsText: "{}" }],
+        toolCalls: [{ id: "inspect-call", name: "inspectDiscordFile", argumentsText: "{}" }],
       })
       .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
       .mockResolvedValueOnce({
-        content: "Here is the answer synthesized from the tool result.",
+        content: "Video transcription isn't supported here.",
         model: "fast/fallback",
         raw: {},
         toolCalls: [],
@@ -3250,16 +3269,20 @@ describe("agent router", () => {
       userDisplayName: "User",
       visibleChannelIds: ["c"],
       sessionMessages: [],
+      requestAttachments: [],
     } as unknown as ToolContext;
 
-    const response = await handleAgentRequest(ctx, "what can you do?");
+    const response = await handleAgentRequest(ctx, "please transcribe the video");
 
-    expect(response.content).toContain("synthesized from the tool result");
+    expect(response.content).toBe(
+      "I can transcribe common audio and video attachments. Attach the media here or reply to the Discord message containing it, and I’ll transcribe it.",
+    );
     expect(chat).toHaveBeenCalledTimes(3);
     expect((chat.mock.calls[1]?.[0] as any).model).toBeUndefined();
     expect((chat.mock.calls[2]?.[0] as any).model).toBe("fast/fallback");
     expect((chat.mock.calls[2]?.[0] as any).tools).toBeUndefined();
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.capability_claim.corrected")).toBe(true);
   });
 
   it("recovers when a hosted OpenRouter tool call leaks as text", async () => {

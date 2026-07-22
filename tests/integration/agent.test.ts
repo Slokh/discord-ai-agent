@@ -1932,6 +1932,11 @@ describe("agent router", () => {
 
     expect(response.content).toContain("Messages indexed: 2");
     expect(ctx.openRouter.chat).toHaveBeenCalledWith(expect.objectContaining({ tools: expect.any(Array) }));
+    const secondRoundMessages = (ctx.openRouter.chat as any).mock.calls[1][0].messages;
+    expect(secondRoundMessages.at(-1)).toEqual(expect.objectContaining({
+      role: "system",
+      content: expect.stringContaining("default to one short paragraph")
+    }));
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({

@@ -129,7 +129,7 @@ export const discordContextFileToolContracts = [
   defineTool({
     name: "inspectDiscordFile",
     description:
-      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. Use this for requests to read, open, parse, identify, summarize, compare, inspect, or transcribe files and media. It fetches fresh Discord CDN URLs, applies strict aggregate download/extraction limits, detects real formats, transcribes common audio/video attachments, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, audio/video transcription, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact iRacing setup values from simulator Garage HTML exports or SDK .ibt telemetry containing CarSetup data. Multiple files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim Discord files or media are inaccessible before trying this tool; if none is attached, ask the user to attach it or reply to it.",
+      "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. It can also resolve and transcribe a public X/Twitter status video URL that appears in the current request or reply chain; pass that exact URL as publicMediaUrl. Use this for requests to read, open, parse, identify, summarize, compare, inspect, or transcribe files and media. It fetches fresh bounded media, detects real formats, transcribes common audio/video attachments including QuickTime MOV, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, audio/video transcription, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact iRacing setup values from simulator Garage HTML exports or SDK .ibt telemetry containing CarSetup data. Multiple Discord files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim scoped files or supported public media are inaccessible before trying this tool; if none is supplied, ask for the media.",
     userVisible: true,
     mutates: false,
     group: "discord-retrieval",
@@ -140,6 +140,7 @@ export const discordContextFileToolContracts = [
       "detected file type, parser, size, and SHA-256",
       "bounded extracted content labeled as untrusted data",
       "bounded audio/video transcript labeled as untrusted data when media is supplied",
+      "bounded public X/Twitter video transcript when its status URL is present in current request scope",
       "explicit parser limitations or safe failure reason"
     ],
     examples: [
@@ -161,6 +162,10 @@ export const discordContextFileToolContracts = [
         attachmentIdOrName: {
           type: "string",
           description: "Attachment ID or filename to select when the message contains multiple files."
+        },
+        publicMediaUrl: {
+          type: "string",
+          description: "Optional public X/Twitter status video URL copied from the current request or Discord reply chain. The tool rejects URLs outside current requester scope."
         },
         question: {
           type: "string",

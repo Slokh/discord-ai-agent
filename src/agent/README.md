@@ -25,6 +25,7 @@ Owns the model loop for one user prompt.
 - `modelRecovery.ts`: leaked hosted-tool markup detection, stripping, recovery calls, and malformed-output artifacts.
 - `invalidToolCallRecovery.ts`: one-shot full-context recovery when a model emits malformed or unavailable function names.
 - `modelToolset.ts`: initial scoped tool selection, same-turn tool-group expansion, and image-context checks used by the model loop.
+- `mediaTranscriptionRoute.ts`: recognizes explicit current-turn transcription requests with scoped attachments or a single public X/Twitter status video and forces `inspectDiscordFile` on the first model round.
 - `toolArguments.ts`: conservative JSON parsing plus schema-directed recovery for provider-double-encoded top-level object and array fields; normalized routes remain subject to canonical tool validation.
 - `randomOutcomeGuard.ts`: detects fresh chance outcomes that lack a successful `drawRandom` result, drives one in-turn retry, and provides the fail-closed response used by the model loop.
 - `modelTimeoutFallback.ts`: trims oldest conversational history for the one safe utility-model retry allowed before tools execute, and performs tool-free utility-model synthesis when the primary model times out after tools have already gathered evidence.

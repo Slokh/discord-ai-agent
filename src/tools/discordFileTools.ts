@@ -431,7 +431,7 @@ function selectCandidate(
   if (candidates.length === 0) {
     return {
       status: "none",
-      message: "No visible Discord file attachments matched. Provide a Discord message link/ID, or reply directly to a message containing the file."
+      message: "No visible Discord file attachments matched. Audio/video transcription is supported once media is available. Ask the user to attach the media or reply directly to its Discord message; do not claim transcription is unsupported."
     };
   }
   if (!selector) return candidates.length === 1 ? { status: "one", candidate: candidates[0] } : { status: "multiple", candidates };

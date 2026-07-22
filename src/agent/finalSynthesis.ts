@@ -28,6 +28,7 @@ import {
 } from "./routerShared.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 import { runObservedModelCall } from "./modelCallTelemetry.js";
+import { correctKnownCapabilityClaim } from "./capabilityClaimGuard.js";
 
 export function modelCallCeilingFallback(
   ctx: ToolContext,
@@ -127,6 +128,16 @@ export async function synthesizeFinalAnswerWithoutTools(
     content ||
     toolEvidenceFallback(input.memoryEvents) ||
     "I found relevant evidence, but I could not compose a clean answer from it.";
+  const capabilityCorrection = correctKnownCapabilityClaim(ctx, input.text, content);
+  content = capabilityCorrection.content;
+  if (capabilityCorrection.corrected) {
+    await recordAgentEvent(ctx, {
+      eventName: "agent.capability_claim.corrected",
+      level: "warn",
+      summary: "Corrected a false model-authored capability refusal",
+      metadata: { capability: capabilityCorrection.capability },
+    });
+  }
   await recordAgentEvent(ctx, {
     audit: {
       guildId: ctx.guildId,
@@ -286,10 +297,20 @@ export async function finalizeModelRoundWithoutTools(
           retryPolicy: "expensive",
         },
       });
-      const recoveryContent = stripLeakedHostedToolMarkup(
+      let recoveryContent = stripLeakedHostedToolMarkup(
         recovery.content,
       ).trim();
       if (recoveryContent) {
+        const capabilityCorrection = correctKnownCapabilityClaim(ctx, text, recoveryContent);
+        recoveryContent = capabilityCorrection.content;
+        if (capabilityCorrection.corrected) {
+          await recordAgentEvent(ctx, {
+            eventName: "agent.capability_claim.corrected",
+            level: "warn",
+            summary: "Corrected a false model-authored capability refusal",
+            metadata: { capability: capabilityCorrection.capability },
+          });
+        }
         await recordAgentEvent(ctx, {
           audit: {
             guildId: ctx.guildId,
@@ -359,7 +380,16 @@ export async function finalizeModelRoundWithoutTools(
     };
   }
 
-  const content = responseContent;
+  const capabilityCorrection = correctKnownCapabilityClaim(ctx, text, responseContent);
+  const content = capabilityCorrection.content;
+  if (capabilityCorrection.corrected) {
+    await recordAgentEvent(ctx, {
+      eventName: "agent.capability_claim.corrected",
+      level: "warn",
+      summary: "Corrected a false model-authored capability refusal",
+      metadata: { capability: capabilityCorrection.capability },
+    });
+  }
   await recordAgentEvent(ctx, {
     audit: {
       guildId: ctx.guildId,

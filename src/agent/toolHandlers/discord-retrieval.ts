@@ -49,6 +49,7 @@ export const discordRetrievalToolHandlers = {
             question: stringArgument(route.arguments, "question") ?? originalText,
             messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
             attachmentIdOrName: stringArgument(route.arguments, "attachmentIdOrName"),
+            publicMediaUrl: stringArgument(route.arguments, "publicMediaUrl"),
             useContextFiles: booleanArgument(route.arguments, "useContextFiles"),
             batchMode: enumArgument(route.arguments, "batchMode", ["inspect", "list"]),
           }),

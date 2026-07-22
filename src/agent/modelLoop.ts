@@ -63,7 +63,7 @@ import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from ".
 import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout } from "./modelTimeoutFallback.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
-
+import { mediaTranscriptionToolForPrompt } from "./mediaTranscriptionRoute.js";
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
@@ -140,6 +140,7 @@ async function runAgentModelLoopInternal(
   const forcedWalletActionTool = automaticStarterFunds && requestedWalletActionTool === "requestStarterFunds"
     ? null
     : requestedWalletActionTool;
+  const forcedMediaTranscriptionTool = mediaTranscriptionToolForPrompt(ctx, text);
   const forcedRandomAction = new ForcedRandomActionRouter(text, Boolean(ctx.config.payments?.userWalletsEnabled));
   const modelCallBudget: ModelCallBudget = {
     used: 0,
@@ -253,7 +254,7 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const forcedToolThisRound = (round === 0 ? forcedWalletActionTool : null) ?? forcedRandomAction.takeToolForRound(round);
+      const forcedToolThisRound = (round === 0 ? forcedWalletActionTool : null) ?? forcedRandomAction.takeToolForRound(round) ?? (round === 0 ? forcedMediaTranscriptionTool : null);
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;

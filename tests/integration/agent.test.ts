@@ -3285,6 +3285,153 @@ describe("agent router", () => {
     expect(traceEvents.some((event) => event.eventName === "agent.capability_claim.corrected")).toBe(true);
   });
 
+  it("transcribes a public X video from the full Discord reply chain before answering", async () => {
+    const publicMediaUrl = "https://x.com/example/status/42/video/1";
+    const transcribeAudio = vi.fn(async () => ({
+      text: "A fictional speaker verifies the release candidate.",
+      model: "test/transcription",
+      raw: {},
+      durationSeconds: 5,
+      estimatedCostUsd: 0.001,
+    }));
+    const chat = vi
+      .fn()
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.tools.some((tool: any) => tool.function?.name === "inspectDiscordFile")).toBe(true);
+        expect(request.toolChoice).toEqual({ type: "function", function: { name: "inspectDiscordFile" } });
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "inspect-public-video",
+            name: "inspectDiscordFile",
+            argumentsText: "{}",
+          }],
+        };
+      })
+      .mockResolvedValueOnce({
+        content: "The clip says: A fictional speaker verifies the release candidate.",
+        model: "answer-model",
+        raw: {},
+        toolCalls: [],
+      });
+    vi.stubGlobal("fetch", vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.startsWith("https://cdn.syndication.twimg.com/tweet-result?")) {
+        return new Response(JSON.stringify({
+          mediaDetails: [{
+            type: "video",
+            video_info: { variants: [{ content_type: "video/mp4", bitrate: 256000, url: "https://video.twimg.com/example/clip.mp4" }] },
+          }],
+        }), { headers: { "content-type": "application/json" } });
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "video/mp4" } });
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat, transcribeAudio },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      requestMessageId: "request",
+      requestAttachments: [],
+      replyContext: replyChainWithContent(publicMediaUrl),
+    } as unknown as ToolContext;
+
+    try {
+      const response = await handleAgentRequest(ctx, "transcribe this");
+
+      expect(response.content).toContain("release candidate");
+      expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
+      expect(chat).toHaveBeenCalledTimes(2);
+      const secondRequest = (chat.mock.calls as any[])[1][0];
+      expect(secondRequest.messages).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: "tool", content: expect.stringContaining("Parser: openrouter-transcription") }),
+      ]));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("transcribes a QuickTime MOV attachment before answering", async () => {
+    const transcribeAudio = vi.fn(async () => ({
+      text: "A fictional MOV recording confirms the audio path.",
+      model: "test/transcription",
+      raw: {},
+      durationSeconds: 3,
+      estimatedCostUsd: 0.001,
+    }));
+    const chat = vi
+      .fn()
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({ type: "function", function: { name: "inspectDiscordFile" } });
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{ id: "inspect-mov", name: "inspectDiscordFile", argumentsText: "{}" }],
+        };
+      })
+      .mockResolvedValueOnce({
+        content: "The recording confirms the audio path.",
+        model: "answer-model",
+        raw: {},
+        toolCalls: [],
+      });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      new Uint8Array([1, 2, 3]),
+      { headers: { "content-type": "video/quicktime" } },
+    )));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat, transcribeAudio },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      requestMessageId: "request",
+      requestAttachments: [{
+        id: "mov-attachment",
+        url: "https://cdn.discordapp.com/attachments/example/recording.mov",
+        filename: "recording.mov",
+        contentType: "video/quicktime",
+        sizeBytes: 3,
+      }],
+    } as unknown as ToolContext;
+
+    try {
+      const response = await handleAgentRequest(ctx, "transcribe this");
+
+      expect(response.content).toContain("audio path");
+      expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
+      expect(chat).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("recovers when a hosted OpenRouter tool call leaks as text", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
@@ -4370,6 +4517,29 @@ describe("agent router", () => {
     );
   });
 });
+
+function replyChainWithContent(content: string) {
+  const ancestor = {
+    messageId: "ancestor",
+    channelId: "c",
+    guildId: "g",
+    authorId: "u",
+    authorDisplayName: "User",
+    authorIsBot: false,
+    content,
+    attachmentSummaries: [],
+    attachments: [],
+    createdAt: null,
+    url: null,
+  };
+  return {
+    ...ancestor,
+    messageId: "parent",
+    rootMessageId: "ancestor",
+    content: "please try this media",
+    chain: [ancestor],
+  };
+}
 
 function fakeAgentRuntimeContext() {
   return {

@@ -31,6 +31,7 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   const replyContextText = input.replyContextText?.toLowerCase() ?? "";
 
   if (bugInboxIntent || hasAny(text, DISCORD_RETRIEVAL_KEYWORDS)) groups.add("discord-retrieval");
+  if (hasAny(text, MEDIA_INSPECTION_KEYWORDS)) groups.add("discord-retrieval");
   if (input.hasFileAttachments) groups.add("discord-retrieval");
   if (input.replyContext && hasAny(text, REPLY_FILE_KEYWORDS)) groups.add("discord-retrieval");
   if (hasAny(text, GENERATED_DATA_KEYWORDS)) groups.add("generated-data");
@@ -148,8 +149,12 @@ const BUG_INBOX_KEYWORDS = [
 const BUG_FIX_INTENT = /\b(?:fix|debug|diagnose|address|resolve|work\s+on)\b/i;
 
 const REPLY_FILE_KEYWORDS = [
-  /\b(file|document|attachment|download|contents?|bytes?|open|read|parse|inspect)\b/,
-  /\.(?:sto|txt|log|json|ya?ml|xml|csv|pdf|docx|xlsx|pptx|zip)\b/
+  /\b(file|document|attachment|download|contents?|bytes?|open|read|parse|inspect|transcrib(?:e|ing|ed)|transcription|audio|video|media|clip|recording)\b/,
+  /\.(?:sto|txt|log|json|ya?ml|xml|csv|pdf|docx|xlsx|pptx|zip|mov|mp4|m4a|mp3|wav|webm)\b/
+];
+
+const MEDIA_INSPECTION_KEYWORDS = [
+  /\b(?:transcrib(?:e|es|ed|ing)|transcription|speech[- ]to[- ]text|subtitles?|captions?)\b/,
 ];
 
 const GENERATED_DATA_KEYWORDS = [

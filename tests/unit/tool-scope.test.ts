@@ -196,6 +196,35 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
   });
 
+  it("adds Discord file inspection for a transcription request replying to public media", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "transcribe this",
+      hasImageAttachments: false,
+      hasFileAttachments: false,
+      replyContext: true,
+      replyContextText: "https://x.com/example/status/42/video/1",
+      config
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("discord-retrieval")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
+  });
+
+  it("adds Discord file inspection for a direct public-media transcription request", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "transcribe https://x.com/example/status/42/video/1",
+      hasImageAttachments: false,
+      config
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("discord-retrieval")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "inspectDiscordFile")).toBe(true);
+  });
+
   it("adds requester-scoped retrieval for the bug inbox", () => {
     const config = loadConfig();
     const groups = selectToolGroups({ text: "show me my bug inbox", hasImageAttachments: false, config });

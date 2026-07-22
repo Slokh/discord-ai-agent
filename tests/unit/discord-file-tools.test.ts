@@ -105,6 +105,141 @@ describe("inspectDiscordFile", () => {
     expect(JSON.stringify(recordTraceEvent.mock.calls)).not.toContain("launch checklist");
   });
 
+  it("transcribes a QuickTime MOV attachment through the media transcription provider", async () => {
+    const transcribeAudio = vi.fn(async () => ({
+      text: "A fictional speaker confirms the microphone check.",
+      model: "test/transcription",
+      raw: {},
+      durationSeconds: 4,
+      estimatedCostUsd: 0.001
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array([0, 1, 2, 3]), { headers: { "content-type": "video/quicktime" } }))
+    );
+    const ctx = {
+      repo: {
+        messageAttachments: vi.fn(async () => [{
+          ...attachmentRow("video-1", "recording.mov"),
+          contentType: "video/quicktime",
+          sizeBytes: 4
+        }]),
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { transcribeAudio },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      visibleIndexedChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const result = await inspectDiscordFile(ctx, { messageIdOrUrl: "123456789012345678" });
+
+    expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
+    expect(result).toContain("Parser: openrouter-transcription");
+    expect(result).toContain("microphone check");
+  });
+
+  it("resolves and transcribes an in-scope public X video from the reply chain", async () => {
+    const publicMediaUrl = "https://x.com/example/status/42/video/1";
+    const recordTraceEvent = vi.fn(async () => undefined);
+    const transcribeAudio = vi.fn(async () => ({
+      text: "A fictional public clip discusses release validation.",
+      model: "test/transcription",
+      raw: {},
+      durationSeconds: 6,
+      estimatedCostUsd: 0.001
+    }));
+    const fetchMock = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.startsWith("https://cdn.syndication.twimg.com/tweet-result?")) {
+        return new Response(JSON.stringify({
+          mediaDetails: [{
+            type: "video",
+            video_info: {
+              variants: [
+                { content_type: "video/mp4", bitrate: 832000, url: "https://video.twimg.com/example/high.mp4" },
+                { content_type: "video/mp4", bitrate: 256000, url: "https://video.twimg.com/example/low.mp4" }
+              ]
+            }
+          }]
+        }), { headers: { "content-type": "application/json" } });
+      }
+      if (url === "https://video.twimg.com/example/low.mp4") {
+        return new Response(new Uint8Array([4, 5, 6]), { headers: { "content-type": "video/mp4" } });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const ctx = {
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent
+      },
+      openRouter: { transcribeAudio },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      requestText: "transcribe this",
+      replyContext: replyContextWithContent(publicMediaUrl)
+    } as unknown as ToolContext;
+
+    const result = await inspectDiscordFile(ctx, { publicMediaUrl });
+
+    expect(fetchMock).toHaveBeenCalledWith(new URL("https://video.twimg.com/example/low.mp4"), expect.objectContaining({ redirect: "error" }));
+    expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
+    expect(result).toContain("Public X video inspection");
+    expect(result).toContain("release validation");
+    expect(JSON.stringify(recordTraceEvent.mock.calls)).not.toContain(publicMediaUrl);
+    expect(JSON.stringify(recordTraceEvent.mock.calls)).not.toContain("release validation");
+  });
+
+  it("rejects a public media URL that is outside the current request and reply chain", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      requestText: "transcribe this",
+      replyContext: replyContextWithContent("https://x.com/example/status/42/video/1")
+    } as unknown as ToolContext;
+
+    const result = await inspectDiscordFile(ctx, {
+      publicMediaUrl: "https://x.com/example/status/99/video/1"
+    });
+
+    expect(result).toContain("current request or reply chain");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects public-media metadata that points outside the approved X video host", async () => {
+    const publicMediaUrl = "https://x.com/example/status/42/video/1";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      mediaDetails: [{
+        type: "video",
+        video_info: { variants: [{ content_type: "video/mp4", bitrate: 1, url: "https://example.com/untrusted.mp4" }] }
+      }]
+    }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      requestText: `transcribe ${publicMediaUrl}`,
+      openRouter: { transcribeAudio: vi.fn() }
+    } as unknown as ToolContext;
+
+    const result = await inspectDiscordFile(ctx, { publicMediaUrl });
+
+    expect(result).toContain("unapproved host");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("inspects a bounded file batch and deduplicates identical extracted content", async () => {
     const fetchMock = vi.fn(async () => new Response("shared setup notes", { headers: { "content-type": "text/plain" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -303,4 +438,34 @@ function iracingIbtPrefix(session: Buffer): Buffer {
   data.writeInt32LE(256, 36);
   session.copy(data, sessionInfoOffset);
   return data;
+}
+
+function replyContextWithContent(content: string) {
+  return {
+    messageId: "parent",
+    rootMessageId: "root",
+    channelId: "channel",
+    guildId: "guild",
+    authorId: "author",
+    authorDisplayName: "Example",
+    authorIsBot: false,
+    content,
+    attachmentSummaries: [],
+    attachments: [],
+    createdAt: null,
+    url: null,
+    chain: [{
+      messageId: "root",
+      channelId: "channel",
+      guildId: "guild",
+      authorId: "author",
+      authorDisplayName: "Example",
+      authorIsBot: false,
+      content,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null
+    }]
+  };
 }

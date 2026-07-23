@@ -1109,6 +1109,65 @@ describe("agent router", () => {
     );
   });
 
+  it("treats a simple personal update as the new conversational state instead of continuing an old argument", async () => {
+    const chat = vi.fn(async (request: { messages: Array<{ role: string; content: unknown }> }) => {
+      const currentRequestReminder = String(request.messages.at(-2)?.content ?? "");
+      return {
+        content: currentRequestReminder.includes("Simple personal updates")
+          ? "Got it — I’ll plan around you being unavailable that month."
+          : "That does not address the earlier disagreement.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          role: "user",
+          authorId: "u",
+          authorDisplayName: "User",
+          content: "Earlier synthetic disagreement.",
+          metadata: {},
+          createdAt: new Date("2026-07-23T12:00:00Z"),
+        },
+        {
+          role: "assistant",
+          authorId: null,
+          authorDisplayName: "AI",
+          content: "Earlier synthetic argumentative response.",
+          metadata: {},
+          createdAt: new Date("2026-07-23T12:01:00Z"),
+        },
+      ],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "I won’t be available that month.");
+
+    expect(response.content).toBe("Got it — I’ll plan around you being unavailable that month.");
+    expect(chat).toHaveBeenCalledTimes(1);
+    const modelRequest = (chat.mock.calls as any[])[0]?.[0];
+    expect(modelRequest.messages.at(-2)).toEqual(expect.objectContaining({
+      role: "system",
+      content: expect.stringContaining("Simple personal updates"),
+    }));
+    expect(modelRequest.messages.at(-1)).toEqual({
+      role: "user",
+      content: "I won’t be available that month.",
+    });
+  });
+
   it("preserves long final model answers so Discord delivery can split them", async () => {
     const longAnswer = "alpha ".repeat(120).trim();
     const chat = vi.fn(async () => ({

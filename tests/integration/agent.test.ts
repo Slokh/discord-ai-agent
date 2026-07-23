@@ -125,6 +125,82 @@ describe("agent router", () => {
     expect(getUserWalletSummary).toHaveBeenCalledWith({ guildId: "g", userId: "u" }, expect.any(Function));
   });
 
+  it("replays a recent-win question through canonical wager history before answering", async () => {
+    const listWagerHistory = vi.fn(async () => ({
+      entries: [{
+        wager: {
+          requestId: "earlier-wager",
+          channelId: "casino",
+          game: "coinflip",
+          status: "settled",
+          settlementOutcome: "player_win",
+          stakeAtomic: 500_000n,
+          payoutAtomic: 1_000_000n,
+          tokenDecimals: 6,
+          explanation: "The verified draw matched the requested side.",
+          createdAt: new Date("2026-07-23T16:20:00.000Z"),
+        },
+        draw: {
+          kind: "coin",
+          outcome: { kind: "coin", values: ["heads"] },
+          reason: "requester chose heads",
+        },
+      }],
+      hasMore: false,
+    }));
+    const chat = vi.fn(async () => ({
+      content: "You won the latest wager because the verified coin result matched your choice; the ledger shows a net $0.50 gain.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { listWagerHistory },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "casino",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["casino"],
+      sessionMessages: [],
+      requestId: "recent-win-question",
+      requestMessageId: "recent-win-question",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "why did I win my most recent wager?");
+
+    expect(response.content).toContain("verified coin result");
+    expect(listWagerHistory).toHaveBeenCalledWith({
+      guildId: "g",
+      userId: "u",
+      game: undefined,
+      limit: 20,
+    });
+    expect(chat).toHaveBeenCalledTimes(1);
+    const synthesisRequest = (chat.mock.calls as any[])[0]?.[0];
+    expect(synthesisRequest.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("Canonical requester wager ledger"),
+      }),
+    ]));
+  });
+
   it("uses the verified bot balance in a conversational response", async () => {
     const chat = vi.fn(async () => ({
       content: "I currently have **$5.95** available.",

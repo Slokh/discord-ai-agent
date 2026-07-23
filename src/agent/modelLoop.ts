@@ -55,9 +55,9 @@ import {
   handleAdditionalToolsRequest,
   initialToolsetState,
 } from "./modelToolset.js";
-import { walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
+import { wagerHistoryRouteForPrompt, walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
 import { walletActionToolForPrompt } from "./walletActionGuard.js";
-import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
+import { executeDeterministicWalletReadRoute } from "./deterministicWalletRoute.js";
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
 import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout } from "./modelTimeoutFallback.js";
@@ -135,7 +135,7 @@ async function runAgentModelLoopInternal(
   };
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
   const wagerResolutionRouter = new WagerResolutionRouter();
-  const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
+  const forcedWalletReadRoute = wagerHistoryRouteForPrompt(ctx.config, text) ?? walletBalanceRouteForPrompt(ctx.config, text);
   const requestedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
   const forcedWalletActionTool = automaticStarterFunds && requestedWalletActionTool === "requestStarterFunds"
     ? null
@@ -195,9 +195,9 @@ async function runAgentModelLoopInternal(
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0,
     },
   });
-  if (forcedWalletBalanceRoute) {
-    return await executeDeterministicWalletBalanceRoute(ctx, {
-      route: forcedWalletBalanceRoute,
+  if (forcedWalletReadRoute) {
+    return await executeDeterministicWalletReadRoute(ctx, {
+      route: forcedWalletReadRoute,
       text,
       requestLogger,
       startedAt,

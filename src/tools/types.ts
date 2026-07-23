@@ -140,6 +140,8 @@ export type DiscordReplyContextMessage = {
   content: string;
   attachmentSummaries: string[];
   attachments: DiscordAttachmentContext[];
+  /** Bounded exact emoji/count summaries visible on this retained message. */
+  reactionSummaries?: string[];
   createdAt: string | null;
   url: string | null;
   /** True when Discord exposed this parent through a forwarded message snapshot. */

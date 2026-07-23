@@ -50,12 +50,16 @@ export async function loadDiscordEmojiPromptContext(ctx: ToolContext, queryText:
     listDiscordEmojiCultureProfiles?: ToolContext["repo"]["listDiscordEmojiCultureProfiles"];
   }).listDiscordEmojiCultureProfiles;
   if (typeof loader !== "function") return { emojis, profiles: [] };
+  const referencedEmojiIds = replyReactionEmojiIdsForQuery(ctx.replyContext, queryText);
+  const emojiIds = referencedEmojiIds.length > 0
+    ? referencedEmojiIds
+    : emojis.map((emoji) => emoji.id);
   const profiles = await loader.call(ctx.repo, {
     guildId: ctx.guildId,
     visibleChannelIds: ctx.visibleChannelIds,
-    emojiIds: emojis.map((emoji) => emoji.id),
+    emojiIds,
     queryText,
-    limit: 8,
+    limit: referencedEmojiIds.length > 0 ? Math.min(8, referencedEmojiIds.length) : 8,
   }).catch(() => []);
   return { emojis, profiles };
 }
@@ -364,6 +368,10 @@ function replyContextMessagesForPrompt(
         message.attachmentSummaries.length > 0
           ? `\nAttachments: ${message.attachmentSummaries.join(", ")}`
           : "";
+      const reactions =
+        message.reactionSummaries && message.reactionSummaries.length > 0
+          ? `\nReactions visible on this message: ${message.reactionSummaries.join(", ")}`
+          : "";
       const created = message.createdAt
         ? `\nCreated: ${message.createdAt}`
         : "";
@@ -386,7 +394,8 @@ function replyContextMessagesForPrompt(
         botNote +
         forwardedNote +
         `\nContent: ${text}` +
-        attachments
+        attachments +
+        reactions
       );
     })
     .join("\n\n");
@@ -395,11 +404,26 @@ function replyContextMessagesForPrompt(
       role: "system",
       content:
         "The current user message is a Discord reply. Use this oldest-to-newest parent chain as the primary context for pronouns, follow-ups, and what the user is responding to. Do not switch to unrelated channel memory or outside topics for vague references unless the user clearly asks to broaden the scope." +
+        " Reaction summaries are exact visible emoji/count metadata without reactor identities. When the user asks what a reacted emote means, use its exact token and the learned server-emoji culture guide; if several reactions are present and the reference is ambiguous, identify or disambiguate them instead of claiming the reactions are inaccessible." +
         `\nReply root message ID: ${replyContext.rootMessageId}` +
         `\nDirect parent message ID: ${replyContext.messageId}` +
         `\n\n${chainText}`,
     },
   ];
+}
+
+function replyReactionEmojiIdsForQuery(
+  replyContext: DiscordReplyContext | undefined,
+  queryText: string,
+): string[] {
+  if (!replyContext || !/\b(?:emoji|emote|reaction|reacted|reacting|react)\b/i.test(queryText)) return [];
+  const chain = replyContext.chain.length > 0 ? replyContext.chain : [replyContext];
+  return [...new Set(chain.flatMap((message) =>
+    (message.reactionSummaries ?? []).flatMap((summary) => {
+      const emojiId = summary.match(/<a?:[^:>]+:(\d+)>/)?.[1];
+      return emojiId ? [emojiId] : [];
+    })
+  ))].slice(0, 8);
 }
 
 function sessionMessagesForPrompt(

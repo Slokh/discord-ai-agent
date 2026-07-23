@@ -12,6 +12,16 @@ describe("Discord forwarded message context", () => {
       member: null,
       content: "The forwarded answer and its details.",
       attachments: new Map(),
+      reactions: {
+        cache: new Map([[
+          "party",
+          {
+            emoji: { id: "101", name: "party", animated: false },
+            count: 2,
+            me: false,
+          },
+        ]]),
+      },
       createdAt: new Date("2026-07-17T20:00:00Z"),
       url: "https://discord.com/channels/guild-a/source-channel/source-message",
       reference: null,
@@ -35,6 +45,7 @@ describe("Discord forwarded message context", () => {
       authorId: "bot-a",
       content: "The forwarded answer and its details.",
       forwarded: true,
+      reactionSummaries: ["<:party:101> ×2"],
     }));
     expect(context?.chain).toHaveLength(1);
     expect(repo.recordTraceEvent).toHaveBeenCalledWith(expect.objectContaining({

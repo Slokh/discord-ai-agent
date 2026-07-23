@@ -5,6 +5,135 @@ import type { WagerReservation } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("replays a reply-chain emote question with exact reacted emoji and learned visible usage", async () => {
+    const targetProfiles = [
+      {
+        emojiId: "101",
+        inlineUses: 2,
+        reactionUses: 6,
+        messageCount: 4,
+        lastUsedAt: new Date("2026-07-20T00:00:00.000Z"),
+        examples: [{
+          emojiId: "101",
+          kind: "reaction" as const,
+          messageId: "example-1",
+          content: "synthetic celebration context",
+          createdAt: new Date("2026-07-20T00:00:00.000Z"),
+        }],
+      },
+      {
+        emojiId: "102",
+        inlineUses: 1,
+        reactionUses: 4,
+        messageCount: 3,
+        lastUsedAt: new Date("2026-07-19T00:00:00.000Z"),
+        examples: [{
+          emojiId: "102",
+          kind: "reaction" as const,
+          messageId: "example-2",
+          content: "synthetic uncertainty context",
+          createdAt: new Date("2026-07-19T00:00:00.000Z"),
+        }],
+      },
+    ];
+    const listDiscordEmojiCultureProfiles = vi.fn(async (input: { emojiIds: string[] }) =>
+      input.emojiIds.length === 2 ? targetProfiles : []);
+    const chat = vi.fn(async (request: { messages: Array<{ content: unknown }> }) => {
+      const prompt = request.messages.map((message) => String(message.content)).join("\n");
+      const grounded =
+        prompt.includes("Reactions visible on this message: <:party:101> ×1, <:hmm:102> ×1") &&
+        prompt.includes("<:party:101> (4 observed messages)") &&
+        prompt.includes("<:hmm:102> (3 observed messages)");
+      return {
+        content: grounded
+          ? "Two custom reactions are on that ancestor; one is used for celebration and the other for uncertainty."
+          : "I cannot identify which emote you mean from the reply.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+        listDiscordEmojiCultureProfiles,
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      discordGuildEmojis: [
+        { id: "101", name: "party", animated: false, mention: "<:party:101>" },
+        { id: "102", name: "hmm", animated: false, mention: "<:hmm:102>" },
+        { id: "103", name: "unrelated", animated: false, mention: "<:unrelated:103>" },
+      ],
+      sessionMessages: [],
+      replyContext: {
+        messageId: "parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "AI",
+        authorIsBot: true,
+        content: "A synthetic reply.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: "2026-07-23T18:00:00.000Z",
+        url: "https://discord.com/channels/g/c/parent",
+        rootMessageId: "root",
+        chain: [
+          {
+            messageId: "root",
+            channelId: "c",
+            guildId: "g",
+            authorId: "u",
+            authorDisplayName: "User",
+            authorIsBot: false,
+            content: "A synthetic ancestor.",
+            attachmentSummaries: [],
+            attachments: [],
+            reactionSummaries: ["<:party:101> ×1", "<:hmm:102> ×1"],
+            createdAt: "2026-07-23T17:59:00.000Z",
+            url: "https://discord.com/channels/g/c/root",
+          },
+          {
+            messageId: "parent",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "AI",
+            authorIsBot: true,
+            content: "A synthetic reply.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-23T18:00:00.000Z",
+            url: "https://discord.com/channels/g/c/parent",
+          },
+        ],
+      },
+      requestId: "message-emote-question",
+      requestMessageId: "message-emote-question",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what does that emote mean?");
+
+    expect(response.content).toContain("Two custom reactions");
+    expect(listDiscordEmojiCultureProfiles).toHaveBeenCalledWith(expect.objectContaining({
+      guildId: "g",
+      visibleChannelIds: ["c"],
+      emojiIds: ["101", "102"],
+      limit: 2,
+    }));
+  });
+
   it("answers ordinary chat without inspecting or funding the requester's wallet", async () => {
     const requestStarterFunds = vi.fn(async () => ({
       granted: true as const,

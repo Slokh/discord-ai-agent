@@ -268,8 +268,16 @@ export function requiresWalletBackedWager(text: string): boolean {
   const shorthand = new RegExp(String.raw`(?:\b(?:bet|wager|stake|risk|put)\s+\$?${amount}(?![\w.])|(?<![\w.])\$?${amount}\s+(?:on|per\s+(?:spin|hand|roll|game)|each)\b)`, "i");
   const game = /\b(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery|wager|bet)\b/i;
   const action = /\b(?:play|run|do|give|deal|roll|flip|spin|bet|wager|stake|risk|put|again|more)\b/i;
+  const replayAction = /\b(?:double(?:\s+down)?|let\s+it\s+ride|run\s+(?:it|that)\s+back|rematch|replay)\b/i;
+  const discussion = /^\s*(?:what|which|why|how|should|would|could|is|are|do\s+(?:you|i|we|they)|does|did|explain)\b/i;
+  const executionOverride = /\b(?:please|go\s+ahead|right\s+now|do\s+it|let(?:'s|\s+us)|for\s+me)\b/i;
   const wholeBalance = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
-  return game.test(text) && ((money.test(text) && action.test(text)) || shorthand.test(text) || (wholeBalance.test(text) && action.test(text)));
+  if (discussion.test(text) && !executionOverride.test(text)) return false;
+  return game.test(text) && (
+    (money.test(text) && (action.test(text) || replayAction.test(text))) ||
+    shorthand.test(text) ||
+    (wholeBalance.test(text) && (action.test(text) || replayAction.test(text)))
+  );
 }
 
 export function isDeferredExternalOutcomeWager(text: string): boolean {

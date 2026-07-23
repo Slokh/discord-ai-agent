@@ -135,7 +135,7 @@ async function runAgentModelLoopInternal(
   };
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
   const wagerResolutionRouter = new WagerResolutionRouter();
-  const forcedWalletReadRoute = wagerHistoryRouteForPrompt(ctx.config, text) ?? walletBalanceRouteForPrompt(ctx.config, text);
+  const forcedWalletReadRoute = wagerHistoryRouteForPrompt(ctx.config, text, ctx.replyContext) ?? walletBalanceRouteForPrompt(ctx.config, text);
   const requestedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
   const forcedWalletActionTool = automaticStarterFunds && requestedWalletActionTool === "requestStarterFunds"
     ? null

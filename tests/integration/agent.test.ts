@@ -5,6 +5,58 @@ import type { WagerReservation } from "../../src/payments/types.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("answers ordinary chat without inspecting or funding the requester's wallet", async () => {
+    const requestStarterFunds = vi.fn(async () => ({
+      granted: true as const,
+      amountUsd: 1,
+      transfer: { status: "confirmed", transactionHash: `0x${"7".repeat(64)}` },
+      destination: { balance: { formatted: "1" } },
+      source: { balance: { formatted: "22" } },
+    }));
+    const chat = vi.fn(async () => ({
+      content: "Recursion is when a process solves a problem by calling itself on a smaller version.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          tempoNetwork: "mainnet",
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { requestStarterFunds },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "message-ordinary-chat",
+      requestMessageId: "message-ordinary-chat",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what is recursion?");
+
+    expect(response.content).toBe("Recursion is when a process solves a problem by calling itself on a smaller version.");
+    expect(response.footerLines ?? []).toEqual([]);
+    expect(requestStarterFunds).not.toHaveBeenCalled();
+    const modelRequest = (chat.mock.calls as any[])[0]?.[0];
+    expect(JSON.stringify(modelRequest.messages)).not.toContain("Automatic starter funding");
+  });
+
   it("automatically tops up starter funds before handling a below-target user request", async () => {
     const transactionHash = `0x${"8".repeat(64)}`;
     const requestStarterFunds = vi.fn(async (_input, record) => {
@@ -199,6 +251,127 @@ describe("agent router", () => {
         content: expect.stringContaining("Canonical requester wager ledger"),
       }),
     ]));
+  });
+
+  it("replays a terse wager correction from a multi-user reply chain through the current requester's ledger", async () => {
+    const listWagerHistory = vi.fn(async () => ({
+      entries: [{
+        wager: {
+          requestId: "requester-wager",
+          channelId: "casino",
+          game: "synthetic-game",
+          status: "settled",
+          settlementOutcome: "player_win",
+          stakeAtomic: 250_000n,
+          payoutAtomic: 500_000n,
+          tokenDecimals: 6,
+          explanation: "The verified draw matched the requester's selection.",
+          createdAt: new Date("2026-07-23T17:00:00.000Z"),
+        },
+        draw: {
+          kind: "coin",
+          outcome: { kind: "coin", values: ["heads"] },
+          reason: "synthetic requester selection",
+        },
+      }],
+      hasMore: false,
+    }));
+    const chat = vi.fn(async (request: { messages: Array<{ content: unknown }> }) => {
+      const hasLedger = JSON.stringify(request.messages).includes("Canonical requester wager ledger");
+      return {
+        content: hasLedger
+          ? "The verified requester ledger confirms the latest result."
+          : "I cannot verify which prior result belongs to you.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { listWagerHistory },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "casino",
+      userId: "current-requester",
+      userDisplayName: "Current requester",
+      visibleChannelIds: ["casino"],
+      sessionMessages: [],
+      requestId: "terse-correction",
+      requestMessageId: "terse-correction",
+      replyContext: {
+        messageId: "parent",
+        channelId: "casino",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "AI",
+        authorIsBot: true,
+        content: "Your latest wager ledger entry was a settled loss.",
+        attachmentSummaries: [],
+        attachments: [],
+        rootMessageId: "root",
+        chain: [
+          {
+            messageId: "root",
+            channelId: "casino",
+            guildId: "g",
+            authorId: "other-member",
+            authorDisplayName: "Other member",
+            authorIsBot: false,
+            content: "Show the latest wager result.",
+            attachmentSummaries: [],
+            attachments: [],
+          },
+          {
+            messageId: "requester-follow-up",
+            channelId: "casino",
+            guildId: "g",
+            authorId: "current-requester",
+            authorDisplayName: "Current requester",
+            authorIsBot: false,
+            content: "Show my latest wager.",
+            attachmentSummaries: [],
+            attachments: [],
+          },
+          {
+            messageId: "parent",
+            channelId: "casino",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "AI",
+            authorIsBot: true,
+            content: "Your latest wager ledger entry was a settled loss.",
+            attachmentSummaries: [],
+            attachments: [],
+          },
+        ],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "that's not my turn");
+
+    expect(response.content).toBe("The verified requester ledger confirms the latest result.");
+    expect(listWagerHistory).toHaveBeenCalledWith({
+      guildId: "g",
+      userId: "current-requester",
+      game: undefined,
+      limit: 20,
+    });
+    expect(chat).toHaveBeenCalledTimes(1);
   });
 
   it("uses the verified bot balance in a conversational response", async () => {

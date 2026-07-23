@@ -373,12 +373,12 @@ describe("managed wallet tools", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("leaves balances at or above the starter target untouched during automatic preflight", async () => {
-    const request = vi.fn(async () => ({ granted: false as const, balance: { formatted: "1.25" } }));
-    const ctx = context({ requestText: "tell me a joke", walletService: { requestStarterFunds: request } });
+  it("does not inspect or fund a wallet during ordinary non-wallet chat", async () => {
+    const request = vi.fn(async () => ({ granted: true as const, amountUsd: 1, ...transferResult() }));
+    const ctx = context({ requestText: "what is recursion?", walletService: { requestStarterFunds: request } });
 
     await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalled();
     expect(ctx.turnOutput?.footerLines).toEqual([]);
   });
 
@@ -388,6 +388,22 @@ describe("managed wallet tools", () => {
 
     await expect(ensureAutomaticStarterFunds(ctx)).resolves.toContain("Automatically added $0.994 USD");
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the starter preflight for an explicit managed-wallet transfer", async () => {
+    const request = vi.fn(async () => ({ granted: false as const, balance: { formatted: "2" } }));
+    const ctx = context({ requestText: "send $1 to the AI treasury", walletService: { requestStarterFunds: request } });
+
+    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not mistake an ordinary price question for starter-funds intent", async () => {
+    const request = vi.fn();
+    const ctx = context({ requestText: "what can $1 buy?", walletService: { requestStarterFunds: request } });
+
+    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("does not create or fund a real wallet when the prompt explicitly opts into roleplay money", async () => {

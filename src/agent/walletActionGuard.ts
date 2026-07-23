@@ -11,6 +11,7 @@ const USD_AMOUNT_SOURCE = "(?:\\$\\s*(?:\\d+(?:\\.\\d+)?|\\.\\d+)|\\b(?:one|two|
 const USD_AMOUNT = new RegExp(USD_AMOUNT_SOURCE, "i");
 const BARE_NUMERIC_AMOUNT = /(?:^|\s)(?:\d+(?:\.\d+)?|\.\d+)(?=$|\s|[,.!?;])/i;
 const STARTER_REQUEST = /\b(?:starter|restart|refill|top\s*me\s*up|start playing|play again)\b/i;
+const PERSONAL_STARTER_DOLLAR = /\b(?:give|send|spot|lend)\s+me\s+(?:my|the|a)\s+dollar\b/i;
 const TRANSFER_REQUEST = /\b(?:send|transfer|pay|tip|deposit|return|refund|give)\b/i;
 const WAGER_CONTEXT = /\b(?:bet|wager|casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|heads|tails)\b/i;
 const AMOUNT_AFTER_VERB = new RegExp(`${USD_AMOUNT_SOURCE}|(?:^|\\s)(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?=$|\\s|[,.!?;])`, "i");
@@ -31,9 +32,18 @@ const WORD_AMOUNTS: Readonly<Record<string, number>> = {
 export function walletActionToolForPrompt(config: AppConfig, text: string): ForcedWalletActionTool | null {
   if (!config.payments?.walletEnabled || !config.payments.userWalletsEnabled) return null;
   const normalized = text.trim();
-  if (USD_AMOUNT.test(normalized) && STARTER_REQUEST.test(normalized)) return "requestStarterFunds";
+  if (USD_AMOUNT.test(normalized) && isExplicitStarterFundsPrompt(normalized)) return "requestStarterFunds";
   if (isExplicitWalletTransferPrompt(normalized)) return "transferWalletFunds";
   return null;
+}
+
+export function isExplicitStarterFundsPrompt(text: string): boolean {
+  const normalized = text.trim();
+  return Boolean(
+    normalized &&
+    !promptExcludesRealWallet(normalized) &&
+    (STARTER_REQUEST.test(normalized) || PERSONAL_STARTER_DOLLAR.test(normalized))
+  );
 }
 
 export function isExplicitWalletTransferPrompt(text: string): boolean {

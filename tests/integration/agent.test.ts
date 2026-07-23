@@ -1,10 +1,251 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleAgentRequest } from "../../src/agent/router.js";
+import type { RngDrawInput, RngSessionRecord, RngSessionTx } from "../../src/db/rngRepository.js";
 import { OpenRouterTimeoutError } from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
+import { rngCommitment } from "../../src/rng/provable.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+  it("replays explicit real-money round language through reservation, fresh RNG, and settlement", async () => {
+    const serverSeed = "11".repeat(32);
+    const commitment = rngCommitment(serverSeed);
+    const draws: RngDrawInput[] = [];
+    const session: RngSessionRecord = {
+      id: "rng_synthetic",
+      threadKey: "g:c:rng-root:root",
+      guildId: "g",
+      channelId: "c",
+      createdByUserId: "u",
+      serverSeed,
+      commitment,
+      clientSeed: null,
+      clientSeedSource: null,
+      nonceCounter: 0,
+      deckCount: null,
+      shuffleNonce: null,
+      deckPosition: null,
+      status: "active",
+      prevSessionId: null,
+      createdAt: new Date("2026-07-23T00:00:00.000Z"),
+      revealedAt: null,
+    };
+    const rngRepo = {
+      withActiveSession: vi.fn(async (
+        _input: unknown,
+        callback: (tx: RngSessionTx, created: boolean) => Promise<unknown>,
+      ) => callback({
+        session,
+        setClientSeed: async (clientSeed: string, source: string) => {
+          const justSet = session.clientSeed == null;
+          session.clientSeed ??= clientSeed;
+          session.clientSeedSource ??= source;
+          return { clientSeed: session.clientSeed, justSet };
+        },
+        takeNonce: async () => session.nonceCounter++,
+        recordDraw: async (input: RngDrawInput) => {
+          draws.push(input);
+          return {
+            id: draws.length,
+            sessionId: session.id,
+            ...input,
+            reason: input.reason ?? null,
+            requestId: input.requestId ?? null,
+            messageId: input.messageId ?? null,
+            requestedByUserId: input.requestedByUserId ?? null,
+            createdAt: new Date("2026-07-23T00:00:00.000Z"),
+          };
+        },
+        setShoe: async () => undefined,
+        claimDeckCards: async () => null,
+      }, true)),
+    };
+    let activeWager: WagerReservation | null = null;
+    const reserveWager = vi.fn(async (input: {
+      requestId: string;
+      guildId: string;
+      channelId: string;
+      threadKey: string;
+      userId: string;
+      game: string;
+      interactionMode: WagerReservation["interactionMode"];
+    }) => {
+      activeWager = {
+        id: "wager_synthetic",
+        requestId: input.requestId,
+        guildId: input.guildId,
+        channelId: input.channelId,
+        threadKey: input.threadKey,
+        requestedByUserId: input.userId,
+        userWalletId: "wallet_user",
+        botWalletId: "wallet_bot",
+        game: input.game,
+        token: "USDC.e",
+        tokenDecimals: 6,
+        stakeAtomic: 250_000n,
+        maxPayoutAtomic: 500_000n,
+        payoutAtomic: null,
+        drawId: null,
+        settlementTransferId: null,
+        status: "reserved",
+        explanation: null,
+        interactionMode: input.interactionMode,
+        settlementOutcome: null,
+        settlementResolutionSource: null,
+        settlementRequestId: null,
+        awaitingAction: false,
+        stateVersion: 0,
+        decisionState: {},
+        allowedActions: [],
+        actionPrompt: null,
+        lastActionRequestId: null,
+        expiresAt: new Date("2026-07-23T01:00:00.000Z"),
+        createdAt: new Date("2026-07-23T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-23T00:00:00.000Z"),
+      };
+      return activeWager;
+    });
+    const settleWager = vi.fn(async () => {
+      activeWager = null;
+      return {
+        transfer: null,
+        userBalance: { formatted: "1.25" },
+      };
+    });
+    let modelRound = 0;
+    const chat = vi.fn(async (request: { messages: Array<{ content: unknown }> }) => {
+      modelRound += 1;
+      const prompt = JSON.stringify(request.messages);
+      if (modelRound === 1) {
+        return {
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [{
+            id: "unbacked-draw",
+            name: "drawRandom",
+            argumentsText: JSON.stringify({ kind: "coin", reason: "synthetic replay round" }),
+          }],
+        };
+      }
+      if (modelRound === 2 && prompt.includes("requires a wallet-backed wager")) {
+        return {
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [{
+            id: "reserved-draw",
+            name: "drawRandom",
+            argumentsText: JSON.stringify({
+              kind: "coin",
+              reason: "heads wins",
+              wager: {
+                playerUserId: "u",
+                stakeUsd: 0.25,
+                maxPayoutUsd: 0.5,
+                game: "synthetic coin game; heads wins",
+              },
+            }),
+          }],
+        };
+      }
+      if (modelRound === 3 && prompt.includes("Provably fair draw complete") && prompt.includes("wallet wager")) {
+        return {
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [{
+            id: "settle-reserved-draw",
+            name: "settleRandomWager",
+            argumentsText: JSON.stringify({
+              payoutUsd: 0.5,
+              outcome: "player_win",
+              resolutionSource: "verified_randomness",
+              explanation: "Synthetic verified result satisfies the stated rule.",
+            }),
+          }],
+        };
+      }
+      return {
+        content: prompt.includes("The scoped wallet wager settled.")
+          ? "The replay round completed and settled against the verified draw."
+          : "The replay round could not be settled.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const requestStarterFunds = vi.fn(async () => ({
+      granted: false as const,
+      targetUsd: 1,
+      balance: { formatted: "1.00" },
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          initialGrantUsd: 1,
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      rngRepo,
+      walletService: {
+        requestStarterFunds,
+        getActiveGameSession: vi.fn(async () => null),
+        getCurrentWager: vi.fn(async () => activeWager),
+        reserveWager,
+        attachWagerDraw: vi.fn(async () => undefined),
+        settleWager,
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "g:c",
+      sessionMessages: [],
+      replyContext: {
+        messageId: "parent",
+        rootMessageId: "root",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "AI",
+        authorIsBot: true,
+        content: "The prior synthetic wager completed.",
+        attachmentSummaries: [],
+        attachments: [],
+        chain: [],
+      },
+      requestId: "replay-wager-request",
+      requestMessageId: "replay-wager-request",
+      requesterScope: {
+        requestId: "replay-wager-request",
+        messageId: "replay-wager-request",
+        guildId: "g",
+        channelId: "c",
+        userId: "u",
+        userDisplayName: "User",
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "let it ride: $0.25 on a coin flip");
+
+    expect(response.content).toBe("The replay round completed and settled against the verified draw.");
+    expect(requestStarterFunds).toHaveBeenCalledTimes(1);
+    expect(reserveWager).toHaveBeenCalledTimes(1);
+    expect(draws).toHaveLength(1);
+    expect(settleWager).toHaveBeenCalledTimes(1);
+  });
+
   it("replays a reply-chain emote question with exact reacted emoji and learned visible usage", async () => {
     const targetProfiles = [
       {

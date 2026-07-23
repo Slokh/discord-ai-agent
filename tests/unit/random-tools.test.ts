@@ -748,9 +748,20 @@ describe("drawRandom", () => {
     "bet .05 blackjack",
     "put $.10 on heads",
     "put the rest of my balance on roulette",
-    "bet my entire bankroll on black"
+    "bet my entire bankroll on black",
+    "double down $0.25 on blackjack",
+    "let it ride: $0.25 on blackjack",
+    "run it back for $0.25 on blackjack"
   ])("recognizes common wager shorthand: %s", (text) => {
     expect(requiresWalletBackedWager(text)).toBe(true);
+  });
+
+  it.each([
+    "should I double down $0.25 on blackjack?",
+    "would it be smart to let $0.25 ride on blackjack?",
+    "explain whether running it back for $0.25 on blackjack is fair",
+  ])("keeps replay-language wager discussion non-mutating: %s", (text) => {
+    expect(requiresWalletBackedWager(text)).toBe(false);
   });
 
   it("carries a wallet-backed wager requirement into a vague repeat only for the same requester", () => {

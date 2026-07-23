@@ -1,7 +1,9 @@
 import {
+  adminSetWalletStarterAmount,
   adminTransferWalletFunds,
   getWagerHistory,
   getWalletBalance,
+  getWalletFeeSummary,
   listWalletBalances,
   reconcileWalletTransfers,
   requestStarterFunds,
@@ -71,6 +73,18 @@ export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolR
         reason: stringArgument(route.arguments, "reason")
       }), ctx.config.maxReplyChars)
     };
+  }
+  if (route.name === "adminSetWalletStarterAmount") {
+    return {
+      content: cleanResponse(await adminSetWalletStarterAmount(ctx, {
+        amountUsd: numberArgument(route.arguments, "amountUsd"),
+        rebalanceExisting: route.arguments?.rebalanceExisting === true,
+        reason: stringArgument(route.arguments, "reason")
+      }), ctx.config.maxReplyChars)
+    };
+  }
+  if (route.name === "getWalletFeeSummary") {
+    return { content: cleanResponse(await getWalletFeeSummary(ctx), ctx.config.maxReplyChars) };
   }
   if (route.name === "reconcileWalletTransfers") {
     return { content: cleanResponse(await reconcileWalletTransfers(ctx), ctx.config.maxReplyChars) };

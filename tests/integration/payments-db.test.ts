@@ -31,6 +31,7 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
     );
     await pool.query("DELETE FROM wallet_transfers WHERE guild_id LIKE $1", [`${guildPrefix}%`]);
     await pool.query("DELETE FROM wallet_accounts WHERE guild_id LIKE $1", [`${guildPrefix}%`]);
+    await pool.query("DELETE FROM wallet_guild_settings WHERE guild_id LIKE $1", [`${guildPrefix}%`]);
   }
 
   async function activeWallet(guildId: string, ownerKind: "bot" | "user", userId: string | null, suffix: string) {
@@ -176,6 +177,59 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
         expect.objectContaining({ discordUserId: "alice", chainId: 42431 }),
         expect.objectContaining({ discordUserId: "charlie", chainId: 42431 })
       ]));
+  });
+
+  it("persists a guild starter target and replaces it on later admin updates", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+
+    await expect(repo.getWalletGuildStarterTargetUsd(guildId)).resolves.toBeNull();
+    await expect(repo.setWalletGuildStarterTargetUsd({
+      guildId,
+      starterTargetUsd: 0.25,
+      updatedByUserId: "admin-1",
+      reason: "Set a smaller starter amount",
+    })).resolves.toBe(0.25);
+    await expect(repo.setWalletGuildStarterTargetUsd({
+      guildId,
+      starterTargetUsd: 1.5,
+      updatedByUserId: "admin-2",
+      reason: "Raise the starter amount",
+    })).resolves.toBe(1.5);
+    await expect(repo.getWalletGuildStarterTargetUsd(guildId)).resolves.toBe(1.5);
+  });
+
+  it("lists only confirmed transfer hashes with a bounded completeness signal", async () => {
+    const guildId = `${guildPrefix}${randomUUID()}`;
+    const source = await activeWallet(guildId, "bot", null, "fee-source");
+    const destination = await activeWallet(guildId, "user", "fee-user", "fee-destination");
+    const createTransfer = (suffix: string) => repo.createManagedTransfer({
+      guildId,
+      requestedByUserId: "admin",
+      source,
+      destination,
+      purpose: "admin_transfer",
+      token: "USDC.e",
+      tokenAddress: `0x${"1".repeat(40)}`,
+      tokenDecimals: 6,
+      amountAtomic: 100_000n,
+      sourceBalanceAtomic: 10_000_000n,
+      sourceBalanceObservedAt: new Date(),
+      idempotencyKey: `${guildId}:${suffix}`,
+    });
+    const confirmed = await createTransfer("confirmed");
+    const secondConfirmed = await createTransfer("second-confirmed");
+    const submitted = await createTransfer("submitted");
+    await repo.markTransferSubmitted(confirmed.id, `0x${"a".repeat(64)}`);
+    await repo.updateTransferStatus({ id: confirmed.id, status: "confirmed" });
+    await repo.markTransferSubmitted(secondConfirmed.id, `0x${"c".repeat(64)}`);
+    await repo.updateTransferStatus({ id: secondConfirmed.id, status: "confirmed" });
+    await repo.markTransferSubmitted(submitted.id, `0x${"b".repeat(64)}`);
+
+    await expect(repo.listConfirmedTransferTransactionHashes({ guildId, limit: 1 })).resolves.toEqual({
+      transactionHashes: [`0x${"a".repeat(64)}`],
+      total: 2,
+      hasMore: true,
+    });
   });
 
   it("reserves wager exposure transactionally and releases it", async () => {

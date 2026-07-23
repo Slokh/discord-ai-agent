@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  adminSetWalletStarterAmount,
   adminTransferWalletFunds,
   ensureAutomaticStarterFunds,
   getWagerHistory,
   getWalletBalance,
+  getWalletFeeSummary,
   hasExplicitTransferIntent,
   listWalletBalances,
   requestStarterFunds,
@@ -448,6 +450,137 @@ describe("managed wallet tools", () => {
       destination: { kind: "user", userId: "friend" }
     }), expect.any(Function));
   });
+
+  it("accepts an explicit current-turn confirmation of the requester's replied admin transfer", async () => {
+    const transferAsAdmin = vi.fn(async () => transferResult());
+    const ctx = context({
+      ownerUserId: "requester",
+      requestText: "do it",
+      replyContext: {
+        messageId: "bot-parent",
+        channelId: "channel",
+        guildId: "guild",
+        authorId: "bot",
+        authorDisplayName: "AI",
+        authorIsBot: true,
+        content: "I can transfer $1 from that member wallet back to the treasury. Confirm?",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        rootMessageId: "user-parent",
+        chain: [
+          {
+            messageId: "user-parent",
+            channelId: "channel",
+            guildId: "guild",
+            authorId: "requester",
+            authorDisplayName: "Requester",
+            authorIsBot: false,
+            content: "move $1 from that member back to treasury",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: null,
+            url: null
+          },
+          {
+            messageId: "bot-parent",
+            channelId: "channel",
+            guildId: "guild",
+            authorId: "bot",
+            authorDisplayName: "AI",
+            authorIsBot: true,
+            content: "I can transfer $1 from that member wallet back to the treasury. Confirm?",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: null,
+            url: null
+          }
+        ]
+      },
+      repo: {
+        getDiscordUserReferenceTerms: vi.fn(async () => [{
+          userId: "friend", username: "friend", globalName: "Friend", aliases: [], terms: []
+        }])
+      },
+      walletService: { transferAsAdmin }
+    });
+
+    await expect(adminTransferWalletFunds(ctx, {
+      source: "user",
+      sourceUserId: "friend",
+      destination: "bot",
+      amountUsd: 1,
+      reason: "confirmed correction"
+    })).resolves.toContain("Transferred $1 USD");
+    expect(transferAsAdmin).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat an unrelated vague reply as admin transfer authority", async () => {
+    const transferAsAdmin = vi.fn();
+    const ctx = context({
+      ownerUserId: "requester",
+      requestText: "do it",
+      walletService: { transferAsAdmin }
+    });
+
+    await expect(adminTransferWalletFunds(ctx, {
+      source: "user",
+      sourceUserId: "friend",
+      destination: "bot",
+      amountUsd: 1,
+      reason: "model suggestion"
+    })).resolves.toContain("No admin transfer was made");
+    expect(transferAsAdmin).not.toHaveBeenCalled();
+  });
+
+  it("uses the current prompt's starter target and bulk intent instead of model arguments", async () => {
+    const setStarterTargetAndRebalance = vi.fn(async () => ({
+      targetUsd: 0.1,
+      inspected: 4,
+      transferred: 3,
+      unchanged: 1,
+      failed: 0,
+      totalToTreasuryUsd: "2.7",
+      totalFromTreasuryUsd: "0"
+    }));
+    const ctx = context({
+      ownerUserId: "requester",
+      requestText: "set starter funds to 10 cents and sweep every user wallet back to that amount",
+      walletService: { setStarterTargetAndRebalance }
+    });
+
+    const result = await adminSetWalletStarterAmount(ctx, {
+      amountUsd: 99,
+      rebalanceExisting: false,
+      reason: "reset the server economy"
+    });
+
+    expect(result).toContain("starter amount is now $0.1 USD");
+    expect(result).toContain("inspected 4, transferred 3, unchanged 1, failed 0");
+    expect(setStarterTargetAndRebalance).toHaveBeenCalledWith(expect.objectContaining({
+      targetUsd: 0.1,
+      rebalanceExisting: true,
+      requestedByUserId: "requester"
+    }), expect.any(Function));
+  });
+
+  it("reports receipt-backed server fees and sponsorship without estimating", async () => {
+    const getFeeSummary = vi.fn(async () => ({
+      totalUsd: "0.003",
+      confirmedTransfers: 3,
+      inspectedReceipts: 3,
+      unavailableReceipts: 0,
+      hasMore: false
+    }));
+    const ctx = context({ ownerUserId: "requester", walletService: { getFeeSummary } });
+
+    const result = await getWalletFeeSummary(ctx);
+
+    expect(result).toContain("$0.003 USD across 3 receipts");
+    expect(result).toContain("AI treasury paid these fees");
+    expect(result).toContain("All 3 confirmed transfers were covered");
+  });
 });
 
 function context(input: {
@@ -457,6 +590,7 @@ function context(input: {
   walletService?: Record<string, unknown>;
   fetchDiscordGuildMembers?: ToolContext["fetchDiscordGuildMembers"];
   requestText?: string;
+  replyContext?: ToolContext["replyContext"];
 } = {}): ToolContext {
   const auditTool = vi.fn(async () => undefined);
   return {
@@ -478,6 +612,7 @@ function context(input: {
     requestId: "message-1",
     requestMessageId: "message-1",
     requestText: input.requestText ?? "send $2 to friend",
+    replyContext: input.replyContext,
     requesterScope: Object.freeze({
       requestId: "message-1",
       messageId: "message-1",

@@ -362,7 +362,7 @@ export async function requestStarterFunds(ctx: ToolContext): Promise<string> {
     requestId: actor.requestId
   }, paymentRecorder(ctx));
   if (!result.granted) {
-    const content = `Starter funds top wallets up to $${money(ctx.config.payments.initialGrantUsd ?? 1)} USD. Your verified wallet balance is already $${result.balance.formatted} USD.`;
+    const content = `Starter funds top wallets up to $${money(result.targetUsd ?? ctx.config.payments.initialGrantUsd ?? 1)} USD. Your verified wallet balance is already $${result.balance.formatted} USD.`;
     await audit(ctx, "requestStarterFunds", "requester", content);
     return content;
   }
@@ -399,7 +399,7 @@ export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<str
     }, paymentRecorder(ctx));
     if (!result.granted) return null;
     const content = [
-      `Automatically added $${money(result.amountUsd)} USD from the AI treasury to restore your verified balance to the $${money(ctx.config.payments.initialGrantUsd ?? 1)} starter amount.`,
+      `Automatically added $${money(result.amountUsd)} USD from the AI treasury to restore your verified balance to the $${money(result.targetUsd ?? ctx.config.payments.initialGrantUsd ?? 1)} starter amount.`,
       `Status: ${result.transfer.status}`,
       `Transaction: ${result.transfer.transactionHash ?? "pending reconciliation"}`,
       `Your balance: $${result.destination.balance.formatted} USD`,
@@ -441,7 +441,7 @@ export async function adminTransferWalletFunds(
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
     return "Per-user USD wallets are not enabled in this deployment.";
   }
-  if (!hasExplicitAdminTransferIntent(ctx.requestText ?? "")) {
+  if (!hasExplicitAdminTransferIntent(ctx)) {
     return "No admin transfer was made. Rebalancing real USD requires an explicit fund, reimburse, restore, correct, move, return, or transfer instruction in the current prompt.";
   }
   const amountUsd = positiveAmount(input.amountUsd);
@@ -463,6 +463,69 @@ export async function adminTransferWalletFunds(
   }, paymentRecorder(ctx));
   const content = formatManagedTransfer(result, amountUsd, source.label, destination.label, reason);
   await audit(ctx, "adminTransferWalletFunds", `$${amountUsd} ${source.label} -> ${destination.label}; ${reason}`, content);
+  return content;
+}
+
+export async function adminSetWalletStarterAmount(
+  ctx: ToolContext,
+  input: {
+    amountUsd?: number;
+    rebalanceExisting?: boolean;
+    reason?: string;
+  }
+): Promise<string> {
+  const actor = paymentRequester(ctx);
+  if (!isPaymentAdmin(ctx)) return "Wallet administration is restricted to the bot owner or payment ops allowlist.";
+  if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
+    return "Per-user USD wallets are not enabled in this deployment.";
+  }
+  const currentRequest = ctx.requestText ?? "";
+  const amountUsd = explicitStarterTargetForPrompt(currentRequest);
+  if (amountUsd == null) {
+    return "No starter amount was changed. State the new USD or cent amount explicitly in the current prompt.";
+  }
+  const reason = input.reason?.trim();
+  if (!reason) return "reason is required when changing the starter amount.";
+  const rebalanceExisting = hasExplicitExistingWalletRebalanceIntent(currentRequest);
+  const result = await ctx.walletService.setStarterTargetAndRebalance({
+    guildId: actor.guildId,
+    requestedByUserId: actor.userId,
+    requestId: actor.requestId,
+    targetUsd: amountUsd,
+    rebalanceExisting,
+    reason
+  }, paymentRecorder(ctx));
+  const content = [
+    `Server starter amount is now $${money(result.targetUsd)} USD.`,
+    rebalanceExisting
+      ? `Existing wallets: inspected ${result.inspected}, transferred ${result.transferred}, unchanged ${result.unchanged}, failed ${result.failed}.`
+      : "Existing wallet balances were left unchanged because the current request did not explicitly ask to rebalance them.",
+    rebalanceExisting ? `Returned to AI treasury: $${result.totalToTreasuryUsd} USD.` : null,
+    rebalanceExisting ? `Added from AI treasury: $${result.totalFromTreasuryUsd} USD.` : null,
+    `Reason: ${reason}`
+  ].filter((line): line is string => line !== null).join("\n");
+  await audit(ctx, "adminSetWalletStarterAmount", `$${money(result.targetUsd)}; rebalance=${rebalanceExisting}; ${reason}`, content);
+  return content;
+}
+
+export async function getWalletFeeSummary(ctx: ToolContext): Promise<string> {
+  const actor = paymentRequester(ctx);
+  if (!isPaymentAdmin(ctx)) return "Server-wide wallet fee history is restricted to the bot owner or payment ops allowlist.";
+  if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
+    return "Per-user USD wallets are not enabled in this deployment.";
+  }
+  const result = await ctx.walletService.getFeeSummary({ guildId: actor.guildId });
+  const content = [
+    `Confirmed managed-wallet network fees: $${result.totalUsd} USD across ${result.inspectedReceipts} receipt${result.inspectedReceipts === 1 ? "" : "s"}.`,
+    "The AI treasury paid these fees; member wallets were sponsored.",
+    result.unavailableReceipts > 0
+      ? `${result.unavailableReceipts} confirmed transfer receipt${result.unavailableReceipts === 1 ? " was" : "s were"} unavailable and excluded.`
+      : null,
+    result.hasMore
+      ? `The bounded report covered the first ${result.inspectedReceipts + result.unavailableReceipts} of ${result.confirmedTransfers} confirmed transfers.`
+      : `All ${result.confirmedTransfers} confirmed transfer${result.confirmedTransfers === 1 ? "" : "s"} were covered.`
+  ].filter((line): line is string => line !== null).join("\n");
+  await audit(ctx, "getWalletFeeSummary", "all confirmed managed-wallet transfers", content);
   return content;
 }
 
@@ -621,8 +684,39 @@ export function hasExplicitTransferIntent(text: string): boolean {
   return isExplicitWalletTransferPrompt(text);
 }
 
-function hasExplicitAdminTransferIntent(text: string): boolean {
-  return /\b(?:send|transfer|fund|reimburse|rebalance|restore|correct|repair|move|return|refund|revert|give)\b/i.test(text);
+function hasExplicitAdminTransferIntent(ctx: ToolContext): boolean {
+  const currentText = ctx.requestText ?? "";
+  if (ADMIN_TRANSFER_INTENT.test(currentText)) return true;
+  if (!ADMIN_TRANSFER_CONFIRMATION.test(currentText.trim())) return false;
+  const chain = ctx.replyContext?.chain ?? [];
+  const directParent = chain.at(-1);
+  return Boolean(
+    directParent?.authorIsBot &&
+    ADMIN_TRANSFER_INTENT.test(directParent.content) &&
+    chain.some((message) =>
+      !message.authorIsBot &&
+      message.authorId === ctx.userId &&
+      ADMIN_TRANSFER_INTENT.test(message.content)
+    )
+  );
+}
+
+const ADMIN_TRANSFER_INTENT = /\b(?:send|transfer|fund|reimburse|rebalance|restore|correct|repair|move|return|refund|revert|give|sweep)\b/i;
+const ADMIN_TRANSFER_CONFIRMATION = /^(?:yes(?:\s+please)?|confirm(?:ed)?|do it|go ahead|proceed|make (?:it|that) happen)[.!]*$/i;
+
+function explicitStarterTargetForPrompt(text: string): number | null {
+  if (!/\b(?:starter|starting|initial)\b/i.test(text) || !/\b(?:set|change|update|make|reduce|lower|raise)\b/i.test(text)) {
+    return null;
+  }
+  const cents = text.match(/\b(\d+(?:\.\d+)?)\s*cents?\b/i)?.[1];
+  const dollars = text.match(/\$\s*(\d+(?:\.\d+)?|\.\d+)/)?.[1];
+  const value = cents == null ? Number(dollars) : Number(cents) / 100;
+  return Number.isFinite(value) && value >= 0 && value <= 100 ? Number(value.toFixed(6)) : null;
+}
+
+function hasExplicitExistingWalletRebalanceIntent(text: string): boolean {
+  return /\b(?:all|every)\b[\s\S]{0,40}\b(?:user|member|wallet|balance)s?\b/i.test(text) &&
+    /\b(?:sweep|rebalance|reset|move|return|transfer|set)\b/i.test(text);
 }
 
 function hasExplicitStarterFundsIntent(text: string): boolean {

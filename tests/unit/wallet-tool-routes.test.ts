@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   transfer: vi.fn(),
   starterFunds: vi.fn(),
   adminTransfer: vi.fn(),
+  adminStarterAmount: vi.fn(),
+  feeSummary: vi.fn(),
   reconcileWallets: vi.fn()
 }));
 
@@ -18,6 +20,8 @@ vi.mock("../../src/tools/walletTools.js", () => ({
   transferWalletFunds: mocks.transfer,
   requestStarterFunds: mocks.starterFunds,
   adminTransferWalletFunds: mocks.adminTransfer,
+  adminSetWalletStarterAmount: mocks.adminStarterAmount,
+  getWalletFeeSummary: mocks.feeSummary,
   reconcileWalletTransfers: mocks.reconcileWallets
 }));
 
@@ -33,6 +37,8 @@ describe("executeWalletToolRoute", () => {
     mocks.transfer.mockResolvedValue(" transferred ");
     mocks.starterFunds.mockResolvedValue(" starter funded ");
     mocks.adminTransfer.mockResolvedValue(" admin transferred ");
+    mocks.adminStarterAmount.mockResolvedValue(" starter amount changed ");
+    mocks.feeSummary.mockResolvedValue(" fee summary ");
     mocks.reconcileWallets.mockResolvedValue(" wallets reconciled ");
   });
 
@@ -55,6 +61,22 @@ describe("executeWalletToolRoute", () => {
     await expect(executeWalletToolRoute(ctx, route("reconcileWalletTransfers", {})))
       .resolves.toEqual({ content: "wallets reconciled" });
     await expect(executeWalletToolRoute(ctx, route("reportStatus", {}))).resolves.toBeNull();
+  });
+
+  it("routes durable starter configuration and receipt-backed fee summaries", async () => {
+    const ctx = context();
+    await expect(executeWalletToolRoute(ctx, route("adminSetWalletStarterAmount", {
+      amountUsd: "0.1", rebalanceExisting: true, reason: "reset"
+    }))).resolves.toEqual({ content: "starter amount changed" });
+    expect(mocks.adminStarterAmount).toHaveBeenCalledWith(ctx, {
+      amountUsd: 0.1,
+      rebalanceExisting: true,
+      reason: "reset"
+    });
+
+    await expect(executeWalletToolRoute(ctx, route("getWalletFeeSummary", {})))
+      .resolves.toEqual({ content: "fee summary" });
+    expect(mocks.feeSummary).toHaveBeenCalledWith(ctx);
   });
 
   it("routes requester starter funding without model-supplied wallet arguments", async () => {

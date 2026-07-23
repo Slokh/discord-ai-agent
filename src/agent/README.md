@@ -16,8 +16,9 @@ Owns the model loop for one user prompt.
 ## Module Map
 
 - `router.ts`: thin compatibility entrypoint; `handleAgentRequest` plus re-exports of `chatMessages`/`toolResultContentForPrompt`.
-- `modelLoop.ts`: model round loop, toolset scoping state, route selection, and direct tool completion.
+- `modelLoop.ts`: model round loop, toolset scoping state, route selection, and completion routing.
 - `toolRepeatGuard.ts`: canonical tool-call/result signatures and redundant-call audit responses.
+- `terminalToolCompletion.ts`: direct terminal-tool responses and bounded tool-free synthesis after successful generated image artifacts.
 - `promptBuilder.ts`: system prompt, requester/skills/overlay/session/reply/image prompt sections, current-turn tone reset for simple updates and corrections, tool-result prompt truncation.
 - `toolDispatcher.ts`: local tool dispatch and tool-argument coercion.
 - `toolGate.ts`: restricted administrative-tool permission gate (owner/ops allowlists) and per-day budget checks applied before dispatch. Code-update starts and retries are open to every member but retain the per-user codegen limit.

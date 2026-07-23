@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleAgentRequest } from "../../src/agent/router.js";
 import type { RngDrawInput, RngSessionRecord, RngSessionTx } from "../../src/db/rngRepository.js";
-import { OpenRouterTimeoutError } from "../../src/models/openrouter.js";
+import { OpenRouterHttpError, OpenRouterTimeoutError } from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
 import { rngCommitment } from "../../src/rng/provable.js";
 import type { ToolContext } from "../../src/tools/types.js";
@@ -3607,6 +3607,132 @@ describe("agent router", () => {
     expect(keywordSearch).toHaveBeenCalledTimes(1);
     expect(recentMessagesFromChannels).toHaveBeenCalledTimes(1);
     expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
+  });
+
+  it("uses bounded tool-free synthesis immediately after an image retry produces a file", async () => {
+    const traceEvents: any[] = [];
+    const imageBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const generateImage = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterHttpError({ status: 400, message: "synthetic rejected request" }))
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: imageBytes.toString("base64"), media_type: "image/png" }],
+      });
+    const firstPrompt = "A synthetic futuristic library scene with blue lights and geometric shelves. ".repeat(8);
+    const secondPrompt = "A safe synthetic futuristic library scene with blue lights.";
+    let modelCall = 0;
+    const chat = vi.fn(async (request: any) => {
+      modelCall += 1;
+      if (modelCall === 1) {
+        return {
+          content: "",
+          model: "slow/primary",
+          raw: {},
+          toolCalls: [{
+            id: "image-attempt-1",
+            name: "generateImage",
+            argumentsText: JSON.stringify({ prompt: firstPrompt }),
+          }],
+        };
+      }
+      if (modelCall === 2) {
+        return {
+          content: "",
+          model: "slow/primary",
+          raw: {},
+          toolCalls: [{
+            id: "image-attempt-2",
+            name: "generateImage",
+            argumentsText: JSON.stringify({ prompt: secondPrompt }),
+          }],
+        };
+      }
+      if (request.tools) {
+        throw new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" });
+      }
+      return {
+        content: "The synthetic image is ready.",
+        model: request.model ?? "slow/primary",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const replyChain = Array.from({ length: 24 }, (_value, index) => ({
+      messageId: `synthetic-parent-${index + 1}`,
+      channelId: "c",
+      guildId: "g",
+      authorId: index % 4 === 0 ? "member" : "bot",
+      authorDisplayName: index % 4 === 0 ? "Member" : "Bot",
+      authorIsBot: index % 4 !== 0,
+      content: index === 23
+        ? "The synthetic scene is a futuristic library with blue lights."
+        : `Synthetic reply-chain context ${index + 1}.`,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: new Date(2026, 0, 1, 0, index).toISOString(),
+      url: null,
+    }));
+    const sessionMessages = Array.from({ length: 25 }, (_value, index) => ({
+      id: index + 1,
+      threadKey: "discord:g:c",
+      discordMessageId: `synthetic-session-${index + 1}`,
+      role: index % 2 === 0 ? "assistant" as const : "user" as const,
+      authorId: index % 2 === 0 ? "bot" : "member",
+      authorDisplayName: index % 2 === 0 ? "Bot" : "Member",
+      content: `Synthetic session context ${index + 1}.`,
+      parts: [],
+      metadata: {},
+      createdAt: new Date(2026, 0, 1, 1, index),
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/final" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages,
+      requestAttachments: [],
+      replyContext: {
+        ...replyChain[23],
+        rootMessageId: replyChain[0]!.messageId,
+        chain: replyChain,
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "make an image of this synthetic scene with blue lights");
+
+    expect(response.content).toBe("The synthetic image is ready.");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png", data: imageBytes }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect(chat.mock.calls[2]?.[0]).toEqual(expect.objectContaining({
+      model: "fast/final",
+    }));
+    expect(chat.mock.calls[2]?.[0].tools).toBeUndefined();
+    expect(traceEvents).toContainEqual(expect.objectContaining({
+      eventName: "agent.final_synthesis.started",
+      metadata: expect.objectContaining({ reason: "successful generated image artifact" }),
+    }));
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
   });
 
   it("synthesizes a final answer instead of dumping raw tool output at the tool round limit", async () => {

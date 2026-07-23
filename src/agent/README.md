@@ -35,7 +35,7 @@ Owns the model loop for one user prompt.
 - `capabilityClaimGuard.ts`: corrects narrow model-authored contradictions of deterministic deployed capabilities; currently it turns false media-transcription refusals with no attached input into an accurate attachment/reply request.
 - `walletStatusGuard.ts`: forces wallet balance prompts through the managed wallet balance tool without capturing bank, game, or unrelated balance requests.
 - `modelLoop.ts` runs requester-scoped automatic starter funding before model/tool selection; `walletActionGuard.ts` still forces explicit USD transfers and fallback restart prompts through guarded wallet tools without capturing wagers.
-- `deterministicWalletRoute.ts`: executes balance-guard routes directly against managed wallet tools without a model-selection hop, then gives the verified evidence to normal conversational synthesis while preserving tool transcripts and telemetry.
+- `deterministicWalletRoute.ts`: executes balance and settled-wager-history guard routes directly against managed wallet tools without a model-selection hop, then gives verified evidence to normal conversational synthesis while preserving tool transcripts and telemetry.
 - `routerShared.ts`: `AgentToolRoute`/`ModelCallBudget` types, round/call ceilings, `reserveModelCall`.
 - `runtimeTranscript.ts`: single event-recording helper for trace events, spans, audits, and runtime transcript appends.
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldForceWalletBalance, walletBalanceOwnerForPrompt, walletBalanceRouteForPrompt } from "../../src/agent/walletStatusGuard.js";
+import { shouldForceWalletBalance, wagerHistoryRouteForPrompt, walletBalanceOwnerForPrompt, walletBalanceRouteForPrompt } from "../../src/agent/walletStatusGuard.js";
 import { loadConfig } from "../../src/config/env.js";
 
 function configuredWallets() {
@@ -66,5 +66,26 @@ describe("wallet balance guard", () => {
       owner: null,
     });
     expect(walletBalanceOwnerForPrompt(configuredWallets(), text)).toBeNull();
+  });
+
+  it.each([
+    "why did I win my most recent wager?",
+    "show my recent bets",
+    "how much did I lose on the last coin flip?",
+    "what were my blackjack results?",
+  ])("routes requester questions about settled wagers to canonical history: %s", (text) => {
+    expect(wagerHistoryRouteForPrompt(configuredWallets(), text)).toEqual({
+      toolName: "getWagerHistory",
+      owner: null,
+    });
+  });
+
+  it.each([
+    "if I win this wager, what is the payout?",
+    "bet $5 on heads",
+    "why do people win at poker?",
+    "show a fictional wager history",
+  ])("does not capture current, hypothetical, or unrelated wager discussion: %s", (text) => {
+    expect(wagerHistoryRouteForPrompt(configuredWallets(), text)).toBeNull();
   });
 });

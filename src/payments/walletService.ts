@@ -2,7 +2,6 @@ import type { AppConfig } from "../config/env.js";
 import type { PaymentRepository } from "../db/paymentRepository.js";
 import { atomicToUsd, stableId, usdToAtomic } from "./money.js";
 import type {
-  ManagedWallet,
   PaymentEventRecorder,
   TokenInfo,
   WalletAccount,
@@ -13,6 +12,8 @@ import type {
   WagerSettlementOutcome,
   WagerReservation
 } from "./types.js";
+import { getStarterTargetUsd as readStarterTargetUsd, getWalletFeeSummary, setStarterTargetAndRebalance as updateStarterTargetAndRebalance, type WalletAdministrationDependencies } from "./walletAdministration.js";
+import { activeManagedWallet, checkedAddress, checkedHash, errorMessage, mapWithConcurrency, networkExternalId, transactionHashFromError } from "./walletRuntimeHelpers.js";
 
 type SubmittedWalletTransfer = WalletTransfer & { confirmedBlockNumber?: bigint };
 
@@ -35,8 +36,9 @@ export class WalletService {
       { guildId: input.guildId, ownerKind: "user", discordUserId: input.userId },
       record
     );
-    if (this.config.initialGrantUsd > 0) {
-      await this.ensureInitialGrant(user, record).catch(async (error) => {
+    const starterTargetUsd = await this.getStarterTargetUsd(input.guildId);
+    if (starterTargetUsd > 0) {
+      await this.ensureInitialGrant(user, starterTargetUsd, record).catch(async (error) => {
         await emit(record, {
           eventName: "wallet.transfer.initial_grant_failed",
           summary: "User wallet was created but its initial grant could not be completed",
@@ -122,6 +124,10 @@ export class WalletService {
     });
   }
 
+  async getStarterTargetUsd(guildId: string): Promise<number> {
+    return readStarterTargetUsd(this.administrationDependencies(), guildId);
+  }
+
   async transferFromUser(input: {
     guildId: string;
     requestedByUserId: string;
@@ -182,15 +188,16 @@ export class WalletService {
     requestedByUserId: string;
     requestId: string;
   }, record?: PaymentEventRecorder) {
-    if (this.config.initialGrantUsd <= 0) throw new Error("Starter funding is disabled in this deployment");
+    const starterTargetUsd = await this.getStarterTargetUsd(input.guildId);
+    if (starterTargetUsd <= 0) throw new Error("Starter funding is disabled in this server");
     const [source, destination] = await Promise.all([
       this.ensureBotWallet(input.guildId, record),
       this.ensureUserWallet({ guildId: input.guildId, userId: input.requestedByUserId }, record)
     ]);
     const currentBalance = await this.getBalance(destination);
-    const targetBalanceAtomic = usdToAtomic(this.config.initialGrantUsd, currentBalance.token.decimals);
+    const targetBalanceAtomic = usdToAtomic(starterTargetUsd, currentBalance.token.decimals);
     if (currentBalance.amountAtomic >= targetBalanceAtomic) {
-      return { granted: false as const, wallet: destination, balance: currentBalance };
+      return { granted: false as const, wallet: destination, balance: currentBalance, targetUsd: starterTargetUsd };
     }
     const amountUsd = Number(atomicToUsd(targetBalanceAtomic - currentBalance.amountAtomic, currentBalance.token.decimals));
     const result = await this.createAndSubmitManagedTransfer({
@@ -204,7 +211,50 @@ export class WalletService {
       starterTargetBalanceAtomic: targetBalanceAtomic,
       metadata: { reason: "requester_below_starter_balance" }
     }, record);
-    return { granted: true as const, amountUsd, ...result };
+    return { granted: true as const, amountUsd, targetUsd: starterTargetUsd, ...result };
+  }
+
+  async setStarterTargetAndRebalance(input: {
+    guildId: string;
+    requestedByUserId: string;
+    requestId: string;
+    targetUsd: number;
+    rebalanceExisting: boolean;
+    reason: string;
+  }, record?: PaymentEventRecorder): Promise<{
+    targetUsd: number;
+    inspected: number;
+    transferred: number;
+    unchanged: number;
+    failed: number;
+    totalToTreasuryUsd: string;
+    totalFromTreasuryUsd: string;
+  }> {
+    return updateStarterTargetAndRebalance(this.administrationDependencies(), input, record);
+  }
+
+  async getFeeSummary(input: {
+    guildId: string;
+    limit?: number;
+  }): Promise<{
+    totalUsd: string;
+    confirmedTransfers: number;
+    inspectedReceipts: number;
+    unavailableReceipts: number;
+    hasMore: boolean;
+  }> {
+    return getWalletFeeSummary(this.administrationDependencies(), input);
+  }
+
+  private administrationDependencies(): WalletAdministrationDependencies {
+    return {
+      repo: this.repo,
+      provider: this.provider,
+      initialGrantUsd: this.config.initialGrantUsd,
+      ensureBotWallet: (guildId, record) => this.ensureBotWallet(guildId, record),
+      usdToken: () => this.usdToken(),
+      createTransfer: (input, record) => this.createAndSubmitManagedTransfer(input, record),
+    };
   }
 
   async recordBotWalletHealth(record?: PaymentEventRecorder): Promise<{
@@ -690,7 +740,7 @@ export class WalletService {
     }
   }
 
-  private async ensureInitialGrant(user: WalletAccount, record?: PaymentEventRecorder): Promise<void> {
+  private async ensureInitialGrant(user: WalletAccount, starterTargetUsd: number, record?: PaymentEventRecorder): Promise<void> {
     const [bot, token] = await Promise.all([this.ensureBotWallet(user.guildId, record), this.usdToken()]);
     const transfer = await this.repo.createInitialGrant({
       guildId: user.guildId,
@@ -699,7 +749,7 @@ export class WalletService {
       token: token.symbol,
       tokenAddress: token.address,
       tokenDecimals: token.decimals,
-      amountAtomic: usdToAtomic(this.config.initialGrantUsd, token.decimals)
+      amountAtomic: usdToAtomic(starterTargetUsd, token.decimals)
     });
     if (transfer && transfer.status !== "confirmed") await this.submitTransfer(transfer.id, record);
   }
@@ -737,52 +787,7 @@ export class WalletService {
 }
 
 export const SHARED_BOT_GUILD_ID = "__shared_bot__";
-const LEGACY_MODERATO_CHAIN_ID = 42431;
-
-function networkExternalId(base: string, chainId: number): string {
-  return chainId === LEGACY_MODERATO_CHAIN_ID ? base : `${base}_chain_${chainId}`;
-}
-
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let cursor = 0;
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await mapper(items[index]!);
-    }
-  }));
-  return results;
-}
-
-function activeManagedWallet(account: WalletAccount): ManagedWallet {
-  if (account.status !== "active" || !account.providerWalletId || !account.address) {
-    throw new Error(`Wallet ${account.id} is not active`);
-  }
-  return { providerWalletId: account.providerWalletId, address: checkedAddress(account.address, "wallet") };
-}
-
-function checkedAddress(value: string | null, label: string): `0x${string}` {
-  if (!value || !/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error(`Invalid ${label} address`);
-  return value as `0x${string}`;
-}
-
-function checkedHash(value: string): `0x${string}` {
-  if (!/^0x[0-9a-fA-F]+$/.test(value)) throw new Error("Invalid transaction hash");
-  return value as `0x${string}`;
-}
 
 async function emit(record: PaymentEventRecorder | undefined, event: Parameters<PaymentEventRecorder>[0]): Promise<void> {
   await record?.(event);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function transactionHashFromError(error: unknown): `0x${string}` | null {
-  if (!error || typeof error !== "object" || !("transactionHash" in error)) return null;
-  const hash = (error as { transactionHash?: unknown }).transactionHash;
-  return typeof hash === "string" && /^0x[0-9a-f]{64}$/i.test(hash) ? hash as `0x${string}` : null;
 }

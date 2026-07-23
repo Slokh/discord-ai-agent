@@ -4580,6 +4580,48 @@ describe("agent router", () => {
       })
     );
   });
+
+  it("does not force an empty RNG call for another member's deferred future wager", async () => {
+    const chat = vi.fn(async () => ({
+      content: "I can’t reserve a cross-user future wager. Use a current bot-run game instead.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: true, userWalletsEnabled: true },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "deferred-wager-request",
+      requestMessageId: "deferred-wager-request",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "bet $0.25 that another member's three-digit number tomorrow is in range, remember it and settle after they roll",
+    );
+
+    expect(response.content).toContain("cross-user future wager");
+    expect(chat).toHaveBeenCalledOnce();
+    expect((chat.mock.calls as any[])[0]?.[0]?.toolChoice).not.toEqual({
+      type: "function",
+      function: { name: "drawRandom" },
+    });
+  });
 });
 
 function replyChainWithContent(content: string) {

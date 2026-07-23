@@ -35,6 +35,9 @@ const RNG_ROOT_SCOPE_SEGMENT = "rng-root";
 const DRAW_KINDS = new Set(["integers", "dice", "coin", "pick", "shuffle", "cards"]);
 
 export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Promise<string> {
+  if (isDeferredExternalOutcomeWager(ctx.requestText ?? "")) {
+    return "This wager depends on a future or third-party outcome, not a draw the bot should perform now. No funds were reserved and no random draw was made. Cross-user deferred wagers are not supported; use a current requester-scoped bot game instead.";
+  }
   const kind = (input.kind ?? "").trim();
   if (!DRAW_KINDS.has(kind)) {
     await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
@@ -267,6 +270,14 @@ export function requiresWalletBackedWager(text: string): boolean {
   const action = /\b(?:play|run|do|give|deal|roll|flip|spin|bet|wager|stake|risk|put|again|more)\b/i;
   const wholeBalance = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
   return game.test(text) && ((money.test(text) && action.test(text)) || shorthand.test(text) || (wholeBalance.test(text) && action.test(text)));
+}
+
+export function isDeferredExternalOutcomeWager(text: string): boolean {
+  if (!requiresWalletBackedWager(text)) return false;
+  const deferredSettlement = /\b(?:remember|save|track|automatically\s+(?:resolve|settle)|resolve|settle)\b[\s\S]{0,120}\b(?:after|when|once|tomorrow|later|future)\b/i;
+  const futureOutcome = /\b(?:after|when|once|tomorrow|later|future|next\s+time)\b[\s\S]{0,100}\b(?:rolls?|flips?|spins?|draws?|picks?|result|outcome|number)\b/i;
+  const thirdParty = /\b(?:another|other|that)\s+(?:user|member|person|player)\b|\b(?:he|she|they)\b|<@!?\d+>/i;
+  return deferredSettlement.test(text) || (futureOutcome.test(text) && thirdParty.test(text));
 }
 
 export function requiresWalletBackedWagerForContext(ctx: ToolContext): boolean {

@@ -13,7 +13,8 @@ export { stringArgument, stringArrayArgument } from "./toolHandlers/arguments.js
 const discordActionToolNames = new Set<ToolName>(["composeDiscordResponse", "addDiscordReaction", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji"]);
 const walletToolNames = new Set<ToolName>([
   "awaitRandomWagerAction", "getWalletBalance", "listWalletBalances", "getWagerHistory", "transferWalletFunds",
-  "requestStarterFunds", "adminTransferWalletFunds", "reconcileWalletTransfers",
+  "requestStarterFunds", "adminTransferWalletFunds", "adminSetWalletStarterAmount", "getWalletFeeSummary",
+  "reconcileWalletTransfers",
 ]);
 export const delegatedToolNames: readonly ToolName[] = Object.freeze(["requestAdditionalTools", ...discordActionToolNames, ...walletToolNames]);
 const localToolHandlers = bindToolHandlers(toolRegistry, handlerDefinitions, delegatedToolNames);

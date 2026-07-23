@@ -54,6 +54,8 @@ describe("toolRegistry", () => {
       "transferWalletFunds",
       "requestStarterFunds",
       "adminTransferWalletFunds",
+      "adminSetWalletStarterAmount",
+      "getWalletFeeSummary",
       "reconcileWalletTransfers",
       "getSpotifyPlaylistTracks",
       "getSpotifyAlbumTracks",

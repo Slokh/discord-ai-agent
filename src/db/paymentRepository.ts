@@ -17,6 +17,13 @@ import { validateStarterTopUp } from "./paymentTransferValidation.js";
 import { validateSettlementEvidence, validateSettlementOutcome } from "./paymentWagerValidation.js";
 import { listWagerHistory, type WagerHistoryQuery } from "./paymentWagerHistory.js";
 import { getActiveGameWager, getCurrentWager } from "./paymentWagerReadRepository.js";
+import {
+  getWalletForOwner,
+  getWalletGuildStarterTargetUsd,
+  listConfirmedTransferTransactionHashes,
+  listUserWallets,
+  setWalletGuildStarterTargetUsd,
+} from "./paymentWalletReadRepository.js";
 
 const ACCOUNT_COLUMNS = `
   id, guild_id, owner_kind, discord_user_id, provider, provider_wallet_id,
@@ -42,27 +49,28 @@ export class PaymentRepository {
     discordUserId?: string | null;
     chainId: number;
   }): Promise<WalletAccount | null> {
-    const result = await this.pool.query(
-      `SELECT ${ACCOUNT_COLUMNS} FROM wallet_accounts
-       WHERE guild_id = $1 AND owner_kind = $2 AND discord_user_id IS NOT DISTINCT FROM $3 AND chain_id = $4`,
-      [input.guildId, input.ownerKind, input.discordUserId ?? null, input.chainId]
-    );
-    return result.rows[0] ? mapAccount(result.rows[0]) : null;
+    return getWalletForOwner(this.pool, input);
   }
-
   async listUserWallets(input: { guildId: string; userIds?: string[]; chainId: number }): Promise<WalletAccount[]> {
-    if (input.userIds?.length === 0) return [];
-    const userFilter = input.userIds ? "AND discord_user_id = ANY($2::text[])" : "";
-    const chainIdParameter = input.userIds ? "$3" : "$2";
-    const result = await this.pool.query(
-      `SELECT ${ACCOUNT_COLUMNS} FROM wallet_accounts
-       WHERE guild_id = $1 AND owner_kind = 'user' ${userFilter} AND chain_id = ${chainIdParameter}
-       ORDER BY discord_user_id`,
-      input.userIds ? [input.guildId, input.userIds, input.chainId] : [input.guildId, input.chainId]
-    );
-    return result.rows.map(mapAccount);
+    return listUserWallets(this.pool, input);
   }
-
+  async getWalletGuildStarterTargetUsd(guildId: string): Promise<number | null> {
+    return getWalletGuildStarterTargetUsd(this.pool, guildId);
+  }
+  async setWalletGuildStarterTargetUsd(input: {
+    guildId: string;
+    starterTargetUsd: number;
+    updatedByUserId: string;
+    reason: string;
+  }): Promise<number> {
+    return setWalletGuildStarterTargetUsd(this.pool, input);
+  }
+  async listConfirmedTransferTransactionHashes(input: {
+    guildId: string;
+    limit?: number;
+  }): Promise<{ transactionHashes: string[]; total: number; hasMore: boolean }> {
+    return listConfirmedTransferTransactionHashes(this.pool, input);
+  }
   async ensureWalletPlaceholder(input: {
     guildId: string;
     ownerKind: WalletOwnerKind;

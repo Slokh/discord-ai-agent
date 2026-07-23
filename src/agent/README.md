@@ -28,6 +28,7 @@ Owns the model loop for one user prompt.
 - `mediaTranscriptionRoute.ts`: recognizes explicit current-turn transcription requests with scoped attachments or a single public X/Twitter status video and forces `inspectDiscordFile` on the first model round.
 - `toolArguments.ts`: conservative JSON parsing plus schema-directed recovery for provider-double-encoded top-level object and array fields; normalized routes remain subject to canonical tool validation.
 - `randomOutcomeGuard.ts`: detects fresh chance outcomes that lack a successful `drawRandom` result, drives one in-turn retry, and provides the fail-closed response used by the model loop.
+- Deferred wagers whose result depends on another member or a future external event stay conversational and never force an immediate empty `drawRandom` call.
 - `modelTimeoutFallback.ts`: trims oldest conversational history for the one safe utility-model retry allowed before tools execute, and performs tool-free utility-model synthesis when the primary model times out after tools have already gathered evidence.
 - `freshExternalDataGuard.ts`: detects time-sensitive price, fare, schedule, availability, and similar answers that lack fresh web evidence, drives one retrieval retry, and fails closed instead of publishing invented live data.
 - `richPresentationOutcomeGuard.ts`: fails closed when rich presentation composition was attempted but no validated presentation reached the turn-output collector, preventing text from claiming missing controls.

@@ -40,6 +40,12 @@ describe("random outcome guard", () => {
     expect(randomToolForPrompt(text)).toBeNull();
   });
 
+  it("does not force a draw for a wager tied to another member's future outcome", () => {
+    expect(randomToolForPrompt(
+      "bet $0.25 that another member's three-digit number tomorrow is in range, remember it and settle after they roll"
+    )).toBeNull();
+  });
+
   it("requires a verified balance before an all-in random wager", () => {
     expect(randomActionNeedsWalletBalance("put the rest of my balance on roulette")).toBe(true);
     expect(randomActionNeedsWalletBalance("bet $0.25 on roulette")).toBe(false);

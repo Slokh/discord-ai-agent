@@ -1,5 +1,5 @@
 import type { ToolName } from "../tools/registry.js";
-import { requiresWalletBackedWager } from "../tools/randomTools.js";
+import { isDeferredExternalOutcomeWager, requiresWalletBackedWager } from "../tools/randomTools.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { previewText } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
@@ -53,6 +53,7 @@ export type RandomOutcomeGuardDecision = "allow" | "retry" | "block";
 
 export function randomToolForPrompt(text: string): "drawRandom" | "revealRandomness" | null {
   if (REVEAL_RANDOMNESS_INTENT.test(text)) return "revealRandomness";
+  if (isDeferredExternalOutcomeWager(text)) return null;
   const normalized = text.trim();
   if (DISCUSSION_PREFIX.test(normalized) && !EXECUTION_OVERRIDE.test(normalized)) return null;
   return DIRECT_RANDOM_ACTION.test(normalized) || REQUESTED_RANDOM_ACTION.test(normalized) || requiresWalletBackedWager(normalized)

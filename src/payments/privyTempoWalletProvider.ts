@@ -156,6 +156,33 @@ export class PrivyTempoWalletProvider implements WalletProvider {
       return "pending";
     }
   }
+
+  async getTransactionFee(transactionHash: Hex): Promise<{
+    amountAtomic: bigint;
+    tokenAddress: Address;
+    feePayer: Address;
+  }> {
+    const client = createClient({ chain: this.chain, transport: http() });
+    const receipt = await client.getTransactionReceipt({ hash: transactionHash });
+    if (receipt.status !== "success") throw new Error("Cannot report a fee for a reverted transaction");
+    if (!receipt.feeToken) throw new Error("The confirmed Tempo receipt did not identify its fee token");
+    const feePayer = receipt.feePayer ?? receipt.from;
+    return {
+      amountAtomic: tempoFeeAmountAtomic(receipt.gasUsed, receipt.effectiveGasPrice),
+      tokenAddress: checkedAddress(receipt.feeToken),
+      feePayer: checkedAddress(feePayer)
+    };
+  }
+}
+
+/**
+ * Tempo quotes gas prices in USD per 10^18 gas while USD TIP-20 tokens use six
+ * decimals. The protocol therefore rounds gasUsed * gasPrice up by 10^12.
+ */
+export function tempoFeeAmountAtomic(gasUsed: bigint, effectiveGasPrice: bigint): bigint {
+  if (gasUsed < 0n || effectiveGasPrice < 0n) throw new Error("Tempo receipt gas values cannot be negative");
+  const scaled = gasUsed * effectiveGasPrice;
+  return scaled === 0n ? 0n : (scaled + 999_999_999_999n) / 1_000_000_000_000n;
 }
 
 function isUnavailableBlockError(error: unknown): boolean {

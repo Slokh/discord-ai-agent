@@ -54,6 +54,11 @@ export type WalletProvider = {
     transactionHash: `0x${string}`,
     expectedTransfer?: ExpectedTokenTransfer
   ): Promise<"confirmed" | "pending" | "failed" | "not_found">;
+  getTransactionFee(transactionHash: `0x${string}`): Promise<{
+    amountAtomic: bigint;
+    tokenAddress: `0x${string}`;
+    feePayer: `0x${string}`;
+  }>;
 };
 
 export type WalletTransferStatus =

@@ -80,6 +80,54 @@ describe("wallet balance guard", () => {
     });
   });
 
+  it("routes a terse requester correction through canonical history when the reply chain is about a prior wager", () => {
+    expect(wagerHistoryRouteForPrompt(configuredWallets(), "that's not my turn", {
+      messageId: "parent",
+      channelId: "casino",
+      guildId: "guild",
+      authorId: "bot",
+      authorDisplayName: "AI",
+      authorIsBot: true,
+      content: "Your latest wager ledger entry was a settled loss.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-23T17:01:00.000Z",
+      url: "https://discord.com/channels/guild/casino/parent",
+      rootMessageId: "root",
+      chain: [
+        {
+          messageId: "root",
+          channelId: "casino",
+          guildId: "guild",
+          authorId: "requester",
+          authorDisplayName: "Requester",
+          authorIsBot: false,
+          content: "Show my latest wager.",
+          attachmentSummaries: [],
+          attachments: [],
+          createdAt: "2026-07-23T17:00:00.000Z",
+          url: "https://discord.com/channels/guild/casino/root",
+        },
+        {
+          messageId: "parent",
+          channelId: "casino",
+          guildId: "guild",
+          authorId: "bot",
+          authorDisplayName: "AI",
+          authorIsBot: true,
+          content: "Your latest wager ledger entry was a settled loss.",
+          attachmentSummaries: [],
+          attachments: [],
+          createdAt: "2026-07-23T17:01:00.000Z",
+          url: "https://discord.com/channels/guild/casino/parent",
+        },
+      ],
+    })).toEqual({
+      toolName: "getWagerHistory",
+      owner: null,
+    });
+  });
+
   it.each([
     "if I win this wager, what is the payout?",
     "bet $5 on heads",

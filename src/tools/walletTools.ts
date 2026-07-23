@@ -1,10 +1,15 @@
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
-import { explicitWalletTransferForPrompt, isExplicitWalletTransferPrompt } from "../agent/walletActionGuard.js";
+import {
+  explicitWalletTransferForPrompt,
+  isExplicitStarterFundsPrompt,
+  isExplicitWalletTransferPrompt,
+} from "../agent/walletActionGuard.js";
 import { promptExcludesRealWallet } from "../agent/walletPromptIntent.js";
 import { atomicToUsd } from "../payments/money.js";
 import type { WagerHistoryEntry } from "../payments/types.js";
 import { summarizeForAudit } from "../util/text.js";
 import { paymentRecorder } from "./paymentToolContext.js";
+import { requiresWalletBackedWagerForContext } from "./randomTools.js";
 import { visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 
@@ -378,16 +383,23 @@ export async function requestStarterFunds(ctx: ToolContext): Promise<string> {
 }
 
 /**
- * Deterministic per-request wallet preflight. Every requester below the
- * configured starter balance is topped up to that amount before the model can
- * choose a wallet or game tool. Its guarded second balance check serializes
- * concurrent top-up requests.
+ * Deterministic wallet-action preflight. Requests that explicitly need starter
+ * funds, a managed transfer, or a real-money wager can top a below-target
+ * requester up before model/tool selection. Ordinary chat never reads or
+ * mutates wallet state. The guarded second balance check serializes concurrent
+ * top-up requests.
  */
 export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<string | null> {
   if (!ctx.config.payments?.walletEnabled || !ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
     return null;
   }
-  if (promptExcludesRealWallet(ctx.requestText ?? "")) return null;
+  const requestText = ctx.requestText ?? "";
+  if (promptExcludesRealWallet(requestText)) return null;
+  const needsWalletActionPreflight =
+    isExplicitStarterFundsPrompt(requestText) ||
+    isExplicitWalletTransferPrompt(requestText) ||
+    requiresWalletBackedWagerForContext(ctx);
+  if (!needsWalletActionPreflight) return null;
   const requestStarterFunds = (ctx.walletService as unknown as { requestStarterFunds?: unknown }).requestStarterFunds;
   if (typeof requestStarterFunds !== "function") return null;
   const actor = paymentRequester(ctx);
@@ -720,7 +732,7 @@ function hasExplicitExistingWalletRebalanceIntent(text: string): boolean {
 }
 
 function hasExplicitStarterFundsIntent(text: string): boolean {
-  return /(?:\$\s*1(?:\.0+)?\b|\b(?:one|1)\s+dollars?\b|\b(?:give|send|spot|lend)\s+me\s+(?:my|the|a)\s+dollar\b|\b(?:starter|restart|refill|top\s*me\s*up|start playing|play again)\b)/i.test(text);
+  return isExplicitStarterFundsPrompt(text);
 }
 
 function isFundedBalance(balance: { formatted: string; amountAtomic?: bigint }): boolean {

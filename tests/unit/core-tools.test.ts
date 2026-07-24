@@ -452,6 +452,44 @@ describe("getDiscordStats", () => {
     );
   });
 
+  it("labels hourly stats as UTC and bounds them to observed message timing", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        discordStats: vi.fn(async () => ({
+          totalMessages: 5,
+          totalAttachments: 0,
+          totalReactions: 0,
+          userCount: 1,
+          channelCount: 1,
+          activeDays: 3,
+          metric: "messages",
+          groupBy: "hourOfDay",
+          rows: [{ key: "20", label: "20:00", value: 5 }],
+          topUsers: [],
+          topChannels: []
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getDiscordStats(ctx, {
+      authorIds: ["member-id"],
+      groupBy: "hourOfDay",
+      metric: "messages",
+      sort: "labelAsc",
+      limit: 24
+    });
+
+    expect(response).toContain("Time basis: UTC");
+    expect(response).toContain("Observed message timing only");
+    expect(response).toContain("does not establish sleep, location, work schedule, or availability");
+  });
+
   it("formats message-level reaction stats with exact message timestamps", async () => {
     const ctx = {
       repo: {

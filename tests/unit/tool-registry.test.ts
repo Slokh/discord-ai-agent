@@ -289,7 +289,7 @@ describe("toolRegistry", () => {
           type: "function",
           function: expect.objectContaining({
             name: "getDiscordStats",
-            description: expect.stringContaining("Tool class: stats."),
+            description: expect.stringContaining("observed message timing only"),
             parameters: expect.objectContaining({
               properties: expect.objectContaining({
                 groupBy: expect.objectContaining({ enum: expect.arrayContaining(["channel", "thread", "message", "month", "hourOfDay"]) }),

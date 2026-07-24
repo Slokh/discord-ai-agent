@@ -7,7 +7,7 @@ export const discordStatsSummaryToolContracts = [
     toolClass: "stats",
     examples: ["@ai rank channels by messages per day"],
     description:
-      "Compute permission-filtered Discord analytics over indexed visible messages. Use this for counts, rankings, lowest/highest rankings, activity over time, messages by channel/user, normalized messages-per-day comparisons, attachment stats, reaction totals, and active-day summaries.",
+      "Compute permission-filtered Discord analytics over indexed visible messages. Use this for counts, rankings, lowest/highest rankings, activity over time, messages by channel/user, normalized messages-per-day comparisons, attachment stats, reaction totals, and active-day summaries. Time buckets use UTC. Hour-of-day and day-of-week results describe observed message timing only; they do not establish sleep, location, work schedule, or availability. Keep a simple named-person activity follow-up to the requested peak or comparison instead of dumping every bucket.",
     userVisible: true,
     mutates: false,
     group: "discord-retrieval",
@@ -46,7 +46,7 @@ export const discordStatsSummaryToolContracts = [
           type: "string",
           enum: ["overall", "user", "channel", "thread", "message", "day", "week", "month", "year", "hourOfDay", "dayOfWeek"],
           description:
-            "Dimension to group the metric by. Use channel for parent-channel rankings with thread/forum-post messages rolled up. Use thread only when the user asks for threads/forum posts separately. Use message with metric=reactions for top/favorite message evidence."
+            "Dimension to group the metric by. All date/time buckets use UTC. Use channel for parent-channel rankings with thread/forum-post messages rolled up. Use thread only when the user asks for threads/forum posts separately. Use message with metric=reactions for top/favorite message evidence."
         },
         metric: {
           type: "string",

@@ -4783,7 +4783,7 @@ describe("agent router", () => {
     expect(chat.mock.calls[4]?.[0].tools).toBeUndefined();
   });
 
-  it("corrects a false transcription refusal from tool-evidence timeout synthesis", async () => {
+  it("corrects a false transcription refusal from the tool-capable timeout retry", async () => {
     const traceEvents: any[] = [];
     const chat = vi
       .fn()
@@ -4829,9 +4829,209 @@ describe("agent router", () => {
     expect(chat).toHaveBeenCalledTimes(3);
     expect((chat.mock.calls[1]?.[0] as any).model).toBeUndefined();
     expect((chat.mock.calls[2]?.[0] as any).model).toBe("fast/fallback");
-    expect((chat.mock.calls[2]?.[0] as any).tools).toBeUndefined();
-    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(true);
+    expect((chat.mock.calls[2]?.[0] as any).tools).toBeDefined();
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
     expect(traceEvents.some((event) => event.eventName === "agent.capability_claim.corrected")).toBe(true);
+  });
+
+  it("continues a chart retry with the utility model when the primary model times out after stats", async () => {
+    const traceEvents: any[] = [];
+    const chartBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{ b64_json: chartBytes.toString("base64"), media_type: "image/png" }],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [{
+          id: "expand-chart-tools",
+          name: "requestAdditionalTools",
+          argumentsText: JSON.stringify({
+            groups: ["discord-retrieval", "image"],
+            reason: "The reply-chain retry needs fresh activity evidence and a replacement chart.",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "I’ll refresh the synthetic activity evidence first.",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [
+          {
+            id: "find-synthetic-channel",
+            name: "findDiscordChannels",
+            argumentsText: JSON.stringify({ query: "synthetic-project" }),
+          },
+          {
+            id: "server-yearly-stats",
+            name: "getDiscordStats",
+            argumentsText: JSON.stringify({
+              metric: "messages",
+              groupBy: "year",
+              sort: "dateAsc",
+              includeBots: false,
+            }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: "I’ll compare the full server trend with the selected channel before rebuilding the chart.",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [
+          {
+            id: "server-yearly-stats-expanded",
+            name: "getDiscordStats",
+            argumentsText: JSON.stringify({
+              metric: "messages",
+              groupBy: "year",
+              sort: "dateAsc",
+              includeBots: false,
+              limit: 15,
+            }),
+          },
+          {
+            id: "channel-yearly-stats",
+            name: "getDiscordStats",
+            argumentsText: JSON.stringify({
+              channelIds: ["synthetic-channel"],
+              metric: "messages",
+              groupBy: "year",
+              sort: "dateAsc",
+              includeBots: false,
+              limit: 15,
+            }),
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.model).toBe("fast/fallback");
+        expect(request.tools).toEqual(expect.arrayContaining([
+          expect.objectContaining({ function: expect.objectContaining({ name: "generateImage" }) }),
+        ]));
+        return {
+          content: "",
+          model: "fast/fallback",
+          raw: {},
+          toolCalls: [{
+            id: "generate-replacement-chart",
+            name: "generateImage",
+            argumentsText: JSON.stringify({
+              prompt: "A synthetic yearly Discord activity comparison chart using only the supplied tool evidence.",
+              useContextImages: false,
+              outputFormat: "png",
+            }),
+          }],
+        };
+      });
+    const yearlyStats = {
+      totalMessages: 42,
+      totalAttachments: 0,
+      totalReactions: 0,
+      userCount: 4,
+      channelCount: 2,
+      activeDays: 10,
+      metric: "messages" as const,
+      groupBy: "year" as const,
+      rows: [
+        { key: "2025", label: "2025", value: 18, messageCount: 18, periodStart: new Date("2025-01-01T00:00:00.000Z") },
+        { key: "2026", label: "2026", value: 24, messageCount: 24, periodStart: new Date("2026-01-01T00:00:00.000Z") },
+      ],
+      topUsers: [],
+      topChannels: [],
+    };
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId,
+      rootMessageId: "synthetic-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "image attachment"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage("synthetic-root", "Rank yearly server message activity.", false),
+      replyMessage("synthetic-2", "Here are the yearly server totals.", true),
+      replyMessage("synthetic-3", "Use the complete yearly range.", false),
+      replyMessage("synthetic-4", "Here is the expanded yearly ranking.", true),
+      replyMessage("synthetic-5", "Make that a chart.", false),
+      replyMessage("synthetic-6", "Here is the first chart.", true, [{
+        attachmentId: "synthetic-chart",
+        filename: "synthetic-chart.jpg",
+        contentType: "image/jpeg",
+        size: 256_000,
+        url: "https://example.com/synthetic-chart.jpg",
+      }]),
+      replyMessage("synthetic-7", "Compare it with the synthetic project channel.", false),
+      replyMessage("synthetic-8", "I can rebuild the chart with that channel comparison.", true),
+    ];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        findDiscordChannels: vi.fn(async () => [{
+          channelId: "synthetic-channel",
+          channelName: "synthetic-project",
+          parentId: null,
+          parentName: null,
+          type: 0,
+        }]),
+        discordStats: vi.fn(async () => yearlyStats),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c", "synthetic-channel"],
+      sessionMessages: Array.from({ length: 25 }, (_value, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "assistant" as const : "user" as const,
+        content: `Synthetic retained context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(2026, 6, 24, 0, index),
+      })),
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "try again");
+
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png", data: chartBytes }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(5);
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
   });
 
   it("transcribes a public X video from the full Discord reply chain before answering", async () => {

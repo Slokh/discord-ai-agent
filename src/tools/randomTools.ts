@@ -31,6 +31,13 @@ import type { DrawRandomInput } from "./randomTypes.js";
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
 const RNG_ROOT_SCOPE_SEGMENT = "rng-root";
+const WAGER_GAME_SOURCE = String.raw`(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery)`;
+const GAME_LED_DECIMAL_WAGER = new RegExp(
+  String.raw`^\s*(?:please\s+)?(?:${WAGER_GAME_SOURCE})\b(?:\s*[,;:]\s*|\s+(?:[a-z][a-z'-]*\s+){0,2})\$?\s*(\d+\.\d+|\.\d+)\s*(?:usd|dollars?|bucks?)?\s*[.!]?\s*$`,
+  "i",
+);
+const GAME_LED_WAGER_DISCUSSION =
+  /\b(?:is|are|was|were|has|have|odds?|probabilit(?:y|ies)|payouts?|pays?|returns?|rules?|strategy|recommend(?:ation|ed)?|worth|costs?|equals?|means?|uses?)\b/i;
 
 const DRAW_KINDS = new Set(["integers", "dice", "coin", "pick", "shuffle", "cards"]);
 
@@ -276,6 +283,7 @@ export function requiresWalletBackedWager(text: string): boolean {
   return game.test(text) && (
     (money.test(text) && (action.test(text) || replayAction.test(text))) ||
     shorthand.test(text) ||
+    gameLedDecimalWagerAmount(text) != null ||
     (wholeBalance.test(text) && (action.test(text) || replayAction.test(text)))
   );
 }
@@ -417,7 +425,16 @@ function describesUnfinishedWager(explanation: string): boolean {
 }
 
 function explicitBareWagerAmount(requestText: string | undefined): number | null {
-  const match = requestText?.trim().match(/^\$?\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:usd|dollars?|bucks?)?\s*[.!?]?$/i);
+  if (!requestText) return null;
+  const match = requestText.trim().match(/^\$?\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:usd|dollars?|bucks?)?\s*[.!?]?$/i);
+  if (!match) return gameLedDecimalWagerAmount(requestText);
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function gameLedDecimalWagerAmount(text: string): number | null {
+  if (GAME_LED_WAGER_DISCUSSION.test(text)) return null;
+  const match = text.match(GAME_LED_DECIMAL_WAGER);
   if (!match) return null;
   const value = Number(match[1]);
   return Number.isFinite(value) && value > 0 ? value : null;

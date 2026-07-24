@@ -64,6 +64,7 @@ export function formatHistoryEvidence(input: {
   context: string;
   dateFrom?: Date;
   dateTo?: Date;
+  hourOfDayUtc?: number;
 }) {
   const dateSummary = historyEvidenceDateSummary(input.results);
   const authors = historyEvidenceAuthors(input.results);
@@ -74,6 +75,9 @@ export function formatHistoryEvidence(input: {
     `Effective query: ${input.query || "(recent messages)"}`,
     `Result count: ${input.results.length}`,
     `Applied date filter: ${appliedDateFilter}`,
+    ...(input.hourOfDayUtc == null
+      ? []
+      : [`UTC hour filter: ${String(input.hourOfDayUtc).padStart(2, "0")}:00–${String(input.hourOfDayUtc).padStart(2, "0")}:59`]),
     `Evidence dates: ${dateSummary}`,
     `Evidence authors: ${authors}`,
     "Use links only if helpful or if the user asked for links, sources, receipts, proof, or exact messages. Otherwise do not add citation markers, raw Discord URLs, or a Sources section.",

@@ -34,7 +34,7 @@ export async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRo
     const response = await executeDiscordActionToolRoute(ctx, route, originalText);
     if (response) return response;
   } else if (walletToolNames.has(route.name)) {
-    const response = await executeWalletToolRoute(ctx, route);
+    const response = await executeWalletToolRoute(ctx, route, originalText);
     if (response) return response;
   }
   return { content: `Tool ${route.name} is registered but has no local execution handler.`, status: "error", errorCode: "missing_tool_handler" };

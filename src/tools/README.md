@@ -37,6 +37,8 @@ Owns model-facing local tool contracts and implementations.
 - If the model chose the wrong capability, update tool descriptions/schema/examples and add a registry or agent test.
 - If the tool returned weak data, update the implementation and closest domain query.
 - If the requested behavior is durable storage/indexing/retrieval, fix the owning data lifecycle first; do not rely on prompt/tool wording alone.
+- Exact-message follow-ups to `getDiscordStats groupBy=hourOfDay` use `searchDiscordHistory` with the same requester-visible author/channel/date filters, `query=""`, and `hourOfDayUtc` (0-23). The repository applies that UTC bucket before returning message evidence; aggregate rows are never treated as the underlying messages.
+- Image requests with exact visible typography pass every verbatim string through `generateImage.requiredText`; the tool performs a vision validation, retries once with a correction prompt, and withholds output that still fails rather than delivering misspelled text.
 - If adding a new tool, define it in the owning `contracts/` family, bind its implementation through the typed handler registry (or an explicit delegated high-risk router), add audit behavior, and add at least one unit or integration test. Startup fails on missing or unknown handlers.
 
 ## Tests

@@ -857,6 +857,35 @@ describe("answerFromHistory", () => {
     expect(ctx.repo.keywordSearch).not.toHaveBeenCalled();
   });
 
+  it("runs a broad UTC hour scan for exact messages behind an aggregate bucket", async () => {
+    const result = searchResult({
+      authorId: "member-id",
+      createdAt: new Date("2026-05-02T09:15:00.000Z"),
+      normalizedContent: "synthetic hourly evidence",
+    });
+    const ctx = historyAnswerContext({
+      keywordResults: [],
+      recentResults: [result],
+    });
+
+    const response = await answerFromHistory(ctx, "", {
+      authorIds: ["member-id"],
+      dateFrom: "2026-05-01",
+      hourOfDayUtc: 9,
+      requestText: "what were the messages in the 9 am UTC bucket?",
+    });
+
+    expect(response).toContain("UTC hour filter: 09:00–09:59");
+    expect(response).toContain("synthetic hourly evidence");
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorIds: ["member-id"],
+        hourOfDayUtc: 9,
+        dateFrom: new Date("2026-05-01T00:00:00.000Z"),
+      })
+    );
+  });
+
   it("runs broad resolved-user scans when the model passes an empty query", async () => {
     const result = searchResult({ authorId: "rare-user-id", authorUsername: "rare_guest_0001", normalizedContent: "is the ram all the way in" });
     const ctx = historyAnswerContext({
@@ -1071,6 +1100,65 @@ describe("generateImage", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "generateImage",
       error: "image_generation_request_rejected",
+    }));
+  });
+
+  it("validates required image text and retries once before attaching the corrected image", async () => {
+    const firstImage = Buffer.from("first-image-with-typo");
+    const correctedImage = Buffer.from("corrected-image");
+    const generateImageMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        estimatedCostUsd: 0.02,
+        data: [{ b64_json: firstImage.toString("base64"), media_type: "image/png" }],
+      })
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        estimatedCostUsd: 0.02,
+        data: [{ b64_json: correctedImage.toString("base64"), media_type: "image/png" }],
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: false, observedText: ["APEX DAY 7249"] }),
+        model: "test/vision",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: true, observedText: ["APEX DAY 7429"] }),
+        model: "test/vision",
+        raw: {},
+        toolCalls: [],
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: { openRouter: {} },
+      repo: { auditTool },
+      openRouter: { generateImage: generateImageMock, chat },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, {
+      prompt: "A synthetic race poster with the exact title.",
+      requiredText: ["APEX DAY 7429"],
+    });
+
+    expect(generateImageMock).toHaveBeenCalledTimes(2);
+    expect(generateImageMock.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(result.files).toEqual([
+      expect.objectContaining({ data: correctedImage, contentType: "image/png" }),
+    ]);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining('"generationAttempts":2'),
+      estimatedCostUsd: 0.04,
     }));
   });
 

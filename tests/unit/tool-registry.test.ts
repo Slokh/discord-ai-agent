@@ -129,6 +129,7 @@ describe("toolRegistry", () => {
 
     expect(imageProperties).toHaveProperty("background");
     expect(imageProperties).toHaveProperty("outputFormat");
+    expect(imageProperties).toHaveProperty("requiredText");
     expect(emojiProperties).toHaveProperty("requireTransparent");
     expect(toolRegistry.find((entry) => entry.name === "generateImage")?.description)
       .toContain("Do not call it for diagnosis-only questions");

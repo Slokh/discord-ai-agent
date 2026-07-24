@@ -498,6 +498,7 @@ export class DiscordAiAgentRepository {
     channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
   }): Promise<SearchResult[]> { return retrievalRepository.keywordSearch(this.pool, input); }
   vectorSearch(input: {
     guildId: string;
@@ -510,6 +511,7 @@ export class DiscordAiAgentRepository {
     channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
   }): Promise<SearchResult[]> { return retrievalRepository.vectorSearch(this.pool, input); }
   recentMessages(input: { guildId: string; channelId: string; limit: number; includeBots?: boolean }): Promise<SearchResult[]> { return retrievalRepository.recentMessages(this.pool, input); }
   recentMessagesFromChannels(input: {
@@ -521,6 +523,7 @@ export class DiscordAiAgentRepository {
     aboutUserTerms?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
     includeBots?: boolean;
   }): Promise<SearchResult[]> { return retrievalRepository.recentMessagesFromChannels(this.pool, input); }
   sampleMessagesFromChannels(input: {

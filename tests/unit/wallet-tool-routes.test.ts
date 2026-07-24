@@ -44,7 +44,11 @@ describe("executeWalletToolRoute", () => {
 
   it("routes requester-bound balance and transfer arguments", async () => {
     const ctx = context();
-    await expect(executeWalletToolRoute(ctx, route("getWalletBalance", { owner: "user", userId: "friend" })))
+    await expect(executeWalletToolRoute(
+      ctx,
+      route("getWalletBalance", { owner: "user", userId: "friend" }),
+      "show that member's wallet balance",
+    ))
       .resolves.toEqual({ content: "wallet" });
     expect(mocks.walletBalance).toHaveBeenCalledWith(ctx, { owner: "user", userId: "friend" });
 
@@ -53,6 +57,51 @@ describe("executeWalletToolRoute", () => {
     }))).resolves.toEqual({ content: "transferred" });
     expect(mocks.transfer).toHaveBeenCalledWith(ctx, {
       destination: "bot", destinationUserId: undefined, amountUsd: 2.5
+    });
+  });
+
+  it("rejects wallet reads without explicit current or replied financial intent", async () => {
+    const ctx = context();
+
+    await expect(executeWalletToolRoute(
+      ctx,
+      route("getWalletBalance", { owner: "requester" }),
+      "my bedtime. seven hour average.",
+    )).resolves.toMatchObject({
+      status: "error",
+      errorCode: "wallet_balance_intent_required",
+    });
+
+    expect(mocks.walletBalance).not.toHaveBeenCalled();
+  });
+
+  it("allows a scoped wallet follow-up when the replied message establishes financial intent", async () => {
+    const ctx = context();
+    ctx.replyContext = {
+      messageId: "wallet-reply",
+      rootMessageId: "wallet-reply",
+      channelId: "channel",
+      guildId: "guild",
+      authorId: "user",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "what is my wallet balance?",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+      chain: [],
+    };
+
+    await expect(executeWalletToolRoute(
+      ctx,
+      route("getWalletBalance", { owner: "requester" }),
+      "how much?",
+    )).resolves.toEqual({ content: "wallet" });
+
+    expect(mocks.walletBalance).toHaveBeenCalledWith(ctx, {
+      owner: "requester",
+      userId: undefined,
     });
   });
 

@@ -34,6 +34,7 @@ export async function keywordSearch(pool: DbPool, input: {
     channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
   }): Promise<SearchResult[]> {
     if (input.visibleChannelIds.length === 0 || !input.query.trim()) return [];
     const tsQuery = orTsQuery(input.query);
@@ -80,6 +81,7 @@ export async function keywordSearch(pool: DbPool, input: {
           )
           AND ($6::timestamptz IS NULL OR m.created_at >= $6)
           AND ($7::timestamptz IS NULL OR m.created_at <= $7)
+          AND ($10::int IS NULL OR extract(hour FROM m.created_at AT TIME ZONE 'UTC')::int = $10)
           AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
           AND to_tsvector('english', m.normalized_content) @@ to_tsquery('english', $3)
         ORDER BY score DESC, m.created_at DESC
@@ -94,7 +96,8 @@ export async function keywordSearch(pool: DbPool, input: {
         input.dateFrom ?? null,
         input.dateTo ?? null,
         channelIds,
-        aboutUserTerms
+        aboutUserTerms,
+        input.hourOfDayUtc ?? null
       ]
     );
     return result.rows.map(rowToSearchResult);
@@ -111,12 +114,19 @@ export async function vectorSearch(pool: DbPool, input: {
     channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
   }): Promise<SearchResult[]> {
     if (input.visibleChannelIds.length === 0 || input.embedding.length === 0) return [];
     const authorIds = normalizeFilterIds(input.authorIds, input.authorId);
     const channelIds = normalizeFilterIds(input.channelIds);
     const aboutUserTerms = normalizeAboutUserTerms(input.aboutUserTerms);
-    const hasResultFilters = authorIds.length > 0 || aboutUserTerms.length > 0 || channelIds.length > 0 || input.dateFrom != null || input.dateTo != null;
+    const hasResultFilters =
+      authorIds.length > 0 ||
+      aboutUserTerms.length > 0 ||
+      channelIds.length > 0 ||
+      input.dateFrom != null ||
+      input.dateTo != null ||
+      input.hourOfDayUtc != null;
     const candidateLimit = Math.min(
       Math.max(input.limit * (hasResultFilters ? 100 : 30), hasResultFilters ? 500 : 250),
       hasResultFilters ? FILTERED_VECTOR_SEARCH_MAX_CANDIDATES : VECTOR_SEARCH_MAX_CANDIDATES
@@ -138,7 +148,7 @@ export async function vectorSearch(pool: DbPool, input: {
               embedding::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) <=> $3::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) AS distance
             FROM message_embeddings
             ORDER BY embedding::halfvec(${EMBEDDING_INDEX_DIMENSIONS}) <=> $3::halfvec(${EMBEDDING_INDEX_DIMENSIONS})
-            LIMIT $10
+            LIMIT $11
           )
           SELECT
             m.id AS message_id,
@@ -178,6 +188,7 @@ export async function vectorSearch(pool: DbPool, input: {
             )
             AND ($6::timestamptz IS NULL OR m.created_at >= $6)
             AND ($7::timestamptz IS NULL OR m.created_at <= $7)
+            AND ($10::int IS NULL OR extract(hour FROM m.created_at AT TIME ZONE 'UTC')::int = $10)
             AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
           ORDER BY nearest.distance, m.created_at DESC
           LIMIT $4
@@ -192,6 +203,7 @@ export async function vectorSearch(pool: DbPool, input: {
           input.dateTo ?? null,
           channelIds,
           aboutUserTerms,
+          input.hourOfDayUtc ?? null,
           annCandidateLimit
         ]
       );
@@ -251,6 +263,7 @@ export async function recentMessagesFromChannels(pool: DbPool, input: {
     aboutUserTerms?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
     includeBots?: boolean;
   }): Promise<SearchResult[]> {
     const requestedChannelIds = normalizeFilterIds(input.channelIds);
@@ -296,6 +309,7 @@ export async function recentMessagesFromChannels(pool: DbPool, input: {
           )
           AND ($5::timestamptz IS NULL OR m.created_at >= $5)
           AND ($6::timestamptz IS NULL OR m.created_at <= $6)
+          AND ($10::int IS NULL OR extract(hour FROM m.created_at AT TIME ZONE 'UTC')::int = $10)
           AND NOT EXISTS (SELECT 1 FROM privacy_deletions p WHERE p.user_id = m.author_id)
         ORDER BY m.created_at DESC
         LIMIT $3
@@ -309,7 +323,8 @@ export async function recentMessagesFromChannels(pool: DbPool, input: {
         input.dateTo ?? null,
         Boolean(input.includeBots),
         requestedChannelIds,
-        aboutUserTerms
+        aboutUserTerms,
+        input.hourOfDayUtc ?? null
       ]
     );
     return result.rows.map(rowToSearchResult).reverse();

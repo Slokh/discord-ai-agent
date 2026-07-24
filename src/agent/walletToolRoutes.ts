@@ -17,8 +17,13 @@ import { cleanResponse } from "../tools/responseFormatting.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { numberArgument, recordArgument, stringArgument, stringArrayArgument } from "./toolHandlers/arguments.js";
+import { walletBalanceReadAllowedForCurrentScope } from "./walletStatusGuard.js";
 
-export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolRoute): Promise<AgentResponse | null> {
+export async function executeWalletToolRoute(
+  ctx: ToolContext,
+  route: AgentToolRoute,
+  originalText = "",
+): Promise<AgentResponse | null> {
   if (route.name === "awaitRandomWagerAction") {
     const content = cleanResponse(await awaitRandomWagerAction(ctx, {
       expectedVersion: numberArgument(route.arguments, "expectedVersion"),
@@ -30,6 +35,16 @@ export async function executeWalletToolRoute(ctx: ToolContext, route: AgentToolR
     return { content, status: succeeded ? "ok" : "error", retryable: !succeeded };
   }
   if (route.name === "getWalletBalance") {
+    if (!walletBalanceReadAllowedForCurrentScope(originalText, ctx.replyContext)) {
+      return {
+        content:
+          "getWalletBalance requires an explicit current or replied financial request. " +
+          "Do not use wallet state for unrelated personal facts; choose the relevant Discord history or stats tool instead.",
+        status: "error",
+        errorCode: "wallet_balance_intent_required",
+        retryable: true,
+      };
+    }
     return {
       content: cleanResponse(await getWalletBalance(ctx, {
         owner: stringArgument(route.arguments, "owner") as "requester" | "bot" | "user" | undefined,

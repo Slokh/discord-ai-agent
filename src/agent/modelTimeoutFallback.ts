@@ -6,6 +6,15 @@ import { synthesizeFinalAnswerWithoutTools } from "./finalSynthesis.js";
 import type { ModelCallBudget } from "./routerShared.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
+export function timeoutNeedsExpandedToolRetry(messages: ChatMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "tool") return message.name === "requestAdditionalTools";
+    if (message.role === "assistant") return false;
+  }
+  return false;
+}
+
 export async function synthesizeToolEvidenceAfterTimeout(
   ctx: ToolContext,
   input: {

@@ -110,6 +110,13 @@ export const discordResolverHistoryToolContracts = [
           type: "string",
           description: "Inclusive UTC date upper bound as YYYY-MM-DD. Set this explicitly when the user gives an end date or bounded window."
         },
+        hourOfDayUtc: {
+          type: "integer",
+          minimum: 0,
+          maximum: 23,
+          description:
+            "Optional UTC hour bucket (0-23). Use with query=\"\" plus author/date/channel filters to retrieve the exact messages behind a getDiscordStats groupBy=hourOfDay bucket."
+        },
         limit: {
           type: "number",
           description: "Maximum evidence messages to retrieve for the final answer."

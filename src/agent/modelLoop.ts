@@ -58,19 +58,17 @@ import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletReadRoute } from "./deterministicWalletRoute.js";
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
-import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout } from "./modelTimeoutFallback.js";
+import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout, timeoutNeedsExpandedToolRetry } from "./modelTimeoutFallback.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
 import { mediaTranscriptionToolForPrompt } from "./mediaTranscriptionRoute.js";
+import { PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE, PublicUrlEvidenceGuard } from "./publicUrlEvidenceGuard.js";
 import {
   completeDirectToolResponse,
   isSuccessfulGeneratedImageArtifact,
   synthesizeGeneratedImageArtifactIfReady,
 } from "./terminalToolCompletion.js";
-export async function runAgentModelLoop(
-  ctx: ToolContext,
-  userText: string,
-): Promise<AgentResponse> {
+export async function runAgentModelLoop(ctx: ToolContext, userText: string): Promise<AgentResponse> {
   ctx.requestText = userText;
   const automaticStarterFunds = await ensureAutomaticStarterFunds(ctx);
   const activeGame = await loadActiveGameSession(ctx, userText);
@@ -78,8 +76,21 @@ export async function runAgentModelLoop(
   const richPresentationOutcomeGuard = new RichPresentationOutcomeGuard(ctx);
   if (activeGame?.actionRequested) randomOutcomeGuard.noteActiveWager(activeGame.wager.id);
   const freshExternalDataGuard = new FreshExternalDataGuard(ctx, userText);
-  const response = await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard, richPresentationOutcomeGuard, activeGame, automaticStarterFunds);
-  return await richPresentationOutcomeGuard.enforce(await randomOutcomeGuard.enforce(await freshExternalDataGuard.enforce(response)));
+  const publicUrlEvidenceGuard = new PublicUrlEvidenceGuard(ctx, userText);
+  const response = await runAgentModelLoopInternal(
+    ctx,
+    userText,
+    randomOutcomeGuard,
+    freshExternalDataGuard,
+    publicUrlEvidenceGuard,
+    richPresentationOutcomeGuard,
+    activeGame,
+    automaticStarterFunds,
+  );
+  const urlGroundedResponse = await publicUrlEvidenceGuard.enforce(response);
+  const freshResponse = await freshExternalDataGuard.enforce(urlGroundedResponse);
+  const randomSafeResponse = await randomOutcomeGuard.enforce(freshResponse);
+  return await richPresentationOutcomeGuard.enforce(randomSafeResponse);
 }
 
 async function runAgentModelLoopInternal(
@@ -87,6 +98,7 @@ async function runAgentModelLoopInternal(
   userText: string,
   randomOutcomeGuard: RandomOutcomeGuard,
   freshExternalDataGuard: FreshExternalDataGuard,
+  publicUrlEvidenceGuard: PublicUrlEvidenceGuard,
   richPresentationOutcomeGuard: RichPresentationOutcomeGuard,
   activeGame: ActiveGameSessionContext | null,
   automaticStarterFunds: string | null,
@@ -264,10 +276,7 @@ async function runAgentModelLoopInternal(
       forceToolUseNextRound = false;
       const chat = {
           messages,
-          tools: toolDefinitionsForModel({
-            localTools: currentToolset.localTools,
-            serverTools: currentToolset.serverTools,
-          }),
+          tools: toolDefinitionsForModel(publicUrlEvidenceGuard.toolsetForRound(currentToolset)),
           toolChoice,
           temperature: 0.2,
           maxTokens: 4096,
@@ -280,7 +289,8 @@ async function runAgentModelLoopInternal(
           chat,
         });
       } catch (error) {
-        const recovered = hasAttemptedTool && !modelTimeoutFallbackAttempted
+        const retryExpandedToolSelection = timeoutNeedsExpandedToolRetry(messages);
+        const recovered = hasAttemptedTool && !retryExpandedToolSelection && !modelTimeoutFallbackAttempted
           ? await synthesizeToolEvidenceAfterTimeout(ctx, {
               error, round: round + 1, roundStartedAt, text, messages, files, memoryEvents, requestLogger, startedAt, modelCallBudget,
             })
@@ -289,7 +299,7 @@ async function runAgentModelLoopInternal(
         const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
         const canFallback =
           isOpenRouterTimeoutError(error) &&
-          !hasAttemptedTool &&
+          (!hasAttemptedTool || retryExpandedToolSelection) &&
           !modelTimeoutFallbackAttempted &&
           Boolean(fallbackModel) &&
           fallbackModel !== ctx.config.openRouter?.chatModel;
@@ -334,6 +344,7 @@ async function runAgentModelLoopInternal(
     }
     const modelRoutes = selectExclusiveWagerTransition(coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls, currentToolset.localTools)));
     freshExternalDataGuard.noteModelResponse(response);
+    publicUrlEvidenceGuard.noteModelResponse(response);
     const toolObservation = modelToolObservation(response);
     const requestedToolRequests = response.toolCalls.map(
       traceToolRequestMetadata,
@@ -442,6 +453,23 @@ async function runAgentModelLoopInternal(
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
         });
       }
+      const publicUrlEvidenceDecision = await publicUrlEvidenceGuard.inspectDraft(response.content);
+      if (publicUrlEvidenceDecision !== "allow") {
+        if (publicUrlEvidenceDecision === "retry") {
+          forceToolUseNextRound = true;
+          messages.push({ role: "assistant", content: response.content });
+          messages.push({
+            role: "system",
+            content: PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE,
+          });
+          continue;
+        }
+        return publicUrlEvidenceGuard.blockedResponse({
+          files: files.length > 0 ? files : undefined,
+          tables: tables.length > 0 ? tables : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
+        });
+      }
       return await finalizeModelRoundWithoutTools(ctx, {
         round: round + 1,
         roundStartedAt,
@@ -531,6 +559,7 @@ async function runAgentModelLoopInternal(
       forcedRandomAction.noteToolResult(route.name, result.status);
       richPresentationOutcomeGuard.noteToolResult(route.name);
       randomOutcomeGuard.noteToolResult(route.name, result.content);
+      publicUrlEvidenceGuard.noteLocalToolResult(route.name, result.status);
       wagerResolutionRouter.arm(randomOutcomeGuard.requiresWagerResolution(), randomOutcomeGuard.requiredWagerResolutionTool());
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&

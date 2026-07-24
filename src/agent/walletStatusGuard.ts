@@ -2,7 +2,7 @@ import type { AppConfig } from "../config/env.js";
 import type { DiscordReplyContext } from "../tools/types.js";
 import { promptExcludesRealWallet } from "./walletPromptIntent.js";
 
-const WALLET_BALANCE_INTENT = /\b(?:wallet|balance|bankroll|casino funds?|available funds?)\b/i;
+const WALLET_BALANCE_INTENT = /\b(?:wallet|balance|bankroll|casino funds?|available funds?|money|usd|usdc|dollars?|cents?)\b/i;
 const NON_WALLET_BALANCE = /\b(?:bank|checking|savings|credit card|equations?|ledger sheet|balance of power)\b/i;
 const TRANSFER_INTENT = /\b(?:send|pay|tip|transfer|move|give|deposit|withdraw|rebalance|refund|reimburse)\b/i;
 const REQUESTER_WALLET_REFERENCE = /\b(?:my|mine)\b/i;
@@ -54,6 +54,26 @@ export function walletBalanceRouteForPrompt(config: AppConfig, text: string): Fo
   const botReference = BOT_WALLET_REFERENCE.exec(normalized);
   const owner = botReference && (!requesterReference || botReference.index < requesterReference.index) ? "bot" : "requester";
   return { toolName: "getWalletBalance", owner };
+}
+
+export function walletBalanceReadAllowedForCurrentScope(
+  text: string,
+  replyContext?: DiscordReplyContext | null,
+) {
+  if (hasExplicitWalletBalanceIntent(text)) return true;
+  if (!replyContext || !/\b(?:my|mine|your|yours|theirs?|what about|how much)\b/i.test(text)) {
+    return false;
+  }
+  const chain = replyContext.chain.length > 0 ? replyContext.chain : [replyContext];
+  return chain.some((message) => hasExplicitWalletBalanceIntent(message.content));
+}
+
+function hasExplicitWalletBalanceIntent(text: string) {
+  return WALLET_BALANCE_INTENT.test(text) &&
+    !promptExcludesRealWallet(text) &&
+    !NON_WALLET_BALANCE.test(text) &&
+    !TRANSFER_INTENT.test(text) &&
+    !WAGER_OR_GAME_INTENT.test(text);
 }
 
 export function wagerHistoryRouteForPrompt(

@@ -4275,6 +4275,514 @@ describe("agent router", () => {
     expect(traceEvents.some((event) => event.eventName === "agent.capability_claim.corrected")).toBe(true);
   });
 
+  it("retries tool selection after an expanded code-update toolset times out", async () => {
+    const enqueueAgentTask = vi.fn(async () => ({ jobId: "job-1", taskId: "task-timeout-retry" }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [{
+          id: "expand-code-tools",
+          name: "requestAdditionalTools",
+          argumentsText: JSON.stringify({
+            groups: ["codegen"],
+            reason: "Need to implement the requested dashboard change.",
+          }),
+        }],
+      })
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.model).toBe("fast/fallback");
+        expect(request.tools.some((tool: any) => tool.function?.name === "runCodingAgent")).toBe(true);
+        return {
+          content: "",
+          model: "fast/fallback",
+          raw: {},
+          toolCalls: [{
+            id: "run-code-update",
+            name: "runCodingAgent",
+            argumentsText: JSON.stringify({
+              request: "Add a privacy-safe activity chart to the dashboard.",
+              title: "Add activity chart",
+            }),
+          }],
+        };
+      });
+    const chain = Array.from({ length: 6 }, (_, index) => ({
+      messageId: `synthetic-chain-${index + 1}`,
+      rootMessageId: "synthetic-chain-1",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: `Synthetic dashboard planning context ${index + 1}.`,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    }));
+    const ctx = {
+      config: {
+        ...codeUpdateTestConfig(),
+        toolsetScoping: true,
+        openRouter: {
+          ...codeUpdateTestConfig().openRouter,
+          chatModel: "slow/primary",
+          utilityModel: "fast/fallback",
+        },
+      },
+      repo: {
+        upsertAgentTaskQueued: vi.fn(async () => undefined),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      github: {},
+      jobs: { enqueueAgentTask },
+      ...fakeAgentRuntimeContext(),
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      statusChannelId: "c",
+      statusMessageId: "reply-1",
+      updateStatus: vi.fn(async () => undefined),
+      requestAttachments: [{
+        attachmentId: "synthetic-spec",
+        filename: "public-dashboard-spec.txt",
+        contentType: "text/plain",
+        size: 64,
+        url: "https://example.com/public-dashboard-spec.txt",
+      }],
+      sessionMessages: Array.from({ length: 25 }, (_, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Synthetic retained session context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(`2026-07-24T00:${String(index).padStart(2, "0")}:00.000Z`),
+      })),
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "Please implement the activity chart from this synthetic spec.");
+
+    expect(response.content).toMatch(/Task ID: `task-[^`]+`/);
+    expect(enqueueAgentTask).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect((chat.mock.calls[2]?.[0] as any).tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ function: expect.objectContaining({ name: "runCodingAgent" }) }),
+    ]));
+  });
+
+  it("retries a timed-out public-link follow-up with hosted URL evidence", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
+      .mockResolvedValueOnce({
+        content: "I can't tell what that public post contains from the link alone.",
+        model: "fast/fallback",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The linked public post is defining a fictional racing term.",
+        model: "fast/fallback",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: {
+        messageId: "parent",
+        rootMessageId: "parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "u",
+        authorDisplayName: "User",
+        authorIsBot: false,
+        content: "https://example.com/public-post",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what is this term?");
+
+    expect(response.content).toContain("defining a fictional racing term");
+    expect(chat).toHaveBeenCalledTimes(3);
+    const recoveryRequest = (chat.mock.calls[2]?.[0] ?? {}) as {
+      messages?: Array<{ role: string; content: string }>;
+      tools?: Array<{ type?: string }>;
+      toolChoice?: string;
+    };
+    expect(recoveryRequest.toolChoice).toBe("required");
+    expect(recoveryRequest.tools).toHaveLength(2);
+    expect(recoveryRequest.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "openrouter:web_fetch" }),
+      expect.objectContaining({ type: "openrouter:web_search" }),
+    ]));
+    expect(recoveryRequest.messages?.some((message) =>
+      message.role === "system" && message.content.includes("read the scoped public URL")
+    )).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.public_url_evidence_guard.rejected"))
+      .toBe(true);
+  });
+
+  it("retrieves exact messages behind a UTC hourly aggregate follow-up", async () => {
+    const exactMessages = [
+      agentSearchResult({
+        messageId: "hourly-message-1",
+        authorId: "member-1",
+        createdAt: new Date("2026-05-02T09:10:00.000Z"),
+        normalizedContent: "synthetic first hourly message",
+      }),
+      agentSearchResult({
+        messageId: "hourly-message-2",
+        authorId: "member-1",
+        createdAt: new Date("2026-05-03T09:20:00.000Z"),
+        normalizedContent: "synthetic second hourly message",
+      }),
+    ];
+    const recentMessagesFromChannels = vi.fn(async () => exactMessages);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "hourly-search",
+          name: "searchDiscordHistory",
+          argumentsText: JSON.stringify({
+            query: "",
+            authorIds: ["member-1"],
+            dateFrom: "2026-05-01",
+            hourOfDayUtc: 9,
+            limit: 25,
+          }),
+        }],
+      })
+      .mockImplementationOnce(async (request: { messages: Array<{ role: string; name?: string; content: string }> }) => {
+        const evidence = request.messages.find(
+          (message) => message.role === "tool" && message.name === "searchDiscordHistory"
+        )?.content ?? "";
+        expect(evidence).toContain("UTC hour filter: 09:00–09:59");
+        expect(evidence).toContain("synthetic first hourly message");
+        expect(evidence).toContain("synthetic second hourly message");
+        return {
+          content: "Those two synthetic messages are the exact 09:00 UTC matches.",
+          model: "final-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 25,
+        toolsetScoping: true,
+        openRouter: {},
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        recentMessagesFromChannels,
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "requester",
+      userDisplayName: "Requester",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        messageId: "bot-parent",
+        rootMessageId: "root",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "AI",
+        authorIsBot: true,
+        content: "There were two messages in the 09:00 UTC aggregate bucket.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what were the two messages at 9 am?");
+
+    expect(response.content).toContain("exact 09:00 UTC matches");
+    expect(recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({
+      authorIds: ["member-1"],
+      hourOfDayUtc: 9,
+      dateFrom: new Date("2026-05-01T00:00:00.000Z"),
+    }));
+  });
+
+  it("rejects an unrelated wallet read and recovers a bedtime stats follow-up", async () => {
+    const getBalance = vi.fn();
+    const discordStats = vi.fn(async () => ({
+      totalMessages: 12,
+      totalAttachments: 0,
+      totalReactions: 0,
+      userCount: 1,
+      channelCount: 1,
+      activeDays: 6,
+      metric: "messages" as const,
+      groupBy: "hourOfDay" as const,
+      rows: [{ key: "6", label: "06:00", value: 4 }],
+      topUsers: [],
+      topChannels: [],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "wrong-wallet-tool",
+          name: "getWalletBalance",
+          argumentsText: JSON.stringify({ owner: "requester" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "expand-retrieval",
+          name: "requestAdditionalTools",
+          argumentsText: JSON.stringify({
+            groups: ["discord-retrieval"],
+            reason: "Need requester-visible activity timing evidence",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "bedtime-stats",
+          name: "getDiscordStats",
+          argumentsText: JSON.stringify({
+            authorIds: ["requester"],
+            metric: "messages",
+            groupBy: "hourOfDay",
+            sort: "labelAsc",
+            limit: 24,
+          }),
+        }],
+      })
+      .mockImplementationOnce(async (request: { messages: Array<{ role: string; name?: string; content: string }> }) => {
+        const walletResult = request.messages.find(
+          (message) => message.role === "tool" && message.name === "getWalletBalance"
+        )?.content ?? "";
+        expect(walletResult).toContain("explicit current or replied financial request");
+        return {
+          content: "Your synthetic activity evidence suggests a 06:00 UTC cutoff for a seven-hour sleep target.",
+          model: "final-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 25,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          privyAppId: "test-app",
+          privyAppSecret: "test-secret",
+        },
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        discordStats,
+        auditTool: vi.fn(async () => undefined),
+      },
+      walletService: { getBalance },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "requester",
+      userDisplayName: "Requester",
+      visibleChannelIds: ["c"],
+      sessionMessages: [{
+        id: 1,
+        threadKey: "g:c",
+        role: "assistant",
+        content: "Your recent indexed activity timing was grouped by UTC hour.",
+        metadata: {},
+        createdAt: new Date("2026-07-24T00:00:00.000Z"),
+      }],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "my bedtime. 7 hour average.");
+
+    expect(response.content).toContain("seven-hour sleep target");
+    expect(getBalance).not.toHaveBeenCalled();
+    expect(discordStats).toHaveBeenCalledWith(expect.objectContaining({
+      authorIds: ["requester"],
+      groupBy: "hourOfDay",
+    }));
+  });
+
+  it("replays a terse image follow-up and delivers only typography-validated output", async () => {
+    const firstImage = Buffer.from("synthetic-image-with-typo");
+    const correctedImage = Buffer.from("synthetic-corrected-image");
+    const generateImage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: firstImage.toString("base64"), media_type: "image/png" }],
+      })
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: correctedImage.toString("base64"), media_type: "image/png" }],
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "expand-image-tools",
+          name: "requestAdditionalTools",
+          argumentsText: JSON.stringify({
+            groups: ["image"],
+            reason: "The reply-chain request needs an image-generation tool.",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-poster",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A synthetic racing poster with the exact title APEX DAY 7429.",
+            requiredText: ["APEX DAY 7429"],
+            useContextImages: false,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: false, observedText: ["APEX DAY 7249"] }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: true, observedText: ["APEX DAY 7429"] }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The corrected synthetic poster is ready.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const replyMessage = (messageId: string, content: string) => ({
+      messageId,
+      rootMessageId: "root-image-request",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: {
+        ...replyMessage("reply-image-request", "Use the earlier synthetic concept."),
+        chain: [
+          replyMessage("root-image-request", "Create a racing poster titled APEX DAY 7429."),
+          replyMessage("reply-2", "Keep the title exact."),
+          replyMessage("reply-3", "Use the same synthetic layout."),
+          replyMessage("reply-image-request", "Use the earlier synthetic concept."),
+        ],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "that version please");
+
+    expect(response.content).toContain("corrected synthetic poster");
+    expect(response.files).toEqual([
+      expect.objectContaining({ data: correctedImage, contentType: "image/png" }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
+    expect(chat).toHaveBeenCalledTimes(5);
+    expect(chat.mock.calls[4]?.[0].tools).toBeUndefined();
+  });
+
   it("corrects a false transcription refusal from tool-evidence timeout synthesis", async () => {
     const traceEvents: any[] = [];
     const chat = vi

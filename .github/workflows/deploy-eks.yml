@@ -13,6 +13,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: deploy-eks-production
+  cancel-in-progress: false
+
 jobs:
   deploy-eks:
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && vars.AWS_REGION != '' && vars.EKS_CLUSTER_NAME != '' && vars.ECR_REPOSITORY != ''
@@ -60,14 +64,6 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
       - uses: azure/setup-helm@v5
-      - name: Build and push images
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-        run: |
-          docker build --target final -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker build --target codegen -t "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG" .
-          docker push "$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
       - name: Deploy Helm chart
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}

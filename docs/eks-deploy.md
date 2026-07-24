@@ -63,6 +63,14 @@ configure at least `WALLET_ENABLED=true`, `USER_WALLETS_ENABLED=false`, and
 repository variables prevents an automated `main` deployment from silently
 reverting a manually configured Helm release to disabled payment features.
 
+On `main`, CI publishes the runtime and codegen images in parallel with the
+compact merged-revision verification jobs. BuildKit reuses persistent GitHub
+Actions caches for both targets. The deploy workflow starts only after that CI
+run succeeds and applies the already-published commit-tagged images with Helm;
+it does not rebuild them. Superseded CI and CodeQL runs are cancelled, while an
+active production deployment is allowed to finish before the latest pending
+revision deploys.
+
 To post automatic deployment notes, set the repository variable
 `RELEASE_NOTES_CHANNEL_ID` to the destination Discord channel ID. Before each
 Helm upgrade, the workflow reads `APP_REVISION` from the currently running bot

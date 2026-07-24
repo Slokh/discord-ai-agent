@@ -33,7 +33,6 @@
     "test:db": "DISCORD_AI_AGENT_DB_TESTS=true vitest run tests/integration/repository-db.test.ts tests/integration/jobs-db.test.ts tests/integration/migration-upgrade-db.test.ts tests/integration/rng-db.test.ts tests/integration/payments-db.test.ts",
     "test:db:coverage": "DISCORD_AI_AGENT_DB_TESTS=true vitest run --coverage --coverage.reportsDirectory=coverage-db tests/integration/repository-db.test.ts tests/integration/jobs-db.test.ts tests/integration/migration-upgrade-db.test.ts tests/integration/rng-db.test.ts tests/integration/payments-db.test.ts",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
     "docs:check": "tsx scripts/checkDocs.ts",
     "lint": "eslint .",
     "verify": "npm run lint && npm run typecheck && npm test && npm audit --omit=dev --audit-level=critical && npm run docs:check && npm run scan:release",
@@ -100,7 +99,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.61.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^26.1.1",

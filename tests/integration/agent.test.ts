@@ -4522,6 +4522,82 @@ describe("agent router", () => {
     )).toBe(true);
   });
 
+  it("preserves a hosted citation when a confirmed reply-chain result promises a link", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi.fn().mockResolvedValueOnce({
+      content: "Yep — I found it, and here's the link.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+      serverToolUse: {
+        web_search_requests: 1,
+        tool_calls_requested: 1,
+        tool_calls_executed: 1,
+      },
+      urlCitations: [{
+        url: "https://example.com/synthetic-match",
+        title: "Synthetic public match",
+      }],
+    });
+    const chain = Array.from({ length: 12 }, (_value, index) => ({
+      messageId: `synthetic-link-chain-${index + 1}`,
+      rootMessageId: "synthetic-link-chain-1",
+      channelId: "c",
+      guildId: "g",
+      authorId: index % 2 === 0 ? "u" : "bot",
+      authorDisplayName: index % 2 === 0 ? "User" : "Bot",
+      authorIsBot: index % 2 === 1,
+      content: index === 11
+        ? "I found a likely public match and can share the source."
+        : `Synthetic public lookup context ${index + 1}.`,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: index === 11 ? "https://example.com/prior-public-source" : null,
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: Array.from({ length: 25 }, (_value, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "assistant" as const : "user" as const,
+        content: `Synthetic retained lookup context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(2026, 6, 24, 3, index),
+      })),
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "ok it is");
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(response.content).toContain(
+      "Source: <https://example.com/synthetic-match>",
+    );
+    expect(traceEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "agent.hosted_citation_link.appended",
+        metadata: expect.objectContaining({ citationCount: 1 }),
+      }),
+    ]));
+  });
+
   it("retries a timed-out public-link follow-up with hosted URL evidence", async () => {
     const traceEvents: any[] = [];
     const chat = vi

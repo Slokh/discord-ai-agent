@@ -6,15 +6,19 @@ import {
   loadDiscordEmojiPromptContext,
   toolResultContentForPrompt,
 } from "../../src/agent/promptBuilder.js";
+import { buildAgentRuntimeTurnEnvelope } from "../../src/agent/runtimeEnvelope.js";
 import {
   REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT,
   SESSION_CONTEXT_MESSAGE_LIMIT,
+  replayPreparedDiscordAgentTurn,
   sessionContextMessageLimitForReplyContext,
 } from "../../src/discord/turnPreparation.js";
 import type { ConversationMessage } from "../../src/db/repositories.js";
 import { loadConfig } from "../../src/config/env.js";
 import { toolDefinitionsForModel } from "../../src/tools/registry.js";
 import { scopedToolset, selectToolGroups } from "../../src/tools/toolScope.js";
+import type { DiscordAgentRequestInput } from "../../src/discord/requestContext.js";
+import type { DiscordReplyContext } from "../../src/tools/types.js";
 
 function conversationMessage(overrides: Partial<ConversationMessage>): ConversationMessage {
   return {
@@ -29,6 +33,51 @@ function conversationMessage(overrides: Partial<ConversationMessage>): Conversat
     metadata: {},
     createdAt: new Date("2026-07-09T00:00:00.000Z"),
     ...overrides,
+  };
+}
+
+function replyContext(): DiscordReplyContext {
+  return {
+    messageId: "parent",
+    channelId: "channel",
+    guildId: "guild",
+    rootMessageId: "root",
+    authorId: "agent",
+    authorDisplayName: "ai",
+    authorIsBot: true,
+    content: "Previous ranking answer",
+    createdAt: "2026-07-09T00:01:00.000Z",
+    url: null,
+    attachmentSummaries: [],
+    attachments: [],
+    chain: [
+      {
+        messageId: "root",
+        channelId: "channel",
+        guildId: "guild",
+        authorId: "user-1",
+        authorDisplayName: "User One",
+        authorIsBot: false,
+        content: "Original ranking request",
+        createdAt: "2026-07-09T00:00:00.000Z",
+        url: null,
+        attachmentSummaries: [],
+        attachments: [],
+      },
+      {
+        messageId: "parent",
+        channelId: "channel",
+        guildId: "guild",
+        authorId: "agent",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "Previous ranking answer",
+        createdAt: "2026-07-09T00:01:00.000Z",
+        url: null,
+        attachmentSummaries: [],
+        attachments: [],
+      },
+    ],
   };
 }
 
@@ -209,7 +258,9 @@ describe("prompt context cost controls", () => {
     });
 
     const defaultMessages = chatMessages("what now", "", [toolMessage]);
-    expect(defaultMessages.map((message) => String(message.content)).join("\n")).not.toContain("VERY LARGE PRIOR TOOL BODY");
+    const defaultPrompt = defaultMessages.map((message) => String(message.content)).join("\n");
+    expect(defaultPrompt).not.toContain("VERY LARGE PRIOR TOOL BODY");
+    expect(defaultPrompt).toContain("Earlier searchDiscordHistory result omitted");
 
     const replyMessages = chatMessages("what now", "", [toolMessage], {
       messageId: "parent",
@@ -228,7 +279,7 @@ describe("prompt context cost controls", () => {
     });
     const replyPrompt = replyMessages.map((message) => String(message.content)).join("\n");
     expect(replyPrompt).not.toContain("VERY LARGE PRIOR TOOL BODY");
-    expect(replyPrompt).toContain("Earlier searchDiscordHistory result omitted");
+    expect(replyPrompt).not.toContain("Earlier searchDiscordHistory result omitted");
   });
 
   it("keeps initial system context before session conversation roles for Claude 5", () => {
@@ -255,14 +306,14 @@ describe("prompt context cost controls", () => {
     expect(messages.at(-1)).toEqual({ role: "user", content: "hello" });
   });
 
-  it("keeps the bounded session window for replies instead of pairing two large histories", () => {
+  it("reserves channel-wide session memory for top-level turns", () => {
     expect(SESSION_CONTEXT_MESSAGE_LIMIT).toBe(8);
     expect(REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT).toBe(24);
     expect(sessionContextMessageLimitForReplyContext(undefined)).toBe(8);
-    expect(sessionContextMessageLimitForReplyContext({} as never)).toBe(8);
+    expect(sessionContextMessageLimitForReplyContext({} as never)).toBe(0);
   });
 
-  it("does not duplicate reply-chain messages in recent channel memory", () => {
+  it("isolates explicit replies from unrelated recent channel memory", () => {
     const sessionMessages = [
       conversationMessage({
         discordMessageId: "root",
@@ -280,52 +331,69 @@ describe("prompt context cost controls", () => {
         content: "Unrelated recent note",
       }),
     ];
-    const prompt = chatMessages("redo it", "", sessionMessages, {
-      messageId: "parent",
-      channelId: "channel",
-      guildId: "guild",
-      rootMessageId: "root",
-      authorId: "agent",
-      authorDisplayName: "ai",
-      authorIsBot: true,
-      content: "Previous ranking answer",
-      createdAt: "2026-07-09T00:01:00.000Z",
-      url: null,
-      attachmentSummaries: [],
-      attachments: [],
-      chain: [
-        {
-          messageId: "root",
-          channelId: "channel",
-          guildId: "guild",
-          authorId: "user-1",
-          authorDisplayName: "User One",
-          authorIsBot: false,
-          content: "Original ranking request",
-          createdAt: "2026-07-09T00:00:00.000Z",
-          url: null,
-          attachmentSummaries: [],
-          attachments: [],
-        },
-        {
-          messageId: "parent",
-          channelId: "channel",
-          guildId: "guild",
-          authorId: "agent",
-          authorDisplayName: "ai",
-          authorIsBot: true,
-          content: "Previous ranking answer",
-          createdAt: "2026-07-09T00:01:00.000Z",
-          url: null,
-          attachmentSummaries: [],
-          attachments: [],
-        },
-      ],
-    }).map((message) => String(message.content)).join("\n");
+    const prompt = chatMessages("redo it", "", sessionMessages, replyContext())
+      .map((message) => String(message.content))
+      .join("\n");
 
     expect(prompt.match(/Original ranking request/g)).toHaveLength(1);
     expect(prompt.match(/Previous ranking answer/g)).toHaveLength(1);
-    expect(prompt.match(/Unrelated recent note/g)).toHaveLength(1);
+    expect(prompt).not.toContain("Unrelated recent note");
+    expect(prompt).not.toContain("Recent completed turns from this channel");
+  });
+
+  it("does not refresh shared channel memory when a queued reply starts", async () => {
+    const staleUnrelatedMessage = conversationMessage({
+      discordMessageId: "unrelated-profile-turn",
+      content: "Update the profile picture yourself",
+    });
+    const recentConversationMessages = vi.fn(async () => [
+      conversationMessage({
+        discordMessageId: "newer-unrelated-profile-turn",
+        content: "Here is the profile login discussion",
+      }),
+    ]);
+    const turnEnvelope = buildAgentRuntimeTurnEnvelope({
+      requestId: "current-reply",
+      sourceMessageId: "current-reply",
+      threadKey: "discord:guild:channel",
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user-1",
+      userDisplayName: "User One",
+      botRoleIds: [],
+      text: "redo it",
+      rawContent: "<@bot> redo it",
+      discordUrl: "https://discord.com/current-reply",
+      messageCreatedAt: new Date("2026-07-09T00:02:00.000Z"),
+      visibleChannelIds: ["channel"],
+      mentionedUserIds: [],
+      mentionedChannelIds: [],
+      replyContext: replyContext(),
+      requestAttachments: [],
+      sessionMessages: [staleUnrelatedMessage],
+    });
+
+    const prepared = await replayPreparedDiscordAgentTurn({
+      context: {
+        repo: { recentConversationMessages },
+      } as unknown as DiscordAgentRequestInput,
+      request: {
+        requestId: "current-reply",
+        text: "redo it",
+        rawContent: "<@bot> redo it",
+        botRoleIds: [],
+        messageStartedAt: Date.now(),
+      },
+      turnEnvelope,
+      requestLogger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      } as never,
+    });
+
+    expect(recentConversationMessages).not.toHaveBeenCalled();
+    expect(prepared.priorSessionMessages).toEqual([]);
+    expect(prepared.turnEnvelope.sessionMessages).toEqual([]);
   });
 
   it("caps large tool results before they re-enter the prompt", () => {

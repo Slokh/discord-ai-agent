@@ -89,7 +89,7 @@ export function chatMessages(
   discordEmojiContext: DiscordEmojiPromptContext = { emojis: [], profiles: [] },
 ): ChatMessage[] {
   const sessionPromptMessages = sessionMessagesForPrompt(
-    sessionMessagesOutsideReplyChain(sessionMessages, replyContext),
+    replyContext ? [] : sessionMessages,
   );
   const initialSessionContext = sessionPromptMessages.filter(
     (message) => message.role === "system",
@@ -403,21 +403,6 @@ function replyReactionEmojiIdsForQuery(
       return emojiId ? [emojiId] : [];
     })
   ))].slice(0, 8);
-}
-
-function sessionMessagesOutsideReplyChain(
-  sessionMessages: ConversationMessage[],
-  replyContext: DiscordReplyContext | undefined,
-) {
-  if (!replyContext) return sessionMessages;
-  const replyMessageIds = new Set([
-    replyContext.messageId,
-    ...replyContext.chain.map((message) => message.messageId),
-  ]);
-  return sessionMessages.filter(
-    (message) =>
-      !message.discordMessageId || !replyMessageIds.has(message.discordMessageId),
-  );
 }
 
 function sessionMessagesForPrompt(

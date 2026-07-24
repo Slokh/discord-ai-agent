@@ -11,7 +11,7 @@ COPY migrations ./migrations
 COPY skills ./skills
 RUN npm run build
 
-FROM node:22-trixie-slim AS runtime
+FROM node:22-trixie-slim AS runtime-base
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apt-get update \
@@ -19,19 +19,11 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /var/cache/discord-ai-agent \
   && chown -R node:node /app /var/cache/discord-ai-agent
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev \
-  && rm -f package-lock.json
-COPY --chown=node:node --from=build /app/dist ./dist
-COPY --chown=node:node migrations ./migrations
-COPY --chown=node:node skills ./skills
-USER node
-CMD ["node", "dist/src/index.js"]
 
-FROM runtime AS codegen
+FROM runtime-base AS codegen-tools
 USER root
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \
+  && apt-get install -y --no-install-recommends curl git ripgrep \
   && mkdir -p -m 755 /etc/apt/keyrings \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
   && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -43,6 +35,21 @@ RUN npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13 \
   && rm -rf /usr/local/lib/node_modules/npm \
   && rm -f /usr/local/bin/npm /usr/local/bin/npx
 USER node
+
+FROM runtime-base AS runtime
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev \
+  && rm -f package-lock.json
+COPY --chown=node:node --from=build /app/dist ./dist
+COPY --chown=node:node migrations ./migrations
+COPY --chown=node:node skills ./skills
+USER node
+CMD ["node", "dist/src/index.js"]
+
+FROM codegen-tools AS codegen
+COPY --chown=node:node --from=runtime /app /app
+USER node
+CMD ["node", "dist/src/index.js"]
 
 FROM runtime AS final
 USER root

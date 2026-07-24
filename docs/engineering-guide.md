@@ -164,7 +164,7 @@ Choose coverage by behavior, not file type.
 | Deployment/Helm/Terraform | Render/lint/validate the changed layer | CI production checks |
 | Documentation links | `npm run docs:check` | `npm run verify` |
 
-`npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB flag, a critical-level production dependency audit, documentation checks, and the release scanner. CI additionally runs coverage, changed-file coverage, production build, Helm, Terraform, DB coverage, CodeQL, and container security.
+`npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB flag, a critical-level production dependency audit, documentation checks, and the release scanner. Pull-request CI additionally runs coverage and changed-file coverage, always runs DB coverage, and runs Helm/Terraform or container security only when their owned inputs change. Main keeps a compact merged-revision test/build gate while publishing cached release images in parallel; deployment reuses those exact images.
 
 Live evals can call providers and use configured private data. Run them only when that is intended; keep server-specific cases under `.discord-ai-agent/evals`.
 

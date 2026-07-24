@@ -240,10 +240,10 @@ Common optional settings:
 | --- | --- | --- |
 | `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
 | `DISCORD_PREMIUM_SKU_IDS` | unset | Comma-separated Discord application SKU snowflakes exposed to the agent for premium Components V2 buttons; all other SKU values fail closed |
-| `OPENROUTER_CHAT_MODEL` | `openai/gpt-5.6-luna` | Main conversational and tool-selection model |
+| `OPENROUTER_CHAT_MODEL` | `anthropic/claude-sonnet-5` | Main conversational and tool-selection model |
 | `OPENROUTER_CHAT_FALLBACK_MODEL` | `openai/gpt-5.6-terra` | Recovery model for malformed tool calls, empty responses, leaked hosted-tool markup, and repeated-tool termination |
-| `OPENROUTER_CHAT_REASONING_EFFORT` / `OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT` | `low` / `medium` | OpenRouter reasoning effort for primary chat and recovery calls |
-| `OPENROUTER_CHAT_MAX_TOKENS` / `OPENROUTER_CHAT_FALLBACK_MAX_TOKENS` | `2560` / `3072` | Combined reasoning and visible-output ceilings; each leaves roughly 1,500 visible tokens at the configured effort |
+| `OPENROUTER_CHAT_REASONING_EFFORT` / `OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT` | `medium` / `medium` | OpenRouter reasoning effort for primary chat and recovery calls |
+| `OPENROUTER_CHAT_MAX_TOKENS` / `OPENROUTER_CHAT_FALLBACK_MAX_TOKENS` | `4096` / `3072` | Combined reasoning and visible-output ceilings; Discord separately bounds final visible replies |
 | `OPENROUTER_UTILITY_MODEL` | `openai/gpt-4o-mini` | Lower-cost utility model and one-shot fallback for a primary timeout before any tool executes |
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |

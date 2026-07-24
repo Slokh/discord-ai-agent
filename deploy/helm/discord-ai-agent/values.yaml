@@ -59,13 +59,13 @@ config:
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
-  openRouterChatModel: openai/gpt-5.6-luna
+  openRouterChatModel: anthropic/claude-sonnet-5
   openRouterChatFallbackModel: openai/gpt-5.6-terra
-  openRouterChatReasoningEffort: low
+  openRouterChatReasoningEffort: medium
   openRouterChatFallbackReasoningEffort: medium
-  # GPT-5 reasoning tokens share the completion budget. These values leave
-  # roughly 1,500 tokens for the visible answer at the configured efforts.
-  openRouterChatMaxTokens: "2560"
+  # Reasoning and visible output share the completion budget. Sonnet gets
+  # additional room for medium reasoning; Discord bounds final visible replies.
+  openRouterChatMaxTokens: "4096"
   openRouterChatFallbackMaxTokens: "3072"
   # Also serves as the one-shot fallback when the primary model times out
   # before any tool has executed.

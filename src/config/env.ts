@@ -59,13 +59,13 @@ const defaults = {
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
   openRouterAppTitle: "Discord AI Agent",
   openRouterHttpReferer: "http://localhost",
-  openRouterChatModel: "openai/gpt-5.6-luna",
+  openRouterChatModel: "anthropic/claude-sonnet-5",
   openRouterChatFallbackModel: "openai/gpt-5.6-terra",
-  openRouterChatReasoningEffort: "low" as ReasoningEffort,
+  openRouterChatReasoningEffort: "medium" as ReasoningEffort,
   openRouterChatFallbackReasoningEffort: "medium" as ReasoningEffort,
-  // OpenRouter's GPT-5 reasoning budget is part of max_tokens. At low effort,
-  // 2,560 leaves roughly 1,500 tokens for the user-visible answer or tool call.
-  openRouterChatMaxTokens: 2_560,
+  // Reasoning and visible output share the completion budget. Give Sonnet
+  // enough room for medium reasoning while Discord still bounds final replies.
+  openRouterChatMaxTokens: 4_096,
   openRouterChatFallbackMaxTokens: 3_072,
   openRouterCodegenModel: "z-ai/glm-5.2",
   openRouterUtilityModel: "openai/gpt-4o-mini",

@@ -6,6 +6,8 @@ import { recordAgentEvent } from "./runtimeTranscript.js";
 
 const PUBLIC_URL_INSPECTION_INTENT =
   /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\b/i;
+const REPLIED_PUBLIC_URL_INSPECTION_INTENT =
+  /\b(?:(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\s+(?:this|that|it)\b|(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\b[^.\n]{0,80}\b(?:link|url|site|page|post|article|video|image|tweet|thread)\b)/i;
 const PUBLIC_URL_EVIDENCE_KEYS = ["web_fetch_requests", "web_search_requests"] as const;
 
 export const PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE =
@@ -102,8 +104,12 @@ export function requiresPublicUrlEvidence(
   replyContext: DiscordReplyContext | null | undefined,
   userText: string,
 ) {
-  if (!PUBLIC_URL_INSPECTION_INTENT.test(userText)) return false;
-  return scopedPublicUrls(userText, replyContext).length > 0;
+  const currentUrls = publicUrlsInText(userText);
+  if (currentUrls.length > 0) {
+    return PUBLIC_URL_INSPECTION_INTENT.test(userText);
+  }
+  if (!REPLIED_PUBLIC_URL_INSPECTION_INTENT.test(userText)) return false;
+  return scopedReplyPublicUrls(replyContext).length > 0;
 }
 
 export function hasPublicUrlEvidence(
@@ -114,18 +120,18 @@ export function hasPublicUrlEvidence(
   );
 }
 
-function scopedPublicUrls(
-  userText: string,
+function scopedReplyPublicUrls(
   replyContext: DiscordReplyContext | null | undefined,
 ) {
   const replyMessages = replyContext
     ? (replyContext.chain.length > 0 ? replyContext.chain : [replyContext])
     : [];
-  const candidates = [
-    ...urlsInText(userText),
-    ...replyMessages.flatMap((message) => urlsInText(message.content)),
-  ];
+  const candidates = replyMessages.flatMap((message) => urlsInText(message.content));
   return [...new Set(candidates.filter(isPublicExternalUrl))];
+}
+
+function publicUrlsInText(text: string) {
+  return [...new Set(urlsInText(text).filter(isPublicExternalUrl))];
 }
 
 function urlsInText(text: string) {

@@ -27,6 +27,19 @@ function replyContext(content: string, attachments: DiscordReplyContext["attachm
 }
 
 describe("known capability claim guard", () => {
+  it("answers an explicit runtime-model identity question from observed call metadata", () => {
+    expect(correctKnownCapabilityClaim(
+      context(),
+      "Which language model are you?",
+      "I don't have access to the exact model identifier.",
+      "provider/example-model",
+    )).toEqual({
+      content: "This reply is running on `provider/example-model`.",
+      corrected: true,
+      capability: "runtime_model_identity",
+    });
+  });
+
   it("corrects a hard transcription refusal when the missing input is a Discord attachment", () => {
     const result = correctKnownCapabilityClaim(
       context(),

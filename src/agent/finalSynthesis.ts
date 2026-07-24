@@ -140,7 +140,7 @@ export async function synthesizeFinalAnswerWithoutTools(
     content ||
     toolEvidenceFallback(input.memoryEvents) ||
     "I found relevant evidence, but I could not compose a clean answer from it.";
-  const capabilityCorrection = correctKnownCapabilityClaim(ctx, input.text, content);
+  const capabilityCorrection = correctKnownCapabilityClaim(ctx, input.text, content, response.model);
   content = capabilityCorrection.content;
   if (capabilityCorrection.corrected) {
     await recordAgentEvent(ctx, {
@@ -313,7 +313,7 @@ export async function finalizeModelRoundWithoutTools(
         recovery.content,
       ).trim();
       if (recoveryContent) {
-        const capabilityCorrection = correctKnownCapabilityClaim(ctx, text, recoveryContent);
+        const capabilityCorrection = correctKnownCapabilityClaim(ctx, text, recoveryContent, recovery.model);
         recoveryContent = capabilityCorrection.content;
         if (capabilityCorrection.corrected) {
           await recordAgentEvent(ctx, {
@@ -392,7 +392,7 @@ export async function finalizeModelRoundWithoutTools(
     };
   }
 
-  const capabilityCorrection = correctKnownCapabilityClaim(ctx, text, responseContent);
+  const capabilityCorrection = correctKnownCapabilityClaim(ctx, text, responseContent, response.model);
   const content = capabilityCorrection.content;
   if (capabilityCorrection.corrected) {
     await recordAgentEvent(ctx, {

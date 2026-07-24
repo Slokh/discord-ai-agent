@@ -6,19 +6,32 @@ const MEDIA_TRANSCRIPTION_GUIDANCE =
 export type CapabilityClaimCorrection = {
   content: string;
   corrected: boolean;
-  capability?: "discord_media_transcription";
+  capability?: "discord_media_transcription" | "runtime_model_identity";
 };
 
 /**
- * Keep model-authored capability claims aligned with deterministic deployed
- * capabilities. This guard is intentionally narrow: it only corrects a hard
- * media-transcription refusal when the request has no attachment to inspect.
+ * Keep model-authored capability and runtime-identity claims aligned with
+ * deterministic observed facts. Corrections remain intentionally narrow.
  */
 export function correctKnownCapabilityClaim(
   ctx: ToolContext,
   userText: string,
   content: string,
+  actualModel?: string,
 ): CapabilityClaimCorrection {
+  if (hasRuntimeModelIdentityIntent(userText)) {
+    const model = (actualModel ?? ctx.config?.openRouter?.chatModel ?? "")
+      .replace(/`/g, "")
+      .trim();
+    if (model) {
+      return {
+        content: `This reply is running on \`${model}\`.`,
+        corrected: content.trim() !== `This reply is running on \`${model}\`.`,
+        capability: "runtime_model_identity",
+      };
+    }
+  }
+
   if (hasDiscordAttachment(ctx)) return { content, corrected: false };
 
   const requestContext = [userText, ...replyContextText(ctx)].join("\n");
@@ -34,6 +47,10 @@ export function correctKnownCapabilityClaim(
     corrected: true,
     capability: "discord_media_transcription",
   };
+}
+
+function hasRuntimeModelIdentityIntent(value: string) {
+  return /\b(?:what|which)\s+(?:(?:ai|language|chat)\s+)?(?:model|llm)\s+(?:(?:are|is)\s+(?:you|this)|(?:do|does)\s+(?:you|this|the bot)\s+use|are\s+we\s+using)\b/i.test(value);
 }
 
 function hasDiscordAttachment(ctx: ToolContext) {

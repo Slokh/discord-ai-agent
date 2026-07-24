@@ -4436,6 +4436,92 @@ describe("agent router", () => {
     ]));
   });
 
+  it("answers model identity without inheriting unrelated reply-chain URL intent", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi.fn().mockResolvedValueOnce({
+      content: "I don't have access to the exact model identifier.",
+      model: "provider/example-model",
+      raw: {},
+      toolCalls: [],
+    });
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+    ) => ({
+      messageId,
+      rootMessageId: "synthetic-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage(
+        "synthetic-root",
+        "Give me a concise status update.",
+        false,
+      ),
+      replyMessage(
+        "synthetic-parent",
+        "Previous context is available at https://example.com/synthetic-reference",
+        true,
+      ),
+    ];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: { chatModel: "configured/primary-model" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: Array.from({ length: 25 }, (_value, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "assistant" as const : "user" as const,
+        content: `Synthetic retained context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(2026, 6, 24, 2, index),
+      })),
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "What language model is this?",
+    );
+
+    expect(response.content).toBe(
+      "This reply is running on `provider/example-model`.",
+    );
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(traceEvents.some(
+      (event) => event.eventName === "agent.public_url_evidence_guard.rejected",
+    )).toBe(false);
+    expect(traceEvents.some(
+      (event) =>
+        event.eventName === "agent.capability_claim.corrected" &&
+        event.metadata?.capability === "runtime_model_identity",
+    )).toBe(true);
+  });
+
   it("retries a timed-out public-link follow-up with hosted URL evidence", async () => {
     const traceEvents: any[] = [];
     const chat = vi

@@ -5368,6 +5368,232 @@ describe("agent router", () => {
     expect(chat.mock.calls[4]?.[0].tools).toBeUndefined();
   });
 
+  it("inherits exact image text from a reply chain when the model omits requiredText", async () => {
+    const firstImage = Buffer.from("synthetic-image-with-typo");
+    const correctedImage = Buffer.from("synthetic-corrected-image");
+    const generateImage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: firstImage.toString("base64"), media_type: "image/png" }],
+      })
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: correctedImage.toString("base64"), media_type: "image/png" }],
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-poster",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A synthetic racing poster with the exact title APEX DAY 7429.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: false, observedText: ["APEX DAY 7249"] }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: true, observedText: ["APEX DAY 7429"] }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The corrected synthetic poster is ready.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId,
+      rootMessageId: "root-image-request",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "image attachment"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage("root-image-request", "Create a racing poster titled APEX DAY 7429.", false),
+      replyMessage("first-poster", "Here is the first version.", true, [{
+        id: "first-image",
+        url: "https://cdn.discordapp.com/first.png",
+        filename: "first.png",
+        contentType: "image/png",
+      }]),
+      replyMessage("adjustment", "Keep the title exact in the next version.", false),
+      replyMessage("ready", "I can revise that version.", true),
+      replyMessage("layout", "Keep the same synthetic layout.", false),
+      replyMessage("layout-ready", "I’ll preserve that layout.", true),
+    ];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "that version please");
+
+    expect(response.content).toContain("corrected synthetic poster");
+    expect(response.files).toEqual([
+      expect.objectContaining({ data: correctedImage, contentType: "image/png" }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
+    expect(chat).toHaveBeenCalledTimes(4);
+  });
+
+  it("recovers a false visual refusal by inspecting a retained reply-chain image", async () => {
+    const imageBytes = Buffer.from("synthetic-reply-image");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(imageBytes, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(imageBytes.length),
+      },
+    })));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "I can't access the earlier image from this Discord reply.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-retained-image",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "What does the visual detail mean?",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic diagram shows the requested visual detail.",
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "It means the highlighted synthetic value increased.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const traceEvents: any[] = [];
+    const root = {
+      messageId: "root-image",
+      rootMessageId: "root-image",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "Here is a synthetic diagram.",
+      attachmentSummaries: ["diagram.png image/png"],
+      attachments: [{
+        id: "diagram",
+        url: "https://cdn.discordapp.com/diagram.png",
+        filename: "diagram.png",
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    };
+    const firstAnswer = {
+      ...root,
+      messageId: "first-answer",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "The diagram has a highlighted value.",
+      attachmentSummaries: [],
+      attachments: [],
+    };
+    const followUp = {
+      ...root,
+      messageId: "follow-up",
+      content: "Please keep using that diagram.",
+      attachmentSummaries: [],
+      attachments: [],
+    };
+    const parent = {
+      ...firstAnswer,
+      messageId: "parent-answer",
+      content: "I’ll keep the diagram in context.",
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...parent, chain: [root, firstAnswer, followUp, parent] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "What does that mean?");
+
+    expect(response.content).toContain("highlighted synthetic value");
+    expect(chat).toHaveBeenCalledTimes(4);
+    expect((chat.mock.calls[1]?.[0] as any).toolChoice).toEqual({
+      type: "function",
+      function: { name: "inspectDiscordImages" },
+    });
+    expect(traceEvents.some((event) => event.eventName === "agent.image_evidence.retry")).toBe(true);
+  });
+
   it("corrects a false transcription refusal from the tool-capable timeout retry", async () => {
     const traceEvents: any[] = [];
     const chat = vi

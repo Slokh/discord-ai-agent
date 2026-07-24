@@ -21,6 +21,30 @@ export function normalizeRequiredImageText(values: string[] | undefined) {
   )].slice(0, MAX_REQUIRED_TEXT_ITEMS);
 }
 
+export function inferRequiredImageText(sources: string[]) {
+  const inferred: string[] = [];
+  const patterns = [
+    /\b(?:exact|verbatim)\s+(?:title|headline|caption|label|text|wording)\s*(?:is|reads?|says?)?\s*[:=-]?\s*(?:"([^"]+)"|“([^”]+)”|'([^']+)'|([^,.;!?\n]{1,160}))/gi,
+    /\b(?:titled|captioned|labeled|labelled)\s+(?:exactly\s+)?(?:"([^"]+)"|“([^”]+)”|'([^']+)'|([^,.;!?\n]{1,160}))/gi,
+    /\b(?:title|headline|caption|label|text)\s+(?:is|reads?|says?)\s*[:=-]?\s*(?:"([^"]+)"|“([^”]+)”|'([^']+)'|([^,.;!?\n]{1,160}))/gi,
+  ];
+  for (const source of sources) {
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(source)) !== null) {
+        const value = match.slice(1).find((candidate) => candidate != null)
+          ?.trim()
+          .replace(/\s+/g, " ")
+          .replace(/\s+(?:in|on|for|with|using)\s+the\s+(?:next|new|revised|updated)\b.*$/i, "")
+          .trim();
+        if (value) inferred.push(value);
+      }
+    }
+  }
+  return normalizeRequiredImageText(inferred);
+}
+
 export function imageTextCorrectionPrompt(prompt: string, requiredText: string[]) {
   return [
     prompt,

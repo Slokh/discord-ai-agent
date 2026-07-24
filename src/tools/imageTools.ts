@@ -4,6 +4,7 @@ import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
 import {
+  inferRequiredImageText,
   imageTextCorrectionPrompt,
   normalizeRequiredImageText,
   validateGeneratedImageText,
@@ -279,7 +280,14 @@ export async function generateImage(
 ): Promise<{ content: string; files: AgentFile[]; status?: "ok" | "error" }> {
   const normalizedInput = typeof input === "string" ? { prompt: input } : input;
   const prompt = normalizedInput.prompt.trim();
-  const requiredText = normalizeRequiredImageText(normalizedInput.requiredText);
+  const requiredText = normalizeRequiredImageText([
+    ...(normalizedInput.requiredText ?? []),
+    ...inferRequiredImageText([
+      prompt,
+      ctx.requestText ?? "",
+      ...(ctx.replyContext?.chain.map((message) => message.content) ?? []),
+    ]),
+  ]);
   const references = await imageReferencesForInput(ctx, {
     explicitUrls: normalizedInput.referenceImageUrls,
     useContextImages: normalizedInput.useContextImages ?? true

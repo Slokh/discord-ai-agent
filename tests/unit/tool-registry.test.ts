@@ -89,6 +89,17 @@ describe("toolRegistry", () => {
     expect(toolDefinitionsForModel()).toBe(toolDefinitionsForModel());
   });
 
+  it("advertises deferred capabilities through the escalation interface", () => {
+    const definition = localToolDefinitionsForModel([
+      toolRegistry.find((entry) => entry.name === "requestAdditionalTools")!,
+    ])[0];
+    const parameters = JSON.stringify(definition?.function.parameters);
+
+    expect(parameters).toContain("discord-retrieval covers");
+    expect(parameters).toContain("codegen covers repository/PR/CI work");
+    expect(definition?.function.description).not.toContain("Example arguments:");
+  });
+
   it("derives the rich presentation tool contract from the exhaustive runtime schema", () => {
     const tool = toolRegistry.find((entry) => entry.name === "composeDiscordResponse");
     const schema = JSON.stringify(tool?.parameters);
@@ -104,8 +115,9 @@ describe("toolRegistry", () => {
       components: expect.any(Array),
     }));
     const definition = localToolDefinitionsForModel([tool!])[0];
-    expect(definition?.function.description).toContain("Example arguments:");
-    expect(definition?.function.description).toContain('"type":"action_row"');
+    expect(definition?.function.description).not.toContain("Example arguments:");
+    expect(definition?.function.description).not.toContain('"type":"action_row"');
+    expect(definition?.function.parameters).toBe(tool?.parameters);
   });
 
   it("routes wallet balances through verified onchain USD", () => {
@@ -266,7 +278,7 @@ describe("toolRegistry", () => {
           type: "function",
           function: expect.objectContaining({
             name: "searchDiscordHistory",
-            description: expect.stringContaining("Tool class: retrieval."),
+            description: expect.not.stringContaining("Tool class:"),
             parameters: expect.objectContaining({
               type: "object",
               required: ["query"],

@@ -5032,16 +5032,103 @@ describe("agent router", () => {
       toolChoice?: string;
     };
     expect(recoveryRequest.toolChoice).toBe("required");
-    expect(recoveryRequest.tools).toHaveLength(2);
-    expect(recoveryRequest.tools).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "openrouter:web_fetch" }),
+    expect(recoveryRequest.tools).toEqual([
       expect.objectContaining({ type: "openrouter:web_search" }),
-    ]));
+    ]);
     expect(recoveryRequest.messages?.some((message) =>
-      message.role === "user" && message.content.includes("read the scoped public URL")
+      message.role === "user" && message.content.includes("exact scoped URL")
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.public_url_evidence_guard.rejected"))
       .toBe(true);
+  });
+
+  it("recovers from an HTML URL misrouted to image inspection with hosted web evidence", async () => {
+    const traceEvents: any[] = [];
+    const auditTool = vi.fn(async () => undefined);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-html-as-image",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            imageUrls: ["https://example.com/synthetic-page"],
+            useContextImages: false,
+          }),
+        }],
+      })
+      .mockRejectedValueOnce(new OpenRouterHttpError({
+        status: 400,
+        message: "URL did not return an image (received text/html)",
+      }))
+      .mockResolvedValueOnce({
+        content: "I couldn't inspect that page as an image.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic page documents a fictional racing term.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: { web_search_requests: 1 },
+        urlCitations: [{
+          url: "https://example.com/synthetic-page",
+          title: "Synthetic page",
+        }],
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool,
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [{
+        id: "context-image",
+        url: "https://cdn.discordapp.com/context.png",
+        filename: "context.png",
+        contentType: "image/png",
+      }],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Inspect https://example.com/synthetic-page",
+    );
+
+    expect(response.content).toContain("documents a fictional racing term");
+    expect(chat).toHaveBeenCalledTimes(4);
+    const retry = (chat.mock.calls[3]?.[0] ?? {}) as {
+      tools?: Array<{ type?: string }>;
+      toolChoice?: string;
+    };
+    expect(retry.toolChoice).toBe("required");
+    expect(retry.tools).toEqual([
+      expect.objectContaining({ type: "openrouter:web_search" }),
+    ]);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "inspectDiscordImages",
+      error: "image_source_unreadable",
+    }));
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.public_url_evidence_guard.rejected"
+    )).toBe(true);
   });
 
   it("retrieves exact messages behind a UTC hourly aggregate follow-up", async () => {

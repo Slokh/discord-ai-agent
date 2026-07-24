@@ -12,7 +12,7 @@ const PUBLIC_URL_EVIDENCE_KEYS = ["web_fetch_requests", "web_search_requests"] a
 
 export const PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE =
   "Your previous draft was rejected because the user asked about a scoped public link without evidence from that link. " +
-  "Use web_fetch to read the scoped public URL now. If the page itself cannot be fetched, use web_search with that exact URL or its public title/domain to recover attributable evidence. " +
+  "Use web_search with the exact scoped URL or its public title/domain now to recover attributable evidence. " +
   "Answer from the returned evidence and include its source; do not repeat an unsupported access disclaimer.";
 
 export const PUBLIC_URL_EVIDENCE_BLOCKED_RESPONSE =
@@ -49,12 +49,13 @@ export class PublicUrlEvidenceGuard {
     return {
       localTools: [],
       serverTools: toolset.serverTools.filter(
-        (tool) => tool.type === "openrouter:web_fetch" || tool.type === "openrouter:web_search",
+        (tool) => tool.type === "openrouter:web_search",
       ),
     };
   }
 
-  noteLocalToolResult(toolName: string, _status?: AgentResponse["status"]) {
+  noteLocalToolResult(toolName: string, status?: AgentResponse["status"]) {
+    if (toolName === "inspectDiscordImages" && status === "error") return;
     if (
       toolName.startsWith("getSpotify") ||
       toolName.startsWith("searchSpotify") ||

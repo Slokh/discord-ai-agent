@@ -1,13 +1,7 @@
 import { isOpenRouterTimeoutError, type ChatMessage } from "../models/openrouter.js";
-import {
-  toolDefinitionsForModel,
-  type ToolName,
-} from "../tools/registry.js";
+import { toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
-import type {
-  AgentResponse,
-  ToolContext,
-} from "../tools/types.js";
+import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { ensureAutomaticStarterFunds } from "../tools/walletTools.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
@@ -18,7 +12,7 @@ import {
   synthesizeFinalAnswerWithoutTools,
 } from "./finalSynthesis.js";
 import {
-  chatMessages, CURRENT_REQUEST_RESPONSE_REMINDER, loadServerOverlay, prepareDiscordEmojiPromptContext,
+  chatMessages, CURRENT_REQUEST_RESPONSE_REMINDER, insertInitialSystemContext, loadServerOverlay, prepareDiscordEmojiPromptContext,
   replyContextAttachmentCount,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -68,6 +62,8 @@ import {
 } from "./terminalToolCompletion.js";
 import { agentChatRequest, timeoutFallbackChatRequest } from "./modelPolicy.js";
 import { executeIndependentToolRoutesInParallel } from "./parallelToolExecution.js";
+import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js";
+
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
@@ -130,14 +126,14 @@ async function runAgentModelLoopInternal(
     discordEmojiContext,
   );
   if (automaticStarterFunds) {
-    messages.splice(Math.max(0, messages.length - 1), 0, {
-      role: "system",
-      content: [
+    insertInitialSystemContext(
+      messages,
+      [
         "Automatic starter funding succeeded before this request. Treat the following as verified wallet evidence.",
         automaticStarterFunds,
         "Do not call requestStarterFunds again for this request or repeat the transaction hash; the transfer link is added to the footer. Continue with the user request conversationally.",
       ].join("\n"),
-    });
+    );
   }
   injectActiveGameSession(messages, activeGame);
   const turnOutput = ensureAgentTurnOutput(ctx);
@@ -175,6 +171,7 @@ async function runAgentModelLoopInternal(
   let toolsetState = initialToolsetState(ctx, text, randomActionAuthorized);
   let hasAttemptedTool = false;
   let modelTimeoutFallbackAttempted = false;
+  let primaryProviderRejected = false;
   let successfulGeneratedImageArtifact = false;
   let useRecoveryModelNextRound = false;
 
@@ -280,8 +277,10 @@ async function runAgentModelLoopInternal(
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
       const roundToolset = publicUrlEvidenceGuard.toolsetForRound(currentToolset);
+      const useRecoveryModel =
+        useRecoveryModelNextRound || primaryProviderRejected;
       const chat = agentChatRequest(ctx, {
-        recovery: useRecoveryModelNextRound,
+        recovery: useRecoveryModel,
         messages,
         tools: toolDefinitionsForModel({
           localTools: roundToolset.localTools,
@@ -289,7 +288,7 @@ async function runAgentModelLoopInternal(
         }),
         toolChoice,
       });
-      const usedRecoveryModel = useRecoveryModelNextRound;
+      const usedRecoveryModel = useRecoveryModel;
       useRecoveryModelNextRound = false;
       try {
         response = await runObservedModelCall(ctx, {
@@ -304,43 +303,59 @@ async function runAgentModelLoopInternal(
         });
       } catch (error) {
         const retryExpandedToolSelection = timeoutNeedsExpandedToolRetry(messages);
-        const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
-        const canFallback =
-          isOpenRouterTimeoutError(error) &&
-          !modelTimeoutFallbackAttempted &&
-          Boolean(fallbackModel) &&
-          fallbackModel !== ctx.config.openRouter?.chatModel;
-        if (!canFallback) throw error;
-        if (!(await reserveModelCall(ctx, modelCallBudget, "timeout_fallback", { round: round + 1, fallbackModel }))) {
-          throw error;
+        const providerFallback = await recoverProviderRejectedModelCall(ctx, {
+          error,
+          usedRecoveryModel,
+          chat,
+          round: round + 1,
+          toolGroups: [...toolsetState.groups].sort(),
+          forcedToolName: wagerResolutionRoute.forcedToolName,
+          afterToolEvidence: hasAttemptedTool,
+          afterToolsetExpansion: retryExpandedToolSelection,
+          modelCallBudget,
+        });
+        if (providerFallback) {
+          primaryProviderRejected = true;
+          response = providerFallback;
+        } else {
+          const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
+          const canFallback =
+            isOpenRouterTimeoutError(error) &&
+            !modelTimeoutFallbackAttempted &&
+            Boolean(fallbackModel) &&
+            fallbackModel !== ctx.config.openRouter?.chatModel;
+          if (!canFallback) throw error;
+          if (!(await reserveModelCall(ctx, modelCallBudget, "timeout_fallback", { round: round + 1, fallbackModel }))) {
+            throw error;
+          }
+          modelTimeoutFallbackAttempted = true;
+          const fallbackMessages = compactMessagesForModelFallback(messages);
+          await recordAgentEvent(ctx, {
+            eventName: "agent.model.timeout_fallback",
+            level: "warn",
+            summary: `Retrying timed-out model call with ${fallbackModel}`,
+            metadata: {
+              round: round + 1,
+              fallbackModel,
+              originalMessageCount: messages.length,
+              fallbackMessageCount: fallbackMessages.length,
+              afterToolEvidence: hasAttemptedTool,
+              afterToolsetExpansion: retryExpandedToolSelection,
+            },
+          });
+          response = await runObservedModelCall(ctx, {
+            purpose: "tool_selection_timeout_fallback",
+            metadata: {
+              round: round + 1,
+              fallbackFor: "tool_selection",
+              toolGroups: [...toolsetState.groups].sort(),
+              forcedToolName: wagerResolutionRoute.forcedToolName,
+              afterToolEvidence: hasAttemptedTool,
+              afterToolsetExpansion: retryExpandedToolSelection,
+            },
+            chat: timeoutFallbackChatRequest(chat, fallbackModel, fallbackMessages),
+          });
         }
-        modelTimeoutFallbackAttempted = true;
-        const fallbackMessages = compactMessagesForModelFallback(messages);
-        await recordAgentEvent(ctx, {
-          eventName: "agent.model.timeout_fallback",
-          level: "warn",
-          summary: `Retrying timed-out model call with ${fallbackModel}`,
-          metadata: {
-            round: round + 1,
-            fallbackModel,
-            originalMessageCount: messages.length,
-            fallbackMessageCount: fallbackMessages.length,
-            afterToolEvidence: hasAttemptedTool,
-            afterToolsetExpansion: retryExpandedToolSelection,
-          },
-        });
-        response = await runObservedModelCall(ctx, {
-          purpose: "tool_selection_timeout_fallback",
-          metadata: {
-            round: round + 1,
-            fallbackFor: "tool_selection",
-            toolGroups: [...toolsetState.groups].sort(),
-            forcedToolName: wagerResolutionRoute.forcedToolName,
-            afterToolEvidence: hasAttemptedTool,
-            afterToolsetExpansion: retryExpandedToolSelection,
-          },
-          chat: timeoutFallbackChatRequest(chat, fallbackModel, fallbackMessages),
-        });
       }
       ctx.abortSignal?.throwIfAborted();
       ctx.noteProgress?.();
@@ -442,7 +457,7 @@ async function runAgentModelLoopInternal(
         if (randomOutcomeDecision === "retry") {
           messages.push({ role: "assistant", content: response.content });
           messages.push({
-            role: "system",
+            role: "user",
             content: randomOutcomeGuard.retryGuidance(),
           });
           continue;
@@ -459,7 +474,7 @@ async function runAgentModelLoopInternal(
           forceToolUseNextRound = true;
           messages.push({ role: "assistant", content: response.content });
           messages.push({
-            role: "system",
+            role: "user",
             content: FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
           });
           continue;
@@ -476,7 +491,7 @@ async function runAgentModelLoopInternal(
           forceToolUseNextRound = true;
           messages.push({ role: "assistant", content: response.content });
           messages.push({
-            role: "system",
+            role: "user",
             content: PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE,
           });
           continue;

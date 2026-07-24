@@ -27,20 +27,22 @@ describe("active game sessions", () => {
     expect(active?.actionRequested).toBe(false);
   });
 
-  it("injects complete versioned state immediately before the new user message", () => {
+  it("injects complete versioned state before conversation history", () => {
     const messages: ChatMessage[] = [
       { role: "system", content: "rules" },
+      { role: "user", content: "deal me in" },
+      { role: "assistant", content: "You have 18." },
       { role: "user", content: "stand" },
     ];
     injectActiveGameSession(messages, { wager: wager(), actionRequested: true });
 
-    expect(messages).toHaveLength(3);
+    expect(messages).toHaveLength(5);
     expect(messages[1]?.role).toBe("system");
     expect(messages[1]?.content).toContain("Game: blackjack");
     expect(messages[1]?.content).not.toContain("wager_1");
     expect(messages[1]?.content).toContain("State version: 3");
     expect(messages[1]?.content).toContain('Saved state: {"playerTotal":18,"dealerUp":"9♦"}');
-    expect(messages[2]).toEqual({ role: "user", content: "stand" });
+    expect(messages.at(-1)).toEqual({ role: "user", content: "stand" });
   });
 });
 

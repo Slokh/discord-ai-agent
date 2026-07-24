@@ -1302,7 +1302,7 @@ describe("agent router", () => {
     };
     expect(retryRequest.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
     expect(retryRequest.messages?.some((message) =>
-      message.role === "system" && message.content.includes("verified chance workflow is incomplete")
+      message.role === "user" && message.content.includes("verified chance workflow is incomplete")
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
       .toBe(true);
@@ -1345,7 +1345,7 @@ describe("agent router", () => {
     };
     expect(retryRequest.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        role: "system",
+        role: "user",
         content: expect.stringContaining("user did not ask you to perform"),
       }),
     ]));
@@ -1503,7 +1503,7 @@ describe("agent router", () => {
       expect.objectContaining({ type: "openrouter:web_search" }),
     ]));
     expect(retryRequest.messages?.some((message) =>
-      message.role === "system" && message.content.includes("time-sensitive request without fresh tool evidence")
+      message.role === "user" && message.content.includes("time-sensitive request without fresh tool evidence")
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.fresh_external_data_guard.rejected"))
       .toBe(true);
@@ -1760,7 +1760,13 @@ describe("agent router", () => {
 
   it("treats a simple personal update as the new conversational state instead of continuing an old argument", async () => {
     const chat = vi.fn(async (request: { messages: Array<{ role: string; content: unknown }> }) => {
-      const currentRequestReminder = String(request.messages.at(-2)?.content ?? "");
+      const currentRequestReminder = String(
+        request.messages.find(
+          (message) =>
+            message.role === "system" &&
+            String(message.content).includes("Simple personal updates"),
+        )?.content ?? "",
+      );
       return {
         content: currentRequestReminder.includes("Simple personal updates")
           ? "Got it — I’ll plan around you being unavailable that month."
@@ -1807,10 +1813,16 @@ describe("agent router", () => {
     expect(response.content).toBe("Got it — I’ll plan around you being unavailable that month.");
     expect(chat).toHaveBeenCalledTimes(1);
     const modelRequest = (chat.mock.calls as any[])[0]?.[0];
-    expect(modelRequest.messages.at(-2)).toEqual(expect.objectContaining({
-      role: "system",
-      content: expect.stringContaining("Simple personal updates"),
-    }));
+    const reminderIndex = modelRequest.messages.findIndex(
+      (message: { role: string; content: string }) =>
+        message.role === "system" &&
+        message.content.includes("Simple personal updates"),
+    );
+    const firstConversationIndex = modelRequest.messages.findIndex(
+      (message: { role: string }) => message.role !== "system",
+    );
+    expect(reminderIndex).toBeGreaterThanOrEqual(0);
+    expect(reminderIndex).toBeLessThan(firstConversationIndex);
     expect(modelRequest.messages.at(-1)).toEqual({
       role: "user",
       content: "I won’t be available that month.",
@@ -4268,6 +4280,70 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
   });
 
+  it("retries a provider-rejected primary request with the configured recovery model", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new OpenRouterHttpError({
+          status: 400,
+          message: "Server tool request failed",
+        }),
+      )
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.model).toBe("openai/gpt-5.6-terra");
+        expect(request.reasoningEffort).toBe("medium");
+        expect(request.maxTokens).toBe(3_072);
+        return {
+          content: "Hey Kartik, what's up?",
+          model: "openai/gpt-5.6-terra",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {
+          chatModel: "anthropic/claude-sonnet-5",
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatFallbackReasoningEffort: "medium",
+          chatFallbackMaxTokens: 3_072,
+          utilityModel: "openai/gpt-4o-mini",
+        },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "Kartik",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "hello");
+
+    expect(response.content).toBe("Hey Kartik, what's up?");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect((chat.mock.calls[0]?.[0] as any).model).toBe(
+      "anthropic/claude-sonnet-5",
+    );
+    expect(
+      traceEvents.some(
+        (event) =>
+          event.eventName === "agent.model.provider_rejection_fallback",
+      ),
+    ).toBe(true);
+  });
+
   it("corrects a false transcription refusal from the initial timeout fallback", async () => {
     const traceEvents: any[] = [];
     const chat = vi
@@ -4667,7 +4743,7 @@ describe("agent router", () => {
       expect.objectContaining({ type: "openrouter:web_search" }),
     ]));
     expect(recoveryRequest.messages?.some((message) =>
-      message.role === "system" && message.content.includes("read the scoped public URL")
+      message.role === "user" && message.content.includes("read the scoped public URL")
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.public_url_evidence_guard.rejected"))
       .toBe(true);

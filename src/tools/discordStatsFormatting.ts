@@ -83,6 +83,8 @@ export function groupTopicCandidates(candidates: DiscordChannelTopicCandidate[])
 export function formatDiscordStats(stats: DiscordStats, options: DiscordStatsFormatOptions) {
   const metric = discordStatsMetricLabel(stats.metric);
   const groupedBy = discordStatsGroupByLabel(stats.groupBy);
+  const usesUtcBuckets = ["day", "week", "month", "year", "hourOfDay", "dayOfWeek"].includes(stats.groupBy);
+  const isCyclicActivityGrouping = stats.groupBy === "hourOfDay" || stats.groupBy === "dayOfWeek";
   const lines = [
     "Discord indexed stats:",
     "- Scope: requester-visible indexed Discord messages",
@@ -90,6 +92,10 @@ export function formatDiscordStats(stats: DiscordStats, options: DiscordStatsFor
     `- Row limit: ${options.limit}`,
     `- Metric: ${metric}`,
     `- Grouped by: ${groupedBy}`,
+    ...(usesUtcBuckets ? ["- Time basis: UTC"] : []),
+    ...(isCyclicActivityGrouping
+      ? ["- Interpretation: Observed message timing only; it does not establish sleep, location, work schedule, or availability."]
+      : []),
     `- Messages: ${stats.totalMessages}`
   ];
   if (stats.groupBy === "overall" || stats.metric === "attachments") {

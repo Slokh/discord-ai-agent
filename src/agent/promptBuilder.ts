@@ -404,6 +404,7 @@ function replyContextMessagesForPrompt(
       role: "system",
       content:
         "The current user message is a Discord reply. Use this oldest-to-newest parent chain as the primary context for pronouns, follow-ups, and what the user is responding to. Do not switch to unrelated channel memory or outside topics for vague references unless the user clearly asks to broaden the scope." +
+        " The final entry is the direct parent and the strongest conversational anchor. If it supplies the people or things referenced by a vague follow-up, carry those referents forward exactly and do not ask the user to repeat them. If a terse follow-up only names a new subject, preserve the direct parent's task and change only that subject." +
         " Reaction summaries are exact visible emoji/count metadata without reactor identities. When the user asks what a reacted emote means, use its exact token and the learned server-emoji culture guide; if several reactions are present and the reference is ambiguous, identify or disambiguate them instead of claiming the reactions are inaccessible." +
         `\nReply root message ID: ${replyContext.rootMessageId}` +
         `\nDirect parent message ID: ${replyContext.messageId}` +

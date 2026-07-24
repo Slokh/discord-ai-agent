@@ -1933,6 +1933,95 @@ describe("agent router", () => {
     expect(replyPrompt).toContain("Do not switch to unrelated channel memory");
   });
 
+  it("keeps named direct-parent referents for a short plural follow-up", async () => {
+    const chat = vi.fn(async (request: { messages: Array<{ role: string; content: string }> }) => {
+      const replyPrompt = request.messages.find(
+        (message) => message.role === "system" && message.content.includes("The current user message is a Discord reply")
+      )?.content ?? "";
+      expect(replyPrompt).toContain("The final entry is the direct parent");
+      expect(replyPrompt).toContain("do not ask the user to repeat");
+      return {
+        content: "Nova is more deliberate; River is more spontaneous.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: []
+      };
+    });
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "requester",
+      userDisplayName: "Requester",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        messageId: "bot-parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "Nova prefers plans made in advance, while River likes keeping options open.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: "2026-07-24T03:30:00.000Z",
+        url: "https://discord.com/channels/g/c/bot-parent",
+        rootMessageId: "root",
+        chain: [
+          {
+            messageId: "root",
+            channelId: "c",
+            guildId: "g",
+            authorId: "other-member",
+            authorDisplayName: "Other",
+            authorIsBot: false,
+            content: "Not really.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:28:00.000Z",
+            url: "https://discord.com/channels/g/c/root"
+          },
+          {
+            messageId: "requester-question",
+            channelId: "c",
+            guildId: "g",
+            authorId: "requester",
+            authorDisplayName: "Requester",
+            authorIsBot: false,
+            content: "How do their preferences differ?",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:29:00.000Z",
+            url: "https://discord.com/channels/g/c/requester-question"
+          },
+          {
+            messageId: "bot-parent",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "ai",
+            authorIsBot: true,
+            content: "Nova prefers plans made in advance, while River likes keeping options open.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:30:00.000Z",
+            url: "https://discord.com/channels/g/c/bot-parent"
+          }
+        ]
+      }
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "Could you compare how they approach it?");
+
+    expect(response.content).toBe("Nova is more deliberate; River is more spontaneous.");
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
   it("injects a prominent self-referential identity instruction for the current requester", async () => {
     const chat = vi.fn(async () => ({
       content: "ok",
@@ -3863,6 +3952,149 @@ describe("agent router", () => {
     expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledTimes(1);
     expect(ctx.repo.messageContext).toHaveBeenCalledTimes(1);
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "tool_round_limit" }));
+  });
+
+  it("replays a terse named-member activity follow-up with bounded UTC evidence", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const toolCall = (round: number, name: string, argumentsValue: Record<string, unknown>) => ({
+      content: "",
+      model: `tool-model-${round}`,
+      raw: {},
+      toolCalls: [{ id: `call-${round}`, name, argumentsText: JSON.stringify(argumentsValue) }]
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce(toolCall(1, "requestAdditionalTools", {
+        groups: ["discord-retrieval"],
+        reason: "Need permission-filtered member activity evidence"
+      }))
+      .mockResolvedValueOnce(toolCall(2, "findDiscordUsers", { query: "river" }))
+      .mockResolvedValueOnce(toolCall(3, "getDiscordStats", {
+        authorIds: ["member-2"],
+        metric: "messages",
+        groupBy: "hourOfDay",
+        sort: "labelAsc",
+        limit: 24
+      }))
+      .mockImplementationOnce(async (request: { messages: Array<{ role: string; name?: string; content: string }> }) => {
+        const statsEvidence = request.messages.find(
+          (message) => message.role === "tool" && message.name === "getDiscordStats"
+        )?.content ?? "";
+        const prompt = request.messages.map((message) => message.content).join("\n");
+        expect(statsEvidence).toContain("Time basis: UTC");
+        expect(statsEvidence).toContain("Observed message timing only");
+        expect(prompt).toContain("preserve the direct parent's task");
+        return {
+          content: "River’s indexed messages peak around 20:00 UTC.",
+          model: "final-model",
+          raw: {},
+          toolCalls: []
+        };
+      });
+    const discordStats = vi.fn(async () => ({
+      totalMessages: 12,
+      totalAttachments: 0,
+      totalReactions: 0,
+      userCount: 1,
+      channelCount: 2,
+      activeDays: 6,
+      metric: "messages" as const,
+      groupBy: "hourOfDay" as const,
+      rows: [
+        {
+          key: "20",
+          label: "20:00",
+          value: 5,
+          authorId: null,
+          authorUsername: null,
+          channelId: null,
+          channelName: null,
+          messageId: null,
+          messageLink: null,
+          periodStart: null,
+          messageCount: 5,
+          activeDays: 4,
+          channelCreatedAt: null,
+          channelAgeDays: null
+        }
+      ],
+      topUsers: [],
+      topChannels: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: true, openRouter: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        findDiscordUsers: vi.fn(async () => [{
+          id: "member-2",
+          username: "river",
+          globalName: "River",
+          isBot: false,
+          messageCount: 12
+        }]),
+        discordStats,
+        auditTool
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "requester",
+      userDisplayName: "Requester",
+      visibleChannelIds: ["c"],
+      replyContext: {
+        messageId: "bot-parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "Nova’s indexed messages peak around 18:00 UTC.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: "2026-07-24T03:30:00.000Z",
+        url: "https://discord.com/channels/g/c/bot-parent",
+        rootMessageId: "root",
+        chain: [
+          {
+            messageId: "root",
+            channelId: "c",
+            guildId: "g",
+            authorId: "other-member",
+            authorDisplayName: "Other",
+            authorIsBot: false,
+            content: "When does Nova post most often?",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:29:00.000Z",
+            url: "https://discord.com/channels/g/c/root"
+          },
+          {
+            messageId: "bot-parent",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "ai",
+            authorIsBot: true,
+            content: "Nova’s indexed messages peak around 18:00 UTC.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:30:00.000Z",
+            url: "https://discord.com/channels/g/c/bot-parent"
+          }
+        ]
+      }
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "and river?");
+
+    expect(response.content).toBe("River’s indexed messages peak around 20:00 UTC.");
+    expect(chat).toHaveBeenCalledTimes(4);
+    expect(discordStats).toHaveBeenCalledWith(expect.objectContaining({
+      authorIds: ["member-2"],
+      groupBy: "hourOfDay",
+      metric: "messages"
+    }));
   });
 
   it("synthesizes a final answer when the model returns empty content after tool evidence", async () => {

@@ -65,11 +65,14 @@ reverting a manually configured Helm release to disabled payment features.
 
 On `main`, CI publishes the runtime and codegen images in parallel with the
 compact merged-revision verification jobs. BuildKit reuses persistent GitHub
-Actions caches for both targets. The deploy workflow starts only after that CI
-run succeeds and applies the already-published commit-tagged images with Helm;
-it does not rebuild them. Superseded CI and CodeQL runs are cancelled, while an
-active production deployment is allowed to finish before the latest pending
-revision deploys.
+Actions caches for both targets, loads the finished images into Docker, and the
+Docker CLI pushes them to ECR. The Terraform-managed deploy role includes the
+complete ECR image-push permission set, including `ecr:BatchGetImage`, so direct
+BuildKit publishing is also safe after the infrastructure is next applied. The
+deploy workflow starts only after that CI run succeeds and applies the
+already-published commit-tagged images with Helm; it does not rebuild them.
+Superseded CI and CodeQL runs are cancelled, while an active production
+deployment is allowed to finish before the latest pending revision deploys.
 
 To post automatic deployment notes, set the repository variable
 `RELEASE_NOTES_CHANNEL_ID` to the destination Discord channel ID. Before each

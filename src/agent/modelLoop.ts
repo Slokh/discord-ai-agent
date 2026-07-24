@@ -63,6 +63,7 @@ import {
 import { agentChatRequest, timeoutFallbackChatRequest } from "./modelPolicy.js";
 import { executeIndependentToolRoutesInParallel } from "./parallelToolExecution.js";
 import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js";
+import { ImageEvidenceGuard } from "./imageEvidenceGuard.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -91,7 +92,6 @@ export async function runAgentModelLoop(
   const randomSafeResponse = await randomOutcomeGuard.enforce(freshResponse);
   return await richPresentationOutcomeGuard.enforce(randomSafeResponse);
 }
-
 async function runAgentModelLoopInternal(
   ctx: ToolContext,
   userText: string,
@@ -103,6 +103,7 @@ async function runAgentModelLoopInternal(
   automaticStarterFunds: string | null,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
+  const imageEvidenceGuard = new ImageEvidenceGuard(ctx);
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
@@ -174,7 +175,6 @@ async function runAgentModelLoopInternal(
   let primaryProviderRejected = false;
   let successfulGeneratedImageArtifact = false;
   let useRecoveryModelNextRound = false;
-
   requestLogger.info(
     {
       textPreview: previewText(text),
@@ -222,7 +222,6 @@ async function runAgentModelLoopInternal(
       modelCallBudget,
     });
   }
-
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     const roundStartedAt = Date.now();
     requestLogger.debug(
@@ -272,7 +271,10 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const forcedToolThisRound = (round === 0 ? forcedWalletActionTool : null) ?? forcedRandomAction.takeToolForRound(round) ?? (round === 0 ? forcedMediaTranscriptionTool : null);
+      const forcedToolThisRound = imageEvidenceGuard.takeForcedTool() ??
+        (round === 0 ? forcedWalletActionTool : null) ??
+        forcedRandomAction.takeToolForRound(round) ??
+        (round === 0 ? forcedMediaTranscriptionTool : null);
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
@@ -502,6 +504,7 @@ async function runAgentModelLoopInternal(
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
         });
       }
+      if (await imageEvidenceGuard.retryDraft(response.content, messages, round + 1)) continue;
       return await finalizeModelRoundWithoutTools(ctx, {
         round: round + 1,
         roundStartedAt,

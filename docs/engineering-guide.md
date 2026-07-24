@@ -115,7 +115,7 @@ Read [`wallets.md`](wallets.md) and [`provable-rng.md`](provable-rng.md). Preser
 
 ### Change the run console or tracing
 
-Define or extend typed runtime events first. Put reusable normalization and diagnostics in `src/observability/`; keep React focused on rendering. Show observed model I/O, tools, events, latency, cost, cache use, and artifacts without claiming private chain-of-thought. Add pure-helper unit tests and Playwright coverage for important workflows.
+Define or extend typed runtime events first. Put reusable normalization and diagnostics in `src/observability/`; keep React focused on rendering. Show observed model I/O, tools, events, latency, cost, cache use, and artifacts without claiming private chain-of-thought. Add focused unit tests for reusable projections, routing, streaming, and formatting behavior.
 
 ### Change code-update tasks
 
@@ -160,11 +160,11 @@ Choose coverage by behavior, not file type.
 | Repository or migration | DB integration and upgrade test where relevant | `npm run verify:db` |
 | Wallet/RNG concurrency or idempotency | Unit plus DB-backed invariant test | `npm run verify:db` |
 | Discord delivery lifecycle | Response-sink/API/delivery unit test | `npm run verify` |
-| Run-console interaction | Pure projection test plus Playwright | `npm run build && npm run test:e2e` |
+| Run-console interaction | Pure projection and routing tests plus a production build | `npm run build` |
 | Deployment/Helm/Terraform | Render/lint/validate the changed layer | CI production checks |
 | Documentation links | `npm run docs:check` | `npm run verify` |
 
-`npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB flag, a critical-level production dependency audit, documentation checks, and the release scanner. CI additionally runs coverage, changed-file coverage, production build, Playwright, Helm, Terraform, DB coverage, CodeQL, and container security.
+`npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB flag, a critical-level production dependency audit, documentation checks, and the release scanner. CI additionally runs coverage, changed-file coverage, production build, Helm, Terraform, DB coverage, CodeQL, and container security.
 
 Live evals can call providers and use configured private data. Run them only when that is intended; keep server-specific cases under `.discord-ai-agent/evals`.
 

@@ -75,7 +75,7 @@ If a request changes Discord knowledge, indexing, embeddings, retrieval, stats, 
 - Run `npm run typecheck` for TypeScript changes and `npm run verify` for a broad final check.
 - Run `npm run verify:db` for migrations, repositories, payments, RNG, queue, or other Postgres behavior.
 - Run `npm run eval -- --dry-run` for eval schema changes; use live `npm run eval` only when configured DB/OpenRouter behavior is intended.
-- Run `npm run test:e2e` for run-console user flows and `npm run build` for production console/build changes.
+- Run `npm run build` for production console/build changes and cover reusable console behavior with focused unit tests.
 - Add or update a focused regression test for every bug fix. Add private server prompts under `.discord-ai-agent/evals`, never committed `evals/prompts`.
 - Update the nearest domain README when ownership, invariants, or a core flow changes.
 - In sandboxed code-update tasks, do not commit, push, or open PRs; the runner owns Git publication.

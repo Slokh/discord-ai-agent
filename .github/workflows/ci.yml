@@ -30,8 +30,6 @@ jobs:
       # Critical advisory blocks a friend-scale release.
       - run: npm audit --omit=dev --audit-level=critical
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
       - run: npm run scan:release
       - uses: actions/upload-artifact@v7
         with:

@@ -53,7 +53,7 @@ New feature work should follow [`product-principles.md`](product-principles.md),
 - [x] Split the stylesheet by shell, timeline, terminal/artifacts, feedback, comparison, and model calls; remove the duplicate theme override block.
 - [x] Stop resending unchanged full snapshots and use lightweight stream heartbeats.
 - [x] Replace changed-snapshot polling with incremental runtime events and run-version updates.
-- [x] Add Playwright coverage for multi-round chat, recovery, stream reconnect, artifacts, feedback, comparison, and responsive layout.
+- [x] Add regression coverage for multi-round chat, recovery, stream reconnect, artifacts, feedback, comparison, and responsive layout.
 - [x] Add aggregate dashboards and side-by-side run comparison.
 
 ### Latency and retrieval

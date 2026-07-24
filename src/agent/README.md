@@ -19,7 +19,7 @@ Owns the model loop for one user prompt.
 - `modelLoop.ts`: model round loop, toolset scoping state, route selection, and completion routing.
 - `toolRepeatGuard.ts`: canonical tool-call/result signatures and redundant-call audit responses.
 - `terminalToolCompletion.ts`: direct terminal-tool responses and bounded tool-free synthesis after successful generated image artifacts.
-- `promptBuilder.ts`: system prompt, requester/skills/overlay/session/reply/image prompt sections, current-turn tone reset for simple updates and corrections, tool-result prompt truncation.
+- `promptBuilder.ts`: compact stable product/safety prompt plus requester, skills, overlay, session, reply, image, and current-turn sections. Tool routing stays in scoped tool contracts. Reply-chain messages are primary context and are deduplicated from the eight-message session window; prior-turn tool bodies are represented by a retrieval/rerun pointer instead of being replayed.
 - `toolDispatcher.ts`: local tool dispatch and tool-argument coercion.
 - `toolGate.ts`: restricted administrative-tool permission gate (owner/ops allowlists) and per-day budget checks applied before dispatch. Code-update starts and retries are open to every member but retain the per-user codegen limit.
 - `finalSynthesis.ts`: forced final synthesis, empty-response recovery, model-call-ceiling fallback, tool-evidence fallback rendering.

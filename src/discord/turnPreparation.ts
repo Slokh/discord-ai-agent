@@ -29,8 +29,8 @@ import {
 export const SESSION_CONTEXT_MESSAGE_LIMIT = 8;
 export { REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT };
 
-export function sessionContextMessageLimitForReplyContext(replyContext: DiscordReplyContext | null | undefined) {
-  return replyContext ? REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT : SESSION_CONTEXT_MESSAGE_LIMIT;
+export function sessionContextMessageLimitForReplyContext(_replyContext: DiscordReplyContext | null | undefined) {
+  return SESSION_CONTEXT_MESSAGE_LIMIT;
 }
 
 export async function prepareDiscordAgentTurn(input: {

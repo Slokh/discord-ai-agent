@@ -22,6 +22,7 @@ type ProcessRole = "all" | "api" | "bot" | "worker";
 type CodegenExecutionBackend = "kubernetes-job" | "local-process";
 type CodegenHarness = "codex" | "opencode";
 type TempoNetwork = "moderato" | "mainnet";
+type ReasoningEffort = "max" | "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
 
 function defaultProcessRole(argv = process.argv): ProcessRole {
   const role = argv.find((arg): arg is ProcessRole => arg === "all" || arg === "api" || arg === "bot" || arg === "worker");
@@ -58,7 +59,16 @@ const defaults = {
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
   openRouterAppTitle: "Discord AI Agent",
   openRouterHttpReferer: "http://localhost",
-  openRouterChatModel: "z-ai/glm-5.2",
+  openRouterChatModel: "openai/gpt-5.6-luna",
+  openRouterChatFallbackModel: "openai/gpt-5.6-terra",
+  openRouterChatReasoningEffort: "low" as ReasoningEffort,
+  openRouterChatFallbackReasoningEffort: "medium" as ReasoningEffort,
+  // OpenRouter's GPT-5 reasoning budget is part of max_tokens. At low effort,
+  // 2,560 leaves roughly 1,500 tokens for the user-visible answer or tool call.
+  openRouterChatMaxTokens: 2_560,
+  openRouterChatFallbackMaxTokens: 3_072,
+  openRouterCodegenModel: "z-ai/glm-5.2",
+  openRouterUtilityModel: "openai/gpt-4o-mini",
   openRouterEmbeddingModel: "qwen/qwen3-embedding-8b",
   openRouterImageModel: "google/gemini-3.1-flash-image",
   openRouterTranscriptionModel: "openai/whisper-large-v3-turbo",
@@ -162,6 +172,20 @@ const envSchema = z.object({
   OPENROUTER_APP_TITLE: z.string().default(defaults.openRouterAppTitle),
   OPENROUTER_HTTP_REFERER: z.string().default(defaults.openRouterHttpReferer),
   OPENROUTER_CHAT_MODEL: z.string().default(defaults.openRouterChatModel),
+  OPENROUTER_CHAT_FALLBACK_MODEL: z.string().default(defaults.openRouterChatFallbackModel),
+  OPENROUTER_CHAT_REASONING_EFFORT: z
+    .enum(["max", "xhigh", "high", "medium", "low", "minimal", "none"])
+    .default(defaults.openRouterChatReasoningEffort),
+  OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT: z
+    .enum(["max", "xhigh", "high", "medium", "low", "minimal", "none"])
+    .default(defaults.openRouterChatFallbackReasoningEffort),
+  OPENROUTER_CHAT_MAX_TOKENS: z.coerce.number().int().min(1_100).max(128_000).default(defaults.openRouterChatMaxTokens),
+  OPENROUTER_CHAT_FALLBACK_MAX_TOKENS: z.coerce
+    .number()
+    .int()
+    .min(1_100)
+    .max(128_000)
+    .default(defaults.openRouterChatFallbackMaxTokens),
   OPENROUTER_CODEGEN_MODEL: z.string().optional(),
   OPENROUTER_UTILITY_MODEL: z.string().optional(),
   OPENROUTER_EMBEDDING_MODEL: z.string().default(defaults.openRouterEmbeddingModel),
@@ -261,8 +285,8 @@ export function loadConfig() {
     throw new Error(`Invalid environment configuration:\n${formatted}`);
   }
   const chatModel = parsed.data.OPENROUTER_CHAT_MODEL;
-  const codegenModel = parsed.data.OPENROUTER_CODEGEN_MODEL?.trim() || chatModel;
-  const utilityModel = parsed.data.OPENROUTER_UTILITY_MODEL?.trim() || chatModel;
+  const codegenModel = parsed.data.OPENROUTER_CODEGEN_MODEL?.trim() || defaults.openRouterCodegenModel;
+  const utilityModel = parsed.data.OPENROUTER_UTILITY_MODEL?.trim() || defaults.openRouterUtilityModel;
 
   return {
     nodeEnv: parsed.data.NODE_ENV,
@@ -290,6 +314,11 @@ export function loadConfig() {
       appTitle: parsed.data.OPENROUTER_APP_TITLE,
       httpReferer: parsed.data.OPENROUTER_HTTP_REFERER,
       chatModel,
+      chatFallbackModel: parsed.data.OPENROUTER_CHAT_FALLBACK_MODEL,
+      chatReasoningEffort: parsed.data.OPENROUTER_CHAT_REASONING_EFFORT,
+      chatFallbackReasoningEffort: parsed.data.OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT,
+      chatMaxTokens: parsed.data.OPENROUTER_CHAT_MAX_TOKENS,
+      chatFallbackMaxTokens: parsed.data.OPENROUTER_CHAT_FALLBACK_MAX_TOKENS,
       codegenModel,
       utilityModel,
       embeddingModel: parsed.data.OPENROUTER_EMBEDDING_MODEL,

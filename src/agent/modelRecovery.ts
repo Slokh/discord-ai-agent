@@ -10,6 +10,7 @@ import {
 } from "./routerShared.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 import { runObservedModelCall } from "./modelCallTelemetry.js";
+import { recoveryChatPolicy } from "./modelPolicy.js";
 
 export type LeakedHostedToolCall = {
   type:
@@ -140,12 +141,11 @@ export async function hostedToolMarkupRecoveryResponse(
   }
   const response = await runObservedModelCall(ctx, {
     purpose: "hosted_tool_markup_recovery",
+    metadata: { recovery: true },
     chat: {
-      model: ctx.config.openRouter?.utilityModel?.trim() || undefined,
+      ...recoveryChatPolicy(ctx),
       messages: [...messages, ...hostedToolRetryMessages(intendedHostedTools)],
       tools: openRouterServerToolDefinitionsForModel(),
-      temperature: 0.2,
-      maxTokens: 4096,
       retryPolicy: "expensive",
     },
   });

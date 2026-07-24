@@ -59,11 +59,18 @@ config:
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
-  openRouterChatModel: z-ai/glm-5.2
+  openRouterChatModel: openai/gpt-5.6-luna
+  openRouterChatFallbackModel: openai/gpt-5.6-terra
+  openRouterChatReasoningEffort: low
+  openRouterChatFallbackReasoningEffort: medium
+  # GPT-5 reasoning tokens share the completion budget. These values leave
+  # roughly 1,500 tokens for the visible answer at the configured efforts.
+  openRouterChatMaxTokens: "2560"
+  openRouterChatFallbackMaxTokens: "3072"
   # Also serves as the one-shot fallback when the primary model times out
   # before any tool has executed.
   openRouterUtilityModel: openai/gpt-4o-mini
-  # Optional. Defaults to openRouterChatModel when empty.
+  # Optional. Defaults to GLM 5.2 when empty.
   openRouterCodegenModel: z-ai/glm-5.2
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image

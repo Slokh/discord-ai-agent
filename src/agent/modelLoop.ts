@@ -58,7 +58,7 @@ import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletReadRoute } from "./deterministicWalletRoute.js";
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
-import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout, timeoutNeedsExpandedToolRetry } from "./modelTimeoutFallback.js";
+import { compactMessagesForModelFallback, timeoutNeedsExpandedToolRetry } from "./modelTimeoutFallback.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
 import { mediaTranscriptionToolForPrompt } from "./mediaTranscriptionRoute.js";
@@ -290,16 +290,9 @@ async function runAgentModelLoopInternal(
         });
       } catch (error) {
         const retryExpandedToolSelection = timeoutNeedsExpandedToolRetry(messages);
-        const recovered = hasAttemptedTool && !retryExpandedToolSelection && !modelTimeoutFallbackAttempted
-          ? await synthesizeToolEvidenceAfterTimeout(ctx, {
-              error, round: round + 1, roundStartedAt, text, messages, files, memoryEvents, requestLogger, startedAt, modelCallBudget,
-            })
-          : null;
-        if (recovered) return recovered;
         const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
         const canFallback =
           isOpenRouterTimeoutError(error) &&
-          (!hasAttemptedTool || retryExpandedToolSelection) &&
           !modelTimeoutFallbackAttempted &&
           Boolean(fallbackModel) &&
           fallbackModel !== ctx.config.openRouter?.chatModel;
@@ -313,7 +306,14 @@ async function runAgentModelLoopInternal(
           eventName: "agent.model.timeout_fallback",
           level: "warn",
           summary: `Retrying timed-out model call with ${fallbackModel}`,
-          metadata: { round: round + 1, fallbackModel, originalMessageCount: messages.length, fallbackMessageCount: fallbackMessages.length },
+          metadata: {
+            round: round + 1,
+            fallbackModel,
+            originalMessageCount: messages.length,
+            fallbackMessageCount: fallbackMessages.length,
+            afterToolEvidence: hasAttemptedTool,
+            afterToolsetExpansion: retryExpandedToolSelection,
+          },
         });
         response = await runObservedModelCall(ctx, {
           purpose: "tool_selection_timeout_fallback",
@@ -322,6 +322,8 @@ async function runAgentModelLoopInternal(
             fallbackFor: "tool_selection",
             toolGroups: [...toolsetState.groups].sort(),
             forcedToolName: wagerResolutionRoute.forcedToolName,
+            afterToolEvidence: hasAttemptedTool,
+            afterToolsetExpansion: retryExpandedToolSelection,
           },
           chat: { ...chat, model: fallbackModel, messages: fallbackMessages },
         });

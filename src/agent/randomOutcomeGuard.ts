@@ -61,6 +61,38 @@ export function randomToolForPrompt(text: string): "drawRandom" | "revealRandomn
     : null;
 }
 
+export function randomActionAuthorizedForTurn(input: {
+  userText: string;
+  replyContextTexts?: string[];
+  replyContext?: {
+    content: string;
+    chain: Array<{ content: string }>;
+  };
+  promptContextText?: string;
+  promptContextTexts?: Array<string | null | undefined>;
+  activeGameActionRequested?: boolean;
+}) {
+  if (input.activeGameActionRequested) return true;
+  const conversationalContext = [
+    input.userText,
+    ...(input.replyContextTexts ?? []),
+    ...(input.replyContext
+      ? [
+          input.replyContext.content,
+          ...input.replyContext.chain.map((message) => message.content),
+        ]
+      : []),
+  ];
+  if (conversationalContext.some((text) => randomToolForPrompt(text) === "drawRandom")) {
+    return true;
+  }
+  return Boolean(
+    [input.promptContextText, ...(input.promptContextTexts ?? [])]
+      .filter((text): text is string => Boolean(text))
+      .some((text) => randomToolForPrompt(text) === "drawRandom"),
+  );
+}
+
 export function randomActionNeedsWalletBalance(text: string): boolean {
   return randomToolForPrompt(text) === "drawRandom" && WHOLE_BALANCE_WAGER.test(text);
 }

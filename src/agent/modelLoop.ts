@@ -42,7 +42,7 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { coerceGeneratedCsvProducerRoutes, selectExclusiveWagerTransition, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
-import { ForcedRandomActionRouter, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
+import { ForcedRandomActionRouter, randomActionAuthorizedForTurn, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
@@ -168,7 +168,8 @@ async function runAgentModelLoopInternal(
     channelId: ctx.channelId,
     userId: ctx.userId,
   });
-  let toolsetState = initialToolsetState(ctx, text);
+  const randomActionAuthorized = randomActionAuthorizedForTurn({ userText: text, replyContext: ctx.replyContext, promptContextTexts: [serverOverlay?.enabled ? serverOverlay.systemPrompt : "", promptOverlay], activeGameActionRequested: activeGame?.actionRequested });
+  let toolsetState = initialToolsetState(ctx, text, randomActionAuthorized);
   let hasAttemptedTool = false;
   let modelTimeoutFallbackAttempted = false;
   let successfulGeneratedImageArtifact = false;

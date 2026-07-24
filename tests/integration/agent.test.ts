@@ -5034,6 +5034,216 @@ describe("agent router", () => {
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
   });
 
+  it("does not offer randomness to a non-random chart continuation after an initial timeout", async () => {
+    const chartBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const toolAudits: Array<Record<string, unknown>> = [];
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{
+        b64_json: chartBytes.toString("base64"),
+        media_type: "image/png",
+      }],
+    }));
+    const chat = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({
+        timeoutMs: 45_000,
+        path: "/chat/completions",
+      }))
+      .mockImplementationOnce(async (request: any) => {
+        const toolNames = request.tools.map(
+          (tool: any) => tool.function?.name,
+        );
+        expect(request.model).toBe("fast/fallback");
+        expect(toolNames).not.toContain("drawRandom");
+        expect(toolNames).toContain("requestAdditionalTools");
+        return {
+          content: "",
+          model: "fast/fallback",
+          raw: {},
+          toolCalls: [{
+            id: "expand-chart-tools",
+            name: "requestAdditionalTools",
+            argumentsText: JSON.stringify({
+              groups: ["discord-retrieval", "image"],
+              reason: "The retained chart request needs fresh scoped evidence and a replacement image.",
+            }),
+          }],
+        };
+      })
+      .mockResolvedValueOnce({
+        content: "I’ll refresh the synthetic comparison data.",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [
+          {
+            id: "find-synthetic-channel",
+            name: "findDiscordChannels",
+            argumentsText: JSON.stringify({ query: "synthetic-project" }),
+          },
+          {
+            id: "server-yearly-stats",
+            name: "getDiscordStats",
+            argumentsText: JSON.stringify({
+              metric: "messages",
+              groupBy: "year",
+              sort: "dateAsc",
+              includeBots: false,
+            }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [{
+          id: "generate-replacement-chart",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A synthetic yearly Discord activity comparison chart using only supplied tool evidence.",
+            useContextImages: false,
+            outputFormat: "png",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here’s the refreshed synthetic comparison chart.",
+        model: "fast/fallback",
+        raw: {},
+        toolCalls: [],
+      });
+    const yearlyStats = {
+      totalMessages: 42,
+      totalAttachments: 0,
+      totalReactions: 0,
+      userCount: 4,
+      channelCount: 2,
+      activeDays: 10,
+      metric: "messages" as const,
+      groupBy: "year" as const,
+      rows: [
+        {
+          key: "2025",
+          label: "2025",
+          value: 18,
+          messageCount: 18,
+          periodStart: new Date("2025-01-01T00:00:00.000Z"),
+        },
+        {
+          key: "2026",
+          label: "2026",
+          value: 24,
+          messageCount: 24,
+          periodStart: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      ],
+      topUsers: [],
+      topChannels: [],
+    };
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId,
+      rootMessageId: "synthetic-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "image attachment"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage("synthetic-root", "Rank yearly server message activity.", false),
+      replyMessage("synthetic-2", "Here are the yearly server totals.", true),
+      replyMessage("synthetic-3", "Use the complete yearly range.", false),
+      replyMessage("synthetic-4", "Here is the expanded yearly ranking.", true),
+      replyMessage("synthetic-5", "Make that a chart.", false),
+      replyMessage("synthetic-6", "Here is the first chart.", true, [{
+        attachmentId: "synthetic-chart",
+        filename: "synthetic-chart.jpg",
+        contentType: "image/jpeg",
+        size: 256_000,
+        url: "https://example.com/synthetic-chart.jpg",
+      }]),
+      replyMessage("synthetic-7", "Compare it with the synthetic project channel.", false),
+      replyMessage("synthetic-8", "I can rebuild the chart with that comparison.", true),
+      replyMessage("synthetic-9", "Please retry the chart.", false),
+      replyMessage("synthetic-10", "I’m ready to regenerate the comparison.", true),
+    ];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {
+          chatModel: "slow/primary",
+          utilityModel: "fast/fallback",
+        },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (
+          _guildId: string,
+          channelIds: string[],
+        ) => channelIds),
+        findDiscordChannels: vi.fn(async () => [{
+          channelId: "synthetic-channel",
+          channelName: "synthetic-project",
+          parentId: null,
+          parentName: null,
+          type: 0,
+        }]),
+        discordStats: vi.fn(async () => yearlyStats),
+        auditTool: vi.fn(async (audit: Record<string, unknown>) => {
+          toolAudits.push(audit);
+        }),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c", "synthetic-channel"],
+      sessionMessages: Array.from({ length: 25 }, (_value, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "assistant" as const : "user" as const,
+        content: `Synthetic retained context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(2026, 6, 24, 1, index),
+      })),
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "please continue");
+
+    expect(response.content).toContain("refreshed synthetic comparison chart");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: chartBytes,
+      }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(5);
+    expect(toolAudits.some((audit) => audit.toolName === "drawRandom")).toBe(
+      false,
+    );
+  });
+
   it("transcribes a public X video from the full Discord reply chain before answering", async () => {
     const publicMediaUrl = "https://x.com/example/status/42/video/1";
     const transcribeAudio = vi.fn(async () => ({

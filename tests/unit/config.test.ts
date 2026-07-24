@@ -15,6 +15,11 @@ describe("config", () => {
         "DISCORD_PREMIUM_SKU_IDS",
         "RUN_MIGRATIONS",
         "OPENROUTER_CHAT_MODEL",
+        "OPENROUTER_CHAT_FALLBACK_MODEL",
+        "OPENROUTER_CHAT_REASONING_EFFORT",
+        "OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT",
+        "OPENROUTER_CHAT_MAX_TOKENS",
+        "OPENROUTER_CHAT_FALLBACK_MAX_TOKENS",
         "OPENROUTER_CODEGEN_MODEL",
         "OPENROUTER_UTILITY_MODEL",
         "OPENROUTER_TRANSCRIPTION_MODEL",
@@ -62,9 +67,14 @@ describe("config", () => {
         expect(config.discord.premiumSkuIds).toEqual([]);
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
-        expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
+        expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-luna");
+        expect(config.openRouter.chatFallbackModel).toBe("openai/gpt-5.6-terra");
+        expect(config.openRouter.chatReasoningEffort).toBe("low");
+        expect(config.openRouter.chatFallbackReasoningEffort).toBe("medium");
+        expect(config.openRouter.chatMaxTokens).toBe(2_560);
+        expect(config.openRouter.chatFallbackMaxTokens).toBe(3_072);
         expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
-        expect(config.openRouter.utilityModel).toBe("z-ai/glm-5.2");
+        expect(config.openRouter.utilityModel).toBe("openai/gpt-4o-mini");
         expect(config.openRouter.transcriptionModel).toBe("openai/whisper-large-v3-turbo");
         expect(config.github.repository).toBe("owner/repo");
         expect(config.internalApi.host).toBe("0.0.0.0");

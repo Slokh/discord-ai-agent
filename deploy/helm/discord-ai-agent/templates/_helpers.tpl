@@ -40,6 +40,16 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.githubBaseBranch | quote }}
 - name: OPENROUTER_CHAT_MODEL
   value: {{ .Values.config.openRouterChatModel | quote }}
+- name: OPENROUTER_CHAT_FALLBACK_MODEL
+  value: {{ .Values.config.openRouterChatFallbackModel | quote }}
+- name: OPENROUTER_CHAT_REASONING_EFFORT
+  value: {{ .Values.config.openRouterChatReasoningEffort | quote }}
+- name: OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT
+  value: {{ .Values.config.openRouterChatFallbackReasoningEffort | quote }}
+- name: OPENROUTER_CHAT_MAX_TOKENS
+  value: {{ .Values.config.openRouterChatMaxTokens | quote }}
+- name: OPENROUTER_CHAT_FALLBACK_MAX_TOKENS
+  value: {{ .Values.config.openRouterChatFallbackMaxTokens | quote }}
 {{- if .Values.config.openRouterUtilityModel }}
 - name: OPENROUTER_UTILITY_MODEL
   value: {{ .Values.config.openRouterUtilityModel | quote }}

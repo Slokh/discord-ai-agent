@@ -71,6 +71,7 @@ export async function runObservedModelCall(
     toolSchemas,
     offeredTools: (input.chat.tools ?? []).map((tool) => tool.type === "function" ? tool.function.name : tool.type),
     maxTokens: input.chat.maxTokens ?? 4096,
+    reasoningEffort: input.chat.reasoningEffort ?? null,
     toolChoice: input.chat.toolChoice ?? "auto",
     ...runtimeVersionMetadata(ctx.config),
     ...input.metadata,
@@ -87,6 +88,7 @@ export async function runObservedModelCall(
       requestedModel: input.chat.model ?? "default",
       maxTokens: input.chat.maxTokens ?? 4096,
       temperature: input.chat.temperature ?? null,
+      reasoningEffort: input.chat.reasoningEffort ?? null,
       toolChoice: input.chat.toolChoice ?? "auto",
       messages: modelMessagesForArtifact(input.chat.messages).map((message, index) => ({
         index,

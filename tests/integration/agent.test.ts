@@ -1175,7 +1175,19 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {
+          chatModel: "openai/gpt-5.6-luna",
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatReasoningEffort: "low",
+          chatFallbackReasoningEffort: "medium",
+          chatMaxTokens: 2_560,
+          chatFallbackMaxTokens: 3_072,
+        },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
       repo: {
         auditTool,
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -1212,9 +1224,27 @@ describe("agent router", () => {
     expect(response.content).toContain("RNG store is unavailable");
     expect(chat).toHaveBeenCalledTimes(3);
     const recoveryRequest = chat.mock.calls[1]?.[0] as {
+      model?: string;
+      reasoningEffort?: string;
+      maxTokens?: number;
       messages?: Array<{ role: string; content: string }>;
       tools?: Array<{ function?: { name?: string } }>;
     };
+    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-luna",
+      reasoningEffort: "low",
+      maxTokens: 2_560,
+    }));
+    expect(recoveryRequest).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-terra",
+      reasoningEffort: "medium",
+      maxTokens: 3_072,
+    }));
+    expect(chat.mock.calls[2]?.[0]).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-luna",
+      reasoningEffort: "low",
+      maxTokens: 2_560,
+    }));
     expect(recoveryRequest.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
     expect(recoveryRequest.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: "system", content: expect.stringContaining("10 spins at $5 each with slot results") }),
@@ -3431,7 +3461,15 @@ describe("agent router", () => {
     ]);
     const recentArgs = JSON.stringify({ authorIds: ["tyler-id"], limit: 20 });
     const ctx = {
-      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 10,
+        openRouter: {
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatFallbackReasoningEffort: "medium",
+          chatFallbackMaxTokens: 3_072,
+        },
+      },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         recentMessagesFromChannels,
@@ -3474,6 +3512,11 @@ describe("agent router", () => {
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
     // Forced final synthesis is deliberately tool-free so models cannot leak tool-call markup.
     expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[2][0]).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-terra",
+      reasoningEffort: "medium",
+      maxTokens: 3_072,
+    }));
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
@@ -4100,7 +4143,15 @@ describe("agent router", () => {
   it("synthesizes a final answer when the model returns empty content after tool evidence", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
-      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 10,
+        openRouter: {
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatFallbackReasoningEffort: "medium",
+          chatFallbackMaxTokens: 3_072,
+        },
+      },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         keywordSearch: vi.fn(async () => [agentSearchResult()]),
@@ -4144,6 +4195,11 @@ describe("agent router", () => {
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
     // Forced final synthesis is deliberately tool-free so models cannot leak tool-call markup.
     expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[2][0]).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-terra",
+      reasoningEffort: "medium",
+      maxTokens: 3_072,
+    }));
   });
 
   it("falls back to compact evidence bullets when forced final synthesis is empty", async () => {
@@ -4269,7 +4325,7 @@ describe("agent router", () => {
       "I can transcribe common audio and video attachments. Attach the media here or reply to the Discord message containing it, and I’ll transcribe it.",
     );
     expect(chat).toHaveBeenCalledTimes(2);
-    expect((chat.mock.calls[0]?.[0] as any).model).toBeUndefined();
+    expect((chat.mock.calls[0]?.[0] as any).model).toBe("slow/primary");
     expect((chat.mock.calls[1]?.[0] as any).model).toBe("fast/fallback");
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.capability_claim.corrected")).toBe(true);
@@ -4827,7 +4883,7 @@ describe("agent router", () => {
       "I can transcribe common audio and video attachments. Attach the media here or reply to the Discord message containing it, and I’ll transcribe it.",
     );
     expect(chat).toHaveBeenCalledTimes(3);
-    expect((chat.mock.calls[1]?.[0] as any).model).toBeUndefined();
+    expect((chat.mock.calls[1]?.[0] as any).model).toBe("slow/primary");
     expect((chat.mock.calls[2]?.[0] as any).model).toBe("fast/fallback");
     expect((chat.mock.calls[2]?.[0] as any).tools).toBeDefined();
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
@@ -5396,7 +5452,11 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        openRouter: { utilityModel: "utility/recovery" }
+        openRouter: {
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatFallbackReasoningEffort: "medium",
+          chatFallbackMaxTokens: 3_072,
+        }
       },
       repo: {
         auditTool
@@ -5430,7 +5490,11 @@ describe("agent router", () => {
 
     expect(response.content).toBe("Check your rank from the game's ranked mode screen.");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
-    expect((ctx.openRouter.chat as any).mock.calls[1][0].model).toBe("utility/recovery");
+    expect((ctx.openRouter.chat as any).mock.calls[1][0]).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-terra",
+      reasoningEffort: "medium",
+      maxTokens: 3_072,
+    }));
     expect((ctx.openRouter.chat as any).mock.calls[1][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_fetch" })]));
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
   });

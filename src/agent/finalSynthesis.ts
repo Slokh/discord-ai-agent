@@ -29,6 +29,7 @@ import {
 import { recordAgentEvent } from "./runtimeTranscript.js";
 import { runObservedModelCall } from "./modelCallTelemetry.js";
 import { correctKnownCapabilityClaim } from "./capabilityClaimGuard.js";
+import { primaryChatPolicy, recoveryChatPolicy } from "./modelPolicy.js";
 
 export function modelCallCeilingFallback(
   ctx: ToolContext,
@@ -64,6 +65,7 @@ export async function synthesizeFinalAnswerWithoutTools(
     modelCallBudget: ModelCallBudget;
     maxTokens?: number;
     model?: string;
+    recovery?: boolean;
   },
 ): Promise<AgentResponse> {
   const finalStartedAt = Date.now();
@@ -89,18 +91,28 @@ export async function synthesizeFinalAnswerWithoutTools(
   if (!(await reserveModelCall(ctx, input.modelCallBudget, "final_synthesis", { reason: input.reason }))) {
     return modelCallCeilingFallback(ctx, input);
   }
+  const selectedPolicy = input.recovery
+    ? recoveryChatPolicy(ctx)
+    : primaryChatPolicy(ctx);
+  const selectedModel = input.model ?? selectedPolicy.model;
+  const reasoningEffort =
+    input.model && input.model !== selectedPolicy.model
+      ? undefined
+      : selectedPolicy.reasoningEffort;
   // Deliberately tool-free: forced synthesis happens after the tool loop has
   // ended, and offering hosted tools here is what caused models (z-ai/glm) to
   // emit raw <tool_call> markup into the final user-visible answer.
   const response = await runObservedModelCall(ctx, {
     purpose: "final_synthesis",
-    metadata: { reason: input.reason },
+    metadata: { reason: input.reason, recovery: input.recovery ?? false },
     chat: {
       messages: finalSynthesisMessages(ctx, input.text, input.memoryEvents),
-      temperature: 0.2,
-      maxTokens: input.maxTokens ?? 4096,
+      temperature:
+        reasoningEffort && reasoningEffort !== "none" ? undefined : 0.2,
+      maxTokens: input.maxTokens ?? selectedPolicy.maxTokens,
       retryPolicy: "expensive",
-      model: input.model,
+      model: selectedModel,
+      reasoningEffort,
     },
   });
 
@@ -238,6 +250,7 @@ export async function finalizeModelRoundWithoutTools(
       requestLogger,
       startedAt,
       modelCallBudget,
+      recovery: true,
     });
   }
   if (!responseContent) {
@@ -289,11 +302,10 @@ export async function finalizeModelRoundWithoutTools(
       }
       const recovery = await runObservedModelCall(ctx, {
         purpose: "empty_response_recovery",
-        metadata: { round },
+        metadata: { round, recovery: true },
         chat: {
+          ...recoveryChatPolicy(ctx),
           messages: emptyNoToolRecoveryMessages(messages),
-          temperature: 0.2,
-          maxTokens: 1024,
           retryPolicy: "expensive",
         },
       });

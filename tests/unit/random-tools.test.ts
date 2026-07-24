@@ -626,6 +626,25 @@ describe("drawRandom", () => {
     expect(rngRepo.sessions.size).toBe(0);
   });
 
+  it("keeps a game-led decimal stake authoritative over model wager arguments", async () => {
+    const reserveWager = vi.fn();
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "blackjack, 0.25",
+      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "cards",
+      count: 3,
+      wager: { playerUserId: "user", stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack" }
+    });
+
+    expect(response).toContain("match the explicit amount");
+    expect(response).toContain("stakeUsd=0.25");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.sessions.size).toBe(0);
+  });
+
   it("returns duplicate request reservations as a recoverable tool result", async () => {
     const reserveWager = vi.fn(async () => {
       throw new Error("A wallet-backed wager already exists for this Discord request");
@@ -746,6 +765,8 @@ describe("drawRandom", () => {
     "bet 2 on a coin flip",
     "20 more spins at $5 each",
     "bet .05 blackjack",
+    "blackjack, 0.25",
+    "roulette red 0.40",
     "put $.10 on heads",
     "put the rest of my balance on roulette",
     "bet my entire bankroll on black",
@@ -760,6 +781,8 @@ describe("drawRandom", () => {
     "should I double down $0.25 on blackjack?",
     "would it be smart to let $0.25 ride on blackjack?",
     "explain whether running it back for $0.25 on blackjack is fair",
+    "blackjack is 21.0",
+    "roulette odds 35.0",
   ])("keeps replay-language wager discussion non-mutating: %s", (text) => {
     expect(requiresWalletBackedWager(text)).toBe(false);
   });

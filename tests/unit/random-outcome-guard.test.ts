@@ -22,6 +22,8 @@ describe("random outcome guard", () => {
     "put 0.25 on roulette and pick the most likely numbers",
     "put the rest of my balance on roulette",
     "bet $1 on black",
+    "blackjack, 0.25",
+    "roulette red 0.40",
     "roll two dice",
     "please spin the slots for me",
     "can you deal me a blackjack hand?",

@@ -12,6 +12,8 @@ const RESTRICTED_TOOL_MESSAGES: Partial<Record<ToolName, string>> = {
   setUserTurnLimit: "User turn limits are restricted to the bot owner or ops allowlist.",
   reconcileWalletTransfers: "Wallet reconciliation is restricted to the bot owner or ops allowlist.",
   adminTransferWalletFunds: "Wallet administration is restricted to the bot owner or ops allowlist.",
+  adminSetWalletStarterAmount: "Wallet administration is restricted to the bot owner or ops allowlist.",
+  getWalletFeeSummary: "Wallet fee history is restricted to the bot owner or ops allowlist.",
   generateImage: "Image generation is restricted to the bot owner or configured allowlist."
 };
 
@@ -31,7 +33,12 @@ export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): 
   if (toolName === "updateBotAvatar" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
   if (toolName === "createDiscordEmoji" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
   if (toolName === "setUserTurnLimit" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
-  if ((toolName === "reconcileWalletTransfers" || toolName === "adminTransferWalletFunds") && !isStrictlyAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) {
+  if ((
+    toolName === "reconcileWalletTransfers" ||
+    toolName === "adminTransferWalletFunds" ||
+    toolName === "adminSetWalletStarterAmount" ||
+    toolName === "getWalletFeeSummary"
+  ) && !isStrictlyAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) {
     return denied(toolName);
   }
   if (toolName === "generateImage") {

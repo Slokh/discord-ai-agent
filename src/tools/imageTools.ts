@@ -3,6 +3,11 @@ import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
+import {
+  imageTextCorrectionPrompt,
+  normalizeRequiredImageText,
+  validateGeneratedImageText,
+} from "./generatedImageTextValidation.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 
@@ -14,6 +19,7 @@ const VISION_IMAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
 
 export type GenerateImageInput = {
   prompt: string;
+  requiredText?: string[];
   referenceImageUrls?: string[];
   useContextImages?: boolean;
   outputFormat?: "png" | "jpeg" | "webp";
@@ -273,6 +279,7 @@ export async function generateImage(
 ): Promise<{ content: string; files: AgentFile[]; status?: "ok" | "error" }> {
   const normalizedInput = typeof input === "string" ? { prompt: input } : input;
   const prompt = normalizedInput.prompt.trim();
+  const requiredText = normalizeRequiredImageText(normalizedInput.requiredText);
   const references = await imageReferencesForInput(ctx, {
     explicitUrls: normalizedInput.referenceImageUrls,
     useContextImages: normalizedInput.useContextImages ?? true
@@ -281,12 +288,17 @@ export async function generateImage(
   const background = normalizedInput.background ?? (inferredTransparentBackground ? "transparent" : undefined);
   const outputFormat = normalizedInput.outputFormat ?? (background === "transparent" ? "png" : undefined);
   let image;
+  let generationAttempts = 1;
+  let textValidationFailed = false;
+  let totalEstimatedCostUsd = 0;
+  const imageOptions = {
+    inputReferences: references.map((reference): ImageReference => ({ type: "image_url", image_url: { url: reference.url } })),
+    ...(outputFormat ? { outputFormat } : {}),
+    ...(background ? { background } : {}),
+  };
   try {
-    image = await ctx.openRouter.generateImage(prompt, {
-      inputReferences: references.map((reference): ImageReference => ({ type: "image_url", image_url: { url: reference.url } })),
-      ...(outputFormat ? { outputFormat } : {}),
-      ...(background ? { background } : {}),
-    });
+    image = await ctx.openRouter.generateImage(prompt, imageOptions);
+    totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
   } catch (error) {
     const contentFilterBlocked = isOpenRouterContentFilterError(error);
     const requestRejected = isOpenRouterHttpError(error) && error.status === 400;
@@ -305,6 +317,57 @@ export async function generateImage(
       content: contentFilterBlocked
         ? "Image generation was blocked by the provider's safety filter, so no image was created. Explain that briefly and conversationally, then offer a safe adjustment to the request. Do not expose provider errors or claim that an image was attached."
         : "The image provider could not accept that image request, so no image was created. Explain that briefly and conversationally, then offer to retry with a simpler request. Do not expose provider errors or claim that an image was attached.",
+      files: [],
+      status: "error",
+    };
+  }
+
+  if (requiredText.length > 0) {
+    const firstValidation = await validateGeneratedImageText(ctx, {
+      data: image.data,
+      requiredText,
+      attempt: 1,
+    }).catch(() => ({ matches: false, observedText: [] }));
+    if (!firstValidation.matches) {
+      generationAttempts = 2;
+      try {
+        image = await ctx.openRouter.generateImage(
+          imageTextCorrectionPrompt(prompt, requiredText),
+          imageOptions,
+        );
+        totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
+        const secondValidation = await validateGeneratedImageText(ctx, {
+          data: image.data,
+          requiredText,
+          attempt: 2,
+        }).catch(() => ({ matches: false, observedText: [] }));
+        textValidationFailed = !secondValidation.matches;
+      } catch {
+        textValidationFailed = true;
+      }
+    }
+  }
+
+  if (textValidationFailed) {
+    await ctx.repo.auditTool({
+      guildId: ctx.guildId,
+      channelId: ctx.channelId,
+      userId: ctx.userId,
+      toolName: "generateImage",
+      argumentsSummary: summarizeForAudit({
+        prompt,
+        requiredTextCount: requiredText.length,
+        referenceImageCount: references.length,
+      }),
+      resultSummary: "required image text did not validate after one correction attempt",
+      error: "generated_image_text_mismatch",
+      model: image.model,
+      estimatedCostUsd: totalEstimatedCostUsd,
+    });
+    return {
+      content:
+        "The image provider misspelled required text twice, so I did not attach an incorrect image. " +
+        "Retry the same request and I’ll make another validated attempt.",
       files: [],
       status: "error",
     };
@@ -348,7 +411,13 @@ export async function generateImage(
     channelId: ctx.channelId,
     userId: ctx.userId,
     toolName: "generateImage",
-    argumentsSummary: summarizeForAudit({ prompt, referenceImageCount: references.length, outputFormat, background }),
+    argumentsSummary: summarizeForAudit({
+      prompt,
+      requiredTextCount: requiredText.length,
+      referenceImageCount: references.length,
+      outputFormat,
+      background,
+    }),
     resultSummary: summarizeForAudit({
       images: image.data.length,
       attachedImages: files.length,
@@ -356,10 +425,12 @@ export async function generateImage(
       outputFormat,
       background,
       automaticBackgroundRemovalCount,
-      rejectedOpaqueImages
+      rejectedOpaqueImages,
+      generationAttempts,
+      textValidated: requiredText.length > 0
     }),
     model: image.model,
-    estimatedCostUsd: image.estimatedCostUsd
+    estimatedCostUsd: totalEstimatedCostUsd || image.estimatedCostUsd
   });
 
   const promptSummary = truncateForDiscord(prompt, 240);

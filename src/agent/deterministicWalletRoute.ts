@@ -9,12 +9,12 @@ import {
   recordAgentEvent,
 } from "./runtimeTranscript.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
-import type { ForcedWalletBalanceRoute } from "./walletStatusGuard.js";
+import type { ForcedWalletReadRoute } from "./walletStatusGuard.js";
 
-export async function executeDeterministicWalletBalanceRoute(
+export async function executeDeterministicWalletReadRoute(
   ctx: ToolContext,
   input: {
-    route: ForcedWalletBalanceRoute;
+    route: ForcedWalletReadRoute;
     text: string;
     requestLogger: Logger;
     startedAt: number;
@@ -36,7 +36,7 @@ export async function executeDeterministicWalletBalanceRoute(
     metadata: {
       toolName: route.name,
       owner: input.route.owner,
-      reason: "wallet_balance_guard",
+      reason: input.route.toolName === "getWagerHistory" ? "wager_history_guard" : "wallet_balance_guard",
       skippedModelSelection: true,
     },
     audit: {
@@ -109,7 +109,9 @@ export async function executeDeterministicWalletBalanceRoute(
     },
   }];
   return await synthesizeFinalAnswerWithoutTools(ctx, {
-    reason: "verified wallet balance evidence",
+    reason: input.route.toolName === "getWagerHistory"
+      ? "canonical wager history evidence"
+      : "verified wallet balance evidence",
     text: input.text,
     messages: [],
     files: result.files ?? [],

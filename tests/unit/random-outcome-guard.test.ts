@@ -3,6 +3,7 @@ import {
   isSuccessfulRandomDrawResult,
   forcedRandomActionRouteForPrompt,
   ForcedRandomActionRouter,
+  randomActionAuthorizedForTurn,
   randomActionNeedsWalletBalance,
   randomToolForPrompt,
   RandomOutcomeGuard,
@@ -38,6 +39,37 @@ describe("random outcome guard", () => {
     "roulette is a bad bet",
   ])("leaves chance discussion conversational: %s", (text) => {
     expect(randomToolForPrompt(text)).toBeNull();
+  });
+
+  it("does not force a draw for a wager tied to another member's future outcome", () => {
+    expect(randomToolForPrompt(
+      "bet $0.25 that another member's three-digit number tomorrow is in range, remember it and settle after they roll"
+    )).toBeNull();
+  });
+
+  it("authorizes randomness only from scoped chance context", () => {
+    expect(randomActionAuthorizedForTurn({
+      userText: "please continue",
+      replyContextTexts: [
+        "Make a yearly activity chart.",
+        "Here is the chart.",
+      ],
+    })).toBe(false);
+    expect(randomActionAuthorizedForTurn({
+      userText: "roll two dice",
+    })).toBe(true);
+    expect(randomActionAuthorizedForTurn({
+      userText: "again",
+      replyContextTexts: ["roll two dice", "The verified total was seven."],
+    })).toBe(true);
+    expect(randomActionAuthorizedForTurn({
+      userText: "continue",
+      activeGameActionRequested: true,
+    })).toBe(true);
+    expect(randomActionAuthorizedForTurn({
+      userText: "do it",
+      promptContextText: "Spin the roulette wheel once.",
+    })).toBe(true);
   });
 
   it("requires a verified balance before an all-in random wager", () => {

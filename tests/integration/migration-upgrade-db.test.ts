@@ -65,6 +65,7 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         "020_discord_component_action_generations",
         "021_discord_component_action_expiry_index",
         "022_agent_runtime_binary_artifacts",
+        "023_wallet_guild_settings",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
@@ -73,6 +74,8 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
       await expect(client.query("SELECT count(*)::int AS count FROM discord_component_actions"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM agent_runtime_artifact_blobs"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM wallet_guild_settings"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);

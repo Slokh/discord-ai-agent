@@ -16,9 +16,10 @@ Owns the model loop for one user prompt.
 ## Module Map
 
 - `router.ts`: thin compatibility entrypoint; `handleAgentRequest` plus re-exports of `chatMessages`/`toolResultContentForPrompt`.
-- `modelLoop.ts`: model round loop, toolset scoping state, route selection, and direct tool completion.
+- `modelLoop.ts`: model round loop, toolset scoping state, route selection, and completion routing.
 - `toolRepeatGuard.ts`: canonical tool-call/result signatures and redundant-call audit responses.
-- `promptBuilder.ts`: system prompt, requester/skills/overlay/session/reply/image prompt sections, tool-result prompt truncation.
+- `terminalToolCompletion.ts`: direct terminal-tool responses and bounded tool-free synthesis after successful generated image artifacts.
+- `promptBuilder.ts`: system prompt, requester/skills/overlay/session/reply/image prompt sections, current-turn tone reset for simple updates and corrections, tool-result prompt truncation.
 - `toolDispatcher.ts`: local tool dispatch and tool-argument coercion.
 - `toolGate.ts`: restricted administrative-tool permission gate (owner/ops allowlists) and per-day budget checks applied before dispatch. Code-update starts and retries are open to every member but retain the per-user codegen limit.
 - `finalSynthesis.ts`: forced final synthesis, empty-response recovery, model-call-ceiling fallback, tool-evidence fallback rendering.
@@ -28,13 +29,16 @@ Owns the model loop for one user prompt.
 - `mediaTranscriptionRoute.ts`: recognizes explicit current-turn transcription requests with scoped attachments or a single public X/Twitter status video and forces `inspectDiscordFile` on the first model round.
 - `toolArguments.ts`: conservative JSON parsing plus schema-directed recovery for provider-double-encoded top-level object and array fields; normalized routes remain subject to canonical tool validation.
 - `randomOutcomeGuard.ts`: detects fresh chance outcomes that lack a successful `drawRandom` result, drives one in-turn retry, and provides the fail-closed response used by the model loop.
-- `modelTimeoutFallback.ts`: trims oldest conversational history for the one safe utility-model retry allowed before tools execute, and performs tool-free utility-model synthesis when the primary model times out after tools have already gathered evidence.
+- The model loop advertises `drawRandom` only when the immutable current request, retained reply chain, active game action, or loaded prompt context establishes chance intent. This keeps terse non-game follow-ups from consuming RNG while preserving `again`-style continuations of an earlier verified draw.
+- Deferred wagers whose result depends on another member or a future external event stay conversational and never force an immediate empty `drawRandom` call.
+- `modelTimeoutFallback.ts`: trims oldest conversational history for the one safe utility-model retry. The retry keeps the current scoped tools available even after earlier tools gathered evidence, so the utility model can finish an unresolved artifact or action instead of collapsing the turn to a text-only answer; the normal repeat guards and per-turn model-call ceiling keep that recovery bounded.
 - `freshExternalDataGuard.ts`: detects time-sensitive price, fare, schedule, availability, and similar answers that lack fresh web evidence, drives one retrieval retry, and fails closed instead of publishing invented live data.
+- `publicUrlEvidenceGuard.ts`: requires hosted fetch/search evidence when a user asks to inspect a public URL in the immutable current message or reply chain, including after a model timeout fallback, and fails closed instead of publishing an unsupported access disclaimer.
 - `richPresentationOutcomeGuard.ts`: fails closed when rich presentation composition was attempted but no validated presentation reached the turn-output collector, preventing text from claiming missing controls.
 - `capabilityClaimGuard.ts`: corrects narrow model-authored contradictions of deterministic deployed capabilities; currently it turns false media-transcription refusals with no attached input into an accurate attachment/reply request.
 - `walletStatusGuard.ts`: forces wallet balance prompts through the managed wallet balance tool without capturing bank, game, or unrelated balance requests.
 - `modelLoop.ts` runs requester-scoped automatic starter funding before model/tool selection; `walletActionGuard.ts` still forces explicit USD transfers and fallback restart prompts through guarded wallet tools without capturing wagers.
-- `deterministicWalletRoute.ts`: executes balance-guard routes directly against managed wallet tools without a model-selection hop, then gives the verified evidence to normal conversational synthesis while preserving tool transcripts and telemetry.
+- `deterministicWalletRoute.ts`: executes balance and settled-wager-history guard routes directly against managed wallet tools without a model-selection hop, then gives verified evidence to normal conversational synthesis while preserving tool transcripts and telemetry.
 - `routerShared.ts`: `AgentToolRoute`/`ModelCallBudget` types, round/call ceilings, `reserveModelCall`.
 - `runtimeTranscript.ts`: single event-recording helper for trace events, spans, audits, and runtime transcript appends.
 

@@ -4,7 +4,7 @@ export const walletUserToolContracts = [
   defineTool({
     name: "getWalletBalance",
     description:
-      "Read a current USD wallet balance. Use owner=requester for 'my/mine' and unqualified balance requests; use owner=bot for 'your/yours', the bot, or the bot treasury. Use owner=user with a resolved userId for another member; owner/ops can always do this, and every member can when WALLET_BALANCES_PUBLIC=true. Another member without a wallet is reported as $0 without creating one. ALWAYS call this instead of answering from memory whenever the user asks about a wallet, balance, bankroll, casino funds, or available money. Existing wallet balances are verified live onchain against USDC.e and presented simply as $ or USD.",
+      "ALWAYS call this for a current USD wallet balance, but only when the current request or its Discord reply context explicitly concerns money, a wallet, balance, bankroll, USD/USDC, or available funds. Pronouns such as 'my/mine' choose the owner only after that financial intent is established; never use this tool for unrelated personal facts such as sleep, bedtime, activity, or Discord stats. Use owner=requester for the requester's balance; owner=bot for the bot or treasury; owner=user with a resolved userId for another member. Owner/ops can always read another member, and every member can when WALLET_BALANCES_PUBLIC=true. Another member without a wallet is reported as $0 without creating one. Existing wallet balances are verified live onchain against USDC.e and presented simply as $ or USD.",
     userVisible: true,
     mutates: false,
     group: "external",

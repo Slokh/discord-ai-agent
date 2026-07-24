@@ -54,6 +54,8 @@ describe("toolRegistry", () => {
       "transferWalletFunds",
       "requestStarterFunds",
       "adminTransferWalletFunds",
+      "adminSetWalletStarterAmount",
+      "getWalletFeeSummary",
       "reconcileWalletTransfers",
       "getSpotifyPlaylistTracks",
       "getSpotifyAlbumTracks",
@@ -127,6 +129,7 @@ describe("toolRegistry", () => {
 
     expect(imageProperties).toHaveProperty("background");
     expect(imageProperties).toHaveProperty("outputFormat");
+    expect(imageProperties).toHaveProperty("requiredText");
     expect(emojiProperties).toHaveProperty("requireTransparent");
     expect(toolRegistry.find((entry) => entry.name === "generateImage")?.description)
       .toContain("Do not call it for diagnosis-only questions");
@@ -287,7 +290,7 @@ describe("toolRegistry", () => {
           type: "function",
           function: expect.objectContaining({
             name: "getDiscordStats",
-            description: expect.stringContaining("Tool class: stats."),
+            description: expect.stringContaining("observed message timing only"),
             parameters: expect.objectContaining({
               properties: expect.objectContaining({
                 groupBy: expect.objectContaining({ enum: expect.arrayContaining(["channel", "thread", "message", "month", "hourOfDay"]) }),

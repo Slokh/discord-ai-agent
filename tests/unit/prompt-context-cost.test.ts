@@ -71,6 +71,8 @@ describe("prompt context cost controls", () => {
     expect(systemPrompt).toContain("Tools alone never justify extra length");
     expect(currentRequestReminder).toContain("default to one short paragraph");
     expect(currentRequestReminder).toContain("use multiple paragraphs only for a genuinely multi-part, detailed, or evidence-heavy request");
+    expect(currentRequestReminder).toContain("Simple personal updates, availability statements, corrections, and boundaries establish the new conversational state");
+    expect(currentRequestReminder).toContain("Direct or blunt means clear, never hostile, contemptuous, or dismissive");
   });
 
   it("teaches the model exact live server emoji mentions without changing the static prompt", () => {

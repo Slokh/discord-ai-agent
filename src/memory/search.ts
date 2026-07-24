@@ -22,6 +22,7 @@ export type HistorySearchInput = {
   channelIds?: string[];
   dateFrom?: Date;
   dateTo?: Date;
+  hourOfDayUtc?: number;
 };
 
 export type HistorySearchOutcome = {
@@ -113,7 +114,8 @@ export async function searchDiscordHistory(input: {
       authorIds,
       aboutUserTerms,
       dateFrom: input.search.dateFrom,
-      dateTo: input.search.dateTo
+      dateTo: input.search.dateTo,
+      hourOfDayUtc: input.search.hourOfDayUtc
     });
     return { results: recent, semanticDegraded: false };
   }
@@ -128,7 +130,8 @@ export async function searchDiscordHistory(input: {
     authorIds,
     aboutUserTerms,
     dateFrom: input.search.dateFrom,
-    dateTo: input.search.dateTo
+    dateTo: input.search.dateTo,
+    hourOfDayUtc: input.search.hourOfDayUtc
   }), { queryChars: normalizedQuery.length, candidateLimit });
 
   const semanticPromise = input.config.openRouter.apiKey
@@ -149,7 +152,8 @@ export async function searchDiscordHistory(input: {
         authorIds,
         aboutUserTerms,
         dateFrom: input.search.dateFrom,
-        dateTo: input.search.dateTo
+        dateTo: input.search.dateTo,
+        hourOfDayUtc: input.search.hourOfDayUtc
       }), { cachedEmbedding: embedded.cached, candidateLimit });
     };
     const semanticStartedAt = Date.now();

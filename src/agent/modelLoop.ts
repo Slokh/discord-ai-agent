@@ -1,4 +1,3 @@
-import type { Logger } from "pino";
 import { isOpenRouterTimeoutError, type ChatMessage } from "../models/openrouter.js";
 import {
   toolByName,
@@ -7,7 +6,6 @@ import {
 } from "../tools/registry.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type {
-  AgentFile,
   AgentResponse,
   ToolContext,
 } from "../tools/types.js";
@@ -44,7 +42,7 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { coerceGeneratedCsvProducerRoutes, selectExclusiveWagerTransition, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
-import { ForcedRandomActionRouter, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
+import { ForcedRandomActionRouter, randomActionAuthorizedForTurn, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
@@ -55,19 +53,22 @@ import {
   handleAdditionalToolsRequest,
   initialToolsetState,
 } from "./modelToolset.js";
-import { walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
+import { wagerHistoryRouteForPrompt, walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
 import { walletActionToolForPrompt } from "./walletActionGuard.js";
-import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
+import { executeDeterministicWalletReadRoute } from "./deterministicWalletRoute.js";
 import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
-import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout } from "./modelTimeoutFallback.js";
+import { compactMessagesForModelFallback, timeoutNeedsExpandedToolRetry } from "./modelTimeoutFallback.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
 import { mediaTranscriptionToolForPrompt } from "./mediaTranscriptionRoute.js";
-export async function runAgentModelLoop(
-  ctx: ToolContext,
-  userText: string,
-): Promise<AgentResponse> {
+import { PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE, PublicUrlEvidenceGuard } from "./publicUrlEvidenceGuard.js";
+import {
+  completeDirectToolResponse,
+  isSuccessfulGeneratedImageArtifact,
+  synthesizeGeneratedImageArtifactIfReady,
+} from "./terminalToolCompletion.js";
+export async function runAgentModelLoop(ctx: ToolContext, userText: string): Promise<AgentResponse> {
   ctx.requestText = userText;
   const automaticStarterFunds = await ensureAutomaticStarterFunds(ctx);
   const activeGame = await loadActiveGameSession(ctx, userText);
@@ -75,8 +76,21 @@ export async function runAgentModelLoop(
   const richPresentationOutcomeGuard = new RichPresentationOutcomeGuard(ctx);
   if (activeGame?.actionRequested) randomOutcomeGuard.noteActiveWager(activeGame.wager.id);
   const freshExternalDataGuard = new FreshExternalDataGuard(ctx, userText);
-  const response = await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard, richPresentationOutcomeGuard, activeGame, automaticStarterFunds);
-  return await richPresentationOutcomeGuard.enforce(await randomOutcomeGuard.enforce(await freshExternalDataGuard.enforce(response)));
+  const publicUrlEvidenceGuard = new PublicUrlEvidenceGuard(ctx, userText);
+  const response = await runAgentModelLoopInternal(
+    ctx,
+    userText,
+    randomOutcomeGuard,
+    freshExternalDataGuard,
+    publicUrlEvidenceGuard,
+    richPresentationOutcomeGuard,
+    activeGame,
+    automaticStarterFunds,
+  );
+  const urlGroundedResponse = await publicUrlEvidenceGuard.enforce(response);
+  const freshResponse = await freshExternalDataGuard.enforce(urlGroundedResponse);
+  const randomSafeResponse = await randomOutcomeGuard.enforce(freshResponse);
+  return await richPresentationOutcomeGuard.enforce(randomSafeResponse);
 }
 
 async function runAgentModelLoopInternal(
@@ -84,6 +98,7 @@ async function runAgentModelLoopInternal(
   userText: string,
   randomOutcomeGuard: RandomOutcomeGuard,
   freshExternalDataGuard: FreshExternalDataGuard,
+  publicUrlEvidenceGuard: PublicUrlEvidenceGuard,
   richPresentationOutcomeGuard: RichPresentationOutcomeGuard,
   activeGame: ActiveGameSessionContext | null,
   automaticStarterFunds: string | null,
@@ -135,7 +150,7 @@ async function runAgentModelLoopInternal(
   };
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
   const wagerResolutionRouter = new WagerResolutionRouter();
-  const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
+  const forcedWalletReadRoute = wagerHistoryRouteForPrompt(ctx.config, text, ctx.replyContext) ?? walletBalanceRouteForPrompt(ctx.config, text);
   const requestedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
   const forcedWalletActionTool = automaticStarterFunds && requestedWalletActionTool === "requestStarterFunds"
     ? null
@@ -153,9 +168,11 @@ async function runAgentModelLoopInternal(
     channelId: ctx.channelId,
     userId: ctx.userId,
   });
-  let toolsetState = initialToolsetState(ctx, text);
+  const randomActionAuthorized = randomActionAuthorizedForTurn({ userText: text, replyContext: ctx.replyContext, promptContextTexts: [serverOverlay?.enabled ? serverOverlay.systemPrompt : "", promptOverlay], activeGameActionRequested: activeGame?.actionRequested });
+  let toolsetState = initialToolsetState(ctx, text, randomActionAuthorized);
   let hasAttemptedTool = false;
   let modelTimeoutFallbackAttempted = false;
+  let successfulGeneratedImageArtifact = false;
 
   requestLogger.info(
     {
@@ -195,9 +212,9 @@ async function runAgentModelLoopInternal(
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0,
     },
   });
-  if (forcedWalletBalanceRoute) {
-    return await executeDeterministicWalletBalanceRoute(ctx, {
-      route: forcedWalletBalanceRoute,
+  if (forcedWalletReadRoute) {
+    return await executeDeterministicWalletReadRoute(ctx, {
+      route: forcedWalletReadRoute,
       text,
       requestLogger,
       startedAt,
@@ -260,10 +277,7 @@ async function runAgentModelLoopInternal(
       forceToolUseNextRound = false;
       const chat = {
           messages,
-          tools: toolDefinitionsForModel({
-            localTools: currentToolset.localTools,
-            serverTools: currentToolset.serverTools,
-          }),
+          tools: toolDefinitionsForModel(publicUrlEvidenceGuard.toolsetForRound(currentToolset)),
           toolChoice,
           temperature: 0.2,
           maxTokens: 4096,
@@ -276,16 +290,10 @@ async function runAgentModelLoopInternal(
           chat,
         });
       } catch (error) {
-        const recovered = hasAttemptedTool && !modelTimeoutFallbackAttempted
-          ? await synthesizeToolEvidenceAfterTimeout(ctx, {
-              error, round: round + 1, roundStartedAt, text, messages, files, memoryEvents, requestLogger, startedAt, modelCallBudget,
-            })
-          : null;
-        if (recovered) return recovered;
+        const retryExpandedToolSelection = timeoutNeedsExpandedToolRetry(messages);
         const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
         const canFallback =
           isOpenRouterTimeoutError(error) &&
-          !hasAttemptedTool &&
           !modelTimeoutFallbackAttempted &&
           Boolean(fallbackModel) &&
           fallbackModel !== ctx.config.openRouter?.chatModel;
@@ -299,7 +307,14 @@ async function runAgentModelLoopInternal(
           eventName: "agent.model.timeout_fallback",
           level: "warn",
           summary: `Retrying timed-out model call with ${fallbackModel}`,
-          metadata: { round: round + 1, fallbackModel, originalMessageCount: messages.length, fallbackMessageCount: fallbackMessages.length },
+          metadata: {
+            round: round + 1,
+            fallbackModel,
+            originalMessageCount: messages.length,
+            fallbackMessageCount: fallbackMessages.length,
+            afterToolEvidence: hasAttemptedTool,
+            afterToolsetExpansion: retryExpandedToolSelection,
+          },
         });
         response = await runObservedModelCall(ctx, {
           purpose: "tool_selection_timeout_fallback",
@@ -308,6 +323,8 @@ async function runAgentModelLoopInternal(
             fallbackFor: "tool_selection",
             toolGroups: [...toolsetState.groups].sort(),
             forcedToolName: wagerResolutionRoute.forcedToolName,
+            afterToolEvidence: hasAttemptedTool,
+            afterToolsetExpansion: retryExpandedToolSelection,
           },
           chat: { ...chat, model: fallbackModel, messages: fallbackMessages },
         });
@@ -330,6 +347,7 @@ async function runAgentModelLoopInternal(
     }
     const modelRoutes = selectExclusiveWagerTransition(coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls, currentToolset.localTools)));
     freshExternalDataGuard.noteModelResponse(response);
+    publicUrlEvidenceGuard.noteModelResponse(response);
     const toolObservation = modelToolObservation(response);
     const requestedToolRequests = response.toolCalls.map(
       traceToolRequestMetadata,
@@ -438,6 +456,23 @@ async function runAgentModelLoopInternal(
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
         });
       }
+      const publicUrlEvidenceDecision = await publicUrlEvidenceGuard.inspectDraft(response.content);
+      if (publicUrlEvidenceDecision !== "allow") {
+        if (publicUrlEvidenceDecision === "retry") {
+          forceToolUseNextRound = true;
+          messages.push({ role: "assistant", content: response.content });
+          messages.push({
+            role: "system",
+            content: PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE,
+          });
+          continue;
+        }
+        return publicUrlEvidenceGuard.blockedResponse({
+          files: files.length > 0 ? files : undefined,
+          tables: tables.length > 0 ? tables : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
+        });
+      }
       return await finalizeModelRoundWithoutTools(ctx, {
         round: round + 1,
         roundStartedAt,
@@ -527,6 +562,7 @@ async function runAgentModelLoopInternal(
       forcedRandomAction.noteToolResult(route.name, result.status);
       richPresentationOutcomeGuard.noteToolResult(route.name);
       randomOutcomeGuard.noteToolResult(route.name, result.content);
+      publicUrlEvidenceGuard.noteLocalToolResult(route.name, result.status);
       wagerResolutionRouter.arm(randomOutcomeGuard.requiresWagerResolution(), randomOutcomeGuard.requiredWagerResolutionTool());
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
@@ -605,6 +641,7 @@ async function runAgentModelLoopInternal(
       }
       if (result.files?.length) files.push(...result.files);
       if (result.tables?.length) tables.push(...result.tables);
+      successfulGeneratedImageArtifact ||= isSuccessfulGeneratedImageArtifact(route.name, result);
       if (!isRedundantToolCall) {
         memoryEvents.push({
           role: "tool",
@@ -653,6 +690,11 @@ async function runAgentModelLoopInternal(
       }
     }
     messages.push({ role: "system", content: CURRENT_REQUEST_RESPONSE_REMINDER });
+    const generatedImageCompletion = await synthesizeGeneratedImageArtifactIfReady(ctx, {
+      ready: successfulGeneratedImageArtifact, text, messages, files, memoryEvents,
+      requestLogger, startedAt, modelCallBudget,
+    });
+    if (generatedImageCompletion) return generatedImageCompletion;
     if (redundantToolReason) {
       return await synthesizeFinalAnswerWithoutTools(ctx, {
         reason: redundantToolReason,
@@ -753,47 +795,4 @@ async function executeIndependentToolRoutesInParallel(
     results.set(route.id, { result, startedAt });
   }));
   return results;
-}
-
-async function completeDirectToolResponse(
-  ctx: ToolContext,
-  input: {
-    routeName: ToolName;
-    result: AgentResponse;
-    files: AgentFile[];
-    memoryEvents?: NonNullable<AgentResponse["memoryEvents"]>;
-    requestLogger: Logger;
-    startedAt: number;
-    completionKind: string;
-  },
-): Promise<AgentResponse> {
-  const content = cleanResponse(input.result.content, ctx.config.maxReplyChars);
-  const memoryEvents = input.memoryEvents ?? [];
-  input.requestLogger.info(
-    {
-      durationMs: durationMs(input.startedAt),
-      finalChars: content.length,
-      fileCount: input.files.length,
-      memoryEventCount: memoryEvents.length,
-    },
-    `Agent request complete after ${input.completionKind}`,
-  );
-  await recordAgentEvent(ctx, {
-    eventName: "agent.request.complete",
-    summary: `Completed with ${input.completionKind}`,
-    metadata: {
-      toolName: input.routeName,
-      finalChars: content.length,
-      fileCount: input.files.length,
-      memoryEventCount: memoryEvents.length,
-      responseRedacted: Boolean(input.result.storedContent),
-    },
-    durationMs: durationMs(input.startedAt),
-  });
-  return {
-    content,
-    storedContent: input.result.storedContent,
-    files: input.files.length > 0 ? input.files : undefined,
-    memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
-  };
 }

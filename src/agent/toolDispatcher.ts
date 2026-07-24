@@ -13,7 +13,8 @@ export { stringArgument, stringArrayArgument } from "./toolHandlers/arguments.js
 const discordActionToolNames = new Set<ToolName>(["composeDiscordResponse", "addDiscordReaction", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji"]);
 const walletToolNames = new Set<ToolName>([
   "awaitRandomWagerAction", "getWalletBalance", "listWalletBalances", "getWagerHistory", "transferWalletFunds",
-  "requestStarterFunds", "adminTransferWalletFunds", "reconcileWalletTransfers",
+  "requestStarterFunds", "adminTransferWalletFunds", "adminSetWalletStarterAmount", "getWalletFeeSummary",
+  "reconcileWalletTransfers",
 ]);
 export const delegatedToolNames: readonly ToolName[] = Object.freeze(["requestAdditionalTools", ...discordActionToolNames, ...walletToolNames]);
 const localToolHandlers = bindToolHandlers(toolRegistry, handlerDefinitions, delegatedToolNames);
@@ -33,7 +34,7 @@ export async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRo
     const response = await executeDiscordActionToolRoute(ctx, route, originalText);
     if (response) return response;
   } else if (walletToolNames.has(route.name)) {
-    const response = await executeWalletToolRoute(ctx, route);
+    const response = await executeWalletToolRoute(ctx, route, originalText);
     if (response) return response;
   }
   return { content: `Tool ${route.name} is registered but has no local execution handler.`, status: "error", errorCode: "missing_tool_handler" };

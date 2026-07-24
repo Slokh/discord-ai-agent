@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   transfer: vi.fn(),
   starterFunds: vi.fn(),
   adminTransfer: vi.fn(),
+  adminStarterAmount: vi.fn(),
+  feeSummary: vi.fn(),
   reconcileWallets: vi.fn()
 }));
 
@@ -18,6 +20,8 @@ vi.mock("../../src/tools/walletTools.js", () => ({
   transferWalletFunds: mocks.transfer,
   requestStarterFunds: mocks.starterFunds,
   adminTransferWalletFunds: mocks.adminTransfer,
+  adminSetWalletStarterAmount: mocks.adminStarterAmount,
+  getWalletFeeSummary: mocks.feeSummary,
   reconcileWalletTransfers: mocks.reconcileWallets
 }));
 
@@ -33,12 +37,18 @@ describe("executeWalletToolRoute", () => {
     mocks.transfer.mockResolvedValue(" transferred ");
     mocks.starterFunds.mockResolvedValue(" starter funded ");
     mocks.adminTransfer.mockResolvedValue(" admin transferred ");
+    mocks.adminStarterAmount.mockResolvedValue(" starter amount changed ");
+    mocks.feeSummary.mockResolvedValue(" fee summary ");
     mocks.reconcileWallets.mockResolvedValue(" wallets reconciled ");
   });
 
   it("routes requester-bound balance and transfer arguments", async () => {
     const ctx = context();
-    await expect(executeWalletToolRoute(ctx, route("getWalletBalance", { owner: "user", userId: "friend" })))
+    await expect(executeWalletToolRoute(
+      ctx,
+      route("getWalletBalance", { owner: "user", userId: "friend" }),
+      "show that member's wallet balance",
+    ))
       .resolves.toEqual({ content: "wallet" });
     expect(mocks.walletBalance).toHaveBeenCalledWith(ctx, { owner: "user", userId: "friend" });
 
@@ -50,11 +60,72 @@ describe("executeWalletToolRoute", () => {
     });
   });
 
+  it("rejects wallet reads without explicit current or replied financial intent", async () => {
+    const ctx = context();
+
+    await expect(executeWalletToolRoute(
+      ctx,
+      route("getWalletBalance", { owner: "requester" }),
+      "my bedtime. seven hour average.",
+    )).resolves.toMatchObject({
+      status: "error",
+      errorCode: "wallet_balance_intent_required",
+    });
+
+    expect(mocks.walletBalance).not.toHaveBeenCalled();
+  });
+
+  it("allows a scoped wallet follow-up when the replied message establishes financial intent", async () => {
+    const ctx = context();
+    ctx.replyContext = {
+      messageId: "wallet-reply",
+      rootMessageId: "wallet-reply",
+      channelId: "channel",
+      guildId: "guild",
+      authorId: "user",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "what is my wallet balance?",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+      chain: [],
+    };
+
+    await expect(executeWalletToolRoute(
+      ctx,
+      route("getWalletBalance", { owner: "requester" }),
+      "how much?",
+    )).resolves.toEqual({ content: "wallet" });
+
+    expect(mocks.walletBalance).toHaveBeenCalledWith(ctx, {
+      owner: "requester",
+      userId: undefined,
+    });
+  });
+
   it("routes operator reconciliation and ignores unrelated tools", async () => {
     const ctx = context();
     await expect(executeWalletToolRoute(ctx, route("reconcileWalletTransfers", {})))
       .resolves.toEqual({ content: "wallets reconciled" });
     await expect(executeWalletToolRoute(ctx, route("reportStatus", {}))).resolves.toBeNull();
+  });
+
+  it("routes durable starter configuration and receipt-backed fee summaries", async () => {
+    const ctx = context();
+    await expect(executeWalletToolRoute(ctx, route("adminSetWalletStarterAmount", {
+      amountUsd: "0.1", rebalanceExisting: true, reason: "reset"
+    }))).resolves.toEqual({ content: "starter amount changed" });
+    expect(mocks.adminStarterAmount).toHaveBeenCalledWith(ctx, {
+      amountUsd: 0.1,
+      rebalanceExisting: true,
+      reason: "reset"
+    });
+
+    await expect(executeWalletToolRoute(ctx, route("getWalletFeeSummary", {})))
+      .resolves.toEqual({ content: "fee summary" });
+    expect(mocks.feeSummary).toHaveBeenCalledWith(ctx);
   });
 
   it("routes requester starter funding without model-supplied wallet arguments", async () => {

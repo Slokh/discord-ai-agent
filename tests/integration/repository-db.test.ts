@@ -1986,6 +1986,60 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ).resolves.toEqual([]);
   }, 10_000);
 
+  it("filters keyword, vector, and broad recent history to one UTC hour bucket", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const matchingMessageId = `message-${randomUUID()}`;
+    const otherMessageId = `message-${randomUUID()}`;
+    const embedding = Array.from({ length: 1536 }, () => 0.001);
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.upsertMessage({
+      id: matchingMessageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "bedtime routine at the matching hour",
+      normalizedContent: "bedtime routine at the matching hour",
+      createdAt: new Date("2026-07-01T09:15:00.000Z")
+    });
+    await repo.upsertMessage({
+      id: otherMessageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "bedtime routine at another hour",
+      normalizedContent: "bedtime routine at another hour",
+      createdAt: new Date("2026-07-01T10:15:00.000Z")
+    });
+    await repo.storeMessageEmbedding({ messageId: matchingMessageId, embedding, model: "test" });
+    await repo.storeMessageEmbedding({ messageId: otherMessageId, embedding, model: "test" });
+
+    const commonFilters = {
+      guildId,
+      visibleChannelIds: [channelId],
+      hourOfDayUtc: 9,
+      limit: 10
+    };
+    await expect(repo.keywordSearch({
+      ...commonFilters,
+      query: "bedtime"
+    })).resolves.toEqual([
+      expect.objectContaining({ messageId: matchingMessageId })
+    ]);
+    await expect(repo.vectorSearch({
+      ...commonFilters,
+      embedding
+    })).resolves.toEqual([
+      expect.objectContaining({ messageId: matchingMessageId })
+    ]);
+    await expect(repo.recentMessagesFromChannels(commonFilters)).resolves.toEqual([
+      expect.objectContaining({ messageId: matchingMessageId })
+    ]);
+  }, 10_000);
+
   it("does not return keyword or vector results when a parent channel is excluded", async () => {
     const guildId = `guild-${randomUUID()}`;
     const parentId = `parent-${randomUUID()}`;

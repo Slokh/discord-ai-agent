@@ -11,6 +11,7 @@ export const imageToolHandlers = {
     const prompt = stringArgument(route.arguments, "prompt") ?? originalText;
     const image = await generateImage(ctx, {
           prompt,
+          requiredText: stringArrayArgument(route.arguments, "requiredText"),
           referenceImageUrls: stringArrayArgument(
             route.arguments,
             "referenceImageUrls",

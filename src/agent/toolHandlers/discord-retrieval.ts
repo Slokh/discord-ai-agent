@@ -239,6 +239,7 @@ export const discordRetrievalToolHandlers = {
               ),
               dateFrom: stringArgument(route.arguments, "dateFrom"),
               dateTo: stringArgument(route.arguments, "dateTo"),
+              hourOfDayUtc: numberArgument(route.arguments, "hourOfDayUtc"),
               limit: numberArgument(route.arguments, "limit"),
               requestText: originalText,
             },

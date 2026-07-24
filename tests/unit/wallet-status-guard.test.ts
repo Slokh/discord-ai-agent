@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldForceWalletBalance, walletBalanceOwnerForPrompt, walletBalanceRouteForPrompt } from "../../src/agent/walletStatusGuard.js";
+import { shouldForceWalletBalance, wagerHistoryRouteForPrompt, walletBalanceOwnerForPrompt, walletBalanceRouteForPrompt } from "../../src/agent/walletStatusGuard.js";
 import { loadConfig } from "../../src/config/env.js";
 
 function configuredWallets() {
@@ -66,5 +66,74 @@ describe("wallet balance guard", () => {
       owner: null,
     });
     expect(walletBalanceOwnerForPrompt(configuredWallets(), text)).toBeNull();
+  });
+
+  it.each([
+    "why did I win my most recent wager?",
+    "show my recent bets",
+    "how much did I lose on the last coin flip?",
+    "what were my blackjack results?",
+  ])("routes requester questions about settled wagers to canonical history: %s", (text) => {
+    expect(wagerHistoryRouteForPrompt(configuredWallets(), text)).toEqual({
+      toolName: "getWagerHistory",
+      owner: null,
+    });
+  });
+
+  it("routes a terse requester correction through canonical history when the reply chain is about a prior wager", () => {
+    expect(wagerHistoryRouteForPrompt(configuredWallets(), "that's not my turn", {
+      messageId: "parent",
+      channelId: "casino",
+      guildId: "guild",
+      authorId: "bot",
+      authorDisplayName: "AI",
+      authorIsBot: true,
+      content: "Your latest wager ledger entry was a settled loss.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-23T17:01:00.000Z",
+      url: "https://discord.com/channels/guild/casino/parent",
+      rootMessageId: "root",
+      chain: [
+        {
+          messageId: "root",
+          channelId: "casino",
+          guildId: "guild",
+          authorId: "requester",
+          authorDisplayName: "Requester",
+          authorIsBot: false,
+          content: "Show my latest wager.",
+          attachmentSummaries: [],
+          attachments: [],
+          createdAt: "2026-07-23T17:00:00.000Z",
+          url: "https://discord.com/channels/guild/casino/root",
+        },
+        {
+          messageId: "parent",
+          channelId: "casino",
+          guildId: "guild",
+          authorId: "bot",
+          authorDisplayName: "AI",
+          authorIsBot: true,
+          content: "Your latest wager ledger entry was a settled loss.",
+          attachmentSummaries: [],
+          attachments: [],
+          createdAt: "2026-07-23T17:01:00.000Z",
+          url: "https://discord.com/channels/guild/casino/parent",
+        },
+      ],
+    })).toEqual({
+      toolName: "getWagerHistory",
+      owner: null,
+    });
+  });
+
+  it.each([
+    "if I win this wager, what is the payout?",
+    "bet $5 on heads",
+    "why do people win at poker?",
+    "show a fictional wager history",
+  ])("does not capture current, hypothetical, or unrelated wager discussion: %s", (text) => {
+    expect(wagerHistoryRouteForPrompt(configuredWallets(), text)).toBeNull();
   });
 });

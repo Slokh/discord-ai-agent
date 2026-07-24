@@ -5,7 +5,7 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 ## Responsibilities
 
 - Bot login, guild scoping, message/reaction/edit/delete events, and mention detection. `taskSupervisor.ts` provides one admission/error/drain lifecycle for every asynchronous gateway and startup task so deploys cannot accept untracked reaction or maintenance work.
-- Reply context, request attachments, image metadata, permissions, and channel visibility.
+- Reply context, bounded reaction summaries, request attachments, image metadata, permissions, and channel visibility. Retained reply ancestors carry exact visible emoji/count metadata without reactor identities so emote questions can select the matching permission-filtered culture profiles.
 - Response sink for acknowledgements, lazy status messages, final replies, attachments, and cleanup.
 - Components V2 validation and side-effect-free rendering, capability-aware V2 delivery, opaque durable action generations, and requester-scoped typed click/modal ingress live under `components/`; see [`../../docs/discord-rich-components.md`](../../docs/discord-rich-components.md).
 - `api.ts` is the typed outbound Discord mutation boundary for replies, edits, sends, reactions, guild expressions, bot profile changes, and one-shot interaction responses. Interaction callbacks disable retries but still return classified/logged failures.

@@ -3,7 +3,7 @@ import type { Logger } from "pino";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, DiscordReplyContextMessage } from "../tools/types.js";
 import { previewText } from "../util/logger.js";
-import { persistDiscordMessage } from "./messagePersistence.js";
+import { persistDiscordMessage, reactionSummariesFromMessage } from "./messagePersistence.js";
 import { recordTraceEvent } from "./requestContext.js";
 
 export const REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT = 24;
@@ -103,7 +103,8 @@ export async function resolveDiscordReplyContext(input: {
       referencedChannelId: context.channelId,
       referencedAuthorId: context.authorId,
       referencedContentPreview: previewText(context.content),
-      attachmentCount: context.attachmentSummaries.length
+      attachmentCount: context.attachmentSummaries.length,
+      reactionKindCount: chain.reduce((count, message) => count + (message.reactionSummaries?.length ?? 0), 0)
     },
     "Resolved Discord reply chain context"
   );
@@ -116,7 +117,8 @@ export async function resolveDiscordReplyContext(input: {
       replyChainLength: chain.length,
       referencedChannelId: context.channelId,
       referencedAuthorId: context.authorId,
-      attachmentCount: context.attachmentSummaries.length
+      attachmentCount: context.attachmentSummaries.length,
+      reactionKindCount: chain.reduce((count, message) => count + (message.reactionSummaries?.length ?? 0), 0)
     }
   });
   return context;
@@ -134,10 +136,26 @@ function discordReplyContextMessageFromMessage(message: Message | UsableMessageS
     content: message.content ?? "",
     attachmentSummaries: attachments.map(discordAttachmentSummary),
     attachments,
+    reactionSummaries: discordReplyReactionSummaries(message),
     createdAt: message.createdAt?.toISOString?.() ?? null,
     url: message.url ?? null,
     forwarded: forwarded || undefined
   };
+}
+
+function discordReplyReactionSummaries(message: Message | UsableMessageSnapshot): string[] {
+  return reactionSummariesFromMessage(message as Pick<Message, "reactions">)
+    .filter((reaction) => Number.isFinite(reaction.count) && reaction.count > 0)
+    .slice(0, 20)
+    .flatMap((reaction) => {
+      const emojiId = String(reaction.emojiId ?? "");
+      const emojiName = String(reaction.emojiName ?? "").trim();
+      if (/^\d+$/.test(emojiId) && /^[A-Za-z0-9_]+$/.test(emojiName)) {
+        const mention = `<${reaction.animated ? "a" : ""}:${emojiName}:${emojiId}>`;
+        return [`${mention} ×${reaction.count}`];
+      }
+      return emojiName ? [`${emojiName} ×${reaction.count}`] : [];
+    });
 }
 
 export function discordForwardedMessageSnapshot(message: Pick<Message, "messageSnapshots">): UsableMessageSnapshot | null {

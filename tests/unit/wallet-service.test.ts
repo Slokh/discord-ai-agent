@@ -560,6 +560,105 @@ describe("WalletService", () => {
       .resolves.toMatchObject({ granted: false, balance: { formatted: "1.25" } });
     expect(createManagedTransfer).not.toHaveBeenCalled();
   });
+
+  it("persists a guild starter target and rebalances existing live wallets to it", async () => {
+    const bot = wallet({ id: "wallet-bot" });
+    const alice = wallet({
+      id: "wallet-alice",
+      guildId: "guild-a",
+      ownerKind: "user",
+      discordUserId: "alice",
+      providerWalletId: "privy-alice",
+      address: `0x${"7".repeat(40)}`
+    });
+    const bob = wallet({
+      id: "wallet-bob",
+      guildId: "guild-a",
+      ownerKind: "user",
+      discordUserId: "bob",
+      providerWalletId: "privy-bob",
+      address: `0x${"8".repeat(40)}`
+    });
+    const confirmed = transferRecord({
+      id: "transfer-rebalance",
+      sourceWalletId: alice.id,
+      destinationWalletId: bot.id,
+      amountAtomic: 400_000n,
+      purpose: "admin_transfer",
+      status: "confirmed"
+    });
+    const setWalletGuildStarterTargetUsd = vi.fn(async () => 0.1);
+    const createManagedTransfer = vi.fn(async () => confirmed);
+    const repo = {
+      setWalletGuildStarterTargetUsd,
+      listUserWallets: vi.fn(async () => [alice, bob]),
+      ensureWalletPlaceholder: vi.fn(async () => bot),
+      createManagedTransfer,
+      getTransfer: vi.fn(async () => confirmed)
+    } as unknown as PaymentRepository;
+    const provider = providerFake();
+    provider.getBalance = vi.fn(async ({ wallet: target }) => {
+      if (target.providerWalletId === alice.providerWalletId) return 500_000n;
+      if (target.providerWalletId === bob.providerWalletId) return 100_000n;
+      return 9_000_000n;
+    });
+    const service = new WalletService(loadConfig().payments, repo, provider);
+
+    const result = await service.setStarterTargetAndRebalance({
+      guildId: "guild-a",
+      requestedByUserId: "admin",
+      requestId: "request-rebalance",
+      targetUsd: 0.1,
+      rebalanceExisting: true,
+      reason: "economy reset"
+    });
+
+    expect(result).toMatchObject({
+      targetUsd: 0.1,
+      inspected: 2,
+      transferred: 1,
+      unchanged: 1,
+      failed: 0,
+      totalToTreasuryUsd: "0.4",
+      totalFromTreasuryUsd: "0"
+    });
+    expect(setWalletGuildStarterTargetUsd).toHaveBeenCalledWith({
+      guildId: "guild-a",
+      starterTargetUsd: 0.1,
+      updatedByUserId: "admin",
+      reason: "economy reset"
+    });
+    expect(createManagedTransfer).toHaveBeenCalledWith(expect.objectContaining({
+      guildId: "guild-a",
+      source: alice,
+      destination: bot,
+      amountAtomic: 400_000n,
+      purpose: "admin_transfer"
+    }));
+  });
+
+  it("aggregates authoritative confirmed Tempo receipt fees for the scoped guild", async () => {
+    const listConfirmedTransferTransactionHashes = vi.fn(async () => ({
+      transactionHashes: [`0x${"3".repeat(64)}`, `0x${"4".repeat(64)}`],
+      total: 2,
+      hasMore: false
+    }));
+    const repo = { listConfirmedTransferTransactionHashes } as unknown as PaymentRepository;
+    const provider = providerFake();
+    provider.getTransactionFee = vi.fn()
+      .mockResolvedValueOnce({ amountAtomic: 900n, tokenAddress, feePayer: botAddress })
+      .mockResolvedValueOnce({ amountAtomic: 1_100n, tokenAddress, feePayer: botAddress });
+    const service = new WalletService(loadConfig().payments, repo, provider);
+
+    await expect(service.getFeeSummary({ guildId: "guild-a" })).resolves.toEqual({
+      totalUsd: "0.002",
+      confirmedTransfers: 2,
+      inspectedReceipts: 2,
+      unavailableReceipts: 0,
+      hasMore: false
+    });
+    expect(listConfirmedTransferTransactionHashes).toHaveBeenCalledWith({ guildId: "guild-a" });
+  });
 });
 
 function providerFake(): WalletProvider {
@@ -569,7 +668,12 @@ function providerFake(): WalletProvider {
     resolveToken: vi.fn(async () => ({ symbol: "USDC.e", address: tokenAddress, decimals: 6, currency: "USD" })),
     getBalance: vi.fn(async () => 10_000_000n),
     transfer: vi.fn(async () => ({ transactionHash: `0x${"3".repeat(64)}` as const })),
-    getTransactionStatus: vi.fn(async () => "confirmed" as const)
+    getTransactionStatus: vi.fn(async () => "confirmed" as const),
+    getTransactionFee: vi.fn(async () => ({
+      amountAtomic: 1_000n,
+      tokenAddress,
+      feePayer: botAddress
+    }))
   };
 }
 

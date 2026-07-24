@@ -30,6 +30,7 @@ import { recordAgentEvent } from "./runtimeTranscript.js";
 import { runObservedModelCall } from "./modelCallTelemetry.js";
 import { correctKnownCapabilityClaim } from "./capabilityClaimGuard.js";
 import { primaryChatPolicy, recoveryChatPolicy } from "./modelPolicy.js";
+import { appendMissingHostedCitationLink } from "./hostedCitationLinkGuard.js";
 
 export function modelCallCeilingFallback(
   ctx: ToolContext,
@@ -150,6 +151,7 @@ export async function synthesizeFinalAnswerWithoutTools(
       metadata: { capability: capabilityCorrection.capability },
     });
   }
+  content = await completeHostedCitationLink(ctx, content, response);
   await recordAgentEvent(ctx, {
     audit: {
       guildId: ctx.guildId,
@@ -323,6 +325,11 @@ export async function finalizeModelRoundWithoutTools(
             metadata: { capability: capabilityCorrection.capability },
           });
         }
+        recoveryContent = await completeHostedCitationLink(
+          ctx,
+          recoveryContent,
+          recovery,
+        );
         await recordAgentEvent(ctx, {
           audit: {
             guildId: ctx.guildId,
@@ -393,7 +400,7 @@ export async function finalizeModelRoundWithoutTools(
   }
 
   const capabilityCorrection = correctKnownCapabilityClaim(ctx, text, responseContent, response.model);
-  const content = capabilityCorrection.content;
+  let content = capabilityCorrection.content;
   if (capabilityCorrection.corrected) {
     await recordAgentEvent(ctx, {
       eventName: "agent.capability_claim.corrected",
@@ -402,6 +409,7 @@ export async function finalizeModelRoundWithoutTools(
       metadata: { capability: capabilityCorrection.capability },
     });
   }
+  content = await completeHostedCitationLink(ctx, content, response);
   await recordAgentEvent(ctx, {
     audit: {
       guildId: ctx.guildId,
@@ -442,6 +450,30 @@ export async function finalizeModelRoundWithoutTools(
     tables: tables.length > 0 ? tables : undefined,
     memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
   };
+}
+
+async function completeHostedCitationLink(
+  ctx: ToolContext,
+  content: string,
+  response: Pick<ChatResult, "serverToolUse" | "urlCitations">,
+) {
+  const completed = appendMissingHostedCitationLink(
+    content,
+    response,
+    ctx.config.maxReplyChars,
+  );
+  if (completed.appended) {
+    await recordAgentEvent(ctx, {
+      eventName: "agent.hosted_citation_link.appended",
+      summary: "Added a missing hosted citation link to the final reply",
+      metadata: {
+        citationCount: completed.citationCount,
+        originalChars: content.length,
+        finalChars: completed.content.length,
+      },
+    });
+  }
+  return completed.content;
 }
 
 function finalSynthesisMessages(

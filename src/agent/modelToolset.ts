@@ -18,14 +18,23 @@ import { stringArgument, stringArrayArgument } from "./toolDispatcher.js";
 export type ToolsetState = {
   groups: Set<ToolGroup>;
   expandedAll: boolean;
+  allowRandomActions?: boolean;
 };
 const scopedToolsetCache = new WeakMap<ToolsetState, ScopedToolset>();
 
-export function initialToolsetState(ctx: ToolContext, text: string): ToolsetState {
+export function initialToolsetState(
+  ctx: ToolContext,
+  text: string,
+  allowRandomActions = true,
+): ToolsetState {
   if (!ctx.config.toolsetScoping) {
     const groups = new Set(TOOL_GROUPS);
-    const state = { groups, expandedAll: true };
-    scopedToolsetCache.set(state, scopedToolset({ config: ctx.config, groups }));
+    const state: ToolsetState = { groups, expandedAll: true };
+    if (!allowRandomActions) state.allowRandomActions = false;
+    scopedToolsetCache.set(
+      state,
+      toolsetForTurn(scopedToolset({ config: ctx.config, groups }), state),
+    );
     return state;
   }
   const groups = selectToolGroups({
@@ -38,15 +47,22 @@ export function initialToolsetState(ctx: ToolContext, text: string): ToolsetStat
         : undefined,
       config: ctx.config,
     });
-  const state = { groups, expandedAll: false };
-  scopedToolsetCache.set(state, scopedToolset({ config: ctx.config, groups }));
+  const state: ToolsetState = { groups, expandedAll: false };
+  if (!allowRandomActions) state.allowRandomActions = false;
+  scopedToolsetCache.set(
+    state,
+    toolsetForTurn(scopedToolset({ config: ctx.config, groups }), state),
+  );
   return state;
 }
 
 export function currentScopedToolset(ctx: ToolContext, state: ToolsetState): ScopedToolset {
   const cached = scopedToolsetCache.get(state);
   if (cached) return cached;
-  const scoped = scopedToolset({ config: ctx.config, groups: state.groups });
+  const scoped = toolsetForTurn(
+    scopedToolset({ config: ctx.config, groups: state.groups }),
+    state,
+  );
   scopedToolsetCache.set(state, scoped);
   return scoped;
 }
@@ -57,7 +73,14 @@ export function handleAdditionalToolsRequest(
   state: ToolsetState,
 ): AgentResponse {
   const requestedGroups = stringArrayArgument(route.arguments, "groups");
-  const scoped = requestAdditionalToolGroups({ requestedGroups, currentGroups: state.groups, config: ctx.config });
+  const scoped = toolsetForTurn(
+    requestAdditionalToolGroups({
+      requestedGroups,
+      currentGroups: state.groups,
+      config: ctx.config,
+    }),
+    state,
+  );
   const reason = stringArgument(route.arguments, "reason") ?? "No reason provided.";
   const invalidGroups = (requestedGroups ?? []).filter((group) => !TOOL_GROUPS.includes(group as ToolGroup));
   return {
@@ -84,6 +107,15 @@ export function expandToolsetState(
   return {
     groups: new Set([...state.groups, ...groups]),
     expandedAll: validRequestedGroups.length === 0 || hasInvalidRequestedGroup,
+    allowRandomActions: state.allowRandomActions,
+  };
+}
+
+function toolsetForTurn(scoped: ScopedToolset, state: ToolsetState): ScopedToolset {
+  if (state.allowRandomActions !== false) return scoped;
+  return {
+    ...scoped,
+    localTools: scoped.localTools.filter((tool) => tool.name !== "drawRandom"),
   };
 }
 

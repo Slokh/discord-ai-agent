@@ -77,6 +77,25 @@ describe("model toolset", () => {
     );
   });
 
+  it("keeps randomness unavailable across toolset expansion without chance intent", () => {
+    const ctx = context();
+    const state = initialToolsetState(ctx, "please continue", false);
+
+    expect(currentScopedToolset(ctx, state).localTools.some(
+      (tool) => tool.name === "drawRandom",
+    )).toBe(false);
+
+    const expanded = expandToolsetState(state, {
+      groups: ["discord-retrieval", "image"],
+    });
+    expect(currentScopedToolset(ctx, expanded).localTools.some(
+      (tool) => tool.name === "drawRandom",
+    )).toBe(false);
+    expect(currentScopedToolset(ctx, expanded).localTools.some(
+      (tool) => tool.name === "generateImage",
+    )).toBe(true);
+  });
+
   it("distinguishes image attachments from generic replied files", () => {
     const requestState = initialToolsetState(
       context({

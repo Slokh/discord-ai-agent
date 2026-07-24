@@ -136,7 +136,6 @@ export function summaryFromAgentExecution(
     bottleneck: bottleneckSpan(spans),
     links: { discordMessage: discordUrl, discordReply: replyUrl },
     metadata: {
-      ...execution.sessionMetadata,
       ...execution.metadata,
       sessionId: execution.sessionId,
       executionId: execution.executionId,

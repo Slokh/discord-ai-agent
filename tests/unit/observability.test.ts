@@ -57,8 +57,16 @@ describe("run summaries", () => {
       guildId: "guild-1",
       channelId: "channel-1",
       userId: "user-1",
-      metadata: { discordMessageId: "message-1", replyUrl: "https://discord.com/reply" },
-      sessionMetadata: { discordUrl: "https://discord.com/message" },
+      metadata: {
+        discordMessageId: "message-1",
+        replyUrl: "https://discord.com/reply",
+        appRevision: "execution-revision"
+      },
+      sessionMetadata: {
+        discordUrl: "https://discord.com/message",
+        currentMessageId: "newest-message-in-channel",
+        appRevision: "newest-session-revision"
+      },
       createdAt: new Date("2026-07-18T12:00:00Z"),
       startedAt: new Date("2026-07-18T12:00:01Z"),
       completedAt: new Date("2026-07-18T12:00:03Z"),
@@ -70,7 +78,14 @@ describe("run summaries", () => {
       messageId: "message-1",
       source: "agent_runtime",
       durationMs: 2_000,
-      links: { discordMessage: "https://discord.com/message", discordReply: "https://discord.com/reply" }
+      links: { discordMessage: "https://discord.com/message", discordReply: "https://discord.com/reply" },
+      metadata: {
+        discordMessageId: "message-1",
+        replyUrl: "https://discord.com/reply",
+        appRevision: "execution-revision",
+        sessionId: "session-1",
+        executionId: "execution-1"
+      }
     }));
   });
 

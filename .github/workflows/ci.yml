@@ -252,25 +252,32 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
       - uses: docker/setup-buildx-action@v4
-      - name: Build and push runtime image
+      - name: Build runtime image
         uses: docker/build-push-action@v7
         with:
           context: .
           target: final
-          push: true
+          load: true
           provenance: false
           tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,mode=max,scope=runtime,ignore-error=true
-      - name: Build and push codegen image
+      # Keep publishing on the Docker CLI path used by the original deploy
+      # workflow. BuildKit probes manifests before direct pushes, which requires
+      # ecr:BatchGetImage on deploy roles created before that permission landed.
+      - name: Push runtime image
+        run: docker push "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+      - name: Build codegen image
         uses: docker/build-push-action@v7
         with:
           context: .
           target: codegen
-          push: true
+          load: true
           provenance: false
           tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
           cache-from: |
             type=gha,scope=runtime
             type=gha,scope=codegen
           cache-to: type=gha,mode=max,scope=codegen,ignore-error=true
+      - name: Push codegen image
+        run: docker push "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}"

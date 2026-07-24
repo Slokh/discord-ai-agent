@@ -40,6 +40,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   statement {
     actions = [
       "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
       "ecr:CompleteLayerUpload",
       "ecr:DescribeRepositories",
       "ecr:GetAuthorizationToken",

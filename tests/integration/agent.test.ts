@@ -1488,7 +1488,34 @@ describe("agent router", () => {
         attachments: [],
         createdAt: null,
         url: null,
-        chain: [],
+        chain: [
+          {
+            messageId: "123456789012345669",
+            channelId: "c",
+            guildId: "g",
+            authorId: "u",
+            authorDisplayName: "User",
+            authorIsBot: false,
+            content: "A synthetic root request.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: null,
+            url: null,
+          },
+          {
+            messageId: "123456789012345671",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "ai",
+            authorIsBot: true,
+            content: "A synthetic earlier response.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: null,
+            url: null,
+          },
+        ],
       },
     } as unknown as ToolContext;
 
@@ -1721,6 +1748,116 @@ describe("agent router", () => {
       }),
     ]));
     expect(retryRequest.messages?.some((message) => message.content.includes("Do not call drawRandom unless"))).toBe(true);
+  });
+
+  it("grounds a why-not randomness reply in the prior run without consuming entropy", async () => {
+    const traceEvents = [{
+      id: 1,
+      traceId: "123456789012345670",
+      requestId: "123456789012345670",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      messageId: "123456789012345670",
+      eventName: "agent.model.call.completed",
+      level: "info",
+      summary: "The prior model round completed without drawRandom in its offered tools.",
+      metadata: {},
+      durationMs: 50,
+      createdAt: new Date("2026-07-25T00:00:00.000Z"),
+    }];
+    const chat = vi
+      .fn()
+      .mockImplementationOnce(async (request: {
+        tools?: Array<{ function?: { name?: string } }>;
+      }) => {
+        const toolNames = request.tools?.map((tool) => tool.function?.name);
+        expect(toolNames).toContain("inspectAgentLogs");
+        expect(toolNames).not.toContain("drawRandom");
+        return {
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [{
+            id: "inspect-prior-run",
+            name: "inspectAgentLogs",
+            argumentsText: JSON.stringify({ limit: 10 }),
+          }],
+        };
+      })
+      .mockImplementationOnce(async (request: {
+        messages?: Array<{ role: string; content: string }>;
+      }) => {
+        expect(request.messages).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            content: expect.stringContaining("without drawRandom in its offered tools"),
+          }),
+        ]));
+        return {
+          content: "That earlier run did not receive the random-draw tool, so it could not make a verified draw. This question does not trigger a new outcome.",
+          model: "router-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool,
+        recordTraceEvent: vi.fn(async () => undefined),
+        findProcessRunByDiscordMessageId: vi.fn(async () => undefined),
+        findAgentTaskByDiscordMessageId: vi.fn(async () => undefined),
+        getProcessRun: vi.fn(async () => undefined),
+        getAgentTask: vi.fn(async () => undefined),
+        getTraceEvents: vi.fn(async () => traceEvents),
+        getTaskProgressEvents: vi.fn(async () => []),
+        getSandboxCommandEvents: vi.fn(async () => []),
+        getToolAuditLogs: vi.fn(async () => []),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      threadKey: "discord:g:c",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "123456789012345672",
+      requestMessageId: "123456789012345672",
+      replyContext: {
+        messageId: "123456789012345671",
+        rootMessageId: "123456789012345670",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "A synthetic earlier response.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Why didn't you use the random tool?",
+    );
+
+    expect(response.content).toContain("did not receive the random-draw tool");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "inspectAgentLogs",
+    }));
   });
 
   it("forces the reveal tool for an explicit randomness reveal", async () => {

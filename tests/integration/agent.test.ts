@@ -376,6 +376,81 @@ describe("agent router", () => {
     }));
   });
 
+  it("answers a follow-up from its retained ancestor chain instead of asking for repeated context", async () => {
+    const chat = vi.fn(async (request: { messages: Array<{ content: unknown }> }) => {
+      const prompt = request.messages.map((message) => String(message.content)).join("\n");
+      const grounded =
+        prompt.includes("The opening lineup lists Rowan as the starter and Casey as the backup.") &&
+        prompt.includes("Casey is the listed backup.") &&
+        prompt.includes("Non-empty reply messages are already available context");
+      return {
+        content: grounded
+          ? "Yes—based on the retained lineup context, Casey is the backup for the opener."
+          : "I need the lineup context before I can answer.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const root = {
+      messageId: "root-lineup",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "The opening lineup lists Rowan as the starter and Casey as the backup.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-25T00:00:00.000Z",
+      url: "https://discord.com/channels/g/c/root-lineup",
+    };
+    const parent = {
+      messageId: "parent-lineup",
+      channelId: "c",
+      guildId: "g",
+      authorId: "bot",
+      authorDisplayName: "AI",
+      authorIsBot: true,
+      content: "Casey is the listed backup.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-25T00:01:00.000Z",
+      url: "https://discord.com/channels/g/c/parent-lineup",
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        ...parent,
+        rootMessageId: root.messageId,
+        chain: [root, parent],
+      },
+      requestId: "lineup-follow-up",
+      requestMessageId: "lineup-follow-up",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "can the backup play the opener?");
+
+    expect(response.content).toContain("Casey is the backup");
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
   it("answers ordinary chat without inspecting or funding the requester's wallet", async () => {
     const requestStarterFunds = vi.fn(async () => ({
       granted: true as const,
@@ -1723,6 +1798,12 @@ describe("agent router", () => {
         model: "router-model",
         raw: {},
         toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "I still couldn't complete a verified coin flip because the RNG service is unavailable.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
       });
     const ctx = {
       config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
@@ -1738,9 +1819,132 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "flip a coin");
 
-    expect(response.content).toContain("couldn't complete a verified coin flip");
+    expect(response.content).toContain("couldn't complete a verified random draw");
+    expect(chat).toHaveBeenCalledTimes(4);
     const drawAudits = (auditTool.mock.calls as any[]).filter((call) => call[0]?.toolName === "drawRandom");
     expect(drawAudits).toHaveLength(2);
+  });
+
+  it("retries an invalid random pick before returning a user-visible outcome", async () => {
+    const serverSeed = "09".repeat(32);
+    const session: RngSessionRecord = {
+      id: "rng_invalid_pick_retry",
+      threadKey: "g:c",
+      guildId: "g",
+      channelId: "c",
+      createdByUserId: "u",
+      serverSeed,
+      commitment: rngCommitment(serverSeed),
+      clientSeed: null,
+      clientSeedSource: null,
+      nonceCounter: 0,
+      deckCount: null,
+      shuffleNonce: null,
+      deckPosition: null,
+      status: "active",
+      prevSessionId: null,
+      createdAt: new Date("2026-07-25T00:00:00.000Z"),
+      revealedAt: null,
+    };
+    const draws: RngDrawInput[] = [];
+    const rngRepo = {
+      withActiveSession: vi.fn(async (
+        _input: unknown,
+        callback: (tx: RngSessionTx, created: boolean) => Promise<unknown>,
+      ) => callback({
+        session,
+        setClientSeed: async (clientSeed: string, source: string) => {
+          const justSet = session.clientSeed == null;
+          session.clientSeed ??= clientSeed;
+          session.clientSeedSource ??= source;
+          return { clientSeed: session.clientSeed, justSet };
+        },
+        takeNonce: async () => session.nonceCounter++,
+        recordDraw: async (input: RngDrawInput) => {
+          draws.push(input);
+          return {
+            id: draws.length,
+            sessionId: session.id,
+            ...input,
+            reason: input.reason ?? null,
+            requestId: input.requestId ?? null,
+            messageId: input.messageId ?? null,
+            requestedByUserId: input.requestedByUserId ?? null,
+            createdAt: new Date("2026-07-25T00:00:00.000Z"),
+          };
+        },
+        setShoe: async () => undefined,
+        claimDeckCards: async () => null,
+      }, true)),
+    };
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "invalid-pick",
+          name: "drawRandom",
+          argumentsText: JSON.stringify({ kind: "pick", options: ["amber"] }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "I need another option before I can make the random choice.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "corrected-pick",
+          name: "drawRandom",
+          argumentsText: JSON.stringify({ kind: "pick", options: ["amber", "teal"] }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The verified random pick is complete.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const traceEvents: any[] = [];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      rngRepo,
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "g:c",
+      requestId: "invalid-pick-request",
+      requestMessageId: "invalid-pick-request",
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "pick one random option from amber or teal");
+
+    expect(response.content).toBe("The verified random pick is complete.");
+    expect(chat).toHaveBeenCalledTimes(4);
+    expect(draws).toHaveLength(1);
+    expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
+      .toBe(true);
   });
 
   it("rejects fabricated live fares and retries with fresh retrieval tools", async () => {

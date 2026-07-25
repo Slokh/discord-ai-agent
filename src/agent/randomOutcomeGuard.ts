@@ -131,6 +131,7 @@ export class ForcedRandomActionRouter {
 }
 
 export class RandomOutcomeGuard {
+  private attemptedDraw = false;
   private successfulDraw = false;
   private retryAttempted = false;
   private readonly pendingWagerIds = new Set<string>();
@@ -146,14 +147,17 @@ export class RandomOutcomeGuard {
   }
 
   noteToolResult(toolName: ToolName, content: string) {
-    if (toolName === "drawRandom" && isSuccessfulRandomDrawResult(content)) {
-      this.successfulDraw = true;
-      const wagerId = content.match(/\bWager\s+(wager_[A-Za-z0-9_-]+)\s+is reserved\b/)?.[1];
-      if (wagerId) this.pendingWagerIds.add(wagerId);
-      else if (/\bscoped wallet wager is reserved\b/i.test(content)) this.pendingWagerIds.add("scoped");
-      const requiredTool = content.match(/^Required next tool:\s*(awaitRandomWagerAction|settleRandomWager)\b/im)?.[1];
-      if (requiredTool === "awaitRandomWagerAction" || requiredTool === "settleRandomWager") {
-        this.requiredWagerTool = requiredTool;
+    if (toolName === "drawRandom") {
+      this.attemptedDraw = true;
+      if (isSuccessfulRandomDrawResult(content)) {
+        this.successfulDraw = true;
+        const wagerId = content.match(/\bWager\s+(wager_[A-Za-z0-9_-]+)\s+is reserved\b/)?.[1];
+        if (wagerId) this.pendingWagerIds.add(wagerId);
+        else if (/\bscoped wallet wager is reserved\b/i.test(content)) this.pendingWagerIds.add("scoped");
+        const requiredTool = content.match(/^Required next tool:\s*(awaitRandomWagerAction|settleRandomWager)\b/im)?.[1];
+        if (requiredTool === "awaitRandomWagerAction" || requiredTool === "settleRandomWager") {
+          this.requiredWagerTool = requiredTool;
+        }
       }
     }
     if (toolName === "settleRandomWager") {
@@ -223,6 +227,9 @@ export class RandomOutcomeGuard {
 
   private shouldReject(responseContent: string) {
     if (this.pendingWagerIds.size > 0) return true;
+    if (this.attemptedDraw && !this.successfulDraw && this.requiresRandomWorkflow()) {
+      return true;
+    }
     return shouldRejectUnverifiedRandomOutcome({
       userText: this.userText,
       replyContextText: this.ctx.replyContext?.content,

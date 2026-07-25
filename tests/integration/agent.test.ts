@@ -6351,6 +6351,100 @@ describe("agent router", () => {
     }
   });
 
+  it("rescues a reply-chain X video transcription when primary and recovery providers fail", async () => {
+    const publicMediaUrl = "https://x.com/example/status/42/video/1";
+    const traceEvents: any[] = [];
+    const transcribeAudio = vi.fn(async () => ({
+      text: "A fictional speaker confirms the synthetic deployment.",
+      model: "test/transcription",
+      raw: {},
+      durationSeconds: 5,
+      estimatedCostUsd: 0.001,
+    }));
+    const chat = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterHttpError({
+        status: 400,
+        message: "Server tool request failed",
+      }))
+      .mockRejectedValueOnce(new OpenRouterHttpError({
+        status: 500,
+        message: "Internal Server Error",
+      }))
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.model).toBe("openai/gpt-4o-mini");
+        expect(request.tools.some((tool: any) => tool.function?.name === "inspectDiscordFile")).toBe(true);
+        expect(request.toolChoice).toEqual({ type: "function", function: { name: "inspectDiscordFile" } });
+        return {
+          content: "",
+          model: "openai/gpt-4o-mini",
+          raw: {},
+          toolCalls: [{
+            id: "inspect-public-video-after-provider-rescue",
+            name: "inspectDiscordFile",
+            argumentsText: "{}",
+          }],
+        };
+      })
+      .mockResolvedValueOnce({
+        content: "The clip confirms the synthetic deployment.",
+        model: "answer-model",
+        raw: {},
+        toolCalls: [],
+      });
+    vi.stubGlobal("fetch", vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.startsWith("https://cdn.syndication.twimg.com/tweet-result?")) {
+        return new Response(JSON.stringify({
+          mediaDetails: [{
+            type: "video",
+            video_info: { variants: [{ content_type: "video/mp4", bitrate: 256000, url: "https://video.twimg.com/example/clip.mp4" }] },
+          }],
+        }), { headers: { "content-type": "application/json" } });
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "video/mp4" } });
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {
+          chatModel: "anthropic/claude-sonnet-5",
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          utilityModel: "openai/gpt-4o-mini",
+        },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, transcribeAudio },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      requestMessageId: "request",
+      requestAttachments: [],
+      replyContext: replyChainWithContent(publicMediaUrl),
+    } as unknown as ToolContext;
+
+    try {
+      const response = await handleAgentRequest(ctx, "transcribe this");
+
+      expect(response.content).toContain("synthetic deployment");
+      expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
+      expect(chat).toHaveBeenCalledTimes(4);
+      expect(traceEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ eventName: "agent.model.provider_rejection_rescue" }),
+      ]));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("transcribes a QuickTime MOV attachment before answering", async () => {
     const transcribeAudio = vi.fn(async () => ({
       text: "A fictional MOV recording confirms the audio path.",

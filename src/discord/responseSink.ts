@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { AttachmentBuilder, MessageFlags, type Client, type Message, type MessageCreateOptions } from "discord.js";
+import { AttachmentBuilder, MessageFlags, type Client, type Message, type MessageCreateOptions, type MessageEditOptions } from "discord.js";
 import type { Logger } from "pino";
 import { cleanResponse, formatDiscordMarkdownTables } from "../tools/responseFormatting.js";
 import { splitForDiscord } from "../util/text.js";
@@ -100,7 +100,11 @@ export class DiscordResponseSink {
       const payload = this.statusUsesComponentsV2()
         ? plainDiscordComponentsV2Payload({ content: cleanContent })
         : cleanContent;
-      const edited = await discordEdit(this.statusMessage, payload as Parameters<Message["edit"]>[0], { logger: this.logger });
+      const edited = await discordEdit(
+        this.statusMessage,
+        this.suppressMentions(payload) as Parameters<Message["edit"]>[0],
+        { logger: this.logger },
+      );
       if (edited.ok) {
         this.statusMessage = edited.value;
         return this.statusMessage;
@@ -109,7 +113,11 @@ export class DiscordResponseSink {
       this.logger.warn({ statusMessageId: this.statusMessage.id }, "Discord status message disappeared; creating a fresh reply");
       this.statusMessage = null;
     }
-    const replied = await discordReply(this.sourceMessage, this.withDeliveryNonce(cleanContent), { logger: this.logger });
+    const replied = await discordReply(
+      this.sourceMessage,
+      this.withDeliveryNonce(this.suppressMentions(cleanContent) as MessageCreateOptions),
+      { logger: this.logger },
+    );
     if (!replied.ok) throw replied.error;
     this.statusMessage = replied.value;
     return this.statusMessage;
@@ -213,7 +221,11 @@ export class DiscordResponseSink {
 
   async replaceRichPresentationWithFallback(presentation: PreparedDiscordPresentation): Promise<Message | null> {
     if (!this.statusMessage) return null;
-    const edited = await discordEdit(this.statusMessage, presentation.fallbackPayload as Parameters<Message["edit"]>[0], { logger: this.logger });
+    const edited = await discordEdit(
+      this.statusMessage,
+      this.suppressMentions(presentation.fallbackPayload) as Parameters<Message["edit"]>[0],
+      { logger: this.logger },
+    );
     if (!edited.ok) {
       this.logger.error({ err: edited.error, statusMessageId: this.statusMessage.id }, "Failed to replace inactive Discord controls with a safe fallback");
       return null;
@@ -280,14 +292,15 @@ export class DiscordResponseSink {
   }
 
   private async editStatusOrReply(payload: string | MessageCreateOptions): Promise<Message> {
+    const safePayload = this.suppressMentions(payload) as MessageCreateOptions;
     if (this.statusMessage) {
-      const edited = await discordEdit(this.statusMessage, payload as Parameters<Message["edit"]>[0], { logger: this.logger });
+      const edited = await discordEdit(this.statusMessage, safePayload as Parameters<Message["edit"]>[0], { logger: this.logger });
       if (edited.ok) return edited.value;
       if (edited.reason !== "unknown_message") throw edited.error;
       this.logger.warn({ statusMessageId: this.statusMessage.id }, "Discord status message disappeared; creating a fresh reply");
       this.statusMessage = null;
     }
-    const replied = await discordReply(this.sourceMessage, this.withDeliveryNonce(payload), { logger: this.logger });
+    const replied = await discordReply(this.sourceMessage, this.withDeliveryNonce(safePayload), { logger: this.logger });
     if (!replied.ok) throw replied.error;
     return replied.value;
   }
@@ -300,6 +313,16 @@ export class DiscordResponseSink {
     if (!this.deliveryNonce) return payload;
     const normalized = typeof payload === "string" ? { content: payload } : payload;
     return { ...normalized, ...this.nonceFields(index) };
+  }
+
+  private suppressMentions(
+    payload: string | MessageCreateOptions | MessageEditOptions,
+  ): MessageCreateOptions | MessageEditOptions {
+    const normalized = typeof payload === "string" ? { content: payload } : payload;
+    return {
+      ...normalized,
+      allowedMentions: { parse: [], repliedUser: false },
+    };
   }
 
   private nonceFields(index: number): Pick<MessageCreateOptions, "nonce" | "enforceNonce"> {

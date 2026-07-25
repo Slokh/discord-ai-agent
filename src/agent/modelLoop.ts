@@ -63,7 +63,7 @@ import {
 import { agentChatRequest, timeoutFallbackChatRequest } from "./modelPolicy.js";
 import { executeIndependentToolRoutesInParallel } from "./parallelToolExecution.js";
 import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js";
-import { ImageEvidenceGuard } from "./imageEvidenceGuard.js";
+import { ImageEvidenceGuard, ImageGenerationGuard } from "./imageEvidenceGuard.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -103,7 +103,7 @@ async function runAgentModelLoopInternal(
   automaticStarterFunds: string | null,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
-  const imageEvidenceGuard = new ImageEvidenceGuard(ctx);
+  const imageEvidenceGuard = new ImageEvidenceGuard(ctx), imageGenerationGuard = new ImageGenerationGuard(ctx, userText);
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
   const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
@@ -271,7 +271,7 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const forcedToolThisRound = imageEvidenceGuard.takeForcedTool() ??
+      const forcedToolThisRound = imageGenerationGuard.takeForcedTool() ?? imageEvidenceGuard.takeForcedTool() ??
         (round === 0 ? forcedWalletActionTool : null) ??
         forcedRandomAction.takeToolForRound(round) ??
         (round === 0 ? forcedMediaTranscriptionTool : null);
@@ -504,6 +504,7 @@ async function runAgentModelLoopInternal(
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
         });
       }
+      if (await imageGenerationGuard.retryDraft(response.content, messages, round + 1, toolUseCounts.has("generateImage"))) { toolsetState = expandToolsetState(toolsetState, { groups: ["image"] }); continue; }
       if (await imageEvidenceGuard.retryDraft(response.content, messages, round + 1)) continue;
       return await finalizeModelRoundWithoutTools(ctx, {
         round: round + 1,

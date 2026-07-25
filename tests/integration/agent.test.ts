@@ -6151,6 +6151,257 @@ describe("agent router", () => {
     expect(traceEvents.some((event) => event.eventName === "agent.image_evidence.retry")).toBe(true);
   });
 
+  it("replays a reply-chain image edit through generation after inspection ends in a refusal", async () => {
+    const sourceImage = Buffer.from("synthetic-source-image");
+    const generatedImage = Buffer.from("synthetic-edited-image");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    })));
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{
+        b64_json: generatedImage.toString("base64"),
+        media_type: "image/png",
+      }],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-edit-reference",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "Describe the synthetic source image for an edit.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic source is a simple blue landscape.",
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "I can describe the image, but I can't create the edited version here.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({
+          type: "function",
+          function: { name: "generateImage" },
+        });
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "generate-edited-reference",
+            name: "generateImage",
+            argumentsText: JSON.stringify({
+              prompt: "Turn the synthetic blue landscape into a watercolor.",
+              useContextImages: true,
+            }),
+          }],
+        };
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the watercolor edit.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const traceEvents: any[] = [];
+    const source = {
+      messageId: "synthetic-source",
+      rootMessageId: "synthetic-source",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "Use this synthetic landscape.",
+      attachmentSummaries: ["landscape.png image/png"],
+      attachments: [{
+        id: "landscape",
+        url: "https://cdn.discordapp.com/landscape.png",
+        filename: "landscape.png",
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    };
+    const parent = {
+      ...source,
+      messageId: "synthetic-parent",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "I can use that image as a reference.",
+      attachmentSummaries: [],
+      attachments: [],
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...parent, chain: [source, parent] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Make this image into a synthetic watercolor.",
+    );
+
+    expect(response.content).toContain("watercolor edit");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(5);
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.image_generation.retry"
+    )).toBe(true);
+  });
+
+  it("replays a terse retained-context image request and delivers a generated file", async () => {
+    const generatedImage = Buffer.from("synthetic-brighter-image");
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{
+        b64_json: generatedImage.toString("base64"),
+        media_type: "image/png",
+      }],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "I can't make that visual in this chat.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({
+          type: "function",
+          function: { name: "generateImage" },
+        });
+        expect(request.tools).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            function: expect.objectContaining({ name: "generateImage" }),
+          }),
+        ]));
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "generate-brighter-version",
+            name: "generateImage",
+            argumentsText: JSON.stringify({
+              prompt: "Make the retained synthetic landscape brighter.",
+              useContextImages: false,
+            }),
+          }],
+        };
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the brighter version.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const traceEvents: any[] = [];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          id: 1,
+          threadKey: "g:c",
+          discordMessageId: "prior-request",
+          role: "user",
+          authorId: "u",
+          authorDisplayName: "User",
+          content: "Create a synthetic landscape image.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-25T20:00:00.000Z"),
+        },
+        {
+          id: 2,
+          threadKey: "g:c",
+          discordMessageId: "prior-response",
+          role: "assistant",
+          authorId: "bot",
+          authorDisplayName: "Bot",
+          content: "I can help with that image.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-25T20:00:01.000Z"),
+        },
+      ],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "make it brighter");
+
+    expect(response.content).toContain("brighter version");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.image_generation.retry"
+    )).toBe(true);
+  });
+
   it("corrects a false transcription refusal from the tool-capable timeout retry", async () => {
     const traceEvents: any[] = [];
     const chat = vi

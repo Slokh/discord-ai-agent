@@ -557,6 +557,13 @@ export function isOpenRouterHttpError(error: unknown): error is OpenRouterHttpEr
   return error instanceof OpenRouterHttpError;
 }
 
+export function isRetryableOpenRouterHttpError(
+  error: unknown,
+): error is OpenRouterHttpError {
+  return isOpenRouterHttpError(error) &&
+    isRetryableOpenRouterStatus(error.status);
+}
+
 function extractServerToolUse(json: any): Record<string, number> | undefined {
   const normalized: Record<string, number> = {};
   const sources = [json?.usage?.server_tool_use, json?.usage?.server_tool_use_details];

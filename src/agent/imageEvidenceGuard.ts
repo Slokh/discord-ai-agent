@@ -2,6 +2,8 @@ import type { ChatMessage } from "../models/openrouter.js";
 import type { DiscordAttachmentContext, DiscordReplyContext, ToolContext } from "../tools/types.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
+export { ImageGenerationGuard } from "./imageGenerationGuard.js";
+
 export const IMAGE_EVIDENCE_RETRY_GUIDANCE =
   "A permission-visible Discord image is already available in the current request or reply chain. " +
   "The previous draft incorrectly claimed the image was unavailable. Call inspectDiscordImages now with useContextImages=true and answer the current visual question from that result. Do not ask for a re-upload.";

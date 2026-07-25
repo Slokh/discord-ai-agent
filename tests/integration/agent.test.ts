@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { handleAgentRequest } from "../../src/agent/router.js";
 import type { RngDrawInput, RngSessionRecord, RngSessionTx } from "../../src/db/rngRepository.js";
 import { OpenRouterHttpError, OpenRouterTimeoutError } from "../../src/models/openrouter.js";
@@ -5563,6 +5564,134 @@ describe("agent router", () => {
     expect(generateImage).toHaveBeenCalledTimes(2);
     expect(generateImage.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
     expect(chat).toHaveBeenCalledTimes(4);
+  });
+
+  it("delivers a deterministic exact-text fallback after repeated reply-chain typography misses", async () => {
+    const generatedImage = await sharp({
+      create: {
+        width: 960,
+        height: 640,
+        channels: 3,
+        background: { r: 34, g: 52, b: 76 },
+      },
+    }).png().toBuffer();
+    const generateImage = vi.fn(async (_prompt: string) => ({
+      model: "test/image",
+      raw: {},
+      data: [{ b64_json: generatedImage.toString("base64"), media_type: "image/png" }],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-exact-poster",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A synthetic event poster based on the retained reference image.",
+            requiredText: ["SYNTHETIC SUMMER FESTIVAL", "FRIDAY AT SEVEN · ALL WELCOME"],
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          matches: false,
+          observedText: ["SYNTHETIC SUMER FESTIVAL"],
+        }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          matches: false,
+          observedText: ["FRIDAY AT SEVEN · ALL WELCOM"],
+        }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The corrected synthetic poster is ready.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId,
+      rootMessageId: "root-exact-poster",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "image attachment"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage(
+        "root-exact-poster",
+        "Create a synthetic event poster with two exact lines of visible text.",
+        false,
+      ),
+      replyMessage("first-exact-poster", "Here is the reference layout.", true, [{
+        id: "reference-image",
+        url: "https://cdn.discordapp.com/reference.png",
+        filename: "reference.png",
+        contentType: "image/png",
+      }]),
+      replyMessage("exact-text-reminder", "Keep both requested lines exact.", false),
+    ];
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "try now");
+
+    expect(response.content).toContain("corrected synthetic poster");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png" }),
+    ]);
+    const outputFile = response.files?.[0];
+    expect(outputFile).toBeDefined();
+    await expect(sharp(outputFile!.data).metadata()).resolves.toMatchObject({
+      width: 960,
+      height: 640,
+      format: "png",
+    });
+    expect(generateImage).toHaveBeenCalledTimes(3);
+    expect(generateImage.mock.calls[2]?.[0]).toContain("render no readable text");
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining('"textOverlayFallback":true'),
+    }));
   });
 
   it("recovers a false visual refusal by inspecting a retained reply-chain image", async () => {

@@ -9,6 +9,10 @@ import {
   normalizeRequiredImageText,
   validateGeneratedImageText,
 } from "./generatedImageTextValidation.js";
+import {
+  imageTextOverlayBasePrompt,
+  renderExactImageTextOverlay,
+} from "./generatedImageTextOverlay.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 
@@ -298,6 +302,7 @@ export async function generateImage(
   let image;
   let generationAttempts = 1;
   let textValidationFailed = false;
+  let textOverlayFallback = false;
   let totalEstimatedCostUsd = 0;
   const imageOptions = {
     inputReferences: references.map((reference): ImageReference => ({ type: "image_url", image_url: { url: reference.url } })),
@@ -356,6 +361,32 @@ export async function generateImage(
     }
   }
 
+  if (textValidationFailed && background !== "transparent") {
+    generationAttempts = 3;
+    try {
+      const fallbackBase = await ctx.openRouter.generateImage(
+        imageTextOverlayBasePrompt(prompt),
+        imageOptions,
+      );
+      totalEstimatedCostUsd += fallbackBase.estimatedCostUsd ?? 0;
+      const overlaid = await renderExactImageTextOverlay(fallbackBase.data, requiredText);
+      if (overlaid) {
+        image = {
+          ...fallbackBase,
+          data: [{
+            b64_json: overlaid.toString("base64"),
+            media_type: "image/png",
+            content_type: "image/png",
+          }],
+        };
+        textValidationFailed = false;
+        textOverlayFallback = true;
+      }
+    } catch {
+      textValidationFailed = true;
+    }
+  }
+
   if (textValidationFailed) {
     await ctx.repo.auditTool({
       guildId: ctx.guildId,
@@ -367,7 +398,7 @@ export async function generateImage(
         requiredTextCount: requiredText.length,
         referenceImageCount: references.length,
       }),
-      resultSummary: "required image text did not validate after one correction attempt",
+      resultSummary: "required image text did not validate after correction and deterministic fallback",
       error: "generated_image_text_mismatch",
       model: image.model,
       estimatedCostUsd: totalEstimatedCostUsd,
@@ -435,7 +466,8 @@ export async function generateImage(
       automaticBackgroundRemovalCount,
       rejectedOpaqueImages,
       generationAttempts,
-      textValidated: requiredText.length > 0
+      textValidated: requiredText.length > 0,
+      textOverlayFallback,
     }),
     model: image.model,
     estimatedCostUsd: totalEstimatedCostUsd || image.estimatedCostUsd
@@ -455,10 +487,13 @@ export async function generateImage(
   const transparencyFailureSummary = rejectedOpaqueImages > 0
     ? `\nTransparency validation failed for ${rejectedOpaqueImages} generated image${rejectedOpaqueImages === 1 ? "" : "s"}: the provider returned opaque output and automatic background removal could not safely isolate a foreground subject. No opaque image was attached.`
     : "";
+  const textOverlaySummary = textOverlayFallback
+    ? "\nTypography fallback: exact requested text was rendered deterministically after the image provider misspelled it twice."
+    : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}`;
   return { content, files };
 }
 

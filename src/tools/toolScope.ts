@@ -209,6 +209,8 @@ const OPS_KEYWORDS = [
 const REPLY_OPS_KEYWORDS = [
   /\b(debug|diagnose|troubleshoot)\b/,
   /\b(why|how) did (you|the bot|this|that)\b/,
+  /\b(why|how) (?:didn['’]?t|did not) (you|the bot|this|that)\b/,
+  /\bwhy not (?:use|call|run|choose|pick|select|invoke|try)\b/,
   /\bwhat (failed|hung|timed out|went wrong)\b/,
 ];
 

@@ -358,6 +358,20 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "inspectAgentLogs")).toBe(true);
   });
 
+  it("offers run debugging for why-not questions about a replied tool choice", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "Why didn't you use the random tool?",
+      hasImageAttachments: false,
+      replyContext: true,
+      config,
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("ops")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "inspectAgentLogs")).toBe(true);
+  });
+
   it("requestAdditionalTools expands to requested or all groups", () => {
     withEnv(
       {

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { handleAgentRequest } from "../../src/agent/router.js";
 import type { RngDrawInput, RngSessionRecord, RngSessionTx } from "../../src/db/rngRepository.js";
-import { OpenRouterHttpError, OpenRouterTimeoutError } from "../../src/models/openrouter.js";
+import {
+  OpenRouterContentFilterError,
+  OpenRouterHttpError,
+  OpenRouterTimeoutError,
+} from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
 import { rngCommitment } from "../../src/rng/provable.js";
 import type { ToolContext } from "../../src/tools/types.js";
@@ -6289,6 +6293,192 @@ describe("agent router", () => {
     expect(traceEvents.some((event) =>
       event.eventName === "agent.image_generation.retry"
     )).toBe(true);
+  });
+
+  it("delivers a conservative image fallback after a text-only generation safety false positive", async () => {
+    const generatedImage = Buffer.from("synthetic-safe-fallback-image");
+    const generateImage = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterContentFilterError({
+        status: 400,
+        model: "test/image",
+        message: "synthetic content filter",
+      }))
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: generatedImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-benign-scene",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A photorealistic portrait of a fictional famous explorer having coffee.",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the clearly illustrated fallback.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Create a benign portrait of a fictional famous explorer having coffee.",
+    );
+
+    expect(response.content).toContain("illustrated fallback");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("clearly stylized");
+    expect(generateImage.mock.calls[1]?.[0]).toContain(
+      "fictional famous explorer having coffee",
+    );
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining('"safetyFallbackUsed":true'),
+    }));
+  });
+
+  it("inlines a current Discord attachment before inspection-led image generation", async () => {
+    const sourceImage = Buffer.from("synthetic-current-discord-image");
+    const generatedImage = Buffer.from("synthetic-current-edited-image");
+    const fetchMock = vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generateImage = vi.fn(async (_prompt: string, options: any) => {
+      expect(options.inputReferences).toHaveLength(1);
+      expect(options.inputReferences[0].image_url.url).toMatch(
+        /^data:image\/png;base64,/,
+      );
+      expect(options.inputReferences[0].image_url.url).not.toContain(
+        "cdn.discordapp.com",
+      );
+      return {
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: generatedImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      };
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-current-reference",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "Describe the current synthetic image before editing it.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic source is a simple geometric landscape.",
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-current-reference",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "Turn the current synthetic landscape into a watercolor.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the watercolor edit.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [{
+        id: "current-image",
+        url: "https://cdn.discordapp.com/current.png",
+        filename: "current.png",
+        contentType: "image/png",
+      }],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Turn this current synthetic image into a watercolor.",
+    );
+
+    expect(response.content).toContain("watercolor edit");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalled();
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(4);
   });
 
   it("replays a terse retained-context image request and delivers a generated file", async () => {

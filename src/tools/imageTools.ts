@@ -296,16 +296,22 @@ export async function generateImage(
     explicitUrls: normalizedInput.referenceImageUrls,
     useContextImages: normalizedInput.useContextImages ?? true
   });
+  const preparedReferences = await inlineDiscordCdnImageReferences(ctx, references);
   const inferredTransparentBackground = normalizedInput.background == null && wantsTransparentImage(prompt);
   const background = normalizedInput.background ?? (inferredTransparentBackground ? "transparent" : undefined);
   const outputFormat = normalizedInput.outputFormat ?? (background === "transparent" ? "png" : undefined);
   let image;
   let generationAttempts = 1;
+  let activePrompt = prompt;
+  let safetyFallbackUsed = false;
   let textValidationFailed = false;
   let textOverlayFallback = false;
   let totalEstimatedCostUsd = 0;
   const imageOptions = {
-    inputReferences: references.map((reference): ImageReference => ({ type: "image_url", image_url: { url: reference.url } })),
+    inputReferences: preparedReferences.references.map((reference): ImageReference => ({
+      type: "image_url",
+      image_url: { url: reference.url },
+    })),
     ...(outputFormat ? { outputFormat } : {}),
     ...(background ? { background } : {}),
   };
@@ -313,26 +319,48 @@ export async function generateImage(
     image = await ctx.openRouter.generateImage(prompt, imageOptions);
     totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
   } catch (error) {
-    const contentFilterBlocked = isOpenRouterContentFilterError(error);
-    const requestRejected = isOpenRouterHttpError(error) && error.status === 400;
-    if (!contentFilterBlocked && !requestRejected) throw error;
-    const errorCode = contentFilterBlocked ? "image_generation_blocked" : "image_generation_request_rejected";
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "generateImage",
-      argumentsSummary: summarizeForAudit({ prompt, referenceImageCount: references.length, outputFormat, background }),
-      resultSummary: errorCode,
-      error: errorCode,
-    });
-    return {
-      content: contentFilterBlocked
-        ? "Image generation was blocked by the provider's safety filter, so no image was created. Explain that briefly and conversationally, then offer a safe adjustment to the request. Do not expose provider errors or claim that an image was attached."
-        : "The image provider could not accept that image request, so no image was created. Explain that briefly and conversationally, then offer to retry with a simpler request. Do not expose provider errors or claim that an image was attached.",
-      files: [],
-      status: "error",
-    };
+    let terminalError = error;
+    if (isOpenRouterContentFilterError(error) && references.length === 0) {
+      generationAttempts += 1;
+      activePrompt = imageSafetyFallbackPrompt(prompt);
+      try {
+        image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
+        totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
+        safetyFallbackUsed = true;
+      } catch (fallbackError) {
+        terminalError = fallbackError;
+      }
+    }
+    if (!image) {
+      const contentFilterBlocked = isOpenRouterContentFilterError(terminalError);
+      const requestRejected = isOpenRouterHttpError(terminalError) && terminalError.status === 400;
+      if (!contentFilterBlocked && !requestRejected) throw terminalError;
+      const errorCode = contentFilterBlocked ? "image_generation_blocked" : "image_generation_request_rejected";
+      await ctx.repo.auditTool({
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        userId: ctx.userId,
+        toolName: "generateImage",
+        argumentsSummary: summarizeForAudit({
+          prompt,
+          referenceImageCount: references.length,
+          inlinedReferenceImageCount: preparedReferences.inlined,
+          referenceImageInlineFailures: preparedReferences.failed,
+          outputFormat,
+          background,
+          generationAttempts,
+        }),
+        resultSummary: errorCode,
+        error: errorCode,
+      });
+      return {
+        content: contentFilterBlocked
+          ? "Image generation was blocked by the provider's safety filter, so no image was created. Explain that briefly and conversationally, then offer a safe adjustment to the request. Do not expose provider errors or claim that an image was attached."
+          : "The image provider could not accept that image request, so no image was created. Explain that briefly and conversationally, then offer to retry with a simpler request. Do not expose provider errors or claim that an image was attached.",
+        files: [],
+        status: "error",
+      };
+    }
   }
 
   if (requiredText.length > 0) {
@@ -342,10 +370,10 @@ export async function generateImage(
       attempt: 1,
     }).catch(() => ({ matches: false, observedText: [] }));
     if (!firstValidation.matches) {
-      generationAttempts = 2;
+      generationAttempts += 1;
       try {
         image = await ctx.openRouter.generateImage(
-          imageTextCorrectionPrompt(prompt, requiredText),
+          imageTextCorrectionPrompt(activePrompt, requiredText),
           imageOptions,
         );
         totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
@@ -362,10 +390,10 @@ export async function generateImage(
   }
 
   if (textValidationFailed && background !== "transparent") {
-    generationAttempts = 3;
+    generationAttempts += 1;
     try {
       const fallbackBase = await ctx.openRouter.generateImage(
-        imageTextOverlayBasePrompt(prompt),
+        imageTextOverlayBasePrompt(activePrompt),
         imageOptions,
       );
       totalEstimatedCostUsd += fallbackBase.estimatedCostUsd ?? 0;
@@ -397,6 +425,8 @@ export async function generateImage(
         prompt,
         requiredTextCount: requiredText.length,
         referenceImageCount: references.length,
+        inlinedReferenceImageCount: preparedReferences.inlined,
+        referenceImageInlineFailures: preparedReferences.failed,
       }),
       resultSummary: "required image text did not validate after correction and deterministic fallback",
       error: "generated_image_text_mismatch",
@@ -454,6 +484,8 @@ export async function generateImage(
       prompt,
       requiredTextCount: requiredText.length,
       referenceImageCount: references.length,
+      inlinedReferenceImageCount: preparedReferences.inlined,
+      referenceImageInlineFailures: preparedReferences.failed,
       outputFormat,
       background,
     }),
@@ -468,6 +500,7 @@ export async function generateImage(
       generationAttempts,
       textValidated: requiredText.length > 0,
       textOverlayFallback,
+      safetyFallbackUsed,
     }),
     model: image.model,
     estimatedCostUsd: totalEstimatedCostUsd || image.estimatedCostUsd
@@ -490,11 +523,25 @@ export async function generateImage(
   const textOverlaySummary = textOverlayFallback
     ? "\nTypography fallback: exact requested text was rendered deterministically after the image provider misspelled it twice."
     : "";
+  const safetyFallbackSummary = safetyFallbackUsed
+    ? "\nSafety fallback: generated as a clearly stylized, non-photorealistic illustration after the provider blocked the original rendering."
+    : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}${safetyFallbackSummary}`;
   return { content, files };
+}
+
+function imageSafetyFallbackPrompt(prompt: string) {
+  return [
+    "Create a clearly stylized, non-photorealistic editorial illustration that preserves only the benign composition, setting, clothing, mood, and harmless action from the request below.",
+    "Do not present the result as a real photograph, documentary evidence, endorsement, quotation, or record of a real event.",
+    "Do not add sexual content, graphic violence, hateful abuse, wrongdoing instructions, or political persuasion.",
+    "If a real person is named, depict them respectfully in a harmless fictional scene without adding claims or actions that were not requested.",
+    "Original request:",
+    prompt,
+  ].join("\n");
 }
 
 const TRANSPARENT_IMAGE_INTENT = /\b(?:transparent(?:\s+background)?|no\s+background|remove\s+(?:the\s+)?background|background[- ]?free|cutout|emoji|sticker)\b/i;

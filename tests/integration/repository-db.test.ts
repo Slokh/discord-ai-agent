@@ -1201,7 +1201,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(embeddings.rows[0]?.count).toBe(0);
   });
 
-  it("scrubs tool audit and skill change user content for privacy-deleted users", async () => {
+  it("scrubs tool audit and trace user content for privacy-deleted users", async () => {
     const userId = `user-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;
@@ -1228,30 +1228,13 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       summary: "private trace summary",
       metadata: { private: "trace metadata" }
     });
-    await repo.recordSkillChange({
-      skillName: `skill-${randomUUID()}`,
-      filePath: `skills/skill-${randomUUID()}.md`,
-      requesterId: userId,
-      request: "remember my private request",
-      policyReasons: ["blocked in test"]
-    });
-    const dbSkillName = `skill-${randomUUID()}`;
-    await repo.upsertDatabaseSkill({
-      name: dbSkillName,
-      content: "# Private Skill\n\n- Contains user-originated private detail.",
-      requesterId: userId,
-      request: "remember my private database skill"
-    });
-
     await repo.requestUserDeletion(userId);
 
-    const [audit, trace, skillChange, dbSkill] = await Promise.all([
+    const [audit, trace] = await Promise.all([
       pool.query(
         "SELECT user_id, arguments_summary, result_summary, error FROM tool_audit_logs WHERE tool_name = 'searchDiscordHistory' ORDER BY id DESC LIMIT 1"
       ),
-      pool.query("SELECT user_id, summary, metadata FROM trace_events WHERE trace_id = $1 ORDER BY id DESC LIMIT 1", [traceId]),
-      pool.query("SELECT requester_id, request FROM skill_changes ORDER BY id DESC LIMIT 1"),
-      pool.query("SELECT content, enabled, created_by, updated_by FROM skills WHERE name = $1", [dbSkillName])
+      pool.query("SELECT user_id, summary, metadata FROM trace_events WHERE trace_id = $1 ORDER BY id DESC LIMIT 1", [traceId])
     ]);
 
     expect(audit.rows[0]).toMatchObject({
@@ -1264,16 +1247,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       user_id: null,
       summary: null,
       metadata: {}
-    });
-    expect(skillChange.rows[0]).toMatchObject({
-      requester_id: null,
-      request: null
-    });
-    expect(dbSkill.rows[0]).toMatchObject({
-      content: "",
-      enabled: false,
-      created_by: null,
-      updated_by: null
     });
   });
 
@@ -1353,56 +1326,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         limit: 10
       })
     ).resolves.toHaveLength(1);
-  });
-
-  it("records policy-blocked skill changes without marking the skill as installed", async () => {
-    const skillName = `skill-${randomUUID()}`;
-    await repo.recordSkillChange({
-      skillName,
-      filePath: `skills/${skillName}.md`,
-      requesterId: `user-${randomUUID()}`,
-      request: "remember this blocked skill",
-      policyReasons: ["blocked by policy"]
-    });
-
-    const [changes, skills] = await Promise.all([
-      pool.query("SELECT count(*)::int AS count FROM skill_changes WHERE skill_name = $1", [skillName]),
-      pool.query("SELECT count(*)::int AS count FROM skills WHERE name = $1", [skillName])
-    ]);
-
-    expect(changes.rows[0]?.count).toBe(1);
-    expect(skills.rows[0]?.count).toBe(0);
-  });
-
-  it("stores private database skills with versioning and enabled-state controls", async () => {
-    const skillName = `skill-${randomUUID()}`;
-    const requesterId = `user-${randomUUID()}`;
-
-    const created = await repo.upsertDatabaseSkill({
-      name: skillName,
-      content: "# Private Skill\n\n- Remember the synthetic preference.",
-      requesterId,
-      request: "learn this synthetic preference"
-    });
-    const updated = await repo.upsertDatabaseSkill({
-      name: skillName,
-      content: "# Private Skill\n\n- Remember the updated synthetic preference.",
-      requesterId,
-      request: "update this synthetic preference"
-    });
-
-    expect(created).toMatchObject({ name: skillName, source: "database", enabled: true, version: 1 });
-    expect(updated).toMatchObject({ name: skillName, source: "database", enabled: true, version: 2 });
-    await expect(repo.listEnabledDatabaseSkills()).resolves.toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: skillName, content: expect.stringContaining("updated synthetic preference"), version: 2 })])
-    );
-
-    await expect(repo.setDatabaseSkillEnabled({ name: skillName, enabled: false, requesterId })).resolves.toMatchObject({ enabled: false });
-    await expect(repo.listEnabledDatabaseSkills()).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ name: skillName })]));
-
-    await expect(repo.setDatabaseSkillEnabled({ name: skillName, enabled: true, requesterId })).resolves.toMatchObject({ enabled: true });
-    await expect(repo.deleteDatabaseSkill(skillName)).resolves.toBe(true);
-    await expect(repo.listDatabaseSkills({ includeDisabled: true })).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ name: skillName })]));
   });
 
   it("stores server overlays", async () => {

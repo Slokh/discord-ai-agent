@@ -43,7 +43,6 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
   if (isCodegenConfigured(input.config) && (hasAny(text, CODEGEN_KEYWORDS) || (bugInboxIntent && BUG_FIX_INTENT.test(text)))) groups.add("codegen");
   if (hasAny(text, OPS_KEYWORDS)) groups.add("ops");
-  if (input.replyContext && SKILL_CONTEXT.test(replyContextText) && hasAny(text, SKILL_REPLY_KEYWORDS)) groups.add("ops");
   if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("ops");
   if (input.replyContext && hasAny(text, REPLY_OPS_KEYWORDS)) groups.add("ops");
 
@@ -128,8 +127,8 @@ function hasAny(text: string, keywords: RegExp[]) {
 }
 
 const IMAGE_KEYWORDS = [
-  /\b(generate|draw|paint|sketch|illustrate|make|create)\b.*\b(image|picture|pic|photo|avatar|pfp|logo|poster|meme|art)\b/,
-  /\b(image|picture|pic|photo|screenshot|avatar|pfp|meme|emoji|chart|diagram|logo)\b/,
+  /\b(generate|draw|paint|sketch|illustrate|make|create|turn|convert)\b.*\b(image|picture|pic|photo|avatar|pfp|logo|poster|meme|art|emoji|emote)\b/,
+  /\b(image|picture|pic|photo|screenshot|avatar|pfp|meme|emoji|emote|chart|diagram|logo)\b/,
   /\b(draw|paint|sketch|illustrate)\b/,
   /\bwhat('| i)?s (in|on|shown)\b/,
   /\blook at this\b/,
@@ -174,14 +173,14 @@ const PRESENTATION_KEYWORDS = [
 const DISCORD_ACTION_KEYWORDS = [
   /\b(poll|vote|undo|delete your|remove your|forget your)\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
-  /\b(?:custom|server)?\s*emojis?\b/,
+  /\b(?:custom|server)?\s*(?:emoji|emote)s?\b/,
   /\b(random|randomly|randomness|roll|dice|coin flip|pick one|choose one|shuffle|draw)\b/,
   /\b(reveal)\b.*\b(random|randomness|seed|proof|commitment)\b/,
 ];
 
 const DISCORD_REACTION_INTENT = /(?:\b(?:react|add|put|place|leave)\b[\s\S]{0,80}(?:\p{Extended_Pictographic}|\b(?:emoji|emote|reaction)\b)|(?:\p{Extended_Pictographic}|\b(?:emoji|emote|reaction)\b)[\s\S]{0,80}\b(?:react|add|put|place|leave)\b)/iu;
 
-const EMOJI_CONTEXT = /\b(?:custom|server)\s+emojis?\b|<a?:[a-z0-9_]+:\d+>/i;
+const EMOJI_CONTEXT = /\b(?:custom|server)?\s*(?:emoji|emote)s?\b|<a?:[a-z0-9_]+:\d+>/i;
 
 const SPOTIFY_KEYWORDS = [
   /\bspotify\b/,
@@ -199,11 +198,10 @@ const CODEGEN_KEYWORDS = [
 const OPS_KEYWORDS = [
   /\b(status|health|logs?|trace|why.*(failed|slow|hung)|deployment|config|admin|ops)\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
-  /\b(?:custom|server)?\s*emojis?\b/,
+  /\b(?:custom|server)?\s*(?:emoji|emote)s?\b/,
   /\bwhat can you do\b/,
   /\b(rate.?limit|turn limit|post limit|unlimit)\b/,
   /\blimit\b.*\b(per day|daily|posts?|turns?|messages?|uses?)\b/,
-  /\bskills?\b/,
 ];
 
 const REPLY_OPS_KEYWORDS = [
@@ -212,9 +210,4 @@ const REPLY_OPS_KEYWORDS = [
   /\b(why|how) (?:didn['’]?t|did not) (you|the bot|this|that)\b/,
   /\bwhy not (?:use|call|run|choose|pick|select|invoke|try)\b/,
   /\bwhat (failed|hung|timed out|went wrong)\b/,
-];
-
-const SKILL_CONTEXT = /\bskills?\b|`[a-z0-9][a-z0-9-]*`/i;
-const SKILL_REPLY_KEYWORDS = [
-  /\b(remove|delete|disable|enable|change|update|edit|all)\b/,
 ];

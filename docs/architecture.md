@@ -10,7 +10,7 @@ Discord AI Agent is a TypeScript Node app with three production roles:
 - `worker`: queue consumers for chat agent-runtime execution and final Discord delivery, crawl, embeddings, code-update tasks, reconciliation, and cleanup.
 - `api`: internal control plane for sandbox callbacks, run console APIs, metrics, and authenticated debugging UI.
 
-Postgres is the durable source of truth for Discord messages, embeddings, skills, conversation memory, traces, process runs, task projections, sandbox runs, and the canonical `agent_runtime_*` session/execution/message/event/artifact ledger.
+Postgres is the durable source of truth for Discord messages, embeddings, conversation memory, traces, process runs, task projections, sandbox runs, and the canonical `agent_runtime_*` session/execution/message/event/artifact ledger.
 
 ## Architectural Laws
 
@@ -35,7 +35,8 @@ These constraints are intentional. Do not treat them as temporary implementation
 | Pending Discord rendering | Delivery obligations repository | Discord delivery sweeps and `responseSink.ts` |
 | Wallet transfers and wagers | Payment repository plus receipt-verified chain state | Wallet service, payment tools, payments console |
 | Provable chance outcomes | RNG repository | Random tools, proof footers, verifier script |
-| Server overlays and learned skills | Postgres | Prompt/skill loaders and management tools |
+| Server overlays | Postgres | Prompt overlay loader and management surfaces |
+| Static prompt skills | Repository `skills/` directory | Prompt skill loader |
 
 When a new feature needs durable state, extend the focused owner that represents its lifecycle. Do not introduce a convenience table or transcript that becomes a second source of truth.
 
@@ -102,8 +103,8 @@ npm run tasks:status
 
 The base repo ships neutral defaults. Server-specific content lives outside Git in two overlay homes:
 
-- `.discord-ai-agent/` (gitignored): `prompt-overlay.md` persona/prompt overlay (path via `PROMPT_OVERLAY_PATH`, loaded by `src/agent/promptOverlay.ts` and merged into the system prompt each turn), private eval prompts under `evals/`, skill exports, and local sandbox/codegen caches.
-- Postgres: per-guild server overlays (`server_overlays`, loaded in `src/agent/router.ts`), learned skills, user aliases, and all indexed Discord content.
+- `.discord-ai-agent/` (gitignored): `prompt-overlay.md` persona/prompt overlay (path via `PROMPT_OVERLAY_PATH`, loaded by `src/agent/promptOverlay.ts` and merged into the system prompt each turn), private eval prompts under `evals/`, and local sandbox/codegen caches.
+- Postgres: per-guild server overlays (`server_overlays`, loaded in `src/agent/router.ts`), user aliases, and all indexed Discord content.
 
 `scripts/scanRelease.ts` enforces the boundary in CI (`npm run scan:release`): tracked files must not contain known-private strings, real-looking Discord snowflakes outside the fixture allowlist, or secret-shaped tokens.
 

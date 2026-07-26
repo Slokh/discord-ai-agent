@@ -20,16 +20,16 @@ Owns model-facing local tool contracts and implementations.
 - `imageTools.ts`: Discord image inspection, reference image collection, image generation, and generated-file conversion.
 - `responseFormatting.ts`: shared final-response cleanup, Markdown-table normalization, and Discord length trimming used by the agent router and Discord renderers.
 - `discordPresentationTools.ts`: validates the model-selected semantic Components V2 presentation against the same canonical Zod schema used to generate the model tool contract; Discord IDs, authorization, persistence, compilation, and delivery remain owned by Discord/database code.
-- `skillTools.ts`: complete skill inventory, private skill draft/update generation, enable/disable/delete lifecycle operations, policy validation, database persistence, and skill audit logging. Prompt-injected skill text may be truncated, so inventory questions must use `manageSkills`.
 - `spotifyTools.ts`: Spotify Web API client-credentials integration for public catalog search, item details, playlist/album track attachments, artist discographies, playlist stats, and playlist comparisons with current API limits and sanitized stored output.
 - `spendTools.ts`: ops spend summaries from `tool_audit_logs.estimated_cost_usd`, including today/month totals and top tool/user breakdowns.
 - `walletTools.ts`: conversational shared-wallet lifecycle status, roster-independent funded-wallet directories backed by existing wallet accounts, requester-scoped canonical wager history, safe Discord-name resolution with one live roster fetch per turn and a permission-filtered indexed fallback, below-target starter top-ups, requester transfers including explicit whole-balance sends, confirmed follow-up admin corrections, durable starter-target resets, receipt-backed fee summaries, and authorized reconciliation.
+- `wagerIntent.ts`: deterministic normalization for standard blackjack/coin-flip amounts, coin-side reply continuations, and canonical draw arguments before funds or entropy move.
 - `paymentToolContext.ts`: shared payment event recording and network-aware Tempo transaction explorer footers.
 - `discordOpsTools.ts`: reply-aware, permission-filtered self-debugging through `inspectAgentLogs`, including normalized run evidence and optional bounded redacted model I/O.
 - `discordBugTools.ts`: requester-scoped, permission-filtered retrieval of messages marked with the Unicode `🐛` reaction, including replied-to prompt context for later code-update tasks.
 - `guildEmojiTools.ts`: ops-gated custom server emoji creation from generated, attached, replied-to, or URL images, including bounded 128×128 WebP normalization and upload auditing.
 - `toolContext.ts`: shared tool-context helpers such as requester-visible indexed channels and Discord message-id parsing.
-- Discord resolvers, history/retrieval, stats/topics, images/vision, skills, code-update tasks, task status, logs, deployment status, and response cleanup.
+- Discord resolvers, history/retrieval, stats/topics, images/vision, code-update tasks, task status, logs, deployment status, and response cleanup.
 - Restricted expensive/mutating tools are gated in the router before dispatch: codegen defaults to owner-only when `BOT_OWNER_USER_ID` is set, avatar updates and per-user turn limits (`setUserTurnLimit`) use the ops allowlist, and image generation can opt into the ops allowlist.
 
 ## Change Routing
@@ -52,7 +52,7 @@ Owns model-facing local tool contracts and implementations.
 
 ## Structure
 
-Implementation lives directly in focused modules by tool family: Discord resolvers/retrieval/summary/ops, agent memory, generated files, images, skills, code-update tasks, spend, Spotify, and response formatting. Add contracts to the matching `contracts/` family; `registry.ts` aggregates them without owning individual schemas.
+Implementation lives directly in focused modules by tool family: Discord resolvers/retrieval/summary/ops, agent memory, generated files, images, code-update tasks, spend, Spotify, and response formatting. Add contracts to the matching `contracts/` family; `registry.ts` aggregates them without owning individual schemas.
 
 ## Tool Groups and Scoped Toolsets
 

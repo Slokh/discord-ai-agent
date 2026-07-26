@@ -2,7 +2,7 @@
 
 A self-hosted AI agent for private Discord servers.
 
-Mention `@ai` and the bot can answer questions, search server history with Discord permissions, summarize channels, generate images, look things up on the web, remember private server skills, and open code-update PRs for itself.
+Mention `@ai` and the bot can answer questions, search server history with Discord permissions, summarize channels, generate images, look things up on the web, and open code-update PRs for itself.
 
 The interface is intentionally simple: users talk to the bot naturally, and the model chooses tools.
 
@@ -13,7 +13,7 @@ Most Discord bots make people learn commands. Most AI chat apps do not understan
 - One interface: `@ai <request>`
 - Permission-aware memory over indexed Discord history
 - Persistent per-channel conversation context
-- Web, image, stats, summary, and skill tools
+- Web, image, stats, and summary tools
 - Self-hosted data and deployment
 - Sandboxed code-update PRs the bot opens against its own repo
 
@@ -41,7 +41,7 @@ The app has three roles, runnable as one fully configured process (`all`) or spl
 - `worker`: queued chat prompt execution and final Discord delivery, plus crawling, embeddings, code-update tasks, reconciliation, and cleanup. Normal chat needs a Discord-agent worker as well as the bot role.
 - `api`: internal callback API for sandbox task progress and the run console. Needed for code-update PRs and debugging UI.
 
-Postgres with `pgvector` is the source of truth for Discord history, embeddings, skills, traces, the `agent_runtime_*` execution ledger, task projections, and sandbox runs.
+Postgres with `pgvector` is the source of truth for Discord history, embeddings, traces, the `agent_runtime_*` execution ledger, task projections, and sandbox runs.
 
 ## Capabilities
 
@@ -56,7 +56,7 @@ Postgres with `pgvector` is the source of truth for Discord history, embeddings,
 - OpenRouter-hosted web search, web fetch, and datetime tools
 - Public Spotify catalog search, item lookup, playlist/album track-list, artist discography, playlist stats, and playlist comparison tools when Spotify client credentials are configured
 - Optional automatic Privy wallets, managed USD transfers, and provably fair wager settlement on Tempo
-- Private DB-backed skills
+- Repository-managed prompt skills
 - Code-update PRs through sandboxed agent tasks
 - Structured logs and trace/agent-runtime event inspection
 
@@ -294,8 +294,8 @@ Fresh installs apply the squashed `migrations/001_initial.sql` baseline followed
 
 The tracked repo ships neutral defaults only. Everything specific to your server lives in one of two overlay homes, both outside Git:
 
-- `.discord-ai-agent/` (gitignored): persona/prompt overlay, private eval prompts, skill exports, local caches.
-- The database: server overlays (`server_overlays`), learned skills, aliases, and all indexed Discord content.
+- `.discord-ai-agent/` (gitignored): persona/prompt overlay, private eval prompts, and local caches.
+- The database: server overlays (`server_overlays`), aliases, and all indexed Discord content.
 
 Customization points:
 
@@ -306,23 +306,9 @@ Customization points:
 
 `npm run scan:release` enforces the boundary: it fails if known-private strings, real-looking Discord snowflakes, or secret-shaped tokens appear in tracked files.
 
-## Private Skills
+## Prompt Skills
 
-Private server-specific skills live in Postgres, not Git.
-
-```text
-@ai learn this for next time: movie night starts at 8 unless someone says otherwise
-```
-
-Manage skills:
-
-```bash
-npm run skills -- list --all
-npm run skills -- export .discord-ai-agent/skills-export.json
-npm run skills -- import .discord-ai-agent/skills-export.json
-npm run skills -- disable movie-night
-npm run skills -- delete movie-night
-```
+Static prompt skills are loaded only from the repository's `skills/` directory. The runtime does not create, update, load, or manage database-backed skills; use the private prompt overlay for deployment-specific conversational guidance.
 
 ## Security Model
 

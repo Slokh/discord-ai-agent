@@ -4,6 +4,7 @@ import {
   forcedRandomActionRouteForPrompt,
   ForcedRandomActionRouter,
   randomActionAuthorizedForTurn,
+  randomActionRequiredForTurn,
   randomActionNeedsWalletBalance,
   randomToolForPrompt,
   RandomOutcomeGuard,
@@ -28,6 +29,9 @@ describe("random outcome guard", () => {
     "please spin the slots for me",
     "can you deal me a blackjack hand?",
     "let's flip a coin",
+    "generate a random 3 digit number",
+    "make me a random number from 1 to 100000",
+    "pick a number from 1 to 20",
   ])("forces verified randomness for an explicit chance action: %s", (text) => {
     expect(randomToolForPrompt(text)).toBe("drawRandom");
   });
@@ -72,6 +76,24 @@ describe("random outcome guard", () => {
       userText: "do it",
       promptContextText: "Spin the roulette wheel once.",
     })).toBe(true);
+  });
+
+  it("requires a draw for an action-completing reply without treating debugging questions as play", () => {
+    const replyContextTexts = [
+      "coinflip 0.10",
+      "Heads or tails for the $0.10 coin flip?",
+    ];
+    expect(randomActionRequiredForTurn({
+      userText: "tails",
+      replyContextTexts,
+    })).toBe(true);
+    expect(randomActionRequiredForTurn({
+      userText: "why didn't you use the RNG tool?",
+      replyContextTexts,
+    })).toBe(false);
+
+    const router = new ForcedRandomActionRouter("tails", true, true);
+    expect(router.takeToolForRound(0)).toBe("drawRandom");
   });
 
   it("requires a verified balance before an all-in random wager", () => {
@@ -172,6 +194,14 @@ describe("random outcome guard", () => {
     expect(shouldRejectUnverifiedRandomOutcome({
       userText: "pick a random 18 digit number",
       responseContent: "123456789" + "012345678",
+      successfulRandomDraw: false,
+    })).toBe(true);
+  });
+
+  it("rejects a short invented result for an explicit random-number request", () => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "generate a random 3 digit number",
+      responseContent: "237",
       successfulRandomDraw: false,
     })).toBe(true);
   });

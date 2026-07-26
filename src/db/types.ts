@@ -259,20 +259,6 @@ export type InteractionBlock = {
   updatedAt: Date;
 };
 
-export type DatabaseSkill = {
-  name: string;
-  filePath: string;
-  source: string;
-  content: string;
-  enabled: boolean;
-  version: number;
-  lastPrUrl: string | null;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
 export type TraceEventLevel = "debug" | "info" | "warn" | "error";
 
 export type TraceEvent = {

@@ -98,7 +98,7 @@ export function hasExplicitImageGenerationIntent(
 }
 
 const IMAGE_OUTPUT_NOUN =
-  /\b(?:image|picture|pic|photo|photograph|illustration|graphic|artwork|avatar|pfp|logo|poster|meme|sticker|emoji|wallpaper|banner|thumbnail|drawing|painting|render)\b/i;
+  /\b(?:image|picture|pic|photo|photograph|illustration|graphic|artwork|avatar|pfp|logo|poster|meme|sticker|emoji|emote|wallpaper|banner|thumbnail|drawing|painting|render)\b/i;
 const IMAGE_CREATION_COMMAND =
   /^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:make|create|generate|design|produce)\b/i;
 const IMAGE_EDIT_COMMAND =

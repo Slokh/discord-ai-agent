@@ -36,8 +36,6 @@ describe("toolRegistry", () => {
       "readGeneratedFile",
       "queryGeneratedCsv",
       "queryGeneratedTable",
-      "createSkillDraft",
-      "manageSkills",
       "runCodingAgent",
       "getAgentTaskStatus",
       "listAgentTasks",

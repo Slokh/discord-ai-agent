@@ -15,7 +15,7 @@ export function effectiveMaximumPayoutUsd(input: {
 
 export function requestSelectsAllowedWagerAction(requestText: string, wager: WagerReservation) {
   const normalized = normalize(requestText);
-  return wager.allowedActions.some((action) => {
+  return (wager.allowedActions ?? []).some((action) => {
     const candidate = normalize(action);
     return Boolean(candidate) && (normalized === candidate || normalized.startsWith(`${candidate} `));
   });

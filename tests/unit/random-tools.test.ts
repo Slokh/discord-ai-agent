@@ -587,10 +587,109 @@ describe("drawRandom", () => {
     expect(response).toContain("Maximum total payout reserved: $0.8");
   });
 
-  it("rejects a blackjack opening draw that would publish the dealer hole card", async () => {
+  it("canonicalizes game-led blackjack shorthand before reserving or drawing", async () => {
+    const reserveWager = vi.fn(async () => ({ id: "wager-1" }));
+    const attachWagerDraw = vi.fn(async () => undefined);
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "blackjack, 0.10",
+      walletService: { reserveWager, attachWagerDraw } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "coin",
+      count: 1,
+      reason: "model selected the wrong draw",
+    });
+
+    expect(response).toContain("Provably fair draw complete");
+    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "user",
+      game: "blackjack",
+      stakeUsd: 0.1,
+      maxPayoutUsd: 0.8,
+    }), expect.any(Function));
+    expect(rngRepo.draws).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "cards", params: expect.objectContaining({ count: 3 }) }),
+    ]));
+  });
+
+  it("continues an incomplete coinflip wager from the same requester's reply chain", async () => {
+    const reserveWager = vi.fn(async () => ({ id: "wager-coin" }));
+    const attachWagerDraw = vi.fn(async () => undefined);
+    const { ctx, rngRepo } = fakeContext({
+      requestText: "tails",
+      requestId: "reply-message",
+      requestMessageId: "reply-message",
+      replyContext: {
+        messageId: "bot-question",
+        rootMessageId: "root-message",
+        channelId: "channel",
+        guildId: "guild",
+        authorId: "bot",
+        authorDisplayName: "Bot",
+        authorIsBot: true,
+        content: "Heads or tails for the $0.10 coin flip?",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [
+          {
+            messageId: "root-message",
+            channelId: "channel",
+            guildId: "guild",
+            authorId: "user",
+            authorDisplayName: "User",
+            authorIsBot: false,
+            content: "coinflip 0.10",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: null,
+            url: null,
+          },
+          {
+            messageId: "bot-question",
+            channelId: "channel",
+            guildId: "guild",
+            authorId: "bot",
+            authorDisplayName: "Bot",
+            authorIsBot: true,
+            content: "Heads or tails for the $0.10 coin flip?",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: null,
+            url: null,
+          },
+        ],
+      },
+      walletService: {
+        getCurrentWager: vi.fn(async () => null),
+        reserveWager,
+        attachWagerDraw,
+      } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await drawRandom(ctx, {
+      kind: "coin",
+      reason: "coin flip",
+    });
+
+    expect(response).toContain("Provably fair draw complete");
+    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "user",
+      game: "coinflip",
+      stakeUsd: 0.1,
+      maxPayoutUsd: 0.2,
+    }), expect.any(Function));
+    expect(rngRepo.draws).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "coin" }),
+    ]));
+  });
+
+  it("still rejects a non-standard blackjack opening that would publish the dealer hole card", async () => {
     const reserveWager = vi.fn();
     const { ctx, rngRepo } = fakeContext({
-      requestText: "bet .1 blackjack",
+      requestText: "play my custom blackjack variant",
       walletService: { reserveWager } as unknown as ToolContext["walletService"],
     });
 
@@ -626,23 +725,28 @@ describe("drawRandom", () => {
     expect(rngRepo.sessions.size).toBe(0);
   });
 
-  it("keeps a game-led decimal stake authoritative over model wager arguments", async () => {
-    const reserveWager = vi.fn();
+  it("canonicalizes a game-led decimal stake over inconsistent model wager arguments", async () => {
+    const reserveWager = vi.fn(async () => ({ id: "wager-1" }));
+    const attachWagerDraw = vi.fn(async () => undefined);
     const { ctx, rngRepo } = fakeContext({
       requestText: "blackjack, 0.25",
-      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+      walletService: { reserveWager, attachWagerDraw } as unknown as ToolContext["walletService"]
     });
 
     const response = await drawRandom(ctx, {
-      kind: "cards",
-      count: 3,
+      kind: "coin",
+      count: 1,
       wager: { playerUserId: "user", stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack" }
     });
 
-    expect(response).toContain("match the explicit amount");
-    expect(response).toContain("stakeUsd=0.25");
-    expect(reserveWager).not.toHaveBeenCalled();
-    expect(rngRepo.sessions.size).toBe(0);
+    expect(response).toContain("Provably fair draw complete");
+    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
+      stakeUsd: 0.25,
+      game: "blackjack",
+    }), expect.any(Function));
+    expect(rngRepo.draws).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "cards", params: expect.objectContaining({ count: 3 }) }),
+    ]));
   });
 
   it("returns duplicate request reservations as a recoverable tool result", async () => {
@@ -801,10 +905,10 @@ describe("drawRandom", () => {
     expect(requiresWalletBackedWagerForContext(ctx)).toBe(false);
   });
 
-  it("rejects wagered card-by-card draws before reserving funds or consuming entropy", async () => {
+  it("rejects non-standard wagered card-by-card openings before reserving funds or consuming entropy", async () => {
     const reserveWager = vi.fn();
     const { ctx, rngRepo } = fakeContext({
-      requestText: "bet .05 blackjack",
+      requestText: "play my custom staged blackjack variant",
       walletService: { reserveWager } as unknown as ToolContext["walletService"]
     });
 

@@ -20,8 +20,7 @@ import {
 } from "../../src/tools/discordSummaryTools.js";
 import { findDiscordUsers } from "../../src/tools/discordResolverTools.js";
 import { undoConversationTurns } from "../../src/tools/agentMemoryTools.js";
-import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../src/tools/imageTools.js";
-import { createSkillFromRequest, manageSkills } from "../../src/tools/skillTools.js";
+import { generateImage, getDiscordUserAvatar, imageReferencesForInput, inspectDiscordImages } from "../../src/tools/imageTools.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 afterEach(() => {
@@ -86,61 +85,6 @@ describe("model-led mutating tools", () => {
     ).toBe("Replace Thinking reply with loading emoji");
     expect(agentUpdateTitleFromRequest("add a calendar integration")).toBe("Add a calendar integration");
     expect(agentUpdateTitleFromRequest("add a calendar integration", "Add calendar support")).toBe("Add calendar support");
-  });
-
-  it("saves a skill from structured model arguments", async () => {
-    const ctx = {
-      config: { openRouter: {}, maxReplyChars: 1800 },
-      repo: {
-        listEnabledDatabaseSkills: vi.fn(async () => []),
-        upsertDatabaseSkill: vi.fn(async (input: { name: string; content: string }) => ({
-          name: input.name,
-          content: input.content,
-          source: "database",
-          version: 1
-        })),
-        auditTool: vi.fn(async () => undefined)
-      },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-      userDisplayName: "User",
-      visibleChannelIds: ["channel"]
-    } as unknown as ToolContext;
-
-    const response = await createSkillFromRequest(ctx, {
-      skillName: "Movie Night",
-      instruction: "movie night votes should use the pinned poll"
-    });
-
-    expect(response).toBe("Saved private skill `movie-night` to the database (v1).");
-    expect(ctx.repo.upsertDatabaseSkill).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "movie-night",
-        request: "movie night votes should use the pinned poll"
-      })
-    );
-  });
-
-  it("lists matching skills and can delete all database skills", async () => {
-    const deleteDatabaseSkill = vi.fn(async () => true);
-    const ctx = {
-      repo: {
-        listDatabaseSkills: vi.fn(async () => [
-          { name: "alex-random-language", content: "# Alex\nUse a random language.", source: "database", enabled: true, version: 3 },
-          { name: "movie-night", content: "# Movies", source: "database", enabled: false, version: 1 },
-        ]),
-        deleteDatabaseSkill,
-        auditTool: vi.fn(async () => undefined),
-      },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-    } as unknown as ToolContext;
-
-    await expect(manageSkills(ctx, { action: "list", query: "alex" })).resolves.toContain("`alex-random-language` — enabled, database v3");
-    await expect(manageSkills(ctx, { action: "delete", all: true })).resolves.toContain("Deleted 2 database skills");
-    expect(deleteDatabaseSkill).toHaveBeenCalledTimes(2);
   });
 
   it("undoes recent conversation turns through a tool boundary", async () => {
@@ -1348,6 +1292,80 @@ describe("generateImage", () => {
     expect(generateImageMock).toHaveBeenCalledWith("turn this into pixel art", {
       inputReferences: [{ type: "image_url", image_url: { url: "https://cdn.discordapp.com/image.png" } }]
     });
+  });
+
+  it("prioritizes the direct parent over older reply-chain images", async () => {
+    const ctx = {
+      repo: {},
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      replyContext: {
+        messageId: "direct-parent",
+        rootMessageId: "old-root",
+        channelId: "channel",
+        guildId: "guild",
+        authorId: "bot",
+        authorDisplayName: "Bot",
+        authorIsBot: true,
+        content: "Newest image",
+        attachmentSummaries: ["new.png image/png"],
+        attachments: [{
+          id: "new",
+          url: "https://example.com/new.png",
+          filename: "new.png",
+          contentType: "image/png",
+        }],
+        createdAt: null,
+        url: null,
+        chain: [
+          {
+            messageId: "old-root",
+            channelId: "channel",
+            guildId: "guild",
+            authorId: "user",
+            authorDisplayName: "User",
+            authorIsBot: false,
+            content: "Old image",
+            attachmentSummaries: ["old.png image/png"],
+            attachments: [{
+              id: "old",
+              url: "https://example.com/old.png",
+              filename: "old.png",
+              contentType: "image/png",
+            }],
+            createdAt: null,
+            url: null,
+          },
+          {
+            messageId: "direct-parent",
+            channelId: "channel",
+            guildId: "guild",
+            authorId: "bot",
+            authorDisplayName: "Bot",
+            authorIsBot: true,
+            content: "Newest image",
+            attachmentSummaries: ["new.png image/png"],
+            attachments: [{
+              id: "new",
+              url: "https://example.com/new.png",
+              filename: "new.png",
+              contentType: "image/png",
+            }],
+            createdAt: null,
+            url: null,
+          },
+        ],
+      },
+    } as unknown as ToolContext;
+
+    const references = await imageReferencesForInput(ctx, { useContextImages: true });
+
+    expect(references.map((reference) => reference.url)).toEqual([
+      "https://example.com/new.png",
+      "https://example.com/old.png",
+    ]);
   });
 
   it("inspects current Discord image attachments with a vision model", async () => {

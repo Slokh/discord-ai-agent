@@ -35,7 +35,7 @@ export const coreToolContracts = [
           type: "array",
           items: { type: "string", enum: TOOL_GROUPS },
           description:
-            "Optional groups to add; omit to request all. discord-retrieval covers server history, memory, stats, summaries, and files; generated-data covers prior generated files/tables; presentation covers native Discord UI; discord-action covers polls, reactions, undo, and randomness; image covers vision/generation; spotify covers catalog and playlists; codegen covers repository/PR/CI work; ops covers status, spend, skills, and diagnostics."
+            "Optional groups to add; omit to request all. discord-retrieval covers server history, memory, stats, summaries, and files; generated-data covers prior generated files/tables; presentation covers native Discord UI; discord-action covers polls, reactions, undo, and randomness; image covers vision/generation; spotify covers catalog and playlists; codegen covers repository/PR/CI work; ops covers status, spend, and diagnostics."
         },
         reason: { type: "string", description: "Why more tools are needed." }
       },

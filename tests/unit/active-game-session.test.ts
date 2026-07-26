@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
-import { injectActiveGameSession, loadActiveGameSession } from "../../src/agent/activeGameSession.js";
+import { activeGameActionNeedsRandomDraw, injectActiveGameSession, loadActiveGameSession } from "../../src/agent/activeGameSession.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("active game sessions", () => {
@@ -25,6 +25,20 @@ describe("active game sessions", () => {
     );
 
     expect(active?.actionRequested).toBe(false);
+  });
+
+  it("forces randomness only for game actions that need a fresh draw", () => {
+    const blackjack = { wager: wager(), actionRequested: true };
+    expect(activeGameActionNeedsRandomDraw(blackjack, "stand")).toBe(true);
+    expect(activeGameActionNeedsRandomDraw(blackjack, "hit")).toBe(true);
+
+    const dice = {
+      wager: { ...wager(), game: "dice game" },
+      actionRequested: true,
+    };
+    expect(activeGameActionNeedsRandomDraw(dice, "reroll all")).toBe(true);
+    expect(activeGameActionNeedsRandomDraw(dice, "score now")).toBe(false);
+    expect(activeGameActionNeedsRandomDraw(dice, "hold 1 and 3")).toBe(false);
   });
 
   it("injects complete versioned state before conversation history", () => {

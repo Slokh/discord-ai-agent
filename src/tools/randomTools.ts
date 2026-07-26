@@ -24,9 +24,10 @@ import type { ToolContext } from "./types.js";
 import { ensureAgentTurnOutput } from "./turnOutput.js";
 import { validateWagerFairness } from "./wagerFairness.js";
 import { wagerRequester } from "./wagerRequesterScope.js";
-import { effectiveMaximumPayoutUsd, requestSelectsAllowedWagerAction } from "./wagerTerms.js";
+import { effectiveMaximumPayoutUsd } from "./wagerTerms.js";
 import { validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
 import type { DrawRandomInput } from "./randomTypes.js";
+import { canonicalizeStandardWagerDraw, standardWagerIntentForContext } from "./wagerIntent.js";
 
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
@@ -45,17 +46,17 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   if (isDeferredExternalOutcomeWager(ctx.requestText ?? "")) {
     return "This wager depends on a future or third-party outcome, not a draw the bot should perform now. No funds were reserved and no random draw was made. Cross-user deferred wagers are not supported; use a current requester-scoped bot game instead.";
   }
+  let continuingWager: WagerReservation | null = null;
+  if (ctx.config.payments.userWalletsEnabled && ctx.walletService) {
+    continuingWager = await currentWagerForContext(ctx);
+  }
+  const canonicalInput = canonicalizeStandardWagerDraw(ctx, input, continuingWager);
+  if (typeof canonicalInput === "string") return canonicalInput;
+  input = canonicalInput;
   const kind = (input.kind ?? "").trim();
   if (!DRAW_KINDS.has(kind)) {
     await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
     return `Unknown draw kind "${kind}". Supported kinds: integers, dice, coin, pick, shuffle, cards.`;
-  }
-  let continuingWager: WagerReservation | null = null;
-  if (ctx.config.payments.userWalletsEnabled && ctx.walletService) {
-    continuingWager = await currentWagerForContext(ctx);
-    if (continuingWager && input.wager && requestSelectsAllowedWagerAction(ctx.requestText ?? "", continuingWager)) {
-      input = { ...input, wager: undefined };
-    }
   }
   if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWagerForContext(ctx)) {
     if (!continuingWager) {
@@ -299,6 +300,7 @@ export function isDeferredExternalOutcomeWager(text: string): boolean {
 export function requiresWalletBackedWagerForContext(ctx: ToolContext): boolean {
   const requestText = ctx.requestText ?? "";
   if (requiresWalletBackedWager(requestText)) return true;
+  if (standardWagerIntentForContext(ctx)) return true;
   if (!/^\s*(?:again|same(?:\s+thing)?|one\s+more|do\s+it\s+again|repeat)\b/i.test(requestText)) return false;
   const previousRequesterPrompt = [...(ctx.sessionMessages ?? [])]
     .reverse()

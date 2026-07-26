@@ -5,7 +5,7 @@ export const TOOL_NAMES = [
   "searchDiscordHistory", "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",
   "listDiscordBugMarkers", "searchDiscordAttachments", "inspectDiscordFile", "inspectDiscordImages", "getDiscordUserAvatar",
   "getDiscordStats", "getDiscordChannelTopics", "summarizeDiscordHistory", "summarizeDiscordThread", "generateImage",
-  "readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable", "createSkillDraft", "manageSkills", "runCodingAgent",
+  "readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable", "runCodingAgent",
   "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask", "getDeploymentStatus", "getSpendSummary",
   "undoConversationTurns", "inspectAgentLogs", "reportStatus", "getWalletBalance", "listWalletBalances", "getWagerHistory",
   "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds", "adminSetWalletStarterAmount",

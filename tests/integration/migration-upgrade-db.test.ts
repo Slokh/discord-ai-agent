@@ -51,6 +51,10 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM mpp_payment_attempts"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await client.query(`
+        INSERT INTO skills(name, file_path, source, content)
+        VALUES ('legacy-database-skill', 'database:legacy-database-skill.md', 'database', '# Legacy')
+      `);
       await client.query("INSERT INTO agent_run_feedback(run_id, rating, capture_eval) VALUES ('execution', 'good', true)");
       await expect(client.query("SELECT count(*)::int AS count FROM agent_run_feedback")).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 1 })] }));
       for (const version of [
@@ -66,6 +70,7 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         "021_discord_component_action_expiry_index",
         "022_agent_runtime_binary_artifacts",
         "023_wallet_guild_settings",
+        "024_remove_database_skills",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
@@ -76,6 +81,8 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
       await expect(client.query("SELECT count(*)::int AS count FROM agent_runtime_artifact_blobs"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM wallet_guild_settings"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM skills WHERE source = 'database'"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);

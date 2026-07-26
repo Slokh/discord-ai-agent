@@ -544,7 +544,7 @@ function imageSafetyFallbackPrompt(prompt: string) {
   ].join("\n");
 }
 
-const TRANSPARENT_IMAGE_INTENT = /\b(?:transparent(?:\s+background)?|no\s+background|remove\s+(?:the\s+)?background|background[- ]?free|cutout|emoji|sticker)\b/i;
+const TRANSPARENT_IMAGE_INTENT = /\b(?:transparent(?:\s+background)?|no\s+background|remove\s+(?:the\s+)?background|background[- ]?free|cutout|emoji|emote|sticker)\b/i;
 
 function wantsTransparentImage(prompt: string) {
   return TRANSPARENT_IMAGE_INTENT.test(prompt);
@@ -630,7 +630,7 @@ function contextImageReferences(ctx: ToolContext): ImageReferenceContext[] {
     if (reference) references.push(reference);
   }
 
-  for (const message of ctx.replyContext?.chain ?? []) {
+  for (const message of [...(ctx.replyContext?.chain ?? [])].reverse()) {
     for (const attachment of message.attachments ?? []) {
       const labelPrefix = message.url ? `reply context message ${message.url}` : `reply context message ${message.messageId}`;
       const reference = discordAttachmentContextToReference(attachment, "reply_context", labelPrefix);

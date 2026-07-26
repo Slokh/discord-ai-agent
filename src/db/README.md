@@ -18,7 +18,7 @@ Owns durable Postgres state and query contracts.
 - Discord delivery obligations for in-flight runtime turns live in `deliveryObligationsRepository.ts` and store only render state, not duplicated execution history. Replayable attachment bytes use `agent_runtime_artifact_blobs`, keyed to normal artifact metadata with cascade cleanup and bounded retention owned by `agentRuntimeArtifactRepository.ts`.
 - Opaque requester/channel-scoped component action generations, batch creation, atomic activation/replacement, bounded expiry, and transactional single-use consumption live in `discordComponentActionRepository.ts`; canonical interaction execution remains in `agent_runtime_*`.
 - Exactly-once deployment note claims, baselines, and posted Discord message IDs live in `deploymentAnnouncementRepository.ts`.
-- DB-backed skills, server overlays, and health checks live in `skillsRepository.ts`.
+- Server overlays and database health checks live in `skillsRepository.ts`. Historical skill tables remain migration-compatible, but the runtime no longer reads or writes database-backed skills.
 - `repositories.ts` is a compatibility facade that delegates to the focused modules; shared types live in `types.ts`, with only cross-domain helpers left in `shared.ts`.
 
 ## Change Routing
@@ -40,4 +40,4 @@ Owns durable Postgres state and query contracts.
 
 ## Structure
 
-`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, and skills. `agentRuntimeRepository.ts` owns shared sessions, executions, events, messages, and sandbox leases; `agentRuntimeArtifactRepository.ts` owns text chunks, binary blobs, integrity metadata, retention, and artifact cleanup behind the same public repository surface. Add new queries to the owning focused module, not the facade.
+`src/db/repositories.ts` is a compatibility facade; implementation lives in focused modules for messages, retrieval, embeddings, agent runtime sessions, tasks, budget/spend reads, delivery obligations, process runs, and server overlays. `agentRuntimeRepository.ts` owns shared sessions, executions, events, messages, and sandbox leases; `agentRuntimeArtifactRepository.ts` owns text chunks, binary blobs, integrity metadata, retention, and artifact cleanup behind the same public repository surface. Add new queries to the owning focused module, not the facade.

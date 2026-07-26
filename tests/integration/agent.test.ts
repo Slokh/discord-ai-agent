@@ -12,7 +12,7 @@ import { rngCommitment } from "../../src/rng/provable.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
-  it("replays explicit real-money round language through reservation, fresh RNG, and settlement", async () => {
+  it("completes a coinflip side reply through reservation, fresh RNG, and settlement", async () => {
     const serverSeed = "11".repeat(32);
     const commitment = rngCommitment(serverSeed);
     const draws: RngDrawInput[] = [];
@@ -133,28 +133,9 @@ describe("agent router", () => {
           }],
         };
       }
-      if (modelRound === 2 && prompt.includes("requires a wallet-backed wager")) {
-        return {
-          content: "",
-          model: "router-model",
-          raw: {},
-          toolCalls: [{
-            id: "reserved-draw",
-            name: "drawRandom",
-            argumentsText: JSON.stringify({
-              kind: "coin",
-              reason: "heads wins",
-              wager: {
-                playerUserId: "u",
-                stakeUsd: 0.25,
-                maxPayoutUsd: 0.5,
-                game: "synthetic coin game; heads wins",
-              },
-            }),
-          }],
-        };
-      }
-      if (modelRound === 3 && prompt.includes("Provably fair draw complete") && prompt.includes("wallet wager")) {
+      if (modelRound === 2 && prompt.includes("Provably fair draw complete") && prompt.includes("wallet wager")) {
+        const values = (draws[0]?.outcome as { values?: string[] } | undefined)?.values ?? [];
+        const won = values.includes("heads");
         return {
           content: "",
           model: "router-model",
@@ -163,10 +144,12 @@ describe("agent router", () => {
             id: "settle-reserved-draw",
             name: "settleRandomWager",
             argumentsText: JSON.stringify({
-              payoutUsd: 0.5,
-              outcome: "player_win",
+              payoutUsd: won ? 0.5 : 0,
+              outcome: won ? "player_win" : "player_loss",
               resolutionSource: "verified_randomness",
-              explanation: "Synthetic verified result satisfies the stated rule.",
+              explanation: won
+                ? "The verified coin landed on the selected side."
+                : "The verified coin did not land on the selected side.",
             }),
           }],
         };
@@ -225,10 +208,20 @@ describe("agent router", () => {
         authorId: "bot",
         authorDisplayName: "AI",
         authorIsBot: true,
-        content: "The prior synthetic wager completed.",
+        content: "Heads or tails for the $0.25 coin flip?",
         attachmentSummaries: [],
         attachments: [],
-        chain: [],
+        chain: [{
+          messageId: "root",
+          channelId: "c",
+          guildId: "g",
+          authorId: "u",
+          authorDisplayName: "User",
+          authorIsBot: false,
+          content: "coinflip 0.25",
+          attachmentSummaries: [],
+          attachments: [],
+        }],
       },
       requestId: "replay-wager-request",
       requestMessageId: "replay-wager-request",
@@ -242,7 +235,7 @@ describe("agent router", () => {
       },
     } as unknown as ToolContext;
 
-    const response = await handleAgentRequest(ctx, "let it ride: $0.25 on a coin flip");
+    const response = await handleAgentRequest(ctx, "heads");
 
     expect(response.content).toBe("The replay round completed and settled against the verified draw.");
     expect(requestStarterFunds).toHaveBeenCalledTimes(1);
@@ -4390,7 +4383,7 @@ describe("agent router", () => {
     expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
   });
 
-  it("uses bounded tool-free synthesis immediately after an image retry produces a file", async () => {
+  it("returns grounded image evidence immediately after an image retry produces a file", async () => {
     const traceEvents: any[] = [];
     const imageBytes = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
@@ -4499,21 +4492,138 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "make an image of this synthetic scene with blue lights");
 
-    expect(response.content).toBe("The synthetic image is ready.");
+    expect(response.content).toContain("Generated image for: A safe synthetic futuristic library scene");
     expect(response.files).toEqual([
       expect.objectContaining({ contentType: "image/png", data: imageBytes }),
     ]);
     expect(generateImage).toHaveBeenCalledTimes(2);
-    expect(chat).toHaveBeenCalledTimes(3);
-    expect(chat.mock.calls[2]?.[0]).toEqual(expect.objectContaining({
-      model: "fast/final",
-    }));
-    expect(chat.mock.calls[2]?.[0].tools).toBeUndefined();
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(traceEvents.some((event) => event.eventName === "agent.final_synthesis.started")).toBe(false);
     expect(traceEvents).toContainEqual(expect.objectContaining({
-      eventName: "agent.final_synthesis.started",
-      metadata: expect.objectContaining({ reason: "successful generated image artifact" }),
+      eventName: "agent.request.complete",
+      metadata: expect.objectContaining({ toolName: "generateImage" }),
     }));
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
+  });
+
+  it("continues a generated avatar request through the Discord mutation before replying", async () => {
+    const imageBytes = Buffer.from("synthetic-avatar-image");
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{
+        b64_json: imageBytes.toString("base64"),
+        media_type: "image/png",
+      }],
+    }));
+    const discordFetch = vi.fn(async () => new Response(
+      JSON.stringify({ id: "bot-id", avatar: "avatar-hash", username: "Bot" }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", discordFetch);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-avatar",
+          name: "generateImage",
+          argumentsText: JSON.stringify({ prompt: "A synthetic geometric avatar." }),
+        }],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({
+          type: "function",
+          function: { name: "updateBotAvatar" },
+        });
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "set-avatar",
+            name: "updateBotAvatar",
+            argumentsText: "{}",
+          }],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        discord: { token: "discord-token" },
+        allowlists: { ownerUserId: "u", opsUserIds: ["u"] },
+        openRouter: { chatModel: "tool-model", utilityModel: "utility-model" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "generate a new image and use it as your pfp",
+    );
+
+    expect(response.content).toContain("Updated my Discord bot avatar");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png", data: imageBytes }),
+    ]);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(discordFetch).toHaveBeenCalledWith(
+      "https://discord.com/api/v10/users/@me",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+  });
+
+  it("asks for a missing coinflip side before wallet preflight or model selection", async () => {
+    const requestStarterFunds = vi.fn();
+    const chat = vi.fn();
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { requestStarterFunds },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "coinflip-root",
+      requestMessageId: "coinflip-root",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "coinflip 0.10");
+
+    expect(response.content).toBe("Heads or tails for the $0.1 coin flip?");
+    expect(requestStarterFunds).not.toHaveBeenCalled();
+    expect(chat).not.toHaveBeenCalled();
   });
 
   it("synthesizes a final answer instead of dumping raw tool output at the tool round limit", async () => {
@@ -5791,14 +5901,14 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "that version please");
 
-    expect(response.content).toContain("corrected synthetic poster");
+    expect(response.content).toContain("Generated image for:");
+    expect(response.content).toContain("APEX DAY 7429");
     expect(response.files).toEqual([
       expect.objectContaining({ data: correctedImage, contentType: "image/png" }),
     ]);
     expect(generateImage).toHaveBeenCalledTimes(2);
     expect(generateImage.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
-    expect(chat).toHaveBeenCalledTimes(5);
-    expect(chat.mock.calls[4]?.[0].tools).toBeUndefined();
+    expect(chat).toHaveBeenCalledTimes(4);
   });
 
   it("inherits exact image text from a reply chain when the model omits requiredText", async () => {
@@ -5902,13 +6012,14 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "that version please");
 
-    expect(response.content).toContain("corrected synthetic poster");
+    expect(response.content).toContain("Generated image for:");
+    expect(response.content).toContain("APEX DAY 7429");
     expect(response.files).toEqual([
       expect.objectContaining({ data: correctedImage, contentType: "image/png" }),
     ]);
     expect(generateImage).toHaveBeenCalledTimes(2);
     expect(generateImage.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
-    expect(chat).toHaveBeenCalledTimes(4);
+    expect(chat).toHaveBeenCalledTimes(3);
   });
 
   it("delivers a deterministic exact-text fallback after repeated reply-chain typography misses", async () => {
@@ -6020,7 +6131,7 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "try now");
 
-    expect(response.content).toContain("corrected synthetic poster");
+    expect(response.content).toContain("Typography fallback:");
     expect(response.files).toEqual([
       expect.objectContaining({ contentType: "image/png" }),
     ]);
@@ -6281,7 +6392,7 @@ describe("agent router", () => {
       "Make this image into a synthetic watercolor.",
     );
 
-    expect(response.content).toContain("watercolor edit");
+    expect(response.content).toContain("Generated image for: Turn the synthetic blue landscape into a watercolor.");
     expect(response.files).toEqual([
       expect.objectContaining({
         contentType: "image/png",
@@ -6289,7 +6400,7 @@ describe("agent router", () => {
       }),
     ]);
     expect(generateImage).toHaveBeenCalledTimes(1);
-    expect(chat).toHaveBeenCalledTimes(5);
+    expect(chat).toHaveBeenCalledTimes(4);
     expect(traceEvents.some((event) =>
       event.eventName === "agent.image_generation.retry"
     )).toBe(true);
@@ -6356,7 +6467,7 @@ describe("agent router", () => {
       "Create a benign portrait of a fictional famous explorer having coffee.",
     );
 
-    expect(response.content).toContain("illustrated fallback");
+    expect(response.content).toContain("Safety fallback:");
     expect(response.files).toEqual([
       expect.objectContaining({
         contentType: "image/png",
@@ -6469,7 +6580,7 @@ describe("agent router", () => {
       "Turn this current synthetic image into a watercolor.",
     );
 
-    expect(response.content).toContain("watercolor edit");
+    expect(response.content).toContain("Generated image for: Turn the current synthetic landscape into a watercolor.");
     expect(response.files).toEqual([
       expect.objectContaining({
         contentType: "image/png",
@@ -6478,7 +6589,7 @@ describe("agent router", () => {
     ]);
     expect(fetchMock).toHaveBeenCalled();
     expect(generateImage).toHaveBeenCalledTimes(1);
-    expect(chat).toHaveBeenCalledTimes(4);
+    expect(chat).toHaveBeenCalledTimes(3);
   });
 
   it("retries an opaque reply-chain background removal and delivers a transparent PNG", async () => {
@@ -6619,7 +6730,8 @@ describe("agent router", () => {
       ],
     );
 
-    expect(response.content).toContain("transparent cutout");
+    expect(response.content).toContain("Transparency fallback:");
+    expect(response.content).toContain("real alpha transparency");
     expect(response.files).toEqual([
       expect.objectContaining({ contentType: "image/png" }),
     ]);
@@ -6767,7 +6879,8 @@ describe("agent router", () => {
       ],
     );
 
-    expect(response.content).toContain("transparent version");
+    expect(response.content).toContain("Reference safety fallback:");
+    expect(response.content).toContain("real alpha transparency");
     expect(response.files).toEqual([
       expect.objectContaining({ contentType: "image/png" }),
     ]);
@@ -6883,7 +6996,7 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "make it brighter");
 
-    expect(response.content).toContain("brighter version");
+    expect(response.content).toContain("Generated image for: Make the retained synthetic landscape brighter.");
     expect(response.files).toEqual([
       expect.objectContaining({
         contentType: "image/png",
@@ -6891,7 +7004,7 @@ describe("agent router", () => {
       }),
     ]);
     expect(generateImage).toHaveBeenCalledTimes(1);
-    expect(chat).toHaveBeenCalledTimes(3);
+    expect(chat).toHaveBeenCalledTimes(2);
     expect(traceEvents.some((event) =>
       event.eventName === "agent.image_generation.retry"
     )).toBe(true);
@@ -7344,7 +7457,7 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "please continue");
 
-    expect(response.content).toContain("refreshed synthetic comparison chart");
+    expect(response.content).toContain("Generated image for: A synthetic yearly Discord activity comparison chart");
     expect(response.files).toEqual([
       expect.objectContaining({
         contentType: "image/png",
@@ -7352,7 +7465,7 @@ describe("agent router", () => {
       }),
     ]);
     expect(generateImage).toHaveBeenCalledTimes(1);
-    expect(chat).toHaveBeenCalledTimes(5);
+    expect(chat).toHaveBeenCalledTimes(4);
     expect(toolAudits.some((audit) => audit.toolName === "drawRandom")).toBe(
       false,
     );
@@ -8023,57 +8136,6 @@ describe("agent router", () => {
         ])
       })
     );
-  });
-
-  it("executes model-selected skill drafts through the structured tool boundary", async () => {
-    const upsertDatabaseSkill = vi.fn(async (input: { name: string; content: string }) => ({
-      name: input.name,
-      content: input.content,
-      source: "database",
-      version: 1
-    }));
-    const ctx = {
-      config: { maxReplyChars: 1800, openRouter: {} },
-      repo: {
-        listEnabledDatabaseSkills: vi.fn(async () => []),
-        upsertDatabaseSkill,
-        auditTool: vi.fn(async () => undefined)
-      },
-      openRouter: {
-        chat: vi
-          .fn()
-          .mockResolvedValueOnce({
-            content: "",
-            model: "router-model",
-            raw: {},
-            toolCalls: [
-              {
-                id: "call-1",
-                name: "createSkillDraft",
-                argumentsText: JSON.stringify({ skillName: "movie-night", instruction: "movie night is on Fridays" })
-              }
-            ]
-          })
-          .mockResolvedValueOnce({
-            content: "Saved that as a private skill.",
-            model: "chat-model",
-            raw: {},
-            toolCalls: []
-          })
-      },
-      github: {},
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"]
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "what is movie night?");
-
-    expect(response.content).toBe("Saved that as a private skill.");
-    expect(upsertDatabaseSkill).toHaveBeenCalledWith(expect.objectContaining({ name: "movie-night", request: "movie night is on Fridays" }));
-    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "createSkillDraft" }));
   });
 
   it("executes model-selected undo requests through the local undo tool", async () => {

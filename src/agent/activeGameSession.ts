@@ -10,6 +10,18 @@ export type ActiveGameSessionContext = {
   actionRequested: boolean;
 };
 
+export function activeGameActionNeedsRandomDraw(
+  active: ActiveGameSessionContext | null,
+  userText: string,
+) {
+  if (!active?.actionRequested) return false;
+  const action = userText.trim().toLowerCase();
+  if (/\bblackjack\b/i.test(active.wager.game)) {
+    return /\b(?:hit|stand|double|split)\b/i.test(action);
+  }
+  return /\b(?:roll|reroll|draw|deal|spin|flip)\b/i.test(action);
+}
+
 export async function loadActiveGameSession(
   ctx: ToolContext,
   userText: string

@@ -23,8 +23,6 @@ const CODEGEN_TOOL_NAME_ANCHORS = new Set([
   "summarizeDiscordHistory",
   "summarizeDiscordThread",
   "generateImage",
-  "createSkillDraft",
-  "manageSkills",
   "runCodingAgent",
   "getAgentTaskStatus",
   "listAgentTasks",

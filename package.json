@@ -42,7 +42,6 @@
     "crawl": "tsx scripts/crawl.ts",
     "reindex": "tsx scripts/crawl.ts --reindex",
     "aliases": "tsx scripts/userAliases.ts",
-    "skills": "tsx scripts/skills.ts",
     "blocked-users": "tsx scripts/blockedUsers.ts",
     "embeddings:backfill": "tsx scripts/backfillEmbeddings.ts",
     "embeddings:worker": "tsx scripts/embeddingWorker.ts",

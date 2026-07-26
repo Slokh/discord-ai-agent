@@ -228,13 +228,13 @@ function imageContextMessagesForPrompt(
     );
   }
 
-  const replyImages = (replyContext?.chain ?? []).flatMap((message) =>
+  const replyImages = [...(replyContext?.chain ?? [])].reverse().flatMap((message) =>
     (message.attachments ?? [])
       .filter(isDiscordImageAttachmentContext)
       .map((attachment) => ({ message, attachment })),
   );
   if (replyImages.length > 0) {
-    lines.push("Reply-chain images:");
+    lines.push("Reply-chain images (direct parent and newest references first):");
     lines.push(
       ...replyImages.map(({ message, attachment }, index) => {
         const source = message.url

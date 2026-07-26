@@ -92,9 +92,9 @@ export const discordActionToolContracts = [
 
   defineTool({
     name: "createDiscordEmoji",
-    examples: ["@ai upload this image as a server emoji named nacho_wizard"],
+    examples: ["@ai upload this image as a server emoji named nacho_wizard", "@ai make this an emote named nacho_wizard"],
     description:
-      "Create a custom emoji in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, or create a server/custom emoji. The image is normalized to a 128x128 WebP with transparent padding under Discord's 256 KiB limit; existing source backgrounds are never falsely treated as transparency. Generated sources require verified alpha by default and fail before upload when they are opaque. Short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
+      "Create a custom emoji (also called an emote) in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, create, or turn something into a server/custom emoji or emote. The image is normalized to a 128x128 WebP with transparent padding under Discord's 256 KiB limit; existing source backgrounds are never falsely treated as transparency. Generated sources require verified alpha by default and fail before upload when they are opaque. Short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
     userVisible: true,
     mutates: true,
     group: "discord-action",

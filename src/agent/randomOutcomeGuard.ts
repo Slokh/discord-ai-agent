@@ -8,7 +8,7 @@ const SUCCESSFUL_DRAW_PREFIX = "Provably fair draw complete.";
 const SUCCESSFUL_WAGER_SETTLEMENT_PREFIX = "The scoped wallet wager settled.";
 
 const REVEAL_RANDOMNESS_INTENT = /\b(?:reveal|verify|prove)\b[\s\S]{0,80}\b(?:random(?:ness)?|fairness|seed|proof|commitment)\b/i;
-const RANDOM_ACTION = "(?:roll|flip|spin|deal|draw|shuffle|pick|choose|select|play|run|start|bet|wager|stake|risk|put)";
+const RANDOM_ACTION = "(?:roll|flip|spin|deal|draw|shuffle|pick|choose|select|generate|make|give|play|run|start|bet|wager|stake|risk|put)";
 const RANDOM_TARGET = "(?:random(?:ly)?|dice|d\\d+|coin|heads|tails|red|black|cards?|hand|blackjack|poker|roulette|wheel|craps|slots?|spins?|casino|lottery|raffle|winner|numbers?)";
 const DIRECT_RANDOM_ACTION = new RegExp(`^\\s*(?:please\\s+)?${RANDOM_ACTION}\\b[\\s\\S]{0,160}\\b${RANDOM_TARGET}\\b`, "i");
 const REQUESTED_RANDOM_ACTION = new RegExp(`\\b(?:please|let(?:'s| us)|can you|could you|would you|i want you to|go ahead(?: and)?|for me)\\b[\\s\\S]{0,100}\\b${RANDOM_ACTION}\\b[\\s\\S]{0,100}\\b${RANDOM_TARGET}\\b`, "i");
@@ -23,6 +23,9 @@ const LONG_NUMBER_WITH_OUTCOME_CONTEXT = new RegExp(
   `(?:\\b${OUTCOME_NUMBER_CONTEXT}\\b[\\s\\S]{0,80}\\b\\d{16,}\\b|\\b\\d{16,}\\b[\\s\\S]{0,80}\\b${OUTCOME_NUMBER_CONTEXT}\\b)`,
   "i",
 );
+const RANDOM_CONTINUATION = /^\s*(?:again|same(?:\s+thing)?|one\s+more|do\s+it(?:\s+again)?|repeat|reroll|reflip|heads|tails)\s*[.!]?\s*$/i;
+const RANDOM_NUMBER_REQUEST = /\bnumbers?\b/i;
+const SHORT_RANDOM_NUMBER_RESULT = /^\s*(?:(?:the\s+)?(?:random|generated|selected)\s+(?:number|value)\s*(?:is|:|—|-)\s*)?[`*_~]*-?\d{1,15}[`*_~]*[.!]?\s*$/i;
 
 const STRONG_OUTCOME_PATTERNS = [
   /^\s*Roll:\s*\d+\b/im,
@@ -93,6 +96,30 @@ export function randomActionAuthorizedForTurn(input: {
   );
 }
 
+export function randomActionRequiredForTurn(input: {
+  userText: string;
+  replyContextTexts?: string[];
+  replyContext?: {
+    content: string;
+    chain: Array<{ content: string }>;
+  };
+  activeGameActionRequested?: boolean;
+}) {
+  if (input.activeGameActionRequested) return true;
+  if (randomToolForPrompt(input.userText) === "drawRandom") return true;
+  if (!RANDOM_CONTINUATION.test(input.userText)) return false;
+  const replyTexts = [
+    ...(input.replyContextTexts ?? []),
+    ...(input.replyContext
+      ? [
+          input.replyContext.content,
+          ...input.replyContext.chain.map((message) => message.content),
+        ]
+      : []),
+  ];
+  return replyTexts.some((text) => randomToolForPrompt(text) === "drawRandom");
+}
+
 export function randomActionNeedsWalletBalance(text: string): boolean {
   return randomToolForPrompt(text) === "drawRandom" && WHOLE_BALANCE_WAGER.test(text);
 }
@@ -113,8 +140,10 @@ export class ForcedRandomActionRouter {
   private readonly route;
   private nextTool: ToolName | null = null;
 
-  constructor(text: string, userWalletsEnabled: boolean) {
-    this.route = forcedRandomActionRouteForPrompt(text, userWalletsEnabled);
+  constructor(text: string, userWalletsEnabled: boolean, forceDraw = false) {
+    this.route = forceDraw
+      ? { initialTool: "drawRandom" as const, afterWalletBalanceTool: null }
+      : forcedRandomActionRouteForPrompt(text, userWalletsEnabled);
   }
 
   takeToolForRound(round: number): ToolName | null {
@@ -128,6 +157,10 @@ export class ForcedRandomActionRouter {
       this.nextTool = this.route.afterWalletBalanceTool;
     }
   }
+
+  forceDrawNextRound() {
+    this.nextTool = "drawRandom";
+  }
 }
 
 export class RandomOutcomeGuard {
@@ -140,7 +173,16 @@ export class RandomOutcomeGuard {
   constructor(
     private readonly ctx: ToolContext,
     private readonly userText: string,
-  ) {}
+    activeGameActionRequested = false,
+  ) {
+    this.randomWorkflowRequired = randomActionRequiredForTurn({
+      userText,
+      replyContext: ctx.replyContext,
+      activeGameActionRequested,
+    });
+  }
+
+  private readonly randomWorkflowRequired: boolean;
 
   noteActiveWager(wagerId: string) {
     this.pendingWagerIds.add(wagerId);
@@ -194,6 +236,10 @@ export class RandomOutcomeGuard {
       : NON_RANDOM_OUTCOME_RETRY_GUIDANCE;
   }
 
+  requiresRandomWorkflowForTurn() {
+    return this.requiresRandomWorkflow();
+  }
+
   async inspectDraft(responseContent: string): Promise<RandomOutcomeGuardDecision> {
     if (!this.shouldReject(responseContent)) return "allow";
     const retry = !this.retryAttempted;
@@ -239,7 +285,7 @@ export class RandomOutcomeGuard {
   }
 
   private requiresRandomWorkflow() {
-    return this.pendingWagerIds.size > 0 || randomToolForPrompt(this.userText) === "drawRandom";
+    return this.pendingWagerIds.size > 0 || this.randomWorkflowRequired;
   }
 }
 
@@ -261,6 +307,13 @@ export function shouldRejectUnverifiedRandomOutcome(input: {
     .trim();
   if (!response) return false;
   if (STRONG_OUTCOME_PATTERNS.some((pattern) => pattern.test(response))) {
+    return true;
+  }
+  if (
+    randomToolForPrompt(input.userText) === "drawRandom" &&
+    RANDOM_NUMBER_REQUEST.test(input.userText) &&
+    SHORT_RANDOM_NUMBER_RESULT.test(response)
+  ) {
     return true;
   }
   if (!LONG_NUMBER.test(response)) return false;

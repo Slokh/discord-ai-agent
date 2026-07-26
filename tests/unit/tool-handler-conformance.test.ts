@@ -13,7 +13,7 @@ const expectedFamilyTools = {
     "summarizeDiscordHistory", "searchDiscordHistory",
   ],
   ops: [
-    "reportStatus", "setUserTurnLimit", "inspectAgentLogs", "createSkillDraft", "manageSkills",
+    "reportStatus", "setUserTurnLimit", "inspectAgentLogs",
     "getDeploymentStatus", "getSpendSummary",
   ],
   discordAction: ["undoConversationTurns", "drawRandom", "revealRandomness", "settleRandomWager"],

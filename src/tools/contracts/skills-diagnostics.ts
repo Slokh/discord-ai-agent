@@ -2,56 +2,6 @@ import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
 
 export const skillDiagnosticToolContracts = [
   defineTool({
-    name: "createSkillDraft",
-    category: "memory",
-    toolClass: "memory",
-    examples: ["@ai learn this for next time: movie night is on Fridays"],
-    description:
-      "Create or update a private database-backed Markdown skill. Use only when the user explicitly asks the agent to learn, remember, save, or update durable behavior/knowledge for next time.",
-    userVisible: true,
-    mutates: true,
-    group: "ops",
-    parameters: {
-      type: "object",
-      properties: {
-        skillName: {
-          type: "string",
-          description: "Short stable kebab-case skill name, such as movie-night, minecraft-server, or house-rules."
-        },
-        instruction: {
-          type: "string",
-          description: "The durable instruction the user wants Discord AI Agent to remember."
-        }
-      },
-      required: ["skillName", "instruction"],
-      additionalProperties: false
-    }
-  }),
-
-  defineTool({
-    name: "manageSkills",
-    category: "memory",
-    toolClass: "memory",
-    examples: ["@ai what are all your skills?"],
-    description:
-      "List the complete skill inventory, resolve a skill's exact name, or enable, disable, or delete private database-backed skills. Always use action=list instead of inferring the full inventory from prompt context. For content changes, list/resolve the skill first, then call createSkillDraft with its exact name.",
-    userVisible: true,
-    mutates: true,
-    group: "ops",
-    parameters: {
-      type: "object",
-      properties: {
-        action: { type: "string", enum: ["list", "enable", "disable", "delete"] },
-        skillNames: { type: "array", items: { type: "string" }, description: "Exact skill names to mutate." },
-        all: { type: "boolean", description: "Apply the mutation to every private database skill only when the user explicitly asks for all." },
-        query: { type: "string", description: "Optional text filter for list/skill-name resolution." },
-      },
-      required: ["action"],
-      additionalProperties: false,
-    },
-  }),
-
-  defineTool({
     name: "getDeploymentStatus",
     toolClass: "ops",
     examples: ["@ai deployment status"],

@@ -71,27 +71,14 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "revealRandomness")).toBe(true);
   });
 
-  it("offers complete skill management for conversational skill requests", () => {
+  it("does not expose removed database-skill management tools", () => {
     const config = loadConfig();
     const groups = selectToolGroups({ text: "what are all the skills you have?", hasImageAttachments: false, config });
     const tools = scopedToolset({ config, groups });
+    const names: string[] = tools.localTools.map((tool) => tool.name);
 
-    expect(groups.has("ops")).toBe(true);
-    expect(tools.localTools.some((tool) => tool.name === "manageSkills")).toBe(true);
-    expect(tools.localTools.some((tool) => tool.name === "createSkillDraft")).toBe(true);
-  });
-
-  it("keeps skill management available for terse replies to a skill response", () => {
-    const config = loadConfig();
-    const groups = selectToolGroups({
-      text: "remove all",
-      hasImageAttachments: false,
-      replyContext: true,
-      replyContextText: "All skills (2): `movie-night`, `alex-random-language`",
-      config,
-    });
-
-    expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "manageSkills")).toBe(true);
+    expect(names).not.toContain("manageSkills");
+    expect(names).not.toContain("createSkillDraft");
   });
 
   it("always pairs wallet-backed randomness with pause and settlement tools", () => {
@@ -305,6 +292,15 @@ describe("tool scoping", () => {
   it("offers server emoji creation for explicit emoji upload prompts", () => {
     const config = loadConfig();
     const groups = selectToolGroups({ text: "make a custom emoji of a nacho wizard", hasImageAttachments: false, config });
+    expect(groups.has("ops")).toBe(true);
+    expect(groups.has("discord-action")).toBe(true);
+    expect(groups.has("image")).toBe(true);
+    expect(scopedToolset({ config, groups }).localTools.some((tool) => tool.name === "createDiscordEmoji")).toBe(true);
+  });
+
+  it("treats emote as an image and Discord emoji capability", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text: "make this into an emote named nacho_wizard", hasImageAttachments: true, config });
     expect(groups.has("ops")).toBe(true);
     expect(groups.has("discord-action")).toBe(true);
     expect(groups.has("image")).toBe(true);

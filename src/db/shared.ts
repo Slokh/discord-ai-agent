@@ -27,8 +27,8 @@ export function orTsQuery(query: string): string {
     .join(" | ");
 }
 
-import type { SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, MessageForEmbedding, InteractionBlock, DatabaseSkill, AgentTaskStatus, AgentTaskRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
-export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
+import type { SearchResult, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, MessageForEmbedding, InteractionBlock, AgentTaskStatus, AgentTaskRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
+export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay } from "./types.js";
 export { rowToTraceEvent, rowToToolAuditLog, rowToAgentRuntimeEvent, rowToAgentRuntimeChatExecution, rowToAgentRuntimeArtifact, rowToAgentRuntimeMessage, rowToProcessRun, rowToProcessRunSpan, rowToProcessRunEvent, rowToProcessRunArtifact, jsonObject, rowToTaskEvent, rowToSandboxRun } from "./runtimeMappers.js";
 export function rowToSearchResult(row: any): SearchResult {
   return {
@@ -570,22 +570,6 @@ export function rowToInteractionBlock(row: any): InteractionBlock {
     guildId: String(row.guild_id),
     userId: String(row.user_id),
     reason: row.reason == null ? null : String(row.reason),
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at)
-  };
-}
-
-export function databaseSkillFromRow(row: any): DatabaseSkill {
-  return {
-    name: String(row.name),
-    filePath: String(row.file_path),
-    source: String(row.source),
-    content: String(row.content ?? ""),
-    enabled: Boolean(row.enabled),
-    version: Number(row.version ?? 1),
-    lastPrUrl: row.last_pr_url == null ? null : String(row.last_pr_url),
-    createdBy: row.created_by == null ? null : String(row.created_by),
-    updatedBy: row.updated_by == null ? null : String(row.updated_by),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at)
   };

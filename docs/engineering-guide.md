@@ -52,8 +52,9 @@ Do not create parallel state because an existing read path is inconvenient.
 | Code-update task compatibility state | `agent_tasks` projection linked to an agent-runtime execution | Discord task notifications and task APIs |
 | Wallet accounts, transfers, and wagers | Payment repository plus receipt-verified onchain state | Wallet service, payment tools, payments console |
 | Chance sessions and draws | RNG repository | Non-model proof footers and verifier script |
-| Private skills and server overlay | Postgres | Prompt loader and skill tools |
-| Server-specific local content | `.discord-ai-agent/` | Prompt overlay, private evals, exported skills |
+| Static prompt skills | Repository `skills/` directory | Prompt loader |
+| Private server overlay | Postgres or `.discord-ai-agent/` | Server/prompt overlay loaders |
+| Server-specific local content | `.discord-ai-agent/` | Prompt overlay and private evals |
 
 See [`agent-runtime.md`](agent-runtime.md), [`wallets.md`](wallets.md), and [`provable-rng.md`](provable-rng.md) before changing those high-risk areas.
 

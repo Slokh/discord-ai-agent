@@ -1,5 +1,4 @@
 import type { Logger } from "pino";
-import type { ChatMessage } from "../models/openrouter.js";
 import type { ToolName } from "../tools/registry.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import type {
@@ -8,8 +7,6 @@ import type {
   ToolContext,
 } from "../tools/types.js";
 import { durationMs } from "../util/logger.js";
-import { synthesizeFinalAnswerWithoutTools } from "./finalSynthesis.js";
-import type { ModelCallBudget } from "./routerShared.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
 export function isSuccessfulGeneratedImageArtifact(
@@ -25,27 +22,26 @@ export async function synthesizeGeneratedImageArtifactIfReady(
   ctx: ToolContext,
   input: {
     ready: boolean;
-    text: string;
-    messages: ChatMessage[];
     files: AgentFile[];
     memoryEvents: NonNullable<AgentResponse["memoryEvents"]>;
     requestLogger: Logger;
     startedAt: number;
-    modelCallBudget: ModelCallBudget;
   },
 ): Promise<AgentResponse | null> {
   if (!input.ready) return null;
-  return await synthesizeFinalAnswerWithoutTools(ctx, {
-    reason: "successful generated image artifact",
-    text: input.text,
-    messages: input.messages,
+  const generatedEvidence = [...input.memoryEvents]
+    .reverse()
+    .find((event) => event.metadata?.toolName === "generateImage");
+  return await completeDirectToolResponse(ctx, {
+    routeName: "generateImage",
+    result: {
+      content: generatedEvidence?.content || "Generated and attached the image.",
+    },
     files: input.files,
     memoryEvents: input.memoryEvents,
     requestLogger: input.requestLogger,
     startedAt: input.startedAt,
-    modelCallBudget: input.modelCallBudget,
-    maxTokens: 1024,
-    model: ctx.config.openRouter?.utilityModel?.trim() || undefined,
+    completionKind: "grounded generated image result",
   });
 }
 

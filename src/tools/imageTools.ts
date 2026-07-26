@@ -10,6 +10,10 @@ import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
 import {
+  imageSafetyFallbackPrompt,
+  transparentImageRecoveryPrompt,
+} from "./imageGenerationPrompts.js";
+import {
   inferRequiredImageText,
   imageTextCorrectionPrompt,
   normalizeRequiredImageText,
@@ -360,6 +364,8 @@ export async function generateImage(
   let generationAttempts = 1;
   let activePrompt = prompt;
   let safetyFallbackUsed = false;
+  let referenceTransparencyFallbackAttempted = false;
+  let referenceTransparencyFallbackUsed = false;
   let textValidationFailed = false;
   let textOverlayFallback = false;
   let totalEstimatedCostUsd = 0;
@@ -376,15 +382,28 @@ export async function generateImage(
     totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
   } catch (error) {
     let terminalError = error;
-    if (isOpenRouterContentFilterError(error) && references.length === 0) {
-      generationAttempts += 1;
-      activePrompt = imageSafetyFallbackPrompt(prompt);
-      try {
-        image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
-        totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
-        safetyFallbackUsed = true;
-      } catch (fallbackError) {
-        terminalError = fallbackError;
+    if (isOpenRouterContentFilterError(error)) {
+      if (references.length === 0) {
+        generationAttempts += 1;
+        activePrompt = imageSafetyFallbackPrompt(prompt);
+        try {
+          image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
+          totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
+          safetyFallbackUsed = true;
+        } catch (fallbackError) {
+          terminalError = fallbackError;
+        }
+      } else if (background === "transparent") {
+        referenceTransparencyFallbackAttempted = true;
+        generationAttempts += 1;
+        activePrompt = transparentImageRecoveryPrompt(prompt);
+        try {
+          image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
+          totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
+          referenceTransparencyFallbackUsed = true;
+        } catch (fallbackError) {
+          terminalError = fallbackError;
+        }
       }
     }
     if (!image) {
@@ -405,6 +424,8 @@ export async function generateImage(
           outputFormat,
           background,
           generationAttempts,
+          referenceTransparencyFallbackAttempted,
+          referenceTransparencyFallbackUsed,
         }),
         resultSummary: errorCode,
         error: errorCode,
@@ -503,6 +524,7 @@ export async function generateImage(
   let transparencyFallbackUsed = false;
   if (
     background === "transparent" &&
+    !referenceTransparencyFallbackUsed &&
     outputs.files.length === 0 &&
     outputs.rejectedOpaqueImages > 0
   ) {
@@ -564,6 +586,8 @@ export async function generateImage(
       textValidated: requiredText.length > 0,
       textOverlayFallback,
       safetyFallbackUsed,
+      referenceTransparencyFallbackAttempted,
+      referenceTransparencyFallbackUsed,
       transparencyFallbackAttempted,
       transparencyFallbackUsed,
     }),
@@ -588,6 +612,10 @@ export async function generateImage(
   const transparencyFallbackSummary = transparencyFallbackUsed
     ? "\nTransparency fallback: regenerated once with a cutout-friendly background and validated real alpha before delivery."
     : "";
+  const referenceTransparencyFallbackSummary =
+    referenceTransparencyFallbackUsed && files.length > 0
+      ? "\nReference safety fallback: retried as a background-only transparent edit and validated real alpha before delivery."
+      : "";
   const textOverlaySummary = textOverlayFallback
     ? "\nTypography fallback: exact requested text was rendered deterministically after the image provider misspelled it twice."
     : "";
@@ -596,32 +624,9 @@ export async function generateImage(
     : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}`;
   return { content, files };
-}
-
-function transparentImageRecoveryPrompt(prompt: string) {
-  return [
-    "BACKGROUND-REMOVAL RECOVERY PASS.",
-    "Preserve only the intended foreground subject, identity, pose, composition, colors, and requested edit from the original request.",
-    "Output a transparent PNG containing only that complete foreground subject.",
-    "If your renderer cannot emit alpha, use a single pure solid chroma-key green background (#00FF00, RGB 0 255 0) filling every background pixel.",
-    "Do not add a gradient, texture, scenery, floor, frame, shadow, glow, reflections, text, or other objects. Keep a clean hard edge between the complete subject and the green background.",
-    "Original request:",
-    prompt,
-  ].join("\n");
-}
-
-function imageSafetyFallbackPrompt(prompt: string) {
-  return [
-    "Create a clearly stylized, non-photorealistic editorial illustration that preserves only the benign composition, setting, clothing, mood, and harmless action from the request below.",
-    "Do not present the result as a real photograph, documentary evidence, endorsement, quotation, or record of a real event.",
-    "Do not add sexual content, graphic violence, hateful abuse, wrongdoing instructions, or political persuasion.",
-    "If a real person is named, depict them respectfully in a harmless fictional scene without adding claims or actions that were not requested.",
-    "Original request:",
-    prompt,
-  ].join("\n");
 }
 
 const TRANSPARENT_IMAGE_INTENT = /\b(?:transparent(?:\s+background)?|no\s+background|remove\s+(?:the\s+)?background|background[- ]?free|cutout|emoji|sticker)\b/i;

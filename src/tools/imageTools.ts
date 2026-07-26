@@ -1,8 +1,18 @@
-import { isOpenRouterContentFilterError, isOpenRouterHttpError, type ChatContentPart, type ImageReference } from "../models/openrouter.js";
+import {
+  isOpenRouterContentFilterError,
+  isOpenRouterHttpError,
+  type ChatContentPart,
+  type ImageReference,
+  type ImageResult,
+} from "../models/openrouter.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
+import {
+  imageSafetyFallbackPrompt,
+  transparentImageRecoveryPrompt,
+} from "./imageGenerationPrompts.js";
 import {
   inferRequiredImageText,
   imageTextCorrectionPrompt,
@@ -278,6 +288,56 @@ function discordEmojiPngFallbackUrl(value: string) {
   return url.toString();
 }
 
+async function materializeGeneratedImageOutputs(
+  data: ImageResult["data"],
+  background: GenerateImageInput["background"] | undefined,
+): Promise<{
+  files: AgentFile[];
+  urls: string[];
+  automaticBackgroundRemovalCount: number;
+  rejectedOpaqueImages: number;
+}> {
+  let files: AgentFile[] = [];
+  const urls: string[] = [];
+  let rejectedOpaqueImages = 0;
+
+  for (const [index, item] of data.entries()) {
+    if (item.b64_json) {
+      const contentType = item.media_type ?? item.content_type ?? "image/png";
+      files.push({
+        name: `discord-ai-agent-${Date.now()}-${index + 1}.${extensionForContentType(contentType)}`,
+        data: Buffer.from(item.b64_json, "base64"),
+        contentType,
+      });
+    } else if (item.url) {
+      const file = await imageUrlToAgentFile(item.url, index).catch(() => undefined);
+      if (file) files.push(file);
+      else if (background === "transparent") rejectedOpaqueImages += 1;
+      else urls.push(item.url);
+    }
+  }
+
+  let automaticBackgroundRemovalCount = 0;
+  if (background === "transparent") {
+    const normalized = await Promise.all(files.map(normalizeGeneratedTransparentImage));
+    files = normalized.flatMap((result) => {
+      if (!result.file) {
+        rejectedOpaqueImages += 1;
+        return [];
+      }
+      if (result.backgroundRemoved) automaticBackgroundRemovalCount += 1;
+      return [result.file];
+    });
+  }
+
+  return {
+    files,
+    urls,
+    automaticBackgroundRemovalCount,
+    rejectedOpaqueImages,
+  };
+}
+
 export async function generateImage(
   ctx: ToolContext,
   input: string | GenerateImageInput
@@ -304,6 +364,8 @@ export async function generateImage(
   let generationAttempts = 1;
   let activePrompt = prompt;
   let safetyFallbackUsed = false;
+  let referenceTransparencyFallbackAttempted = false;
+  let referenceTransparencyFallbackUsed = false;
   let textValidationFailed = false;
   let textOverlayFallback = false;
   let totalEstimatedCostUsd = 0;
@@ -320,15 +382,28 @@ export async function generateImage(
     totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
   } catch (error) {
     let terminalError = error;
-    if (isOpenRouterContentFilterError(error) && references.length === 0) {
-      generationAttempts += 1;
-      activePrompt = imageSafetyFallbackPrompt(prompt);
-      try {
-        image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
-        totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
-        safetyFallbackUsed = true;
-      } catch (fallbackError) {
-        terminalError = fallbackError;
+    if (isOpenRouterContentFilterError(error)) {
+      if (references.length === 0) {
+        generationAttempts += 1;
+        activePrompt = imageSafetyFallbackPrompt(prompt);
+        try {
+          image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
+          totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
+          safetyFallbackUsed = true;
+        } catch (fallbackError) {
+          terminalError = fallbackError;
+        }
+      } else if (background === "transparent") {
+        referenceTransparencyFallbackAttempted = true;
+        generationAttempts += 1;
+        activePrompt = transparentImageRecoveryPrompt(prompt);
+        try {
+          image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
+          totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
+          referenceTransparencyFallbackUsed = true;
+        } catch (fallbackError) {
+          terminalError = fallbackError;
+        }
       }
     }
     if (!image) {
@@ -349,6 +424,8 @@ export async function generateImage(
           outputFormat,
           background,
           generationAttempts,
+          referenceTransparencyFallbackAttempted,
+          referenceTransparencyFallbackUsed,
         }),
         resultSummary: errorCode,
         error: errorCode,
@@ -442,38 +519,46 @@ export async function generateImage(
     };
   }
 
-  let files: AgentFile[] = [];
-  const urls: string[] = [];
-  let rejectedOpaqueImages = 0;
-
-  for (const [index, item] of image.data.entries()) {
-    if (item.b64_json) {
-      const contentType = item.media_type ?? item.content_type ?? "image/png";
-      files.push({
-        name: `discord-ai-agent-${Date.now()}-${index + 1}.${extensionForContentType(contentType)}`,
-        data: Buffer.from(item.b64_json, "base64"),
-        contentType
-      });
-    } else if (item.url) {
-      const file = await imageUrlToAgentFile(item.url, index).catch(() => undefined);
-      if (file) files.push(file);
-      else if (background === "transparent") rejectedOpaqueImages += 1;
-      else urls.push(item.url);
+  let outputs = await materializeGeneratedImageOutputs(image.data, background);
+  let transparencyFallbackAttempted = false;
+  let transparencyFallbackUsed = false;
+  if (
+    background === "transparent" &&
+    !referenceTransparencyFallbackUsed &&
+    outputs.files.length === 0 &&
+    outputs.rejectedOpaqueImages > 0
+  ) {
+    transparencyFallbackAttempted = true;
+    generationAttempts += 1;
+    try {
+      const fallbackImage = await ctx.openRouter.generateImage(
+        transparentImageRecoveryPrompt(activePrompt),
+        imageOptions,
+      );
+      totalEstimatedCostUsd += fallbackImage.estimatedCostUsd ?? 0;
+      const fallbackOutputs = await materializeGeneratedImageOutputs(
+        fallbackImage.data,
+        background,
+      );
+      outputs = {
+        ...fallbackOutputs,
+        rejectedOpaqueImages:
+          outputs.rejectedOpaqueImages + fallbackOutputs.rejectedOpaqueImages,
+      };
+      if (fallbackOutputs.files.length > 0) {
+        image = fallbackImage;
+        transparencyFallbackUsed = true;
+      }
+    } catch {
+      // The original opaque result remains rejected; report the bounded retry below.
     }
   }
-
-  let automaticBackgroundRemovalCount = 0;
-  if (background === "transparent") {
-    const normalized = await Promise.all(files.map(normalizeGeneratedTransparentImage));
-    files = normalized.flatMap((result) => {
-      if (!result.file) {
-        rejectedOpaqueImages += 1;
-        return [];
-      }
-      if (result.backgroundRemoved) automaticBackgroundRemovalCount += 1;
-      return [result.file];
-    });
-  }
+  const {
+    files,
+    urls,
+    automaticBackgroundRemovalCount,
+    rejectedOpaqueImages,
+  } = outputs;
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -501,6 +586,10 @@ export async function generateImage(
       textValidated: requiredText.length > 0,
       textOverlayFallback,
       safetyFallbackUsed,
+      referenceTransparencyFallbackAttempted,
+      referenceTransparencyFallbackUsed,
+      transparencyFallbackAttempted,
+      transparencyFallbackUsed,
     }),
     model: image.model,
     estimatedCostUsd: totalEstimatedCostUsd || image.estimatedCostUsd
@@ -517,9 +606,16 @@ export async function generateImage(
   const backgroundRemovalSummary = automaticBackgroundRemovalCount > 0
     ? `\nAutomatic background removal: applied to ${automaticBackgroundRemovalCount} image${automaticBackgroundRemovalCount === 1 ? "" : "s"}.`
     : "";
-  const transparencyFailureSummary = rejectedOpaqueImages > 0
+  const transparencyFailureSummary = rejectedOpaqueImages > 0 && files.length === 0
     ? `\nTransparency validation failed for ${rejectedOpaqueImages} generated image${rejectedOpaqueImages === 1 ? "" : "s"}: the provider returned opaque output and automatic background removal could not safely isolate a foreground subject. No opaque image was attached.`
     : "";
+  const transparencyFallbackSummary = transparencyFallbackUsed
+    ? "\nTransparency fallback: regenerated once with a cutout-friendly background and validated real alpha before delivery."
+    : "";
+  const referenceTransparencyFallbackSummary =
+    referenceTransparencyFallbackUsed && files.length > 0
+      ? "\nReference safety fallback: retried as a background-only transparent edit and validated real alpha before delivery."
+      : "";
   const textOverlaySummary = textOverlayFallback
     ? "\nTypography fallback: exact requested text was rendered deterministically after the image provider misspelled it twice."
     : "";
@@ -528,20 +624,9 @@ export async function generateImage(
     : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}${safetyFallbackSummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}`;
   return { content, files };
-}
-
-function imageSafetyFallbackPrompt(prompt: string) {
-  return [
-    "Create a clearly stylized, non-photorealistic editorial illustration that preserves only the benign composition, setting, clothing, mood, and harmless action from the request below.",
-    "Do not present the result as a real photograph, documentary evidence, endorsement, quotation, or record of a real event.",
-    "Do not add sexual content, graphic violence, hateful abuse, wrongdoing instructions, or political persuasion.",
-    "If a real person is named, depict them respectfully in a harmless fictional scene without adding claims or actions that were not requested.",
-    "Original request:",
-    prompt,
-  ].join("\n");
 }
 
 const TRANSPARENT_IMAGE_INTENT = /\b(?:transparent(?:\s+background)?|no\s+background|remove\s+(?:the\s+)?background|background[- ]?free|cutout|emoji|emote|sticker)\b/i;

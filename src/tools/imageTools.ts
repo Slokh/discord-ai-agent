@@ -1,4 +1,10 @@
-import { isOpenRouterContentFilterError, isOpenRouterHttpError, type ChatContentPart, type ImageReference } from "../models/openrouter.js";
+import {
+  isOpenRouterContentFilterError,
+  isOpenRouterHttpError,
+  type ChatContentPart,
+  type ImageReference,
+  type ImageResult,
+} from "../models/openrouter.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
@@ -278,6 +284,56 @@ function discordEmojiPngFallbackUrl(value: string) {
   return url.toString();
 }
 
+async function materializeGeneratedImageOutputs(
+  data: ImageResult["data"],
+  background: GenerateImageInput["background"] | undefined,
+): Promise<{
+  files: AgentFile[];
+  urls: string[];
+  automaticBackgroundRemovalCount: number;
+  rejectedOpaqueImages: number;
+}> {
+  let files: AgentFile[] = [];
+  const urls: string[] = [];
+  let rejectedOpaqueImages = 0;
+
+  for (const [index, item] of data.entries()) {
+    if (item.b64_json) {
+      const contentType = item.media_type ?? item.content_type ?? "image/png";
+      files.push({
+        name: `discord-ai-agent-${Date.now()}-${index + 1}.${extensionForContentType(contentType)}`,
+        data: Buffer.from(item.b64_json, "base64"),
+        contentType,
+      });
+    } else if (item.url) {
+      const file = await imageUrlToAgentFile(item.url, index).catch(() => undefined);
+      if (file) files.push(file);
+      else if (background === "transparent") rejectedOpaqueImages += 1;
+      else urls.push(item.url);
+    }
+  }
+
+  let automaticBackgroundRemovalCount = 0;
+  if (background === "transparent") {
+    const normalized = await Promise.all(files.map(normalizeGeneratedTransparentImage));
+    files = normalized.flatMap((result) => {
+      if (!result.file) {
+        rejectedOpaqueImages += 1;
+        return [];
+      }
+      if (result.backgroundRemoved) automaticBackgroundRemovalCount += 1;
+      return [result.file];
+    });
+  }
+
+  return {
+    files,
+    urls,
+    automaticBackgroundRemovalCount,
+    rejectedOpaqueImages,
+  };
+}
+
 export async function generateImage(
   ctx: ToolContext,
   input: string | GenerateImageInput
@@ -442,38 +498,45 @@ export async function generateImage(
     };
   }
 
-  let files: AgentFile[] = [];
-  const urls: string[] = [];
-  let rejectedOpaqueImages = 0;
-
-  for (const [index, item] of image.data.entries()) {
-    if (item.b64_json) {
-      const contentType = item.media_type ?? item.content_type ?? "image/png";
-      files.push({
-        name: `discord-ai-agent-${Date.now()}-${index + 1}.${extensionForContentType(contentType)}`,
-        data: Buffer.from(item.b64_json, "base64"),
-        contentType
-      });
-    } else if (item.url) {
-      const file = await imageUrlToAgentFile(item.url, index).catch(() => undefined);
-      if (file) files.push(file);
-      else if (background === "transparent") rejectedOpaqueImages += 1;
-      else urls.push(item.url);
+  let outputs = await materializeGeneratedImageOutputs(image.data, background);
+  let transparencyFallbackAttempted = false;
+  let transparencyFallbackUsed = false;
+  if (
+    background === "transparent" &&
+    outputs.files.length === 0 &&
+    outputs.rejectedOpaqueImages > 0
+  ) {
+    transparencyFallbackAttempted = true;
+    generationAttempts += 1;
+    try {
+      const fallbackImage = await ctx.openRouter.generateImage(
+        transparentImageRecoveryPrompt(activePrompt),
+        imageOptions,
+      );
+      totalEstimatedCostUsd += fallbackImage.estimatedCostUsd ?? 0;
+      const fallbackOutputs = await materializeGeneratedImageOutputs(
+        fallbackImage.data,
+        background,
+      );
+      outputs = {
+        ...fallbackOutputs,
+        rejectedOpaqueImages:
+          outputs.rejectedOpaqueImages + fallbackOutputs.rejectedOpaqueImages,
+      };
+      if (fallbackOutputs.files.length > 0) {
+        image = fallbackImage;
+        transparencyFallbackUsed = true;
+      }
+    } catch {
+      // The original opaque result remains rejected; report the bounded retry below.
     }
   }
-
-  let automaticBackgroundRemovalCount = 0;
-  if (background === "transparent") {
-    const normalized = await Promise.all(files.map(normalizeGeneratedTransparentImage));
-    files = normalized.flatMap((result) => {
-      if (!result.file) {
-        rejectedOpaqueImages += 1;
-        return [];
-      }
-      if (result.backgroundRemoved) automaticBackgroundRemovalCount += 1;
-      return [result.file];
-    });
-  }
+  const {
+    files,
+    urls,
+    automaticBackgroundRemovalCount,
+    rejectedOpaqueImages,
+  } = outputs;
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -501,6 +564,8 @@ export async function generateImage(
       textValidated: requiredText.length > 0,
       textOverlayFallback,
       safetyFallbackUsed,
+      transparencyFallbackAttempted,
+      transparencyFallbackUsed,
     }),
     model: image.model,
     estimatedCostUsd: totalEstimatedCostUsd || image.estimatedCostUsd
@@ -517,8 +582,11 @@ export async function generateImage(
   const backgroundRemovalSummary = automaticBackgroundRemovalCount > 0
     ? `\nAutomatic background removal: applied to ${automaticBackgroundRemovalCount} image${automaticBackgroundRemovalCount === 1 ? "" : "s"}.`
     : "";
-  const transparencyFailureSummary = rejectedOpaqueImages > 0
+  const transparencyFailureSummary = rejectedOpaqueImages > 0 && files.length === 0
     ? `\nTransparency validation failed for ${rejectedOpaqueImages} generated image${rejectedOpaqueImages === 1 ? "" : "s"}: the provider returned opaque output and automatic background removal could not safely isolate a foreground subject. No opaque image was attached.`
+    : "";
+  const transparencyFallbackSummary = transparencyFallbackUsed
+    ? "\nTransparency fallback: regenerated once with a cutout-friendly background and validated real alpha before delivery."
     : "";
   const textOverlaySummary = textOverlayFallback
     ? "\nTypography fallback: exact requested text was rendered deterministically after the image provider misspelled it twice."
@@ -528,9 +596,21 @@ export async function generateImage(
     : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${textOverlaySummary}${safetyFallbackSummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}`;
   return { content, files };
+}
+
+function transparentImageRecoveryPrompt(prompt: string) {
+  return [
+    "BACKGROUND-REMOVAL RECOVERY PASS.",
+    "Preserve only the intended foreground subject, identity, pose, composition, colors, and requested edit from the original request.",
+    "Output a transparent PNG containing only that complete foreground subject.",
+    "If your renderer cannot emit alpha, use a single pure solid chroma-key green background (#00FF00, RGB 0 255 0) filling every background pixel.",
+    "Do not add a gradient, texture, scenery, floor, frame, shadow, glow, reflections, text, or other objects. Keep a clean hard edge between the complete subject and the green background.",
+    "Original request:",
+    prompt,
+  ].join("\n");
 }
 
 function imageSafetyFallbackPrompt(prompt: string) {

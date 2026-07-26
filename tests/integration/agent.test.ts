@@ -6634,6 +6634,158 @@ describe("agent router", () => {
     }));
   });
 
+  it("recovers a blocked transparent reply edit with the same inlined reference", async () => {
+    const sourceImage = await sharp({
+      create: {
+        width: 16,
+        height: 16,
+        channels: 3,
+        background: { r: 210, g: 205, b: 195 },
+      },
+    }).png().toBuffer();
+    const subject = await sharp({
+      create: {
+        width: 6,
+        height: 6,
+        channels: 3,
+        background: { r: 35, g: 95, b: 220 },
+      },
+    }).png().toBuffer();
+    const chromaBackground = Buffer.alloc(20 * 20 * 3);
+    for (let pixel = 0; pixel < 20 * 20; pixel += 1) {
+      const offset = pixel * 3;
+      chromaBackground[offset] = (pixel * 37) % 56;
+      chromaBackground[offset + 1] = 190 + ((pixel * 17) % 66);
+      chromaBackground[offset + 2] = (pixel * 29) % 46;
+    }
+    const recoverableImage = await sharp(chromaBackground, {
+      raw: { width: 20, height: 20, channels: 3 },
+    }).composite([{ input: subject, left: 7, top: 7 }]).png().toBuffer();
+    const fetchMock = vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generateImage = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterContentFilterError({
+        status: 400,
+        model: "test/image",
+        message: "synthetic content filter",
+      }))
+      .mockImplementationOnce(async (_prompt: string, options: any) => {
+        expect(options.inputReferences).toHaveLength(1);
+        expect(options.inputReferences[0].image_url.url).toMatch(
+          /^data:image\/png;base64,/,
+        );
+        return {
+          model: "test/image",
+          raw: {},
+          data: [{
+            b64_json: recoverableImage.toString("base64"),
+            media_type: "image/png",
+          }],
+        };
+      });
+    const referenceUrl = "https://cdn.discordapp.com/synthetic-reference.png";
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "make-reference-transparent",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "Make the referenced synthetic image transparent.",
+            referenceImageUrls: [referenceUrl],
+            outputFormat: "png",
+            background: "transparent",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the transparent version.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const sourceMessage = {
+      messageId: "synthetic-source",
+      rootMessageId: "synthetic-source",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "Use this synthetic image.",
+      attachmentSummaries: ["synthetic-reference.png image/png"],
+      attachments: [{
+        id: "synthetic-reference",
+        url: referenceUrl,
+        filename: "synthetic-reference.png",
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...sourceMessage, chain: [sourceMessage] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "make it transparent");
+    const deliveredFile = response.files?.[0];
+    expect(deliveredFile).toBeDefined();
+    if (!deliveredFile) throw new Error("expected the recovered transparent image");
+    const normalized = await sharp(deliveredFile.data)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const alpha = Array.from(
+      { length: normalized.data.length / normalized.info.channels },
+      (_value, index) => normalized.data[
+        index * normalized.info.channels + normalized.info.channels - 1
+      ],
+    );
+
+    expect(response.content).toContain("transparent version");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png" }),
+    ]);
+    expect(alpha).toContain(0);
+    expect(alpha).toContain(255);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain(
+      "BACKGROUND-REMOVAL RECOVERY PASS",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining(
+        '"referenceTransparencyFallbackUsed":true',
+      ),
+    }));
+  });
+
   it("replays a terse retained-context image request and delivers a generated file", async () => {
     const generatedImage = Buffer.from("synthetic-brighter-image");
     const generateImage = vi.fn(async () => ({

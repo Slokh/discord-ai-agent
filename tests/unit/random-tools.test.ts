@@ -583,8 +583,8 @@ describe("drawRandom", () => {
     expect(response).not.toContain("Required next tool: awaitRandomWagerAction");
     expect(response).toContain("Never pause a terminal outcome");
     expect(response).toContain("Do not draw again or answer before one of those tools succeeds");
-    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({ maxPayoutUsd: 0.8 }), expect.any(Function));
-    expect(response).toContain("Maximum total payout reserved: $0.8");
+    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({ maxPayoutUsd: 0.25 }), expect.any(Function));
+    expect(response).toContain("Maximum total payout reserved: $0.25");
   });
 
   it("canonicalizes game-led blackjack shorthand before reserving or drawing", async () => {
@@ -606,7 +606,7 @@ describe("drawRandom", () => {
       userId: "user",
       game: "blackjack",
       stakeUsd: 0.1,
-      maxPayoutUsd: 0.8,
+      maxPayoutUsd: 0.25,
     }), expect.any(Function));
     expect(rngRepo.draws).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "cards", params: expect.objectContaining({ count: 3 }) }),
@@ -1040,6 +1040,212 @@ describe("drawRandom", () => {
     ]);
   });
 
+  it("corrects a model-authored blackjack loss when verified dealer cards bust", async () => {
+    const wager = {
+      id: "wager-blackjack",
+      requestId: "opening-request",
+      guildId: "guild",
+      channelId: "channel",
+      threadKey: discordRngThreadKey("opening-request"),
+      requestedByUserId: "user",
+      userWalletId: "wallet-user",
+      botWalletId: "wallet-bot",
+      game: "blackjack",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 100_000n,
+      maxPayoutAtomic: 800_000n,
+      payoutAtomic: null,
+      drawId: 2,
+      settlementTransferId: null,
+      status: "drawn" as const,
+      explanation: null,
+      interactionMode: "player_decisions" as const,
+      settlementOutcome: null,
+      settlementResolutionSource: null,
+      settlementRequestId: null,
+      awaitingAction: true,
+      stateVersion: 1,
+      decisionState: {},
+      allowedActions: ["hit", "stand"],
+      actionPrompt: "Hit or stand?",
+      lastActionRequestId: "opening-request",
+      expiresAt: new Date("2026-07-27T01:00:00.000Z"),
+      createdAt: new Date("2026-07-27T00:00:00.000Z"),
+      updatedAt: new Date("2026-07-27T00:00:00.000Z"),
+    };
+    const draws: RngDrawRecord[] = [
+      {
+        id: 2,
+        sessionId: "rng-blackjack",
+        nonce: 0,
+        kind: "cards",
+        params: { deckCount: 1, start: 0, count: 3 },
+        outcome: { kind: "cards", cards: ["J♥", "10♠", "9♥"] },
+        reason: "standard blackjack opening deal: two player cards and one dealer upcard",
+        requestId: "opening-request",
+        messageId: "opening-request",
+        requestedByUserId: "user",
+        createdAt: new Date("2026-07-27T00:00:00.000Z"),
+      },
+      {
+        id: 3,
+        sessionId: "rng-blackjack",
+        nonce: 0,
+        kind: "cards",
+        params: { deckCount: 1, start: 3, count: 1 },
+        outcome: { kind: "cards", cards: ["3♥"] },
+        reason: "blackjack stand continuation card",
+        requestId: "stand-request",
+        messageId: "stand-request",
+        requestedByUserId: "user",
+        createdAt: new Date("2026-07-27T00:01:00.000Z"),
+      },
+      {
+        id: 4,
+        sessionId: "rng-blackjack",
+        nonce: 0,
+        kind: "cards",
+        params: { deckCount: 1, start: 4, count: 1 },
+        outcome: { kind: "cards", cards: ["J♦"] },
+        reason: "blackjack stand continuation card",
+        requestId: "stand-request",
+        messageId: "stand-request",
+        requestedByUserId: "user",
+        createdAt: new Date("2026-07-27T00:01:01.000Z"),
+      },
+    ];
+    const settleWager = vi.fn(async () => ({
+      wager,
+      transfer: null,
+      userBalance: { formatted: "0.20", symbol: "USDC.e" },
+    }));
+    const { ctx } = fakeContext({
+      requestId: "stand-request",
+      requestMessageId: "stand-request",
+      replyContext: fakeReplyContext("opening-request"),
+      rngRepo: {
+        getActiveSession: vi.fn(async () => ({ id: "rng-blackjack" })),
+        listDraws: vi.fn(async () => draws),
+      } as unknown as RngRepository,
+      walletService: {
+        getCurrentWager: vi.fn(async () => wager),
+        settleWager,
+      } as unknown as ToolContext["walletService"],
+    });
+
+    const response = await settleRandomWager(ctx, {
+      payoutUsd: 0,
+      outcome: "player_loss",
+      resolutionSource: "player_decision",
+      explanation: "Player stood on 20. Dealer reached 22, so the player loses.",
+    });
+
+    expect(settleWager).toHaveBeenCalledWith(expect.objectContaining({
+      payoutUsd: 0.2,
+      outcome: "player_win",
+      resolutionSource: "player_decision",
+      explanation: "Player 20 vs dealer 22; dealer busts, so the player wins even money.",
+    }), expect.any(Function));
+    expect(response).toContain("Payout: $0.2");
+    expect(response).toContain("dealer busts");
+  });
+
+  it("settles terminal standard blackjack even when the model calls it unfinished", async () => {
+    const wager = {
+      id: "wager-blackjack",
+      requestId: "opening-request",
+      guildId: "guild",
+      channelId: "channel",
+      threadKey: discordRngThreadKey("opening-request"),
+      requestedByUserId: "user",
+      userWalletId: "wallet-user",
+      botWalletId: "wallet-bot",
+      game: "blackjack",
+      token: "USDC.e",
+      tokenDecimals: 6,
+      stakeAtomic: 100_000n,
+      maxPayoutAtomic: 250_000n,
+      payoutAtomic: null,
+      drawId: 2,
+      settlementTransferId: null,
+      status: "drawn" as const,
+      explanation: null,
+      interactionMode: "player_decisions" as const,
+      settlementOutcome: null,
+      settlementResolutionSource: null,
+      settlementRequestId: null,
+      awaitingAction: true,
+      stateVersion: 1,
+      decisionState: {},
+      allowedActions: ["hit", "stand"],
+      actionPrompt: "Hit or stand?",
+      lastActionRequestId: "opening-request",
+      expiresAt: new Date("2026-07-27T01:00:00.000Z"),
+      createdAt: new Date("2026-07-27T00:00:00.000Z"),
+      updatedAt: new Date("2026-07-27T00:00:00.000Z"),
+    };
+    const draws: RngDrawRecord[] = [
+      {
+        id: 2,
+        sessionId: "rng-blackjack",
+        nonce: 0,
+        kind: "cards",
+        params: { deckCount: 1, start: 0, count: 3 },
+        outcome: { kind: "cards", cards: ["J♥", "10♠", "9♥"] },
+        reason: "standard blackjack opening deal: two player cards and one dealer upcard",
+        requestId: "opening-request",
+        messageId: "opening-request",
+        requestedByUserId: "user",
+        createdAt: new Date("2026-07-27T00:00:00.000Z"),
+      },
+      {
+        id: 3,
+        sessionId: "rng-blackjack",
+        nonce: 0,
+        kind: "cards",
+        params: { deckCount: 1, start: 3, count: 1 },
+        outcome: { kind: "cards", cards: ["K♦"] },
+        reason: "blackjack stand continuation card",
+        requestId: "stand-request",
+        messageId: "stand-request",
+        requestedByUserId: "user",
+        createdAt: new Date("2026-07-27T00:01:00.000Z"),
+      },
+    ];
+    const settleWager = vi.fn(async () => ({
+      wager,
+      transfer: null,
+      userBalance: { formatted: "0.20", symbol: "USDC.e" },
+    }));
+    const { ctx } = fakeContext({
+      requestId: "stand-request",
+      requestMessageId: "stand-request",
+      replyContext: fakeReplyContext("opening-request"),
+      rngRepo: {
+        getActiveSession: vi.fn(async () => ({ id: "rng-blackjack" })),
+        listDraws: vi.fn(async () => draws),
+      } as unknown as RngRepository,
+      walletService: {
+        getCurrentWager: vi.fn(async () => wager),
+        settleWager,
+      } as unknown as ToolContext["walletService"],
+    });
+
+    await settleRandomWager(ctx, {
+      payoutUsd: 0.1,
+      outcome: "push",
+      resolutionSource: "player_decision",
+      explanation: "Blackjack is still in progress and awaiting settlement.",
+    });
+
+    expect(settleWager).toHaveBeenCalledWith(expect.objectContaining({
+      payoutUsd: 0.2,
+      outcome: "player_win",
+      explanation: "Player 20 beats dealer 19, so the player wins even money.",
+    }), expect.any(Function));
+  });
+
   it("uses the scoped wager when a legacy model call corrupts the opaque wager id", async () => {
     const getCurrentWager = vi.fn(async () => ({ id: "wager_68db51b7-1466-4ed4-b20c-128f8aeab273" }));
     const settleWager = vi.fn(async () => ({ wager: {}, transfer: null, userBalance: null }));
@@ -1109,7 +1315,10 @@ describe("drawRandom", () => {
   it("rejects settlement calculations that leave a wallet-backed game unfinished", async () => {
     const settleWager = vi.fn();
     const { ctx } = fakeContext({
-      walletService: { settleWager } as unknown as ToolContext["walletService"]
+      walletService: {
+        getCurrentWager: vi.fn(async () => ({ id: "wager-custom", game: "custom game" })),
+        settleWager,
+      } as unknown as ToolContext["walletService"]
     });
 
     const response = await settleRandomWager(ctx, {

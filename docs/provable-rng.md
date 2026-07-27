@@ -66,7 +66,7 @@ Beyond recomputing each stored outcome, `npm run verify:rng -- --session <id>` c
 
 ## Design notes
 
-- **Generic, not blackjack-specific.** The tool exposes draw kinds (`integers`, `dice`, `coin`, `pick`, `shuffle`, `cards`); game rules stay with the model. The provable part is exactly the part the model must not control: the entropy and its mapping to outcomes.
+- **Generic draws, deterministic standard settlements.** The tool exposes general draw kinds (`integers`, `dice`, `coin`, `pick`, `shuffle`, `cards`) and custom-game rules can stay with the model. For standard wallet-backed coin flips and hit/stand blackjack, code also reconstructs the outcome and payout from persisted draws so a model arithmetic or rules mistake cannot move the wrong amount.
 - **The model reports, code decides.** `drawRandom` returns computed outcomes and instructs the model to report them exactly; the proof footer repeats the values from code so any model tampering is visible by comparison.
 - **Common requests are normalized before entropy or money moves.** Ordinary random-number wording such as “generate a random number,” standard `blackjack <amount>` openings, and coin-flip side replies are routed into canonical draw parameters. A coin flip with an amount but no side asks `heads or tails` before wallet preflight or model selection. Standard blackjack openings always draw the two player cards plus dealer upcard; `hit`/`stand` continuations draw only the newly public card data required by that action.
 - **Reveal is rollover, not shutdown.** Revealing a seed would let future draws be predicted, so `revealRandomness` always starts a new committed session in the same reply chain.

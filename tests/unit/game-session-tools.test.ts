@@ -67,8 +67,8 @@ describe("awaitRandomWagerAction", () => {
     const response = await awaitRandomWagerAction(ctx, {
       expectedVersion: 1,
       state: { turn: 2 },
-      allowedActions: ["roll"],
-      prompt: "Roll again?",
+      allowedActions: ["hit"],
+      prompt: "Hit again?",
     });
 
     expect(response).toContain("Could not pause wallet game: Game state version conflict");

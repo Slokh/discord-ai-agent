@@ -1,4 +1,5 @@
 import type { ChatResult } from "../models/openrouter.js";
+import type { ScopedToolset } from "../tools/toolScope.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { previewText } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
@@ -6,7 +7,11 @@ import { recordAgentEvent } from "./runtimeTranscript.js";
 const FRESH_DATA_INTENT =
   /\b(find|search|compare|check|track|book|buy|cheapest|lowest|best|current|live|latest|today|tonight|tomorrow|this (?:week|weekend|month|season|spring|summer|fall|autumn|winter|year)|next (?:week|weekend|month|season|spring|summer|fall|autumn|winter|year))\b/i;
 const TIME_SENSITIVE_SUBJECT =
-  /\b(prices?|fares?|flights?|hotels?|tickets?|availability|schedules?|departures?|arrivals?|weather|forecast|scores?|standings|stocks?|crypto|exchange rates?|resale|listings?|bookable|in stock)\b/i;
+  /\b(prices?|fares?|flights?|hotels?|tickets?|availability|schedules?|departures?|arrivals?|weather|forecast|scores?|standings|stocks?|crypto|exchange rates?|resale|listings?|bookable|in stock|rosters?|lineups?|depth charts?|injur(?:y|ies)|trades?|signings?|transactions?)\b/i;
+const CURRENT_SPORTS_INTENT =
+  /\b(?:current|live|latest|today|tonight|tomorrow|this (?:season|year)|next (?:season|year))\b/i;
+const CURRENT_SPORTS_SUBJECT =
+  /\b(?:players?|teams?|playoffs?|finals?|champions?)\b/i;
 const LIVE_ODDS_SUBJECT =
   /(?:\b(?:current|live|latest|today|tonight|tomorrow|sportsbook|bookmaker|betting)\b[\s\S]{0,80}\bodds\b|\bodds\b[\s\S]{0,80}\b(?:current|live|latest|today|tonight|tomorrow|sportsbook|bookmaker|betting)\b)/i;
 const SAFE_NO_EVIDENCE_RESPONSE =
@@ -20,7 +25,7 @@ export const FRESH_EXTERNAL_DATA_RETRY_GUIDANCE =
   "Do not reuse unsupported prices, dates, schedules, availability, or claims from the rejected draft. If the lookup needs a missing parameter, ask one concise follow-up question instead.";
 
 export const FRESH_EXTERNAL_DATA_BLOCKED_RESPONSE =
-  "I couldn't verify live results with a fresh source, so I won't make up prices or availability. Try again with exact dates or the narrowest date range that works for you.";
+  "I couldn't verify live results with a fresh source, so I won't make up current facts. Try again with the specific league, date, location, or other scope the lookup needs.";
 
 export type FreshExternalDataGuardDecision = "allow" | "retry" | "block";
 
@@ -37,6 +42,17 @@ export class FreshExternalDataGuard {
     if (response.content.trim() && hasFreshExternalToolEvidence(response)) {
       this.freshEvidenceObserved = true;
     }
+  }
+
+  toolsetForRound(toolset: ScopedToolset): ScopedToolset {
+    if (!this.retryAttempted || this.freshEvidenceObserved) return toolset;
+    return {
+      groups: toolset.groups,
+      localTools: [],
+      serverTools: toolset.serverTools.filter(
+        (tool) => tool.type === "openrouter:web_search",
+      ),
+    };
   }
 
   async inspectDraft(responseContent: string): Promise<FreshExternalDataGuardDecision> {
@@ -91,9 +107,16 @@ export function hasFreshExternalToolEvidence(
 }
 
 export function requiresFreshExternalData(userText: string): boolean {
-  return FRESH_DATA_INTENT.test(userText) && (
-    TIME_SENSITIVE_SUBJECT.test(userText) || LIVE_ODDS_SUBJECT.test(userText)
-  );
+  return (
+    FRESH_DATA_INTENT.test(userText) &&
+    (
+      TIME_SENSITIVE_SUBJECT.test(userText) ||
+      (
+        CURRENT_SPORTS_INTENT.test(userText) &&
+        CURRENT_SPORTS_SUBJECT.test(userText)
+      )
+    )
+  ) || LIVE_ODDS_SUBJECT.test(userText);
 }
 
 export function shouldRejectUngroundedFreshData(input: {

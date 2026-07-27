@@ -2634,6 +2634,59 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(afterDelete.map((message) => message.role)).toEqual(["assistant"]);
   });
 
+  it("loads top-level conversation memory from only the current requester's turns", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const threadKey = `discord:${guildId}:${channelId}`;
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.ensureConversationSession({ threadKey, guildId, channelId });
+
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "turn-alice",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "alice",
+        authorDisplayName: "Alice",
+        content: "My preferred color is blue.",
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Got it, Alice.",
+      },
+    });
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "turn-bob",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bob",
+        authorDisplayName: "Bob",
+        content: "Call me Captain Red.",
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Sure, Captain Red.",
+      },
+    });
+
+    const aliceMemory = await repo.recentConversationMessages({
+      threadKey,
+      limit: 10,
+      requesterAuthorId: "alice",
+    });
+
+    expect(aliceMemory.map((message) => message.content)).toEqual([
+      "My preferred color is blue.",
+      "Got it, Alice.",
+    ]);
+  });
+
   it("compacts older conversation memory into a snapshot and prepends it to recent context", async () => {
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;

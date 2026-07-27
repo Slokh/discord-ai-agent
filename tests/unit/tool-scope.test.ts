@@ -81,7 +81,7 @@ describe("tool scoping", () => {
     expect(names).not.toContain("createSkillDraft");
   });
 
-  it("always pairs wallet-backed randomness with pause and settlement tools", () => {
+  it("omits wager continuation schemas from unrelated wallet-enabled chat", () => {
     withEnv({
       WALLET_ENABLED: "true",
       USER_WALLETS_ENABLED: "true",
@@ -93,8 +93,8 @@ describe("tool scoping", () => {
       const names = tools.localTools.map((tool) => tool.name);
 
       expect(names).toContain("drawRandom");
-      expect(names).toContain("awaitRandomWagerAction");
-      expect(names).toContain("settleRandomWager");
+      expect(names).not.toContain("awaitRandomWagerAction");
+      expect(names).not.toContain("settleRandomWager");
     });
   });
 

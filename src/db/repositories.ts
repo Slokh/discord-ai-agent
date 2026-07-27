@@ -122,7 +122,12 @@ export class DiscordAiAgentRepository {
       createdAt?: Date;
     };
   }) { return conversationMemoryRepository.appendConversationTurn(this.pool, input); }
-  recentConversationMessages(input: { threadKey: string; limit: number; includeToolResults?: boolean }): Promise<ConversationMessage[]> { return conversationMemoryRepository.recentConversationMessages(this.pool, input); }
+  recentConversationMessages(input: {
+    threadKey: string;
+    limit: number;
+    includeToolResults?: boolean;
+    requesterAuthorId?: string | null;
+  }): Promise<ConversationMessage[]> { return conversationMemoryRepository.recentConversationMessages(this.pool, input); }
   agentMemoryTurnStats(input: {
     guildId: string;
     channelId: string;

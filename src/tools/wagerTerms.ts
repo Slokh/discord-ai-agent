@@ -1,6 +1,6 @@
 import type { WagerReservation } from "../payments/types.js";
 
-const BLACKJACK_MAX_TOTAL_PAYOUT_MULTIPLIER = 8;
+const BLACKJACK_MAX_TOTAL_PAYOUT_MULTIPLIER = 2.5;
 
 export function effectiveMaximumPayoutUsd(input: {
   game: string;

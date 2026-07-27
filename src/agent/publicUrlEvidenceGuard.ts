@@ -7,8 +7,10 @@ import { recordAgentEvent } from "./runtimeTranscript.js";
 
 const PUBLIC_URL_INSPECTION_INTENT =
   /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\b/i;
-const REPLIED_PUBLIC_URL_INSPECTION_INTENT =
-  /\b(?:(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\s+(?:this|that|it)\b|(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\b[^.\n]{0,80}\b(?:link|url|site|page|post|article|video|image|tweet|thread)\b)/i;
+const REPLIED_DEICTIC_URL_INSPECTION_INTENT =
+  /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\s+(?:this|that|it)\b/i;
+const REPLIED_EXPLICIT_URL_INSPECTION_INTENT =
+  /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\b[^.\n]{0,80}\b(?:link|url|site|page|post|article|video|image|tweet|thread)\b/i;
 const PUBLIC_URL_EVIDENCE_KEYS = ["web_fetch_requests", "web_search_requests"] as const;
 
 export const PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE =
@@ -49,9 +51,10 @@ export class PublicUrlEvidenceGuard {
     }
   }
 
-  toolsetForRound(toolset: ScopedToolset) {
+  toolsetForRound(toolset: ScopedToolset): ScopedToolset {
     if (!this.retryAttempted || this.evidenceObserved) return toolset;
     return {
+      groups: toolset.groups,
       localTools: [],
       serverTools: toolset.serverTools.filter(
         (tool) => tool.type === "openrouter:web_search",
@@ -115,8 +118,12 @@ export function requiresPublicUrlEvidence(
   if (currentUrls.length > 0) {
     return PUBLIC_URL_INSPECTION_INTENT.test(userText);
   }
-  if (!REPLIED_PUBLIC_URL_INSPECTION_INTENT.test(userText)) return false;
-  return scopedReplyPublicUrls(replyContext, configuredRunConsoleUrl).length > 0;
+  const explicitlyTargetsUrl = REPLIED_EXPLICIT_URL_INSPECTION_INTENT.test(userText);
+  if (!explicitlyTargetsUrl && !REPLIED_DEICTIC_URL_INSPECTION_INTENT.test(userText)) return false;
+  return scopedReplyPublicUrls(replyContext, {
+    allowBotAuthoredParent: explicitlyTargetsUrl,
+    configuredRunConsoleUrl,
+  }).length > 0;
 }
 
 export function hasPublicUrlEvidence(
@@ -129,15 +136,22 @@ export function hasPublicUrlEvidence(
 
 function scopedReplyPublicUrls(
   replyContext: DiscordReplyContext | null | undefined,
-  configuredRunConsoleUrl?: string | null,
+  input: {
+    allowBotAuthoredParent: boolean;
+    configuredRunConsoleUrl?: string | null;
+  },
 ) {
-  const replyMessages = replyContext
-    ? (replyContext.chain.length > 0 ? replyContext.chain : [replyContext])
-    : [];
-  const candidates = replyMessages.flatMap((message) => urlsInText(message.content));
+  if (!replyContext) return [];
+  const directParent = replyContext.chain.at(-1) ?? replyContext;
+  if (
+    directParent.authorIsBot &&
+    !directParent.forwarded &&
+    !input.allowBotAuthoredParent
+  ) return [];
+  const candidates = urlsInText(directParent.content);
   return [...new Set(candidates.filter((value) =>
     isPublicExternalUrl(value) &&
-    !isConfiguredRunConsoleUrl(value, configuredRunConsoleUrl)
+    !isConfiguredRunConsoleUrl(value, input.configuredRunConsoleUrl)
   ))];
 }
 

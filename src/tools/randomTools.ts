@@ -32,6 +32,10 @@ import {
   standardWagerIntentForContext,
   standardWagerIntentForPrompt,
 } from "./wagerIntent.js";
+import {
+  canonicalizeStandardBlackjackContinuation,
+  prepareStandardWagerSettlement,
+} from "./standardWagerRuntime.js";
 
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
@@ -56,7 +60,13 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   }
   const canonicalInput = canonicalizeStandardWagerDraw(ctx, input, continuingWager);
   if (typeof canonicalInput === "string") return canonicalInput;
-  input = canonicalInput;
+  const continuedInput = await canonicalizeStandardBlackjackContinuation(
+    ctx,
+    continuingWager,
+    canonicalInput,
+  );
+  if (typeof continuedInput === "string") return continuedInput;
+  input = continuedInput;
   const kind = (input.kind ?? "").trim();
   if (!DRAW_KINDS.has(kind)) {
     await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
@@ -336,12 +346,15 @@ export async function settleRandomWager(
   if (!isResolutionSource(input.resolutionSource)) {
     return "resolutionSource must be verified_randomness or player_decision.";
   }
-  if (describesUnfinishedWager(explanation)) {
-    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. If more automatic chance is required, call drawRandom again without a new wager, apply the verified result, and repeat until the outcome is final. Then call settleRandomWager with the final payout.";
-  }
   const wager = await currentWagerForContext(ctx);
   if (!wager) {
     return "Settlement rejected: no active wallet wager exists for this player in this Discord game session. No transfer was created.";
+  }
+  const standardGame =
+    typeof wager.game === "string" &&
+    /^(?:blackjack|coin\s*flip)$/i.test(wager.game.trim());
+  if (!standardGame && describesUnfinishedWager(explanation)) {
+    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. If more automatic chance is required, call drawRandom again without a new wager, apply the verified result, and repeat until the outcome is final. Then call settleRandomWager with the final payout.";
   }
   const suppliedWagerId = input.wagerId?.trim();
   if (suppliedWagerId && suppliedWagerId !== wager.id) {
@@ -353,6 +366,13 @@ export async function settleRandomWager(
     });
   }
   const wagerId = wager.id;
+  const settlement = await prepareStandardWagerSettlement(ctx, wager, {
+    payoutUsd: input.payoutUsd,
+    outcome: input.outcome,
+    resolutionSource: input.resolutionSource,
+    explanation,
+  });
+  if (typeof settlement === "string") return settlement;
   let settled: Awaited<ReturnType<typeof ctx.walletService.settleWager>>;
   try {
     settled = await ctx.walletService.settleWager(
@@ -360,10 +380,10 @@ export async function settleRandomWager(
         wagerId,
         userId: ctx.userId,
         requestId,
-        payoutUsd: input.payoutUsd,
-        outcome: input.outcome,
-        resolutionSource: input.resolutionSource,
-        explanation
+        payoutUsd: settlement.payoutUsd,
+        outcome: settlement.outcome,
+        resolutionSource: settlement.resolutionSource,
+        explanation: settlement.explanation,
       },
       paymentRecorder(ctx)
     );
@@ -376,12 +396,12 @@ export async function settleRandomWager(
   }
   return [
     `The scoped wallet wager settled.`,
-    `Payout: $${input.payoutUsd}.`,
+    `Payout: $${settlement.payoutUsd}.`,
     settled.transfer
       ? `Net transfer: $${atomicToUsd(settled.transfer.amountAtomic, settled.transfer.tokenDecimals)} USD (${settled.transfer.status})${settled.transfer.transactionHash ? ` · ${settled.transfer.transactionHash}` : ""}.`
       : "Net transfer: none (the payout equals the stake).",
     settled.userBalance ? `User wallet balance: $${settled.userBalance.formatted} USD.` : null,
-    `Calculation: ${explanation}`
+    `Calculation: ${settlement.explanation}`
   ].filter((line): line is string => line !== null).join("\n");
 }
 

@@ -59,12 +59,12 @@ const defaults = {
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
   openRouterAppTitle: "Discord AI Agent",
   openRouterHttpReferer: "http://localhost",
-  openRouterChatModel: "anthropic/claude-sonnet-5",
+  openRouterChatModel: "moonshotai/kimi-k3",
   openRouterChatFallbackModel: "openai/gpt-5.6-terra",
   openRouterChatReasoningEffort: "medium" as ReasoningEffort,
   openRouterChatFallbackReasoningEffort: "medium" as ReasoningEffort,
-  // Reasoning and visible output share the completion budget. Give Sonnet
-  // enough room for medium reasoning while Discord still bounds final replies.
+  // Reasoning and visible output share the completion budget. Keep enough room
+  // for medium reasoning while Discord still bounds final visible replies.
   openRouterChatMaxTokens: 4_096,
   openRouterChatFallbackMaxTokens: 3_072,
   openRouterCodegenModel: "z-ai/glm-5.2",

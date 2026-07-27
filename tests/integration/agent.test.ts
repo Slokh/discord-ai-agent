@@ -36,6 +36,23 @@ describe("agent router", () => {
       revealedAt: null,
     };
     const rngRepo = {
+      getActiveSession: vi.fn(async (threadKey: string) =>
+        threadKey === session.threadKey ? session : null
+      ),
+      listDraws: vi.fn(async (sessionId: string) =>
+        sessionId === session.id
+          ? draws.map((draw, index) => ({
+              id: index + 1,
+              sessionId: session.id,
+              ...draw,
+              reason: draw.reason ?? null,
+              requestId: draw.requestId ?? null,
+              messageId: draw.messageId ?? null,
+              requestedByUserId: draw.requestedByUserId ?? null,
+              createdAt: new Date("2026-07-23T00:00:00.000Z"),
+            }))
+          : []
+      ),
       withActiveSession: vi.fn(async (
         _input: unknown,
         callback: (tx: RngSessionTx, created: boolean) => Promise<unknown>,
@@ -189,7 +206,11 @@ describe("agent router", () => {
         getActiveGameSession: vi.fn(async () => null),
         getCurrentWager: vi.fn(async () => activeWager),
         reserveWager,
-        attachWagerDraw: vi.fn(async () => undefined),
+        attachWagerDraw: vi.fn(async (_wagerId: string, drawId: number) => {
+          if (activeWager) {
+            activeWager = { ...activeWager, drawId, status: "drawn" };
+          }
+        }),
         settleWager,
       },
       openRouter: { chat },
@@ -1114,6 +1135,23 @@ describe("agent router", () => {
     };
     const draws: RngDrawInput[] = [];
     const rngRepo = {
+      getActiveSession: vi.fn(async (threadKey: string) =>
+        threadKey === session.threadKey ? session : null
+      ),
+      listDraws: vi.fn(async (sessionId: string) =>
+        sessionId === session.id
+          ? draws.map((draw, index) => ({
+              id: index + 1,
+              sessionId: session.id,
+              ...draw,
+              reason: draw.reason ?? null,
+              requestId: draw.requestId ?? null,
+              messageId: draw.messageId ?? null,
+              requestedByUserId: draw.requestedByUserId ?? null,
+              createdAt: new Date("2026-07-24T00:00:00.000Z"),
+            }))
+          : []
+      ),
       withActiveSession: vi.fn(async (
         _input: unknown,
         callback: (tx: RngSessionTx, created: boolean) => Promise<unknown>,
@@ -1330,7 +1368,11 @@ describe("agent router", () => {
         getActiveGameSession: vi.fn(async () => null),
         getCurrentWager: vi.fn(async () => activeWager),
         reserveWager,
-        attachWagerDraw: vi.fn(async () => undefined),
+        attachWagerDraw: vi.fn(async (_wagerId: string, drawId: number) => {
+          if (activeWager) {
+            activeWager = { ...activeWager, drawId, status: "drawn" };
+          }
+        }),
         awaitGameAction,
         settleWager,
       },
@@ -2151,9 +2193,9 @@ describe("agent router", () => {
       toolChoice?: string;
     };
     expect(retryRequest.toolChoice).toBe("required");
-    expect(retryRequest.tools).toEqual(expect.arrayContaining([
+    expect(retryRequest.tools).toEqual([
       expect.objectContaining({ type: "openrouter:web_search" }),
-    ]));
+    ]);
     expect(retryRequest.messages?.some((message) =>
       message.role === "user" && message.content.includes("time-sensitive request without fresh tool evidence")
     )).toBe(true);
@@ -2169,6 +2211,58 @@ describe("agent router", () => {
         }),
       }),
     ]));
+  });
+
+  it("retries current-roster predictions with only fresh web retrieval enabled", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "Boston beats Denver in six based on the current lineups.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "After checking the current rosters, my prediction is Boston over Denver in six.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{
+          url: "https://example.com/current-nba-rosters",
+          title: "Current NBA rosters",
+        }],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Predict the NBA Finals with current rosters.",
+    );
+
+    expect(response.content).toContain("After checking the current rosters");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: "required",
+      tools: [expect.objectContaining({ type: "openrouter:web_search" })],
+    }));
   });
 
   it("accepts transparent hosted search evidence on the first round without a duplicate retry", async () => {
@@ -5075,7 +5169,7 @@ describe("agent router", () => {
         maxReplyChars: 1800,
         toolsetScoping: true,
         openRouter: {
-          chatModel: "anthropic/claude-sonnet-5",
+          chatModel: "moonshotai/kimi-k3",
           chatFallbackModel: "openai/gpt-5.6-terra",
           chatFallbackReasoningEffort: "medium",
           chatFallbackMaxTokens: 3_072,
@@ -5103,7 +5197,7 @@ describe("agent router", () => {
     expect(response.content).toBe("Hey Kartik, what's up?");
     expect(chat).toHaveBeenCalledTimes(2);
     expect((chat.mock.calls[0]?.[0] as any).model).toBe(
-      "anthropic/claude-sonnet-5",
+      "moonshotai/kimi-k3",
     );
     expect(
       traceEvents.some(
@@ -5361,6 +5455,59 @@ describe("agent router", () => {
         event.eventName === "agent.capability_claim.corrected" &&
         event.metadata?.capability === "runtime_model_identity",
     )).toBe(true);
+  });
+
+  it("does not inspect a bot trace URL when the user asks for a reply transformation", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi.fn().mockResolvedValueOnce({
+      content: "Think of it like a point guard reading the defense and making the simple pass.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    });
+    const parent = {
+      messageId: "synthetic-parent",
+      rootMessageId: "synthetic-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "I mixed up the context.\nTrace: https://tasks.example.com/runs/synthetic",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...parent, chain: [parent] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "Explain this in basketball.");
+
+    expect(response.content).toContain("point guard");
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(traceEvents.some(
+      (event) => event.eventName === "agent.public_url_evidence_guard.rejected",
+    )).toBe(false);
   });
 
   it("preserves a hosted citation when a confirmed reply-chain result promises a link", async () => {
@@ -8017,7 +8164,7 @@ describe("agent router", () => {
         maxReplyChars: 1800,
         toolsetScoping: true,
         openRouter: {
-          chatModel: "anthropic/claude-sonnet-5",
+          chatModel: "moonshotai/kimi-k3",
           chatFallbackModel: "openai/gpt-5.6-terra",
           utilityModel: "openai/gpt-4o-mini",
         },

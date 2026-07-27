@@ -9,7 +9,7 @@ Owns durable Postgres state and query contracts.
 - Normalized custom-emoji inline/reaction evidence and per-channel culture profiles live in `discordEmojiUsageRepository.ts`. Evidence is updated when archived messages, edits, deletes, or reactions change; request-time reads use indexed profiles instead of scanning raw message history and remain channel-permission filtered, exclusion-aware, and privacy-deletion safe.
 - Message embeddings and embedding backlog selection live in `embeddingRepository.ts`.
 - Permission-aware retrieval, search, attachment search, and message context live in `retrievalRepository.ts`; stats and topic candidates live in `retrievalStatsRepository.ts`.
-- Conversation sessions and per-channel agent memory live in `conversationMemoryRepository.ts`.
+- Conversation sessions and per-channel agent memory live in `conversationMemoryRepository.ts`. Top-level prompt reads are requester-scoped: they include only that member's completed turns and paired assistant/tool records, and exclude channel-wide compacted snapshots.
 - Agent task lifecycle writes live in `agentTaskRepository.ts`; task/status/timeline readers live in `agentTaskReadRepository.ts`; runtime task/event projection readers live in `agentTaskRuntimeReadRepository.ts`.
 - Process runs, spans, run events, artifacts, and cleanup live in `processRunRepository.ts`.
 - Trace events and tool audit logs live in `auditRepository.ts`.

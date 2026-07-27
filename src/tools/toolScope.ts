@@ -66,7 +66,7 @@ export function scopedToolset(input: { config: AppConfig; groups: Set<ToolGroup>
   const groups = normalizeGroups(input.groups, input.config);
   const localTools = toolRegistry
     .filter((tool) =>
-      (groups.has(tool.group) || tool.name === "drawRandom" || tool.name === "awaitRandomWagerAction" || tool.name === "settleRandomWager") &&
+      (groups.has(tool.group) || tool.name === "drawRandom") &&
       isToolDeploymentAvailable(tool, input.config)
     )
     .map((tool) => toolForDeployment(tool, input.config));

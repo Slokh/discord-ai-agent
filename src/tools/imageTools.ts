@@ -26,7 +26,7 @@ import {
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 
-const DEFAULT_VISION_MODEL = "google/gemini-3.1-flash-lite";
+const DEFAULT_VISION_MODEL = "google/gemini-3.6-flash";
 const MAX_IMAGE_REFERENCES = 4;
 const MAX_INLINE_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_INLINE_VISION_TOTAL_BYTES = 20 * 1024 * 1024;

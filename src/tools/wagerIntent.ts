@@ -16,12 +16,14 @@ export type StandardWagerIntent =
 
 const AMOUNT_SOURCE = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const GAME_LED_STANDARD_WAGER = new RegExp(
-  String.raw`^\s*(?:please\s+)?(blackjack|coin\s*flip|flip\s+a\s+coin)\b(?:\s*[,;:]\s*|\s+(?:[a-z][a-z'-]*\s+){0,3})\$?\s*(${AMOUNT_SOURCE})\s*(?:usd|dollars?|bucks?)?\s*[.!]?\s*$`,
+  String.raw`^\s*(?:please\s+)?(blackjack|coin\s*flip|flip\s+a\s+coin)\b(?:\s*[,;:]\s*|\s+(?:[a-z][a-z'-]*\s+){0,3})\$?\s*(${AMOUNT_SOURCE})\s*(?:usd|dollars?|bucks?)?\s*(?:(heads|tails)\s*)?[.!]?\s*$`,
   "i",
 );
 const ACTION_LED_WAGER = /\b(?:bet|wager|stake|risk|put|play|deal|flip)\b/i;
 const WAGER_DISCUSSION =
   /^\s*(?:what|which|why|how|should|would|could|is|are|do\s+(?:you|i|we|they)|does|did|explain)\b/i;
+const GAME_LED_WAGER_DISCUSSION =
+  /\b(?:is|are|was|were|has|have|odds?|probabilit(?:y|ies)|payouts?|pays?|returns?|rules?|strategy|recommend(?:ation|ed)?|worth|costs?|equals?|means?|uses?)\b/i;
 const CUSTOM_PAYOUT_RULE =
   /\b(?:payout|pays?|returns?|profit|win\s+\$|wins?\s+\d|double|triple|odds?)\b/i;
 const COIN_GAME = /\b(?:coin\s*flip|flip\s+a\s+coin|heads|tails)\b/i;
@@ -31,7 +33,12 @@ const COIN_SIDE_REPLY = /^\s*(heads|tails)\s*(?:please|for me|it is)?\s*[.!]?\s*
 
 export function standardWagerIntentForPrompt(text: string): StandardWagerIntent | null {
   const normalized = text.trim();
-  if (!normalized || WAGER_DISCUSSION.test(normalized) || CUSTOM_PAYOUT_RULE.test(normalized)) {
+  if (
+    !normalized ||
+    WAGER_DISCUSSION.test(normalized) ||
+    GAME_LED_WAGER_DISCUSSION.test(normalized) ||
+    CUSTOM_PAYOUT_RULE.test(normalized)
+  ) {
     return null;
   }
 
@@ -39,7 +46,9 @@ export function standardWagerIntentForPrompt(text: string): StandardWagerIntent 
   if (gameLed) {
     const stakeUsd = positiveAmount(gameLed[2]);
     if (stakeUsd == null) return null;
-    if (/blackjack/i.test(gameLed[1] ?? "")) return { game: "blackjack", stakeUsd };
+    if (/blackjack/i.test(gameLed[1] ?? "")) {
+      return gameLed[3] ? null : { game: "blackjack", stakeUsd };
+    }
     return {
       game: "coinflip",
       stakeUsd,

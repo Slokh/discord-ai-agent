@@ -27,7 +27,11 @@ import { wagerRequester } from "./wagerRequesterScope.js";
 import { effectiveMaximumPayoutUsd } from "./wagerTerms.js";
 import { validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
 import type { DrawRandomInput } from "./randomTypes.js";
-import { canonicalizeStandardWagerDraw, standardWagerIntentForContext } from "./wagerIntent.js";
+import {
+  canonicalizeStandardWagerDraw,
+  standardWagerIntentForContext,
+  standardWagerIntentForPrompt,
+} from "./wagerIntent.js";
 
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
@@ -281,6 +285,7 @@ export function requiresWalletBackedWager(text: string): boolean {
   const executionOverride = /\b(?:please|go\s+ahead|right\s+now|do\s+it|let(?:'s|\s+us)|for\s+me)\b/i;
   const wholeBalance = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
   if (discussion.test(text) && !executionOverride.test(text)) return false;
+  if (standardWagerIntentForPrompt(text)) return true;
   return game.test(text) && (
     (money.test(text) && (action.test(text) || replayAction.test(text))) ||
     shorthand.test(text) ||

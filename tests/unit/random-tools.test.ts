@@ -871,6 +871,7 @@ describe("drawRandom", () => {
     "bet .05 blackjack",
     "blackjack, 0.25",
     "roulette red 0.40",
+    "coinflip 0.15 tails",
     "put $.10 on heads",
     "put the rest of my balance on roulette",
     "bet my entire bankroll on black",

@@ -65,6 +65,7 @@ import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js
 import { ImageEvidenceGuard, ImageGenerationGuard } from "./imageEvidenceGuard.js";
 import { runGuardedAgentRequest } from "./modelLoopRequest.js";
 import { completeAfterToolRoundLimit } from "./modelLoopLimit.js";
+import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -329,7 +330,7 @@ async function runAgentModelLoopInternal(
             isOpenRouterTimeoutError(error) &&
             !modelTimeoutFallbackAttempted &&
             Boolean(fallbackModel) &&
-            fallbackModel !== ctx.config.openRouter?.chatModel;
+            fallbackModel !== effectiveAgentChatModel(ctx);
           if (!canFallback) throw error;
           if (!(await reserveModelCall(ctx, modelCallBudget, "timeout_fallback", { round: round + 1, fallbackModel }))) {
             throw error;

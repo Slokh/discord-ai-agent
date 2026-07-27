@@ -81,6 +81,19 @@ describe("tool scoping", () => {
     expect(names).not.toContain("createSkillDraft");
   });
 
+  it("preloads the ops model-switch tool for conversational model changes", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "switch the chat model to moonshotai/kimi-k3",
+      hasImageAttachments: false,
+      config,
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("ops")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "setAgentModel")).toBe(true);
+  });
+
   it("omits wager continuation schemas from unrelated wallet-enabled chat", () => {
     withEnv({
       WALLET_ENABLED: "true",

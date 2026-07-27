@@ -11,7 +11,7 @@ export const TOOL_NAMES = [
   "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds", "adminSetWalletStarterAmount",
   "getWalletFeeSummary", "reconcileWalletTransfers", "getSpotifyPlaylistTracks",
   "getSpotifyAlbumTracks", "getSpotifyArtistDiscography", "getSpotifyPlaylistStats", "compareSpotifyPlaylists", "searchSpotify",
-  "getSpotifyItem", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar", "setUserTurnLimit", "drawRandom",
+  "getSpotifyItem", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar", "setUserTurnLimit", "setAgentModel", "drawRandom",
   "awaitRandomWagerAction", "settleRandomWager", "revealRandomness",
 ] as const;
 export type ToolName = typeof TOOL_NAMES[number];

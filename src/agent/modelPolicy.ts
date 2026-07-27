@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
 } from "../models/openrouter.js";
 import type { ToolContext } from "../tools/types.js";
+import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
 
 export type AgentChatPolicy = {
   model?: string;
@@ -14,7 +15,7 @@ export type AgentChatPolicy = {
 
 export function primaryChatPolicy(ctx: ToolContext): AgentChatPolicy {
   return {
-    model: nonEmpty(ctx.config.openRouter?.chatModel),
+    model: effectiveAgentChatModel(ctx),
     reasoningEffort: ctx.config.openRouter?.chatReasoningEffort,
     maxTokens: ctx.config.openRouter?.chatMaxTokens ?? 4_096,
   };

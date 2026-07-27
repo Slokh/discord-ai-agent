@@ -210,6 +210,7 @@ const CODEGEN_KEYWORDS = [
 
 const OPS_KEYWORDS = [
   /\b(status|health|logs?|trace|why.*(failed|slow|hung)|deployment|config|admin|ops)\b/,
+  /\b(?:switch|change|set|reset)\b.{0,40}\b(?:(?:agent|ai|bot|chat)\s+)?model\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
   /\b(?:custom|server)?\s*(?:emoji|emote)s?\b/,
   /\bwhat can you do\b/,

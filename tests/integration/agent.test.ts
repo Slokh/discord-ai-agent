@@ -9612,6 +9612,118 @@ describe("agent router", () => {
       function: { name: "drawRandom" },
     });
   });
+
+  it("lets a configured owner switch and reset the server model without calling the current model", async () => {
+    const chat = vi.fn();
+    const setGuildChatModelOverride = vi.fn(async () => undefined);
+    const clearGuildChatModelOverride = vi.fn(async () => true);
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: { chatModel: "configured/default" },
+        allowlists: { ownerUserId: "owner", opsUserIds: ["operator"] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride,
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "owner",
+      userDisplayName: "Owner",
+      visibleChannelIds: ["c"],
+      requestId: "model-switch-request",
+    } as unknown as ToolContext;
+
+    const switched = await handleAgentRequest(ctx, "switch model to moonshotai/kimi-k3");
+    expect(switched.content).toContain("moonshotai/kimi-k3");
+    expect(setGuildChatModelOverride).toHaveBeenCalledWith({
+      guildId: "g",
+      chatModel: "moonshotai/kimi-k3",
+      updatedByUserId: "owner",
+    });
+    expect(chat).not.toHaveBeenCalled();
+
+    const reset = await handleAgentRequest(ctx, "reset model");
+    expect(reset.content).toContain("configured default");
+    expect(clearGuildChatModelOverride).toHaveBeenCalledWith("g");
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthorized exact model switches without invoking a model", async () => {
+    const chat = vi.fn();
+    const setGuildChatModelOverride = vi.fn();
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: { chatModel: "configured/default" },
+        allowlists: { ownerUserId: "owner", opsUserIds: ["operator"] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride: vi.fn(),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "friend",
+      userDisplayName: "Friend",
+      visibleChannelIds: ["c"],
+      requestId: "unauthorized-model-switch",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "switch model to moonshotai/kimi-k3");
+
+    expect(response.content).toContain("restricted");
+    expect(setGuildChatModelOverride).not.toHaveBeenCalled();
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("uses a durable guild override for the next primary model request", async () => {
+    const chat = vi.fn(async () => ({
+      content: "The server override is active.",
+      model: "moonshotai/kimi-k3",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: {
+          chatModel: "configured/default",
+          chatFallbackModel: "fallback/recovery",
+        },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => ({
+          chatModel: "moonshotai/kimi-k3",
+        })),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      requestId: "model-override-request",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "hello");
+
+    expect(response.content).toContain("override is active");
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      model: "moonshotai/kimi-k3",
+    }));
+  });
 });
 
 function replyChainWithContent(content: string) {

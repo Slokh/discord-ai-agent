@@ -52,4 +52,45 @@ export const runtimeAdminToolContracts = [
       additionalProperties: false
     }
   }),
+
+  defineTool({
+    name: "setAgentModel",
+    examples: [
+      "@ai switch model to moonshotai/kimi-k3",
+      "@ai reset model",
+    ],
+    description:
+      "Set or reset this Discord server's durable primary chat-model override. Use an OpenRouter model ID in provider/model form. The change applies starting with the next request and does not change the recovery model. Restricted to the configured bot owner or ops allowlist.",
+    userVisible: true,
+    mutates: true,
+    group: "ops",
+    category: "ops",
+    toolClass: "ops",
+    outputContract: [
+      "previous and effective primary chat model",
+      "whether the override was set or reset",
+      "when the change takes effect",
+      "failure reason when authorization or model syntax is invalid",
+    ],
+    permissionRequirements: [
+      "explicit_current_turn_request",
+      "configured_bot_owner_or_ops_allowlist",
+      "tool_audit_log",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["set", "reset"],
+          description: "Set a server override or reset it to the configured default. Defaults to set.",
+        },
+        model: {
+          type: "string",
+          description: "OpenRouter model ID in provider/model form. Required when action is set.",
+        },
+      },
+      additionalProperties: false,
+    },
+  }),
 ] satisfies ToolRegistryEntry[];

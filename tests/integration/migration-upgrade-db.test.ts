@@ -71,6 +71,7 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         "022_agent_runtime_binary_artifacts",
         "023_wallet_guild_settings",
         "024_remove_database_skills",
+        "025_guild_agent_settings",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
@@ -83,6 +84,8 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
       await expect(client.query("SELECT count(*)::int AS count FROM wallet_guild_settings"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM skills WHERE source = 'database'"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM guild_agent_settings"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);

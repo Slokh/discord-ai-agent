@@ -3107,6 +3107,36 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(budgetRepo.getUserTurnLimitOverride({ guildId, userId })).resolves.toBeUndefined();
   });
 
+  it("stores, replaces, and clears a per-guild chat-model override", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const firstUserId = `user-${randomUUID()}`;
+    const secondUserId = `user-${randomUUID()}`;
+
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toBeUndefined();
+    await expect(repo.setGuildChatModelOverride({
+      guildId,
+      chatModel: "moonshotai/kimi-k3",
+      updatedByUserId: firstUserId,
+    })).resolves.toEqual(expect.objectContaining({
+      guildId,
+      chatModel: "moonshotai/kimi-k3",
+      updatedByUserId: firstUserId,
+    }));
+    await repo.setGuildChatModelOverride({
+      guildId,
+      chatModel: "anthropic/claude-sonnet-5",
+      updatedByUserId: secondUserId,
+    });
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toEqual(expect.objectContaining({
+      guildId,
+      chatModel: "anthropic/claude-sonnet-5",
+      updatedByUserId: secondUserId,
+    }));
+    await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(true);
+    await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(false);
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toBeUndefined();
+  });
+
   it("rejects turn-limit overrides below -1", async () => {
     const budgetRepo = new BudgetRepository(pool);
     const guildId = `guild-${randomUUID()}`;
@@ -3196,6 +3226,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 });
 
 async function cleanupTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM guild_agent_settings WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");

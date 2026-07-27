@@ -1,5 +1,9 @@
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { ensureAutomaticStarterFunds } from "../tools/walletTools.js";
+import {
+  executeAgentModelCommand,
+  loadAgentModelOverride,
+} from "../tools/agentModelTools.js";
 import { coinflipWagerClarification } from "../tools/wagerIntent.js";
 import {
   activeGameActionNeedsRandomDraw,
@@ -28,6 +32,9 @@ export async function runGuardedAgentRequest(
   execute: (request: AgentModelLoopRequest) => Promise<AgentResponse>,
 ): Promise<AgentResponse> {
   ctx.requestText = userText;
+  await loadAgentModelOverride(ctx);
+  const agentModelCommand = await executeAgentModelCommand(ctx, userText);
+  if (agentModelCommand) return agentModelCommand;
   const coinflipClarification = ctx.config.payments?.userWalletsEnabled
     ? coinflipWagerClarification(userText)
     : null;

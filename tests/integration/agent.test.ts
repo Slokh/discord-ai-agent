@@ -1084,6 +1084,7 @@ describe("agent router", () => {
   it.each([
     ["blackjack, 0.25", "cards", 0.25, "blackjack", "awaitRandomWagerAction"],
     ["roulette red 0.40", "integers", 0.4, "roulette", "settleRandomWager"],
+    ["coinflip 0.15 tails", "coin", 0.15, "coinflip", "settleRandomWager"],
   ] as const)("replays game-led decimal wager shorthand through a usable verified outcome: %s", async (
     prompt,
     kind,
@@ -1220,8 +1221,20 @@ describe("agent router", () => {
       return { transfer: null, userBalance: { formatted: "1.00" } };
     });
     let round = 0;
-    const chat = vi.fn(async (request: { messages: Array<{ content: unknown }> }) => {
+    let firstToolChoice: unknown;
+    let firstToolNames: string[] = [];
+    const chat = vi.fn(async (request: {
+      messages: Array<{ content: unknown }>;
+      toolChoice?: unknown;
+      tools?: Array<{ function?: { name?: string } }>;
+    }) => {
       round += 1;
+      if (round === 1) {
+        firstToolChoice = structuredClone(request.toolChoice);
+        firstToolNames = (request.tools ?? [])
+          .map((tool) => tool.function?.name)
+          .filter((name): name is string => Boolean(name));
+      }
       const modelContext = JSON.stringify(request.messages);
       if (round === 1) {
         return {
@@ -1275,7 +1288,7 @@ describe("agent router", () => {
                   payoutUsd: 0,
                   outcome: "player_loss",
                   resolutionSource: "verified_randomness",
-                  explanation: "The verified roulette draw did not match the selected color.",
+                  explanation: "The verified random draw did not match the selected outcome.",
                 }),
               }],
             };
@@ -1283,7 +1296,9 @@ describe("agent router", () => {
       return {
         content: transition === "awaitRandomWagerAction"
           ? "Your verified cards are 3♥ and 4♦; the dealer shows 8♣. Hit or stand?"
-          : "The verified wheel landed on 35 black, so the red wager lost and settled.",
+          : kind === "coin"
+            ? "The verified coin landed on heads, so the tails wager lost and settled."
+            : "The verified wheel landed on 35 black, so the red wager lost and settled.",
         model: "router-model",
         raw: {},
         toolCalls: [],
@@ -1341,12 +1356,8 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, prompt);
 
-    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-      toolChoice: { type: "function", function: { name: "drawRandom" } },
-      tools: expect.arrayContaining([
-        expect.objectContaining({ function: expect.objectContaining({ name: "drawRandom" }) }),
-      ]),
-    }));
+    expect(firstToolChoice).toEqual({ type: "function", function: { name: "drawRandom" } });
+    expect(firstToolNames).toContain("drawRandom");
     expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
       userId: "u",
       stakeUsd,
@@ -1365,14 +1376,21 @@ describe("agent router", () => {
       expect(response.content).toContain("Hit or stand");
     } else {
       expect(draws).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          kind: "integers",
-          outcome: expect.objectContaining({ values: [35] }),
-        }),
+        kind === "coin"
+          ? expect.objectContaining({
+              kind: "coin",
+              outcome: expect.objectContaining({
+                values: expect.arrayContaining([expect.stringMatching(/^(?:heads|tails)$/)]),
+              }),
+            })
+          : expect.objectContaining({
+              kind: "integers",
+              outcome: expect.objectContaining({ values: [35] }),
+            }),
       ]));
       expect(settleWager).toHaveBeenCalledTimes(1);
       expect(awaitGameAction).not.toHaveBeenCalled();
-      expect(response.content).toContain("35 black");
+      expect(response.content).toContain(kind === "coin" ? "verified coin" : "35 black");
     }
   });
 

@@ -6639,6 +6639,181 @@ describe("agent router", () => {
     ]);
   });
 
+  it("keeps the generated reply image when the model disables context for a follow-up generation", async () => {
+    const sourceImage = Buffer.from("synthetic-deep-chain-source");
+    const generatedImage = Buffer.from("synthetic-deep-chain-variation");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    })));
+    const generateImage = vi.fn(async (_prompt: string, options: any) => {
+      expect(options.inputReferences).toHaveLength(1);
+      expect(options.inputReferences[0].image_url.url).toMatch(
+        /^data:image\/png;base64,/,
+      );
+      return {
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: generatedImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      };
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-reference-follow-up",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A new setting with the retained synthetic subject.",
+            useContextImages: false,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the follow-up variation.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const chain = deepGeneratedImageReplyChain(
+      "synthetic-preserved-reference",
+    );
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Please generate an image with the same synthetic subject in a garden.",
+    );
+
+    expect(chain).toHaveLength(24);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(response.content).toContain("Used 1 reference image.");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+  });
+
+  it("replays deep-chain visual correction feedback and preserves the source image", async () => {
+    const sourceImage = Buffer.from("synthetic-correction-source");
+    const generatedImage = Buffer.from("synthetic-corrected-result");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    })));
+    const generateImage = vi.fn(async (_prompt: string, options: any) => {
+      expect(options.inputReferences).toHaveLength(1);
+      return {
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: generatedImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      };
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "I understand the correction.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({
+          type: "function",
+          function: { name: "generateImage" },
+        });
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "generate-corrected-reference",
+            name: "generateImage",
+            argumentsText: JSON.stringify({
+              prompt: "Correct the output while retaining the same synthetic subject.",
+              useContextImages: false,
+            }),
+          }],
+        };
+      });
+    const traceEvents: any[] = [];
+    const chain = deepGeneratedImageReplyChain(
+      "synthetic-correction-reference",
+    );
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "No, it should keep the same synthetic subject.",
+    );
+
+    expect(chain).toHaveLength(24);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(response.content).toContain("Used 1 reference image.");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.image_generation.retry"
+    )).toBe(true);
+  });
+
   it("delivers a conservative image fallback after a text-only generation safety false positive", async () => {
     const generatedImage = Buffer.from("synthetic-safe-fallback-image");
     const generateImage = vi
@@ -9119,6 +9294,48 @@ function codeUpdateTestConfig() {
     openRouter: { codegenModel: "z-ai/glm-5.2" },
     execution: { codegenBackend: "local-process", codegenHarness: "opencode", taskSigningSecret: "test-secret" }
   };
+}
+
+function deepGeneratedImageReplyChain(referenceId: string) {
+  const message = (
+    index: number,
+    authorIsBot: boolean,
+    content: string,
+    attachments: Array<Record<string, unknown>> = [],
+  ) => ({
+    messageId: `synthetic-image-chain-${index}`,
+    rootMessageId: "synthetic-image-chain-root",
+    channelId: "c",
+    guildId: "g",
+    authorId: authorIsBot ? "bot" : "u",
+    authorDisplayName: authorIsBot ? "Bot" : "User",
+    authorIsBot,
+    content,
+    attachmentSummaries: attachments.map(() => "synthetic-reference.png image/png"),
+    attachments,
+    createdAt: null,
+    url: null,
+  });
+  const chain = Array.from({ length: 20 }, (_value, index) =>
+    message(
+      index,
+      index % 2 === 1,
+      index % 2 === 0
+        ? `Synthetic visual refinement ${index / 2 + 1}.`
+        : `Acknowledged visual refinement ${(index + 1) / 2}.`,
+    ));
+  chain.push(
+    message(20, false, "Generate the current synthetic subject."),
+    message(21, true, "Here is the generated synthetic subject.", [{
+      id: referenceId,
+      url: `https://cdn.discordapp.com/${referenceId}.png`,
+      filename: `${referenceId}.png`,
+      contentType: "image/png",
+    }]),
+    message(22, false, "Keep the subject consistent."),
+    message(23, true, "I’ll keep the synthetic subject consistent."),
+  );
+  return chain;
 }
 
 function channelTopicCandidate(content: string, embedding: number[]) {

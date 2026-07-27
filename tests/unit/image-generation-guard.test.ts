@@ -21,6 +21,40 @@ describe("image generation guard", () => {
       } as unknown as ToolContext,
       "make it brighter",
     )).toBe(true);
+    expect(hasExplicitImageGenerationIntent(
+      {
+        requestAttachments: [],
+        replyContext: {
+          chain: [{
+            attachments: [{
+              id: "synthetic-reference",
+              url: "https://cdn.discordapp.com/synthetic-reference.png",
+              filename: "synthetic-reference.png",
+              contentType: "image/png",
+            }],
+          }],
+        },
+        sessionMessages: [],
+      } as unknown as ToolContext,
+      "No, it should keep the same synthetic subject.",
+    )).toBe(true);
+    expect(hasExplicitImageGenerationIntent(
+      {
+        requestAttachments: [],
+        replyContext: {
+          chain: [{
+            attachments: [{
+              id: "synthetic-reference",
+              url: "https://cdn.discordapp.com/synthetic-reference.png",
+              filename: "synthetic-reference.png",
+              contentType: "image/png",
+            }],
+          }],
+        },
+        sessionMessages: [],
+      } as unknown as ToolContext,
+      "The new result is not the same person as the reference.",
+    )).toBe(true);
   });
 
   it("does not turn image how-to questions or unrelated edits into generation", () => {

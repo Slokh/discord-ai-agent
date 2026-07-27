@@ -30,6 +30,7 @@ import {
   describeGeneratedImageFile,
   generatedImageDimensions,
 } from "./imageOutputInspection.js";
+import { resolveContextImageSelection } from "./imageContextSelection.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 
@@ -352,6 +353,7 @@ export async function generateImage(
 ): Promise<{ content: string; files: AgentFile[]; status?: "ok" | "error" }> {
   const normalizedInput = typeof input === "string" ? { prompt: input } : input;
   const prompt = normalizedInput.prompt.trim();
+  const contextImageSelection = resolveContextImageSelection({ requestText: ctx.requestText, requested: normalizedInput.useContextImages, contextHasImages: contextImageReferences(ctx).length > 0 });
   const requiredText = normalizeRequiredImageText([
     ...(normalizedInput.requiredText ?? []),
     ...inferRequiredImageText([
@@ -362,7 +364,7 @@ export async function generateImage(
   ]);
   const references = await imageReferencesForInput(ctx, {
     explicitUrls: normalizedInput.referenceImageUrls,
-    useContextImages: normalizedInput.useContextImages ?? true
+    useContextImages: contextImageSelection.useContextImages,
   });
   const preparedReferences = await inlineDiscordCdnImageReferences(ctx, references);
   const inferredTransparentBackground = normalizedInput.background == null && wantsTransparentImage(prompt);
@@ -565,15 +567,8 @@ export async function generateImage(
       // The original opaque result remains rejected; report the bounded retry below.
     }
   }
-  const {
-    files,
-    urls,
-    automaticBackgroundRemovalCount,
-    rejectedOpaqueImages,
-  } = outputs;
-  const generatedDimensions = (
-    await Promise.all(files.map(generatedImageDimensions))
-  ).filter((value): value is string => Boolean(value));
+  const { files, urls, automaticBackgroundRemovalCount, rejectedOpaqueImages } = outputs;
+  const generatedDimensions = (await Promise.all(files.map(generatedImageDimensions))).filter((value): value is string => Boolean(value));
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -586,6 +581,7 @@ export async function generateImage(
       referenceImageCount: references.length,
       inlinedReferenceImageCount: preparedReferences.inlined,
       referenceImageInlineFailures: preparedReferences.failed,
+      contextImageSelectionOverridden: contextImageSelection.overrodeModelOptOut,
       outputFormat,
       background,
       aspectRatio,
@@ -594,6 +590,7 @@ export async function generateImage(
       images: image.data.length,
       attachedImages: files.length,
       referenceImageCount: references.length,
+      contextImageSelectionOverridden: contextImageSelection.overrodeModelOptOut,
       outputFormat,
       background,
       aspectRatio,
@@ -709,7 +706,7 @@ export async function imageReferencesForInput(
   return dedupeImageReferences(references).slice(0, MAX_IMAGE_REFERENCES);
 }
 
-function contextImageReferences(ctx: ToolContext): ImageReferenceContext[] {
+function contextImageReferences(ctx: Pick<ToolContext, "requestAttachments" | "replyContext">): ImageReferenceContext[] {
   const references: ImageReferenceContext[] = [];
   for (const attachment of ctx.requestAttachments ?? []) {
     const reference = discordAttachmentContextToReference(attachment, "current_request", "current request");

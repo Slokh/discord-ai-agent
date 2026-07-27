@@ -94,7 +94,8 @@ export const imageToolContracts = [
         },
         useContextImages: {
           type: "boolean",
-          description: "Whether to include images attached to the current request or replied-to chain as references. Defaults to true when context images exist."
+          description:
+            "Whether to include images attached to the current request or replied-to chain as references. Defaults to true when context images exist. Set false only when the current user explicitly asks to ignore, exclude, or avoid those images."
         },
         outputFormat: {
           type: "string",

@@ -20,7 +20,13 @@ import {
 } from "../../src/tools/discordSummaryTools.js";
 import { findDiscordUsers } from "../../src/tools/discordResolverTools.js";
 import { undoConversationTurns } from "../../src/tools/agentMemoryTools.js";
-import { generateImage, getDiscordUserAvatar, imageReferencesForInput, inspectDiscordImages } from "../../src/tools/imageTools.js";
+import {
+  generateImage,
+  getDiscordUserAvatar,
+  imageReferencesForInput,
+  inspectDiscordImages,
+} from "../../src/tools/imageTools.js";
+import { resolveContextImageSelection } from "../../src/tools/imageContextSelection.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 afterEach(() => {
@@ -1366,6 +1372,40 @@ describe("generateImage", () => {
       "https://example.com/new.png",
       "https://example.com/old.png",
     ]);
+  });
+
+  it("preserves reply images unless the current user explicitly opts out", () => {
+    const ctx = {
+      requestText: "Generate another synthetic variation.",
+      requestAttachments: [],
+      replyContext: {
+        chain: [{
+          attachments: [{
+            id: "synthetic-reference",
+            url: "https://cdn.discordapp.com/synthetic-reference.png",
+            filename: "synthetic-reference.png",
+            contentType: "image/png",
+          }],
+        }],
+      },
+    } as unknown as ToolContext;
+
+    expect(resolveContextImageSelection({
+      requestText: ctx.requestText,
+      requested: false,
+      contextHasImages: true,
+    })).toEqual({
+      useContextImages: true,
+      overrodeModelOptOut: true,
+    });
+    expect(resolveContextImageSelection({
+      requestText: "Generate it from scratch without the previous image.",
+      requested: false,
+      contextHasImages: true,
+    })).toEqual({
+      useContextImages: false,
+      overrodeModelOptOut: false,
+    });
   });
 
   it("inspects current Discord image attachments with a vision model", async () => {

@@ -90,6 +90,7 @@ export function hasExplicitImageGenerationIntent(
 
   return (
     hasEditCommand ||
+    IMAGE_CORRECTION_FEEDBACK.test(normalized) ||
     (
       hasCreationCommand &&
       IMAGE_FOLLOW_UP_REFERENCE.test(normalized)
@@ -107,6 +108,8 @@ const IMAGE_DIRECT_RENDER_COMMAND =
   /^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:draw|paint|sketch|illustrate|render)\b/i;
 const IMAGE_FOLLOW_UP_REFERENCE =
   /\b(?:it|this|that|one|another|same|version|again|more)\b/i;
+const IMAGE_CORRECTION_FEEDBACK =
+  /^(?:no|not quite|try again)\b|\b(?:doesn't|does not|didn't|did not)\b|\bnot\b.{0,100}\b(?:same|reference|subject|person|character|face|him|her|them|this|that)\b/i;
 const IMAGE_INSTRUCTIONAL_QUESTION =
   /^(?:how|why|what|when|where|which|who)\b|^(?:can|could|would)\s+(?:i|someone|a user)\b/i;
 

@@ -31,9 +31,7 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13 \
-  && rm -rf /usr/local/lib/node_modules/npm \
-  && rm -f /usr/local/bin/npm /usr/local/bin/npx
+RUN npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13 npm@12.0.1
 USER node
 
 FROM runtime-base AS runtime

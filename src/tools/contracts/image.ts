@@ -105,6 +105,11 @@ export const imageToolContracts = [
           type: "string",
           enum: ["auto", "transparent", "opaque"],
           description: "Requested background treatment. Use transparent for emojis, stickers, cutouts, and explicit background removal."
+        },
+        aspectRatio: {
+          type: "string",
+          enum: ["1:1", "16:9", "9:16", "4:3", "3:4"],
+          description: "Requested canvas aspect ratio. Use 3:4 for portrait, 16:9 for landscape, and 1:1 for square unless the user gives an explicit supported ratio."
         }
       },
       required: ["prompt"],

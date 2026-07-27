@@ -1404,7 +1404,7 @@ describe("generateImage", () => {
     expect(result).toContain("It looks like a dashboard screenshot.");
     expect(chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "google/gemini-3.1-flash-lite",
+        model: "google/gemini-3.6-flash",
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "user",

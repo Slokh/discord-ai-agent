@@ -6266,6 +6266,105 @@ describe("agent router", () => {
     expect(traceEvents.some((event) => event.eventName === "agent.image_evidence.retry")).toBe(true);
   });
 
+  it("uses the stronger vision path for a current composite image before final synthesis", async () => {
+    const sourceImage = await sharp(Buffer.from(`
+      <svg xmlns="http://www.w3.org/2000/svg" width="320" height="180">
+        <rect width="320" height="180" fill="#f6f7fb"/>
+        <circle cx="82" cy="90" r="44" fill="#3568d4"/>
+        <rect x="176" y="46" width="92" height="88" rx="12" fill="#f09a38"/>
+        <path d="M46 142 L118 142 L82 104 Z" fill="#45a66b"/>
+      </svg>
+    `)).png().toBuffer();
+    const fetchMock = vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-current-composite",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "Describe the main elements in this synthetic composite.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.model).toBe("google/gemini-3.6-flash");
+        expect(request.messages).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "image_url",
+                image_url: {
+                  url: expect.stringMatching(/^data:image\/png;base64,/),
+                },
+              }),
+            ]),
+          }),
+        ]));
+        return {
+          content: "The synthetic composite contains all three requested geometric elements.",
+          model: "strong-vision-model",
+          raw: {},
+          toolCalls: [],
+        };
+      })
+      .mockImplementationOnce(async (request: any) => {
+        const toolEvidence = request.messages.find(
+          (message: any) => message.role === "tool" && message.name === "inspectDiscordImages",
+        )?.content ?? "";
+        expect(toolEvidence).toContain("all three requested geometric elements");
+        return {
+          content: "It shows all three synthetic geometric elements.",
+          model: "final-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [{
+        id: "current-composite",
+        url: "https://cdn.discordapp.com/current-composite.png",
+        filename: "current-composite.png",
+        contentType: "image/png",
+      }],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Describe the main elements in this synthetic composite.",
+    );
+
+    expect(response.content).toContain("all three synthetic geometric elements");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(3);
+  });
+
   it("replays a reply-chain image edit through generation after inspection ends in a refusal", async () => {
     const sourceImage = Buffer.from("synthetic-source-image");
     const generatedImage = Buffer.from("synthetic-edited-image");

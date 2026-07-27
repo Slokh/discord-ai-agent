@@ -50,7 +50,7 @@ The model should own semantic work:
 - choosing among available tools;
 - deciding what evidence matters;
 - selecting conversational wording and useful formatting;
-- applying game-specific rules inside the allowed random/wager lifecycle;
+- applying game-specific rules for custom games inside the allowed random/wager lifecycle;
 - deciding whether an emote fits the social context.
 
 Code should own hard guarantees:
@@ -59,7 +59,7 @@ Code should own hard guarantees:
 - Discord permissions and private-data filtering;
 - tool authorization and explicit mutation intent;
 - live wallet balances, transfer endpoints, receipts, fee sponsorship, and idempotency;
-- random entropy, wager exposure, continuation ownership, and exactly-once settlement;
+- random entropy, wager exposure, continuation ownership, deterministic settlement for supported named games, and exactly-once settlement;
 - durable execution, queue handoff, retry bounds, cancellation, and delivery state;
 - bounded file parsing, secret redaction, retention, and non-model footers.
 

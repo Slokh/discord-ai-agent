@@ -59,6 +59,25 @@ describe("fresh external data guard", () => {
       .toBe(true);
   });
 
+  it("requires fresh evidence for current sports rosters and this-season predictions", () => {
+    expect(requiresFreshExternalData(
+      "Predict the NBA Finals with current rosters.",
+    )).toBe(true);
+    expect(requiresFreshExternalData(
+      "Who makes the NBA Finals this season?",
+    )).toBe(true);
+    expect(shouldRejectUngroundedFreshData({
+      userText: "Predict the NBA Finals with current rosters.",
+      responseContent: "Boston beats Denver in six based on the current lineups.",
+      freshEvidenceObserved: false,
+    })).toBe(true);
+  });
+
+  it("does not force current-data retrieval for timeless player rankings or team-building", () => {
+    expect(requiresFreshExternalData("Who are the best NBA players ever?")).toBe(false);
+    expect(requiresFreshExternalData("What is the best team-building exercise this week?")).toBe(false);
+  });
+
   it("requires structured citations instead of treating a search attempt as usable evidence", () => {
     expect(hasFreshExternalToolEvidence({
       serverToolUse: { web_search_requests: 1, tool_calls_executed: 1 },

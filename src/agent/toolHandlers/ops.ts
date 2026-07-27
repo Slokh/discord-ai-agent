@@ -1,4 +1,5 @@
 import { getDeploymentStatus } from "../../tools/agentTaskTools.js";
+import { setAgentModel } from "../../tools/agentModelTools.js";
 import { inspectAgentLogs, reportStatus, setUserTurnLimit } from "../../tools/discordOpsTools.js";
 import { getSpendSummary } from "../../tools/spendTools.js";
 import { cleanResponse } from "../../tools/responseFormatting.js";
@@ -26,6 +27,17 @@ export const opsToolHandlers = {
             ctx.config.maxReplyChars,
           ),
         };
+  },
+  "setAgentModel": async (ctx, route, originalText) => {
+    return {
+      content: cleanResponse(
+        await setAgentModel(ctx, {
+          action: stringArgument(route.arguments, "action"),
+          model: stringArgument(route.arguments, "model"),
+        }),
+        ctx.config.maxReplyChars,
+      ),
+    };
   },
   "inspectAgentLogs": async (ctx, route, originalText) => {
     return {

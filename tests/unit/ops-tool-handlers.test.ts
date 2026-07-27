@@ -6,12 +6,16 @@ const mocks = vi.hoisted(() => ({
   getDeploymentStatus: vi.fn(),
   inspectAgentLogs: vi.fn(),
   reportStatus: vi.fn(),
+  setAgentModel: vi.fn(),
   setUserTurnLimit: vi.fn(),
   getSpendSummary: vi.fn(),
 }));
 
 vi.mock("../../src/tools/agentTaskTools.js", () => ({
   getDeploymentStatus: mocks.getDeploymentStatus,
+}));
+vi.mock("../../src/tools/agentModelTools.js", () => ({
+  setAgentModel: mocks.setAgentModel,
 }));
 vi.mock("../../src/tools/discordOpsTools.js", () => ({
   inspectAgentLogs: mocks.inspectAgentLogs,
@@ -32,6 +36,7 @@ describe("opsToolHandlers", () => {
     mocks.getDeploymentStatus.mockResolvedValue(" deployment status ");
     mocks.inspectAgentLogs.mockResolvedValue(" agent logs ");
     mocks.reportStatus.mockResolvedValue(" report status ");
+    mocks.setAgentModel.mockResolvedValue(" model updated ");
     mocks.setUserTurnLimit.mockResolvedValue(" turn limit updated ");
     mocks.getSpendSummary.mockResolvedValue(" spend summary ");
   });
@@ -59,6 +64,18 @@ describe("opsToolHandlers", () => {
       userId: "user-1",
       turnsPerDay: 25,
       reason: "moderation",
+    });
+  });
+
+  it("normalizes agent-model arguments", async () => {
+    await expect(opsToolHandlers.setAgentModel(ctx, route("setAgentModel", {
+      action: " set ",
+      model: " moonshotai/kimi-k3 ",
+    }), "switch model")).resolves.toEqual({ content: "model updated" });
+
+    expect(mocks.setAgentModel).toHaveBeenCalledWith(ctx, {
+      action: "set",
+      model: "moonshotai/kimi-k3",
     });
   });
 

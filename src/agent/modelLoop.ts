@@ -65,6 +65,7 @@ import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js
 import { ImageEvidenceGuard, ImageGenerationGuard } from "./imageEvidenceGuard.js";
 import { runGuardedAgentRequest } from "./modelLoopRequest.js";
 import { completeAfterToolRoundLimit } from "./modelLoopLimit.js";
+import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
 
 export async function runAgentModelLoop(
   ctx: ToolContext,
@@ -172,6 +173,7 @@ async function runAgentModelLoopInternal(
   });
   const randomActionAuthorized = randomActionAuthorizedForTurn({ userText: text, replyContext: ctx.replyContext, promptContextTexts: [serverOverlay?.enabled ? serverOverlay.systemPrompt : "", promptOverlay], activeGameActionRequested: activeGame?.actionRequested });
   let toolsetState = initialToolsetState(ctx, text, randomActionAuthorized);
+  if (activeGame) toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
   let hasAttemptedTool = false;
   let modelTimeoutFallbackAttempted = false;
   let primaryProviderRejected = false;
@@ -281,7 +283,7 @@ async function runAgentModelLoopInternal(
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
-      const roundToolset = publicUrlEvidenceGuard.toolsetForRound(currentToolset);
+      const roundToolset = freshExternalDataGuard.toolsetForRound(publicUrlEvidenceGuard.toolsetForRound(currentToolset));
       const useRecoveryModel =
         useRecoveryModelNextRound || primaryProviderRejected;
       const chat = agentChatRequest(ctx, {
@@ -328,7 +330,7 @@ async function runAgentModelLoopInternal(
             isOpenRouterTimeoutError(error) &&
             !modelTimeoutFallbackAttempted &&
             Boolean(fallbackModel) &&
-            fallbackModel !== ctx.config.openRouter?.chatModel;
+            fallbackModel !== effectiveAgentChatModel(ctx);
           if (!canFallback) throw error;
           if (!(await reserveModelCall(ctx, modelCallBudget, "timeout_fallback", { round: round + 1, fallbackModel }))) {
             throw error;

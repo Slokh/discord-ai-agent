@@ -59,12 +59,12 @@ config:
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
-  openRouterChatModel: anthropic/claude-sonnet-5
+  openRouterChatModel: moonshotai/kimi-k3
   openRouterChatFallbackModel: openai/gpt-5.6-terra
   openRouterChatReasoningEffort: medium
   openRouterChatFallbackReasoningEffort: medium
-  # Reasoning and visible output share the completion budget. Sonnet gets
-  # additional room for medium reasoning; Discord bounds final visible replies.
+  # Reasoning and visible output share the completion budget; Discord bounds
+  # final visible replies.
   openRouterChatMaxTokens: "4096"
   openRouterChatFallbackMaxTokens: "3072"
   # Also serves as the one-shot fallback when the primary model times out

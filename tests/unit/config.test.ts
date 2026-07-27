@@ -67,7 +67,7 @@ describe("config", () => {
         expect(config.discord.premiumSkuIds).toEqual([]);
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
-        expect(config.openRouter.chatModel).toBe("anthropic/claude-sonnet-5");
+        expect(config.openRouter.chatModel).toBe("moonshotai/kimi-k3");
         expect(config.openRouter.chatFallbackModel).toBe("openai/gpt-5.6-terra");
         expect(config.openRouter.chatReasoningEffort).toBe("medium");
         expect(config.openRouter.chatFallbackReasoningEffort).toBe("medium");

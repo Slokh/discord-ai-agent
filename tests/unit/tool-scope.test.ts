@@ -81,7 +81,20 @@ describe("tool scoping", () => {
     expect(names).not.toContain("createSkillDraft");
   });
 
-  it("always pairs wallet-backed randomness with pause and settlement tools", () => {
+  it("preloads the ops model-switch tool for conversational model changes", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "switch the chat model to moonshotai/kimi-k3",
+      hasImageAttachments: false,
+      config,
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("ops")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "setAgentModel")).toBe(true);
+  });
+
+  it("omits wager continuation schemas from unrelated wallet-enabled chat", () => {
     withEnv({
       WALLET_ENABLED: "true",
       USER_WALLETS_ENABLED: "true",
@@ -93,8 +106,8 @@ describe("tool scoping", () => {
       const names = tools.localTools.map((tool) => tool.name);
 
       expect(names).toContain("drawRandom");
-      expect(names).toContain("awaitRandomWagerAction");
-      expect(names).toContain("settleRandomWager");
+      expect(names).not.toContain("awaitRandomWagerAction");
+      expect(names).not.toContain("settleRandomWager");
     });
   });
 

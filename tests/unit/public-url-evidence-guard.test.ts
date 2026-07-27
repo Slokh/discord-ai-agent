@@ -57,4 +57,44 @@ describe("public URL evidence guard", () => {
       "https://tasks.example.test",
     )).toBe(true);
   });
+
+  it("does not treat a bot-authored trace footer as the subject of a reply transformation", () => {
+    const context = replyContext(
+      "I mixed up the context.\nTrace: https://tasks.example.com/runs/synthetic",
+      true,
+    );
+
+    expect(requiresPublicUrlEvidence(context, "Explain this in basketball.")).toBe(false);
+  });
+
+  it("still inspects a bot-authored source when the user explicitly targets its link", () => {
+    const context = replyContext(
+      "Source: https://example.com/public-post",
+      true,
+    );
+
+    expect(requiresPublicUrlEvidence(context, "Please summarize this link.")).toBe(true);
+  });
+
+  it("does not inherit a public URL from an older reply ancestor", () => {
+    const root = {
+      ...replyContext("https://example.com/older-link"),
+      messageId: "root",
+      rootMessageId: "root",
+    };
+    const parent = {
+      ...root,
+      messageId: "parent",
+      content: "The direct parent is ordinary conversation.",
+    };
+    const context = {
+      ...parent,
+      chain: [
+        { ...root, chain: undefined },
+        { ...parent, chain: undefined },
+      ],
+    } as unknown as DiscordReplyContext;
+
+    expect(requiresPublicUrlEvidence(context, "Explain this.")).toBe(false);
+  });
 });

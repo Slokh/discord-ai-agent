@@ -1,4 +1,5 @@
 import type { ToolContext } from "../tools/types.js";
+import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
 
 const MEDIA_TRANSCRIPTION_GUIDANCE =
   "I can transcribe common audio and video attachments. Attach the media here or reply to the Discord message containing it, and I’ll transcribe it.";
@@ -20,7 +21,7 @@ export function correctKnownCapabilityClaim(
   actualModel?: string,
 ): CapabilityClaimCorrection {
   if (hasRuntimeModelIdentityIntent(userText)) {
-    const model = (actualModel ?? ctx.config?.openRouter?.chatModel ?? "")
+    const model = (actualModel ?? effectiveAgentChatModel(ctx) ?? "")
       .replace(/`/g, "")
       .trim();
     if (model) {

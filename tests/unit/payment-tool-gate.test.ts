@@ -20,6 +20,20 @@ describe("payment tool permissions", () => {
       await expect(restrictedToolGate(context("operator"), toolName)).resolves.toEqual({ allowed: true });
     },
   );
+
+  it("fails closed for model changes unless an owner or op is configured", async () => {
+    await expect(restrictedToolGate(context("friend"), "setAgentModel"))
+      .resolves.toEqual(expect.objectContaining({ allowed: false }));
+    await expect(restrictedToolGate(context("owner"), "setAgentModel"))
+      .resolves.toEqual({ allowed: true });
+    await expect(restrictedToolGate(context("operator"), "setAgentModel"))
+      .resolves.toEqual({ allowed: true });
+    await expect(restrictedToolGate({
+      userId: "friend",
+      config: { allowlists: { opsUserIds: [] } },
+    } as unknown as ToolContext, "setAgentModel"))
+      .resolves.toEqual(expect.objectContaining({ allowed: false }));
+  });
 });
 
 function context(userId: string): ToolContext {

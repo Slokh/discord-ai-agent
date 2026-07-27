@@ -26,7 +26,7 @@ import {
   type PreparedDiscordAgentTurn
 } from "./requestContext.js";
 
-export const SESSION_CONTEXT_MESSAGE_LIMIT = 8;
+export const SESSION_CONTEXT_MESSAGE_LIMIT = 4;
 export { REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT };
 
 export function sessionContextMessageLimitForReplyContext(replyContext: DiscordReplyContext | null | undefined) {
@@ -126,7 +126,8 @@ export async function prepareDiscordAgentTurn(input: {
     ? []
     : await input.context.repo.recentConversationMessages({
         threadKey,
-        limit: sessionContextLimit
+        limit: sessionContextLimit,
+        requesterAuthorId: requesterId,
       });
   input.requestLogger.info(
     {
@@ -236,7 +237,8 @@ export async function replayPreparedDiscordAgentTurn(input: {
     try {
       priorSessionMessages = await input.context.repo.recentConversationMessages({
         threadKey: input.turnEnvelope.threadKey,
-        limit: sessionContextLimit
+        limit: sessionContextLimit,
+        requesterAuthorId: input.turnEnvelope.userId,
       });
       turnEnvelope = replaceAgentRuntimeTurnEnvelopeSessionMessages(input.turnEnvelope, priorSessionMessages);
       refreshed = true;

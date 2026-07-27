@@ -46,6 +46,9 @@ export type ToolContext = {
   requestText?: string;
   /** Discord id of the message that triggered this request; assigned by Discord, not the bot. */
   requestMessageId?: string;
+  /** Durable per-guild primary chat-model override loaded before model selection. */
+  chatModelOverride?: string | null;
+  chatModelOverrideLoaded?: boolean;
   /** False for model-authored generic component follow-ups; mutating tools must fail closed. */
   mutationAuthorizedByCurrentInput?: boolean;
   statusChannelId?: string;

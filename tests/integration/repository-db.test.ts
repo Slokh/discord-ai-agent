@@ -2634,6 +2634,59 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(afterDelete.map((message) => message.role)).toEqual(["assistant"]);
   });
 
+  it("loads top-level conversation memory from only the current requester's turns", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const threadKey = `discord:${guildId}:${channelId}`;
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.ensureConversationSession({ threadKey, guildId, channelId });
+
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "turn-alice",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "alice",
+        authorDisplayName: "Alice",
+        content: "My preferred color is blue.",
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Got it, Alice.",
+      },
+    });
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "turn-bob",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bob",
+        authorDisplayName: "Bob",
+        content: "Call me Captain Red.",
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Sure, Captain Red.",
+      },
+    });
+
+    const aliceMemory = await repo.recentConversationMessages({
+      threadKey,
+      limit: 10,
+      requesterAuthorId: "alice",
+    });
+
+    expect(aliceMemory.map((message) => message.content)).toEqual([
+      "My preferred color is blue.",
+      "Got it, Alice.",
+    ]);
+  });
+
   it("compacts older conversation memory into a snapshot and prepends it to recent context", async () => {
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;
@@ -3054,6 +3107,36 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(budgetRepo.getUserTurnLimitOverride({ guildId, userId })).resolves.toBeUndefined();
   });
 
+  it("stores, replaces, and clears a per-guild chat-model override", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const firstUserId = `user-${randomUUID()}`;
+    const secondUserId = `user-${randomUUID()}`;
+
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toBeUndefined();
+    await expect(repo.setGuildChatModelOverride({
+      guildId,
+      chatModel: "moonshotai/kimi-k3",
+      updatedByUserId: firstUserId,
+    })).resolves.toEqual(expect.objectContaining({
+      guildId,
+      chatModel: "moonshotai/kimi-k3",
+      updatedByUserId: firstUserId,
+    }));
+    await repo.setGuildChatModelOverride({
+      guildId,
+      chatModel: "anthropic/claude-sonnet-5",
+      updatedByUserId: secondUserId,
+    });
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toEqual(expect.objectContaining({
+      guildId,
+      chatModel: "anthropic/claude-sonnet-5",
+      updatedByUserId: secondUserId,
+    }));
+    await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(true);
+    await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(false);
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toBeUndefined();
+  });
+
   it("rejects turn-limit overrides below -1", async () => {
     const budgetRepo = new BudgetRepository(pool);
     const guildId = `guild-${randomUUID()}`;
@@ -3143,6 +3226,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 });
 
 async function cleanupTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM guild_agent_settings WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");

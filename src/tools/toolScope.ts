@@ -66,7 +66,7 @@ export function scopedToolset(input: { config: AppConfig; groups: Set<ToolGroup>
   const groups = normalizeGroups(input.groups, input.config);
   const localTools = toolRegistry
     .filter((tool) =>
-      (groups.has(tool.group) || tool.name === "drawRandom" || tool.name === "awaitRandomWagerAction" || tool.name === "settleRandomWager") &&
+      (groups.has(tool.group) || tool.name === "drawRandom") &&
       isToolDeploymentAvailable(tool, input.config)
     )
     .map((tool) => toolForDeployment(tool, input.config));
@@ -210,6 +210,7 @@ const CODEGEN_KEYWORDS = [
 
 const OPS_KEYWORDS = [
   /\b(status|health|logs?|trace|why.*(failed|slow|hung)|deployment|config|admin|ops)\b/,
+  /\b(?:switch|change|set|reset)\b.{0,40}\b(?:(?:agent|ai|bot|chat)\s+)?model\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
   /\b(?:custom|server)?\s*(?:emoji|emote)s?\b/,
   /\bwhat can you do\b/,

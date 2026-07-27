@@ -26,7 +26,7 @@ export const randomWagerActionToolContracts = [
         allowedActions: {
           type: "array",
           items: { type: "string" },
-          description: "One to twelve normalized player choices accepted next, such as hit, stand, hold, roll, or fold."
+          description: "One to twelve normalized player choices accepted next. Standard blackjack supports only hit and stand so its settlement can be computed deterministically."
         },
         prompt: { type: "string", description: "Short conversational question asking the player for their next decision." }
       },
@@ -39,7 +39,7 @@ export const randomWagerActionToolContracts = [
     name: "settleRandomWager",
     examples: ["@ai settle the wager from that draw"],
     description:
-      "Settle the active wallet-backed wager created by drawRandom in this player's scoped Discord game session. The runtime resolves the canonical wager automatically; never supply or repeat an internal wager id. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. A nominally interactive game must settle immediately with resolutionSource=verified_randomness when its opening draw is already terminal, such as a natural blackjack; it spans replies through awaitRandomWagerAction only when a genuine gameplay decision remains. Never ask the player to confirm a completed outcome, and never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. outcome must agree with whether payoutUsd is above, below, or equal to the stake. Use resolutionSource=verified_randomness for an outcome completely determined by the draw and player_decision only when a persisted decision was resolved by a later reply. The service validates these facts before creating a transfer.",
+      "Settle the active wallet-backed wager created by drawRandom in this player's scoped Discord game session. The runtime resolves the canonical wager automatically; never supply or repeat an internal wager id. Call this exactly once after applying the game's stated payout rules to exact provably fair results and all persisted player decisions. Standard blackjack and coinflip payouts are recomputed from durable RNG draws; model-authored payout, outcome, source, and explanation fields are corrected or rejected before money moves. Other games still require a payout-consistent proposal. A nominally interactive game spans replies through awaitRandomWagerAction only when a genuine gameplay decision remains. Never ask the player to confirm a completed outcome, and never use break-even merely because a decision is pending. payoutUsd is the total returned to the player, including returned stake: use 0 for a full loss and the original stake for an actual final break-even. outcome must agree with whether payoutUsd is above, below, or equal to the stake. Use resolutionSource=verified_randomness for an automatic result and player_decision only when a persisted decision was resolved by a later reply.",
     userVisible: false,
     mutates: true,
     group: "discord-action",

@@ -8478,6 +8478,268 @@ describe("agent router", () => {
     );
   });
 
+  it("does not carry another member's form of address into a top-level requester turn", async () => {
+    const chat = vi.fn(async (request: {
+      messages?: Array<{ role: string; content: string }>;
+    }) => {
+      const protectsRequesterAddress = request.messages?.some((message) =>
+        message.role === "system" &&
+        message.content.includes("Do not carry another member's form of address")
+      ) ?? false;
+      return {
+        content: protectsRequesterAddress
+          ? "That fictional account constraint is clear."
+          : "Nice try, captain. That fictional account constraint is clear.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const priorMessages = [
+      {
+        id: 1,
+        threadKey: "discord:g:c",
+        discordMessageId: "prior-1",
+        role: "user",
+        authorId: "other-user",
+        authorDisplayName: "Other User",
+        content: "In this roleplay, call me captain.",
+        parts: [],
+        metadata: {},
+        createdAt: new Date("2026-07-27T20:00:00.000Z"),
+      },
+      {
+        id: 2,
+        threadKey: "discord:g:c",
+        discordMessageId: "prior-2",
+        role: "assistant",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Understood, captain.",
+        parts: [],
+        metadata: {},
+        createdAt: new Date("2026-07-27T20:00:01.000Z"),
+      },
+    ];
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "current-user",
+      userDisplayName: "Current User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        ...priorMessages,
+        ...priorMessages,
+        ...priorMessages,
+        ...priorMessages,
+        priorMessages[0],
+      ],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Make sure this fictional checklist does not claim that all $250 belongs in my demo account; it is only a sample constraint for the document.",
+    );
+
+    expect(response.content).toBe("That fictional account constraint is clear.");
+    expect(response.content).not.toContain("captain");
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("owns an unwanted form-of-address correction without assigning another member's persona", async () => {
+    const chat = vi.fn(async (request: {
+      messages?: Array<{ role: string; content: string }>;
+    }) => {
+      const protectsRequesterAddress = request.messages?.some((message) =>
+        message.role === "system" &&
+        message.content.includes("Do not carry another member's form of address")
+      ) ?? false;
+      return {
+        content: protectsRequesterAddress
+          ? "That form of address was carried over incorrectly from unrelated channel context. I won't use it for you."
+          : "I used it because you previously asked me to call you that.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "current-user",
+      userDisplayName: "Current User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          id: 1,
+          threadKey: "discord:g:c",
+          discordMessageId: "prior-1",
+          role: "user",
+          authorId: "other-user",
+          authorDisplayName: "Other User",
+          content: "In this roleplay, call me captain.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-27T20:00:00.000Z"),
+        },
+        {
+          id: 2,
+          threadKey: "discord:g:c",
+          discordMessageId: "prior-2",
+          role: "assistant",
+          authorId: "bot",
+          authorDisplayName: "ai",
+          content: "Understood, captain.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-27T20:00:01.000Z"),
+        },
+      ],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Why did you call me captain when I never asked for that name in this conversation?",
+    );
+
+    expect(response.content).toContain("carried over incorrectly");
+    expect(response.content).not.toContain("you previously asked");
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("inspects a trusted run-console link from reply context instead of treating it as a public webpage", async () => {
+    const runUrl = "https://tasks.example.test/runs/123456789012345670";
+    const traceEvents = [{
+      id: 1,
+      traceId: "123456789012345670",
+      requestId: "123456789012345670",
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      messageId: "123456789012345670",
+      eventName: "agent.model.call.completed",
+      level: "info",
+      summary: "The synthetic run completed after one model round.",
+      metadata: {},
+      durationMs: 50,
+      createdAt: new Date("2026-07-27T20:00:00.000Z"),
+    }];
+    const chat = vi
+      .fn()
+      .mockImplementationOnce(async (request: {
+        tools?: Array<{ function?: { name?: string } }>;
+      }) => {
+        const toolNames = request.tools?.map((tool) => tool.function?.name);
+        expect(toolNames).toContain("inspectAgentLogs");
+        return {
+          content: "",
+          model: "router-model",
+          raw: {},
+          toolCalls: [{
+            id: "inspect-trusted-run-link",
+            name: "inspectAgentLogs",
+            argumentsText: JSON.stringify({ traceId: runUrl, limit: 10 }),
+          }],
+        };
+      })
+      .mockImplementationOnce(async (request: {
+        messages?: Array<{ role: string; content: string }>;
+      }) => {
+        expect(request.messages).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            content: expect.stringContaining("synthetic run completed after one model round"),
+          }),
+        ]));
+        return {
+          content: "That run completed normally after one model round.",
+          model: "router-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        toolsetScoping: true,
+        openRouter: {},
+        controlUi: { publicUrl: "https://tasks.example.test" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool,
+        recordTraceEvent: vi.fn(async () => undefined),
+        findProcessRunByDiscordMessageId: vi.fn(async () => undefined),
+        findAgentTaskByDiscordMessageId: vi.fn(async () => undefined),
+        findAgentRuntimeChatExecutionByTraceId: vi.fn(async () => undefined),
+        getProcessRun: vi.fn(async () => undefined),
+        getAgentTask: vi.fn(async () => undefined),
+        getTraceEvents: vi.fn(async () => traceEvents),
+        getTaskProgressEvents: vi.fn(async () => []),
+        getSandboxCommandEvents: vi.fn(async () => []),
+        getToolAuditLogs: vi.fn(async () => []),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      threadKey: "discord:g:c",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "123456789012345672",
+      requestMessageId: "123456789012345672",
+      replyContext: {
+        messageId: "123456789012345671",
+        rootMessageId: "123456789012345671",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: runUrl,
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "Explain this run please.");
+
+    expect(response.content).toBe("That run completed normally after one model round.");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "inspectAgentLogs",
+    }));
+  });
+
   it("passes Discord reply parent context to the model for follow-up continuity", async () => {
     const ctx = {
       config: { maxReplyChars: 1800 },

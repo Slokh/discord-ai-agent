@@ -1,4 +1,5 @@
 import { hasGitHubTaskCredential, type AppConfig } from "../config/env.js";
+import { hasConfiguredRunConsoleUrl } from "../observability/runConsoleUrl.js";
 import {
   openRouterServerToolRegistry,
   TOOL_GROUPS,
@@ -45,6 +46,18 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   if (hasAny(text, OPS_KEYWORDS)) groups.add("ops");
   if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("ops");
   if (input.replyContext && hasAny(text, REPLY_OPS_KEYWORDS)) groups.add("ops");
+  if (
+    RUN_CONSOLE_INSPECTION_INTENT.test(text) &&
+    (
+      hasConfiguredRunConsoleUrl(input.text, input.config.controlUi?.publicUrl) ||
+      (
+        input.replyContext &&
+        hasConfiguredRunConsoleUrl(input.replyContextText ?? "", input.config.controlUi?.publicUrl)
+      )
+    )
+  ) {
+    groups.add("ops");
+  }
 
   return groups;
 }
@@ -211,3 +224,6 @@ const REPLY_OPS_KEYWORDS = [
   /\bwhy not (?:use|call|run|choose|pick|select|invoke|try)\b/,
   /\bwhat (failed|hung|timed out|went wrong)\b/,
 ];
+
+const RUN_CONSOLE_INSPECTION_INTENT =
+  /\b(?:what(?:'s| is)?|why|how|explain|summarize|read|open|check|inspect|debug|diagnose|look at|tell me about|help me understand)\b/i;

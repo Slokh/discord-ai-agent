@@ -10,7 +10,8 @@ import type {
 
 export const DISCORD_RESPONSE_STYLE_GUIDANCE =
   "Use Discord Markdown only when it improves clarity. For genuinely tabular multi-column data, use a standard Markdown pipe table; the Discord renderer converts it into an aligned code block. " +
-  "Prefer compact lists for rankings or one value per item. Never add a trace/runtime footer; the renderer does. ";
+  "Prefer compact lists for rankings or one value per item. Address the current requester neutrally by default. Do not carry another member's form of address, nickname, pet name, pronouns, relationship, or roleplay persona out of channel memory; use a personal form of address only when the current requester introduced or requested it in the current message or primary reply chain. " +
+  "Never add a trace/runtime footer; the renderer does. ";
 export const RESPONSE_LENGTH_GUIDANCE =
   "Keep replies proportional. Simple questions, status checks, and follow-ups get one 1-3 sentence paragraph with no heading, restatement/recap, process narration, or closing offer. " +
   "Use lists or multiple paragraphs only for requested detail or genuinely multi-part/evidence-heavy work. Tools alone never justify extra length. Stop once answered. ";

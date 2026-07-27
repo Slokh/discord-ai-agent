@@ -38,4 +38,23 @@ describe("public URL evidence guard", () => {
     expect(requiresPublicUrlEvidence(context, "What model is this?")).toBe(false);
     expect(requiresPublicUrlEvidence(context, "Explain the model you are using.")).toBe(false);
   });
+
+  it("does not route a configured run-console link through public web evidence", () => {
+    const context = replyContext("https://tasks.example.test/runs/123456789012345678");
+    expect(requiresPublicUrlEvidence(
+      context,
+      "Explain this run please.",
+      "https://tasks.example.test",
+    )).toBe(false);
+    expect(requiresPublicUrlEvidence(
+      replyContext("https://tasks.example.test/docs/runbook"),
+      "Explain this page please.",
+      "https://tasks.example.test",
+    )).toBe(true);
+    expect(requiresPublicUrlEvidence(
+      replyContext("https://tasks.example.test.evil.invalid/runs/123456789012345678"),
+      "Explain this run please.",
+      "https://tasks.example.test",
+    )).toBe(true);
+  });
 });

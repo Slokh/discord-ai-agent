@@ -20,6 +20,7 @@ export const imageToolHandlers = {
           useContextImages: booleanArgument(route.arguments, "useContextImages"),
           outputFormat: stringArgument(route.arguments, "outputFormat") as "png" | "jpeg" | "webp" | undefined,
           background: stringArgument(route.arguments, "background") as "auto" | "transparent" | "opaque" | undefined,
+          aspectRatio: stringArgument(route.arguments, "aspectRatio") as "1:1" | "16:9" | "9:16" | "4:3" | "3:4" | undefined,
         });
     return {
           content: cleanResponse(image.content, ctx.config.maxReplyChars),

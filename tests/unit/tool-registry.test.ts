@@ -139,6 +139,7 @@ describe("toolRegistry", () => {
 
     expect(imageProperties).toHaveProperty("background");
     expect(imageProperties).toHaveProperty("outputFormat");
+    expect(imageProperties).toHaveProperty("aspectRatio");
     expect(imageProperties).toHaveProperty("requiredText");
     expect(emojiProperties).toHaveProperty("requireTransparent");
     expect(toolRegistry.find((entry) => entry.name === "generateImage")?.description)

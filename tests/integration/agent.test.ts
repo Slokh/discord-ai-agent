@@ -6523,6 +6523,122 @@ describe("agent router", () => {
     )).toBe(true);
   });
 
+  it("replays a terse portrait refinement across a deep generated-image reply chain", async () => {
+    const sourceImage = await sharp({
+      create: { width: 800, height: 450, channels: 3, background: { r: 30, g: 80, b: 120 } },
+    }).png().toBuffer();
+    const portraitImage = await sharp({
+      create: { width: 600, height: 800, channels: 3, background: { r: 80, g: 40, b: 120 } },
+    }).png().toBuffer();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    })));
+    const generateImage = vi.fn(async (_prompt: string, options: any) => {
+      expect(options.aspectRatio).toBe("3:4");
+      expect(options.inputReferences).toHaveLength(1);
+      return {
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: portraitImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      };
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-portrait-refinement",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A portrait composition of the retained synthetic character and scene.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the portrait refinement.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const replyMessage = (
+      index: number,
+      authorIsBot: boolean,
+      content: string,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId: `synthetic-portrait-${index}`,
+      rootMessageId: "synthetic-portrait-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "synthetic-scene.png image/png"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = Array.from({ length: 20 }, (_value, index) =>
+      replyMessage(
+        index,
+        index % 2 === 1,
+        index % 2 === 0
+          ? `Synthetic scene refinement ${index / 2 + 1}.`
+          : `Acknowledged synthetic refinement ${(index + 1) / 2}.`,
+      ));
+    chain.push(
+      replyMessage(20, false, "Generate the current synthetic scene."),
+      replyMessage(21, true, "Here is the generated synthetic scene.", [{
+        id: "synthetic-generated-scene",
+        url: "https://cdn.discordapp.com/synthetic-generated-scene.png",
+        filename: "synthetic-generated-scene.png",
+        contentType: "image/png",
+      }]),
+      replyMessage(22, false, "Keep the same character."),
+      replyMessage(23, true, "I’ll preserve the same synthetic character."),
+    );
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "portrait layout");
+    const metadata = await sharp(response.files?.[0]?.data).metadata();
+
+    expect(chain).toHaveLength(24);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(metadata).toMatchObject({ width: 600, height: 800 });
+    expect(response.content).toContain("Requested aspect ratio: 3:4");
+    expect(response.content).toContain("Actual dimensions: 600x800");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png", data: portraitImage }),
+    ]);
+  });
+
   it("delivers a conservative image fallback after a text-only generation safety false positive", async () => {
     const generatedImage = Buffer.from("synthetic-safe-fallback-image");
     const generateImage = vi

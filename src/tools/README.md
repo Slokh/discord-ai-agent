@@ -18,6 +18,8 @@ Owns model-facing local tool contracts and implementations.
 - `discordStatsFormatting.ts`: Discord stats and channel-topic output formatting, metric parsing, and topic clustering helpers.
 - `generatedFileTools.ts`: current-turn generated file/table access and CSV/table querying for artifacts produced by earlier tool calls.
 - `imageTools.ts`: Discord image inspection, reference image collection, image generation, and generated-file conversion.
+- `imageAspectRatio.ts`: supported generation aspect ratios and explicit portrait/landscape/square inference.
+- `imageOutputInspection.ts`: decoded generated-image dimensions, media types, and real alpha inspection.
 - `responseFormatting.ts`: shared final-response cleanup, Markdown-table normalization, and Discord length trimming used by the agent router and Discord renderers.
 - `discordPresentationTools.ts`: validates the model-selected semantic Components V2 presentation against the same canonical Zod schema used to generate the model tool contract; Discord IDs, authorization, persistence, compilation, and delivery remain owned by Discord/database code.
 - `spotifyTools.ts`: Spotify Web API client-credentials integration for public catalog search, item details, playlist/album track attachments, artist discographies, playlist stats, and playlist comparisons with current API limits and sanitized stored output.

@@ -6,7 +6,6 @@ import {
   type ImageResult,
 } from "../models/openrouter.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
-import sharp from "sharp";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
 import {
@@ -23,6 +22,14 @@ import {
   imageTextOverlayBasePrompt,
   renderExactImageTextOverlay,
 } from "./generatedImageTextOverlay.js";
+import {
+  inferredImageAspectRatio,
+  type ImageAspectRatio,
+} from "./imageAspectRatio.js";
+import {
+  describeGeneratedImageFile,
+  generatedImageDimensions,
+} from "./imageOutputInspection.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 
@@ -39,6 +46,7 @@ export type GenerateImageInput = {
   useContextImages?: boolean;
   outputFormat?: "png" | "jpeg" | "webp";
   background?: "auto" | "transparent" | "opaque";
+  aspectRatio?: ImageAspectRatio;
 };
 
 export type InspectDiscordImagesInput = {
@@ -360,6 +368,7 @@ export async function generateImage(
   const inferredTransparentBackground = normalizedInput.background == null && wantsTransparentImage(prompt);
   const background = normalizedInput.background ?? (inferredTransparentBackground ? "transparent" : undefined);
   const outputFormat = normalizedInput.outputFormat ?? (background === "transparent" ? "png" : undefined);
+  const aspectRatio = normalizedInput.aspectRatio ?? inferredImageAspectRatio(prompt);
   let image;
   let generationAttempts = 1;
   let activePrompt = prompt;
@@ -376,6 +385,7 @@ export async function generateImage(
     })),
     ...(outputFormat ? { outputFormat } : {}),
     ...(background ? { background } : {}),
+    ...(aspectRatio ? { aspectRatio } : {}),
   };
   try {
     image = await ctx.openRouter.generateImage(prompt, imageOptions);
@@ -423,6 +433,7 @@ export async function generateImage(
           referenceImageInlineFailures: preparedReferences.failed,
           outputFormat,
           background,
+          aspectRatio,
           generationAttempts,
           referenceTransparencyFallbackAttempted,
           referenceTransparencyFallbackUsed,
@@ -504,6 +515,7 @@ export async function generateImage(
         referenceImageCount: references.length,
         inlinedReferenceImageCount: preparedReferences.inlined,
         referenceImageInlineFailures: preparedReferences.failed,
+        aspectRatio,
       }),
       resultSummary: "required image text did not validate after correction and deterministic fallback",
       error: "generated_image_text_mismatch",
@@ -559,6 +571,9 @@ export async function generateImage(
     automaticBackgroundRemovalCount,
     rejectedOpaqueImages,
   } = outputs;
+  const generatedDimensions = (
+    await Promise.all(files.map(generatedImageDimensions))
+  ).filter((value): value is string => Boolean(value));
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -573,6 +588,7 @@ export async function generateImage(
       referenceImageInlineFailures: preparedReferences.failed,
       outputFormat,
       background,
+      aspectRatio,
     }),
     resultSummary: summarizeForAudit({
       images: image.data.length,
@@ -580,6 +596,8 @@ export async function generateImage(
       referenceImageCount: references.length,
       outputFormat,
       background,
+      aspectRatio,
+      generatedDimensions,
       automaticBackgroundRemovalCount,
       rejectedOpaqueImages,
       generationAttempts,
@@ -599,6 +617,12 @@ export async function generateImage(
   const referenceSummary = references.length > 0 ? `\nUsed ${references.length} reference image${references.length === 1 ? "" : "s"}.` : "";
   const requestedOutputSummary = background || outputFormat
     ? `\nRequested output: ${[background ? `${background} background` : null, outputFormat?.toUpperCase()].filter(Boolean).join(", ")}.`
+    : "";
+  const requestedAspectRatioSummary = aspectRatio
+    ? `\nRequested aspect ratio: ${aspectRatio}.`
+    : "";
+  const generatedDimensionsSummary = generatedDimensions.length > 0
+    ? `\nActual dimensions: ${generatedDimensions.join(", ")}.`
     : "";
   const actualOutputSummary = requestedOutputSummary && files.length > 0
     ? `\nActual output: ${(await Promise.all(files.map(describeGeneratedImageFile))).join(", ")}.`
@@ -624,8 +648,8 @@ export async function generateImage(
     : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${actualOutputSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${requestedAspectRatioSummary}${actualOutputSummary}${generatedDimensionsSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${requestedAspectRatioSummary}${actualOutputSummary}${generatedDimensionsSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}`;
   return { content, files };
 }
 
@@ -633,29 +657,6 @@ const TRANSPARENT_IMAGE_INTENT = /\b(?:transparent(?:\s+background)?|no\s+backgr
 
 function wantsTransparentImage(prompt: string) {
   return TRANSPARENT_IMAGE_INTENT.test(prompt);
-}
-
-async function describeGeneratedImageFile(file: AgentFile) {
-  const contentType = file.contentType || "unknown image format";
-  try {
-    const { data, info } = await sharp(file.data, { pages: 1, limitInputPixels: 40_000_000 })
-      .toColourspace("srgb")
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    const alphaOffset = info.channels - 1;
-    let hasTransparentPixel = false;
-    for (let index = alphaOffset; index < data.length; index += info.channels) {
-      if (data[index] < 255) {
-        hasTransparentPixel = true;
-        break;
-      }
-    }
-    const transparency = hasTransparentPixel ? "real alpha transparency" : "opaque";
-    return `${contentType} (${transparency})`;
-  } catch {
-    return contentType;
-  }
 }
 
 export type ImageReferenceContext = {

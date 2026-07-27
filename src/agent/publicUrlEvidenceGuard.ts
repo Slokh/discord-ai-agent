@@ -1,4 +1,5 @@
 import type { ChatResult } from "../models/openrouter.js";
+import { isConfiguredRunConsoleUrl } from "../observability/runConsoleUrl.js";
 import type { ScopedToolset } from "../tools/toolScope.js";
 import type { AgentResponse, DiscordReplyContext, ToolContext } from "../tools/types.js";
 import { previewText } from "../util/logger.js";
@@ -29,7 +30,11 @@ export class PublicUrlEvidenceGuard {
     private readonly ctx: ToolContext,
     private readonly userText: string,
   ) {
-    this.evidenceRequired = requiresPublicUrlEvidence(ctx.replyContext, userText);
+    this.evidenceRequired = requiresPublicUrlEvidence(
+      ctx.replyContext,
+      userText,
+      ctx.config.controlUi?.publicUrl,
+    );
   }
 
   noteModelResponse(response: Pick<ChatResult, "content" | "serverToolUse" | "urlCitations">) {
@@ -104,13 +109,14 @@ export class PublicUrlEvidenceGuard {
 export function requiresPublicUrlEvidence(
   replyContext: DiscordReplyContext | null | undefined,
   userText: string,
+  configuredRunConsoleUrl?: string | null,
 ) {
-  const currentUrls = publicUrlsInText(userText);
+  const currentUrls = publicUrlsInText(userText, configuredRunConsoleUrl);
   if (currentUrls.length > 0) {
     return PUBLIC_URL_INSPECTION_INTENT.test(userText);
   }
   if (!REPLIED_PUBLIC_URL_INSPECTION_INTENT.test(userText)) return false;
-  return scopedReplyPublicUrls(replyContext).length > 0;
+  return scopedReplyPublicUrls(replyContext, configuredRunConsoleUrl).length > 0;
 }
 
 export function hasPublicUrlEvidence(
@@ -123,16 +129,23 @@ export function hasPublicUrlEvidence(
 
 function scopedReplyPublicUrls(
   replyContext: DiscordReplyContext | null | undefined,
+  configuredRunConsoleUrl?: string | null,
 ) {
   const replyMessages = replyContext
     ? (replyContext.chain.length > 0 ? replyContext.chain : [replyContext])
     : [];
   const candidates = replyMessages.flatMap((message) => urlsInText(message.content));
-  return [...new Set(candidates.filter(isPublicExternalUrl))];
+  return [...new Set(candidates.filter((value) =>
+    isPublicExternalUrl(value) &&
+    !isConfiguredRunConsoleUrl(value, configuredRunConsoleUrl)
+  ))];
 }
 
-function publicUrlsInText(text: string) {
-  return [...new Set(urlsInText(text).filter(isPublicExternalUrl))];
+function publicUrlsInText(text: string, configuredRunConsoleUrl?: string | null) {
+  return [...new Set(urlsInText(text).filter((value) =>
+    isPublicExternalUrl(value) &&
+    !isConfiguredRunConsoleUrl(value, configuredRunConsoleUrl)
+  ))];
 }
 
 function urlsInText(text: string) {

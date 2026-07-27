@@ -368,6 +368,22 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "inspectAgentLogs")).toBe(true);
   });
 
+  it("offers run debugging for a configured run-console link in reply context", () => {
+    const config = loadConfig();
+    config.controlUi.publicUrl = "https://tasks.example.test";
+    const groups = selectToolGroups({
+      text: "Explain this run please.",
+      hasImageAttachments: false,
+      replyContext: true,
+      replyContextText: "https://tasks.example.test/runs/123456789012345678",
+      config,
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("ops")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "inspectAgentLogs")).toBe(true);
+  });
+
   it("requestAdditionalTools expands to requested or all groups", () => {
     withEnv(
       {

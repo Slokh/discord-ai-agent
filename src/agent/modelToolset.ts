@@ -1,4 +1,5 @@
 import { TOOL_GROUPS, type ToolGroup } from "../tools/registry.js";
+import { requiresAgentSelfHistory } from "../tools/agentMemoryIntent.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import {
   requestAdditionalToolGroups,
@@ -21,6 +22,10 @@ export type ToolsetState = {
   allowRandomActions?: boolean;
 };
 const scopedToolsetCache = new WeakMap<ToolsetState, ScopedToolset>();
+
+export function forcedAgentMemoryToolForPrompt(text: string): "getRecentAgentMemory" | null {
+  return requiresAgentSelfHistory(text) ? "getRecentAgentMemory" : null;
+}
 
 export function initialToolsetState(
   ctx: ToolContext,

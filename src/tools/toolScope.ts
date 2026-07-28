@@ -8,6 +8,7 @@ import {
   type ToolGroup,
   type ToolRegistryEntry,
 } from "./registry.js";
+import { requiresAgentSelfHistory } from "./agentMemoryIntent.js";
 import { toolForDeployment } from "./toolDeployment.js";
 
 export type ToolScopeInput = {
@@ -31,6 +32,7 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   const bugInboxIntent = hasAny(text, BUG_INBOX_KEYWORDS);
   const replyContextText = input.replyContextText?.toLowerCase() ?? "";
 
+  if (requiresAgentSelfHistory(input.text)) groups.add("discord-retrieval");
   if (bugInboxIntent || hasAny(text, DISCORD_RETRIEVAL_KEYWORDS)) groups.add("discord-retrieval");
   if (hasAny(text, MEDIA_INSPECTION_KEYWORDS)) groups.add("discord-retrieval");
   if (input.hasFileAttachments) groups.add("discord-retrieval");

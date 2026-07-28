@@ -2349,6 +2349,55 @@ describe("agent router", () => {
     }));
   });
 
+  it("rejects an unverified time-to-launch answer and requires fresh web evidence", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "The new public beta launches within the next few hours.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The official launch page lists tomorrow, but it does not give an exact hour.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{ url: "https://example.com/official-launch", title: "Official launch" }],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "how much longer til i can access the new public beta?",
+    );
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(response.content).toContain("does not give an exact hour");
+    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: "required",
+      tools: [expect.objectContaining({ type: "openrouter:web_search" })],
+    }));
+  });
+
   it("accepts transparent hosted search evidence on the first round without a duplicate retry", async () => {
     const traceEvents: any[] = [];
     const chat = vi.fn(async () => ({
@@ -2520,6 +2569,71 @@ describe("agent router", () => {
     expect(traceEvents.some((event) =>
       event.eventName === "agent.member_availability_guard.rejected"
     )).toBe(true);
+  });
+
+  it("forces agent memory for disputes about the bot's own earlier wording", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "memory-call",
+          name: "getRecentAgentMemory",
+          argumentsText: JSON.stringify({ limit: 12, includeToolResults: false }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "You're right—I did call Taylor “Maverick” in that earlier reply.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool,
+        recordTraceEvent: vi.fn(async () => undefined),
+        recentConversationMessages: vi.fn(async () => [{
+          id: 1,
+          threadKey: "discord:g:c",
+          discordMessageId: "earlier-reply",
+          role: "assistant",
+          authorId: "bot",
+          authorDisplayName: "ai",
+          content: "You and Maverick can play tonight.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-28T17:00:00.000Z"),
+        }]),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "why do you keep calling Taylor Maverick?",
+    );
+
+    expect(response.content).toContain("I did call Taylor");
+    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: { type: "function", function: { name: "getRecentAgentMemory" } },
+    }));
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "getRecentAgentMemory",
+    }));
+    expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "searchDiscordHistory",
+    }));
   });
 
   it("still blocks a second ungrounded live-data draft when no fresh evidence was observed", async () => {
@@ -8992,12 +9106,12 @@ describe("agent router", () => {
         messages: expect.arrayContaining([
           expect.objectContaining({ role: "user", content: "Kartik: make an image of a wizard eating nachos" }),
           expect.objectContaining({
-            role: "assistant",
-            content: "[Earlier generateImage result omitted. Request the relevant memory/retrieval tools or rerun the operation if its evidence is needed.]"
+            role: "system",
+            content: "A historical generateImage tool result exists, but its body is omitted. Request the relevant memory or retrieval tool, or rerun the operation, if that evidence is needed."
           }),
           expect.objectContaining({
             role: "assistant",
-            content: "[Earlier Discord AI Agent reply; not authoritative for Discord facts] Generated image for: a wizard eating nachos"
+            content: "Generated image for: a wizard eating nachos"
           }),
           expect.objectContaining({ role: "user", content: "what image did we generate earlier?" })
         ])

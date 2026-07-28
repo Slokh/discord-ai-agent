@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { hasFreshExternalToolEvidence, requiresFreshExternalData, shouldRejectUngroundedFreshData } from "../../src/agent/freshExternalDataGuard.js";
+import {
+  hasFreshExternalToolEvidence,
+  hasRelativeDateContradiction,
+  requiresFreshExternalData,
+  shouldRejectUngroundedFreshData,
+} from "../../src/agent/freshExternalDataGuard.js";
 
 describe("fresh external data guard", () => {
   it("requires fresh evidence for natural-language live flight shopping", () => {
@@ -76,6 +81,30 @@ describe("fresh external data guard", () => {
   it("does not force current-data retrieval for timeless player rankings or team-building", () => {
     expect(requiresFreshExternalData("Who are the best NBA players ever?")).toBe(false);
     expect(requiresFreshExternalData("What is the best team-building exercise this week?")).toBe(false);
+  });
+
+  it("requires fresh evidence for natural time-to-launch and playability questions", () => {
+    expect(requiresFreshExternalData("how much longer til i can play classic mode with my friend"))
+      .toBe(true);
+    expect(requiresFreshExternalData("when can we access the new season?"))
+      .toBe(true);
+    expect(requiresFreshExternalData("what time does the expansion launch?"))
+      .toBe(true);
+    expect(requiresFreshExternalData("when is the update coming out?"))
+      .toBe(true);
+  });
+
+  it("rejects relative dates that contradict the explicit date in the same answer", () => {
+    const now = new Date("2026-07-28T17:29:00.000Z");
+    expect(hasRelativeDateContradiction("It launches today, July 29, 2026.", now)).toBe(true);
+    expect(hasRelativeDateContradiction("It launches tomorrow, July 29, 2026.", now)).toBe(false);
+    expect(hasRelativeDateContradiction("It launched yesterday, July 27.", now)).toBe(false);
+    expect(shouldRejectUngroundedFreshData({
+      userText: "when does the expansion launch?",
+      responseContent: "Fresh results say it launches today, July 29, 2026.",
+      freshEvidenceObserved: true,
+      now,
+    })).toBe(true);
   });
 
   it("requires structured citations instead of treating a search attempt as usable evidence", () => {

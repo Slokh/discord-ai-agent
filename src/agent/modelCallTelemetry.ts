@@ -220,7 +220,8 @@ function promptMessageSection(message: ChatMessage, index: number, count: number
   if (content.startsWith("Deployment prompt overlay instructions follow.")) return "deployment_overlay";
   if (content.startsWith("The current user message is a Discord reply.")) return "reply_chain";
   if (content.startsWith("Discord image attachments are available")) return "attachments";
-  if (content.startsWith("Recent completed Discord AI Agent turns")) return "session_memory";
+  if (content.startsWith("Recent completed turns from this channel")) return "session_memory";
+  if (content.startsWith("A historical ") && content.includes(" tool result exists")) return "session_memory";
   if (content.startsWith("Answer only the next user message.")) return "context_guard";
   if (/^\[Earlier Discord AI Agent reply|^\[Earlier .* result/.test(content)) return "session_memory";
   if (message.role === "assistant" || message.role === "user") return "session_memory";

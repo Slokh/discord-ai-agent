@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   currentScopedToolset,
   expandToolsetState,
+  forcedAgentMemoryToolForPrompt,
   handleAdditionalToolsRequest,
   initialToolsetState,
   type ToolsetState,
@@ -33,6 +34,13 @@ function requestAdditionalToolsRoute(
 }
 
 describe("model toolset", () => {
+  it("forces agent memory only for the bot's own prior wording", () => {
+    expect(forcedAgentMemoryToolForPrompt("why did you call Taylor Maverick?"))
+      .toBe("getRecentAgentMemory");
+    expect(forcedAgentMemoryToolForPrompt("why did you choose that tool?"))
+      .toBeNull();
+  });
+
   it("starts with every group when scoping is disabled", () => {
     const state = initialToolsetState(
       context({

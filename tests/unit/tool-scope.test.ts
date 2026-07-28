@@ -29,6 +29,19 @@ describe("tool scoping", () => {
     });
   });
 
+  it("adds agent memory for disputes about the bot's own earlier wording", () => {
+    const config = loadConfig();
+    const groups = selectToolGroups({
+      text: "why do you keep calling Taylor Maverick?",
+      hasImageAttachments: false,
+      config,
+    });
+    const tools = scopedToolset({ config, groups });
+
+    expect(groups.has("discord-retrieval")).toBe(true);
+    expect(tools.localTools.some((tool) => tool.name === "getRecentAgentMemory")).toBe(true);
+  });
+
   it("always offers provably fair randomness even for vague follow-ups", () => {
     const config = loadConfig();
     const groups = selectToolGroups({ text: "20 more", hasImageAttachments: false, config });

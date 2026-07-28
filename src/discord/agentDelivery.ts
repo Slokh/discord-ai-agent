@@ -193,6 +193,12 @@ export async function executeDiscordAgentRequest(
   const userDisplayName = turnEnvelope.userDisplayName;
   const visibleChannelIds = turnEnvelope.visibleChannelIds;
   const mentionedUserIds = turnEnvelope.mentionedUserIds;
+  const mentionedUsers = turnEnvelope.mentionedUsers ?? mentionedUserIds.map((userId) => ({
+    userId,
+    mention: `<@${userId}>`,
+    username: null,
+    displayName: null,
+  }));
   const mentionedChannelIds = turnEnvelope.mentionedChannelIds;
   const replyContext = turnEnvelope.replyContext ?? undefined;
   const requestAttachments = turnEnvelope.requestAttachments;
@@ -243,6 +249,7 @@ export async function executeDiscordAgentRequest(
       }),
       visibleChannelIds,
       mentionedUserIds,
+      mentionedUsers,
       mentionedChannelIds,
       threadKey,
       sessionMessages: priorSessionMessages,

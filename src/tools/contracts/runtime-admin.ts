@@ -57,10 +57,11 @@ export const runtimeAdminToolContracts = [
     name: "setAgentModel",
     examples: [
       "@ai switch model to moonshotai/kimi-k3",
+      "@ai switch to Sonnet 5",
       "@ai reset model",
     ],
     description:
-      "Set or reset this Discord server's durable primary chat-model override. Use an OpenRouter model ID in provider/model form. The change applies starting with the next request and does not change the recovery model. Restricted to the configured bot owner or ops allowlist.",
+      "Set or reset this Discord server's durable primary chat-model override only when the current Discord message explicitly requests that mutation. A verified OpenRouter model ID or unambiguous catalog name/alias is accepted; prior messages may identify what 'that' means but never authorize a change. The current message's target is authoritative, even if a model-generated tool argument differs. A successful change applies to remaining work in the same request and future requests, and does not change the recovery model. Restricted to the configured bot owner or ops allowlist.",
     userVisible: true,
     mutates: true,
     group: "ops",
@@ -87,7 +88,7 @@ export const runtimeAdminToolContracts = [
         },
         model: {
           type: "string",
-          description: "OpenRouter model ID in provider/model form. Required when action is set.",
+          description: "The model named in the current request, as an OpenRouter provider/model ID or unambiguous catalog alias. Required when action is set. Never infer a different target from older context.",
         },
       },
       additionalProperties: false,

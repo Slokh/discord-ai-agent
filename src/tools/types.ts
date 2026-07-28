@@ -49,6 +49,15 @@ export type ToolContext = {
   /** Durable per-guild primary chat-model override loaded before model selection. */
   chatModelOverride?: string | null;
   chatModelOverrideLoaded?: boolean;
+  /** Deterministic evidence for any model-setting attempt made during this request. */
+  agentModelMutation?: {
+    attempted: true;
+    succeeded: boolean;
+    action: "set" | "reset";
+    requestedModel?: string;
+    effectiveModel?: string;
+    error?: string;
+  };
   /** False for model-authored generic component follow-ups; mutating tools must fail closed. */
   mutationAuthorizedByCurrentInput?: boolean;
   statusChannelId?: string;

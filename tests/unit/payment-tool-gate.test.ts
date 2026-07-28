@@ -31,14 +31,27 @@ describe("payment tool permissions", () => {
     await expect(restrictedToolGate({
       userId: "friend",
       config: { allowlists: { opsUserIds: [] } },
+      requestText: "switch model to moonshotai/kimi-k3",
     } as unknown as ToolContext, "setAgentModel"))
       .resolves.toEqual(expect.objectContaining({ allowed: false }));
+  });
+
+  it("requires model-change intent in the current message", async () => {
+    const ctx = context("owner");
+    ctx.requestText = "I added a tool for changing models";
+
+    await expect(restrictedToolGate(ctx, "setAgentModel"))
+      .resolves.toEqual(expect.objectContaining({
+        allowed: false,
+        message: expect.stringContaining("current Discord message"),
+      }));
   });
 });
 
 function context(userId: string): ToolContext {
   return {
     userId,
+    requestText: "switch model to moonshotai/kimi-k3",
     config: {
       allowlists: {
         ownerUserId: "owner",

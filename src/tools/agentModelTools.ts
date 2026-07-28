@@ -1,9 +1,23 @@
 import { summarizeForAudit } from "../util/text.js";
+import { resolveAgentModel } from "./agentModelCatalog.js";
+import {
+  agentModelIntentForPrompt,
+  modelTargetFromCurrentContext,
+  type AgentModelIntent,
+} from "./agentModelIntent.js";
 import type { AgentResponse, ToolContext } from "./types.js";
+
+export { normalizeOpenRouterModelId } from "./agentModelId.js";
 
 export type AgentModelAction =
   | { action: "set"; model: string }
   | { action: "reset" };
+
+export type AgentModelCommandExecution = {
+  response: AgentResponse;
+  continuationText?: string;
+  succeeded: boolean;
+};
 
 type AgentModelSettingsRepository = {
   getGuildAgentSettings(guildId: string): Promise<{ chatModel: string } | undefined>;
@@ -13,6 +27,12 @@ type AgentModelSettingsRepository = {
     updatedByUserId: string;
   }): Promise<unknown>;
   clearGuildChatModelOverride(guildId: string): Promise<boolean>;
+};
+
+type AgentModelChangeResult = {
+  content: string;
+  succeeded: boolean;
+  effectiveModel?: string;
 };
 
 export async function loadAgentModelOverride(ctx: ToolContext): Promise<void> {
@@ -31,54 +51,153 @@ export function effectiveAgentChatModel(ctx: ToolContext): string | undefined {
     undefined;
 }
 
+/** Backwards-compatible action shape for callers that do not need continuation text. */
 export function agentModelActionForPrompt(text: string): AgentModelAction | null {
-  const normalized = text.trim();
-  if (
-    /^(?:please\s+)?reset\s+(?:(?:the|this)\s+)?(?:(?:agent|ai|bot|chat)\s+)?model(?:\s+(?:back\s+)?to\s+(?:the\s+)?default)?\s*[.!]?\s*$/i.test(normalized)
-  ) {
-    return { action: "reset" };
-  }
-  const match = normalized.match(
-    /^(?:please\s+)?(?:switch|change|set)\s+(?:(?:the|this)\s+)?(?:(?:agent|ai|bot|chat)\s+)?model\s+(?:back\s+)?to\s+(.+?)\s*[.!]?\s*$/i,
-  );
-  if (!match) return null;
-  const target = cleanModelArgument(match[1] ?? "");
-  if (/^(?:the\s+)?default$/i.test(target)) return { action: "reset" };
-  return { action: "set", model: target };
+  const intent = agentModelIntentForPrompt(text);
+  if (!intent) return null;
+  return intent.action === "reset"
+    ? { action: "reset" }
+    : { action: "set", model: intent.target };
 }
 
 export async function setAgentModel(
   ctx: ToolContext,
   input: { action?: string; model?: string },
 ): Promise<string> {
+  return (await applyAgentModelChange(ctx, input)).content;
+}
+
+export async function executeAgentModelCommand(
+  ctx: ToolContext,
+  text: string,
+): Promise<AgentModelCommandExecution | null> {
+  const intent = agentModelIntentForPrompt(text);
+  if (!intent) return null;
+  const result = await applyAgentModelChange(ctx, actionFromIntent(intent));
+  return {
+    response: { content: result.content },
+    continuationText: intent.continuationText,
+    succeeded: result.succeeded,
+  };
+}
+
+export function isAgentModelAdmin(ctx: ToolContext): boolean {
+  const owner = ctx.config.allowlists?.ownerUserId;
+  return Boolean(
+    (owner && ctx.userId === owner) ||
+    ctx.config.allowlists?.opsUserIds?.includes(ctx.userId),
+  );
+}
+
+async function applyAgentModelChange(
+  ctx: ToolContext,
+  input: { action?: string; model?: string },
+): Promise<AgentModelChangeResult> {
+  const currentIntent = agentModelIntentForPrompt(ctx.requestText ?? "");
+  const requestedAction = normalizeAction(input.action);
+  const evidenceAction = currentIntent?.action ?? requestedAction ?? "set";
+  ctx.agentModelMutation = {
+    attempted: true,
+    succeeded: false,
+    action: evidenceAction,
+    requestedModel: currentIntent?.action === "set" ? currentIntent.target : input.model,
+  };
+
+  if (!currentIntent) {
+    return denyModelChange(
+      ctx,
+      input,
+      "agent_model_current_intent_required",
+      "I didn’t change the server model because the current message does not explicitly ask for a model change. Say `switch model to <provider/model>` in a new message.",
+    );
+  }
   if (!isAgentModelAdmin(ctx)) {
-    await auditModelChange(ctx, input, undefined, "agent_model_admin_required");
-    return "Changing the agent model is restricted to the configured bot owner or ops allowlist.";
+    return denyModelChange(
+      ctx,
+      input,
+      "agent_model_admin_required",
+      "Changing the agent model is restricted to the configured bot owner or ops allowlist.",
+    );
+  }
+  if (!requestedAction || requestedAction !== currentIntent.action) {
+    return denyModelChange(
+      ctx,
+      input,
+      "agent_model_intent_mismatch",
+      "I didn’t change the server model because the requested tool action did not match the current message.",
+    );
   }
   const repo = modelSettingsRepository(ctx);
   if (!repo) {
-    await auditModelChange(ctx, input, undefined, "agent_model_settings_unavailable");
-    return "Agent model settings are unavailable because the durable settings repository is not configured.";
+    return denyModelChange(
+      ctx,
+      input,
+      "agent_model_settings_unavailable",
+      "Agent model settings are unavailable because the durable settings repository is not configured.",
+    );
   }
-  const action = (input.action ?? "set").trim().toLowerCase();
+
   const defaultModel = ctx.config.openRouter?.chatModel?.trim();
   const previousModel = effectiveAgentChatModel(ctx) ?? "provider default";
-  if (action === "reset" || action === "clear") {
+  if (currentIntent.action === "reset") {
     await repo.clearGuildChatModelOverride(ctx.guildId);
     ctx.chatModelOverride = null;
     ctx.chatModelOverrideLoaded = true;
-    await auditModelChange(ctx, { action: "reset" }, defaultModel);
-    return `Reset this server's primary chat model from \`${previousModel}\` to the configured default \`${defaultModel ?? "provider default"}\`. This applies to the next request.`;
+    const effectiveModel = defaultModel ?? "provider default";
+    ctx.agentModelMutation = {
+      attempted: true,
+      succeeded: true,
+      action: "reset",
+      effectiveModel,
+    };
+    await auditModelChange(ctx, { action: "reset" }, effectiveModel);
+    return {
+      succeeded: true,
+      effectiveModel,
+      content: `Reset this server's primary chat model from \`${previousModel}\` to the configured default \`${effectiveModel}\`. The default is active for any remaining work in this request and future requests; the recovery model is unchanged.`,
+    };
   }
-  if (action !== "set") {
-    await auditModelChange(ctx, input, undefined, "agent_model_action_invalid");
-    return `Unknown action "${input.action}". Use set or reset.`;
+
+  const authoritativeTarget = modelTargetFromCurrentContext(ctx, currentIntent.target);
+  if (!authoritativeTarget) {
+    return denyModelChange(
+      ctx,
+      input,
+      "agent_model_context_target_missing",
+      "I couldn’t identify which model “that” refers to in this reply chain. Name the model or its OpenRouter ID in the current switch request.",
+    );
   }
-  const model = normalizeOpenRouterModelId(input.model);
-  if (!model) {
-    await auditModelChange(ctx, input, undefined, "agent_model_id_invalid");
-    return "Provide an OpenRouter model ID in `provider/model` form, for example `moonshotai/kimi-k3`. No model setting was changed.";
+  const resolution = await resolveAgentModel(authoritativeTarget, {
+    config: ctx.config,
+    openRouter: ctx.openRouter,
+    signal: ctx.abortSignal,
+  });
+  if (!resolution.ok) {
+    return denyModelChange(
+      ctx,
+      input,
+      `agent_model_${resolution.reason}`,
+      modelResolutionFailure(authoritativeTarget, resolution.reason, resolution.candidates),
+    );
   }
+
+  if (input.model?.trim()) {
+    const toolResolution = await resolveAgentModel(input.model, {
+      config: ctx.config,
+      openRouter: ctx.openRouter,
+      signal: ctx.abortSignal,
+    });
+    if (!toolResolution.ok || toolResolution.model !== resolution.model) {
+      return denyModelChange(
+        ctx,
+        input,
+        "agent_model_intent_mismatch",
+        `I didn’t change the server model because the tool requested \`${input.model}\`, but the current message authorizes \`${resolution.model}\`.`,
+      );
+    }
+  }
+
+  const model = resolution.model;
   if (model === defaultModel) {
     await repo.clearGuildChatModelOverride(ctx.guildId);
     ctx.chatModelOverride = null;
@@ -92,43 +211,60 @@ export async function setAgentModel(
     ctx.chatModelOverride = model;
     ctx.chatModelOverrideLoaded = true;
   }
+  ctx.agentModelMutation = {
+    attempted: true,
+    succeeded: true,
+    action: "set",
+    requestedModel: currentIntent.target,
+    effectiveModel: model,
+  };
   await auditModelChange(ctx, { action: "set", model }, model);
   const source = model === defaultModel ? " (the configured default)" : "";
-  return `Switched this server's primary chat model from \`${previousModel}\` to \`${model}\`${source}. This applies to the next request; the recovery model is unchanged.`;
-}
-
-export async function executeAgentModelCommand(
-  ctx: ToolContext,
-  text: string,
-): Promise<AgentResponse | null> {
-  const action = agentModelActionForPrompt(text);
-  if (!action) return null;
   return {
-    content: await setAgentModel(ctx, action),
+    succeeded: true,
+    effectiveModel: model,
+    content: `Switched this server's primary chat model from \`${previousModel}\` to \`${model}\`${source}. It is active for any remaining work in this request and future requests; the recovery model is unchanged.`,
   };
 }
 
-export function isAgentModelAdmin(ctx: ToolContext): boolean {
-  const owner = ctx.config.allowlists?.ownerUserId;
-  return Boolean(
-    (owner && ctx.userId === owner) ||
-    ctx.config.allowlists?.opsUserIds?.includes(ctx.userId),
-  );
+function actionFromIntent(intent: AgentModelIntent): AgentModelAction {
+  return intent.action === "reset"
+    ? { action: "reset" }
+    : { action: "set", model: intent.target };
 }
 
-export function normalizeOpenRouterModelId(value: string | undefined): string | null {
-  const model = cleanModelArgument(value ?? "");
-  if (model.length < 3 || model.length > 200) return null;
-  return /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(model)
-    ? model
-    : null;
+function normalizeAction(value: string | undefined): "set" | "reset" | null {
+  const action = (value ?? "set").trim().toLowerCase();
+  if (action === "clear") return "reset";
+  return action === "set" || action === "reset" ? action : null;
 }
 
-function cleanModelArgument(value: string) {
-  return value.trim()
-    .replace(/^`([^`]+)`$/, "$1")
-    .replace(/^<([^<>]+)>$/, "$1")
-    .trim();
+function modelResolutionFailure(
+  target: string,
+  reason: "invalid" | "not_found" | "ambiguous" | "catalog_unavailable",
+  candidates?: string[],
+): string {
+  if (reason === "ambiguous" && candidates?.length) {
+    return `\`${target}\` matches more than one available model: ${candidates.map((model) => `\`${model}\``).join(", ")}. Name the exact OpenRouter model ID. No setting was changed.`;
+  }
+  if (reason === "catalog_unavailable") {
+    return `I couldn’t verify \`${target}\` against OpenRouter’s model catalog right now, so I left the current model unchanged.`;
+  }
+  return `I couldn’t find an available OpenRouter model matching \`${target}\`. No model setting was changed.`;
+}
+
+async function denyModelChange(
+  ctx: ToolContext,
+  input: { action?: string; model?: string },
+  error: string,
+  content: string,
+): Promise<AgentModelChangeResult> {
+  if (ctx.agentModelMutation) {
+    ctx.agentModelMutation.succeeded = false;
+    ctx.agentModelMutation.error = error;
+  }
+  await auditModelChange(ctx, input, undefined, error);
+  return { content, succeeded: false };
 }
 
 function modelSettingsRepository(ctx: ToolContext): AgentModelSettingsRepository | null {

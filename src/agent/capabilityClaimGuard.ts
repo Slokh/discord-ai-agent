@@ -7,7 +7,7 @@ const MEDIA_TRANSCRIPTION_GUIDANCE =
 export type CapabilityClaimCorrection = {
   content: string;
   corrected: boolean;
-  capability?: "discord_media_transcription" | "runtime_model_identity";
+  capability?: "discord_media_transcription" | "runtime_model_identity" | "agent_model_mutation";
 };
 
 /**
@@ -33,6 +33,27 @@ export function correctKnownCapabilityClaim(
     }
   }
 
+  if (hasAgentModelMutationCompletionClaim(content)) {
+    const mutation = ctx.agentModelMutation;
+    if (!mutation?.succeeded) {
+      return {
+        content: "I didn’t change this server’s model. The current message must explicitly ask for a switch or reset, and only the configured bot owner or an ops admin can make that change.",
+        corrected: true,
+        capability: "agent_model_mutation",
+      };
+    }
+    if (mutation.effectiveModel) {
+      const corrected = replaceConflictingModelIds(content, mutation.effectiveModel);
+      if (corrected !== content) {
+        return {
+          content: corrected,
+          corrected: true,
+          capability: "agent_model_mutation",
+        };
+      }
+    }
+  }
+
   if (hasDiscordAttachment(ctx)) return { content, corrected: false };
 
   const requestContext = [userText, ...replyContextText(ctx)].join("\n");
@@ -48,6 +69,22 @@ export function correctKnownCapabilityClaim(
     corrected: true,
     capability: "discord_media_transcription",
   };
+}
+
+function hasAgentModelMutationCompletionClaim(content: string) {
+  const start = content.trim().slice(0, 500);
+  return /^(?:done\b[\s,:—-]*)?(?:(?:i(?:'ve|\s+have)?\s+)?(?:switched|changed|set)\b.{0,160}(?:\bmodel\b|\bto\s+(?:`?[a-z0-9._-]+\/[a-z0-9._:-]+`?|\b(?:sonnet|kimi|claude|gpt)\b))|(?:(?:this|the)\s+server(?:'s)?\s+)?(?:primary\s+|chat\s+)?model\s+is\s+now\b)/is
+    .test(start);
+}
+
+function replaceConflictingModelIds(content: string, effectiveModel: string) {
+  return content.replace(
+    /`?([A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*)`?/g,
+    (full, model: string) =>
+      model.toLowerCase() === effectiveModel.toLowerCase()
+        ? full
+        : `\`${effectiveModel}\``,
+  );
 }
 
 function hasRuntimeModelIdentityIntent(value: string) {

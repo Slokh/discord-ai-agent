@@ -94,6 +94,17 @@ describe("tool scoping", () => {
     expect(tools.localTools.some((tool) => tool.name === "setAgentModel")).toBe(true);
   });
 
+  it.each([
+    "switch to sonnet5",
+    "USE TOOL TO SWITXH MODEL TO SONNET 5",
+    "use moonshotai/kimi-k3",
+  ])("preloads model administration for natural switch wording: %s", (text) => {
+    const config = loadConfig();
+    const groups = selectToolGroups({ text, hasImageAttachments: false, config });
+
+    expect(groups.has("ops")).toBe(true);
+  });
+
   it("omits wager continuation schemas from unrelated wallet-enabled chat", () => {
     withEnv({
       WALLET_ENABLED: "true",

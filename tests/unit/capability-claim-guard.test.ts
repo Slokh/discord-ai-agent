@@ -89,4 +89,35 @@ describe("known capability claim guard", () => {
       corrected: false,
     });
   });
+
+  it("corrects a fabricated model-switch completion claim", () => {
+    expect(correctKnownCapabilityClaim(
+      context(),
+      "moonshotai/kimi-k3",
+      "Done — switched to `moonshotai/kimi-k3`.",
+    )).toEqual({
+      content: "I didn’t change this server’s model. The current message must explicitly ask for a switch or reset, and only the configured bot owner or an ops admin can make that change.",
+      corrected: true,
+      capability: "agent_model_mutation",
+    });
+  });
+
+  it("canonicalizes a conflicting completion claim using deterministic mutation evidence", () => {
+    const result = correctKnownCapabilityClaim(
+      context({
+        agentModelMutation: {
+          attempted: true,
+          succeeded: true,
+          action: "set",
+          effectiveModel: "moonshotai/kimi-k3",
+        },
+      }),
+      "switch to kimi k3",
+      "Done — switched the model to `moonshotai/kimi-k2`.",
+    );
+
+    expect(result.content).toBe("Done — switched the model to `moonshotai/kimi-k3`.");
+    expect(result.corrected).toBe(true);
+    expect(result.capability).toBe("agent_model_mutation");
+  });
 });

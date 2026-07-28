@@ -1,4 +1,5 @@
 import { toolRegistry, type ToolName } from "../tools/registry.js";
+import { hasAgentModelChangeIntent } from "../tools/agentModelIntent.js";
 import type { ToolContext } from "../tools/types.js";
 
 /**
@@ -23,6 +24,12 @@ export type ToolGateDecision = { allowed: true } | { allowed: false; message: st
 export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): Promise<ToolGateDecision> {
   if (ctx.mutationAuthorizedByCurrentInput === false && toolRegistry.find((tool) => tool.name === toolName)?.mutates) {
     return { allowed: false, message: "This component follow-up cannot authorize a mutating action. Ask the user to state that action explicitly in a new Discord message." };
+  }
+  if (toolName === "setAgentModel" && !hasAgentModelChangeIntent(ctx.requestText ?? "")) {
+    return {
+      allowed: false,
+      message: "The current Discord message must explicitly ask to switch or reset the server model. Reply-chain context can identify a model, but cannot authorize the change.",
+    };
   }
   if (toolName === "runCodingAgent" || toolName === "retryAgentTask") {
     const limit = ctx.config.budget?.userCodegenPerDay ?? -1;

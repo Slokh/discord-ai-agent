@@ -44,10 +44,11 @@ describe("agent model settings", () => {
   it("sets and resets the server override for configured owners and ops", async () => {
     const repo = settingsRepo();
     const ownerCtx = context("owner", repo);
+    ownerCtx.requestText = "switch to Sonnet 5";
 
     await expect(setAgentModel(ownerCtx, {
       action: "set",
-      model: "anthropic/claude-sonnet-5",
+      model: "Sonnet 5",
     })).resolves.toContain("Switched this server's primary chat model");
     expect(repo.setGuildChatModelOverride).toHaveBeenCalledWith({
       guildId: "guild",
@@ -59,6 +60,7 @@ describe("agent model settings", () => {
     const opsCtx = context("operator", repo);
     opsCtx.chatModelOverride = "bad-provider/missing-model";
     opsCtx.chatModelOverrideLoaded = true;
+    opsCtx.requestText = "reset model";
     await expect(setAgentModel(opsCtx, { action: "reset" }))
       .resolves.toContain("configured default");
     expect(repo.clearGuildChatModelOverride).toHaveBeenCalledWith("guild");
@@ -68,6 +70,7 @@ describe("agent model settings", () => {
   it("denies unconfigured users and leaves durable state unchanged", async () => {
     const repo = settingsRepo();
     const ctx = context("friend", repo);
+    ctx.requestText = "switch to Kimi K3";
 
     await expect(setAgentModel(ctx, {
       action: "set",
@@ -83,15 +86,46 @@ describe("agent model settings", () => {
   it("audits invalid model IDs without changing durable state", async () => {
     const repo = settingsRepo();
     const ctx = context("owner", repo);
+    ctx.requestText = "switch model to not-a-model";
 
     await expect(setAgentModel(ctx, {
       action: "set",
       model: "not-a-model",
-    })).resolves.toContain("provider/model");
+    })).resolves.toContain("couldn’t find");
     expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
     expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "setAgentModel",
-      error: "agent_model_id_invalid",
+      error: "agent_model_not_found",
+    }));
+  });
+
+  it("requires explicit current-turn mutation intent even when the model calls the tool", async () => {
+    const repo = settingsRepo();
+    const ctx = context("owner", repo);
+    ctx.requestText = "I literally added a tool for you to change models";
+
+    await expect(setAgentModel(ctx, {
+      action: "set",
+      model: "moonshotai/kimi-k3",
+    })).resolves.toContain("does not explicitly ask");
+    expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
+    expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      error: "agent_model_current_intent_required",
+    }));
+  });
+
+  it("rejects a model-generated target that conflicts with the current request", async () => {
+    const repo = settingsRepo();
+    const ctx = context("owner", repo);
+    ctx.requestText = "switch back to Kimi K3";
+
+    await expect(setAgentModel(ctx, {
+      action: "set",
+      model: "moonshotai/kimi-k2",
+    })).resolves.toContain("current message authorizes");
+    expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
+    expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      error: "agent_model_intent_mismatch",
     }));
   });
 });
@@ -120,7 +154,13 @@ function context(userId: string, repo: Record<string, unknown>): ToolContext {
       },
     },
     repo,
-    openRouter: {},
+    openRouter: {
+      listModels: vi.fn(async () => [
+        { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" },
+        { id: "moonshotai/kimi-k2", name: "MoonshotAI: Kimi K2" },
+        { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
+      ]),
+    },
     guildId: "guild",
     channelId: "channel",
     userId,

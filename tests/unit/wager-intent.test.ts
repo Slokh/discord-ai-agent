@@ -5,6 +5,7 @@ describe("standard wager intent", () => {
   it.each([
     ["coinflip 0.15 tails", { game: "coinflip", stakeUsd: 0.15, selection: "tails" }],
     ["coin flip $0.25 heads", { game: "coinflip", stakeUsd: 0.25, selection: "heads" }],
+    ["2 wager coin flip tails", { game: "coinflip", stakeUsd: 2, selection: "tails" }],
   ] as const)("recognizes a game-led coinflip with an inline side: %s", (prompt, expected) => {
     expect(standardWagerIntentForPrompt(prompt)).toEqual(expected);
   });

@@ -1187,15 +1187,17 @@ describe("agent router", () => {
   });
 
   it.each([
-    ["blackjack, 0.25", "cards", 0.25, "blackjack", "awaitRandomWagerAction"],
-    ["roulette red 0.40", "integers", 0.4, "roulette", "settleRandomWager"],
-    ["coinflip 0.15 tails", "coin", 0.15, "coinflip", "settleRandomWager"],
+    ["blackjack, 0.25", "cards", 0.25, "blackjack", "awaitRandomWagerAction", false],
+    ["roulette red 0.40", "integers", 0.4, "roulette", "settleRandomWager", false],
+    ["coinflip 0.15 tails", "coin", 0.15, "coinflip", "settleRandomWager", false],
+    ["2 wager coin flip tails", "coin", 2, "coinflip", "settleRandomWager", true],
   ] as const)("replays game-led decimal wager shorthand through a usable verified outcome: %s", async (
     prompt,
     kind,
     stakeUsd,
     game,
     transition,
+    timeoutFirst,
   ) => {
     const serverSeed = "05".repeat(32);
     const session: RngSessionRecord = {
@@ -1356,12 +1358,30 @@ describe("agent router", () => {
         firstToolNames = (request.tools ?? [])
           .map((tool) => tool.function?.name)
           .filter((name): name is string => Boolean(name));
+        if (timeoutFirst) {
+          throw new OpenRouterTimeoutError({
+            timeoutMs: 45_000,
+            path: "/chat/completions",
+          });
+        }
       }
+      const effectiveRound = timeoutFirst ? round - 1 : round;
       const modelContext = JSON.stringify(request.messages);
-      if (round === 1) {
+      if (effectiveRound === 1) {
+        if (timeoutFirst && JSON.stringify(request.toolChoice) !== JSON.stringify({
+          type: "function",
+          function: { name: "drawRandom" },
+        })) {
+          return {
+            content: "I couldn't start the synthetic wager because no active wager exists.",
+            model: "fast/fallback",
+            raw: {},
+            toolCalls: [],
+          };
+        }
         return {
           content: "",
-          model: "router-model",
+          model: timeoutFirst ? "fast/fallback" : "router-model",
           raw: {},
           toolCalls: [{
             id: "synthetic-game-draw",
@@ -1382,7 +1402,7 @@ describe("agent router", () => {
           }],
         };
       }
-      if (round === 2 && modelContext.includes("Provably fair draw complete")) {
+      if (effectiveRound === 2 && modelContext.includes("Provably fair draw complete")) {
         return transition === "awaitRandomWagerAction"
           ? {
               content: "",
@@ -1431,6 +1451,9 @@ describe("agent router", () => {
         maxReplyChars: 1800,
         toolsetScoping: true,
         openRouter: {},
+        ...(timeoutFirst
+          ? { openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" } }
+          : {}),
         payments: {
           walletEnabled: true,
           userWalletsEnabled: true,
@@ -1484,6 +1507,13 @@ describe("agent router", () => {
 
     expect(firstToolChoice).toEqual({ type: "function", function: { name: "drawRandom" } });
     expect(firstToolNames).toContain("drawRandom");
+    if (timeoutFirst) {
+      expect((chat.mock.calls[1]?.[0] as any).toolChoice).toEqual({
+        type: "function",
+        function: { name: "drawRandom" },
+      });
+      expect((chat.mock.calls[1]?.[0] as any).model).toBe("fast/fallback");
+    }
     expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
       userId: "u",
       stakeUsd,

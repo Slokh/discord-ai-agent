@@ -117,7 +117,7 @@ async function runAgentModelLoopInternal(
       mentionedUsers: ctx.mentionedUsers,
     },
     promptOverlay,
-    discordEmojiContext,
+    discordEmojiContext, { displayName: ctx.config.discord?.botName ?? "" },
   );
   if (automaticStarterFunds) {
     insertInitialSystemContext(

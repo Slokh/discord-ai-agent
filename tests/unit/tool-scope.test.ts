@@ -299,6 +299,19 @@ describe("tool scoping", () => {
     });
   });
 
+  it("uses replied implementation context to scope a terse current-turn fix request", () => {
+    withEnv({ GITHUB_REPOSITORY: "example-org/example-repo", GITHUB_TOKEN: "test-token", TASK_SIGNING_SECRET: "test-secret" }, () => {
+      const groups = selectToolGroups({
+        text: "fix it now",
+        hasImageAttachments: false,
+        replyContext: true,
+        replyContextText: "The assistant could not call the settlement tool because the implementation omitted it.",
+        config: loadConfig(),
+      });
+      expect(groups.has("codegen")).toBe(true);
+    });
+  });
+
   it("excludes codegen when GitHub credentials are missing even if the repo is set", () => {
     withEnv(
       {

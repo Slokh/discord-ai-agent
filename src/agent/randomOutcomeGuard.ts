@@ -12,6 +12,10 @@ const RANDOM_ACTION = "(?:roll|flip|spin|deal|draw|shuffle|pick|choose|select|ge
 const RANDOM_TARGET = "(?:random(?:ly)?|dice|d\\d+|coin|heads|tails|red|black|cards?|hand|blackjack|poker|roulette|wheel|craps|slots?|spins?|casino|lottery|raffle|winner|numbers?)";
 const DIRECT_RANDOM_ACTION = new RegExp(`^\\s*(?:please\\s+)?${RANDOM_ACTION}\\b[\\s\\S]{0,160}\\b${RANDOM_TARGET}\\b`, "i");
 const REQUESTED_RANDOM_ACTION = new RegExp(`\\b(?:please|let(?:'s| us)|can you|could you|would you|i want you to|go ahead(?: and)?|for me)\\b[\\s\\S]{0,100}\\b${RANDOM_ACTION}\\b[\\s\\S]{0,100}\\b${RANDOM_TARGET}\\b`, "i");
+const CUSTOM_RANDOM_WAGER = new RegExp(
+  `(?:\\b(?:bet|wager|stake|risk)\\b[\\s\\S]{0,240}\\b${RANDOM_ACTION}\\b[\\s\\S]{0,160}\\b${RANDOM_TARGET}\\b|\\b${RANDOM_ACTION}\\b[\\s\\S]{0,160}\\b${RANDOM_TARGET}\\b[\\s\\S]{0,240}\\b(?:bet|wager|stake|risk)\\b)`,
+  "i",
+);
 const DISCUSSION_PREFIX = /^\s*(?:what|which|why|how|should|is|are|do|does|did|tell|explain)\b/i;
 const EXECUTION_OVERRIDE = /\b(?:please|for me|right now|go ahead|can you|could you|would you|let(?:'s| us))\b/i;
 const WHOLE_BALANCE_WAGER = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
@@ -23,7 +27,8 @@ const LONG_NUMBER_WITH_OUTCOME_CONTEXT = new RegExp(
   `(?:\\b${OUTCOME_NUMBER_CONTEXT}\\b[\\s\\S]{0,80}\\b\\d{16,}\\b|\\b\\d{16,}\\b[\\s\\S]{0,80}\\b${OUTCOME_NUMBER_CONTEXT}\\b)`,
   "i",
 );
-const RANDOM_CONTINUATION = /^\s*(?:again|same(?:\s+thing)?|one\s+more|do\s+it(?:\s+again)?|repeat|reroll|reflip|heads|tails)\s*[.!]?\s*$/i;
+const RANDOM_CONTINUATION = /^\s*(?:again|try\s+again|same(?:\s+thing)?|one\s+more|do\s+it(?:\s+again)?|repeat|reroll|reflip|heads|tails)\s*[.!]?\s*$/i;
+const RANDOM_AUTHORIZATION_CONTINUATION = /^\s*(?:(?:one|\d+)\s+more(?:\s*,?\s*(?:please|win\s+this\s+time))?)\s*[.!]?\s*$/i;
 const RANDOM_NUMBER_REQUEST = /\bnumbers?\b/i;
 const SHORT_RANDOM_NUMBER_RESULT = /^\s*(?:(?:the\s+)?(?:random|generated|selected)\s+(?:number|value)\s*(?:is|:|—|-)\s*)?[`*_~]*-?\d{1,15}[`*_~]*[.!]?\s*$/i;
 
@@ -59,7 +64,7 @@ export function randomToolForPrompt(text: string): "drawRandom" | "revealRandomn
   if (isDeferredExternalOutcomeWager(text)) return null;
   const normalized = text.trim();
   if (DISCUSSION_PREFIX.test(normalized) && !EXECUTION_OVERRIDE.test(normalized)) return null;
-  return DIRECT_RANDOM_ACTION.test(normalized) || REQUESTED_RANDOM_ACTION.test(normalized) || requiresWalletBackedWager(normalized)
+  return DIRECT_RANDOM_ACTION.test(normalized) || REQUESTED_RANDOM_ACTION.test(normalized) || CUSTOM_RANDOM_WAGER.test(normalized) || requiresWalletBackedWager(normalized)
     ? "drawRandom"
     : null;
 }
@@ -75,25 +80,9 @@ export function randomActionAuthorizedForTurn(input: {
   promptContextTexts?: Array<string | null | undefined>;
   activeGameActionRequested?: boolean;
 }) {
-  if (input.activeGameActionRequested) return true;
-  const conversationalContext = [
-    input.userText,
-    ...(input.replyContextTexts ?? []),
-    ...(input.replyContext
-      ? [
-          input.replyContext.content,
-          ...input.replyContext.chain.map((message) => message.content),
-        ]
-      : []),
-  ];
-  if (conversationalContext.some((text) => randomToolForPrompt(text) === "drawRandom")) {
-    return true;
-  }
-  return Boolean(
-    [input.promptContextText, ...(input.promptContextTexts ?? [])]
-      .filter((text): text is string => Boolean(text))
-      .some((text) => randomToolForPrompt(text) === "drawRandom"),
-  );
+  if (randomActionRequiredForTurn(input)) return true;
+  if (!RANDOM_AUTHORIZATION_CONTINUATION.test(input.userText)) return false;
+  return randomReplyContextTexts(input).some((text) => randomToolForPrompt(text) === "drawRandom");
 }
 
 export function randomActionRequiredForTurn(input: {
@@ -108,7 +97,17 @@ export function randomActionRequiredForTurn(input: {
   if (input.activeGameActionRequested) return true;
   if (randomToolForPrompt(input.userText) === "drawRandom") return true;
   if (!RANDOM_CONTINUATION.test(input.userText)) return false;
-  const replyTexts = [
+  return randomReplyContextTexts(input).some((text) => randomToolForPrompt(text) === "drawRandom");
+}
+
+function randomReplyContextTexts(input: {
+  replyContextTexts?: string[];
+  replyContext?: {
+    content: string;
+    chain: Array<{ content: string }>;
+  };
+}) {
+  return [
     ...(input.replyContextTexts ?? []),
     ...(input.replyContext
       ? [
@@ -117,7 +116,6 @@ export function randomActionRequiredForTurn(input: {
         ]
       : []),
   ];
-  return replyTexts.some((text) => randomToolForPrompt(text) === "drawRandom");
 }
 
 export function randomActionNeedsWalletBalance(text: string): boolean {

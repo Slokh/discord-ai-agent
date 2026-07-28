@@ -45,7 +45,10 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("discord-action");
   if (input.hasImageAttachments || hasAny(text, IMAGE_KEYWORDS)) groups.add("image");
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
-  if (isCodegenConfigured(input.config) && (hasAny(text, CODEGEN_KEYWORDS) || (bugInboxIntent && BUG_FIX_INTENT.test(text)))) groups.add("codegen");
+  const replyScopedCodeFix = input.replyContext &&
+    BUG_FIX_INTENT.test(text) &&
+    REPLY_CODEGEN_SUBJECT.test(replyContextText);
+  if (isCodegenConfigured(input.config) && (hasAny(text, CODEGEN_KEYWORDS) || replyScopedCodeFix || (bugInboxIntent && BUG_FIX_INTENT.test(text)))) groups.add("codegen");
   if (hasAny(text, OPS_KEYWORDS)) groups.add("ops");
   if (hasAgentModelChangeIntent(input.text)) groups.add("ops");
   if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("ops");
@@ -206,11 +209,14 @@ const SPOTIFY_KEYWORDS = [
 ];
 
 const CODEGEN_KEYWORDS = [
-  /\b(fix|debug|change|update|edit|implement|add|remove|refactor|ship|deploy|pr|pull request)\b.*\b(bot|code|repo|repository|github|ci|test|feature|bug|app|worker)\b/,
-  /\b(bot|code|repo|repository|github|ci|test|feature|bug|app|worker)\b.*\b(fix|debug|change|update|edit|implement|add|remove|refactor|ship|deploy|pr|pull request)\b/,
+  /\b(fix|debug|change|update|edit|implement|add|remove|refactor|ship|deploy|pr|pull request)\b.*\b(bot|code|repo|repository|github|ci|test|feature|bug|app|worker|implementation|tool|capability)\b/,
+  /\b(bot|code|repo|repository|github|ci|test|feature|bug|app|worker|implementation|tool|capability)\b.*\b(fix|debug|change|update|edit|implement|add|remove|refactor|ship|deploy|pr|pull request)\b/,
   /\bmake (the|this|our) bot\b/,
   /\bopen a pr\b/,
 ];
+
+const REPLY_CODEGEN_SUBJECT =
+  /\b(?:assistant|bot|code|implementation|tool|capability|feature|bug|error|failure|failed|repository|repo|test|ci)\b/i;
 
 const OPS_KEYWORDS = [
   /\b(status|health|logs?|trace|why.*(failed|slow|hung)|deployment|config|admin|ops)\b/,

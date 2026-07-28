@@ -2470,6 +2470,58 @@ describe("agent router", () => {
       .toBe(true);
   });
 
+  it("corrects an invented future schedule for a mentioned member", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "Avery should be online within the next two hours and will be playing by tonight.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "I can't know another member's availability from a mention alone. Ask them to confirm a concrete time.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      mentionedUserIds: ["member-1"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "How soon can Avery play ranked games with <@member-1>?",
+    );
+
+    expect(response.content).toContain("Ask them to confirm");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect((chat.mock.calls[1]?.[0] as any).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("future availability"),
+      }),
+    ]));
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.member_availability_guard.rejected"
+    )).toBe(true);
+  });
+
   it("still blocks a second ungrounded live-data draft when no fresh evidence was observed", async () => {
     const chat = vi
       .fn()

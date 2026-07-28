@@ -469,6 +469,90 @@ describe("agent router", () => {
     expect(chat).toHaveBeenCalledTimes(1);
   });
 
+  it("replays a harmless terse follow-up when the first draft falsely denies its retained Discord chain", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content:
+          "I can't access Discord member messages, so provide the relevant context before I can answer.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockImplementationOnce(async (request: { messages: Array<{ content: unknown }> }) => {
+        const prompt = request.messages
+          .map((message) => String(message.content))
+          .join("\n");
+        expect(prompt).toContain("The permission-visible Discord reply chain is already included");
+        expect(prompt).toContain("A synthetic member shared a playful server nickname.");
+        return {
+          content:
+            "Based on the retained exchange, it reads as a playful nickname rather than a verified profile fact.",
+          model: "router-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const root = {
+      messageId: "root-opinion",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "A synthetic member shared a playful server nickname.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-28T00:00:00.000Z",
+      url: "https://discord.com/channels/g/c/root-opinion",
+    };
+    const parent = {
+      messageId: "parent-opinion",
+      channelId: "c",
+      guildId: "g",
+      authorId: "bot",
+      authorDisplayName: "AI",
+      authorIsBot: true,
+      content: "That nickname sounds intentionally playful.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-28T00:01:00.000Z",
+      url: "https://discord.com/channels/g/c/parent-opinion",
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        ...parent,
+        rootMessageId: root.messageId,
+        chain: [root, parent],
+      },
+      requestId: "opinion-follow-up",
+      requestMessageId: "opinion-follow-up",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "give a brief opinion");
+
+    expect(response.content).toContain("playful nickname");
+    expect(response.content).not.toContain("can't access Discord");
+    expect(chat).toHaveBeenCalledTimes(2);
+  });
+
   it("answers ordinary chat without inspecting or funding the requester's wallet", async () => {
     const requestStarterFunds = vi.fn(async () => ({
       granted: true as const,
@@ -4354,6 +4438,98 @@ describe("agent router", () => {
     expect(ctx.repo.vectorSearch).not.toHaveBeenCalled();
   });
 
+  it("answers from scoped recent candidates when a semantic history lookup times out", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const recentMessagesFromChannels = vi.fn(async () => [
+      agentSearchResult({
+        messageId: "synthetic-recent-update",
+        authorId: "member-id",
+        authorUsername: "member",
+        normalizedContent:
+          "The synthetic release moved to the next scheduled window.",
+        createdAt: new Date("2026-07-20T12:00:00.000Z"),
+      }),
+    ]);
+    const embed = vi.fn(async () => {
+      throw new Error("OpenRouter request timed out after 4000ms (/embeddings).");
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "search-timeout",
+          name: "searchDiscordHistory",
+          argumentsText: JSON.stringify({
+            query: "release",
+            dateFrom: "2026-07-01",
+            dateTo: "2026-07-28",
+            limit: 20,
+          }),
+        }],
+      })
+      .mockImplementationOnce(async (request: { messages: Array<{ role: string; content: unknown }> }) => {
+        const toolContent = request.messages
+          .filter((message) => message.role === "tool")
+          .map((message) => String(message.content))
+          .join("\n");
+        expect(toolContent).toContain("semantic matching timed out");
+        expect(toolContent).toContain("The synthetic release moved to the next scheduled window.");
+        return {
+          content:
+            "The retained history says the synthetic release moved to the next scheduled window.",
+          model: "final-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 20,
+        openRouter: {
+          apiKey: "test-key",
+          embeddingModel: "test/embed",
+        },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["c"]),
+        keywordSearch: vi.fn(async () => []),
+        vectorSearch: vi.fn(async () => []),
+        recentMessagesFromChannels,
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool,
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat, embed },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "what was the latest synthetic release update this month?",
+    );
+
+    expect(response.content).toContain("moved to the next scheduled window");
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(ctx.repo.vectorSearch).not.toHaveBeenCalled();
+    expect(recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({
+      guildId: "g",
+      visibleChannelIds: ["c"],
+      dateFrom: new Date("2026-07-01T00:00:00.000Z"),
+      dateTo: new Date("2026-07-28T23:59:59.999Z"),
+      limit: 20,
+    }));
+  });
+
   it("passes about-user filters from model-selected history searches", async () => {
     const auditTool = vi.fn(async () => undefined);
     const keywordSearch = vi.fn(async () => [
@@ -4495,7 +4671,7 @@ describe("agent router", () => {
     expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
   });
 
-  it("returns grounded image evidence immediately after an image retry produces a file", async () => {
+  it("returns a generated image after one provider rejection without requiring another model tool call", async () => {
     const traceEvents: any[] = [];
     const imageBytes = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
@@ -4510,44 +4686,16 @@ describe("agent router", () => {
         data: [{ b64_json: imageBytes.toString("base64"), media_type: "image/png" }],
       });
     const firstPrompt = "A synthetic futuristic library scene with blue lights and geometric shelves. ".repeat(8);
-    const secondPrompt = "A safe synthetic futuristic library scene with blue lights.";
-    let modelCall = 0;
-    const chat = vi.fn(async (request: any) => {
-      modelCall += 1;
-      if (modelCall === 1) {
-        return {
-          content: "",
-          model: "slow/primary",
-          raw: {},
-          toolCalls: [{
-            id: "image-attempt-1",
-            name: "generateImage",
-            argumentsText: JSON.stringify({ prompt: firstPrompt }),
-          }],
-        };
-      }
-      if (modelCall === 2) {
-        return {
-          content: "",
-          model: "slow/primary",
-          raw: {},
-          toolCalls: [{
-            id: "image-attempt-2",
-            name: "generateImage",
-            argumentsText: JSON.stringify({ prompt: secondPrompt }),
-          }],
-        };
-      }
-      if (request.tools) {
-        throw new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" });
-      }
-      return {
-        content: "The synthetic image is ready.",
-        model: request.model ?? "slow/primary",
-        raw: {},
-        toolCalls: [],
-      };
-    });
+    const chat = vi.fn(async () => ({
+      content: "",
+      model: "slow/primary",
+      raw: {},
+      toolCalls: [{
+        id: "image-attempt-1",
+        name: "generateImage",
+        argumentsText: JSON.stringify({ prompt: firstPrompt }),
+      }],
+    }));
     const replyChain = Array.from({ length: 24 }, (_value, index) => ({
       messageId: `synthetic-parent-${index + 1}`,
       channelId: "c",
@@ -4604,12 +4752,13 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "make an image of this synthetic scene with blue lights");
 
-    expect(response.content).toContain("Generated image for: A safe synthetic futuristic library scene");
+    expect(response.content).toContain("Generated image for: A synthetic futuristic library scene");
     expect(response.files).toEqual([
       expect.objectContaining({ contentType: "image/png", data: imageBytes }),
     ]);
     expect(generateImage).toHaveBeenCalledTimes(2);
-    expect(chat).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("REQUEST-COMPATIBILITY RECOVERY PASS");
+    expect(chat).toHaveBeenCalledTimes(1);
     expect(traceEvents.some((event) => event.eventName === "agent.final_synthesis.started")).toBe(false);
     expect(traceEvents).toContainEqual(expect.objectContaining({
       eventName: "agent.request.complete",

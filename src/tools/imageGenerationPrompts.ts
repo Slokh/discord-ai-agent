@@ -20,3 +20,13 @@ export function imageSafetyFallbackPrompt(prompt: string) {
     prompt,
   ].join("\n");
 }
+
+export function imageRequestRecoveryPrompt(prompt: string) {
+  return [
+    "REQUEST-COMPATIBILITY RECOVERY PASS.",
+    "Create one safe image that preserves the core subject, composition, setting, colors, mood, and harmless action from the original request.",
+    "Simplify unsupported or overly complex rendering instructions. Do not add text, people, claims, or objects that were not requested.",
+    "Original request:",
+    prompt,
+  ].join("\n");
+}

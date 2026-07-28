@@ -8,10 +8,7 @@ import {
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
-import {
-  imageSafetyFallbackPrompt,
-  transparentImageRecoveryPrompt,
-} from "./imageGenerationPrompts.js";
+import { imageSafetyFallbackPrompt, transparentImageRecoveryPrompt } from "./imageGenerationPrompts.js";
 import {
   inferRequiredImageText,
   imageTextCorrectionPrompt,
@@ -33,6 +30,7 @@ import {
 import { resolveContextImageSelection } from "./imageContextSelection.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
+import { recoverRejectedImageRequest } from "./imageRequestRejectionRecovery.js";
 
 const DEFAULT_VISION_MODEL = "google/gemini-3.6-flash";
 const MAX_IMAGE_REFERENCES = 4;
@@ -418,6 +416,14 @@ export async function generateImage(
         }
       }
     }
+    const rejectionRecovery = image ? null : await recoverRejectedImageRequest(ctx.openRouter, terminalError, activePrompt, imageOptions);
+    if (rejectionRecovery) {
+      generationAttempts += 1;
+      activePrompt = rejectionRecovery.prompt;
+      image = rejectionRecovery.image;
+      terminalError = rejectionRecovery.error;
+      totalEstimatedCostUsd += image?.estimatedCostUsd ?? 0;
+    }
     if (!image) {
       const contentFilterBlocked = isOpenRouterContentFilterError(terminalError);
       const requestRejected = isOpenRouterHttpError(terminalError) && terminalError.status === 400;
@@ -603,8 +609,8 @@ export async function generateImage(
       safetyFallbackUsed,
       referenceTransparencyFallbackAttempted,
       referenceTransparencyFallbackUsed,
-      transparencyFallbackAttempted,
       transparencyFallbackUsed,
+      transparencyFallbackAttempted,
     }),
     model: image.model,
     estimatedCostUsd: totalEstimatedCostUsd || image.estimatedCostUsd

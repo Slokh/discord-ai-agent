@@ -6706,6 +6706,17 @@ describe("agent router", () => {
       createdAt: null,
       url: null,
     };
+    const rootRequest = {
+      ...repliedImage,
+      messageId: "request-root",
+      rootMessageId: "request-root",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "Create a synthetic diagram.",
+      attachmentSummaries: [],
+      attachments: [],
+    };
     const ctx = {
       config: {
         maxReplyChars: 1800,
@@ -6722,7 +6733,7 @@ describe("agent router", () => {
       visibleChannelIds: ["c"],
       sessionMessages: [],
       requestAttachments: [],
-      replyContext: { ...repliedImage, chain: [repliedImage] },
+      replyContext: { ...repliedImage, chain: [rootRequest, repliedImage] },
     } as unknown as ToolContext;
 
     const response = await handleAgentRequest(

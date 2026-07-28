@@ -33,6 +33,7 @@ describe("random outcome guard", () => {
     "generate a random 3 digit number",
     "make me a random number from 1 to 100000",
     "pick a number from 1 to 20",
+    "1x loss / 3x win custom wager: roll four dice and settle the stated payout",
   ])("forces verified randomness for an explicit chance action: %s", (text) => {
     expect(randomToolForPrompt(text)).toBe("drawRandom");
   });
@@ -74,9 +75,10 @@ describe("random outcome guard", () => {
       activeGameActionRequested: true,
     })).toBe(true);
     expect(randomActionAuthorizedForTurn({
-      userText: "do it",
+      userText: "fix the implementation now",
+      replyContextTexts: ["Spin the roulette wheel once."],
       promptContextText: "Spin the roulette wheel once.",
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it("requires a draw for an action-completing reply without treating debugging questions as play", () => {

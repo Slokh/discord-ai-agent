@@ -19,9 +19,9 @@ const GAME_LED_STANDARD_WAGER = new RegExp(
   String.raw`^\s*(?:please\s+)?(blackjack|coin\s*flip|flip\s+a\s+coin)\b(?:\s*[,;:]\s*|\s+(?:[a-z][a-z'-]*\s+){0,3})\$?\s*(${AMOUNT_SOURCE})\s*(?:usd|dollars?|bucks?)?\s*(?:(heads|tails)\s*)?[.!]?\s*$`,
   "i",
 );
-const ACTION_LED_WAGER = /\b(?:bet|wager|stake|risk|put|play|deal|flip)\b/i;
+const ACTION_LED_WAGER = /\b(?:bet|wager|stake|risk|put|play|deal|flip|all\s+in)\b/i;
 const AMOUNT_LED_WAGER = new RegExp(
-  String.raw`^\s*\$?\s*(${AMOUNT_SOURCE})\s*(?:usd|dollars?|bucks?)?\s+(?:bet|wager|stake|risk)\b`,
+  String.raw`^\s*\$?\s*(${AMOUNT_SOURCE})\s*(?:usd|dollars?|bucks?)?\s+(?:bet|wager|stake|risk|all\s+in)\b`,
   "i",
 );
 const WAGER_DISCUSSION =

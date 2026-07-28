@@ -172,7 +172,7 @@ async function runAgentModelLoopInternal(
   });
   const randomActionAuthorized = randomActionAuthorizedForTurn({ userText: text, replyContext: ctx.replyContext, promptContextTexts: [serverOverlay?.enabled ? serverOverlay.systemPrompt : "", promptOverlay], activeGameActionRequested: activeGame?.actionRequested });
   let toolsetState = initialToolsetState(ctx, text, randomActionAuthorized);
-  if (activeGame) toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
+  if (activeGame || randomActionRequired) toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
   let hasAttemptedTool = false;
   let modelTimeoutFallbackAttempted = false;
   let primaryProviderRejected = false;

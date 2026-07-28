@@ -135,7 +135,10 @@ describe("agent router", () => {
       };
     });
     let modelRound = 0;
-    const chat = vi.fn(async (request: { messages: Array<{ content: unknown }> }) => {
+    const chat = vi.fn(async (request: {
+      messages: Array<{ content: unknown }>;
+      tools?: Array<{ function?: { name?: string } }>;
+    }) => {
       modelRound += 1;
       const prompt = JSON.stringify(request.messages);
       if (modelRound === 1) {
@@ -151,6 +154,7 @@ describe("agent router", () => {
         };
       }
       if (modelRound === 2 && prompt.includes("Provably fair draw complete") && prompt.includes("wallet wager")) {
+        expect(request.tools?.some((tool) => tool.function?.name === "settleRandomWager")).toBe(true);
         const values = (draws[0]?.outcome as { values?: string[] } | undefined)?.values ?? [];
         const won = values.includes("heads");
         return {
@@ -1191,6 +1195,7 @@ describe("agent router", () => {
     ["roulette red 0.40", "integers", 0.4, "roulette", "settleRandomWager", false],
     ["coinflip 0.15 tails", "coin", 0.15, "coinflip", "settleRandomWager", false],
     ["2 wager coin flip tails", "coin", 2, "coinflip", "settleRandomWager", true],
+    ["3 all in coinflip heads", "coin", 3, "coinflip", "settleRandomWager", false],
   ] as const)("replays game-led decimal wager shorthand through a usable verified outcome: %s", async (
     prompt,
     kind,
@@ -5993,6 +5998,65 @@ describe("agent router", () => {
     expect((chat.mock.calls[2]?.[0] as any).tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ function: expect.objectContaining({ name: "runCodingAgent" }) }),
     ]));
+  });
+
+  it("routes a terse reply-chain implementation fix to codegen without inheriting wager authority", async () => {
+    const chat = vi.fn(async (request: {
+      tools?: Array<{ function?: { name?: string } }>;
+    }) => {
+      const toolNames = (request.tools ?? []).map((tool) => tool.function?.name);
+      expect(toolNames).toContain("runCodingAgent");
+      expect(toolNames).not.toContain("drawRandom");
+      return {
+        content: "I’m ready to apply the implementation fix.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const replyMessage = (messageId: string, content: string, authorIsBot: boolean) => ({
+      messageId,
+      rootMessageId: "synthetic-fix-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage("synthetic-fix-root", "Start a coin wager and roll the dice.", false),
+      replyMessage("synthetic-fix-error", "The settlement tool was omitted by the implementation.", true),
+    ];
+    const ctx = {
+      config: {
+        ...codeUpdateTestConfig(),
+        toolsetScoping: true,
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      ...fakeAgentRuntimeContext(),
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestMessageId: "synthetic-fix-current",
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "fix it now");
+
+    expect(response.content).toBe("I’m ready to apply the implementation fix.");
+    expect(chat).toHaveBeenCalledTimes(1);
   });
 
   it("answers model identity without inheriting unrelated reply-chain URL intent", async () => {

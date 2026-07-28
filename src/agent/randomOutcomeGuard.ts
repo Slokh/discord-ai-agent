@@ -45,6 +45,11 @@ export const RANDOM_OUTCOME_RETRY_GUIDANCE =
   "If no draw succeeded, call drawRandom and report its result exactly. If a wallet wager is active and its rules need more automatic chance, call drawRandom again without a new wager. Otherwise call awaitRandomWagerAction for a genuine player decision, or call settleRandomWager exactly once after a final outcome with a payout-consistent outcome and its true resolution source. " +
   "Correct rejected arguments and retry in this turn. Never report or apply a chance outcome or money change until the required tools succeed.";
 
+export const FABRICATED_TOOL_UNAVAILABILITY_RETRY_GUIDANCE =
+  "Your previous draft claimed the random-draw tool was unavailable or refused to run a chance action without calling it. That claim is false: drawRandom is offered in this turn's tool list and is available now. " +
+  "Do not assert a tool is unavailable, unconfigured, missing, or in need of an owner/config fix unless an actual tool call to it has failed or it is definitively omitted from your offered tools. A successful tool result is ground truth and must not be second-guessed. " +
+  "Call drawRandom now with the correct parameters for the requested game, then report its verified result exactly. Never fabricate unavailability again for a tool you were offered.";
+
 export const NON_RANDOM_OUTCOME_RETRY_GUIDANCE =
   "Your previous draft introduced a specific roll, spin, draw, winner, or other chance result that the user did not ask you to perform. " +
   "Remove the invented random framing and answer the user's actual message conversationally. Do not call drawRandom unless the current request genuinely asks you to execute a chance action. Do not report or apply any random outcome or money change.";
@@ -167,6 +172,7 @@ export class RandomOutcomeGuard {
   private attemptedDraw = false;
   private successfulDraw = false;
   private retryAttempted = false;
+  private fabricatedUnavailabilityRejected = false;
   private readonly pendingWagerIds = new Set<string>();
   private requiredWagerTool: "awaitRandomWagerAction" | "settleRandomWager" | null = null;
 
@@ -231,6 +237,7 @@ export class RandomOutcomeGuard {
   }
 
   retryGuidance() {
+    if (this.fabricatedUnavailabilityRejected) return FABRICATED_TOOL_UNAVAILABILITY_RETRY_GUIDANCE;
     return this.requiresRandomWorkflow()
       ? RANDOM_OUTCOME_RETRY_GUIDANCE
       : NON_RANDOM_OUTCOME_RETRY_GUIDANCE;

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { shouldRetryFalseImageRefusal } from "../../src/agent/imageEvidenceGuard.js";
+import {
+  shouldForceContextImageInspection,
+  shouldRetryFalseImageRefusal,
+} from "../../src/agent/imageEvidenceGuard.js";
 import { inferRequiredImageText } from "../../src/tools/generatedImageTextValidation.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
@@ -30,6 +33,37 @@ describe("image evidence guard", () => {
     expect(shouldRetryFalseImageRefusal(
       imageContext,
       "The image shows a synthetic chart.",
+    )).toBe(false);
+  });
+
+  it("requires image evidence for causal follow-ups to a directly replied image", () => {
+    const imageContext = {
+      requestAttachments: [],
+      replyContext: {
+        chain: [{
+          authorIsBot: true,
+          content: "Here is the generated synthetic diagram.",
+          attachments: [{
+            id: "synthetic-image",
+            url: "https://cdn.discordapp.com/synthetic.png",
+            filename: "synthetic.png",
+            contentType: "image/png",
+          }],
+        }],
+      },
+    } as unknown as ToolContext;
+
+    expect(shouldForceContextImageInspection(
+      imageContext,
+      "Why did you put the blue marker there?",
+    )).toBe(true);
+    expect(shouldForceContextImageInspection(
+      imageContext,
+      "Thanks for making it.",
+    )).toBe(false);
+    expect(shouldForceContextImageInspection(
+      { requestAttachments: [], replyContext: null } as unknown as ToolContext,
+      "Why did you put the blue marker there?",
     )).toBe(false);
   });
 

@@ -29,14 +29,17 @@ export type AgentModelLoopRequest = {
 export async function runGuardedAgentRequest(
   ctx: ToolContext,
   userText: string,
-  execute: (request: AgentModelLoopRequest) => Promise<AgentResponse>,
+  execute: (request: AgentModelLoopRequest, executionText: string) => Promise<AgentResponse>,
 ): Promise<AgentResponse> {
   ctx.requestText = userText;
   await loadAgentModelOverride(ctx);
   const agentModelCommand = await executeAgentModelCommand(ctx, userText);
-  if (agentModelCommand) return agentModelCommand;
+  if (agentModelCommand && !agentModelCommand.continuationText) {
+    return agentModelCommand.response;
+  }
+  const executionText = agentModelCommand?.continuationText ?? userText;
   const coinflipClarification = ctx.config.payments?.userWalletsEnabled
-    ? coinflipWagerClarification(userText)
+    ? coinflipWagerClarification(executionText)
     : null;
   if (coinflipClarification) {
     await recordAgentEvent(ctx, {
@@ -44,17 +47,19 @@ export async function runGuardedAgentRequest(
       summary: "Requested the missing coinflip side before reserving funds",
       metadata: { game: "coinflip" },
     });
-    return { content: coinflipClarification };
+    return combineModelCommandResponse(agentModelCommand?.response, {
+      content: coinflipClarification,
+    });
   }
 
   const automaticStarterFunds = await ensureAutomaticStarterFunds(ctx);
-  const activeGame = await loadActiveGameSession(ctx, userText);
-  const activeGameNeedsRandomDraw = activeGameActionNeedsRandomDraw(activeGame, userText);
-  const randomOutcomeGuard = new RandomOutcomeGuard(ctx, userText, activeGameNeedsRandomDraw);
+  const activeGame = await loadActiveGameSession(ctx, executionText);
+  const activeGameNeedsRandomDraw = activeGameActionNeedsRandomDraw(activeGame, executionText);
+  const randomOutcomeGuard = new RandomOutcomeGuard(ctx, executionText, activeGameNeedsRandomDraw);
   const richPresentationOutcomeGuard = new RichPresentationOutcomeGuard(ctx);
   if (activeGame?.actionRequested) randomOutcomeGuard.noteActiveWager(activeGame.wager.id);
-  const freshExternalDataGuard = new FreshExternalDataGuard(ctx, userText);
-  const publicUrlEvidenceGuard = new PublicUrlEvidenceGuard(ctx, userText);
+  const freshExternalDataGuard = new FreshExternalDataGuard(ctx, executionText);
+  const publicUrlEvidenceGuard = new PublicUrlEvidenceGuard(ctx, executionText);
   const response = await execute({
     randomOutcomeGuard,
     freshExternalDataGuard,
@@ -63,9 +68,21 @@ export async function runGuardedAgentRequest(
     activeGame,
     activeGameNeedsRandomDraw,
     automaticStarterFunds,
-  });
+  }, executionText);
   const urlGroundedResponse = await publicUrlEvidenceGuard.enforce(response);
   const freshResponse = await freshExternalDataGuard.enforce(urlGroundedResponse);
   const randomSafeResponse = await randomOutcomeGuard.enforce(freshResponse);
-  return await richPresentationOutcomeGuard.enforce(randomSafeResponse);
+  const guardedResponse = await richPresentationOutcomeGuard.enforce(randomSafeResponse);
+  return combineModelCommandResponse(agentModelCommand?.response, guardedResponse);
+}
+
+function combineModelCommandResponse(
+  commandResponse: AgentResponse | undefined,
+  response: AgentResponse,
+): AgentResponse {
+  if (!commandResponse) return response;
+  return {
+    ...response,
+    content: `${commandResponse.content}\n\n${response.content}`.trim(),
+  };
 }

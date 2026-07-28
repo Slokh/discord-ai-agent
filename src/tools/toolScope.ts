@@ -9,6 +9,7 @@ import {
   type ToolRegistryEntry,
 } from "./registry.js";
 import { toolForDeployment } from "./toolDeployment.js";
+import { hasAgentModelChangeIntent } from "./agentModelIntent.js";
 
 export type ToolScopeInput = {
   text: string;
@@ -44,6 +45,7 @@ export function selectToolGroups(input: ToolScopeInput): Set<ToolGroup> {
   if (isSpotifyConfigured(input.config) && hasAny(text, SPOTIFY_KEYWORDS)) groups.add("spotify");
   if (isCodegenConfigured(input.config) && (hasAny(text, CODEGEN_KEYWORDS) || (bugInboxIntent && BUG_FIX_INTENT.test(text)))) groups.add("codegen");
   if (hasAny(text, OPS_KEYWORDS)) groups.add("ops");
+  if (hasAgentModelChangeIntent(input.text)) groups.add("ops");
   if (input.replyContext && EMOJI_CONTEXT.test(replyContextText)) groups.add("ops");
   if (input.replyContext && hasAny(text, REPLY_OPS_KEYWORDS)) groups.add("ops");
   if (
@@ -210,7 +212,6 @@ const CODEGEN_KEYWORDS = [
 
 const OPS_KEYWORDS = [
   /\b(status|health|logs?|trace|why.*(failed|slow|hung)|deployment|config|admin|ops)\b/,
-  /\b(?:switch|change|set|reset)\b.{0,40}\b(?:(?:agent|ai|bot|chat)\s+)?model\b/,
   /\b(bot avatar|avatar|profile picture|pfp)\b/,
   /\b(?:custom|server)?\s*(?:emoji|emote)s?\b/,
   /\bwhat can you do\b/,

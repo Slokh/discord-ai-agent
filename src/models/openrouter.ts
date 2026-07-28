@@ -1,12 +1,14 @@
 import type { AppConfig } from "../config/env.js";
 import { durationMs, logger } from "../util/logger.js";
 import { openRouterReasoning, openRouterTemperature, type OpenRouterReasoningEffort } from "./openrouterReasoning.js";
+import { fetchOpenRouterModels, type OpenRouterModel } from "./openrouterModels.js";
 import { transcribeAudioViaOpenRouter, type TranscriptionInput, type TranscriptionResult } from "./openrouterTranscription.js";
 import { extractEstimatedCostUsd, extractTokenUsage, type OpenRouterTokenUsage } from "./openrouterUsage.js";
 
 export type { TranscriptionResult } from "./openrouterTranscription.js";
 export type { OpenRouterReasoningEffort } from "./openrouterReasoning.js";
 export type { OpenRouterTokenUsage } from "./openrouterUsage.js";
+export type { OpenRouterModel } from "./openrouterModels.js";
 export type ChatContentPart =
   | { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } }
   | { type: "image_url"; image_url: { url: string } };
@@ -119,6 +121,14 @@ const MAX_CITATION_TITLE_CHARS = 300;
 
 export class OpenRouterClient {
   constructor(private readonly config: AppConfig["openRouter"]) {}
+
+  async listModels(options: { signal?: AbortSignal } = {}): Promise<OpenRouterModel[]> {
+    return fetchOpenRouterModels(
+      (path, body, timeoutMs, requestOptions) =>
+        this.request(path, body, timeoutMs, requestOptions),
+      options.signal,
+    );
+  }
 
   async chat(input: {
     messages: ChatMessage[];
@@ -340,7 +350,12 @@ export class OpenRouterClient {
     path: string,
     body: Record<string, unknown>,
     timeoutMs: number,
-    options: { retryPolicy?: OpenRouterRetryPolicy; maxAttempts?: number; signal?: AbortSignal } = {}
+    options: {
+      retryPolicy?: OpenRouterRetryPolicy;
+      maxAttempts?: number;
+      signal?: AbortSignal;
+      method?: "GET" | "POST";
+    } = {}
   ): Promise<any> {
     if (!this.config.apiKey) {
       throw new Error("OPENROUTER_API_KEY is required for this operation.");
@@ -365,14 +380,14 @@ export class OpenRouterClient {
       let text: string;
       try {
         response = await fetch(`${this.config.baseUrl}${path}`, {
-          method: "POST",
+          method: options.method ?? "POST",
           headers: {
             Authorization: `Bearer ${this.config.apiKey}`,
             "Content-Type": "application/json",
             "HTTP-Referer": this.config.httpReferer,
             "X-Title": this.config.appTitle
           },
-          body: JSON.stringify(body),
+          body: options.method === "GET" ? undefined : JSON.stringify(body),
           signal: abortController.signal
         });
         // Keep the deadline active until the complete body is consumed. Fetch can

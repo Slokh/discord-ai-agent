@@ -25,6 +25,33 @@ describe("OpenRouterClient", () => {
     vi.useRealTimers();
   });
 
+  it("loads the model catalog with a GET request", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      data: [
+        {
+          id: "anthropic/claude-sonnet-5",
+          name: "Anthropic: Claude Sonnet 5",
+          canonical_slug: "anthropic/claude-sonnet-5",
+        },
+      ],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    await expect(client.listModels()).resolves.toEqual([{
+      id: "anthropic/claude-sonnet-5",
+      name: "Anthropic: Claude Sonnet 5",
+      canonicalSlug: "anthropic/claude-sonnet-5",
+    }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://openrouter.test/api/v1/models",
+      expect.objectContaining({
+        method: "GET",
+        body: undefined,
+      }),
+    );
+  });
+
   it("sends embedding dimensions", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ data: [{ index: 0, embedding: [0.1, 0.2] }] }));
     vi.stubGlobal("fetch", fetchMock);

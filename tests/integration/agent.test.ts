@@ -5011,6 +5011,154 @@ describe("agent router", () => {
     expect(chat).not.toHaveBeenCalled();
   });
 
+  it("switches by verified alias and runs compound work on the new model", async () => {
+    const chat = vi.fn(async (input: { model?: string }) => ({
+      content: "The comparison is ready.",
+      model: input.model ?? "unknown",
+      raw: {},
+      toolCalls: [],
+    }));
+    const setGuildChatModelOverride = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: {
+          chatModel: "moonshotai/kimi-k3",
+          chatFallbackModel: "fallback/recovery",
+        },
+        allowlists: { ownerUserId: "owner", opsUserIds: ["operator"] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride: vi.fn(async () => true),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: {
+        chat,
+        listModels: vi.fn(async () => [
+          { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
+          { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" },
+        ]),
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "owner",
+      userDisplayName: "Owner",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "compound-model-switch",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "switch to sonnet5, then compare MacBook Air vs Neo for Georgia Tech OMSA",
+    );
+
+    expect(response.content).toContain("anthropic/claude-sonnet-5");
+    expect(response.content).toContain("comparison is ready");
+    expect(setGuildChatModelOverride).toHaveBeenCalledWith({
+      guildId: "g",
+      chatModel: "anthropic/claude-sonnet-5",
+      updatedByUserId: "owner",
+    });
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      model: "anthropic/claude-sonnet-5",
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("compare MacBook Air vs Neo"),
+        }),
+      ]),
+    }));
+  });
+
+  it("continues compound work on the old model when the requester cannot switch", async () => {
+    const chat = vi.fn(async (input: { model?: string }) => ({
+      content: "Here is the comparison.",
+      model: input.model ?? "unknown",
+      raw: {},
+      toolCalls: [],
+    }));
+    const setGuildChatModelOverride = vi.fn();
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: { chatModel: "moonshotai/kimi-k3" },
+        allowlists: { ownerUserId: "owner", opsUserIds: ["operator"] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride: vi.fn(),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "friend",
+      userDisplayName: "Friend",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "unauthorized-compound-switch",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "switch to sonnet5, then compare the two laptops",
+    );
+
+    expect(response.content).toContain("restricted");
+    expect(response.content).toContain("Here is the comparison");
+    expect(setGuildChatModelOverride).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      model: "moonshotai/kimi-k3",
+    }));
+  });
+
+  it("handles typo-tolerant standalone model switches without a chat call", async () => {
+    const chat = vi.fn();
+    const setGuildChatModelOverride = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: { chatModel: "moonshotai/kimi-k3" },
+        allowlists: { ownerUserId: "owner", opsUserIds: [] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride: vi.fn(),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: {
+        chat,
+        listModels: vi.fn(async () => [
+          { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
+          { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" },
+        ]),
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "owner",
+      userDisplayName: "Owner",
+      visibleChannelIds: ["c"],
+      requestId: "typo-model-switch",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "USE TOOL TO SWITXH MODEL TO SONNET 5",
+    );
+
+    expect(response.content).toContain("anthropic/claude-sonnet-5");
+    expect(setGuildChatModelOverride).toHaveBeenCalledOnce();
+    expect(chat).not.toHaveBeenCalled();
+  });
+
   it("synthesizes a final answer instead of dumping raw tool output at the tool round limit", async () => {
     const auditTool = vi.fn(async () => undefined);
     let recentCall = 0;
@@ -10010,7 +10158,12 @@ describe("agent router", () => {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined),
       },
-      openRouter: { chat },
+      openRouter: {
+        chat,
+        listModels: vi.fn(async () => [
+          { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
+        ]),
+      },
       guildId: "g",
       channelId: "c",
       userId: "owner",

@@ -71,10 +71,10 @@ export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
 ): Promise<AgentResponse> {
-  return await runGuardedAgentRequest(ctx, userText, async (request) =>
+  return await runGuardedAgentRequest(ctx, userText, async (request, executionText) =>
     runAgentModelLoopInternal(
       ctx,
-      userText,
+      executionText,
       request.randomOutcomeGuard,
       request.freshExternalDataGuard,
       request.publicUrlEvidenceGuard,

@@ -281,8 +281,34 @@ describe("prompt context cost controls", () => {
     expect(guidance).toContain("sports rosters");
     expect(guidance).toContain("Never say you ran a simulation, calculation, search, or tool");
     expect(guidance).toContain("actual purchasable offers");
+    expect(guidance).toContain("A verified date does not establish an exact hour");
+    expect(guidance).toContain("related patch or event");
     expect(guidance).toContain("ask the shortest necessary follow-up");
     expect(chatMessages("find current fares", "").map((message) => String(message.content)).join("\n")).toContain("Current UTC date:");
+  });
+
+  it("injects live current-message mention identities without importing old nicknames", () => {
+    const prompt = chatMessages(
+      "when can I play with <@friend-id>?",
+      "",
+      [],
+      undefined,
+      [],
+      undefined,
+      {
+        userId: "requester-id",
+        userDisplayName: "Requester",
+        mentionedUsers: [{
+          userId: "friend-id",
+          mention: "<@friend-id>",
+          username: "friend_user",
+          displayName: "Friend",
+        }],
+      },
+    ).map((message) => String(message.content)).join("\n");
+
+    expect(prompt).toContain('<@friend-id> = display name "Friend", username "friend_user", user ID friend-id');
+    expect(prompt).toContain("never import or invent one from unrelated channel memory");
   });
 
   it("keeps prior tool-result bodies out of model context even for reply follow-ups", () => {
@@ -295,7 +321,7 @@ describe("prompt context cost controls", () => {
     const defaultMessages = chatMessages("what now", "", [toolMessage]);
     const defaultPrompt = defaultMessages.map((message) => String(message.content)).join("\n");
     expect(defaultPrompt).not.toContain("VERY LARGE PRIOR TOOL BODY");
-    expect(defaultPrompt).toContain("Earlier searchDiscordHistory result omitted");
+    expect(defaultPrompt).toContain("A historical searchDiscordHistory tool result exists");
 
     const replyMessages = chatMessages("what now", "", [toolMessage], {
       messageId: "parent",
@@ -314,7 +340,20 @@ describe("prompt context cost controls", () => {
     });
     const replyPrompt = replyMessages.map((message) => String(message.content)).join("\n");
     expect(replyPrompt).not.toContain("VERY LARGE PRIOR TOOL BODY");
-    expect(replyPrompt).not.toContain("Earlier searchDiscordHistory result omitted");
+    expect(replyPrompt).not.toContain("A historical searchDiscordHistory tool result exists");
+  });
+
+  it("does not embed user-visible provenance labels in historical assistant memory", () => {
+    const messages = chatMessages("what did you say?", "", [
+      conversationMessage({
+        role: "assistant",
+        content: "The launch is tomorrow.",
+      }),
+    ]);
+    const prompt = messages.map((message) => String(message.content)).join("\n");
+
+    expect(prompt).toContain("The launch is tomorrow.");
+    expect(prompt).not.toContain("[Earlier Discord AI Agent reply");
   });
 
   it("keeps initial system context before session conversation roles", () => {

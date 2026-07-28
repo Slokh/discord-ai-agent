@@ -16,6 +16,7 @@ import type { DiscordReplyContext } from "../tools/types.js";
 import { durationMs } from "../util/logger.js";
 import { visibleChannelIdsForMember } from "./permissions.js";
 import { discordChannelThreadKey, explicitChannelMentionIds, explicitUserMentionIds } from "./mentionParsing.js";
+import { mentionedUserIdentitiesFromMessage } from "./mentionedUsers.js";
 import { discordAttachmentContextsFromMessage, resolveDiscordReplyContext, REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT } from "./replyContext.js";
 import type { DiscordResponseSink } from "./responseSink.js";
 import {
@@ -69,6 +70,7 @@ export async function prepareDiscordAgentTurn(input: {
   const member = requesterMember;
   const mentionedChannelIds = explicitChannelMentionIds(input.request.rawContent);
   const mentionedUserIds = explicitUserMentionIds(input.request.rawContent, botUserId);
+  const mentionedUsers = mentionedUserIdentitiesFromMessage(input.message, mentionedUserIds);
   const referencedChannelId = input.message.reference?.channelId ?? null;
   const visibleChannelIds = await visibleChannelIdsForMember(guild, member, [
     input.message.channelId,
@@ -179,6 +181,7 @@ export async function prepareDiscordAgentTurn(input: {
     messageCreatedAt: input.message.createdAt,
     visibleChannelIds,
     mentionedUserIds,
+    mentionedUsers,
     mentionedChannelIds,
     replyContext,
     requestAttachments,

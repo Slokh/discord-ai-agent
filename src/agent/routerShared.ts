@@ -48,5 +48,9 @@ export async function reserveModelCall(
 }
 
 export function cleanFinalModelResponse(content: string) {
-  return content.trim() || "Done.";
+  const cleaned = content.trim().replace(
+    /\[(?:Earlier Discord AI Agent reply; not authoritative for Discord facts|Earlier [^\]\r\n]+ result(?:; not authoritative unless refreshed| omitted(?:\.[^\]\r\n]*)?))\]\s*/gi,
+    "",
+  ).trim();
+  return cleaned || "Done.";
 }

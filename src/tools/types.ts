@@ -34,6 +34,7 @@ export type ToolContext = {
   }>;
   visibleChannelIds: string[];
   mentionedUserIds?: string[];
+  mentionedUsers?: DiscordMentionedUserIdentity[];
   mentionedChannelIds?: string[];
   threadKey?: string;
   sessionMessages?: ConversationMessage[];
@@ -105,6 +106,13 @@ export type ToolContext = {
   /** Aborted when the enclosing Discord request times out; late work must not execute tools. */
   abortSignal?: AbortSignal;
   noteProgress?: () => void;
+};
+
+export type DiscordMentionedUserIdentity = {
+  userId: string;
+  mention: string;
+  username: string | null;
+  displayName: string | null;
 };
 
 export type DiscordGuildMemberSummary = {

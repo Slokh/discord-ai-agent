@@ -39,10 +39,8 @@ import {
 } from "./freshExternalDataGuard.js";
 import { MemberAvailabilityGuard } from "./memberAvailabilityGuard.js";
 import {
-  currentScopedToolset,
-  expandToolsetState,
-  handleAdditionalToolsRequest,
-  initialToolsetState,
+  currentScopedToolset, expandToolsetState, forcedAgentMemoryToolForPrompt,
+  handleAdditionalToolsRequest, initialToolsetState,
 } from "./modelToolset.js";
 import { wagerHistoryRouteForPrompt, walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
 import { walletActionToolForPrompt } from "./walletActionGuard.js";
@@ -116,6 +114,7 @@ async function runAgentModelLoopInternal(
     {
       userId: ctx.userId,
       userDisplayName: ctx.userDisplayName,
+      mentionedUsers: ctx.mentionedUsers,
     },
     promptOverlay,
     discordEmojiContext,
@@ -279,7 +278,8 @@ async function runAgentModelLoopInternal(
         imageGenerationGuard.takeForcedTool() ?? imageEvidenceGuard.takeForcedTool() ??
         (round === 0 ? forcedWalletActionTool : null) ??
         forcedRandomAction.takeToolForRound(round) ??
-        (round === 0 ? forcedMediaTranscriptionTool : null);
+        (round === 0 ? forcedMediaTranscriptionTool : null) ??
+        (round === 0 ? forcedAgentMemoryToolForPrompt(text) : null);
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;

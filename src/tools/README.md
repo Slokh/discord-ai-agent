@@ -12,6 +12,7 @@ Owns model-facing local tool contracts and implementations.
 - `toolDeployment.ts`: applies and caches deployment capability narrowing once for both the model-visible schema and runtime validator (currently wallet-backed wager fields and configured premium Discord SKUs).
 - `agentTaskTools.ts`: model-facing code-update task creation, status, retry/cancel, deployment status, and task log snippets.
 - `agentTaskFormatting.ts`: code-update task titles, task result messages, compact timing/cache lines, and shared duration formatting.
+- `agentMemoryIntent.ts`: narrowly recognizes questions and disputes about the bot's own prior wording so the model loop uses `getRecentAgentMemory` instead of human-authored Discord history or runtime-debugging tools.
 - `discordHistoryFormatting.ts`: Discord history search syntax, date coercion, no-results text, and history evidence/summary formatting.
 - `discordFileTools.ts`: permission-aware Discord attachment selection, fresh CDN URL resolution, bounded downloads, inspection events, and audit logging.
 - `fileInspection.ts`: bounded in-memory file detection and parsing for text, JSON, Office Open XML, ZIP, images, PDFs, unknown binaries, and iRacing `.sto` setup notes.

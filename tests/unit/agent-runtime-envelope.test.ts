@@ -26,6 +26,12 @@ describe("agent runtime envelope", () => {
       messageCreatedAt: new Date("2026-07-01T12:00:00Z"),
       visibleChannelIds: ["channel", "other-channel"],
       mentionedUserIds: ["friend"],
+      mentionedUsers: [{
+        userId: "friend",
+        mention: "<@friend>",
+        username: "friend_user",
+        displayName: "Friend",
+      }],
       mentionedChannelIds: ["other-channel"],
       replyContext: null,
       requestAttachments: [
@@ -54,6 +60,12 @@ describe("agent runtime envelope", () => {
         messageCreatedAt: "2026-07-01T12:00:00.000Z",
         visibleChannelIds: ["channel", "other-channel"],
         mentionedUserIds: ["friend"],
+        mentionedUsers: [{
+          userId: "friend",
+          mention: "<@friend>",
+          username: "friend_user",
+          displayName: "Friend",
+        }],
         mentionedChannelIds: ["other-channel"],
         delivery: { statusChannelId: "channel", statusMessageId: "status-message" },
         createdAt: "2026-07-01T12:00:01.000Z"

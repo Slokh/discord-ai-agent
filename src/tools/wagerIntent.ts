@@ -20,6 +20,10 @@ const GAME_LED_STANDARD_WAGER = new RegExp(
   "i",
 );
 const ACTION_LED_WAGER = /\b(?:bet|wager|stake|risk|put|play|deal|flip)\b/i;
+const AMOUNT_LED_WAGER = new RegExp(
+  String.raw`^\s*\$?\s*(${AMOUNT_SOURCE})\s*(?:usd|dollars?|bucks?)?\s+(?:bet|wager|stake|risk)\b`,
+  "i",
+);
 const WAGER_DISCUSSION =
   /^\s*(?:what|which|why|how|should|would|could|is|are|do\s+(?:you|i|we|they)|does|did|explain)\b/i;
 const GAME_LED_WAGER_DISCUSSION =
@@ -166,6 +170,8 @@ function coinSide(text: string): "heads" | "tails" | undefined {
 }
 
 function explicitMoneyAmount(text: string): number | null {
+  const amountLed = text.match(AMOUNT_LED_WAGER);
+  if (amountLed) return positiveAmount(amountLed[1]);
   const dollar = text.match(new RegExp(String.raw`\$\s*(${AMOUNT_SOURCE})\b`, "i"));
   if (dollar) return positiveAmount(dollar[1]);
   const leadingDecimal = text.match(new RegExp(String.raw`(?<![\w.])(\.\d+)\b`, "i"));

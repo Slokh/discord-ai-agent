@@ -37,6 +37,7 @@ import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
 } from "./freshExternalDataGuard.js";
+import { MemberAvailabilityGuard } from "./memberAvailabilityGuard.js";
 import {
   currentScopedToolset,
   expandToolsetState,
@@ -66,7 +67,6 @@ import { ImageEvidenceGuard, ImageGenerationGuard, ReplyContextEvidenceGuard } f
 import { runGuardedAgentRequest } from "./modelLoopRequest.js";
 import { completeAfterToolRoundLimit } from "./modelLoopLimit.js";
 import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
-
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
@@ -96,7 +96,7 @@ async function runAgentModelLoopInternal(
   automaticStarterFunds: string | null,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
-  const imageEvidenceGuard = new ImageEvidenceGuard(ctx, userText), imageGenerationGuard = new ImageGenerationGuard(ctx, userText), replyContextEvidenceGuard = new ReplyContextEvidenceGuard(ctx);
+  const imageEvidenceGuard = new ImageEvidenceGuard(ctx, userText), imageGenerationGuard = new ImageGenerationGuard(ctx, userText), replyContextEvidenceGuard = new ReplyContextEvidenceGuard(ctx), memberAvailabilityGuard = new MemberAvailabilityGuard(ctx);
   const compoundToolCompletion = new CompoundToolCompletionGuard(userText);
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
@@ -497,6 +497,8 @@ async function runAgentModelLoopInternal(
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
         });
       }
+      const memberAvailabilityDecision = await memberAvailabilityGuard.handleDraft(response.content, messages);
+      if (memberAvailabilityDecision === "retry") continue; if (memberAvailabilityDecision !== "allow") return memberAvailabilityDecision;
       const freshExternalDataDecision = await freshExternalDataGuard.inspectDraft(response.content);
       if (freshExternalDataDecision !== "allow") {
         if (freshExternalDataDecision === "retry") {
@@ -548,7 +550,6 @@ async function runAgentModelLoopInternal(
         recoveryState,
       });
     }
-
     await recordAgentEvent(ctx, {
       audit: {
         guildId: ctx.guildId,
@@ -785,7 +786,6 @@ async function runAgentModelLoopInternal(
       });
     }
   }
-
   return await completeAfterToolRoundLimit(ctx, {
     text,
     messages,

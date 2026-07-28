@@ -1,4 +1,7 @@
-import type { ChatResult } from "../models/openrouter.js";
+import type {
+  ChatResult,
+  OpenRouterUrlCitation,
+} from "../models/openrouter.js";
 import type { ScopedToolset } from "../tools/toolScope.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { previewText } from "../util/logger.js";
@@ -22,6 +25,7 @@ const FRESH_EVIDENCE_SERVER_USAGE_KEYS = ["web_search_requests", "web_fetch_requ
 export const FRESH_EXTERNAL_DATA_RETRY_GUIDANCE =
   "Your previous draft was rejected because it answered a time-sensitive request without fresh tool evidence. " +
   "Call web_search now and use dated, bookable, or otherwise verifiable current results. " +
+  "For a claim that a named product or entity does not exist, is not released, or is unavailable, search the exact disputed name and prioritize official primary sources. " +
   "Do not reuse unsupported prices, dates, schedules, availability, or claims from the rejected draft. If the lookup needs a missing parameter, ask one concise follow-up question instead.";
 
 export const FRESH_EXTERNAL_DATA_BLOCKED_RESPONSE =
@@ -32,6 +36,7 @@ export type FreshExternalDataGuardDecision = "allow" | "retry" | "block";
 export class FreshExternalDataGuard {
   private freshEvidenceObserved = false;
   private retryAttempted = false;
+  private urlCitations: OpenRouterUrlCitation[] = [];
 
   constructor(
     private readonly ctx: ToolContext,
@@ -39,6 +44,7 @@ export class FreshExternalDataGuard {
   ) {}
 
   noteModelResponse(response: Pick<ChatResult, "content" | "serverToolUse" | "urlCitations">) {
+    this.urlCitations = response.urlCitations ?? [];
     if (response.content.trim() && hasFreshExternalToolEvidence(response)) {
       this.freshEvidenceObserved = true;
     }
@@ -56,11 +62,16 @@ export class FreshExternalDataGuard {
   }
 
   async inspectDraft(responseContent: string): Promise<FreshExternalDataGuardDecision> {
-    if (!shouldRejectUngroundedFreshData({
+    const inspection = {
       userText: this.userText,
       responseContent,
       freshEvidenceObserved: this.freshEvidenceObserved,
-    })) return "allow";
+      urlCitations: this.urlCitations,
+    };
+    if (!shouldRejectUngroundedFreshData(inspection)) return "allow";
+    if (hasUnsupportedCatalogDenial(inspection)) {
+      this.freshEvidenceObserved = false;
+    }
 
     const retry = !this.retryAttempted;
     this.retryAttempted = true;
@@ -80,6 +91,7 @@ export class FreshExternalDataGuard {
       userText: this.userText,
       responseContent: response.content,
       freshEvidenceObserved: this.freshEvidenceObserved,
+      urlCitations: this.urlCitations,
     })) return response;
     await recordFreshExternalDataGuardEvent(this.ctx, {
       eventName: "agent.fresh_external_data_guard.blocked",
@@ -123,7 +135,9 @@ export function shouldRejectUngroundedFreshData(input: {
   userText: string;
   responseContent: string;
   freshEvidenceObserved: boolean;
+  urlCitations?: OpenRouterUrlCitation[];
 }): boolean {
+  if (hasUnsupportedCatalogDenial(input)) return true;
   if (input.freshEvidenceObserved || !requiresFreshExternalData(input.userText)) return false;
   const response = input.responseContent.trim();
   if (!response) return false;
@@ -134,6 +148,60 @@ export function shouldRejectUngroundedFreshData(input: {
     !UNSUPPORTED_OFFER_VALUE.test(response)
   ) return false;
   return true;
+}
+
+function hasUnsupportedCatalogDenial(input: {
+  userText: string;
+  responseContent: string;
+  urlCitations?: OpenRouterUrlCitation[];
+}) {
+  if (!/\b(?:compare|comparison|versus|vs\.?|buy|choose|recommend|which|best)\b/i.test(input.userText)) {
+    return false;
+  }
+  const deniedSubjects = extractDeniedSubjects(input.responseContent);
+  if (deniedSubjects.length === 0) return false;
+  const evidence = (input.urlCitations ?? [])
+    .map((citation) =>
+      new Set(normalizeEvidenceText(`${citation.title ?? ""} ${citation.url}`).split(" "))
+    );
+  return deniedSubjects.some((subject) => {
+    const tokens = distinctiveSubjectTokens(subject);
+    return tokens.length > 0 && !evidence.some((candidate) =>
+      tokens.every((token) => candidate.has(token))
+    );
+  });
+}
+
+function extractDeniedSubjects(content: string) {
+  const subjects: string[] = [];
+  const quotedDenial =
+    /\b(?:there(?:'s| is)\s+no|no\s+such)\s+["“]([^"”\r\n]{2,80})["”]/gi;
+  for (const match of content.matchAll(quotedDenial)) {
+    if (match[1]) subjects.push(match[1]);
+  }
+  const quotedUnavailable =
+    /["“]([^"”\r\n]{2,80})["”]\s+(?:does not|doesn't|is not|isn't|has not|hasn't)\s+(?:exist|real|released|available|out)\b/gi;
+  for (const match of content.matchAll(quotedUnavailable)) {
+    if (match[1]) subjects.push(match[1]);
+  }
+  return [...new Set(subjects)];
+}
+
+function distinctiveSubjectTokens(subject: string) {
+  const ignored = new Set(["a", "an", "the", "model", "product", "version"]);
+  return normalizeEvidenceText(subject)
+    .split(" ")
+    .filter((token) => token.length > 0 && !ignored.has(token));
+}
+
+function normalizeEvidenceText(value: string) {
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    // A malformed citation URL can still be compared in its original form.
+  }
+  return decoded.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 async function recordFreshExternalDataGuardEvent(

@@ -96,7 +96,7 @@ async function runAgentModelLoopInternal(
   automaticStarterFunds: string | null,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
-  const imageEvidenceGuard = new ImageEvidenceGuard(ctx), imageGenerationGuard = new ImageGenerationGuard(ctx, userText), replyContextEvidenceGuard = new ReplyContextEvidenceGuard(ctx);
+  const imageEvidenceGuard = new ImageEvidenceGuard(ctx, userText), imageGenerationGuard = new ImageGenerationGuard(ctx, userText), replyContextEvidenceGuard = new ReplyContextEvidenceGuard(ctx);
   const compoundToolCompletion = new CompoundToolCompletionGuard(userText);
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };

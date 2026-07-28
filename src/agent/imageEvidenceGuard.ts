@@ -13,11 +13,17 @@ export class ImageEvidenceGuard {
   private attempted = false;
   private forceInspection = false;
 
-  constructor(private readonly ctx: ToolContext) {}
+  constructor(
+    private readonly ctx: ToolContext,
+    userText = "",
+  ) {
+    this.forceInspection = shouldForceContextImageInspection(ctx, userText);
+  }
 
   takeForcedTool() {
     if (!this.forceInspection) return null;
     this.forceInspection = false;
+    this.attempted = true;
     return "inspectDiscordImages" as const;
   }
 
@@ -53,6 +59,25 @@ export function shouldRetryFalseImageRefusal(
     /\b(?:image|picture|photo|screenshot|attachment)\b.{0,80}\b(?:is not|isn't|was not|wasn't)\s+(?:available|accessible|visible)\b/s.test(normalized) ||
     /\b(?:re-?upload|upload|attach|send)\b.{0,80}\b(?:image|picture|photo|screenshot|attachment)\b.{0,40}\b(?:again|here)\b/s.test(normalized);
   return imageSubject.test(normalized) && inaccessibleClaim;
+}
+
+export function shouldForceContextImageInspection(
+  ctx: ToolContext,
+  userText: string,
+) {
+  const currentImages = (ctx.requestAttachments ?? []).filter(isImageAttachment);
+  const directReplyImages = (ctx.replyContext?.chain.at(-1)?.attachments ?? [])
+    .filter(isImageAttachment);
+  if (currentImages.length === 0 && directReplyImages.length === 0) return false;
+
+  const normalized = userText.replace(/[’]/g, "'").trim().toLowerCase();
+  const explicitVisualQuestion =
+    /\b(?:image|picture|photo|screenshot|diagram|chart|meme|visual|attachment)\b/.test(normalized) &&
+    /\b(?:what|why|how|where|who|which|describe|explain|inspect|look|see|show|mean|happen|wrong|different)\b/.test(normalized);
+  const causalReplyFollowUp =
+    directReplyImages.length > 0 &&
+    /\bwhy\s+(?:did|does|is|was|were|would|can|could)\s+(?:you|it|this|that|the)\b/.test(normalized);
+  return explicitVisualQuestion || causalReplyFollowUp;
 }
 
 function hasContextImage(

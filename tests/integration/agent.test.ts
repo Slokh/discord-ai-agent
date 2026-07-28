@@ -2398,6 +2398,78 @@ describe("agent router", () => {
     ]));
   });
 
+  it("rechecks a denied current product when the cited search evidence covers only alternatives", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: 'There is no "Nimbus Note X"; compare Nimbus Note Air and Nimbus Note Pro instead.',
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{
+          url: "https://example.test/nimbus-note-air",
+          title: "Nimbus Note Air",
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Nimbus Note X is currently available, so it belongs in the school comparison.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{
+          url: "https://example.test/nimbus-note-x",
+          title: "Nimbus Note X availability",
+        }],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Nimbus Note X vs Nimbus Note Air vs Nimbus Note Pro for school",
+    );
+
+    expect(response.content).toContain("currently available");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: "required",
+      tools: [expect.objectContaining({ type: "openrouter:web_search" })],
+    }));
+    expect((chat.mock.calls[1]?.[0] as any).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("exact disputed name"),
+      }),
+    ]));
+    expect(traceEvents.some((event) => event.eventName === "agent.fresh_external_data_guard.rejected"))
+      .toBe(true);
+  });
+
   it("still blocks a second ungrounded live-data draft when no fresh evidence was observed", async () => {
     const chat = vi
       .fn()
@@ -6578,6 +6650,102 @@ describe("agent router", () => {
       function: { name: "inspectDiscordImages" },
     });
     expect(traceEvents.some((event) => event.eventName === "agent.image_evidence.retry")).toBe(true);
+  });
+
+  it("inspects a directly replied generated image before explaining its visual outcome", async () => {
+    const imageBytes = Buffer.from("synthetic-generated-image");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(imageBytes, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(imageBytes.length),
+      },
+    })));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-generated-image",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "Why is the blue marker placed there?",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic image places the blue marker beside the orange block.",
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The marker landed there because the composition aligned it with the orange block.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const repliedImage = {
+      messageId: "generated-reply",
+      rootMessageId: "request-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "Generated a synthetic diagram.",
+      attachmentSummaries: ["diagram.png image/png"],
+      attachments: [{
+        id: "diagram",
+        url: "https://cdn.discordapp.com/diagram.png",
+        filename: "diagram.png",
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        toolsetScoping: true,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...repliedImage, chain: [repliedImage] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Why did you put the blue marker there?",
+    );
+
+    expect(response.content).toContain("composition aligned it");
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect((chat.mock.calls[0]?.[0] as any).toolChoice).toEqual({
+      type: "function",
+      function: { name: "inspectDiscordImages" },
+    });
+    const finalMessages = (chat.mock.calls[2]?.[0] as any).messages as Array<{
+      role: string;
+      name?: string;
+      content: string;
+    }>;
+    expect(finalMessages.some((message) =>
+      message.role === "tool" &&
+      message.name === "inspectDiscordImages" &&
+      message.content.includes("blue marker beside the orange block")
+    )).toBe(true);
   });
 
   it("uses the stronger vision path for a current composite image before final synthesis", async () => {

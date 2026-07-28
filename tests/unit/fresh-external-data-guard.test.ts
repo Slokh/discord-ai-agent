@@ -91,4 +91,26 @@ describe("fresh external data guard", () => {
       urlCitations: [{ url: "https://example.com/current-odds" }],
     })).toBe(false);
   });
+
+  it("rejects a current catalog nonexistence claim when citations do not cover the denied item", () => {
+    const prompt = "Nimbus Note X vs Nimbus Note Air vs Nimbus Note Pro for school";
+    expect(shouldRejectUngroundedFreshData({
+      userText: prompt,
+      responseContent: 'There is no "Nimbus Note X"; compare the Air and Pro instead.',
+      freshEvidenceObserved: true,
+      urlCitations: [{
+        url: "https://example.test/nimbus-note-air",
+        title: "Nimbus Note Air",
+      }],
+    })).toBe(true);
+    expect(shouldRejectUngroundedFreshData({
+      userText: prompt,
+      responseContent: 'There is no "Nimbus Note X" in the current catalog.',
+      freshEvidenceObserved: true,
+      urlCitations: [{
+        url: "https://example.test/nimbus-note-x",
+        title: "Nimbus Note X availability",
+      }],
+    })).toBe(false);
+  });
 });

@@ -62,7 +62,7 @@ import { agentChatRequest, timeoutFallbackChatRequest } from "./modelPolicy.js";
 import { executeIndependentToolRoutesInParallel } from "./parallelToolExecution.js";
 import { CompoundToolCompletionGuard } from "./compoundToolCompletion.js";
 import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js";
-import { ImageEvidenceGuard, ImageGenerationGuard } from "./imageEvidenceGuard.js";
+import { ImageEvidenceGuard, ImageGenerationGuard, ReplyContextEvidenceGuard } from "./imageEvidenceGuard.js";
 import { runGuardedAgentRequest } from "./modelLoopRequest.js";
 import { completeAfterToolRoundLimit } from "./modelLoopLimit.js";
 import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
@@ -96,7 +96,7 @@ async function runAgentModelLoopInternal(
   automaticStarterFunds: string | null,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
-  const imageEvidenceGuard = new ImageEvidenceGuard(ctx), imageGenerationGuard = new ImageGenerationGuard(ctx, userText);
+  const imageEvidenceGuard = new ImageEvidenceGuard(ctx), imageGenerationGuard = new ImageGenerationGuard(ctx, userText), replyContextEvidenceGuard = new ReplyContextEvidenceGuard(ctx);
   const compoundToolCompletion = new CompoundToolCompletionGuard(userText);
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
@@ -532,7 +532,7 @@ async function runAgentModelLoopInternal(
         });
       }
       if (await imageGenerationGuard.retryDraft(response.content, messages, round + 1, toolUseCounts.has("generateImage"))) { toolsetState = expandToolsetState(toolsetState, { groups: ["image"] }); continue; }
-      if (await imageEvidenceGuard.retryDraft(response.content, messages, round + 1)) continue;
+      if (await imageEvidenceGuard.retryDraft(response.content, messages, round + 1) || await replyContextEvidenceGuard.retryDraft(text, response.content, messages, round + 1)) continue;
       return await finalizeModelRoundWithoutTools(ctx, {
         round: round + 1,
         roundStartedAt,

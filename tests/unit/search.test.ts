@@ -188,7 +188,7 @@ describe("searchDiscordHistory", () => {
     );
   });
 
-  it("marks the outcome degraded and retries once when the query embedding fails", async () => {
+  it("marks the outcome degraded without repeating a failed query embedding", async () => {
     const keywordResults = [result("a", 1), result("b", 0.9)];
     const repo = {
       getVisibleIndexedChannelIds: async () => ["c"],
@@ -215,8 +215,61 @@ describe("searchDiscordHistory", () => {
     expect(results.map((item) => item.messageId)).toEqual(["a", "b"]);
     expect(results.every((item) => item.matchSources?.includes("keyword"))).toBe(true);
     expect(semanticDegraded).toBe(true);
-    expect(openRouter.embed).toHaveBeenCalledTimes(2);
+    expect(openRouter.embed).toHaveBeenCalledTimes(1);
     expect(repo.vectorSearch).not.toHaveBeenCalled();
+  });
+
+  it("returns recent messages from the same scope when semantic and keyword matching are unavailable", async () => {
+    const recent = [result("recent-scoped", 1)];
+    const repo = {
+      getVisibleIndexedChannelIds: async () => ["c"],
+      keywordSearch: vi.fn(async () => []),
+      vectorSearch: vi.fn(async () => []),
+      recentMessagesFromChannels: vi.fn(async () => recent),
+    };
+    const openRouter = {
+      embed: vi.fn(async () => {
+        throw new Error("OpenRouter request timed out after 4000ms (/embeddings).");
+      }),
+    };
+    const dateFrom = new Date("2026-07-01T00:00:00.000Z");
+    const dateTo = new Date("2026-07-28T23:59:59.999Z");
+
+    const outcome = await searchDiscordHistory({
+      repo: repo as any,
+      openRouter: openRouter as any,
+      config: { maxHistoryResults: 10, openRouter: { apiKey: "key", embeddingModel: "embed" } } as any,
+      search: {
+        guildId: "g",
+        userVisibleChannelIds: ["c"],
+        query: "release",
+        channelIds: ["c"],
+        authorIds: ["member"],
+        dateFrom,
+        dateTo,
+        limit: 10,
+      },
+    });
+
+    expect(outcome).toMatchObject({
+      semanticDegraded: true,
+      recentFallbackUsed: true,
+      results: [expect.objectContaining({
+        messageId: "recent-scoped",
+        matchSources: ["recent_scope"],
+      })],
+    });
+    expect(openRouter.embed).toHaveBeenCalledTimes(1);
+    expect(repo.vectorSearch).not.toHaveBeenCalled();
+    expect(repo.recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({
+      guildId: "g",
+      visibleChannelIds: ["c"],
+      channelIds: ["c"],
+      authorIds: ["member"],
+      dateFrom,
+      dateTo,
+      limit: 10,
+    }));
   });
 
   it("recovers on retry when the vector query times out once", async () => {

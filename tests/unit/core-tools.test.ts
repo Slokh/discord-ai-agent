@@ -1030,12 +1030,13 @@ describe("generateImage", () => {
 
   it("returns a recoverable tool error when the image provider rejects the request", async () => {
     const auditTool = vi.fn(async () => undefined);
+    const generateImageMock = vi.fn(async (_prompt: string) => {
+      throw new OpenRouterHttpError({ status: 400, message: "invalid image parameters" });
+    });
     const ctx = {
       repo: { auditTool },
       openRouter: {
-        generateImage: vi.fn(async () => {
-          throw new OpenRouterHttpError({ status: 400, message: "invalid image parameters" });
-        }),
+        generateImage: generateImageMock,
       },
       guildId: "guild",
       channelId: "channel",
@@ -1047,6 +1048,8 @@ describe("generateImage", () => {
     expect(result).toMatchObject({ status: "error", files: [] });
     expect(result.content).toContain("could not accept that image request");
     expect(result.content).not.toContain("invalid image parameters");
+    expect(generateImageMock).toHaveBeenCalledTimes(2);
+    expect(generateImageMock.mock.calls[1]?.[0]).toContain("REQUEST-COMPATIBILITY RECOVERY PASS");
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "generateImage",
       error: "image_generation_request_rejected",

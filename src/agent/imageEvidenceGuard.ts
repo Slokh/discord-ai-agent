@@ -3,6 +3,7 @@ import type { DiscordAttachmentContext, DiscordReplyContext, ToolContext } from 
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
 export { ImageGenerationGuard } from "./imageGenerationGuard.js";
+export { ReplyContextEvidenceGuard } from "./replyContextEvidenceGuard.js";
 
 export const IMAGE_EVIDENCE_RETRY_GUIDANCE =
   "A permission-visible Discord image is already available in the current request or reply chain. " +

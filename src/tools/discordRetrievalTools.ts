@@ -58,7 +58,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
   const query = (syntaxFilters.query || (hasSyntaxFilters ? "" : question)).trim();
   const effectiveQuery = buildHistoryRetrievalQuery(query);
   const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
-  const { results, semanticDegraded } = await searchDiscordHistory({
+  const { results, semanticDegraded, recentFallbackUsed } = await searchDiscordHistory({
     repo: ctx.repo,
     openRouter: ctx.openRouter,
     config: ctx.config,
@@ -101,7 +101,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
       dateTo: historyFilters.dateTo?.toISOString(),
       hourOfDayUtc
     }),
-    resultSummary: summarizeForAudit({ resultCount: results.length, semanticDegraded })
+    resultSummary: summarizeForAudit({ resultCount: results.length, semanticDegraded, recentFallbackUsed })
   });
 
   const context = formatSearchResults(results);
@@ -119,6 +119,12 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     hourOfDayUtc
   });
   if (!semanticDegraded) return evidence;
+  if (recentFallbackUsed) {
+    return [
+      "Note: semantic matching timed out and exact keywords found nothing. These are recent messages from the exact requested permission and filter scope, included as broader candidates. Verify their relevance before answering and say when the evidence is inconclusive.",
+      evidence,
+    ].join("\n");
+  }
   return [
     "Note: semantic search was unavailable for this query (timeout); these are exact-keyword matches only and may be incomplete.",
     evidence

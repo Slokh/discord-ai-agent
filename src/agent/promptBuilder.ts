@@ -96,6 +96,9 @@ export function chatMessages(
   },
   promptOverlay?: string,
   discordEmojiContext: DiscordEmojiPromptContext = { emojis: [], profiles: [] },
+  agentIdentity?: {
+    displayName: string;
+  },
 ): ChatMessage[] {
   const sessionPromptMessages = sessionMessagesForPrompt(
     replyContext ? [] : sessionMessages,
@@ -120,6 +123,7 @@ export function chatMessages(
         "Use mutating tools only for an explicit request in the current user message. Requester identity, permissions, money, randomness, durability, and delivery are enforced by code; never work around a rejected tool action. " +
         "The final user message is the request to answer. Reply-chain context is primary for relevant follow-ups; prior channel memory is background only and is not authoritative evidence.",
     },
+    ...agentIdentityMessagesForPrompt(agentIdentity),
     ...requesterMessagesForPrompt(requester),
     currentDataGuidance(),
     {
@@ -139,6 +143,21 @@ export function chatMessages(
     ...sessionConversation,
     { role: "user" as const, content: text },
   ];
+}
+
+function agentIdentityMessagesForPrompt(agentIdentity?: {
+  displayName: string;
+}): ChatMessage[] {
+  const displayName = agentIdentity?.displayName.trim();
+  if (!displayName) return [];
+  return [{
+    role: "system",
+    content:
+      `Current Discord bot identity: display name ${JSON.stringify(displayName)}. ` +
+      "For questions about your own name or what the requester should call you, answer with this exact display name. " +
+      "\"Discord AI Agent\" describes your internal role, not your current Discord name. " +
+      "Never take your own name from reply context, channel memory, skills, or model inference.",
+  }];
 }
 
 export function insertInitialSystemContext(

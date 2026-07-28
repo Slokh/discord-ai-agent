@@ -3204,6 +3204,65 @@ describe("agent router", () => {
     expect(requesterIndex).toBeLessThan(skillIndex);
   });
 
+  it("answers its configured Discord name through an unrelated retained reply chain", async () => {
+    const chat = vi.fn(async (request: {
+      messages: Array<{ role: string; content: string }>;
+    }) => {
+      const prompt = request.messages.map((message) => message.content).join("\n");
+      return {
+        content: prompt.includes('Current Discord bot identity: display name "Lantern"')
+          ? "I'm Lantern."
+          : "I'm Discord AI Agent.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const replyChain = Array.from({ length: 7 }, (_, index) => ({
+      messageId: `synthetic-chain-${index}`,
+      channelId: "c",
+      guildId: "g",
+      authorId: index % 2 === 0 ? "bot" : "other-member",
+      authorDisplayName: index % 2 === 0 ? "Lantern" : "Other Member",
+      authorIsBot: index % 2 === 0,
+      content: index % 2 === 0
+        ? "An earlier unrelated assistant response."
+        : "An earlier unrelated member follow-up.",
+      attachmentSummaries: [],
+      attachments: [],
+      reactionSummaries: [],
+      createdAt: `2026-07-28T18:0${index}:00.000Z`,
+      url: null,
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        discord: { botName: "Lantern" },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "current-member",
+      userDisplayName: "Current Member",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: {
+        ...replyChain[6],
+        rootMessageId: replyChain[0].messageId,
+        chain: replyChain,
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what should I call you?");
+
+    expect(response.content).toBe("I'm Lantern.");
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
   it("lets the model route status requests to reportStatus", async () => {
     const ctx = {
       config: { maxReplyChars: 1800, openRouter: { embeddingModel: "test/embed" }, discord: { clientId: "bot" } },

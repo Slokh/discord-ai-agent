@@ -8,8 +8,9 @@ const SUCCESSFUL_DRAW_PREFIX = "Provably fair draw complete.";
 const SUCCESSFUL_WAGER_SETTLEMENT_PREFIX = "The scoped wallet wager settled.";
 
 const REVEAL_RANDOMNESS_INTENT = /\b(?:reveal|verify|prove)\b[\s\S]{0,80}\b(?:random(?:ness)?|fairness|seed|proof|commitment)\b/i;
-const RANDOM_ACTION = "(?:roll|flip|spin|deal|draw|shuffle|pick|choose|select|generate|make|give|play|run|start|bet|wager|stake|risk|put)";
-const RANDOM_TARGET = "(?:random(?:ly)?|dice|d\\d+|coin|heads|tails|red|black|cards?|hand|blackjack|poker|roulette|wheel|craps|slots?|spins?|casino|lottery|raffle|winner|numbers?)";
+const RANDOM_ACTION = "(?:roll|flip|spin|deal|draw|shuffle|pick|choose|select|generate|make|give|play|run|start|bet|wager|stake|risk|put|assign|randomi[sz]e|simulate)";
+const DICE_EXPRESSION = "(?:\\d+\\s*)?d\\s*\\d+(?:\\s*[+-]\\s*\\d+)?";
+const RANDOM_TARGET = `(?:random(?:ly)?|dice|${DICE_EXPRESSION}|coin|heads|tails|red|black|cards?|hand|blackjack|poker|roulette|wheel|craps|slots?|spins?|casino|lottery|raffle|winner|numbers?|permutations?|orders?|sequences?)`;
 const DIRECT_RANDOM_ACTION = new RegExp(`^\\s*(?:please\\s+)?${RANDOM_ACTION}\\b[\\s\\S]{0,160}\\b${RANDOM_TARGET}\\b`, "i");
 const REQUESTED_RANDOM_ACTION = new RegExp(`\\b(?:please|let(?:'s| us)|can you|could you|would you|i want you to|go ahead(?: and)?|for me)\\b[\\s\\S]{0,100}\\b${RANDOM_ACTION}\\b[\\s\\S]{0,100}\\b${RANDOM_TARGET}\\b`, "i");
 const CUSTOM_RANDOM_WAGER = new RegExp(
@@ -18,6 +19,7 @@ const CUSTOM_RANDOM_WAGER = new RegExp(
 );
 const DISCUSSION_PREFIX = /^\s*(?:what|which|why|how|should|is|are|do|does|did|tell|explain)\b/i;
 const EXECUTION_OVERRIDE = /\b(?:please|for me|right now|go ahead|can you|could you|would you|let(?:'s| us))\b/i;
+const BARE_DICE_REQUEST = new RegExp(`^\\s*(?:please\\s+)?${DICE_EXPRESSION}\\s*[.!]?\\s*$`, "i");
 const WHOLE_BALANCE_WAGER = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
 const DISCORD_CUSTOM_EMOJI = /<a?:[A-Za-z0-9_]+:\d+>/g;
 const DISCORD_SNOWFLAKE_METADATA = /<[@#][!&]?\d+>|https?:\/\/(?:www\.)?discord(?:app)?\.com\/channels\/\d+\/\d+\/\d+/gi;
@@ -57,16 +59,31 @@ export const NON_RANDOM_OUTCOME_RETRY_GUIDANCE =
 export const RANDOM_OUTCOME_BLOCKED_RESPONSE =
   "I couldn't complete a verified random draw, so I didn't apply or report an outcome. Try that action again.";
 
-export type RandomOutcomeGuardDecision = "allow" | "retry" | "block";
+export const RANDOM_ACTION_NOT_AUTHORIZED_RESPONSE =
+  "I need an explicit current request to perform a random draw before I can consume verified randomness. For example: \"roll 1d4\" or \"flip a coin\".";
 
-export function randomToolForPrompt(text: string): "drawRandom" | "revealRandomness" | null {
-  if (REVEAL_RANDOMNESS_INTENT.test(text)) return "revealRandomness";
+export type RandomOutcomeGuardDecision = "allow" | "retry" | "block";
+export type RandomRequestIntent = "draw" | "reveal" | null;
+
+/**
+ * The single current-turn classifier for chance requests. Tool exposure stays
+ * broad so unfamiliar valid wording can still reach the model, while this
+ * result controls forcing, retry guards, and the execution-time authorization
+ * boundary before an RNG session or wager is created.
+ */
+export function classifyRandomRequest(text: string): RandomRequestIntent {
+  if (REVEAL_RANDOMNESS_INTENT.test(text)) return "reveal";
   if (isDeferredExternalOutcomeWager(text)) return null;
   const normalized = text.trim();
   if (DISCUSSION_PREFIX.test(normalized) && !EXECUTION_OVERRIDE.test(normalized)) return null;
-  return DIRECT_RANDOM_ACTION.test(normalized) || REQUESTED_RANDOM_ACTION.test(normalized) || CUSTOM_RANDOM_WAGER.test(normalized) || requiresWalletBackedWager(normalized)
-    ? "drawRandom"
+  return BARE_DICE_REQUEST.test(normalized) || DIRECT_RANDOM_ACTION.test(normalized) || REQUESTED_RANDOM_ACTION.test(normalized) || CUSTOM_RANDOM_WAGER.test(normalized) || requiresWalletBackedWager(normalized)
+    ? "draw"
     : null;
+}
+
+export function randomToolForPrompt(text: string): "drawRandom" | "revealRandomness" | null {
+  const intent = classifyRandomRequest(text);
+  return intent === "draw" ? "drawRandom" : intent === "reveal" ? "revealRandomness" : null;
 }
 
 export function randomActionAuthorizedForTurn(input: {

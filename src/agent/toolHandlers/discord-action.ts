@@ -1,5 +1,8 @@
 import { drawRandom, revealRandomness, settleRandomWager } from "../../tools/randomTools.js";
-import { isSuccessfulRandomDrawResult } from "../randomOutcomeGuard.js";
+import {
+  isSuccessfulRandomDrawResult,
+  RANDOM_ACTION_NOT_AUTHORIZED_RESPONSE,
+} from "../randomOutcomeGuard.js";
 import { undoConversationTurns } from "../../tools/agentMemoryTools.js";
 import { cleanResponse } from "../../tools/responseFormatting.js";
 import { stringArgument, stringArrayArgument, numberArgument, recordArgument } from "./arguments.js";
@@ -21,6 +24,14 @@ export const discordActionToolHandlers = {
         };
   },
   "drawRandom": async (ctx, route, originalText) => {
+    if (!ctx.randomActionAuthorized) {
+      return {
+        content: RANDOM_ACTION_NOT_AUTHORIZED_RESPONSE,
+        status: "error",
+        errorCode: "random_action_not_authorized",
+        retryable: false,
+      };
+    }
     const content = cleanResponse(
           await drawRandom(ctx, {
             kind: stringArgument(route.arguments, "kind"),

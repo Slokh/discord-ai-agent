@@ -85,20 +85,20 @@ describe("model toolset", () => {
     );
   });
 
-  it("keeps randomness unavailable across toolset expansion without chance intent", () => {
+  it("keeps provably fair randomness available across toolset expansion", () => {
     const ctx = context();
-    const state = initialToolsetState(ctx, "please continue", false);
+    const state = initialToolsetState(ctx, "please continue");
 
     expect(currentScopedToolset(ctx, state).localTools.some(
       (tool) => tool.name === "drawRandom",
-    )).toBe(false);
+    )).toBe(true);
 
     const expanded = expandToolsetState(state, {
       groups: ["discord-retrieval", "image"],
     });
     expect(currentScopedToolset(ctx, expanded).localTools.some(
       (tool) => tool.name === "drawRandom",
-    )).toBe(false);
+    )).toBe(true);
     expect(currentScopedToolset(ctx, expanded).localTools.some(
       (tool) => tool.name === "generateImage",
     )).toBe(true);

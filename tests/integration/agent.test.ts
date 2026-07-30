@@ -1949,7 +1949,7 @@ describe("agent router", () => {
       }) => {
         const toolNames = request.tools?.map((tool) => tool.function?.name);
         expect(toolNames).toContain("inspectAgentLogs");
-        expect(toolNames).not.toContain("drawRandom");
+        expect(toolNames).toContain("drawRandom");
         return {
           content: "",
           model: "router-model",
@@ -2063,6 +2063,35 @@ describe("agent router", () => {
     };
     expect(request.toolChoice).toEqual({ type: "function", function: { name: "revealRandomness" } });
     expect(request.tools?.some((tool) => tool.function?.name === "revealRandomness")).toBe(true);
+  });
+
+  it("forces drawRandom for canonical dice notation", async () => {
+    const chat = vi.fn(async () => ({
+      content: "I will make the verified draw.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    await handleAgentRequest(ctx, "roll 1d4");
+
+    const request = ((chat.mock.calls as any[])[0]?.[0] ?? {}) as {
+      toolChoice?: unknown;
+      tools?: Array<{ function?: { name?: string } }>;
+    };
+    expect(request.toolChoice).toEqual({ type: "function", function: { name: "drawRandom" } });
+    expect(request.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
   });
 
   it("does not short-circuit a balance-backed roulette wager into tool-free synthesis", async () => {
@@ -6015,7 +6044,7 @@ describe("agent router", () => {
     }) => {
       const toolNames = (request.tools ?? []).map((tool) => tool.function?.name);
       expect(toolNames).toContain("runCodingAgent");
-      expect(toolNames).not.toContain("drawRandom");
+      expect(toolNames).toContain("drawRandom");
       return {
         content: "I’m ready to apply the implementation fix.",
         model: "router-model",
@@ -6066,6 +6095,7 @@ describe("agent router", () => {
 
     expect(response.content).toBe("I’m ready to apply the implementation fix.");
     expect(chat).toHaveBeenCalledTimes(1);
+    expect(ctx.randomActionAuthorized).toBe(false);
   });
 
   it("answers model identity without inheriting unrelated reply-chain URL intent", async () => {
@@ -8620,7 +8650,7 @@ describe("agent router", () => {
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
   });
 
-  it("does not offer randomness to a non-random chart continuation after an initial timeout", async () => {
+  it("does not consume randomness for a non-random chart continuation after an initial timeout", async () => {
     const chartBytes = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
       "base64",
@@ -8645,7 +8675,7 @@ describe("agent router", () => {
           (tool: any) => tool.function?.name,
         );
         expect(request.model).toBe("fast/fallback");
-        expect(toolNames).not.toContain("drawRandom");
+        expect(toolNames).toContain("drawRandom");
         expect(toolNames).toContain("requestAdditionalTools");
         return {
           content: "",

@@ -32,7 +32,7 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { coerceGeneratedCsvProducerRoutes, selectExclusiveWagerTransition, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
-import { ForcedRandomActionRouter, randomActionAuthorizedForTurn, randomToolForPrompt, type RandomOutcomeGuard } from "./randomOutcomeGuard.js";
+import { ForcedRandomActionRouter, randomToolForPrompt, type RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
@@ -109,11 +109,9 @@ async function runAgentModelLoopInternal(
     ctx.config.promptOverlayPath,
   );
   const discordEmojiContext = await prepareDiscordEmojiPromptContext(ctx, text);
-  const randomActionAuthorized = randomActionAuthorizedForTurn({ userText: text, replyContext: ctx.replyContext, promptContextTexts: [serverOverlay?.enabled ? serverOverlay.systemPrompt : "", promptOverlay], activeGameActionRequested: activeGame?.actionRequested });
   const initialToolsetPromptContext = prepareInitialToolsetPromptContext({
     ctx,
     text,
-    randomActionAuthorized,
     activeGame,
     activeGameNeedsRandomDraw,
   });

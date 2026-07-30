@@ -12,7 +12,7 @@ import {
 } from "./activeGameSession.js";
 import { FreshExternalDataGuard } from "./freshExternalDataGuard.js";
 import { PublicUrlEvidenceGuard } from "./publicUrlEvidenceGuard.js";
-import { RandomOutcomeGuard } from "./randomOutcomeGuard.js";
+import { randomActionAuthorizedForTurn, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
@@ -55,6 +55,11 @@ export async function runGuardedAgentRequest(
   const automaticStarterFunds = await ensureAutomaticStarterFunds(ctx);
   const activeGame = await loadActiveGameSession(ctx, executionText);
   const activeGameNeedsRandomDraw = activeGameActionNeedsRandomDraw(activeGame, executionText);
+  ctx.randomActionAuthorized = randomActionAuthorizedForTurn({
+    userText: executionText,
+    replyContext: ctx.replyContext,
+    activeGameActionRequested: activeGame?.actionRequested,
+  });
   const randomOutcomeGuard = new RandomOutcomeGuard(ctx, executionText, activeGameNeedsRandomDraw);
   const richPresentationOutcomeGuard = new RichPresentationOutcomeGuard(ctx);
   if (activeGame?.actionRequested) randomOutcomeGuard.noteActiveWager(activeGame.wager.id);

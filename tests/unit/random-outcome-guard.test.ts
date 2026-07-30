@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  classifyRandomRequest,
   isSuccessfulRandomDrawResult,
   forcedRandomActionRouteForPrompt,
   ForcedRandomActionRouter,
@@ -13,6 +14,13 @@ import {
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("random outcome guard", () => {
+  it("classifies canonical dice notation as a current-turn draw request", () => {
+    expect(classifyRandomRequest("roll 1d4")).toBe("draw");
+    expect(classifyRandomRequest("roll 2d6+3")).toBe("draw");
+    expect(classifyRandomRequest("d20")).toBe("draw");
+    expect(classifyRandomRequest("how do I roll 1d4?")).toBeNull();
+  });
+
   it("routes an explicit fairness reveal to the reveal tool", () => {
     expect(randomToolForPrompt("Reveal randomness")).toBe("revealRandomness");
     expect(randomToolForPrompt("prove the RNG commitment")).toBe("revealRandomness");
@@ -27,6 +35,9 @@ describe("random outcome guard", () => {
     "roulette red 0.40",
     "coinflip 0.15 tails",
     "roll two dice",
+    "roll 1d4",
+    "roll 2d6+3",
+    "d20",
     "please spin the slots for me",
     "can you deal me a blackjack hand?",
     "let's flip a coin",
@@ -65,6 +76,9 @@ describe("random outcome guard", () => {
     })).toBe(false);
     expect(randomActionAuthorizedForTurn({
       userText: "roll two dice",
+    })).toBe(true);
+    expect(randomActionAuthorizedForTurn({
+      userText: "roll 1d4",
     })).toBe(true);
     expect(randomActionAuthorizedForTurn({
       userText: "again",

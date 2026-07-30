@@ -615,7 +615,7 @@ describe("prompt context cost controls", () => {
       "utf8",
     );
 
-    expect(tools.localTools.map((tool) => tool.name)).toEqual(["listTools", "requestAdditionalTools", "drawRandom"]);
+    expect(tools.localTools.map((tool) => tool.name)).toEqual(["listTools", "requestAdditionalTools", "loadSkillContext"]);
     expect(systemBytes).toBeLessThan(4_000);
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("searchDiscordHistory");
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("getDiscordStats");

@@ -216,6 +216,14 @@ export type AgentResponse = {
   errorCode?: string;
   retryable?: boolean;
   limitation?: string;
+  /** Machine-readable tool state for orchestration; never rendered directly to Discord. */
+  outcome?: {
+    kind: string;
+    state: "succeeded" | "failed" | "awaiting_action" | "settled";
+    nextTool?: string;
+    /** A wallet-backed wager is active after this result and requires a typed lifecycle transition. */
+    wagerActive?: boolean;
+  };
   files?: AgentFile[];
   tables?: AgentTable[];
   /** Validated Discord Components V2 presentation rendered by the Discord delivery boundary. */

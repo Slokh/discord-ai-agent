@@ -20,3 +20,4 @@ export function mediaTranscriptionToolForPrompt(
   ));
   return hasAttachment || hasPublicXVideo ? "inspectDiscordFile" : null;
 }
+

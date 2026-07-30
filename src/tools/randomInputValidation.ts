@@ -72,6 +72,15 @@ export function validateWagerInput(input: DrawRandomInput): string | null {
   if (!Number.isFinite(stakeUsd) || (stakeUsd ?? 0) <= 0) return "wager.stakeUsd must be a positive amount.";
   if (!Number.isFinite(maxPayoutUsd) || (maxPayoutUsd ?? -1) < 0) return "wager.maxPayoutUsd must be a non-negative amount that includes any returned stake.";
   if (!game?.trim()) return "wager.game is required.";
+  if (input.wager.interactionMode && input.wager.interactionMode !== "automatic" && input.wager.interactionMode !== "player_decisions") {
+    return "wager.interactionMode must be automatic or player_decisions.";
+  }
+  const rule = input.wager.rule;
+  if (rule) {
+    if (rule.kind === "coin_side" && rule.side !== "heads" && rule.side !== "tails") return "coin_side wager.rule requires side=heads or side=tails.";
+    if (rule.kind === "sum" && (![">=", ">", "<=", "<", "="].includes(rule.operator) || !Number.isSafeInteger(rule.target))) return "sum wager.rule requires an integer target and a valid comparison operator.";
+    if (!["coin_side", "sum", "any_match", "all_distinct"].includes(rule.kind)) return "wager.rule kind is not supported.";
+  }
   if (input.kind === "cards" && /\bblackjack\b/i.test(game)) {
     return (input.count ?? 1) === 3
       ? null

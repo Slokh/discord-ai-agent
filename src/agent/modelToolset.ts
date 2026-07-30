@@ -22,6 +22,7 @@ export type ToolsetState = {
 };
 const scopedToolsetCache = new WeakMap<ToolsetState, ScopedToolset>();
 
+/** Compatibility routing for deployments that explicitly opt out of scoped tools. */
 export function forcedAgentMemoryToolForPrompt(text: string): "getRecentAgentMemory" | null {
   return requiresAgentSelfHistory(text) ? "getRecentAgentMemory" : null;
 }
@@ -82,7 +83,7 @@ export function handleAdditionalToolsRequest(
     content: cleanResponse(
       [
         `Additional tool groups enabled: ${[...scoped.groups].sort().join(", ")}.`,
-        invalidGroups.length > 0 ? `Unrecognized groups (${invalidGroups.join(", ")}) were replaced by all available groups.` : null,
+        invalidGroups.length > 0 ? `Unrecognized groups were not enabled: ${invalidGroups.join(", ")}.` : null,
         `Available tools now: ${scoped.localTools.map((tool) => tool.name).join(", ")}; ${scoped.serverTools.map((tool) => tool.type).join(", ")}.`,
         `Reason: ${reason}`,
       ].filter(Boolean).join("\n"),
@@ -98,10 +99,14 @@ export function expandToolsetState(
   const requestedGroups = stringArrayArgument(args, "groups");
   const validRequestedGroups = requestedGroups?.filter((group): group is ToolGroup => TOOL_GROUPS.includes(group as ToolGroup)) ?? [];
   const hasInvalidRequestedGroup = requestedGroups?.some((group) => !TOOL_GROUPS.includes(group as ToolGroup)) ?? false;
-  const groups = validRequestedGroups.length > 0 && !hasInvalidRequestedGroup ? validRequestedGroups : TOOL_GROUPS;
+  const groups = requestedGroups == null
+    ? TOOL_GROUPS
+    : validRequestedGroups.length > 0 && !hasInvalidRequestedGroup
+      ? validRequestedGroups
+      : [];
   return {
     groups: new Set([...state.groups, ...groups]),
-    expandedAll: validRequestedGroups.length === 0 || hasInvalidRequestedGroup,
+    expandedAll: requestedGroups == null,
   };
 }
 

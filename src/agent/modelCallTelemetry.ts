@@ -215,7 +215,7 @@ function promptMessageSection(message: ChatMessage, index: number, count: number
   if (message.role === "tool") return "current_tool_results";
   if (message.tool_calls?.length) return "current_assistant_tool_calls";
   if (content.startsWith("Current Discord requester:")) return "requester_identity";
-  if (content.startsWith("Loaded skills:")) return "loaded_skills";
+  if (content.startsWith("Available skill inventory:")) return "skill_inventory";
   if (content.startsWith("Private server overlay instructions follow.")) return "server_overlay";
   if (content.startsWith("Deployment prompt overlay instructions follow.")) return "deployment_overlay";
   if (content.startsWith("The current user message is a Discord reply.")) return "reply_chain";

@@ -9,3 +9,4 @@ const AGENT_SELF_HISTORY_PATTERNS = [
 export function requiresAgentSelfHistory(text: string): boolean {
   return AGENT_SELF_HISTORY_PATTERNS.some((pattern) => pattern.test(text));
 }
+

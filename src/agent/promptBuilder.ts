@@ -134,7 +134,7 @@ export function chatMessages(
     currentDataGuidance(),
     {
       role: "system" as const,
-      content: `Loaded skills:\n${skills || "No skills loaded."}`,
+      content: `Available skill inventory:\n${skills || "No skills installed."}\nLoad one named skill only when its procedure materially helps this request.`,
     },
     ...serverOverlayMessagesForPrompt(serverOverlay),
     ...promptOverlayMessagesForPrompt(promptOverlay),

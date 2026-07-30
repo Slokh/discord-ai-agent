@@ -32,6 +32,14 @@ export const discordActionToolHandlers = {
         retryable: false,
       };
     }
+    const wager = recordArgument(route.arguments, "wager") as {
+      playerUserId?: string;
+      stakeUsd?: number;
+      maxPayoutUsd?: number;
+      game?: string;
+      interactionMode?: "automatic" | "player_decisions";
+      rule?: { kind: "coin_side"; side: "heads" | "tails" } | { kind: "sum"; operator: ">=" | ">" | "<=" | "<" | "="; target: number } | { kind: "any_match" } | { kind: "all_distinct" };
+    } | undefined;
     const content = cleanResponse(
           await drawRandom(ctx, {
             kind: stringArgument(route.arguments, "kind"),
@@ -42,12 +50,7 @@ export const discordActionToolHandlers = {
             options: stringArrayArgument(route.arguments, "options"),
             deckCount: numberArgument(route.arguments, "deckCount"),
             reason: stringArgument(route.arguments, "reason"),
-            wager: recordArgument(route.arguments, "wager") as {
-              playerUserId?: string;
-              stakeUsd?: number;
-              maxPayoutUsd?: number;
-              game?: string;
-            } | undefined,
+            wager,
           }),
           ctx.config.maxReplyChars,
         );
@@ -55,6 +58,7 @@ export const discordActionToolHandlers = {
           content,
           status: isSuccessfulRandomDrawResult(content) ? "ok" : "error",
           retryable: !isSuccessfulRandomDrawResult(content),
+          outcome: randomDrawOutcome(content, Boolean(wager)),
         };
   },
   "revealRandomness": async (ctx, route, originalText) => {
@@ -66,8 +70,7 @@ export const discordActionToolHandlers = {
         };
   },
   "settleRandomWager": async (ctx, route, originalText) => {
-    return {
-          content: cleanResponse(
+    const content = cleanResponse(
             await settleRandomWager(ctx, {
               payoutUsd: numberArgument(route.arguments, "payoutUsd"),
               outcome: stringArgument(route.arguments, "outcome") as "player_win" | "player_loss" | "push" | undefined,
@@ -75,8 +78,13 @@ export const discordActionToolHandlers = {
               explanation: stringArgument(route.arguments, "explanation"),
             }),
             ctx.config.maxReplyChars,
-          ),
-        };
+          );
+    return { content, status: content.startsWith("The scoped wallet wager settled.") ? "ok" : "error", outcome: { kind: "wager", state: content.startsWith("The scoped wallet wager settled.") ? "settled" : "failed" } };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
 /* eslint-enable @typescript-eslint/no-unused-vars */
+
+function randomDrawOutcome(content: string, wagerActive: boolean) {
+  if (!isSuccessfulRandomDrawResult(content)) return { kind: "rng_draw", state: "failed" as const };
+  return { kind: "rng_draw", state: "succeeded" as const, wagerActive };
+}

@@ -9,6 +9,7 @@ import {
 } from "./modelToolset.js";
 import type { ActiveGameSessionContext } from "./activeGameSession.js";
 import { scopedToolGuidance, scopedToolGuidanceForToolset } from "./toolGuidance.js";
+import { capabilityIndexForModel } from "../tools/toolScope.js";
 
 export function prepareInitialToolsetPromptContext(input: {
   ctx: ToolContext;
@@ -22,13 +23,20 @@ export function prepareInitialToolsetPromptContext(input: {
     activeGameActionRequested: input.activeGameNeedsRandomDraw,
   });
   let toolsetState = initialToolsetState(input.ctx, input.text);
-  if (input.activeGame || randomActionRequired) {
+  // An already persisted game is durable state, so its continuation tools are
+  // structurally relevant. New-request intent is deliberately left to the
+  // model through the capability index rather than a keyword classifier.
+  if (input.activeGame) {
     toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
   }
   return {
     randomActionRequired,
     toolsetState,
-    toolGuidance: scopedToolGuidanceForToolset(currentScopedToolset(input.ctx, toolsetState)),
+    toolGuidance: [
+      "On-demand capability groups (call requestAdditionalTools before using one):",
+      capabilityIndexForModel(input.ctx.config),
+      scopedToolGuidanceForToolset(currentScopedToolset(input.ctx, toolsetState)),
+    ].filter((value): value is string => Boolean(value)).join("\n\n"),
   };
 }
 

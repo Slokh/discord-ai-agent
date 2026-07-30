@@ -95,7 +95,7 @@ describe("runObservedModelCall", () => {
       chat: {
         messages: [
           { role: "system", content: "base instructions" },
-          { role: "system", content: "Loaded skills:\nNo skills loaded." },
+          { role: "system", content: "Available skill inventory:\nNo repository skills are installed." },
           { role: "user", content: "hello" },
         ],
         tools: [{ type: "function", function: { name: "searchDiscordHistory", parameters: { type: "object" } } }],
@@ -159,13 +159,13 @@ describe("runObservedModelCall", () => {
     expect(promptSectionTelemetry([
       { role: "system", content: "base" },
       { role: "system", content: "Current Discord requester: User" },
-      { role: "system", content: "Loaded skills:\nNo skills loaded." },
+      { role: "system", content: "Available skill inventory:\nNo repository skills are installed." },
       { role: "system", content: "The current user message is a Discord reply. parent" },
       { role: "user", content: "latest" },
     ])).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "base_system_prompt", messageCount: 1 }),
       expect.objectContaining({ name: "requester_identity", messageCount: 1 }),
-      expect.objectContaining({ name: "loaded_skills", messageCount: 1 }),
+      expect.objectContaining({ name: "skill_inventory", messageCount: 1 }),
       expect.objectContaining({ name: "reply_chain", messageCount: 1 }),
       expect.objectContaining({ name: "current_user_request", messageCount: 1 }),
     ]));

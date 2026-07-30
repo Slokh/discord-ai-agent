@@ -1,7 +1,7 @@
 import type { FunctionToolDefinition } from "../models/openrouter.js";
 
 export const TOOL_NAMES = [
-  "listTools", "requestAdditionalTools", "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels",
+  "listTools", "requestAdditionalTools", "loadSkillContext", "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels",
   "searchDiscordHistory", "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",
   "listDiscordBugMarkers", "searchDiscordAttachments", "inspectDiscordFile", "inspectDiscordImages", "getDiscordUserAvatar",
   "getDiscordStats", "getDiscordChannelTopics", "summarizeDiscordHistory", "summarizeDiscordThread", "generateImage",

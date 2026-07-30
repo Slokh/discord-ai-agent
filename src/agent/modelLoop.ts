@@ -2,7 +2,7 @@ import { isOpenRouterTimeoutError, type ChatMessage } from "../models/openrouter
 import { toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
-import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
+import { loadSkills, renderSkillInventoryForPrompt } from "../skills/loader.js";
 import { loadPromptOverlayText } from "./promptOverlay.js";
 import {
   finalizeModelRoundWithoutTools,
@@ -38,10 +38,7 @@ import {
   FreshExternalDataGuard,
 } from "./freshExternalDataGuard.js";
 import { MemberAvailabilityGuard } from "./memberAvailabilityGuard.js";
-import {
-  currentScopedToolset, expandToolsetState, forcedAgentMemoryToolForPrompt,
-  handleAdditionalToolsRequest,
-} from "./modelToolset.js";
+import { currentScopedToolset, expandToolsetState, forcedAgentMemoryToolForPrompt, handleAdditionalToolsRequest } from "./modelToolset.js";
 import { wagerHistoryRouteForPrompt, walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
 import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletReadRoute } from "./deterministicWalletRoute.js";
@@ -50,7 +47,6 @@ import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from ".
 import { compactMessagesForModelFallback, timeoutNeedsExpandedToolRetry } from "./modelTimeoutFallback.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import type { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
-import { mediaTranscriptionToolForPrompt } from "./mediaTranscriptionRoute.js";
 import { PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE, PublicUrlEvidenceGuard } from "./publicUrlEvidenceGuard.js";
 import {
   completeDirectToolResponse,
@@ -62,6 +58,7 @@ import { executeIndependentToolRoutesInParallel } from "./parallelToolExecution.
 import { CompoundToolCompletionGuard } from "./compoundToolCompletion.js";
 import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js";
 import { ImageEvidenceGuard, ImageGenerationGuard, ReplyContextEvidenceGuard } from "./imageEvidenceGuard.js";
+import { mediaTranscriptionToolForPrompt } from "./mediaTranscriptionRoute.js";
 import { runGuardedAgentRequest } from "./modelLoopRequest.js";
 import { completeAfterToolRoundLimit } from "./modelLoopLimit.js";
 import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
@@ -103,7 +100,7 @@ async function runAgentModelLoopInternal(
   const compoundToolCompletion = new CompoundToolCompletionGuard(userText);
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
-  const skills = renderSkillsForPrompt(await loadSkills());
+  const skills = renderSkillInventoryForPrompt(await loadSkills());
   const serverOverlay = await loadServerOverlay(ctx);
   const promptOverlay = await loadPromptOverlayText(
     ctx.config.promptOverlayPath,
@@ -148,17 +145,18 @@ async function runAgentModelLoopInternal(
   };
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
   const wagerResolutionRouter = new WagerResolutionRouter();
-  const forcedWalletReadRoute = wagerHistoryRouteForPrompt(ctx.config, text, ctx.replyContext) ?? walletBalanceRouteForPrompt(ctx.config, text);
-  const requestedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
+  const legacyUnscoped = !ctx.config.toolsetScoping;
+  const forcedWalletReadRoute = legacyUnscoped
+    ? wagerHistoryRouteForPrompt(ctx.config, text, ctx.replyContext) ?? walletBalanceRouteForPrompt(ctx.config, text)
+    : null;
+  const requestedWalletActionTool = legacyUnscoped ? walletActionToolForPrompt(ctx.config, text) : null;
   const forcedWalletActionTool = automaticStarterFunds && requestedWalletActionTool === "requestStarterFunds"
     ? null
     : requestedWalletActionTool;
-  const forcedMediaTranscriptionTool = mediaTranscriptionToolForPrompt(ctx, text);
-  const forcedRandomAction = new ForcedRandomActionRouter(
-    text,
-    Boolean(ctx.config.payments?.userWalletsEnabled),
-    randomActionRequired && randomToolForPrompt(text) !== "revealRandomness",
-  );
+  const forcedMediaTranscriptionTool = legacyUnscoped ? mediaTranscriptionToolForPrompt(ctx, text) : null;
+  const forcedRandomAction = legacyUnscoped
+    ? new ForcedRandomActionRouter(text, Boolean(ctx.config.payments?.userWalletsEnabled), randomActionRequired && randomToolForPrompt(text) !== "revealRandomness")
+    : null;
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -214,13 +212,7 @@ async function runAgentModelLoopInternal(
     },
   });
   if (forcedWalletReadRoute) {
-    return await executeDeterministicWalletReadRoute(ctx, {
-      route: forcedWalletReadRoute,
-      text,
-      requestLogger,
-      startedAt,
-      modelCallBudget,
-    });
+    return await executeDeterministicWalletReadRoute(ctx, { route: forcedWalletReadRoute, text, requestLogger, startedAt, modelCallBudget });
   }
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     const roundStartedAt = Date.now();
@@ -274,9 +266,9 @@ async function runAgentModelLoopInternal(
       const forcedToolThisRound = compoundToolCompletion.takeForcedTool() ??
         imageGenerationGuard.takeForcedTool() ?? imageEvidenceGuard.takeForcedTool() ??
         (round === 0 ? forcedWalletActionTool : null) ??
-        forcedRandomAction.takeToolForRound(round) ??
+        forcedRandomAction?.takeToolForRound(round) ??
         (round === 0 ? forcedMediaTranscriptionTool : null) ??
-        (round === 0 ? forcedAgentMemoryToolForPrompt(text) : null);
+        (legacyUnscoped && round === 0 ? forcedAgentMemoryToolForPrompt(text) : null);
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
@@ -479,7 +471,8 @@ async function runAgentModelLoopInternal(
       if (randomOutcomeDecision !== "allow") {
         if (randomOutcomeDecision === "retry") {
           if (randomOutcomeGuard.requiresRandomWorkflowForTurn()) {
-            forcedRandomAction.forceDrawNextRound();
+            if (forcedRandomAction) forcedRandomAction.forceDrawNextRound();
+            else toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
           }
           messages.push({ role: "assistant", content: response.content });
           messages.push({
@@ -618,9 +611,9 @@ async function runAgentModelLoopInternal(
         : route.name === "requestAdditionalTools"
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
-      forcedRandomAction.noteToolResult(route.name, result.status);
+      forcedRandomAction?.noteToolResult(route.name, result.status);
       richPresentationOutcomeGuard.noteToolResult(route.name);
-      randomOutcomeGuard.noteToolResult(route.name, result.content);
+      randomOutcomeGuard.noteToolResult(route.name, result);
       compoundToolCompletion.noteToolResult(route.name, result);
       publicUrlEvidenceGuard.noteLocalToolResult(route.name, result.status);
       wagerResolutionRouter.arm(randomOutcomeGuard.requiresWagerResolution(), randomOutcomeGuard.requiredWagerResolutionTool());

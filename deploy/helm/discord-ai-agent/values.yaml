@@ -61,7 +61,7 @@ config:
   githubBaseBranch: main
   openRouterChatModel: openai/gpt-5.6-luna
   openRouterChatFallbackModel: openai/gpt-5.6-terra
-  openRouterChatReasoningEffort: high
+  openRouterChatReasoningEffort: medium
   openRouterChatFallbackReasoningEffort: medium
   # Reasoning and visible output share the completion budget; Discord bounds
   # final visible replies.

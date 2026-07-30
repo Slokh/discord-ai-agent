@@ -61,7 +61,7 @@ const defaults = {
   openRouterHttpReferer: "http://localhost",
   openRouterChatModel: "openai/gpt-5.6-luna",
   openRouterChatFallbackModel: "openai/gpt-5.6-terra",
-  openRouterChatReasoningEffort: "high" as ReasoningEffort,
+  openRouterChatReasoningEffort: "medium" as ReasoningEffort,
   openRouterChatFallbackReasoningEffort: "medium" as ReasoningEffort,
   // Reasoning and visible output share the completion budget. Keep enough room
   // for medium reasoning while Discord still bounds final visible replies.

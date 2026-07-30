@@ -13,7 +13,6 @@ import { scopedToolGuidance, scopedToolGuidanceForToolset } from "./toolGuidance
 export function prepareInitialToolsetPromptContext(input: {
   ctx: ToolContext;
   text: string;
-  randomActionAuthorized: boolean;
   activeGame: ActiveGameSessionContext | null;
   activeGameNeedsRandomDraw: boolean;
 }) {
@@ -22,11 +21,7 @@ export function prepareInitialToolsetPromptContext(input: {
     replyContext: input.ctx.replyContext,
     activeGameActionRequested: input.activeGameNeedsRandomDraw,
   });
-  let toolsetState = initialToolsetState(
-    input.ctx,
-    input.text,
-    input.randomActionAuthorized,
-  );
+  let toolsetState = initialToolsetState(input.ctx, input.text);
   if (input.activeGame || randomActionRequired) {
     toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
   }

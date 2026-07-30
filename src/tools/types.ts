@@ -45,6 +45,12 @@ export type ToolContext = {
   requestId?: string;
   /** Exact current user request, available to tools that need request-level validation. */
   requestText?: string;
+  /**
+   * Deterministic current-turn authorization for consuming RNG entropy. The
+   * model may always see drawRandom, but the tool must still reject an
+   * unrequested draw before it creates a session or reserves a wager.
+   */
+  randomActionAuthorized?: boolean;
   /** Discord id of the message that triggered this request; assigned by Discord, not the bot. */
   requestMessageId?: string;
   /** Durable per-guild primary chat-model override loaded before model selection. */

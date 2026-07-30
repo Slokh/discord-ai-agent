@@ -130,6 +130,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
       description: [ctx.requestText, input.reason, input.wager.game].filter(Boolean).join("\n"),
       stakeUsd: input.wager.stakeUsd!,
       maxPayoutUsd: effectiveMaxPayoutUsd!,
+      rule: input.wager.rule,
     });
     if (fairnessError) {
       await auditRng(ctx, "drawRandom", input, fairnessError);
@@ -153,7 +154,7 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     const requestId = ctx.requestId ?? ctx.requestMessageId;
     if (!requestId) return "A stable request id is required before a wallet-backed wager can be reserved.";
     try {
-      wagerInteractionMode = inferWagerInteractionMode(ctx.requestText ?? "", input.wager.game!);
+      wagerInteractionMode = input.wager.interactionMode ?? inferWagerInteractionMode(ctx.requestText ?? "", input.wager.game!);
       wager = await ctx.walletService!.reserveWager(
         {
           requestId,

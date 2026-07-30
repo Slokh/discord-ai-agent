@@ -94,4 +94,25 @@ describe("wallet wager fairness", () => {
       maxPayoutUsd: 2,
     })).toMatch(/100%.*guaranteed profit/i);
   });
+
+  it("evaluates structured rules before the legacy prose compatibility path", () => {
+    expect(validateWagerFairness({
+      kind: "coin",
+      count: 1,
+      description: "a coin wager",
+      rule: { kind: "coin_side", side: "heads" },
+      stakeUsd: 1,
+      maxPayoutUsd: 3,
+    })).toMatch(/expected payout.*exceeds.*stake/i);
+
+    expect(validateWagerFairness({
+      kind: "dice",
+      count: 7,
+      sides: 6,
+      description: "a dice wager",
+      rule: { kind: "any_match" },
+      stakeUsd: 1,
+      maxPayoutUsd: 2,
+    })).toMatch(/100%.*guaranteed profit/i);
+  });
 });

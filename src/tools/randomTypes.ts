@@ -1,3 +1,9 @@
+export type WagerRule =
+  | { kind: "coin_side"; side: "heads" | "tails" }
+  | { kind: "sum"; operator: ">=" | ">" | "<=" | "<" | "="; target: number }
+  | { kind: "any_match" }
+  | { kind: "all_distinct" };
+
 export type DrawRandomInput = {
   kind?: string;
   count?: number;
@@ -12,5 +18,7 @@ export type DrawRandomInput = {
     stakeUsd?: number;
     maxPayoutUsd?: number;
     game?: string;
+    interactionMode?: "automatic" | "player_decisions";
+    rule?: WagerRule;
   };
 };

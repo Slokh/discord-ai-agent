@@ -1,3 +1,5 @@
+import type { WagerRule } from "./randomTypes.js";
+
 const EPSILON = 1e-9;
 const MAX_SUM_ENUMERATION_WORK = 1_000_000;
 const OBVIOUS_GUARANTEED_WIN = /\b(?:guaranteed\s+win|always\s+wins?|cannot\s+lose|can['’]?t\s+lose|unlosable|no\s+losing\s+outcome)\b/i;
@@ -15,6 +17,7 @@ export type WagerFairnessInput = {
   description: string;
   stakeUsd: number;
   maxPayoutUsd: number;
+  rule?: WagerRule;
 };
 
 /**
@@ -55,6 +58,7 @@ export function validateWagerFairness(input: WagerFairnessInput): string | null 
 
 function winProbability(input: WagerFairnessInput): number | null {
   if (OBVIOUS_GUARANTEED_WIN.test(input.description)) return 1;
+  if (input.rule) return structuredRuleProbability(input);
   if (input.kind === "coin") return coinWinProbability(input);
   if (input.kind === "integers") return integerWinProbability(input);
   if (input.kind !== "dice") return null;
@@ -65,6 +69,21 @@ function winProbability(input: WagerFairnessInput): number | null {
   if (ALL_DISTINCT.test(input.description)) return 1 - duplicateProbability(count, sides);
   const sumRule = parseSumRule(input.description);
   return sumRule ? uniformSumProbability(count, 1, sides, sumRule) : null;
+}
+
+function structuredRuleProbability(input: WagerFairnessInput): number | null {
+  const rule = input.rule;
+  if (!rule) return null;
+  if (rule.kind === "coin_side") return input.kind === "coin" && (input.count ?? 1) === 1 ? 0.5 : null;
+  const count = positiveInteger(input.count ?? 1);
+  const bounds = input.kind === "dice"
+    ? { min: 1, max: positiveInteger(input.sides ?? 6) }
+    : { min: input.min, max: input.max };
+  if (count == null || !Number.isSafeInteger(bounds.min) || !Number.isSafeInteger(bounds.max) || bounds.max! < bounds.min!) return null;
+  const outcomes = bounds.max! - bounds.min! + 1;
+  if (rule.kind === "any_match") return duplicateProbability(count, outcomes);
+  if (rule.kind === "all_distinct") return 1 - duplicateProbability(count, outcomes);
+  return uniformSumProbability(count, bounds.min!, bounds.max!, rule);
 }
 
 function integerWinProbability(input: WagerFairnessInput): number | null {

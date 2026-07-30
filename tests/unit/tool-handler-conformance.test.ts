@@ -5,7 +5,7 @@ import { toolRegistry, type ToolName } from "../../src/tools/registry.js";
 import { bindToolHandlers } from "../../src/tools/toolDefinition.js";
 
 const expectedFamilyTools = {
-  core: ["listTools"],
+  core: ["listTools", "loadSkillContext"],
   discordRetrieval: [
     "findDiscordUsers", "findDiscordChannels", "listDiscordBugMarkers", "inspectDiscordFile",
     "summarizeDiscordThread", "getRecentDiscordMessages", "getRecentAgentMemory", "getAgentMemoryStats",

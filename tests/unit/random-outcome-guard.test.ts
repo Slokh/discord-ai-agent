@@ -2,16 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import {
   classifyRandomRequest,
   isSuccessfulRandomDrawResult,
-  forcedRandomActionRouteForPrompt,
-  ForcedRandomActionRouter,
   randomActionAuthorizedForTurn,
   randomActionRequiredForTurn,
-  randomActionNeedsWalletBalance,
   randomToolForPrompt,
   RandomOutcomeGuard,
   shouldRejectUnverifiedRandomOutcome,
 } from "../../src/agent/randomOutcomeGuard.js";
 import type { ToolContext } from "../../src/tools/types.js";
+
+function toolResult(content: string, outcome?: { kind: string; state: "succeeded" | "failed" | "awaiting_action" | "settled"; nextTool?: string; wagerActive?: boolean }) {
+  return { content, outcome };
+}
 
 describe("random outcome guard", () => {
   it("classifies canonical dice notation as a current-turn draw request", () => {
@@ -109,26 +110,6 @@ describe("random outcome guard", () => {
       replyContextTexts,
     })).toBe(false);
 
-    const router = new ForcedRandomActionRouter("tails", true, true);
-    expect(router.takeToolForRound(0)).toBe("drawRandom");
-  });
-
-  it("requires a verified balance before an all-in random wager", () => {
-    expect(randomActionNeedsWalletBalance("put the rest of my balance on roulette")).toBe(true);
-    expect(randomActionNeedsWalletBalance("bet $0.25 on roulette")).toBe(false);
-    expect(forcedRandomActionRouteForPrompt("put the rest of my balance on roulette", true)).toEqual({
-      initialTool: "getWalletBalance",
-      afterWalletBalanceTool: "drawRandom",
-    });
-    expect(forcedRandomActionRouteForPrompt("put $0.25 on roulette", true)).toEqual({
-      initialTool: "drawRandom",
-      afterWalletBalanceTool: null,
-    });
-    const router = new ForcedRandomActionRouter("put the rest of my balance on roulette", true);
-    expect(router.takeToolForRound(0)).toBe("getWalletBalance");
-    router.noteToolResult("getWalletBalance");
-    expect(router.takeToolForRound(1)).toBe("drawRandom");
-    expect(router.takeToolForRound(2)).toBeNull();
   });
 
   it.each([
@@ -259,15 +240,15 @@ describe("random outcome guard", () => {
       }
     } as unknown as ToolContext, "bet $1 on a coin flip");
 
-    guard.noteToolResult("drawRandom", [
+    guard.noteToolResult("drawRandom", toolResult([
       "Provably fair draw complete.",
       "Result: heads",
       "Wager wager_abc is reserved."
-    ].join("\n"));
+    ].join("\n"), { kind: "rng_draw", state: "succeeded", nextTool: "settleRandomWager" }));
     expect(guard.requiresWagerResolution()).toBe(true);
     await expect(guard.inspectDraft("Heads — you win $2.")).resolves.toBe("retry");
 
-    guard.noteToolResult("settleRandomWager", "Wager wager_abc settled.\nPayout: $2.");
+    guard.noteToolResult("settleRandomWager", toolResult("Wager wager_abc settled.\nPayout: $2.", { kind: "wager", state: "settled" }));
     expect(guard.requiresWagerResolution()).toBe(false);
     await expect(guard.inspectDraft("Heads — you win $2.")).resolves.toBe("allow");
   });
@@ -276,11 +257,11 @@ describe("random outcome guard", () => {
     const guard = new RandomOutcomeGuard({} as ToolContext, "hit");
     guard.noteActiveWager("wager_abc");
 
-    guard.noteToolResult("awaitRandomWagerAction", [
+    guard.noteToolResult("awaitRandomWagerAction", toolResult([
       "Wallet game paused for player action.",
       "Wager: wager_abc",
       "Allowed actions: hit, stand",
-    ].join("\n"));
+    ].join("\n"), { kind: "wager", state: "awaiting_action" }));
 
     expect(guard.requiresWagerResolution()).toBe(false);
     await expect(guard.inspectDraft("Your total is 16. Hit or stand?")).resolves.toBe("allow");
@@ -288,14 +269,14 @@ describe("random outcome guard", () => {
 
   it("tracks scoped wager lifecycle without exposing an opaque wager id", () => {
     const guard = new RandomOutcomeGuard({} as ToolContext, "again");
-    guard.noteToolResult("drawRandom", [
+    guard.noteToolResult("drawRandom", toolResult([
       "Provably fair draw complete.",
       "Result: heads",
       "The scoped wallet wager is reserved."
-    ].join("\n"));
+    ].join("\n"), { kind: "rng_draw", state: "succeeded", nextTool: "settleRandomWager" }));
     expect(guard.requiresWagerResolution()).toBe(true);
 
-    guard.noteToolResult("settleRandomWager", "The scoped wallet wager settled.\nPayout: $2.");
+    guard.noteToolResult("settleRandomWager", toolResult("The scoped wallet wager settled.\nPayout: $2.", { kind: "wager", state: "settled" }));
     expect(guard.requiresWagerResolution()).toBe(false);
   });
 
@@ -303,12 +284,12 @@ describe("random outcome guard", () => {
     const guard = new RandomOutcomeGuard({} as ToolContext, "Stand");
     guard.noteActiveWager("wager_abc");
 
-    guard.noteToolResult("settleRandomWager", [
+    guard.noteToolResult("settleRandomWager", toolResult([
       "The scoped wallet wager settled.",
       "Payout: $0.04.",
       "Net transfer: $0.02 USD (confirmed).",
       "Calculation: Player 18 beats dealer 17.",
-    ].join("\n"));
+    ].join("\n"), { kind: "wager", state: "settled" }));
 
     expect(guard.requiresWagerResolution()).toBe(false);
     await expect(guard.inspectDraft([
@@ -331,7 +312,7 @@ describe("random outcome guard", () => {
     } as unknown as ToolContext, "Stand");
     guard.noteActiveWager("wager_abc");
 
-    guard.noteToolResult("settleRandomWager", "Settlement rejected: the game is unfinished. No transfer was created.");
+    guard.noteToolResult("settleRandomWager", toolResult("Settlement rejected: the game is unfinished. No transfer was created.", { kind: "wager", state: "failed" }));
 
     expect(guard.requiresWagerResolution()).toBe(true);
     await expect(guard.inspectDraft("You win. Dealer has 17.")).resolves.toBe("retry");
@@ -339,35 +320,32 @@ describe("random outcome guard", () => {
 
   it("requires resolution but lets the model choose settle or pause for an interactive opening draw", () => {
     const guard = new RandomOutcomeGuard({} as ToolContext, "bet $2 on blackjack");
-    guard.noteToolResult("drawRandom", [
+    guard.noteToolResult("drawRandom", toolResult([
       "Provably fair draw complete.",
       "Result: blackjack deal",
       "The scoped wallet wager is reserved.",
       "Required next action: settle a terminal result or persist a genuine player decision.",
-    ].join("\n"));
+    ].join("\n"), { kind: "rng_draw", state: "succeeded", wagerActive: true }));
 
     expect(guard.requiresWagerResolution()).toBe(true);
     expect(guard.requiredWagerResolutionTool()).toBeNull();
   });
 
-  it.each([
-    "awaitRandomWagerAction",
-    "settleRandomWager",
-  ] as const)("forces the declared %s transition after a newly reserved wager draw", (requiredTool) => {
+  it("requires a typed lifecycle transition after a newly reserved wager draw", () => {
     const guard = new RandomOutcomeGuard({} as ToolContext, "bet $1");
-    guard.noteToolResult("drawRandom", [
+    guard.noteToolResult("drawRandom", toolResult([
       "Provably fair draw complete.",
       "Result: verified result",
       "The scoped wallet wager is reserved.",
-      `Required next tool: ${requiredTool}.`,
-    ].join("\n"));
+    ].join("\n"), { kind: "rng_draw", state: "succeeded", wagerActive: true }));
 
     expect(guard.requiresWagerResolution()).toBe(true);
-    expect(guard.requiredWagerResolutionTool()).toBe(requiredTool);
+    expect(guard.requiredWagerResolutionTool()).toBeNull();
 
-    guard.noteToolResult(requiredTool, requiredTool === "awaitRandomWagerAction"
-      ? "Wallet game paused for player action.\nState version: 1"
-      : "The scoped wallet wager settled.\nPayout: $0.");
+    guard.noteToolResult("settleRandomWager", toolResult(
+      "The scoped wallet wager settled.\nPayout: $0.",
+      { kind: "wager", state: "settled" },
+    ));
     expect(guard.requiredWagerResolutionTool()).toBeNull();
   });
 });

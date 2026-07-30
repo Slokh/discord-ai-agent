@@ -3232,7 +3232,7 @@ describe("agent router", () => {
     expect(requesterMessage.content).toContain("name: UserB");
 
     const skillIndex = messages.findIndex(
-      (m) => m.role === "system" && m.content.startsWith("Loaded skills:")
+      (m) => m.role === "system" && m.content.startsWith("Available skill inventory:")
     );
     expect(skillIndex).toBeGreaterThanOrEqual(0);
     expect(requesterIndex).toBeLessThan(skillIndex);

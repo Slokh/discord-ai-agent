@@ -32,7 +32,7 @@ export async function executeWalletToolRoute(
       prompt: stringArgument(route.arguments, "prompt"),
     }), ctx.config.maxReplyChars);
     const succeeded = isSuccessfulAwaitRandomWagerAction(content);
-    return { content, status: succeeded ? "ok" : "error", retryable: !succeeded };
+    return { content, status: succeeded ? "ok" : "error", retryable: !succeeded, outcome: { kind: "wager", state: succeeded ? "awaiting_action" : "failed" } };
   }
   if (route.name === "getWalletBalance") {
     if (!walletBalanceReadAllowedForCurrentScope(originalText, ctx.replyContext)) {

@@ -3072,9 +3072,9 @@ describe("agent router", () => {
       ?.messages ?? [];
     const mainSystemPrompt = messages.find((message) => message.role === "system" && message.content.includes("For Discord replies"))?.content ?? "";
     const replyPrompt = messages.find((message) => message.role === "system" && message.content.includes("The current user message is a Discord reply"))?.content ?? "";
-    expect(mainSystemPrompt).toContain("treat the reply-chain context as primary");
+    expect(mainSystemPrompt).toContain("current message remains the task");
     expect(mainSystemPrompt).toContain("Do not infer birthdays");
-    expect(replyPrompt).toContain("primary context");
+    expect(replyPrompt).toContain("it alone determines the task and subject");
     expect(replyPrompt).toContain("Do not switch to unrelated channel memory");
   });
 
@@ -3083,8 +3083,8 @@ describe("agent router", () => {
       const replyPrompt = request.messages.find(
         (message) => message.role === "system" && message.content.includes("The current user message is a Discord reply")
       )?.content ?? "";
-      expect(replyPrompt).toContain("direct parent as the strongest conversational anchor");
-      expect(replyPrompt).toContain("Resolve vague follow-ups against it");
+      expect(replyPrompt).toContain("direct parent is the strongest conversational anchor for vague references");
+      expect(replyPrompt).toContain("only for a genuinely incomplete follow-up");
       return {
         content: "Nova is more deliberate; River is more spontaneous.",
         model: "chat-model",
@@ -5526,7 +5526,7 @@ describe("agent router", () => {
         const prompt = request.messages.map((message) => message.content).join("\n");
         expect(statsEvidence).toContain("Time basis: UTC");
         expect(statsEvidence).toContain("Observed message timing only");
-        expect(prompt).toContain("preserve the direct parent's task");
+        expect(prompt).toContain("direct parent is the strongest conversational anchor for vague references");
         return {
           content: "River’s indexed messages peak around 20:00 UTC.",
           model: "final-model",
@@ -9748,7 +9748,7 @@ describe("agent router", () => {
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "system",
-            content: expect.stringContaining("The current user message is a Discord reply. Use the oldest-to-newest chain below as primary context")
+            content: expect.stringContaining("The current user message is a Discord reply, and it alone determines the task")
           }),
           expect.objectContaining({ role: "system", content: expect.stringContaining("Author: Alice") }),
           expect.objectContaining({ role: "system", content: expect.stringContaining("Content: should I merge this PR?") }),

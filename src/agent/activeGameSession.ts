@@ -45,7 +45,10 @@ export function injectActiveGameSession(
   messages: ChatMessage[],
   active: ActiveGameSessionContext | null
 ) {
-  if (!active) return;
+  // A reply chain may contain an unresolved game while the current user starts a
+  // complete new request. Only inject the game when this turn selected one of
+  // its durable allowed actions, so it cannot compete with the current task.
+  if (!active?.actionRequested) return;
   const wager = active.wager;
   const state = JSON.stringify(wager.decisionState);
   const content = [

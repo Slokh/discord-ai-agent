@@ -363,6 +363,45 @@ describe("drawRandom", () => {
     await verifyAllDraws(rngRepo, session.id);
   });
 
+  it("ignores an empty provider wager placeholder on a free draw", async () => {
+    const { ctx, rngRepo } = fakeContext({ requestText: "roll 1d4" });
+
+    const response = await drawRandom(ctx, {
+      kind: "dice",
+      count: 1,
+      sides: 4,
+      reason: "1d4 roll",
+      wager: {
+        playerUserId: "user",
+        stakeUsd: 0,
+        maxPayoutUsd: 0,
+        game: "",
+      },
+    });
+
+    expect(response).toContain("Provably fair draw complete.");
+    expect(rngRepo.draws).toHaveLength(1);
+  });
+
+  it("keeps a substantive but invalid wager fail-closed", async () => {
+    const { ctx, rngRepo } = fakeContext({ requestText: "bet $0 on dice" });
+
+    const response = await drawRandom(ctx, {
+      kind: "dice",
+      count: 1,
+      sides: 4,
+      wager: {
+        playerUserId: "user",
+        stakeUsd: 0,
+        maxPayoutUsd: 0,
+        game: "dice",
+      },
+    });
+
+    expect(response).toContain("wager.stakeUsd must be a positive amount");
+    expect(rngRepo.draws).toHaveLength(0);
+  });
+
   it("reshuffles with the requested deck count when it changes", async () => {
     const { ctx, rngRepo } = fakeContext();
 

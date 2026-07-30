@@ -25,7 +25,7 @@ import { ensureAgentTurnOutput } from "./turnOutput.js";
 import { validateWagerFairness } from "./wagerFairness.js";
 import { wagerRequester } from "./wagerRequesterScope.js";
 import { effectiveMaximumPayoutUsd } from "./wagerTerms.js";
-import { validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
+import { normalizeDrawRandomInput, validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
 import type { DrawRandomInput } from "./randomTypes.js";
 import {
   canonicalizeStandardWagerDraw,
@@ -51,6 +51,7 @@ const GAME_LED_WAGER_DISCUSSION =
 const DRAW_KINDS = new Set(["integers", "dice", "coin", "pick", "shuffle", "cards"]);
 
 export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Promise<string> {
+  input = normalizeDrawRandomInput(input);
   if (isDeferredExternalOutcomeWager(ctx.requestText ?? "")) {
     return "This wager depends on a future or third-party outcome, not a draw the bot should perform now. No funds were reserved and no random draw was made. Cross-user deferred wagers are not supported; use a current requester-scoped bot game instead.";
   }

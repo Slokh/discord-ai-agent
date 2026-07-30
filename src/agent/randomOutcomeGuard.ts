@@ -315,9 +315,10 @@ export function shouldRejectUnverifiedRandomOutcome(input: {
     return true;
   }
   if (!LONG_NUMBER.test(response)) return false;
-  return LONG_NUMBER_WITH_OUTCOME_CONTEXT.test(response)
-    || randomToolForPrompt(input.userText) === "drawRandom"
-    || Boolean(input.replyContextText && randomToolForPrompt(input.replyContextText) === "drawRandom");
+  return LONG_NUMBER_WITH_OUTCOME_CONTEXT.test(response) || randomActionRequiredForTurn({
+    userText: input.userText,
+    replyContextTexts: input.replyContextText ? [input.replyContextText] : undefined,
+  });
 }
 
 export async function recordRandomOutcomeGuardEvent(

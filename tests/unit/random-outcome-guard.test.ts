@@ -136,6 +136,24 @@ describe("random outcome guard", () => {
     })).toBe(true);
   });
 
+  it("does not inherit a random guard from a parent for a substantive new request", () => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "what is the stock price today?",
+      replyContextText: "roll the dice",
+      responseContent: "The share price is 123456789012345678 cents.",
+      successfulRandomDraw: false,
+    })).toBe(false);
+  });
+
+  it("inherits a random guard for a terse continuation only", () => {
+    expect(shouldRejectUnverifiedRandomOutcome({
+      userText: "again",
+      replyContextText: "roll the dice",
+      responseContent: "123456789012345678",
+      successfulRandomDraw: false,
+    })).toBe(true);
+  });
+
   it("allows an outcome after a successful drawRandom result", () => {
     expect(shouldRejectUnverifiedRandomOutcome({
       userText: "20 more spins",

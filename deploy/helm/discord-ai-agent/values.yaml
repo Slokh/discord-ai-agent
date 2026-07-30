@@ -59,7 +59,7 @@ config:
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
-  openRouterChatModel: moonshotai/kimi-k3
+  openRouterChatModel: openai/gpt-5.6-luna
   openRouterChatFallbackModel: openai/gpt-5.6-terra
   openRouterChatReasoningEffort: medium
   openRouterChatFallbackReasoningEffort: medium

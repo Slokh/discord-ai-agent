@@ -58,6 +58,20 @@ describe("active game sessions", () => {
     expect(messages[1]?.content).toContain('Saved state: {"playerTotal":18,"dealerUp":"9♦"}');
     expect(messages.at(-1)).toEqual({ role: "user", content: "stand" });
   });
+
+  it("does not inject a pending game's state into an unrelated current request", () => {
+    const messages: ChatMessage[] = [
+      { role: "system", content: "rules" },
+      { role: "user", content: "what is the stock price today?" },
+    ];
+
+    injectActiveGameSession(messages, { wager: wager(), actionRequested: false });
+
+    expect(messages).toEqual([
+      { role: "system", content: "rules" },
+      { role: "user", content: "what is the stock price today?" },
+    ]);
+  });
 });
 
 function context(getActiveGameSession: ReturnType<typeof vi.fn>): ToolContext {

@@ -192,7 +192,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -320,7 +320,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
       },
       repo: {
@@ -443,7 +443,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -526,7 +526,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -574,7 +574,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -634,7 +634,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -692,7 +692,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -761,7 +761,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -842,7 +842,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -941,7 +941,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -995,7 +995,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         allowlists: { ownerUserId: null, opsUserIds: [] },
         payments: {
@@ -1147,7 +1147,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         allowlists: { ownerUserId: null, opsUserIds: [] },
         payments: {
@@ -1454,7 +1454,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         ...(timeoutFirst
           ? { openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" } }
@@ -1623,7 +1623,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1_800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -1751,7 +1751,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {
           chatModel: "openai/gpt-5.6-luna",
           chatFallbackModel: "openai/gpt-5.6-terra",
@@ -1850,7 +1850,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -1898,7 +1898,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "g",
@@ -1981,7 +1981,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1_800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -2044,7 +2044,7 @@ describe("agent router", () => {
       toolCalls: [],
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "g",
@@ -2073,7 +2073,7 @@ describe("agent router", () => {
       toolCalls: [],
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "g",
@@ -2105,7 +2105,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: true, userWalletsEnabled: true, privyAppId: "app", privyAppSecret: "secret" },
       },
@@ -2148,7 +2148,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: { auditTool, recordTraceEvent: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "g",
@@ -2257,7 +2257,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -2312,7 +2312,7 @@ describe("agent router", () => {
         urlCitations: [{ url: "https://example.com/current-fares", title: "Current fares" }],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -2386,7 +2386,7 @@ describe("agent router", () => {
         }],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined),
@@ -2435,7 +2435,7 @@ describe("agent router", () => {
         urlCitations: [{ url: "https://example.com/official-launch", title: "Official launch" }],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined),
@@ -2477,7 +2477,7 @@ describe("agent router", () => {
       urlCitations: [{ url: "https://example.com/current-odds", title: "Current odds" }],
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -2546,7 +2546,7 @@ describe("agent router", () => {
         }],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -2600,7 +2600,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -2656,7 +2656,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool,
         recordTraceEvent: vi.fn(async () => undefined),
@@ -2721,7 +2721,7 @@ describe("agent router", () => {
         },
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined),
@@ -2764,7 +2764,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, toolsetScoping: false, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined),
@@ -5087,7 +5087,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: { chatModel: "slow/primary", utilityModel: "fast/final" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -5174,7 +5174,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         discord: { token: "discord-token" },
         allowlists: { ownerUserId: "u", opsUserIds: ["u"] },
         openRouter: { chatModel: "tool-model", utilityModel: "utility-model" },
@@ -5216,7 +5216,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -5479,7 +5479,7 @@ describe("agent router", () => {
       toolCalls: [{ id: `call-${round}`, name, argumentsText: JSON.stringify(argumentsValue) }]
     });
     const ctx = {
-      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: false, openRouter: {} },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         findDiscordUsers: vi.fn(async () => [{
@@ -5594,7 +5594,7 @@ describe("agent router", () => {
       topChannels: []
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: false, openRouter: {} },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         findDiscordUsers: vi.fn(async () => [{
@@ -5825,7 +5825,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {
           chatModel: "moonshotai/kimi-k3",
           chatFallbackModel: "openai/gpt-5.6-terra",
@@ -5879,7 +5879,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -6073,7 +6073,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         ...codeUpdateTestConfig(),
-        toolsetScoping: true,
+        toolsetScoping: false,
       },
       repo: {
         auditTool: vi.fn(async () => undefined),
@@ -6139,7 +6139,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: { chatModel: "configured/primary-model" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -6209,7 +6209,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -6273,7 +6273,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -6337,7 +6337,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -6432,7 +6432,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -6531,7 +6531,7 @@ describe("agent router", () => {
       config: {
         maxReplyChars: 1800,
         maxHistoryResults: 25,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
       },
       repo: {
@@ -6646,7 +6646,7 @@ describe("agent router", () => {
       config: {
         maxReplyChars: 1800,
         maxHistoryResults: 25,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -6767,7 +6767,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -6886,7 +6886,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7005,7 +7005,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7128,7 +7128,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7226,7 +7226,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7334,7 +7334,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7466,7 +7466,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7591,7 +7591,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7670,7 +7670,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7756,7 +7756,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7836,7 +7836,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -7944,7 +7944,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -8088,7 +8088,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -8237,7 +8237,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -8340,7 +8340,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -8419,7 +8419,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -8604,7 +8604,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -8801,7 +8801,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {
           chatModel: "slow/primary",
           utilityModel: "fast/fallback",
@@ -8906,7 +8906,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -8996,7 +8996,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {
           chatModel: "moonshotai/kimi-k3",
           chatFallbackModel: "openai/gpt-5.6-terra",
@@ -9066,7 +9066,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -9505,7 +9505,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1_800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -9559,7 +9559,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1_800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
@@ -9667,7 +9667,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1_800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         controlUi: { publicUrl: "https://tasks.example.test" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
@@ -10415,7 +10415,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
+        toolsetScoping: false,
         openRouter: {},
         payments: { walletEnabled: true, userWalletsEnabled: true },
       },
@@ -10626,7 +10626,7 @@ function presentationTestContext(chat: ReturnType<typeof vi.fn>) {
   return {
     config: {
       maxReplyChars: 1800,
-      toolsetScoping: true,
+      toolsetScoping: false,
       openRouter: {},
       discord: { premiumSkuIds: [] },
       payments: { walletEnabled: false, userWalletsEnabled: false },

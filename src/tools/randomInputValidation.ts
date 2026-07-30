@@ -5,6 +5,26 @@ const MAX_COUNT = 100;
 const MAX_OPTIONS = 100;
 const MAX_SIDES = 1_000_000;
 
+/**
+ * Some providers emit every optional object from a schema with blank or zero
+ * values. An empty wager is not user intent and must not turn a free draw into
+ * a rejected money action. Preserve any substantive wager fields so genuine
+ * malformed wagers still fail validation rather than being silently changed.
+ */
+export function normalizeDrawRandomInput(input: DrawRandomInput): DrawRandomInput {
+  if (!isEmptyWagerPlaceholder(input.wager)) return input;
+  const withoutWager = { ...input };
+  delete withoutWager.wager;
+  return withoutWager;
+}
+
+function isEmptyWagerPlaceholder(wager: DrawRandomInput["wager"]) {
+  if (!wager) return false;
+  return !wager.game?.trim() &&
+    (wager.stakeUsd == null || wager.stakeUsd === 0) &&
+    (wager.maxPayoutUsd == null || wager.maxPayoutUsd === 0);
+}
+
 export function validateDrawInput(kind: string, input: DrawRandomInput): string | null {
   const count = input.count ?? 1;
   if (!Number.isSafeInteger(count) || count < 1 || count > MAX_COUNT) return `count must be an integer between 1 and ${MAX_COUNT}.`;

@@ -4,6 +4,7 @@ import { isOpenRouterContentFilterError } from "../models/openrouter.js";
 import type { DiscordAgentRequestJob } from "../jobs/queue.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
+import { continuationEvidenceFromResponse } from "../agent/continuationEvidence.js";
 import { agentRuntimeTurnInputText, assertAgentRuntimeTurnEnvelopeScope, loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
@@ -494,7 +495,8 @@ export async function executeDiscordAgentRequest(
           discordUrl: finalReply.url,
           responseRedacted,
           sourceMessageReaction: reactionOutcome?.added[0] ?? null,
-          files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+          files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? [],
+          continuationEvidence: continuationEvidenceFromResponse(response),
         }
       }
     }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to append delivered Discord turn to conversation memory"));

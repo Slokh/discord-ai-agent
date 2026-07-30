@@ -62,6 +62,21 @@ export function injectActiveGameSession(
   insertInitialSystemContext(messages, content);
 }
 
+export function injectAutomaticStarterFunding(
+  messages: ChatMessage[],
+  funding: string | null,
+) {
+  if (!funding) return;
+  insertInitialSystemContext(
+    messages,
+    [
+      "Automatic starter funding succeeded before this request. Treat the following as verified wallet evidence.",
+      funding,
+      "Do not call requestStarterFunds again for this request or repeat the transaction hash; the transfer link is added to the footer. Continue with the user request conversationally.",
+    ].join("\n"),
+  );
+}
+
 function matchesAllowedAction(text: string, actions: string[]) {
   const normalized = text.trim().toLowerCase().replace(/[^a-z0-9\s'-]/g, " ").replace(/\s+/g, " ");
   return actions.some((action) => {

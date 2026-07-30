@@ -8,6 +8,7 @@ import type {
   DiscordReplyContext,
   ToolContext,
 } from "../tools/types.js";
+import { replyContinuationEvidencePrompt } from "./continuationEvidence.js";
 
 export const DISCORD_RESPONSE_STYLE_GUIDANCE =
   "Use Discord Markdown only when it improves clarity. For genuinely tabular multi-column data, use a standard Markdown pipe table; the Discord renderer converts it into an aligned code block. " +
@@ -99,9 +100,14 @@ export function chatMessages(
   agentIdentity?: {
     displayName: string;
   },
+  toolGuidance?: string,
 ): ChatMessage[] {
   const sessionPromptMessages = sessionMessagesForPrompt(
     replyContext ? [] : sessionMessages,
+  );
+  const replyContinuationEvidence = replyContinuationEvidencePrompt(
+    sessionMessages,
+    replyContext,
   );
   const initialSessionContext = sessionPromptMessages.filter(
     (message) => message.role === "system",
@@ -133,8 +139,12 @@ export function chatMessages(
     ...serverOverlayMessagesForPrompt(serverOverlay),
     ...promptOverlayMessagesForPrompt(promptOverlay),
     ...discordGuildEmojiMessagesForPrompt(discordEmojiContext),
+    ...(toolGuidance ? [{ role: "system" as const, content: toolGuidance }] : []),
     ...initialSessionContext,
     ...replyContextMessagesForPrompt(replyContext),
+    ...(replyContinuationEvidence
+      ? [{ role: "system" as const, content: replyContinuationEvidence }]
+      : []),
     ...imageContextMessagesForPrompt(requestAttachments, replyContext),
     {
       role: "system" as const,

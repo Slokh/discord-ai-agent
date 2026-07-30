@@ -30,8 +30,11 @@ import {
 export const SESSION_CONTEXT_MESSAGE_LIMIT = 4;
 export { REPLY_CHAIN_CONTEXT_MESSAGE_LIMIT };
 
-export function sessionContextMessageLimitForReplyContext(replyContext: DiscordReplyContext | null | undefined) {
-  return replyContext ? 0 : SESSION_CONTEXT_MESSAGE_LIMIT;
+export function sessionContextMessageLimitForReplyContext(_replyContext: DiscordReplyContext | null | undefined) {
+  // The query is requester-scoped. Prompt assembly only carries forward compact
+  // continuation pointers tied to the retained reply chain, never general
+  // channel chatter or historical tool bodies.
+  return SESSION_CONTEXT_MESSAGE_LIMIT;
 }
 
 export async function prepareDiscordAgentTurn(input: {
@@ -124,13 +127,11 @@ export async function prepareDiscordAgentTurn(input: {
 
   const sessionStartedAt = Date.now();
   const sessionContextLimit = sessionContextMessageLimitForReplyContext(replyContext);
-  const priorSessionMessages = sessionContextLimit === 0
-    ? []
-    : await input.context.repo.recentConversationMessages({
-        threadKey,
-        limit: sessionContextLimit,
-        requesterAuthorId: requesterId,
-      });
+  const priorSessionMessages = await input.context.repo.recentConversationMessages({
+    threadKey,
+    limit: sessionContextLimit,
+    requesterAuthorId: requesterId,
+  });
   input.requestLogger.info(
     {
       threadKey,
@@ -228,32 +229,23 @@ export async function replayPreparedDiscordAgentTurn(input: {
 }): Promise<PreparedDiscordAgentTurn> {
   const startedAt = Date.now();
   const sessionContextLimit = sessionContextMessageLimitForReplyContext(input.turnEnvelope.replyContext);
-  const replyContextIsolated = sessionContextLimit === 0;
-  let priorSessionMessages = replyContextIsolated
-    ? []
-    : conversationMessagesFromEnvelope(input.turnEnvelope);
-  let turnEnvelope = replyContextIsolated
-    ? replaceAgentRuntimeTurnEnvelopeSessionMessages(input.turnEnvelope, [])
-    : input.turnEnvelope;
+  let priorSessionMessages = conversationMessagesFromEnvelope(input.turnEnvelope);
+  let turnEnvelope = input.turnEnvelope;
   let refreshed = false;
-  if (!replyContextIsolated) {
-    try {
-      priorSessionMessages = await input.context.repo.recentConversationMessages({
-        threadKey: input.turnEnvelope.threadKey,
-        limit: sessionContextLimit,
-        requesterAuthorId: input.turnEnvelope.userId,
-      });
-      turnEnvelope = replaceAgentRuntimeTurnEnvelopeSessionMessages(input.turnEnvelope, priorSessionMessages);
-      refreshed = true;
-    } catch (error) {
-      input.requestLogger.warn({ err: error, threadKey: input.turnEnvelope.threadKey }, "Failed to refresh queued channel memory; using stored envelope memory");
-    }
+  try {
+    priorSessionMessages = await input.context.repo.recentConversationMessages({
+      threadKey: input.turnEnvelope.threadKey,
+      limit: sessionContextLimit,
+      requesterAuthorId: input.turnEnvelope.userId,
+    });
+    turnEnvelope = replaceAgentRuntimeTurnEnvelopeSessionMessages(input.turnEnvelope, priorSessionMessages);
+    refreshed = true;
+  } catch (error) {
+    input.requestLogger.warn({ err: error, threadKey: input.turnEnvelope.threadKey }, "Failed to refresh queued channel memory; using stored envelope memory");
   }
-  const replaySummary = replyContextIsolated
-    ? "Replayed reply-scoped agent turn context"
-    : refreshed
-      ? "Refreshed queued agent turn context"
-      : "Replayed stored agent turn context";
+  const replaySummary = refreshed
+    ? "Refreshed queued agent turn context"
+    : "Replayed stored agent turn context";
   input.requestLogger.info(
     {
       threadKey: turnEnvelope.threadKey,
@@ -261,7 +253,6 @@ export async function replayPreparedDiscordAgentTurn(input: {
       staleSessionMessageCount: input.turnEnvelope.sessionMessages.length,
       visibleChannelCount: turnEnvelope.visibleChannelIds.length,
       sessionContextLimit,
-      replyContextIsolated,
       refreshed,
       durationMs: durationMs(startedAt)
     },
@@ -276,7 +267,6 @@ export async function replayPreparedDiscordAgentTurn(input: {
       staleSessionMessageCount: input.turnEnvelope.sessionMessages.length,
       visibleChannelCount: turnEnvelope.visibleChannelIds.length,
       sessionContextLimit,
-      replyContextIsolated,
       refreshed
     },
     durationMs: durationMs(startedAt)

@@ -10,7 +10,7 @@ import {
   synthesizeFinalAnswerWithoutTools,
 } from "./finalSynthesis.js";
 import {
-  chatMessages, CURRENT_REQUEST_RESPONSE_REMINDER, insertInitialSystemContext, loadServerOverlay, prepareDiscordEmojiPromptContext,
+  chatMessages, CURRENT_REQUEST_RESPONSE_REMINDER, loadServerOverlay, prepareDiscordEmojiPromptContext,
   replyContextAttachmentCount,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -32,7 +32,7 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { coerceGeneratedCsvProducerRoutes, selectExclusiveWagerTransition, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
-import { ForcedRandomActionRouter, randomActionAuthorizedForTurn, randomActionRequiredForTurn, randomToolForPrompt, type RandomOutcomeGuard } from "./randomOutcomeGuard.js";
+import { ForcedRandomActionRouter, randomActionAuthorizedForTurn, randomToolForPrompt, type RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
@@ -40,12 +40,12 @@ import {
 import { MemberAvailabilityGuard } from "./memberAvailabilityGuard.js";
 import {
   currentScopedToolset, expandToolsetState, forcedAgentMemoryToolForPrompt,
-  handleAdditionalToolsRequest, initialToolsetState,
+  handleAdditionalToolsRequest,
 } from "./modelToolset.js";
 import { wagerHistoryRouteForPrompt, walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
 import { walletActionToolForPrompt } from "./walletActionGuard.js";
 import { executeDeterministicWalletReadRoute } from "./deterministicWalletRoute.js";
-import { injectActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
+import { injectActiveGameSession, injectAutomaticStarterFunding, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
 import { compactMessagesForModelFallback, timeoutNeedsExpandedToolRetry } from "./modelTimeoutFallback.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
@@ -65,6 +65,11 @@ import { ImageEvidenceGuard, ImageGenerationGuard, ReplyContextEvidenceGuard } f
 import { runGuardedAgentRequest } from "./modelLoopRequest.js";
 import { completeAfterToolRoundLimit } from "./modelLoopLimit.js";
 import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
+import {
+  appendToolRoundContinuation,
+  expandToolsetPromptContext,
+  prepareInitialToolsetPromptContext,
+} from "./toolsetPromptContext.js";
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
@@ -104,6 +109,16 @@ async function runAgentModelLoopInternal(
     ctx.config.promptOverlayPath,
   );
   const discordEmojiContext = await prepareDiscordEmojiPromptContext(ctx, text);
+  const randomActionAuthorized = randomActionAuthorizedForTurn({ userText: text, replyContext: ctx.replyContext, promptContextTexts: [serverOverlay?.enabled ? serverOverlay.systemPrompt : "", promptOverlay], activeGameActionRequested: activeGame?.actionRequested });
+  const initialToolsetPromptContext = prepareInitialToolsetPromptContext({
+    ctx,
+    text,
+    randomActionAuthorized,
+    activeGame,
+    activeGameNeedsRandomDraw,
+  });
+  const { randomActionRequired, toolGuidance } = initialToolsetPromptContext;
+  let { toolsetState } = initialToolsetPromptContext;
   const messages: ChatMessage[] = chatMessages(
     text,
     skills,
@@ -118,17 +133,9 @@ async function runAgentModelLoopInternal(
     },
     promptOverlay,
     discordEmojiContext, { displayName: ctx.config.discord?.botName ?? "" },
+    toolGuidance,
   );
-  if (automaticStarterFunds) {
-    insertInitialSystemContext(
-      messages,
-      [
-        "Automatic starter funding succeeded before this request. Treat the following as verified wallet evidence.",
-        automaticStarterFunds,
-        "Do not call requestStarterFunds again for this request or repeat the transaction hash; the transfer link is added to the footer. Continue with the user request conversationally.",
-      ].join("\n"),
-    );
-  }
+  injectAutomaticStarterFunding(messages, automaticStarterFunds);
   injectActiveGameSession(messages, activeGame);
   const turnOutput = ensureAgentTurnOutput(ctx);
   const { files, tables } = turnOutput;
@@ -149,11 +156,6 @@ async function runAgentModelLoopInternal(
     ? null
     : requestedWalletActionTool;
   const forcedMediaTranscriptionTool = mediaTranscriptionToolForPrompt(ctx, text);
-  const randomActionRequired = randomActionRequiredForTurn({
-    userText: text,
-    replyContext: ctx.replyContext,
-    activeGameActionRequested: activeGameNeedsRandomDraw,
-  });
   const forcedRandomAction = new ForcedRandomActionRouter(
     text,
     Boolean(ctx.config.payments?.userWalletsEnabled),
@@ -170,9 +172,6 @@ async function runAgentModelLoopInternal(
     channelId: ctx.channelId,
     userId: ctx.userId,
   });
-  const randomActionAuthorized = randomActionAuthorizedForTurn({ userText: text, replyContext: ctx.replyContext, promptContextTexts: [serverOverlay?.enabled ? serverOverlay.systemPrompt : "", promptOverlay], activeGameActionRequested: activeGame?.actionRequested });
-  let toolsetState = initialToolsetState(ctx, text, randomActionAuthorized);
-  if (activeGame || randomActionRequired) toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
   let hasAttemptedTool = false;
   let modelTimeoutFallbackAttempted = false;
   let primaryProviderRejected = false;
@@ -589,6 +588,7 @@ async function runAgentModelLoopInternal(
     );
     const parallelToolResults = await executeIndependentToolRoutesInParallel(ctx, modelRoutes, successfulToolCallKeys, text);
     let redundantToolReason: string | null = null;
+    let expandedToolGuidance: string | undefined;
     for (const route of modelRoutes) {
       ctx.noteProgress?.();
       hasAttemptedTool = true;
@@ -646,7 +646,7 @@ async function runAgentModelLoopInternal(
         });
       }
       if (route.name === "requestAdditionalTools") {
-        toolsetState = expandToolsetState(toolsetState, route.arguments);
+        ({ toolsetState, toolGuidance: expandedToolGuidance } = expandToolsetPromptContext(toolsetState, route.arguments));
       }
       requestLogger.info(
         {
@@ -751,7 +751,7 @@ async function runAgentModelLoopInternal(
         });
       }
     }
-    messages.push({ role: "system", content: CURRENT_REQUEST_RESPONSE_REMINDER });
+    appendToolRoundContinuation(messages, CURRENT_REQUEST_RESPONSE_REMINDER, expandedToolGuidance);
     const compoundCompletion = compoundToolCompletion.takeTerminalAction();
     if (compoundCompletion) {
       return await completeDirectToolResponse(ctx, {

@@ -59,9 +59,9 @@ config:
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
-  openRouterChatModel: moonshotai/kimi-k3
+  openRouterChatModel: openai/gpt-5.6-luna
   openRouterChatFallbackModel: openai/gpt-5.6-terra
-  openRouterChatReasoningEffort: medium
+  openRouterChatReasoningEffort: high
   openRouterChatFallbackReasoningEffort: medium
   # Reasoning and visible output share the completion budget; Discord bounds
   # final visible replies.

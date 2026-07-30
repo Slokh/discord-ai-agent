@@ -67,9 +67,9 @@ describe("config", () => {
         expect(config.discord.premiumSkuIds).toEqual([]);
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
-        expect(config.openRouter.chatModel).toBe("moonshotai/kimi-k3");
+        expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-luna");
         expect(config.openRouter.chatFallbackModel).toBe("openai/gpt-5.6-terra");
-        expect(config.openRouter.chatReasoningEffort).toBe("medium");
+        expect(config.openRouter.chatReasoningEffort).toBe("high");
         expect(config.openRouter.chatFallbackReasoningEffort).toBe("medium");
         expect(config.openRouter.chatMaxTokens).toBe(4_096);
         expect(config.openRouter.chatFallbackMaxTokens).toBe(3_072);

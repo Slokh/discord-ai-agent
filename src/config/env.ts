@@ -59,9 +59,9 @@ const defaults = {
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
   openRouterAppTitle: "Discord AI Agent",
   openRouterHttpReferer: "http://localhost",
-  openRouterChatModel: "moonshotai/kimi-k3",
+  openRouterChatModel: "openai/gpt-5.6-luna",
   openRouterChatFallbackModel: "openai/gpt-5.6-terra",
-  openRouterChatReasoningEffort: "medium" as ReasoningEffort,
+  openRouterChatReasoningEffort: "high" as ReasoningEffort,
   openRouterChatFallbackReasoningEffort: "medium" as ReasoningEffort,
   // Reasoning and visible output share the completion budget. Keep enough room
   // for medium reasoning while Discord still bounds final visible replies.

@@ -4,7 +4,6 @@ import {
   executeAgentModelCommand,
   loadAgentModelOverride,
 } from "../tools/agentModelTools.js";
-import { coinflipWagerClarification } from "../tools/wagerIntent.js";
 import {
   activeGameActionNeedsRandomDraw,
   loadActiveGameSession,
@@ -14,7 +13,6 @@ import { FreshExternalDataGuard } from "./freshExternalDataGuard.js";
 import { PublicUrlEvidenceGuard } from "./publicUrlEvidenceGuard.js";
 import { randomActionAuthorizedForTurn, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
-import { recordAgentEvent } from "./runtimeTranscript.js";
 
 export type AgentModelLoopRequest = {
   randomOutcomeGuard: RandomOutcomeGuard;
@@ -38,20 +36,6 @@ export async function runGuardedAgentRequest(
     return agentModelCommand.response;
   }
   const executionText = agentModelCommand?.continuationText ?? userText;
-  const coinflipClarification = ctx.config.payments?.userWalletsEnabled
-    ? coinflipWagerClarification(executionText)
-    : null;
-  if (coinflipClarification) {
-    await recordAgentEvent(ctx, {
-      eventName: "wallet.wager.clarification_requested",
-      summary: "Requested the missing coinflip side before reserving funds",
-      metadata: { game: "coinflip" },
-    });
-    return combineModelCommandResponse(agentModelCommand?.response, {
-      content: coinflipClarification,
-    });
-  }
-
   const automaticStarterFunds = await ensureAutomaticStarterFunds(ctx);
   const activeGame = await loadActiveGameSession(ctx, executionText);
   const activeGameNeedsRandomDraw = activeGameActionNeedsRandomDraw(activeGame, executionText);

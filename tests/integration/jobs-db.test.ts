@@ -332,7 +332,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       crawlWorker: false,
       embeddingWorker: false,
       taskWorker: false,
-      discordAgentWorker: true,
+      agentRuntimeWorker: true,
       crawler: {
         crawlConfiguredGuild: async () => undefined
       },
@@ -375,7 +375,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
       crawlWorker: false,
       embeddingWorker: false,
       taskWorker: false,
-      discordAgentWorker: false,
+      agentRuntimeWorker: false,
       crawler: {
         crawlConfiguredGuild: async () => undefined
       },

@@ -67,8 +67,7 @@ config:
   # final visible replies.
   openRouterChatMaxTokens: "4096"
   openRouterChatFallbackMaxTokens: "3072"
-  # Also serves as the one-shot fallback when the primary model times out
-  # before any tool has executed.
+  # Used for bounded summaries, compaction, and deployment notes.
   openRouterUtilityModel: openai/gpt-4o-mini
   # Optional. Defaults to GLM 5.2 when empty.
   openRouterCodegenModel: z-ai/glm-5.2
@@ -87,7 +86,6 @@ config:
   memoryCompactionThreshold: "100"
   memoryCompactionKeepRecent: "30"
   crawlScheduleCron: "0 6 * * *"
-  toolsetScoping: "true"
   walletEnabled: "false"
   userWalletsEnabled: "false"
   walletBalancesPublic: "false"
@@ -153,7 +151,7 @@ worker:
     crawl: true
     embedding: true
     task: true
-    discordAgent: true
+    agentRuntime: true
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }

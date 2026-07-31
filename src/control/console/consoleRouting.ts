@@ -15,7 +15,7 @@ export type ConsoleUrlState = {
 export const statusFilters = ["all", "active", "attention", "queued", "running", "failed", "no_changes", "cancelled", "succeeded", "done"] as const;
 export const runKinds = ["all", "codegen", "discord", "crawl", "embedding", "prompt", "workflow", "ops"] as const;
 const detailTabIds: DetailTab[] = ["overview", "timeline", "models", "compare", "terminal", "artifacts", "raw"];
-const managedSearchParams = new Set(["tab", "status", "filter", "kind", "q", "embeddings", "includeEmbeddings"]);
+const managedSearchParams = new Set(["tab", "status", "kind", "q", "embeddings"]);
 
 export function readConsoleUrlState(): ConsoleUrlState {
   const search = new URLSearchParams(window.location.search);
@@ -23,10 +23,10 @@ export function readConsoleUrlState(): ConsoleUrlState {
   return normalizeConsoleUrlState({
     runId: runIdFromLocation(),
     tab: parseTab(search.get("tab")),
-    filter: parseStatusFilter(search.get("status") ?? search.get("filter")),
+    filter: parseStatusFilter(search.get("status")),
     kind,
     query: search.get("q") ?? "",
-    includeEmbeddings: search.get("embeddings") === "1" || search.get("includeEmbeddings") === "1" || kind === "embedding",
+    includeEmbeddings: search.get("embeddings") === "1" || kind === "embedding",
   });
 }
 
@@ -58,15 +58,14 @@ export function runHref(runId: string, tab: DetailTab = "overview") {
 }
 
 export function parseTab(value: string | null): DetailTab {
-  if (value === "calls" || value === "debugger") return "models";
   return detailTabIds.includes(value as DetailTab) ? value as DetailTab : "overview";
 }
 
 function runIdFromLocation() {
-  const match = window.location.pathname.match(/^\/(?:console\/)?runs\/([^/]+)$/);
+  const match = window.location.pathname.match(/^\/runs\/([^/]+)$/);
   return match ? decodeURIComponent(match[1]!) : "";
 }
 
-function runsRoutePrefix() { return window.location.pathname.startsWith("/console/") ? "/console/runs" : "/runs"; }
+function runsRoutePrefix() { return "/runs"; }
 function parseStatusFilter(value: string | null): StatusFilter { return statusFilters.includes(value as StatusFilter) ? value as StatusFilter : "all"; }
 function parseKind(value: string | null): RunKind | "all" { return runKinds.includes(value as RunKind | "all") ? value as RunKind | "all" : "all"; }

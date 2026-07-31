@@ -19,11 +19,6 @@ const DATA_URI_CONTENT_TYPES: Record<string, string> = {
   "image/gif": "image/gif"
 };
 
-export type UpdateBotAvatarResult = {
-  ok: boolean;
-  message: string;
-};
-
 export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarInput = {}): Promise<string> {
   const token = ctx.config.discord.token;
   if (!token) {

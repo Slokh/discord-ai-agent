@@ -1,5 +1,5 @@
 import type { DbPool } from "./pool.js";
-import * as skillsRepository from "./skillsRepository.js";
+import * as serverOverlayRepository from "./serverOverlayRepository.js";
 import * as agentSettingsRepository from "./agentSettingsRepository.js";
 import * as embeddingRepository from "./embeddingRepository.js";
 import * as conversationMemoryRepository from "./conversationMemoryRepository.js";
@@ -18,7 +18,7 @@ export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./dis
 export type { GuildAgentSettings } from "./agentSettingsRepository.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
-// for repository-permissions.test.ts import-compatibility coverage:
+// for repository-permissions.test.ts coverage:
 // c.parent_id = ANY($2::text[]) AND c.type IN (10, 11)
 
 export class DiscordAiAgentRepository {
@@ -37,7 +37,7 @@ export class DiscordAiAgentRepository {
   latestDeploymentRevision(guildId: string) { return deploymentAnnouncementRepository.latestDeploymentRevision(this.pool, guildId); }
   markDeploymentAnnouncementPosted(input: { guildId: string; revision: string; content: string; comparisonUrl: string; discordMessageId: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementPosted(this.pool, input); }
   markDeploymentAnnouncementFailed(input: { guildId: string; revision: string; error: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementFailed(this.pool, input); }
-  getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> { return skillsRepository.getServerOverlay(this.pool, guildId); }
+  getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> { return serverOverlayRepository.getServerOverlay(this.pool, guildId); }
   upsertServerOverlay(input: {
     guildId: string;
     enabled?: boolean;
@@ -45,8 +45,8 @@ export class DiscordAiAgentRepository {
     toolPolicy?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
     updatedBy?: string | null;
-  }): Promise<ServerOverlay> { return skillsRepository.upsertServerOverlay(this.pool, input); }
-  health() { return skillsRepository.health(this.pool); }
+  }): Promise<ServerOverlay> { return serverOverlayRepository.upsertServerOverlay(this.pool, input); }
+  health() { return serverOverlayRepository.health(this.pool); }
   async getRunFeedback(runId: string): Promise<AgentRunFeedback | undefined> {
     const result = await this.pool.query("SELECT * FROM agent_run_feedback WHERE run_id = $1", [runId]);
     return result.rows[0] ? rowToRunFeedback(result.rows[0]) : undefined;
@@ -374,12 +374,6 @@ export class DiscordAiAgentRepository {
     traceId?: string;
     limit: number;
   }): Promise<TaskEvent[]> { return agentTaskRepository.getAgentRuntimeTaskEvents(this.pool, input); }
-  getTaskProgressEvents(input: {
-    guildId: string;
-    visibleChannelIds: string[];
-    traceId?: string;
-    limit: number;
-  }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskProgressEvents(this.pool, input); }
   getAgentRuntimeEventsForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeEvent[]> { return agentTaskRepository.getAgentRuntimeEventsForTrace(this.pool, input); }
   getAgentRuntimeMessagesForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeMessage[]> { return agentTaskRepository.getAgentRuntimeMessagesForTrace(this.pool, input); }
   listAgentRuntimeChatExecutions(input: { limit?: number } = {}): Promise<AgentRuntimeChatExecution[]> { return agentTaskRepository.listAgentRuntimeChatExecutions(this.pool, input); }
@@ -387,7 +381,6 @@ export class DiscordAiAgentRepository {
   getAgentRuntimeArtifactsForExecution(input: { executionId: string; sessionId: string }): Promise<AgentRuntimeArtifactRecord[]> { return agentTaskRepository.getAgentRuntimeArtifactsForExecution(this.pool, input); }
   getAgentRuntimeArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> { return agentTaskRepository.getAgentRuntimeArtifact(this.pool, input); }
   getAgentRuntimeTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getAgentRuntimeTaskEventsForTask(this.pool, input); }
-  getTaskProgressEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskProgressEventsForTask(this.pool, input); }
   getAgentTaskMetrics(): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     agentTaskBacklog: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>;

@@ -88,8 +88,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.memoryCompactionKeepRecent | quote }}
 - name: CRAWL_SCHEDULE_CRON
   value: {{ .Values.config.crawlScheduleCron | quote }}
-- name: TOOLSET_SCOPING
-  value: {{ .Values.config.toolsetScoping | quote }}
 - name: WALLET_ENABLED
   value: {{ .Values.config.walletEnabled | quote }}
 - name: USER_WALLETS_ENABLED

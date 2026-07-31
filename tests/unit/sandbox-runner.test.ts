@@ -225,7 +225,7 @@ describe("sandboxRunner", () => {
     );
   });
 
-  it("humanizes legacy kebab task titles before opening PRs", () => {
+  it("humanizes generated kebab task titles before opening PRs", () => {
     expect(codeUpdatePullRequestTitle("instead-of-replying-with-a-thinking-placeholder--retry")).toBe(
       "Instead of replying with a thinking placeholder"
     );

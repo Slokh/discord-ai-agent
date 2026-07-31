@@ -161,7 +161,7 @@ export async function inspectAgentLogs(
       traceId,
       limit
     }),
-    ctx.repo.getTaskProgressEvents({
+    ctx.repo.getAgentRuntimeTaskEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
       traceId,

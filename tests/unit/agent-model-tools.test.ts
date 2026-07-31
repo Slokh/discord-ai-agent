@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { primaryChatPolicy, recoveryChatPolicy } from "../../src/agent/modelPolicy.js";
 import {
-  agentModelActionForPrompt,
   effectiveAgentChatModel,
   loadAgentModelOverride,
   normalizeOpenRouterModelId,
@@ -10,17 +9,6 @@ import {
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent model settings", () => {
-  it("parses conversational exact commands without catching ordinary discussion", () => {
-    expect(agentModelActionForPrompt("switch model to moonshotai/kimi-k3"))
-      .toEqual({ action: "set", model: "moonshotai/kimi-k3" });
-    expect(agentModelActionForPrompt("please set the chat model to <anthropic/claude-sonnet-5>"))
-      .toEqual({ action: "set", model: "anthropic/claude-sonnet-5" });
-    expect(agentModelActionForPrompt("reset model")).toEqual({ action: "reset" });
-    expect(agentModelActionForPrompt("switch the bot model back to the default"))
-      .toEqual({ action: "reset" });
-    expect(agentModelActionForPrompt("which model should we switch to?")).toBeNull();
-  });
-
   it("validates OpenRouter model IDs locally", () => {
     expect(normalizeOpenRouterModelId(" moonshotai/kimi-k3 ")).toBe("moonshotai/kimi-k3");
     expect(normalizeOpenRouterModelId("openai/gpt-5.6:online")).toBe("openai/gpt-5.6:online");

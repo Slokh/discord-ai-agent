@@ -294,7 +294,7 @@ async function taskDetails(
 }
 
 async function recentTaskEvents(repo: DiscordAiAgentRepository, task: AgentTaskRecord, limit = 8): Promise<TaskEvent[] | undefined> {
-  return repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit }).catch((error) => {
+  return repo.getAgentRuntimeTaskEventsForTask({ taskId: task.taskId, limit }).catch((error) => {
     logger.warn({ err: error, taskId: task.taskId }, "Failed to load recent agent task progress events for Discord progress render");
     return undefined;
   });

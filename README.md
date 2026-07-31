@@ -132,7 +132,7 @@ npm run dev
 npm run worker
 ```
 
-The copied `.env.example` keeps `WORKER_TASK_ENABLED=false`, so this minimal worker handles chat, crawl, embeddings, retention, and reconciliation without requiring GitHub/code-update credentials. The `bot` role acknowledges and enqueues the request; the Discord-agent worker executes it and completes final delivery.
+The copied `.env.example` keeps `WORKER_TASK_ENABLED=false`, so this minimal worker handles chat, crawl, embeddings, retention, and reconciliation without requiring GitHub/code-update credentials. The `bot` role acknowledges and enqueues the request; the agent-runtime worker executes it and completes final delivery.
 
 To enable code-update PRs, configure the GitHub and task-signing variables, set `WORKER_TASK_ENABLED=true`, and also run `npm run api` for callbacks and the run console. `DISCORD_AI_AGENT_PROCESS_ROLE=all` is available only when the API/task configuration required by every combined role is present.
 
@@ -244,7 +244,7 @@ Common optional settings:
 | `OPENROUTER_CHAT_FALLBACK_MODEL` | `openai/gpt-5.6-terra` | Recovery model for malformed tool calls, empty responses, leaked hosted-tool markup, and repeated-tool termination |
 | `OPENROUTER_CHAT_REASONING_EFFORT` / `OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT` | `medium` / `medium` | OpenRouter reasoning effort for primary chat and recovery calls |
 | `OPENROUTER_CHAT_MAX_TOKENS` / `OPENROUTER_CHAT_FALLBACK_MAX_TOKENS` | `4096` / `3072` | Combined reasoning and visible-output ceilings; Discord separately bounds final visible replies |
-| `OPENROUTER_UTILITY_MODEL` | `openai/gpt-4o-mini` | Lower-cost utility model and one-shot fallback for a primary timeout before any tool executes |
+| `OPENROUTER_UTILITY_MODEL` | `openai/gpt-4o-mini` | Lower-cost model for bounded summaries, compaction, and deployment notes |
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
@@ -262,7 +262,7 @@ Common optional settings:
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
 | `CODEGEN_EXECUTION_BACKEND` | `local-process` | `local-process` runs code-update tasks in a warm worker child process; `kubernetes-job` runs each task in an isolated Kubernetes Job (advanced) |
 | `CODEGEN_HARNESS` | `opencode` | Coding harness for code-update tasks: `opencode` by default, or `codex` to run tasks through Codex |
-| `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_DISCORD_AGENT_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated code-update worker |
+| `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_AGENT_RUNTIME_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated code-update worker |
 | `RETENTION_EVENTS_DAYS` | `60` | Worker-side age cutoff for trace, process-run, agent-runtime, and sandbox command event cleanup; `0` disables event retention cleanup |
 | `RETENTION_AUDIT_DAYS` | `90` | Worker-side age cutoff for `tool_audit_logs`; `0` disables audit cleanup |
 | `RETENTION_EMBEDDING_RUNS_DAYS` | `14` | Worker-side age cutoff for terminal embedding `process_runs` and cascading artifacts/events; `0` disables embedding-run cleanup |
@@ -285,10 +285,10 @@ Common optional settings:
 | `BUDGET_GUILD_DAILY_USD` | `10` | Per-guild daily cap over `tool_audit_logs.estimated_cost_usd`; set to `-1` for unlimited |
 | `BOT_OWNER_USER_ID` / `OPS_ALLOWLIST_USER_IDS` | unset | Restricted administrative-tool allowlists as Discord user IDs. Code-update tasks are available to every member and remain subject to `BUDGET_USER_CODEGEN_PER_DAY`; owner/ops restrictions still protect administrative mutations. |
 | `IMAGE_TOOLS_ALLOWLIST_ONLY` | `false` | When true, image generation also requires owner/ops allowlist membership |
-| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all`. Chat needs `bot` for ingress/delivery and a worker with `WORKER_DISCORD_AGENT_ENABLED=true` for execution. Sandbox callbacks and the run console need `api`. Use `all` only with the complete combined-role configuration. |
+| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all`. Chat needs `bot` for ingress/delivery and a worker with `WORKER_AGENT_RUNTIME_ENABLED=true` for execution. Sandbox callbacks and the run console need `api`. Use `all` only with the complete combined-role configuration. |
 | `RUN_MIGRATIONS` | `true` | Run migrations on process startup; Helm runtime pods set this to `false` because migrations run as a hook |
 
-Fresh installs apply the squashed `migrations/001_initial.sql` baseline followed by every later numbered forward migration. If you are upgrading a database created before the migration squash, run `scripts/legacy-schema-transition.sql` once to rename the old runtime tables/columns in place before applying the current migration chain.
+Fresh installs and deployments apply the squashed `migrations/001_initial.sql` baseline followed by every later numbered forward migration.
 
 ## Private Content And The Overlay Boundary
 

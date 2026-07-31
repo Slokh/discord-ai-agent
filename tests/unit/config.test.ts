@@ -43,11 +43,10 @@ describe("config", () => {
         "WORKER_CRAWL_ENABLED",
         "WORKER_EMBEDDING_ENABLED",
         "WORKER_TASK_ENABLED",
-        "WORKER_DISCORD_AGENT_ENABLED",
+        "WORKER_AGENT_RUNTIME_ENABLED",
         "SPOTIFY_CLIENT_ID",
         "SPOTIFY_CLIENT_SECRET",
         "SPOTIFY_MARKET",
-        "TOOLSET_SCOPING",
         "WALLET_ENABLED",
         "USER_WALLETS_ENABLED",
         "WALLET_BALANCES_PUBLIC",
@@ -100,7 +99,7 @@ describe("config", () => {
           crawlEnabled: true,
           embeddingEnabled: true,
           taskEnabled: true,
-          discordAgentEnabled: true,
+          agentRuntimeEnabled: true,
           retention: {
             eventsDays: 60,
             auditDays: 90,
@@ -119,7 +118,6 @@ describe("config", () => {
         });
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.agentPromptMaxConcurrency).toBe(4);
-        expect(config.toolsetScoping).toBe(true);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
         expect(config.crawlRetryMaxMs).toBe(30_000);
@@ -193,12 +191,6 @@ describe("config", () => {
   it("rejects embedding dimensions that do not match the migrated vector index", () => {
     withEnv({ EMBEDDING_DIMENSIONS: "3072" }, () => {
       expect(() => loadConfig()).toThrow(/must remain 1536/);
-    });
-  });
-
-  it("allows disabling toolset scoping", () => {
-    withEnv({ TOOLSET_SCOPING: "false" }, () => {
-      expect(loadConfig().toolsetScoping).toBe(false);
     });
   });
 
@@ -278,14 +270,14 @@ describe("config", () => {
         WORKER_CRAWL_ENABLED: "false",
         WORKER_EMBEDDING_ENABLED: "0",
         WORKER_TASK_ENABLED: "true",
-        WORKER_DISCORD_AGENT_ENABLED: "no"
+        WORKER_AGENT_RUNTIME_ENABLED: "no"
       },
       () => {
         expect(loadConfig().worker).toEqual({
           crawlEnabled: false,
           embeddingEnabled: false,
           taskEnabled: true,
-          discordAgentEnabled: false,
+          agentRuntimeEnabled: false,
           retention: {
             eventsDays: 60,
             auditDays: 90,

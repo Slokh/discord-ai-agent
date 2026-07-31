@@ -57,7 +57,7 @@ Or independently, with any tooling: check `SHA-256(serverSeed) == commitment`, t
 
 `migrations/002_provable_rng.sql` adds two tables:
 
-- `rng_sessions` — one active session per RNG-scoped `thread_key` (the conversation key plus the Discord reply-root message id, enforced by a partial unique index), holding the server seed, commitment, client seed, nonce counter, shoe state (`deck_count`, `shuffle_nonce`, `deck_position`), and reveal status. Sessions link to their predecessor via `prev_session_id`. Legacy channel-scoped keys remain discoverable for standalone reveals during cutover.
+- `rng_sessions` — one active session per RNG-scoped `thread_key` (the conversation key plus the Discord reply-root message id, enforced by a partial unique index), holding the server seed, commitment, client seed, nonce counter, shoe state (`deck_count`, `shuffle_nonce`, `deck_position`), and reveal status. Sessions link to their predecessor via `prev_session_id`.
 - `rng_draws` — one row per recorded draw with `nonce`, `kind`, `params`, and the exact `outcome` that was reported, plus the request/message/user that triggered it.
 
 All writes go through two serialized paths in [`src/db/rngRepository.ts`](../src/db/rngRepository.ts): draws run inside a transaction that holds a `FOR UPDATE` row lock on the reply chain's active session, and `revealAndRollover` flips the session to `revealed`, snapshots its draws, and inserts the committed successor under the same lock. Concurrent draws in one reply chain therefore cannot reuse a nonce or deal the same card twice, and no draw can slip into a session after its reveal listed the draws.

@@ -51,9 +51,9 @@ export type ModelCallView = {
 };
 
 export function modelCallsFromSnapshot(snapshot: Pick<RunSnapshot, "events">): ModelCallView[] {
-  const observed = snapshot.events.filter((event) => event.name === "agent.model.call.completed" || event.name === "agent.model.call.failed");
-  const events = observed.length > 0 ? observed : snapshot.events.filter((event) => event.name === "agent.model.round.complete");
-  return events.map(modelCallFromEvent);
+  return snapshot.events
+    .filter((event) => event.name === "agent.model.call.completed" || event.name === "agent.model.call.failed")
+    .map(modelCallFromEvent);
 }
 
 function modelCallFromEvent(event: RunEvent): ModelCallView {

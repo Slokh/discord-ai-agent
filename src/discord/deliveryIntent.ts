@@ -25,16 +25,6 @@ const commonFields = {
   sourceMessageReaction: z.string().nullable(),
 };
 
-const legacyIntentSchema = z.object({
-  schemaVersion: z.literal(1),
-  ...commonFields,
-  files: z.array(z.object({
-    name: z.string().min(1),
-    contentType: z.string().optional(),
-    dataBase64: z.string(),
-  })).max(10),
-});
-
 export const discordDeliveryFileReferenceSchema = z.object({
   artifactId: z.string().min(1).max(200),
   name: z.string().min(1).max(255),
@@ -49,7 +39,7 @@ const currentIntentSchema = z.object({
   files: z.array(discordDeliveryFileReferenceSchema).max(10),
 });
 
-const discordDeliveryIntentSchema = z.discriminatedUnion("schemaVersion", [legacyIntentSchema, currentIntentSchema]);
+const discordDeliveryIntentSchema = currentIntentSchema;
 
 export type DiscordDeliveryFileReference = z.infer<typeof discordDeliveryFileReferenceSchema>;
 export type DiscordDeliveryIntent = z.infer<typeof discordDeliveryIntentSchema>;
@@ -96,13 +86,6 @@ export async function discordDeliveryIntentFiles(
   intent: DiscordDeliveryIntent,
   loadBinary?: (artifactId: string) => Promise<Buffer | undefined>,
 ): Promise<AgentFile[]> {
-  if (intent.schemaVersion === 1) {
-    return intent.files.map((file) => ({
-      name: file.name,
-      data: Buffer.from(file.dataBase64, "base64"),
-      ...(file.contentType ? { contentType: file.contentType } : {}),
-    }));
-  }
   if (intent.files.length > 0 && !loadBinary) throw new Error("Discord delivery intent needs a binary artifact loader.");
   return Promise.all(intent.files.map(async (file) => {
     const data = await loadBinary!(file.artifactId);

@@ -28,12 +28,6 @@ import { effectiveMaximumPayoutUsd } from "./wagerTerms.js";
 import { normalizeDrawRandomInput, validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
 import type { DrawRandomInput } from "./randomTypes.js";
 import {
-  canonicalizeStandardWagerDraw,
-  standardWagerIntentForContext,
-  standardWagerIntentForPrompt,
-} from "./wagerIntent.js";
-import {
-  canonicalizeStandardBlackjackContinuation,
   prepareStandardWagerSettlement,
 } from "./standardWagerRuntime.js";
 
@@ -41,13 +35,6 @@ const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
 const RNG_ROOT_SCOPE_SEGMENT = "rng-root";
 const WAGER_GAME_SOURCE = String.raw`(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery)`;
-const GAME_LED_DECIMAL_WAGER = new RegExp(
-  String.raw`^\s*(?:please\s+)?(?:${WAGER_GAME_SOURCE})\b(?:\s*[,;:]\s*|\s+(?:[a-z][a-z'-]*\s+){0,2})\$?\s*(\d+\.\d+|\.\d+)\s*(?:usd|dollars?|bucks?)?\s*[.!]?\s*$`,
-  "i",
-);
-const GAME_LED_WAGER_DISCUSSION =
-  /\b(?:is|are|was|were|has|have|odds?|probabilit(?:y|ies)|payouts?|pays?|returns?|rules?|strategy|recommend(?:ation|ed)?|worth|costs?|equals?|means?|uses?)\b/i;
-
 const DRAW_KINDS = new Set(["integers", "dice", "coin", "pick", "shuffle", "cards"]);
 
 export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Promise<string> {
@@ -59,15 +46,6 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   if (ctx.config.payments.userWalletsEnabled && ctx.walletService) {
     continuingWager = await currentWagerForContext(ctx);
   }
-  const canonicalInput = canonicalizeStandardWagerDraw(ctx, input, continuingWager);
-  if (typeof canonicalInput === "string") return canonicalInput;
-  const continuedInput = await canonicalizeStandardBlackjackContinuation(
-    ctx,
-    continuingWager,
-    canonicalInput,
-  );
-  if (typeof continuedInput === "string") return continuedInput;
-  input = continuedInput;
   const kind = (input.kind ?? "").trim();
   if (!DRAW_KINDS.has(kind)) {
     await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
@@ -121,13 +99,14 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
       await auditRng(ctx, "drawRandom", input, error);
       return error;
     }
+  }
+  if (input.wager && (input.wager.rule || ["coin", "dice", "integers"].includes(kind))) {
     const fairnessError = validateWagerFairness({
       kind,
       count: input.count,
       sides: input.sides,
       min: input.min,
       max: input.max,
-      description: [ctx.requestText, input.reason, input.wager.game].filter(Boolean).join("\n"),
       stakeUsd: input.wager.stakeUsd!,
       maxPayoutUsd: effectiveMaxPayoutUsd!,
       rule: input.wager.rule,
@@ -142,19 +121,13 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     await auditRng(ctx, "drawRandom", input, error);
     return error;
   }
-  const explicitStakeUsd = explicitBareWagerAmount(ctx.requestText);
-  if (input.wager && explicitStakeUsd != null && Math.abs(input.wager.stakeUsd! - explicitStakeUsd) > 1e-9) {
-    const error = `Wager stake must match the explicit amount in the current request: $${explicitStakeUsd}. Retry drawRandom with stakeUsd=${explicitStakeUsd}; do not reuse an amount from conversation history.`;
-    await auditRng(ctx, "drawRandom", input, error);
-    return error;
-  }
   let wager: WagerReservation | null = null;
   let wagerInteractionMode: WagerInteractionMode | null = null;
   if (input.wager) {
     const requestId = ctx.requestId ?? ctx.requestMessageId;
     if (!requestId) return "A stable request id is required before a wallet-backed wager can be reserved.";
     try {
-      wagerInteractionMode = input.wager.interactionMode ?? inferWagerInteractionMode(ctx.requestText ?? "", input.wager.game!);
+      wagerInteractionMode = input.wager.interactionMode!;
       wager = await ctx.walletService!.reserveWager(
         {
           requestId,
@@ -291,17 +264,18 @@ export function requiresWalletBackedWager(text: string): boolean {
   const money = new RegExp(String.raw`(?:\$\s*${amount}|(?<![\w.])${amount}\s*(?:usd|dollars?|bucks?)\b)`, "i");
   const shorthand = new RegExp(String.raw`(?:\b(?:bet|wager|stake|risk|put)\s+\$?${amount}(?![\w.])|(?<![\w.])\$?${amount}\s+(?:on|per\s+(?:spin|hand|roll|game)|each)\b)`, "i");
   const game = /\b(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery|wager|bet)\b/i;
+  const gameLedStake = new RegExp(String.raw`\b(?:${WAGER_GAME_SOURCE})\b(?:\s*[,;:]\s*|\s+(?:[a-z][a-z'-]*\s+){0,2})\$?\s*${amount}(?![\w.])`, "i");
+  const gameDiscussion = /\b(?:is|are|was|were|has|have|odds?|probabilit(?:y|ies)|payouts?|pays?|returns?|rules?|strategy|recommend(?:ation|ed)?|worth|costs?|equals?|means?|uses?)\b/i;
   const action = /\b(?:play|run|do|give|deal|roll|flip|spin|bet|wager|stake|risk|put|again|more)\b/i;
   const replayAction = /\b(?:double(?:\s+down)?|let\s+it\s+ride|run\s+(?:it|that)\s+back|rematch|replay)\b/i;
   const discussion = /^\s*(?:what|which|why|how|should|would|could|is|are|do\s+(?:you|i|we|they)|does|did|explain)\b/i;
   const executionOverride = /\b(?:please|go\s+ahead|right\s+now|do\s+it|let(?:'s|\s+us)|for\s+me)\b/i;
   const wholeBalance = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
   if (discussion.test(text) && !executionOverride.test(text)) return false;
-  if (standardWagerIntentForPrompt(text)) return true;
   return game.test(text) && (
     (money.test(text) && (action.test(text) || replayAction.test(text))) ||
     shorthand.test(text) ||
-    gameLedDecimalWagerAmount(text) != null ||
+    (gameLedStake.test(text) && !gameDiscussion.test(text)) ||
     (wholeBalance.test(text) && (action.test(text) || replayAction.test(text)))
   );
 }
@@ -317,7 +291,6 @@ export function isDeferredExternalOutcomeWager(text: string): boolean {
 export function requiresWalletBackedWagerForContext(ctx: ToolContext): boolean {
   const requestText = ctx.requestText ?? "";
   if (requiresWalletBackedWager(requestText)) return true;
-  if (standardWagerIntentForContext(ctx)) return true;
   if (!/^\s*(?:again|same(?:\s+thing)?|one\s+more|do\s+it\s+again|repeat)\b/i.test(requestText)) return false;
   const previousRequesterPrompt = [...(ctx.sessionMessages ?? [])]
     .reverse()
@@ -424,23 +397,6 @@ export function hasUncommittedPlayerSecretWager(text: string): boolean {
   return /\b(?:guess|predict|tell)\b/i.test(text) && playerPossession.test(text) && (guessSecret.test(text) || directSecret.test(text));
 }
 
-export function inferWagerInteractionMode(text: string, game: string): WagerInteractionMode {
-  const combined = `${game}\n${text}`;
-  if (/\b(?:blackjack|poker|hold\s*['’]?em|yahtzee|video\s+poker)\b/i.test(combined)) {
-    return "player_decisions";
-  }
-  if (/\b(?:choose\s+(?:after|whether)|ask\s+me|let\s+me\s+(?:choose|decide))\b/i.test(combined)) {
-    return "player_decisions";
-  }
-  if (/\b(?:slots?|roulette|craps|dice|die\s+roll|coin\s*flip|heads|tails|wheel|lottery|raffle|random\s+(?:pick|draw|number)|(?:digit|number)[\s_-]*(?:bet|draw)|(?:generate|draw|pick)\s+(?:a\s+)?(?:\d+\s*[- ]?digit\s+)?number)\b/i.test(combined)) {
-    return "automatic";
-  }
-  if (/\b(?:hit|stand|double\s+down|split|fold|call|raise|hold|discard)\b/i.test(combined)) {
-    return "player_decisions";
-  }
-  return "player_decisions";
-}
-
 function isSettlementOutcome(value: unknown): value is WagerSettlementOutcome {
   return value === "player_win" || value === "player_loss" || value === "push";
 }
@@ -451,22 +407,6 @@ function isResolutionSource(value: unknown): value is WagerResolutionSource {
 
 function describesUnfinishedWager(explanation: string): boolean {
   return /\b(?:in\s+progress|await(?:ing|s)?|pending|hit\s+or\s+stand|not\s+(?:yet\s+)?(?:finished|complete|resolved|decided|settled)|to\s+be\s+(?:continued|completed|decided))\b/i.test(explanation);
-}
-
-function explicitBareWagerAmount(requestText: string | undefined): number | null {
-  if (!requestText) return null;
-  const match = requestText.trim().match(/^\$?\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:usd|dollars?|bucks?)?\s*[.!?]?$/i);
-  if (!match) return gameLedDecimalWagerAmount(requestText);
-  const value = Number(match[1]);
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function gameLedDecimalWagerAmount(text: string): number | null {
-  if (GAME_LED_WAGER_DISCUSSION.test(text)) return null;
-  const match = text.match(GAME_LED_DECIMAL_WAGER);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export async function revealRandomness(ctx: ToolContext): Promise<string> {
@@ -684,15 +624,6 @@ async function ensureRngSetup(
   if (!rootMessageId) return { rngRepo: ctx.rngRepo, threadKey: baseThreadKey };
 
   const threadKeyPrefix = `${baseThreadKey}:${RNG_ROOT_SCOPE_SEGMENT}:`;
-  if (toolName === "revealRandomness" && !replyRootMessageId) {
-    const latestThreadKey = await ctx.rngRepo.findLatestDrawnActiveSessionThreadKey({
-      channelId: ctx.channelId,
-      requestedByUserId: ctx.userId,
-      legacyThreadKey: baseThreadKey,
-      threadKeyPrefix
-    });
-    if (latestThreadKey) return { rngRepo: ctx.rngRepo, threadKey: latestThreadKey };
-  }
   return { rngRepo: ctx.rngRepo, threadKey: `${threadKeyPrefix}${rootMessageId}` };
 }
 

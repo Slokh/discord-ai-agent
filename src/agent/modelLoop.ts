@@ -32,16 +32,13 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { coerceGeneratedCsvProducerRoutes, selectExclusiveWagerTransition, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
-import { ForcedRandomActionRouter, randomToolForPrompt, type RandomOutcomeGuard } from "./randomOutcomeGuard.js";
+import { type RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
 } from "./freshExternalDataGuard.js";
 import { MemberAvailabilityGuard } from "./memberAvailabilityGuard.js";
-import { currentScopedToolset, expandToolsetState, forcedAgentMemoryToolForPrompt, handleAdditionalToolsRequest } from "./modelToolset.js";
-import { wagerHistoryRouteForPrompt, walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
-import { walletActionToolForPrompt } from "./walletActionGuard.js";
-import { executeDeterministicWalletReadRoute } from "./deterministicWalletRoute.js";
+import { currentScopedToolset, expandToolsetState, handleAdditionalToolsRequest } from "./modelToolset.js";
 import { injectActiveGameSession, injectAutomaticStarterFunding, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
 import { compactMessagesForModelFallback, timeoutNeedsExpandedToolRetry } from "./modelTimeoutFallback.js";
@@ -53,15 +50,13 @@ import {
   isSuccessfulGeneratedImageArtifact,
   synthesizeGeneratedImageArtifactIfReady,
 } from "./terminalToolCompletion.js";
-import { agentChatRequest, timeoutFallbackChatRequest } from "./modelPolicy.js";
+import { agentChatRequest } from "./modelPolicy.js";
 import { executeIndependentToolRoutesInParallel } from "./parallelToolExecution.js";
 import { CompoundToolCompletionGuard } from "./compoundToolCompletion.js";
 import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js";
 import { ImageEvidenceGuard, ImageGenerationGuard, ReplyContextEvidenceGuard } from "./imageEvidenceGuard.js";
-import { mediaTranscriptionToolForPrompt } from "./mediaTranscriptionRoute.js";
 import { runGuardedAgentRequest } from "./modelLoopRequest.js";
 import { completeAfterToolRoundLimit } from "./modelLoopLimit.js";
-import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
 import {
   appendToolRoundContinuation,
   expandToolsetPromptContext,
@@ -112,7 +107,7 @@ async function runAgentModelLoopInternal(
     activeGame,
     activeGameNeedsRandomDraw,
   });
-  const { randomActionRequired, toolGuidance } = initialToolsetPromptContext;
+  const { toolGuidance } = initialToolsetPromptContext;
   let { toolsetState } = initialToolsetPromptContext;
   const messages: ChatMessage[] = chatMessages(
     text,
@@ -145,18 +140,6 @@ async function runAgentModelLoopInternal(
   };
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
   const wagerResolutionRouter = new WagerResolutionRouter();
-  const legacyUnscoped = !ctx.config.toolsetScoping;
-  const forcedWalletReadRoute = legacyUnscoped
-    ? wagerHistoryRouteForPrompt(ctx.config, text, ctx.replyContext) ?? walletBalanceRouteForPrompt(ctx.config, text)
-    : null;
-  const requestedWalletActionTool = legacyUnscoped ? walletActionToolForPrompt(ctx.config, text) : null;
-  const forcedWalletActionTool = automaticStarterFunds && requestedWalletActionTool === "requestStarterFunds"
-    ? null
-    : requestedWalletActionTool;
-  const forcedMediaTranscriptionTool = legacyUnscoped ? mediaTranscriptionToolForPrompt(ctx, text) : null;
-  const forcedRandomAction = legacyUnscoped
-    ? new ForcedRandomActionRouter(text, Boolean(ctx.config.payments?.userWalletsEnabled), randomActionRequired && randomToolForPrompt(text) !== "revealRandomness")
-    : null;
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -211,9 +194,6 @@ async function runAgentModelLoopInternal(
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0,
     },
   });
-  if (forcedWalletReadRoute) {
-    return await executeDeterministicWalletReadRoute(ctx, { route: forcedWalletReadRoute, text, requestLogger, startedAt, modelCallBudget });
-  }
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     const roundStartedAt = Date.now();
     requestLogger.debug(
@@ -264,11 +244,7 @@ async function runAgentModelLoopInternal(
       }
       ctx.noteProgress?.();
       const forcedToolThisRound = compoundToolCompletion.takeForcedTool() ??
-        imageGenerationGuard.takeForcedTool() ?? imageEvidenceGuard.takeForcedTool() ??
-        (round === 0 ? forcedWalletActionTool : null) ??
-        forcedRandomAction?.takeToolForRound(round) ??
-        (round === 0 ? forcedMediaTranscriptionTool : null) ??
-        (legacyUnscoped && round === 0 ? forcedAgentMemoryToolForPrompt(text) : null);
+        imageGenerationGuard.takeForcedTool() ?? imageEvidenceGuard.takeForcedTool();
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
@@ -314,18 +290,24 @@ async function runAgentModelLoopInternal(
           primaryProviderRejected = true;
           response = providerFallback;
         } else {
-          const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
+          const fallbackMessages = compactMessagesForModelFallback(messages);
+          const fallbackChat = agentChatRequest(ctx, {
+            recovery: true,
+            messages: fallbackMessages,
+            tools: chat.tools,
+            toolChoice: chat.toolChoice,
+          });
+          const fallbackModel = fallbackChat.model?.trim();
           const canFallback =
             isOpenRouterTimeoutError(error) &&
             !modelTimeoutFallbackAttempted &&
             Boolean(fallbackModel) &&
-            fallbackModel !== effectiveAgentChatModel(ctx);
+            fallbackModel !== chat.model;
           if (!canFallback) throw error;
           if (!(await reserveModelCall(ctx, modelCallBudget, "timeout_fallback", { round: round + 1, fallbackModel }))) {
             throw error;
           }
           modelTimeoutFallbackAttempted = true;
-          const fallbackMessages = compactMessagesForModelFallback(messages);
           await recordAgentEvent(ctx, {
             eventName: "agent.model.timeout_fallback",
             level: "warn",
@@ -349,7 +331,7 @@ async function runAgentModelLoopInternal(
               afterToolEvidence: hasAttemptedTool,
               afterToolsetExpansion: retryExpandedToolSelection,
             },
-            chat: timeoutFallbackChatRequest(chat, fallbackModel, fallbackMessages),
+            chat: fallbackChat,
           });
         }
       }
@@ -471,8 +453,7 @@ async function runAgentModelLoopInternal(
       if (randomOutcomeDecision !== "allow") {
         if (randomOutcomeDecision === "retry") {
           if (randomOutcomeGuard.requiresRandomWorkflowForTurn()) {
-            if (forcedRandomAction) forcedRandomAction.forceDrawNextRound();
-            else toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
+            toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
           }
           messages.push({ role: "assistant", content: response.content });
           messages.push({
@@ -611,7 +592,6 @@ async function runAgentModelLoopInternal(
         : route.name === "requestAdditionalTools"
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
-      forcedRandomAction?.noteToolResult(route.name, result.status);
       richPresentationOutcomeGuard.noteToolResult(route.name);
       randomOutcomeGuard.noteToolResult(route.name, result);
       compoundToolCompletion.noteToolResult(route.name, result);

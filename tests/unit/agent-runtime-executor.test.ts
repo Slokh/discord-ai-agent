@@ -11,7 +11,7 @@ describe("agent runtime prompt executors", () => {
     vi.clearAllMocks();
   });
 
-  it("runs the compatibility model loop in-process", async () => {
+  it("runs the model loop in-process", async () => {
     vi.mocked(handleAgentRequest).mockResolvedValue({ content: "hello" });
     const executor = new InProcessAgentRuntimePromptExecutor();
 

@@ -116,7 +116,7 @@ async function sweepOne(input: SweepInput, obligation: DiscordDeliveryObligation
     delivered = replied.value;
   }
   if (decision.action === "deliver") {
-    await input.obligations.markDelivered({ executionId: obligation.executionId, statusChannelId: delivered.channelId, statusMessageId: delivered.id, metadata: { swept: true, legacyTextRecovery: true } });
+    await input.obligations.markDelivered({ executionId: obligation.executionId, statusChannelId: delivered.channelId, statusMessageId: delivered.id, metadata: { swept: true, textRecovery: true } });
   } else {
     await input.obligations.markAbandoned({ executionId: obligation.executionId, error: decision.error, metadata: { swept: true, noticeMessageId: delivered.id } });
   }
@@ -220,7 +220,7 @@ async function loadTurnEnvelope(agentRuntime: AgentRuntimeRepository, executionI
   if (!artifact?.content) return null;
   try {
     const parsed = JSON.parse(artifact.content) as AgentRuntimeTurnEnvelope;
-    return (parsed.schemaVersion === 1 || parsed.schemaVersion === 2) && parsed.source === "discord" ? parsed : null;
+    return parsed.schemaVersion === 2 && parsed.source === "discord" ? parsed : null;
   } catch {
     return null;
   }

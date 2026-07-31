@@ -1,7 +1,7 @@
 import type { Client, Message } from "discord.js";
 import type { Logger } from "pino";
 import { isOpenRouterContentFilterError } from "../models/openrouter.js";
-import type { DiscordAgentRequestJob } from "../jobs/queue.js";
+import type { AgentRuntimeExecutionJob } from "../jobs/queue.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
 import { continuationEvidenceFromResponse } from "../agent/continuationEvidence.js";
@@ -42,7 +42,7 @@ import {
 
 export async function runQueuedAgentRuntimeExecution(
   input: DiscordAgentRequestInput & { client: Client },
-  job: DiscordAgentRequestJob
+  job: AgentRuntimeExecutionJob
 ) {
   const existingDelivery = job.agentExecutionId
     ? await input.deliveryObligations?.getByExecutionId(job.agentExecutionId).catch(() => undefined)

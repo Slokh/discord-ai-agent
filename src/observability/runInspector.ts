@@ -248,17 +248,9 @@ function agentTranscriptPartSummary(part: unknown): string {
 }
 
 function formatModelUsage(snapshot: RunSnapshot) {
-  const observedCallEvents = snapshot.events.filter(
+  const usageRows = snapshot.events.filter(
     (event) => event.name === "agent.model.call.completed" && usageFromMetadata(event.metadata),
-  );
-  const usageSources = observedCallEvents.length > 0
-    ? observedCallEvents
-    : snapshot.spans.filter((span) => usageFromMetadata(span.metadata));
-  const fallbackUsageSources =
-    usageSources.length > 0
-      ? []
-      : snapshot.events.filter((event) => event.name === "agent.model.round.complete" && usageFromMetadata(event.metadata));
-  const usageRows = [...usageSources, ...fallbackUsageSources].map((item) => ({
+  ).map((item) => ({
     model: stringFromUnknown(item.metadata.model) ?? "unknown",
     usage: usageFromMetadata(item.metadata)!
   }));

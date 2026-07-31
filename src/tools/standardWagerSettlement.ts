@@ -16,10 +16,6 @@ export type StandardWagerSettlement =
       explanation: string;
     };
 
-export type StandardBlackjackNextDraw =
-  | { status: "draw"; reason: "blackjack hit continuation card" | "blackjack stand continuation card" }
-  | { status: "blocked"; reason: string };
-
 export function deriveStandardWagerSettlement(
   wager: WagerReservation,
   draws: RngDrawRecord[],
@@ -150,59 +146,12 @@ function deriveBlackjackSettlement(
   );
 }
 
-export function deriveStandardBlackjackNextDraw(
-  wager: WagerReservation,
-  draws: RngDrawRecord[],
-  input: {
-    requestedAction: "hit" | "stand" | null;
-    requestId: string | null;
-  },
-): StandardBlackjackNextDraw {
-  if (wager.game.trim().toLowerCase() !== "blackjack") {
-    return { status: "blocked", reason: "This is not a standard blackjack wager." };
-  }
-  const replay = replayBlackjack(wager, draws);
-  if (replay.status === "invalid") {
-    return { status: "blocked", reason: replay.reason };
-  }
-  const playerTotal = blackjackTotal(replay.playerCards);
-  const dealerTotal = blackjackTotal(replay.dealerCards);
-  if (playerTotal > 21 || (replay.dealerStarted && dealerTotal >= 17)) {
-    return {
-      status: "blocked",
-      reason: "The verified blackjack hand is already terminal; settle it instead of drawing again.",
-    };
-  }
-  if (replay.dealerStarted || playerTotal === 21 || input.requestedAction === "stand") {
-    return { status: "draw", reason: "blackjack stand continuation card" };
-  }
-  if (input.requestedAction !== "hit") {
-    return {
-      status: "blocked",
-      reason: "The player must choose hit or stand before another blackjack card is drawn.",
-    };
-  }
-  const hitAlreadyRecordedForRequest = input.requestId != null &&
-    replay.continuationDraws.some((draw) =>
-      /\bblackjack\s+hit\b/i.test(draw.reason ?? "") &&
-      (draw.requestId === input.requestId || draw.messageId === input.requestId)
-    );
-  if (hitAlreadyRecordedForRequest) {
-    return {
-      status: "blocked",
-      reason: "This hit was already recorded. Save the next hit-or-stand prompt and wait for a new player reply.",
-    };
-  }
-  return { status: "draw", reason: "blackjack hit continuation card" };
-}
-
 type BlackjackReplay =
   | {
       status: "valid";
       playerCards: string[];
       dealerCards: string[];
       dealerStarted: boolean;
-      continuationDraws: RngDrawRecord[];
     }
   | { status: "invalid"; reason: string };
 
@@ -272,7 +221,6 @@ function replayBlackjack(
     playerCards,
     dealerCards,
     dealerStarted,
-    continuationDraws,
   };
 }
 

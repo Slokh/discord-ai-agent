@@ -12,7 +12,6 @@ import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } f
 import {
   drawRandom,
   hasUncommittedPlayerSecretWager,
-  inferWagerInteractionMode,
   requiresWalletBackedWager,
   requiresWalletBackedWagerForContext,
   revealRandomness,
@@ -40,30 +39,6 @@ class FakeRngRepository {
 
   async listDraws(sessionId: string): Promise<RngDrawRecord[]> {
     return this.draws.filter((draw) => draw.sessionId === sessionId).map((draw) => ({ ...draw }));
-  }
-
-  async findLatestDrawnActiveSessionThreadKey(input: {
-    channelId: string;
-    requestedByUserId: string;
-    legacyThreadKey: string;
-    threadKeyPrefix: string;
-  }): Promise<string | null> {
-    const candidates = [...this.sessions.values()]
-      .filter(
-        (session) =>
-          session.status === "active" &&
-          session.channelId === input.channelId &&
-          (session.threadKey === input.legacyThreadKey || session.threadKey.startsWith(input.threadKeyPrefix))
-      )
-      .map((session) => ({
-        session,
-        latestDraw: this.draws
-          .filter((draw) => draw.sessionId === session.id && draw.requestedByUserId === input.requestedByUserId)
-          .at(-1)
-      }))
-      .filter((candidate) => candidate.latestDraw !== undefined)
-      .sort((a, b) => b.latestDraw!.id - a.latestDraw!.id);
-    return candidates[0]?.session.threadKey ?? null;
   }
 
   async withActiveSession<T>(
@@ -518,7 +493,7 @@ describe("drawRandom", () => {
       sides: 6,
       count: 2,
       reason: "player wins if sum = 7",
-      wager: { playerUserId: "user", stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice" }
+      wager: { playerUserId: "user", stakeUsd: 0.25, maxPayoutUsd: 1, game: "generic dice", interactionMode: "automatic", rule: { kind: "sum", operator: "=", target: 7 } }
     });
 
     expect(reserveWager).toHaveBeenCalledWith(
@@ -550,7 +525,7 @@ describe("drawRandom", () => {
     const response = await drawRandom(ctx, {
       kind: "coin",
       reason: "another user bets on tails",
-      wager: { playerUserId: "other-user", stakeUsd: 1, maxPayoutUsd: 2, game: "coinflip" },
+      wager: { playerUserId: "other-user", stakeUsd: 1, maxPayoutUsd: 2, game: "coinflip", interactionMode: "automatic", rule: { kind: "coin_side", side: "tails" } },
     });
 
     expect(response).toContain("does not match the current requester user");
@@ -575,7 +550,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "coin",
-      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coinflip" },
+      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coinflip", interactionMode: "automatic", rule: { kind: "coin_side", side: "tails" } },
     });
 
     expect(response).toContain("immutable Discord requester scope changed");
@@ -595,7 +570,7 @@ describe("drawRandom", () => {
       count: 7,
       sides: 6,
       reason: "7d6 pair match game",
-      wager: { playerUserId: "user", stakeUsd: 0.3, maxPayoutUsd: 0.6, game: "dice" },
+      wager: { playerUserId: "user", stakeUsd: 0.3, maxPayoutUsd: 0.6, game: "dice", interactionMode: "automatic", rule: { kind: "any_match" } },
     });
 
     expect(response).toMatch(/100%.*guaranteed profit/i);
@@ -614,7 +589,7 @@ describe("drawRandom", () => {
     const response = await drawRandom(ctx, {
       kind: "cards",
       count: 3,
-      wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" }
+      wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack", interactionMode: "player_decisions" }
     });
 
     expect(response).toContain("call settleRandomWager now");
@@ -626,7 +601,7 @@ describe("drawRandom", () => {
     expect(response).toContain("Maximum total payout reserved: $0.25");
   });
 
-  it("canonicalizes game-led blackjack shorthand before reserving or drawing", async () => {
+  it("does not infer a wallet wager from an unstructured model draw", async () => {
     const reserveWager = vi.fn(async () => ({ id: "wager-1" }));
     const attachWagerDraw = vi.fn(async () => undefined);
     const { ctx, rngRepo } = fakeContext({
@@ -640,89 +615,9 @@ describe("drawRandom", () => {
       reason: "model selected the wrong draw",
     });
 
-    expect(response).toContain("Provably fair draw complete");
-    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
-      userId: "user",
-      game: "blackjack",
-      stakeUsd: 0.1,
-      maxPayoutUsd: 0.25,
-    }), expect.any(Function));
-    expect(rngRepo.draws).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "cards", params: expect.objectContaining({ count: 3 }) }),
-    ]));
-  });
-
-  it("continues an incomplete coinflip wager from the same requester's reply chain", async () => {
-    const reserveWager = vi.fn(async () => ({ id: "wager-coin" }));
-    const attachWagerDraw = vi.fn(async () => undefined);
-    const { ctx, rngRepo } = fakeContext({
-      requestText: "tails",
-      requestId: "reply-message",
-      requestMessageId: "reply-message",
-      replyContext: {
-        messageId: "bot-question",
-        rootMessageId: "root-message",
-        channelId: "channel",
-        guildId: "guild",
-        authorId: "bot",
-        authorDisplayName: "Bot",
-        authorIsBot: true,
-        content: "Heads or tails for the $0.10 coin flip?",
-        attachmentSummaries: [],
-        attachments: [],
-        createdAt: null,
-        url: null,
-        chain: [
-          {
-            messageId: "root-message",
-            channelId: "channel",
-            guildId: "guild",
-            authorId: "user",
-            authorDisplayName: "User",
-            authorIsBot: false,
-            content: "coinflip 0.10",
-            attachmentSummaries: [],
-            attachments: [],
-            createdAt: null,
-            url: null,
-          },
-          {
-            messageId: "bot-question",
-            channelId: "channel",
-            guildId: "guild",
-            authorId: "bot",
-            authorDisplayName: "Bot",
-            authorIsBot: true,
-            content: "Heads or tails for the $0.10 coin flip?",
-            attachmentSummaries: [],
-            attachments: [],
-            createdAt: null,
-            url: null,
-          },
-        ],
-      },
-      walletService: {
-        getCurrentWager: vi.fn(async () => null),
-        reserveWager,
-        attachWagerDraw,
-      } as unknown as ToolContext["walletService"],
-    });
-
-    const response = await drawRandom(ctx, {
-      kind: "coin",
-      reason: "coin flip",
-    });
-
-    expect(response).toContain("Provably fair draw complete");
-    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
-      userId: "user",
-      game: "coinflip",
-      stakeUsd: 0.1,
-      maxPayoutUsd: 0.2,
-    }), expect.any(Function));
-    expect(rngRepo.draws).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "coin" }),
-    ]));
+    expect(response).toContain("requires a wallet-backed wager");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.draws).toEqual([]);
   });
 
   it("still rejects a non-standard blackjack opening that would publish the dealer hole card", async () => {
@@ -736,7 +631,7 @@ describe("drawRandom", () => {
       kind: "cards",
       count: 4,
       reason: "player and dealer initial blackjack hands",
-      wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" },
+      wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack", interactionMode: "player_decisions" },
     });
 
     expect(response).toContain("exactly 3 public cards");
@@ -745,26 +640,26 @@ describe("drawRandom", () => {
     expect(rngRepo.sessions.size).toBe(0);
   });
 
-  it("rejects a wager amount inherited from history when the current request is an explicit amount", async () => {
-    const reserveWager = vi.fn();
+  it("uses structured wager terms instead of parsing an amount from the prompt", async () => {
+    const reserveWager = vi.fn(async () => ({ id: "wager-1" }));
+    const attachWagerDraw = vi.fn(async () => undefined);
     const { ctx, rngRepo } = fakeContext({
       requestText: "$.01",
-      walletService: { reserveWager } as unknown as ToolContext["walletService"]
+      walletService: { reserveWager, attachWagerDraw } as unknown as ToolContext["walletService"]
     });
 
     const response = await drawRandom(ctx, {
       kind: "cards",
       count: 3,
-      wager: { playerUserId: "user", stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack" }
+      wager: { playerUserId: "user", stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack", interactionMode: "player_decisions" }
     });
 
-    expect(response).toContain("match the explicit amount");
-    expect(response).toContain("stakeUsd=0.01");
-    expect(reserveWager).not.toHaveBeenCalled();
-    expect(rngRepo.sessions.size).toBe(0);
+    expect(response).toContain("Provably fair draw complete");
+    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({ stakeUsd: 0.5 }), expect.any(Function));
+    expect(rngRepo.sessions.size).toBe(1);
   });
 
-  it("canonicalizes a game-led decimal stake over inconsistent model wager arguments", async () => {
+  it("requires structured odds for a profitable coin draw", async () => {
     const reserveWager = vi.fn(async () => ({ id: "wager-1" }));
     const attachWagerDraw = vi.fn(async () => undefined);
     const { ctx, rngRepo } = fakeContext({
@@ -775,17 +670,12 @@ describe("drawRandom", () => {
     const response = await drawRandom(ctx, {
       kind: "coin",
       count: 1,
-      wager: { playerUserId: "user", stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack" }
+      wager: { playerUserId: "user", stakeUsd: 0.5, maxPayoutUsd: 1.25, game: "blackjack", interactionMode: "player_decisions" }
     });
 
-    expect(response).toContain("Provably fair draw complete");
-    expect(reserveWager).toHaveBeenCalledWith(expect.objectContaining({
-      stakeUsd: 0.25,
-      game: "blackjack",
-    }), expect.any(Function));
-    expect(rngRepo.draws).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "cards", params: expect.objectContaining({ count: 3 }) }),
-    ]));
+    expect(response).toContain("wager.rule is required");
+    expect(reserveWager).not.toHaveBeenCalled();
+    expect(rngRepo.draws).toEqual([]);
   });
 
   it("returns duplicate request reservations as a recoverable tool result", async () => {
@@ -799,7 +689,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "coin",
-      wager: { playerUserId: "user", stakeUsd: 0.01, maxPayoutUsd: 0.02, game: "coin" }
+      wager: { playerUserId: "user", stakeUsd: 0.01, maxPayoutUsd: 0.02, game: "coin", interactionMode: "automatic", rule: { kind: "coin_side", side: "heads" } }
     });
 
     expect(response).toContain("first successful draw");
@@ -817,7 +707,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "coin",
-      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coin" }
+      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coin", interactionMode: "automatic", rule: { kind: "coin_side", side: "heads" } }
     });
 
     expect(response).toContain("active wager and transfer reservations");
@@ -835,7 +725,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "coin",
-      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coin" }
+      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "coin", interactionMode: "automatic", rule: { kind: "coin_side", side: "heads" } }
     });
 
     expect(response).toContain("bot wallet cannot currently cover the maximum payout");
@@ -879,10 +769,11 @@ describe("drawRandom", () => {
     expect(rngRepo.draws.map((draw) => draw.kind)).toEqual(["shuffle", "cards"]);
   });
 
-  it("continues a saved game action when the model redundantly repeats opening wager fields", async () => {
+  it("allows a structured continuation draw for an already active wager", async () => {
     const reserveWager = vi.fn();
     const getCurrentWager = vi.fn(async () => ({
       id: "wager-active",
+      game: "blackjack",
       allowedActions: ["hit", "stand", "double"],
     }));
     const { ctx, rngRepo } = fakeContext({
@@ -894,7 +785,6 @@ describe("drawRandom", () => {
       kind: "cards",
       count: 1,
       reason: "dealer continuation card",
-      wager: { playerUserId: "user", stakeUsd: 0.1, maxPayoutUsd: 0.25, game: "blackjack" },
     });
 
     expect(response).toContain("Provably fair draw complete");
@@ -955,7 +845,7 @@ describe("drawRandom", () => {
     const response = await drawRandom(ctx, {
       kind: "cards",
       count: 1,
-      wager: { playerUserId: "user", stakeUsd: 0.05, maxPayoutUsd: 0.125, game: "blackjack" }
+      wager: { playerUserId: "user", stakeUsd: 0.05, maxPayoutUsd: 0.125, game: "blackjack", interactionMode: "player_decisions" }
     });
 
     expect(response).toContain("exactly 3 public cards");
@@ -974,7 +864,7 @@ describe("drawRandom", () => {
       kind: "integers",
       min: 1,
       max: 1_000,
-      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "guess my number" }
+      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "guess my number", interactionMode: "automatic", rule: { kind: "sum", operator: "=", target: 1 } }
     });
 
     expect(response).toContain("not verifiable");
@@ -995,28 +885,6 @@ describe("drawRandom", () => {
     expect(hasUncommittedPlayerSecretWager("I bet $1 the next die roll is six")).toBe(false);
   });
 
-  it("classifies games with later choices as interactive without trusting the settlement call", () => {
-    expect(inferWagerInteractionMode("deal me in for $1", "blackjack")).toBe("player_decisions");
-    expect(inferWagerInteractionMode("let me choose after the first roll", "custom dice")).toBe("player_decisions");
-    expect(inferWagerInteractionMode("$1 on heads", "coin flip")).toBe("automatic");
-    expect(inferWagerInteractionMode("let's play for $1", "custom game")).toBe("player_decisions");
-  });
-
-  it("does not treat incidental action words as decisions in a known automatic game", () => {
-    expect(inferWagerInteractionMode(
-      "Bet $1 coin flip, I win on heads. Resolve it: flip, then pay out. Since a fair flip is 50/50, don't waste a tool call on it.",
-      "coinflip"
-    )).toBe("automatic");
-  });
-
-  it("classifies independently generated number wagers as automatic", () => {
-    expect(inferWagerInteractionMode(
-      "generate 10 digit number, $.2 on it having a 1 in it, and $.2 on it having a 5 in it",
-      "digit-bet"
-    )).toBe("automatic");
-    expect(inferWagerInteractionMode("draw a 6-digit number", "number draw")).toBe("automatic");
-  });
-
   it("rejects wallet-backed wagers when user wallets are disabled", async () => {
     const reserveWager = vi.fn();
     const { ctx } = fakeContext({
@@ -1026,7 +894,7 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, {
       kind: "coin",
-      wager: { playerUserId: "user", stakeUsd: 0.25, maxPayoutUsd: 0.5, game: "coin" }
+      wager: { playerUserId: "user", stakeUsd: 0.25, maxPayoutUsd: 0.5, game: "coin", interactionMode: "automatic", rule: { kind: "coin_side", side: "heads" } }
     });
 
     expect(response).toContain("User wallets and wallet-backed wagers are not enabled");
@@ -1285,7 +1153,7 @@ describe("drawRandom", () => {
     }), expect.any(Function));
   });
 
-  it("uses the scoped wager when a legacy model call corrupts the opaque wager id", async () => {
+  it("uses the scoped wager when a model call corrupts the opaque wager id", async () => {
     const getCurrentWager = vi.fn(async () => ({ id: "wager_68db51b7-1466-4ed4-b20c-128f8aeab273" }));
     const settleWager = vi.fn(async () => ({ wager: {}, transfer: null, userBalance: null }));
     const { ctx } = fakeContext({
@@ -1438,20 +1306,18 @@ describe("revealRandomness", () => {
     await verifyAllDraws(rngRepo, seeded?.id ?? "");
   });
 
-  it("reveals the requester's most recently drawn session from a standalone Discord prompt", async () => {
+  it("requires a reply to the scoped random result before revealing it", async () => {
     const { ctx, rngRepo } = fakeContext();
 
     await drawRandom(ctx, { kind: "coin" });
     const firstSession = [...rngRepo.sessions.values()][0];
     const secondPrompt = { ...ctx, requestMessageId: "1234567890000000002" } as ToolContext;
     await drawRandom(secondPrompt, { kind: "dice", sides: 20 });
-    const secondSession = [...rngRepo.sessions.values()].at(-1)!;
-
     const revealPrompt = { ...ctx, requestMessageId: "1234567890000000003" } as ToolContext;
     const response = await revealRandomness(revealPrompt);
 
-    expect(response).toContain(`Revealed session ${secondSession.id}`);
+    expect(response).toContain("Reply \"reveal randomness\" to a random result");
     expect((await rngRepo.getSession(firstSession.id))?.status).toBe("active");
-    expect((await rngRepo.getSession(secondSession.id))?.status).toBe("revealed");
+    expect((await rngRepo.getSession([...rngRepo.sessions.values()].at(-1)!.id))?.status).toBe("active");
   });
 });

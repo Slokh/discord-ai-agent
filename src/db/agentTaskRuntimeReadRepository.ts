@@ -227,12 +227,6 @@ export async function getAgentRuntimeTaskEventsForTask(pool: DbPool, input: { ta
 
 
 
-export async function getTaskProgressEventsForTask(pool: DbPool, input: { taskId: string; limit?: number }): Promise<TaskEvent[]> {
-    return getAgentRuntimeTaskEventsForTask(pool, input);
-  }
-
-
-
 export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     agentTaskBacklog: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>;

@@ -12,7 +12,7 @@ Owns sandboxed code-update execution from queued task to PR.
 
 ## Module Map
 
-- `sandboxRunner.ts`: sandbox entrypoint and compatibility facade; re-exports the public runner API.
+- `sandboxRunner.ts`: executable sandbox entrypoint.
 - `runnerPipeline.ts`: `main`/`runCodeUpdate` orchestration, timed phases, tool shims, harness selection.
 - `repoWorkspace.ts`: cached mirror/worktree, target branch/PR resolution, git state, push refs, git auth.
 - `dependencyCache.ts`: dependency cache key, node_modules restore/install, npm env scrubbing.

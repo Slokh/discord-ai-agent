@@ -39,14 +39,14 @@ describe("wager settlement validation", () => {
     expect(() => validateSettlementEvidence(reservation(), "root", "verified_randomness")).not.toThrow();
   });
 
-  it("also protects paused wagers created before interaction modes were recorded", () => {
-    const legacyPaused = reservation({
+  it("protects every paused wager regardless of interaction mode", () => {
+    const paused = reservation({
       interactionMode: "automatic",
       awaitingAction: true,
       stateVersion: 1,
       lastActionRequestId: "root"
     });
-    expect(() => validateSettlementEvidence(legacyPaused, "reply", "verified_randomness"))
+    expect(() => validateSettlementEvidence(paused, "reply", "verified_randomness"))
       .toThrow(/paused wager/);
   });
 });

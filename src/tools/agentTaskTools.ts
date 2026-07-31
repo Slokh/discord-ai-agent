@@ -147,7 +147,7 @@ export async function getAgentTaskStatus(ctx: ToolContext, input: { taskId?: str
 }
 
 async function getTaskStatusEvents(ctx: ToolContext, task: AgentTaskRecord, limit: number): Promise<TaskEvent[]> {
-  return ctx.repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit });
+  return ctx.repo.getAgentRuntimeTaskEventsForTask({ taskId: task.taskId, limit });
 }
 
 async function getTaskPullRequestStatus(ctx: ToolContext, task: AgentTaskRecord): Promise<string> {

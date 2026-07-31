@@ -540,46 +540,6 @@ export async function handleInternalApiRequest(input: {
     return;
   }
 
-  if (method === "GET" && url.pathname === "/api/tasks") {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
-    const limit = parseLimit(url.searchParams.get("limit"), 50, 100);
-    sendJson(input.response, 200, {
-      tasks: await input.repo.listRecentAgentTasks(limit),
-      generatedAt: new Date().toISOString(),
-    });
-    return;
-  }
-
-  const taskSnapshotMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
-  if (method === "GET" && taskSnapshotMatch) {
-    if (!authorizedUi(input.config, input.request, input.response, url)) return;
-    const taskId = decodeURIComponent(taskSnapshotMatch[1] ?? "");
-    const task = await input.repo.getAgentTask(taskId);
-    if (!task) {
-      sendJson(input.response, 404, { error: "task_not_found" });
-      return;
-    }
-    const [events, commands, runs] = await Promise.all([
-      input.repo.getTaskProgressEventsForTask({
-        taskId,
-        limit: parseLimit(url.searchParams.get("events"), 200, 300),
-      }),
-      input.repo.getSandboxCommandEventsForTask({
-        taskId,
-        limit: parseLimit(url.searchParams.get("commands"), 50, 100),
-      }),
-      input.repo.getSandboxRunsForTask(taskId),
-    ]);
-    sendJson(input.response, 200, {
-      task,
-      events,
-      commands,
-      runs,
-      generatedAt: new Date().toISOString(),
-    });
-    return;
-  }
-
   if (method === "GET" && url.pathname === "/metrics") {
     if (!authorizedUi(input.config, input.request, input.response, url)) return;
     sendText(input.response, 200, await renderMetrics(input.repo));

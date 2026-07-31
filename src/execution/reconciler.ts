@@ -67,10 +67,6 @@ async function sweepOrphanClusterResources(repo: DiscordAiAgentRepository, backe
   await backend.sweepOrphanResources(knownTaskIds);
 }
 
-export function isOrphanSandboxResource(input: { taskId?: string | null; knownTaskIds: Set<string> }) {
-  return Boolean(input.taskId && !input.knownTaskIds.has(input.taskId));
-}
-
 async function reconcileActiveRuns(repo: DiscordAiAgentRepository, backend: SandboxRunBackend) {
   const runs = await repo.listActiveSandboxRuns({ backend: backend.name });
   for (const run of runs) {

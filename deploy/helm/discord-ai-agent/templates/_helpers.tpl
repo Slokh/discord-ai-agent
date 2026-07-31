@@ -100,26 +100,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
   value: {{ .Values.config.tempoUsdToken | quote }}
 - name: WALLET_INITIAL_GRANT_USD
   value: {{ .Values.config.walletInitialGrantUsd | quote }}
-{{- if .Values.config.budgetUserTurnsPerDay }}
-- name: BUDGET_USER_TURNS_PER_DAY
-  value: {{ .Values.config.budgetUserTurnsPerDay | quote }}
-{{- end }}
-{{- if .Values.config.budgetUserImagesPerDay }}
-- name: BUDGET_USER_IMAGES_PER_DAY
-  value: {{ .Values.config.budgetUserImagesPerDay | quote }}
-{{- end }}
-{{- if .Values.config.budgetUserCodegenPerDay }}
-- name: BUDGET_USER_CODEGEN_PER_DAY
-  value: {{ .Values.config.budgetUserCodegenPerDay | quote }}
-{{- end }}
-{{- if .Values.config.budgetUserBugReportsPerDay }}
-- name: BUDGET_USER_BUG_REPORTS_PER_DAY
-  value: {{ .Values.config.budgetUserBugReportsPerDay | quote }}
-{{- end }}
-{{- if .Values.config.budgetGuildDailyUsd }}
-- name: BUDGET_GUILD_DAILY_USD
-  value: {{ .Values.config.budgetGuildDailyUsd | quote }}
-{{- end }}
 - name: CODEGEN_HARNESS
   value: {{ .Values.codegen.harness | quote }}
 - name: BOT_OWNER_USER_ID

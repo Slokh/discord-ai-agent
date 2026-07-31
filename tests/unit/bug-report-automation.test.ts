@@ -9,7 +9,7 @@ describe("Discord bug report automation", () => {
     expect(harness.jobs.enqueueAgentTask).not.toHaveBeenCalled();
   });
 
-  it("queues one budgeted bug-report task with bounded run evidence", async () => {
+  it("queues one bug-report task with bounded run evidence", async () => {
     const harness = fakeHarness(true);
     await expect(automateDiscordBugReport(harness.input as any)).resolves.toBe("queued");
     expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.objectContaining({
@@ -19,8 +19,6 @@ describe("Discord bug report automation", () => {
       request: expect.stringContaining("AI reply marked with 🐛")
     }));
     expect(harness.repo.attachDiscordBugReportTask).toHaveBeenCalledWith(expect.objectContaining({ statusMessageId: "status-1" }));
-    expect(harness.input.budgetRepo.countUserBugReportTasksSince).toHaveBeenCalledOnce();
-    expect(harness.input.budgetRepo.countUserCodegenTasksSince).not.toHaveBeenCalled();
   });
 });
 
@@ -56,16 +54,11 @@ function fakeHarness(created: boolean) {
     message, repo, jobs,
     input: {
       config: {
-        appRevision: "rev-1", budget: { userCodegenPerDay: 1, userBugReportsPerDay: 3, guildDailyUsd: 10 },
+        appRevision: "rev-1",
         execution: { codegenBackend: "local-process", codegenHarness: "opencode" },
         openRouter: { codegenModel: "test/model" }
       },
       repo,
-      budgetRepo: {
-        countUserCodegenTasksSince: vi.fn(async () => 1),
-        countUserBugReportTasksSince: vi.fn(async () => 0),
-        sumGuildEstimatedCostSince: vi.fn(async () => 0)
-      },
       agentRuntime, jobs, botUserId: "bot-1", message, reportedByUserId: "user-1"
     }
   };

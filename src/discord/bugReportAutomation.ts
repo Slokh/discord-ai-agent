@@ -3,7 +3,6 @@ import type { Message } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import { enqueueAgentRuntimeCodeUpdateTask } from "../agent/runtimeControlPlane.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
-import type { BudgetRepository } from "../db/budgetRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { JobRuntime } from "../jobs/queue.js";
 import { logger } from "../util/logger.js";
@@ -14,14 +13,13 @@ const MAX_EVIDENCE_CHARS = 12_000;
 export async function automateDiscordBugReport(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;
-  budgetRepo?: BudgetRepository;
   agentRuntime?: AgentRuntimeRepository;
   jobs?: JobRuntime;
   botUserId?: string | null;
   message: Message;
   reportedByUserId: string;
 }) {
-  if (!input.agentRuntime || !input.jobs || !input.budgetRepo || !input.botUserId) return "disabled" as const;
+  if (!input.agentRuntime || !input.jobs || !input.botUserId) return "disabled" as const;
   if (input.message.author.id !== input.botUserId) return "not_ai_reply" as const;
   const guildId = input.message.guildId;
   if (!guildId) return "not_ai_reply" as const;
@@ -55,22 +53,6 @@ export async function automateDiscordBugReport(input: {
   }
 
   try {
-    const since = startOfUtcDay(new Date());
-    const [userTasks, guildSpend] = await Promise.all([
-      input.config.budget.userBugReportsPerDay < 0
-        ? Promise.resolve(0)
-        : input.budgetRepo.countUserBugReportTasksSince({ guildId, userId: input.reportedByUserId, since }),
-      input.config.budget.guildDailyUsd < 0
-        ? Promise.resolve(0)
-        : input.budgetRepo.sumGuildEstimatedCostSince({ guildId, since })
-    ]);
-    if (input.config.budget.userBugReportsPerDay >= 0 && userTasks >= input.config.budget.userBugReportsPerDay) {
-      throw new Error("The daily automated-fix limit has been reached. This marker remains in the bug inbox.");
-    }
-    if (input.config.budget.guildDailyUsd >= 0 && guildSpend >= input.config.budget.guildDailyUsd) {
-      throw new Error("The server’s daily AI budget has been reached. This marker remains in the bug inbox.");
-    }
-
     const session = await input.agentRuntime.getSession({ sessionId: execution.sessionId });
     if (!session) throw new Error("The original AI run is no longer available for validation.");
     const [events, tools] = execution.traceId
@@ -122,8 +104,4 @@ function boundedEvidence(input: { execution: Awaited<ReturnType<DiscordAiAgentRe
     ...input.tools.map((tool) => `- ${tool.toolName}; args=${tool.argumentsSummary ?? ""}; result=${tool.resultSummary ?? ""}; error=${tool.error ?? ""}`)
   ].join("\n\n");
   return text.slice(0, MAX_EVIDENCE_CHARS);
-}
-
-function startOfUtcDay(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }

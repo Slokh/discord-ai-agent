@@ -25,7 +25,7 @@ These decisions drive every workstream. If one is reversed, re-plan the affected
 - **D3. Discord owns delivery state only.** The bot process persists delivery obligations (which message to edit, last event applied) and can recover rendering after a crash by replaying session events. It never owns execution truth.
 - **D4. Local-process is the default code-update backend.** Kubernetes stays supported as the advanced isolation mode, but new adopters get a working code-update flow without a cluster.
 - **D5. Private content lives in the overlay boundary.** Server-specific persona, emoji, examples, evals, and config live in `.discord-ai-agent/` or DB overlays/skills. The base repo ships neutral defaults. `scripts/scanRelease.ts` enforces the boundary.
-- **D6. Cost governance is a first-class feature.** Scoped toolsets, prompt-cache-friendly ordering, model tiering, and per-user/guild budgets. This goes beyond the Centaur references (they have operational limits only) because unattended hobby cost is a project goal.
+- **D6. Cost efficiency is a first-class feature.** Scoped toolsets, prompt-cache-friendly ordering, and model tiering reduce spend. Application-level daily quotas were subsequently removed in favor of the OpenRouter account credit ceiling.
 
 ## Workstream Order
 
@@ -146,17 +146,16 @@ Exit criteria: `npm run runs:inspect` shows typical-turn input tokens reduced â‰
 
 ---
 
-## WS4: Budgets And Abuse Guards
+## WS4: Cost Controls And Abuse Guards
 
-Goal: a friend spamming `@ai` cannot create surprise spend. Uses the `estimatedCostUsd` already recorded in tool audits.
+Goal: keep spend observable and execution bounded without maintaining a second quota system alongside OpenRouter.
 
-- [x] Per-user rolling limits (config-driven defaults, e.g. N turns/day, M image generations/day, 1 codegen task/day) checked at ingress before any model call.
-- [x] Per-guild daily estimated-spend cap; when exceeded, reply with a cheap static "budget exhausted" message.
-- [x] Owner/allowlist gating for `runCodingAgent`, `updateBotAvatar`, and optionally `generateImage` (config, default owner-only for codegen).
+- [x] OpenRouter account credits provide the spend ceiling; application-level per-user and per-guild daily quotas were removed.
+- [x] Permission gating remains for administrative mutations such as `updateBotAvatar`; code-update tasks use the same admission flow for every member.
 - [x] Surface spend on demand: an ops-tool answer for "how much have we spent today/this month" (replaces the reverted cost-footer approach from PR #150/#151).
 - [x] Per-execution silence timeout + hard timeout (Centaur-style `EXECUTION_SILENCE_TIMEOUT`/`HARD_TIMEOUT`) replacing the single 30-minute blanket for chat; keep long timeouts for code tasks only.
 
-Exit criteria: limits verifiably trip in tests; a spam loop costs bounded dollars; expensive tools are permission-gated.
+Exit criteria: provider credits bound spend, costs remain observable, and administrative tools are permission-gated.
 
 ---
 

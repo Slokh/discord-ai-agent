@@ -137,24 +137,6 @@ export async function handleMessageCreate(
     deliveryKey: requestId,
     logger: requestLogger
   });
-  const budgetDecision = await checkIngressBudget(input, {
-    guildId: message.guildId,
-    channelId: message.channelId,
-    userId: message.author.id,
-    requestId,
-    text
-  });
-  if (!budgetDecision.allowed) {
-    requestLogger.info({ reason: budgetDecision.reason }, "Discord AI Agent mention rejected by budget limits");
-    await recordTraceEvent(input.repo, {
-      eventName: "budget.ingress.rejected",
-      level: "warn",
-      summary: budgetDecision.reason,
-      metadata: budgetDecision.metadata
-    });
-    await responseSink.sendError(budgetDecision.message, discordTraceFooter(input.config, requestId, messageStartedAt));
-    return;
-  }
   if (input.walletService && input.config.payments.userWalletsEnabled) {
     await input.walletService.enqueueUserProvision(
       { guildId: message.guildId, userId: message.author.id },
@@ -356,88 +338,4 @@ export function queueIncomingMessageEmbedding(
     .catch((error) => {
       logger.warn({ err: error, messageId: message.id, channelId: message.channelId, source }, "Failed to enqueue message embedding");
     });
-}
-
-export type IngressBudgetDecision =
-  | { allowed: true }
-  | { allowed: false; reason: string; message: string; metadata: Record<string, unknown> };
-
-export async function checkIngressBudget(
-  input: Pick<DiscordAgentRequestInput, "budgetRepo" | "config">,
-  request: { guildId: string; channelId: string; userId: string; requestId: string; text: string }
-): Promise<IngressBudgetDecision> {
-  const budgetRepo = input.budgetRepo;
-  if (!budgetRepo) return { allowed: true };
-  const dayStart = startOfUtcDay(new Date());
-  const { budget } = input.config;
-  if (typeof budgetRepo.reserveUserChatTurn === "function") {
-    const spend = budget.guildDailyUsd >= 0
-      ? await budgetRepo.sumGuildEstimatedCostSince({ guildId: request.guildId, since: dayStart })
-      : 0;
-    if (budget.guildDailyUsd >= 0 && spend >= budget.guildDailyUsd) {
-      return {
-        allowed: false,
-        reason: "guild_daily_spend_exhausted",
-        message: "Budget exhausted for today. Try again tomorrow.",
-        metadata: { guildId: request.guildId, spend, limit: budget.guildDailyUsd },
-      };
-    }
-    const reservation = await budgetRepo.reserveUserChatTurn({
-      guildId: request.guildId,
-      userId: request.userId,
-      requestId: request.requestId,
-      since: dayStart,
-      defaultLimit: budget.userTurnsPerDay,
-    });
-    if (!reservation.allowed) {
-      return {
-        allowed: false,
-        reason: "user_daily_turn_limit_exhausted",
-        message: `You've hit today's AI turn limit (${reservation.limit} per day). Try again tomorrow.`,
-        metadata: {
-          guildId: request.guildId,
-          userId: request.userId,
-          turns: reservation.turns,
-          limit: reservation.limit,
-          limitSource: reservation.limitSource,
-        },
-      };
-    }
-    return { allowed: true };
-  }
-  const [turnLimitOverride, spend] = await Promise.all([
-    budgetRepo.getUserTurnLimitOverride({ guildId: request.guildId, userId: request.userId }),
-    budget.guildDailyUsd >= 0 ? budgetRepo.sumGuildEstimatedCostSince({ guildId: request.guildId, since: dayStart }) : Promise.resolve(0)
-  ]);
-  if (budget.guildDailyUsd >= 0 && spend >= budget.guildDailyUsd) {
-    return {
-      allowed: false,
-      reason: "guild_daily_spend_exhausted",
-      message: "Budget exhausted for today. Try again tomorrow.",
-      metadata: { guildId: request.guildId, spend, limit: budget.guildDailyUsd }
-    };
-  }
-  const turnLimit = turnLimitOverride ?? budget.userTurnsPerDay;
-  if (turnLimit >= 0) {
-    const turns = await budgetRepo.countUserChatTurnsSince({ guildId: request.guildId, userId: request.userId, since: dayStart });
-    if (turns >= turnLimit) {
-      return {
-        allowed: false,
-        reason: "user_daily_turn_limit_exhausted",
-        message: `You've hit today's AI turn limit (${turnLimit} per day). Try again tomorrow.`,
-        metadata: {
-          guildId: request.guildId,
-          userId: request.userId,
-          turns,
-          limit: turnLimit,
-          limitSource: turnLimitOverride === undefined ? "default" : "override"
-        }
-      };
-    }
-  }
-  return { allowed: true };
-}
-
-function startOfUtcDay(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }

@@ -84,11 +84,10 @@ double-post. A first startup without a known previous revision records a
 baseline and waits for the next real diff.
 
 Optional administrative permission keys (strongly recommended): the chart maps
-these into every pod when present in the same Secret. Without them, restricted
-administrative tools such as avatar updates and per-user turn limits are open to
-every guild member. Code-update tasks are intentionally available to every
-member and remain protected by per-user daily limits, sandbox isolation, CI,
-and branch protection.
+these into every pod when present in the same Secret. Avatar updates and other
+restricted administrative tools use these permissions. Code-update tasks are
+intentionally available to every member and remain protected by sandbox
+isolation, CI, and branch protection.
 
 ```bash
 kubectl -n discord-ai-agent patch secret discord-ai-agent-env --type merge -p \
@@ -182,14 +181,9 @@ For GitHub Actions deploys, set repository variables instead:
 - optional `SANDBOX_CACHE_SIZE`
 - optional `SANDBOX_CACHE_STORAGE_CLASS`
 
-Daily budget limits can also be overridden with repository variables. Leave
-them unset to keep the application defaults (50 turns, 10 images, 1
-code-update task per user; $10/day guild spend); use `-1` to disable a limit:
-
-- optional `BUDGET_USER_TURNS_PER_DAY`
-- optional `BUDGET_USER_IMAGES_PER_DAY`
-- optional `BUDGET_USER_CODEGEN_PER_DAY`
-- optional `BUDGET_GUILD_DAILY_USD`
+The application does not enforce parallel per-user or per-guild daily spend
+quotas. Configure the OpenRouter account credit limit as the spend ceiling;
+the application continues to record estimated cost for operational visibility.
 
 That deployment consumes only `agent.task`, uses the `local-process` backend, registers a lease in Postgres, and keeps repo, dependency, and harness caches warm on the mounted sandbox cache volume. The regular worker automatically stops consuming code-update task jobs while continuing crawl, embedding, and Discord request work.
 

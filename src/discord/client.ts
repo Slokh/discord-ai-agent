@@ -175,7 +175,7 @@ export function createDiscordAiAgentBot(input: {
         persistReactionMessageUpdate(input, reaction).catch((error) => {
           logger.warn({ err: error }, "Failed to persist reaction add");
         }),
-        handleDiscordBugMarkerReaction(input, reaction, user, true).catch((error) => {
+        handleDiscordBugMarkerReaction({ ...input, botUserId: client.user?.id }, reaction, user, true).catch((error) => {
           logger.warn({ err: error }, "Failed to add Discord bug marker");
         }),
         handleRegenerateReplyReaction(input, client, reaction, user).catch((error) => {
@@ -191,7 +191,7 @@ export function createDiscordAiAgentBot(input: {
         persistReactionMessageUpdate(input, reaction).catch((error) => {
           logger.warn({ err: error }, "Failed to persist reaction remove");
         }),
-        handleDiscordBugMarkerReaction(input, reaction, user, false).catch((error) => {
+        handleDiscordBugMarkerReaction({ ...input, botUserId: client.user?.id }, reaction, user, false).catch((error) => {
           logger.warn({ err: error }, "Failed to remove Discord bug marker");
         })
       ]);

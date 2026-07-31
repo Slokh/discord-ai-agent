@@ -192,7 +192,7 @@ export class BudgetRepository {
         FROM agent_tasks
         WHERE guild_id = $1
           AND user_id = $2
-          AND task_type = 'code_update'
+          AND task_type IN ('code_update', 'bug_report')
           AND created_at >= $3
       `,
       [input.guildId, input.userId, input.since]

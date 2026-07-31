@@ -27,6 +27,7 @@ import {
 } from "./repoWorkspace.js";
 import { codegenHarnessDisplayName, loadSandboxEnv, parseGitHubRepository, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
 import { conciseError, formatDuration, uniqueStrings } from "./sandboxUtils.js";
+import { readBugReportResult } from "./bugReportResult.js";
 
 type CacheSummary = {
   repo?: "hit" | "miss";
@@ -44,18 +45,22 @@ export async function main() {
   try {
     const result = await runCodeUpdate(env, timings, totalStartedAt);
     await complete(env, {
-      status: "succeeded",
+      status: result.status,
       branchName: result.branchName,
       prUrl: result.prUrl,
       draft: result.draft,
       verifyPassed: result.verifyPassed,
+      error: result.status === "no_changes" ? result.bugReportResult?.summary ?? null : null,
       metadata: {
         timingsMs: result.timings,
         cache: result.cacheSummary,
         targetBranch: env.targetBranch,
         targetPullRequestNumber: env.targetPullRequestNumber,
         targetPullRequestUrl: env.targetPullRequestUrl,
-        updatedExistingPullRequest: result.updatedExistingPullRequest
+        updatedExistingPullRequest: result.updatedExistingPullRequest,
+        bugReportDisposition: result.bugReportResult?.disposition ?? null,
+        bugReportSummary: result.bugReportResult?.summary ?? null,
+        autoMergeEnabled: result.autoMergeEnabled
       }
     });
   } catch (error) {
@@ -205,13 +210,40 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
 
     await runSelectedCodegenHarness({ env, timings, adapter: harnessAdapter, input: harnessInput });
 
+    const bugReportResult = env.taskType === "bug_report" ? await readBugReportResult(env.bugReportResultPath) : null;
+
     await progress(env, "diff", `Checking whether ${codegenHarnessDisplayName(env.codegenHarness)} produced real code changes.`, {
       harness: env.codegenHarness,
       baseRevision
     });
     const changeState = await readGitChangeState(checkoutDir, baseRevision);
     if (!changeState.hasChanges) {
+      if (bugReportResult && bugReportResult.disposition !== "confirmed_fixed") {
+        timings.total = Date.now() - totalStartedAt;
+        await recordArtifact(env, {
+          kind: "diagnostic",
+          name: "Bug validation result",
+          content: JSON.stringify(bugReportResult, null, 2),
+          contentType: "application/json"
+        });
+        await progress(env, "bug_not_confirmed", bugReportResult.summary, { disposition: bugReportResult.disposition });
+        return {
+          status: "no_changes" as const,
+          branchName: null,
+          prUrl: null,
+          draft: null,
+          verifyPassed: null,
+          updatedExistingPullRequest: false,
+          autoMergeEnabled: false,
+          bugReportResult,
+          timings,
+          cacheSummary
+        };
+      }
       throw new Error("Agent task produced no diff; no PR will be opened.");
+    }
+    if (env.taskType === "bug_report" && bugReportResult?.disposition !== "confirmed_fixed") {
+      throw new Error("Bug task produced code changes without a confirmed_fixed validation result; refusing to push.");
     }
     await progress(env, "diff_detected", "Detected generated code changes.", gitChangeStateMetadata(changeState));
     const diffStat = await runCommand("git", ["diff", "--stat", baseRevision, "--"], { cwd: checkoutDir, taskEnv: env, step: "diff_stat" });
@@ -336,6 +368,21 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
         });
     }
 
+    let autoMergeEnabled = false;
+    if (env.taskType === "bug_report" && prNumber) {
+      const pr = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
+      await octokit.graphql(
+        `mutation EnableAutoMerge($pullRequestId: ID!) {
+          enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
+            pullRequest { number }
+          }
+        }`,
+        { pullRequestId: pr.data.node_id }
+      );
+      autoMergeEnabled = true;
+      await progress(env, "auto_merge_enabled", "Required checks will automatically merge and deploy this fix.", { prUrl, prNumber });
+    }
+
     timings.total = Date.now() - totalStartedAt;
     await recordArtifact(env, {
       kind: "pr_body",
@@ -355,11 +402,14 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     });
 
     return {
+      status: "succeeded" as const,
       branchName,
       prUrl,
       draft,
       verifyPassed: null,
       updatedExistingPullRequest,
+      autoMergeEnabled,
+      bugReportResult,
       timings,
       cacheSummary
     };

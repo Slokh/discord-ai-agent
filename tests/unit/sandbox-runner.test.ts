@@ -157,6 +157,18 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("where is this defined");
   });
 
+  it("validates bugs before edits and omits private evidence from PR bodies", () => {
+    const env = {
+      taskId: "bug-1", taskType: "bug_report" as const,
+      bugReportResultPath: "/tmp/bug-1.json", requestedBy: "user-1",
+      taskRequest: "secret-channel-run-payload"
+    };
+    expect(codeUpdatePrompt(env)).toContain("Reproduce or establish the defect");
+    const body = codeUpdatePullRequestBody({ env });
+    expect(body).toContain("Original private Discord evidence is intentionally omitted");
+    expect(body).not.toContain("secret-channel-run-payload");
+  });
+
   it("installs GitHub CLI in the sandbox runtime image", async () => {
     const dockerfile = await fs.readFile(path.join(process.cwd(), "Dockerfile"), "utf8");
 

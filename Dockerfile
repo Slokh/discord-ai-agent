@@ -42,6 +42,8 @@ CMD ["node", "dist/src/index.js"]
 
 FROM runtime AS codegen
 USER root
+RUN npm install --global npm@11.19.0 \
+  && npm cache clean --force
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \
   && mkdir -p -m 755 /etc/apt/keyrings \

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { Buffer } from "node:buffer";
 import { loadConfig } from "../src/config/env.js";
 import { extractDiscordMessageId } from "../src/observability/runs.js";
+import { resolveProductionControlPlane } from "./productionControlPlane.js";
 
 type Args = {
   audit: boolean;
@@ -29,9 +29,11 @@ async function main() {
   const config = loadConfig();
   const token = config.discord.token;
   if (!token) throw new Error("DISCORD_TOKEN is required.");
-  const apiUrl = args.apiUrl ?? config.controlUi.publicUrl ?? kubernetesControlUiUrl(config.execution.kubernetes.namespace);
-  if (!apiUrl) throw new Error("--api-url or CONTROL_UI_PUBLIC_URL is required to correlate runs.");
-  const auth = args.auth ?? config.controlUi.authPassword ?? kubernetesSecret(config.execution.kubernetes.namespace, "CONTROL_UI_AUTH_PASSWORD");
+  const { apiUrl, auth } = resolveProductionControlPlane({
+    apiUrl: args.apiUrl ?? config.controlUi.publicUrl,
+    auth: args.auth ?? config.controlUi.authPassword,
+    namespace: config.execution.kubernetes.namespace,
+  });
   const discord = new DiscordReader(token);
   const bot = await discord.me();
   if (args.audit) {
@@ -172,10 +174,18 @@ function formatAudit(input: { channelId: string; since: Date; rows: any[] }) {
 }
 function counts(values: string[]) { return [...new Map(values.map((value) => [value, values.filter((item) => item === value).length])).entries()].map(([name, count]) => ({ name, count })); }
 function channelIdFromReference(reference: string) { try { const parts = new URL(reference).pathname.split("/").filter(Boolean); return parts[parts.indexOf("channels") + 2]; } catch { return undefined; } }
-function deploymentStartedAt(namespace: string) { const value = kubectl(["-n", namespace, "get", "deployment", "discord-ai-agent-bot", "-o", "jsonpath={.status.conditions[?(@.type==\"Available\")].lastTransitionTime}"]); if (!value) throw new Error("Could not resolve the deployed bot timestamp; pass --since."); return new Date(value); }
-function kubernetesControlUiUrl(namespace: string) { return kubectl(["-n", namespace, "get", "deployment", "discord-ai-agent-api", "-o", "jsonpath={.spec.template.spec.containers[0].env[?(@.name==\"CONTROL_UI_PUBLIC_URL\")].value}"]) || undefined; }
-function kubernetesSecret(namespace: string, key: string) { const value = kubectl(["-n", namespace, "get", "secret", "discord-ai-agent-env", "-o", `jsonpath={.data.${key}}`]); return value ? Buffer.from(value, "base64").toString("utf8") : undefined; }
-function kubectl(args: string[]) { try { return execFileSync("kubectl", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return ""; } }
+function deploymentStartedAt(namespace: string) {
+  const value = kubectl(["-n", namespace, "get", "deployment", "discord-ai-agent-bot", "-o", "jsonpath={.status.conditions[?(@.type==\"Available\")].lastTransitionTime}"]);
+  if (!value) throw new Error("Could not resolve the deployed bot timestamp; pass --since.");
+  return new Date(value);
+}
+function kubectl(args: string[]) {
+  try {
+    return execFileSync("kubectl", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
 function parseArgs(argv: string[]): Args { const args: Args = { audit: false, sinceDeploy: false, includeReplyChains: false }; for (let index = 0; index < argv.length; index += 1) { const value = argv[index]!; if (value === "--audit") args.audit = true; else if (value === "--channel") args.channelId = argv[++index]; else if (value === "--since") args.since = new Date(argv[++index]!); else if (value === "--since-deploy") args.sinceDeploy = true; else if (value === "--include-reply-chains") args.includeReplyChains = true; else if (value === "--api-url") args.apiUrl = argv[++index]; else if (value === "--auth") args.auth = argv[++index]; else if (!value.startsWith("-")) args.reference = args.reference ? `${args.reference} ${value}` : value; else throw new Error(`Unknown option ${value}`); } if (args.since && Number.isNaN(+args.since)) throw new Error("--since must be an ISO timestamp."); return args; }
 
 main().catch((error) => { console.error(error instanceof Error ? error.message : error); process.exit(1); });

@@ -72,6 +72,10 @@ New contributors and coding agents should start with the [documentation guide](d
 
 The root [coding-agent guide](AGENTS.md) contains the concise mandatory rules. Folder READMEs are ownership contracts; active and historical plans are labeled in the documentation guide so completed checklists are not mistaken for current work.
 
+## Production-First Operator Workflow
+
+Operator tooling targets production by default. `npm run runs:inspect`, `npm run tasks:status`, `npm run discord:debug`, `npm run discord:audit`, and `npm run console:dev:live` resolve the production control plane from `CONTROL_UI_PUBLIC_URL` or the current local Kubernetes context. They do not silently inspect localhost or a local database. Use an explicit `--api-url` when needed; `--source db` is reserved for deliberate isolated local inspection.
+
 ## Requirements
 
 - Node.js 22+
@@ -84,9 +88,9 @@ Optional, for code-update PRs:
 - A GitHub repository the bot can push to
 - A fine-grained GitHub token (or GitHub App credentials)
 
-That is the whole stack. Local Postgres plus the `bot` and `worker` roles is the supported private-server setup; Kubernetes is an optional advanced isolation mode (see [Advanced deployment](#advanced-deployment)).
+Production is the normal operating target. The isolated local Postgres plus `bot`/`worker` setup below remains available when deliberately needed; Kubernetes provides the deployed runtime and the production-control-plane connection used by operator tooling (see [Advanced deployment](#advanced-deployment)).
 
-## Quickstart
+## Explicit Local Setup
 
 ```bash
 git clone https://github.com/your-org/discord-ai-agent.git
@@ -95,7 +99,7 @@ npm install
 cp .env.example .env
 ```
 
-Start local Postgres and migrate:
+For an isolated local environment, start local Postgres and migrate:
 
 ```bash
 docker compose up -d postgres
@@ -111,7 +115,7 @@ DISCORD_GUILD_ID=
 OPENROUTER_API_KEY=
 ```
 
-`DATABASE_URL` already defaults to the Docker Compose Postgres, so you can leave it alone; set it if your Postgres runs elsewhere. To enable code-update PRs, also set `GITHUB_REPOSITORY`, `GITHUB_TOKEN` (a fine-grained PAT limited to that repo), and `TASK_SIGNING_SECRET` — the bot politely refuses code-update requests until all three are configured.
+This is an explicit local setup. Normal operator work should stay connected to production through the production-control-plane tooling above. To enable code-update PRs locally, also set `GITHUB_REPOSITORY`, `GITHUB_TOKEN` (a fine-grained PAT limited to that repo), and `TASK_SIGNING_SECRET` — the bot politely refuses code-update requests until all three are configured.
 
 Generate an invite URL:
 
@@ -224,7 +228,7 @@ Required:
 | `DISCORD_CLIENT_ID` | Discord application/client ID |
 | `DISCORD_GUILD_ID` | Discord server to run in |
 | `OPENROUTER_API_KEY` | Chat, embeddings, images, and hosted tools |
-| `DATABASE_URL` | Postgres connection string (defaults to the Docker Compose Postgres) |
+| `DATABASE_URL` | Postgres connection string for the deployed app or explicit direct-DB work; the isolated-local template uses Docker Compose Postgres. |
 
 Required only for code-update PRs (the feature stays disabled with a clear message until all are set):
 

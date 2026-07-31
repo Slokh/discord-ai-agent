@@ -4,6 +4,7 @@ import { DiscordAiAgentRepository } from "../src/db/repositories.js";
 import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, selectArtifacts } from "../src/observability/runInspector.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../src/observability/runs.js";
 import type { RunSnapshot, RunSummary } from "../src/observability/runTypes.js";
+import { resolveProductionControlPlane } from "./productionControlPlane.js";
 
 type Args = {
   reference: string;
@@ -39,9 +40,11 @@ async function main() {
   const config = loadConfig();
   const source = args.source;
   if (source === "api") {
-    const apiUrl = (args.apiUrl ?? config.controlUi.publicUrl)?.replace(/\/$/, "");
-    if (!apiUrl) throw new Error("--api-url or CONTROL_UI_PUBLIC_URL is required with --source api.");
-    const auth = args.auth ?? config.controlUi.authPassword;
+    const { apiUrl, auth } = resolveProductionControlPlane({
+      apiUrl: args.apiUrl ?? config.controlUi.publicUrl,
+      auth: args.auth ?? config.controlUi.authPassword,
+      namespace: config.execution.kubernetes.namespace,
+    });
     if (args.list) {
       const runs = await loadRunListFromApi({ apiUrl, auth, args });
       await writeRunList(runs, args, async (runId) => loadSnapshotFromApi({ apiUrl, auth, runId }));
@@ -142,7 +145,7 @@ async function resolveRunId(repo: DiscordAiAgentRepository, reference: string) {
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     reference: "",
-    source: process.env.RUNS_INSPECT_SOURCE === "api" ? "api" : "db",
+    source: process.env.RUNS_INSPECT_SOURCE === "db" ? "db" : "api",
     json: false,
     includeDebug: false,
     includeMetadata: false,
@@ -358,16 +361,16 @@ function parseBoundedInteger(value: string, min: number, max: number) {
 }
 
 function printUsage() {
-  process.stdout.write(`Inspect an agent run from Postgres.
+  process.stdout.write(`Inspect a production agent run through the production control plane.
 
 Usage:
   npm run runs:inspect -- <run-id-or-discord-message-link> [options]
   npm run runs:inspect -- --list [options]
 
 Options:
-  --source <db|api>           Data source. Default: db, or RUNS_INSPECT_SOURCE=api.
-  --api-url <url>             Control UI/API base URL. Implies --source api.
-  --auth <password>           Control UI password for API mode. Defaults to CONTROL_UI_AUTH_PASSWORD.
+  --source <db|api>           Data source. Default: production API; use db only for intentional isolated local work.
+  --api-url <url>             Production Control UI/API base URL. Implies --source api.
+  --auth <password>           Production Control UI password. Defaults to env or Kubernetes secret.
   --list, --recent            List recent runs instead of inspecting one run.
   --kind <kind>               Filter list mode by run kind, e.g. codegen, discord, prompt.
   --status <status>           Filter list mode by status, e.g. failed, no_changes, running.

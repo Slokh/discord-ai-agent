@@ -7,6 +7,8 @@ This repository is a TypeScript Discord assistant for private communities. Users
 - Log papercuts and friction in tooling, docs, APIs, tests, or conventions as you hit them with `npx frog log`.
 - Do not add global, system, or internal friction.
 - Run `npx frog list` first to see what is already known.
+- Frog is not the Discord bug-report system. A member's `🐛` reaction is a private, requester-scoped product report; start its repair flow with `listDiscordBugMarkers` and the linked runtime evidence.
+- Never copy Discord bug-marker excerpts, links, member identities, or private-server context into a Frog entry, GitHub issue, or pull-request body. Frog may record only separate repository-development friction encountered while repairing the report.
 
 ## Read First
 

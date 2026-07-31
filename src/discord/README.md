@@ -41,6 +41,10 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Bug-marker reactions: `tests/unit/bug-marker-reaction.test.ts`.
 - Deployment notes: `tests/unit/deployment-announcements.test.ts`.
 
+## Debugging deployed replies
+
+Use [`../../docs/deployment-debugging.md`](../../docs/deployment-debugging.md) and its `discord:audit` / `discord:debug` scripts before browser automation. They correlate Discord messages and retained reply chains with canonical agent-runtime traces.
+
 ## Structure
 
 `client.ts` is the thin bot entrypoint. Mention parsing, message ingress/persistence, request context, agent-runtime queue handoff, response rendering, and delivery sweeps live in focused sibling modules; add new behavior to the owning module, not `client.ts`.

@@ -56,7 +56,7 @@ export const discordActionToolHandlers = {
           content,
           status: isSuccessfulRandomDrawResult(content) ? "ok" : "error",
           retryable: !isSuccessfulRandomDrawResult(content),
-          outcome: randomDrawOutcome(content, Boolean(wager)),
+          outcome: randomDrawOutcome(content),
         };
   },
   "revealRandomness": async (ctx, _route, _originalText) => {
@@ -81,7 +81,17 @@ export const discordActionToolHandlers = {
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
 
-function randomDrawOutcome(content: string, wagerActive: boolean) {
+export function randomDrawOutcome(content: string) {
   if (!isSuccessfulRandomDrawResult(content)) return { kind: "rng_draw", state: "failed" as const };
-  return { kind: "rng_draw", state: "succeeded" as const, wagerActive };
+  // `drawRandom` normalizes empty/default model arguments before deciding
+  // whether it reserved a wager. The text below is its confirmed lifecycle
+  // result, so it is safe to use for orchestration without trusting raw args.
+  const wagerActive = /\b(?:scoped wallet wager is reserved|continues the scoped active wallet wager)\b/i.test(content);
+  const nextTool = content.match(/\bRequired next (?:action|tool):[\s\S]{0,500}?\bcall\s+(awaitRandomWagerAction|settleRandomWager)\b/i)?.[1];
+  return {
+    kind: "rng_draw",
+    state: "succeeded" as const,
+    wagerActive,
+    ...(nextTool ? { nextTool } : {}),
+  };
 }

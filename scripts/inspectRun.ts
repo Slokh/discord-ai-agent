@@ -22,6 +22,10 @@ type Args = {
   eventLimit: number;
   terminalLimit: number;
   artifactSelector?: string;
+  channelId?: string;
+  revision?: string;
+  since?: Date;
+  warningsOnly: boolean;
 };
 
 async function main() {
@@ -40,7 +44,7 @@ async function main() {
     const auth = args.auth ?? config.controlUi.authPassword;
     if (args.list) {
       const runs = await loadRunListFromApi({ apiUrl, auth, args });
-      writeRunList(runs, args);
+      await writeRunList(runs, args, async (runId) => loadSnapshotFromApi({ apiUrl, auth, runId }));
       return;
     }
     const { snapshot, artifactContents } = await loadFromApi({ apiUrl, auth, args });
@@ -54,7 +58,7 @@ async function main() {
     const repo = new DiscordAiAgentRepository(pool);
     if (args.list) {
       const runs = await listRunSummaries(repo, { limit: listFetchLimit(args), includeEmbeddings: args.includeEmbeddings });
-      writeRunList(runs, args);
+      await writeRunList(runs, args, async (runId) => (await getRunSnapshot(repo, runId)) ?? null);
       return;
     }
     const runId = await resolveRunId(repo, args.reference);
@@ -73,12 +77,45 @@ async function main() {
   }
 }
 
-function writeRunList(runs: RunSummary[], args: Args) {
+async function writeRunList(
+  runs: RunSummary[],
+  args: Args,
+  loadSnapshot: (runId: string) => Promise<RunSnapshot | null>,
+) {
+  const matching = runs.filter((run) =>
+    (!args.channelId || run.channelId === args.channelId) &&
+    (!args.revision || String(run.metadata.appRevision ?? "") === args.revision) &&
+    (!args.since || run.startedAt >= args.since)
+  );
+  const filtered = args.warningsOnly
+    ? await filterWarningRuns(matching, loadSnapshot)
+    : matching;
   if (args.json) {
-    process.stdout.write(`${JSON.stringify({ runs }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ runs: filtered }, null, 2)}\n`);
     return;
   }
-  process.stdout.write(formatRunSummaryList(runs, { kind: args.kind, status: args.status, sort: args.sort, limit: args.eventLimit }));
+  process.stdout.write(formatRunSummaryList(filtered, { kind: args.kind, status: args.status, sort: args.sort, limit: args.eventLimit }));
+}
+
+async function filterWarningRuns(
+  runs: RunSummary[],
+  loadSnapshot: (runId: string) => Promise<RunSnapshot | null>,
+) {
+  const included: RunSummary[] = [];
+  const queue = [...runs];
+  const workers = Array.from({ length: Math.min(8, queue.length) }, async () => {
+    let run: RunSummary | undefined;
+    while ((run = queue.shift())) {
+      if (run.status === "failed") {
+        included.push(run);
+        continue;
+      }
+      const snapshot = await loadSnapshot(run.runId);
+      if (snapshot?.events.some((event) => event.level === "warn" || event.level === "error")) included.push(run);
+    }
+  });
+  await Promise.all(workers);
+  return runs.filter((run) => included.includes(run));
 }
 
 function writeSnapshot(snapshot: RunSnapshot, args: Args) {
@@ -114,7 +151,8 @@ function parseArgs(argv: string[]): Args {
     list: false,
     sort: "updated",
     eventLimit: 80,
-    terminalLimit: 40
+    terminalLimit: 40,
+    warningsOnly: false
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -183,6 +221,27 @@ function parseArgs(argv: string[]): Args {
       index += 1;
       continue;
     }
+    if (arg === "--channel") {
+      args.channelId = nextValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--revision") {
+      args.revision = nextValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg === "--since") {
+      const since = new Date(nextValue(argv, index, arg));
+      if (Number.isNaN(since.getTime())) throw new Error("--since must be an ISO timestamp.");
+      args.since = since;
+      index += 1;
+      continue;
+    }
+    if (arg === "--warnings-only") {
+      args.warningsOnly = true;
+      continue;
+    }
     if (arg === "--limit") {
       args.eventLimit = parseBoundedInteger(nextValue(argv, index, arg), 1, 500);
       index += 1;
@@ -233,8 +292,16 @@ async function loadFromApi(input: { apiUrl: string; auth?: string; args: Args })
   return { snapshot, artifactContents };
 }
 
+async function loadSnapshotFromApi(input: { apiUrl: string; auth?: string; runId: string }) {
+  const headers = input.auth ? { authorization: `Bearer ${input.auth}` } : undefined;
+  const response = await fetchJson<unknown>(`${input.apiUrl}/api/runs/${encodeURIComponent(input.runId)}`, headers);
+  return response ? reviveRunSnapshot(response) : null;
+}
+
 function listFetchLimit(args: Args) {
-  return args.sort === "slowest" || args.kind || args.status ? Math.max(args.eventLimit, 100) : args.eventLimit;
+  return args.sort === "slowest" || args.kind || args.status || args.channelId || args.revision || args.since || args.warningsOnly
+    ? Math.max(args.eventLimit, 200)
+    : args.eventLimit;
 }
 
 async function fetchJson<T>(url: string, headers: Record<string, string> | undefined, options: { optionalNotFound?: boolean } = {}): Promise<T | undefined> {
@@ -310,6 +377,10 @@ Options:
   --terminal                 Include terminal command output tail.
   --terminal-limit <count>   Terminal entries to print when --terminal is set. Default: 40.
   --artifact <selector>      Print full matching artifact content. Use "all" for every artifact.
+  --channel <id>             Filter listed runs to one Discord channel.
+  --revision <sha>           Filter listed runs to one deployed application revision.
+  --since <ISO timestamp>    Filter listed runs started at or after this time.
+  --warnings-only            Filter listed runs with a failure/warning signal.
   --limit <count>            Timeline items to print. Default: 80.
   --metadata                 Include metadata JSON under timeline rows.
   --debug                    Include debug-level events.

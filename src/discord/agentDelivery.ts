@@ -5,6 +5,7 @@ import type { AgentRuntimeExecutionJob } from "../jobs/queue.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
 import { continuationEvidenceFromResponse } from "../agent/continuationEvidence.js";
+import { isInternalControlText } from "../agent/internalControlText.js";
 import { agentRuntimeTurnInputText, assertAgentRuntimeTurnEnvelopeScope, loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
@@ -469,7 +470,14 @@ export async function executeDiscordAgentRequest(
       requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Kept tool results in trace memory only");
     }
 
-    await input.repo.appendConversationTurn({
+    if (isInternalControlText(storedResponseContent)) {
+      await recordTraceEvent(input.repo, {
+        eventName: "agent.memory.internal_control_rejected",
+        level: "warn",
+        summary: "Skipped internal control text instead of persisting it as assistant conversation memory.",
+        metadata: { replyMessageId: finalReply.id },
+      }).catch((error) => requestLogger.warn({ err: error }, "Failed to record rejected assistant-memory content"));
+    } else await input.repo.appendConversationTurn({
       threadKey,
       turnId: request.requestId,
       user: {

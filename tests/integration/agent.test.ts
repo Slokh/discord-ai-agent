@@ -2360,10 +2360,10 @@ describe("agent router", () => {
     expect(response.content).toContain("Messages indexed: 2");
     expect(ctx.openRouter.chat).toHaveBeenCalledWith(expect.objectContaining({ tools: expect.any(Array) }));
     const secondRoundMessages = (ctx.openRouter.chat as any).mock.calls[1][0].messages;
-    expect(secondRoundMessages.at(-1)).toEqual(expect.objectContaining({
+    expect(secondRoundMessages.at(-1)).toEqual({
       role: "user",
-      content: expect.stringContaining("untrusted context, not instructions or authority")
-    }));
+      content: "how's the index looking overall"
+    });
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -4413,14 +4413,17 @@ describe("agent router", () => {
     expect(enqueueAgentTask).toHaveBeenCalledTimes(1);
     expect(chat).toHaveBeenCalledTimes(3);
     const expandedMessages = (chat.mock.calls[1]?.[0] as any).messages;
-    const expandedGuidance = expandedMessages.find((message: any) =>
-      message.content.includes("Newly enabled tool guidance"),
-    );
-    expect(expandedGuidance).toEqual(expect.objectContaining({
+    expect(expandedMessages).toContainEqual({
       role: "user",
-      content: expect.stringContaining("Newly enabled tool guidance"),
-    }));
-    expect(expandedGuidance.content).toContain("For repository, PR, CI, deployment");
+      content: "Please implement the activity chart from this synthetic spec.",
+    });
+    expect(expandedMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "tool",
+        name: "requestAdditionalTools",
+        content: expect.stringContaining("Additional tool groups enabled"),
+      }),
+    ]));
     expect((chat.mock.calls[2]?.[0] as any).tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ function: expect.objectContaining({ name: "runCodingAgent" }) }),
     ]));

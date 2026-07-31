@@ -9,10 +9,8 @@ import { stringArgument, stringArrayArgument, numberArgument, recordArgument } f
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
-// Uniform signatures intentionally expose only the inputs each tool needs.
-/* eslint-disable @typescript-eslint/no-unused-vars */
 export const discordActionToolHandlers = {
-  "undoConversationTurns": async (ctx, route, originalText) => {
+  "undoConversationTurns": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await undoConversationTurns(
@@ -23,7 +21,7 @@ export const discordActionToolHandlers = {
           ),
         };
   },
-  "drawRandom": async (ctx, route, originalText) => {
+  "drawRandom": async (ctx, route, _originalText) => {
     if (!ctx.randomActionAuthorized) {
       return {
         content: RANDOM_ACTION_NOT_AUTHORIZED_RESPONSE,
@@ -61,7 +59,7 @@ export const discordActionToolHandlers = {
           outcome: randomDrawOutcome(content, Boolean(wager)),
         };
   },
-  "revealRandomness": async (ctx, route, originalText) => {
+  "revealRandomness": async (ctx, _route, _originalText) => {
     return {
           content: cleanResponse(
             await revealRandomness(ctx),
@@ -69,7 +67,7 @@ export const discordActionToolHandlers = {
           ),
         };
   },
-  "settleRandomWager": async (ctx, route, originalText) => {
+  "settleRandomWager": async (ctx, route, _originalText) => {
     const content = cleanResponse(
             await settleRandomWager(ctx, {
               payoutUsd: numberArgument(route.arguments, "payoutUsd"),
@@ -82,7 +80,6 @@ export const discordActionToolHandlers = {
     return { content, status: content.startsWith("The scoped wallet wager settled.") ? "ok" : "error", outcome: { kind: "wager", state: content.startsWith("The scoped wallet wager settled.") ? "settled" : "failed" } };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
-/* eslint-enable @typescript-eslint/no-unused-vars */
 
 function randomDrawOutcome(content: string, wagerActive: boolean) {
   if (!isSuccessfulRandomDrawResult(content)) return { kind: "rng_draw", state: "failed" as const };

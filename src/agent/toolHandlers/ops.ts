@@ -7,15 +7,13 @@ import { stringArgument, numberArgument } from "./arguments.js";
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
-// Uniform signatures intentionally expose only the inputs each tool needs.
-/* eslint-disable @typescript-eslint/no-unused-vars */
 export const opsToolHandlers = {
-  "reportStatus": async (ctx, route, originalText) => {
+  "reportStatus": async (ctx, _route, _originalText) => {
     return {
           content: cleanResponse(await reportStatus(ctx), ctx.config.maxReplyChars),
         };
   },
-  "setUserTurnLimit": async (ctx, route, originalText) => {
+  "setUserTurnLimit": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await setUserTurnLimit(ctx, {
@@ -28,7 +26,7 @@ export const opsToolHandlers = {
           ),
         };
   },
-  "setAgentModel": async (ctx, route, originalText) => {
+  "setAgentModel": async (ctx, route, _originalText) => {
     return {
       content: cleanResponse(
         await setAgentModel(ctx, {
@@ -39,7 +37,7 @@ export const opsToolHandlers = {
       ),
     };
   },
-  "inspectAgentLogs": async (ctx, route, originalText) => {
+  "inspectAgentLogs": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await inspectAgentLogs(ctx, {
@@ -51,7 +49,7 @@ export const opsToolHandlers = {
           ),
         };
   },
-  "getDeploymentStatus": async (ctx, route, originalText) => {
+  "getDeploymentStatus": async (ctx, _route, _originalText) => {
     return {
           content: cleanResponse(
             await getDeploymentStatus(ctx),
@@ -59,7 +57,7 @@ export const opsToolHandlers = {
           ),
         };
   },
-  "getSpendSummary": async (ctx, route, originalText) => {
+  "getSpendSummary": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await getSpendSummary(ctx, {
@@ -71,4 +69,3 @@ export const opsToolHandlers = {
         };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
-/* eslint-enable @typescript-eslint/no-unused-vars */

@@ -96,3 +96,4 @@ If a request changes Discord knowledge, indexing, embeddings, retrieval, stats, 
 - Update the nearest domain README when ownership, invariants, or a core flow changes.
 - In sandboxed code-update tasks, do not commit, push, or open PRs; the runner owns Git publication.
 - In direct repository work, open a ready-for-review, non-draft PR when asked. Do not merge or deploy unless the user explicitly asks.
+- Before updating an existing PR branch, check its GitHub `state` and `mergedAt`. Never push a requested update to a merged PR; branch from current `origin/main` and open a new PR instead.

@@ -292,6 +292,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "discord-agent-nanocodex-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nanocodex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -916,18 +928,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "discord-agent-nanocodex-runtime"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "nanocodex",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
-]
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -961,7 +961,7 @@ dependencies = [
 [[package]]
 name = "nanocodex"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=f630f89a468de9658c864e8cf869dbbc74babaf5#f630f89a468de9658c864e8cf869dbbc74babaf5"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
 dependencies = [
  "nanocodex-agent",
  "nanocodex-oai-api",
@@ -971,7 +971,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-agent"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=f630f89a468de9658c864e8cf869dbbc74babaf5#f630f89a468de9658c864e8cf869dbbc74babaf5"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
 dependencies = [
  "chrono",
  "futures-util",
@@ -993,7 +993,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-oai-api"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=f630f89a468de9658c864e8cf869dbbc74babaf5#f630f89a468de9658c864e8cf869dbbc74babaf5"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
 dependencies = [
  "async-trait",
  "base64",
@@ -1019,7 +1019,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-tools"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=f630f89a468de9658c864e8cf869dbbc74babaf5#f630f89a468de9658c864e8cf869dbbc74babaf5"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
 dependencies = [
  "async-trait",
  "base64",
@@ -1049,7 +1049,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-tools-macros"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=f630f89a468de9658c864e8cf869dbbc74babaf5#f630f89a468de9658c864e8cf869dbbc74babaf5"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

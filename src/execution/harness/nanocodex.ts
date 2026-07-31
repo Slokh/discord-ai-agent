@@ -1,4 +1,5 @@
 import path from "node:path";
+import { CODEGEN_REASONING } from "../../agent/modelPolicy.js";
 import { nanoCodexSessionId, runNanoCodexRuntime, type NanoCodexRuntimeEvent } from "../../agent/nanocodexRuntime.js";
 import { progress, recordArtifact } from "../callbacks.js";
 import { codeUpdatePrompt } from "../codegenPrompts.js";
@@ -11,9 +12,9 @@ export const NANOCODEX_RUNTIME_LABEL = "nanocodex-native-v1";
 
 export function nanoCodexModel(model: string) {
   const normalized = model.trim().replace(/^openai\//, "");
-  if (normalized === "gpt-5.6-sol" || normalized === "gpt-5.6-luna") return normalized;
+  if (normalized === "gpt-5.6-sol" || normalized === "gpt-5.6-terra" || normalized === "gpt-5.6-luna") return normalized;
   throw new Error(
-    `NanoCodex supports OpenRouter model "openai/gpt-5.6-sol" or "openai/gpt-5.6-luna"; received "${model}".`
+    `NanoCodex supports OpenRouter model "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", or "openai/gpt-5.6-luna"; received "${model}".`
   );
 }
 
@@ -60,7 +61,7 @@ export async function runNanoCodex(input: NanoCodexRunInput): Promise<AgentRunSu
       apiKey: input.env.openRouterApiKey,
       apiBaseUrl: input.env.openRouterBaseUrl || "https://openrouter.ai/api/v1",
       model: `openai/${model}`,
-      thinking: "high",
+      thinking: CODEGEN_REASONING,
       reasoningMode: "standard",
       instructions: "Implement the requested repository change completely. Work directly in the provided checkout, follow its repository instructions, verify the result, and leave the working tree with the intended diff.",
       prompt,

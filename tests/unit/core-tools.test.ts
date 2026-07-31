@@ -1006,6 +1006,7 @@ describe("generateImage", () => {
   it("returns a recoverable tool error when the image provider blocks the prompt", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { auditTool },
       openRouter: {
         generateImage: vi.fn(async () => {
@@ -1425,6 +1426,7 @@ describe("generateImage", () => {
       toolCalls: []
     }));
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { auditTool },
       openRouter: { chat },
       guildId: "guild",
@@ -1447,7 +1449,8 @@ describe("generateImage", () => {
     expect(result).toContain("It looks like a dashboard screenshot.");
     expect(chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "google/gemini-3.6-flash",
+        model: "openai/gpt-5.6-luna",
+        reasoningEffort: "high",
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "user",
@@ -1480,6 +1483,7 @@ describe("generateImage", () => {
       toolCalls: []
     }));
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { auditTool: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "guild",
@@ -1529,6 +1533,7 @@ describe("generateImage", () => {
       toolCalls: []
     }));
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { auditTool: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "guild",
@@ -1606,6 +1611,7 @@ describe("generateImage", () => {
       toolCalls: []
     }));
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { messageAttachments, auditTool: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "111111111111111111",

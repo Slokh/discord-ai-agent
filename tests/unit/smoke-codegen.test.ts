@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest";
 import { formatSmokeSuiteSummary, formatSmokeSummary, loadSmokeSuite, parseArgs } from "../../scripts/smokeCodegen.js";
 
 describe("codegen smoke script helpers", () => {
-  it("defaults smoke runs to NanoCodex Sol", async () => {
+  it("defaults smoke runs to NanoCodex Terra", async () => {
     await expect(parseArgs([])).resolves.toEqual(
-      expect.objectContaining({ model: "openai/gpt-5.6-sol" })
+      expect.objectContaining({ model: "openai/gpt-5.6-terra" })
     );
   });
 

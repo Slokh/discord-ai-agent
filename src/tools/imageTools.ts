@@ -6,6 +6,7 @@ import {
   type ImageResult,
 } from "../models/openrouter.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
+import { UTILITY_REASONING } from "../agent/modelPolicy.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
 import { imageSafetyFallbackPrompt, transparentImageRecoveryPrompt } from "./imageGenerationPrompts.js";
@@ -31,8 +32,6 @@ import { resolveContextImageSelection } from "./imageContextSelection.js";
 import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 import { recoverRejectedImageRequest } from "./imageRequestRejectionRecovery.js";
-
-const DEFAULT_VISION_MODEL = "google/gemini-3.6-flash";
 const MAX_IMAGE_REFERENCES = 4;
 const MAX_INLINE_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_INLINE_VISION_TOTAL_BYTES = 20 * 1024 * 1024;
@@ -157,7 +156,8 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
   }
 
   const response = await runObservedModelCall(ctx, { purpose: "discord_image_inspection", chat: {
-    model: DEFAULT_VISION_MODEL,
+    model: ctx.config.openRouter.utilityModel,
+    reasoningEffort: UTILITY_REASONING,
     messages: [
       {
         role: "system",

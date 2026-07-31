@@ -16,6 +16,8 @@ Owns the retained NanoCodex turn for one requester-scoped Discord prompt.
 
 `runtimeRunner.ts` and `runtimeExecutor.ts` select `NanoCodexAgentRuntimePromptExecutor`. `nanocodexAgentRuntime.ts` prepares the turn, loads the latest checkpoint, exposes the stable tool contract, dispatches requested tools, applies deterministic guards, and stores the next checkpoint. `nanocodexRuntime.ts` owns the versioned NDJSON child-process protocol; `native/nanocodex-runtime` embeds the exact pinned Rust library and native HTTPS Responses transport.
 
+The deployed Discord agent defaults to Luna with high reasoning. This reasoning policy is fixed in `modelPolicy.ts`; owner/ops model switching remains limited to the interactive Sol/Luna catalog.
+
 Discord transcript messages remain the inspectable product history. A Nano checkpoint is opaque execution state, not a second user-facing history. On the first Nano turn for an existing session, the bounded product transcript seeds the session; subsequent turns send only the current request and resume the checkpoint.
 
 ## Module Map

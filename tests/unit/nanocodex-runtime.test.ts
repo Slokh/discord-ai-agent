@@ -36,6 +36,12 @@ class FakeRuntimeProcess extends EventEmitter {
 }
 
 describe("NanoCodex native runtime protocol", () => {
+  it("accepts every model supported by the owned NanoCodex fork", () => {
+    expect(nanoCodexModel("openai/gpt-5.6-sol")).toBe("gpt-5.6-sol");
+    expect(nanoCodexModel("openai/gpt-5.6-terra")).toBe("gpt-5.6-terra");
+    expect(nanoCodexModel("openai/gpt-5.6-luna")).toBe("gpt-5.6-luna");
+  });
+
   it("runs one scoped turn and returns tool results to NanoCodex", async () => {
     const child = new FakeRuntimeProcess();
     const executeTool = vi.fn(async () => ({ success: true, output: "verified result" }));

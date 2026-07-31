@@ -39,7 +39,7 @@ The architecture is kept clean by enforcing all of the following:
 - Discord chat and local prompt/eval runs invoke NanoCodex directly; the custom `modelLoop` no longer exists.
 - Code-update work uses the same native Nano runtime; the image does not install or invoke a separate Nano CLI.
 - Agent execution does not use `OpenRouterClient.chat`, hosted-tool markup recovery, manual model-round retry logic, or harness-selection abstractions. Direct provider calls remain only behind deterministic tool APIs pending their own Nano-native utility conversion.
-- Configuration accepts only the Nano-supported Sol and Luna models for agent work. Separate deterministic utility APIs such as embeddings, transcription, and image generation may remain direct provider clients because they are tools, not alternate agent engines.
+- Discord chat defaults to Luna with high reasoning, code updates default to Terra with medium reasoning, and utility reasoning uses Luna with high reasoning. The owned NanoCodex fork supports Sol, Terra, and Luna; requester-visible server overrides remain limited to Sol and Luna. Separate deterministic APIs such as embeddings, transcription, and image generation remain direct provider clients because they are tools, not alternate agent engines.
 - The container contains the application Nano runtime and no Codex, OpenCode, or generic agent-harness binaries.
 - Documentation and tests describe only the Nano architecture; there are no fallback flags or dual-runtime rollout modes.
 

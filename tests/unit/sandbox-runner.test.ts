@@ -47,6 +47,7 @@ async function git(cwd: string, args: string[]) {
 describe("sandboxRunner", () => {
   it("runs only NanoCodex-supported models through the native runtime", () => {
     expect(nanoCodexModel("openai/gpt-5.6-sol")).toBe("gpt-5.6-sol");
+    expect(nanoCodexModel("openai/gpt-5.6-terra")).toBe("gpt-5.6-terra");
     expect(nanoCodexModel("openai/gpt-5.6-luna")).toBe("gpt-5.6-luna");
     expect(() => nanoCodexModel("openrouter/openai/gpt-5.6-luna")).toThrow(/supports OpenRouter model/);
     expect(() => nanoCodexModel("z-ai/glm-5.2")).toThrow(/supports OpenRouter model/);
@@ -82,7 +83,7 @@ describe("sandboxRunner", () => {
     expect(dockerfile).toContain("https://cli.github.com/packages");
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends gh");
     expect(dockerfile).not.toContain("nanocodex-bin");
-    expect(cargoManifest).toContain("f630f89a468de9658c864e8cf869dbbc74babaf5");
+    expect(cargoManifest).toContain("9da913aeed3361b708cca8308e016125b84b9430");
     expect(dockerfile).toContain("/usr/local/bin/discord-agent-nanocodex-runtime");
     expect(dockerfile).not.toContain("/usr/local/bin/nanocodex");
   });

@@ -53,4 +53,5 @@ Owns sandboxed code-update execution from queued task to PR.
 The `codegen` image uses the same embedded native runtime as Discord chat. The
 owned NanoCodex fork and exact source revision are pinned in
 `native/nanocodex-runtime/Cargo.toml`; Docker, CI, and deployment do not select
-or install another harness.
+or install another harness. Code-update execution defaults to Terra with medium
+reasoning, with that policy shared by the runtime ledger and native invocation.

@@ -40,7 +40,8 @@ describe("agent task enqueue", () => {
         queueName: "agent.task",
         backendName: "local-process-sandbox",
         codegenBackend: "local-process",
-        codegenModel: "openai/gpt-5.6-sol",
+        codegenModel: "openai/gpt-5.6-terra",
+        codegenReasoningEffort: "medium",
         codegenProvider: "openrouter"
       })
     );

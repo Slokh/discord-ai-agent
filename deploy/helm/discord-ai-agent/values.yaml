@@ -56,10 +56,10 @@ config:
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
-  # NanoCodex agent execution accepts only Sol or Luna.
-  openRouterChatModel: openai/gpt-5.6-sol
+  # Discord chat uses Luna/high; code updates use Terra/medium.
+  openRouterChatModel: openai/gpt-5.6-luna
   openRouterUtilityModel: openai/gpt-5.6-luna
-  openRouterCodegenModel: openai/gpt-5.6-sol
+  openRouterCodegenModel: openai/gpt-5.6-terra
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
   openRouterTranscriptionModel: openai/whisper-large-v3-turbo

@@ -1,8 +1,8 @@
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
+import { UTILITY_REASONING } from "../agent/modelPolicy.js";
 import type { ChatContentPart, ImageResult } from "../models/openrouter.js";
 import type { ToolContext } from "./types.js";
 
-const GENERATED_IMAGE_TEXT_VALIDATION_MODEL = "google/gemini-3.1-flash-lite";
 const MAX_REQUIRED_TEXT_ITEMS = 8;
 const MAX_REQUIRED_TEXT_CHARS = 160;
 const MAX_VALIDATION_IMAGES = 2;
@@ -80,7 +80,8 @@ export async function validateGeneratedImageText(
       imageCount: imageParts.length,
     },
     chat: {
-      model: GENERATED_IMAGE_TEXT_VALIDATION_MODEL,
+      model: ctx.config.openRouter.utilityModel,
+      reasoningEffort: UTILITY_REASONING,
       messages: [
         {
           role: "system",

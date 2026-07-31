@@ -5,6 +5,7 @@ import { cleanResponse } from "../tools/responseFormatting.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
+import { PRIMARY_AGENT_REASONING } from "./modelPolicy.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { durationMs, previewText } from "../util/logger.js";
 import { injectActiveGameSession } from "./activeGameSession.js";
@@ -102,7 +103,7 @@ async function runRetainedNanoCodexTurn(input: {
     apiKey,
     apiBaseUrl: ctx.config.openRouter.baseUrl,
     model,
-    thinking: "high",
+    thinking: PRIMARY_AGENT_REASONING,
     reasoningMode: "standard",
     instructions: prompt.instructions,
     prompt: prompt.prompt,

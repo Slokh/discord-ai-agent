@@ -152,7 +152,8 @@ describe("agent runtime control plane", () => {
         queueName: "agent.task",
         backendName: "local-process-sandbox",
         codegenBackend: "local-process" as const,
-        codegenModel: "openai/gpt-5.6-sol" as const,
+        codegenModel: "openai/gpt-5.6-terra" as const,
+        codegenReasoningEffort: "medium" as const,
         codegenProvider: "openrouter"
       }))
     };
@@ -228,14 +229,16 @@ describe("agent runtime control plane", () => {
         taskId: "task-runtime-first",
         status: "queued",
         harness: "runCodingAgent",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-5.6-terra",
+        reasoningEffort: "medium",
         metadata: expect.objectContaining({
           queue: "agent.task",
           parentAgentSessionId: "agent-session-1",
           parentAgentExecutionId: "agent-execution-parent",
           parentAgentThreadKey: "discord:guild:channel",
           codegenBackend: "local-process",
-          codegenModel: "openai/gpt-5.6-sol",
+          codegenModel: "openai/gpt-5.6-terra",
+          codegenReasoningEffort: "medium",
           codegenProvider: "openrouter",
           targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
           targetPullRequestNumber: 120,
@@ -389,7 +392,7 @@ function fakeConfig() {
     ...config,
     openRouter: {
       ...config.openRouter,
-      codegenModel: "openai/gpt-5.6-sol" as const
+      codegenModel: "openai/gpt-5.6-terra" as const
     },
     execution: {
       ...config.execution,

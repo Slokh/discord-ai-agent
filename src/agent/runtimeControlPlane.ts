@@ -155,7 +155,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     harness: "runCodingAgent",
     model: selection.codegenModel,
     provider: selection.codegenProvider,
-    reasoningEffort: "low",
+    reasoningEffort: selection.codegenReasoningEffort,
     metadata: {
       taskType,
       source: "agent.runtime.tool",

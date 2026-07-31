@@ -57,8 +57,8 @@ const defaults = {
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
   openRouterAppTitle: "Discord AI Agent",
   openRouterHttpReferer: "http://localhost",
-  openRouterChatModel: "openai/gpt-5.6-sol",
-  openRouterCodegenModel: "openai/gpt-5.6-sol",
+  openRouterChatModel: "openai/gpt-5.6-luna",
+  openRouterCodegenModel: "openai/gpt-5.6-terra",
   openRouterUtilityModel: "openai/gpt-5.6-luna",
   openRouterEmbeddingModel: "qwen/qwen3-embedding-8b",
   openRouterImageModel: "google/gemini-3.1-flash-image",
@@ -162,7 +162,7 @@ const envSchema = z.object({
   ),
   OPENROUTER_CODEGEN_MODEL: z.preprocess(
     emptyAsUndefined,
-    z.enum(["openai/gpt-5.6-sol", "openai/gpt-5.6-luna"]).default(defaults.openRouterCodegenModel)
+    z.enum(["openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/gpt-5.6-luna"]).default(defaults.openRouterCodegenModel)
   ),
   OPENROUTER_UTILITY_MODEL: z.preprocess(
     emptyAsUndefined,

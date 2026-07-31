@@ -60,8 +60,8 @@ describe("config", () => {
         expect(config.discord.premiumSkuIds).toEqual([]);
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
-        expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-sol");
-        expect(config.openRouter.codegenModel).toBe("openai/gpt-5.6-sol");
+        expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-luna");
+        expect(config.openRouter.codegenModel).toBe("openai/gpt-5.6-terra");
         expect(config.openRouter.utilityModel).toBe("openai/gpt-5.6-luna");
         expect(config.openRouter.transcriptionModel).toBe("openai/whisper-large-v3-turbo");
         expect(config.github.repository).toBe("owner/repo");
@@ -205,11 +205,11 @@ describe("config", () => {
     });
   });
 
-  it("allows codegen to use the other NanoCodex model", () => {
-    withEnv({ OPENROUTER_CHAT_MODEL: "openai/gpt-5.6-sol", OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.6-luna" }, () => {
+  it("allows codegen to use every NanoCodex coding model", () => {
+    withEnv({ OPENROUTER_CHAT_MODEL: "openai/gpt-5.6-sol", OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.6-terra" }, () => {
       const config = loadConfig();
       expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-sol");
-      expect(config.openRouter.codegenModel).toBe("openai/gpt-5.6-luna");
+      expect(config.openRouter.codegenModel).toBe("openai/gpt-5.6-terra");
     });
   });
 

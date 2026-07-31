@@ -6,7 +6,7 @@ import type { FunctionToolDefinition } from "../models/openrouter.js";
 export const NANOCODEX_RUNTIME_PROTOCOL_VERSION = 1;
 export const NANOCODEX_RUNTIME_BINARY = "discord-agent-nanocodex-runtime";
 
-export type NanoCodexModel = "gpt-5.6-sol" | "gpt-5.6-luna";
+export type NanoCodexModel = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna";
 export type NanoCodexThinking = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type NanoCodexReasoningMode = "standard" | "pro";
 
@@ -216,8 +216,10 @@ export async function runNanoCodexRuntime(input: {
 
 export function nanoCodexModel(model: string): NanoCodexModel {
   const normalized = model.trim().replace(/^openai\//, "");
-  if (normalized === "gpt-5.6-sol" || normalized === "gpt-5.6-luna") return normalized;
-  throw new Error(`NanoCodex supports only openai/gpt-5.6-sol or openai/gpt-5.6-luna, received ${model}.`);
+  if (normalized === "gpt-5.6-sol" || normalized === "gpt-5.6-terra" || normalized === "gpt-5.6-luna") return normalized;
+  throw new Error(
+    `NanoCodex supports only openai/gpt-5.6-sol, openai/gpt-5.6-terra, or openai/gpt-5.6-luna; received ${model}.`,
+  );
 }
 
 /**

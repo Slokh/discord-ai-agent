@@ -537,7 +537,7 @@ export async function parseArgs(values: string[]): Promise<SmokeArgs> {
     : valueFor(values, "--request") ??
       "Make a tiny README.md wording change for a temporary local codegen smoke test. Keep it to one sentence and do not modify behavior.";
   return {
-    model: valueFor(values, "--model") ?? process.env.OPENROUTER_CODEGEN_MODEL ?? "openai/gpt-5.6-sol",
+    model: valueFor(values, "--model") ?? process.env.OPENROUTER_CODEGEN_MODEL ?? "openai/gpt-5.6-terra",
     title: valueFor(values, "--title") ?? "Local codegen smoke test",
     request,
     requestFile: requestFile ? path.resolve(requestFile) : undefined,

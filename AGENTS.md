@@ -2,6 +2,12 @@
 
 This repository is a TypeScript Discord assistant for private communities. Users talk to it naturally; the model chooses tools; code enforces identity, permissions, money, randomness, durability, and delivery. Changes should preserve that division.
 
+## Friction Log
+
+- Log papercuts and friction in tooling, docs, APIs, tests, or conventions as you hit them with `npx frog log`.
+- Do not add global, system, or internal friction.
+- Run `npx frog list` first to see what is already known.
+
 ## Read First
 
 Use this order for a new task:

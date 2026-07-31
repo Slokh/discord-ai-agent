@@ -6,11 +6,13 @@ export type { CodegenHarness, SandboxEnv, TaskTimings } from "./types.js";
 
 export function loadSandboxEnv(): SandboxEnv {
   return {
+    taskType: process.env.TASK_TYPE === "bug_report" ? "bug_report" : "code_update",
     taskId: requiredEnv("TASK_ID"),
     traceId: requiredEnv("TRACE_ID"),
     sandboxRunId: requiredEnv("SANDBOX_RUN_ID"),
     taskTitle: requiredEnv("TASK_TITLE"),
     taskRequest: requiredEnv("TASK_REQUEST"),
+    bugReportResultPath: process.env.BUG_REPORT_RESULT_PATH || path.join(os.tmpdir(), `${requiredEnv("TASK_ID")}-bug-report-result.json`),
     requestedBy: requiredEnv("REQUESTED_BY"),
     targetBranch: optionalEnv("TARGET_BRANCH"),
     targetPullRequestNumber: numberEnv("TARGET_PULL_REQUEST_NUMBER"),

@@ -103,11 +103,13 @@ function sandboxEnv(controlPlaneInternalUrl: string): SandboxEnv {
   const taskId = "task-1";
   const sandboxRunId = "run-1";
   return {
+    taskType: "code_update",
     taskId,
     traceId: "trace-1",
     sandboxRunId,
     taskTitle: "Test callbacks",
     taskRequest: "Verify callback authentication.",
+    bugReportResultPath: "/tmp/task-1-bug-report-result.json",
     requestedBy: "test",
     targetBranch: null,
     targetPullRequestNumber: null,

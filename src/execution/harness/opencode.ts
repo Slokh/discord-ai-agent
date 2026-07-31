@@ -25,6 +25,7 @@ import {
   waitForChildExit
 } from "../sandboxUtils.js";
 import { CodegenNoDiffError, type AgentAttemptSummary, type AgentRunSummary, type CodegenHarnessAdapter, type CodegenHarnessRunInput } from "./types.js";
+import { readBugReportResult } from "../bugReportResult.js";
 
 const OPENCODE_HEALTH_PROBE_TIMEOUT_MS = 1_000;
 
@@ -171,6 +172,7 @@ export async function runOpenCodeWithRecovery(input: CodegenHarnessRunInput): Pr
   );
 
   if (producedDiff) return { attempts };
+  if (input.env.taskType === "bug_report" && await readBugReportResult(input.env.bugReportResultPath)) return { attempts };
   throw new CodegenNoDiffError(
     [
       "Agent task produced no diff after OpenCode attempt; no PR will be opened.",

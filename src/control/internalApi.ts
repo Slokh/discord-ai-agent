@@ -614,6 +614,17 @@ export async function handleInternalApiRequest(input: {
         metadata: body.metadata,
       });
     }
+    if (task?.taskType === "bug_report") {
+      const disposition = discordBugDisposition(body.metadata?.bugReportDisposition);
+      const summary = typeof body.metadata?.bugReportSummary === "string" ? body.metadata.bugReportSummary : body.error ?? body.status;
+      await input.repo.completeDiscordBugReportForTask({
+        taskId,
+        status: body.status === "failed" || body.status === "cancelled" ? "failed" : "completed",
+        disposition,
+        summary,
+        prUrl: body.prUrl ?? null
+      });
+    }
     sendJson(input.response, 200, { ok: true });
     return;
   }
@@ -682,4 +693,11 @@ export async function handleInternalApiRequest(input: {
   }
 
   sendJson(input.response, 404, { error: "not_found" });
+}
+
+function discordBugDisposition(value: unknown): import("../db/types.js").DiscordBugReportDisposition | null {
+  return value === "confirmed_fixed" || value === "confirmed_unfixed" || value === "expected_behavior" ||
+    value === "not_reproducible" || value === "already_fixed" || value === "insufficient_evidence"
+    ? value
+    : null;
 }

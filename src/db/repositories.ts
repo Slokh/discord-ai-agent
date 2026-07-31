@@ -8,14 +8,17 @@ import * as processRunRepository from "./processRunRepository.js";
 import * as agentTaskRepository from "./agentTaskRepository.js";
 import * as discordArchiveRepository from "./discordArchiveRepository.js";
 import * as discordBugMarkerRepository from "./discordBugMarkerRepository.js";
+import * as discordBugReportRepository from "./discordBugReportRepository.js";
 import * as discordEmojiUsageRepository from "./discordEmojiUsageRepository.js";
 import * as deploymentAnnouncementRepository from "./deploymentAnnouncementRepository.js";
 import * as discordComponentActionRepository from "./discordComponentActionRepository.js";
 import * as retrievalRepository from "./retrievalRepository.js";
 import type { PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
+import type { DiscordBugReport } from "./types.js";
 export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
 export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./discordEmojiUsageRepository.js";
 export type { GuildAgentSettings } from "./agentSettingsRepository.js";
+export type { DiscordBugReport, DiscordBugReportStatus, DiscordBugReportDisposition } from "./types.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
 // for repository-permissions.test.ts coverage:
@@ -435,6 +438,10 @@ export class DiscordAiAgentRepository {
   }
   setDiscordBugMarker(input: { guildId: string; channelId: string; messageId: string; userId: string; present: boolean }) { return discordBugMarkerRepository.setDiscordBugMarker(this.pool, input); }
   clearDiscordBugMarkersForMessage(input: { guildId: string; messageId: string }) { return discordBugMarkerRepository.clearDiscordBugMarkersForMessage(this.pool, input); }
+  createDiscordBugReport(input: Parameters<typeof discordBugReportRepository.createDiscordBugReport>[1]): Promise<{ report: DiscordBugReport; created: boolean }> { return discordBugReportRepository.createDiscordBugReport(this.pool, input); }
+  attachDiscordBugReportTask(input: Parameters<typeof discordBugReportRepository.attachDiscordBugReportTask>[1]) { return discordBugReportRepository.attachDiscordBugReportTask(this.pool, input); }
+  markDiscordBugReportFailed(input: Parameters<typeof discordBugReportRepository.markDiscordBugReportFailed>[1]) { return discordBugReportRepository.markDiscordBugReportFailed(this.pool, input); }
+  completeDiscordBugReportForTask(input: Parameters<typeof discordBugReportRepository.completeDiscordBugReportForTask>[1]) { return discordBugReportRepository.completeDiscordBugReportForTask(this.pool, input); }
   isUserPrivacyDeleted(userId: string) { return discordArchiveRepository.isUserPrivacyDeleted(this.pool, userId); }
   async requestUserDeletion(userId: string) {
     await discordArchiveRepository.requestUserDeletion(this.pool, userId);

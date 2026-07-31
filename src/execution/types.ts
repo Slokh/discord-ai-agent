@@ -3,7 +3,7 @@ export type AgentTaskStatus = "queued" | "running" | "succeeded" | "failed" | "n
 export type AgentTaskJob = {
   taskId: string;
   traceId?: string;
-  taskType: "code_update";
+  taskType: "code_update" | "bug_report";
   request: string;
   title: string;
   requestedBy: string;
@@ -48,11 +48,13 @@ export type AgentTaskCompletionEvent = {
 export type CodegenHarness = "codex" | "opencode";
 
 export type SandboxEnv = {
+  taskType: AgentTaskJob["taskType"];
   taskId: string;
   traceId: string;
   sandboxRunId: string;
   taskTitle: string;
   taskRequest: string;
+  bugReportResultPath: string;
   requestedBy: string;
   targetBranch: string | null;
   targetPullRequestNumber: number | null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldForceWalletBalance, wagerHistoryRouteForPrompt, walletBalanceOwnerForPrompt, walletBalanceRouteForPrompt } from "../../src/agent/walletStatusGuard.js";
+import { shouldForceWalletBalance, wagerHistoryRouteForPrompt, walletBalanceOwnerForPrompt, walletBalanceReadAllowedForCurrentScope, walletBalanceRouteForPrompt } from "../../src/agent/walletStatusGuard.js";
 import { loadConfig } from "../../src/config/env.js";
 
 function configuredWallets() {
@@ -41,6 +41,10 @@ describe("wallet balance guard", () => {
     config.payments.walletEnabled = false;
 
     expect(shouldForceWalletBalance(config, "balance")).toBe(false);
+  });
+
+  it("allows one live balance read to size an explicit all-in wager", () => {
+    expect(walletBalanceReadAllowedForCurrentScope("all in on heads")).toBe(true);
   });
 
   it.each([

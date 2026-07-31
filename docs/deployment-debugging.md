@@ -2,6 +2,8 @@
 
 Use the canonical agent-runtime ledger and Discord API paths to investigate post-deploy behavior. Do not use browser automation when a Discord link, run trace, or archive query can answer the question.
 
+These commands target production by default through the configured control-plane URL or the active local Kubernetes context. They fail if production cannot be resolved rather than silently falling back to localhost or a local database. Use direct DB/local modes only for intentional isolated development.
+
 ## Audit a channel since deployment
 
 ```bash

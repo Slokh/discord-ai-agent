@@ -33,6 +33,7 @@ Use this order for a new task:
 
 ## Workflow
 
+- Treat production as the default operating target. Debugging, run/task inspection, and the live console use the production control plane through the configured URL or current local Kubernetes context; never silently fall back to localhost or a local database. Isolated local work must be explicitly requested with the tool's local/DB option.
 - Use `rg` first, then read the smallest owning files needed for the next concrete edit.
 - Do not spend the whole run inspecting. Once the relevant lifecycle is clear, add the focused test or implementation change.
 - For bugs, reproduce from the run trace or add a failing regression test before or alongside the fix.
@@ -43,6 +44,7 @@ Use this order for a new task:
 
 ### Debugging Discord regressions
 
+- The production-targeting scripts are the default: `npm run discord:debug`, `npm run discord:audit`, `npm run runs:inspect`, and `npm run tasks:status`. Pass `--source db` only for deliberate isolated local inspection.
 - For one Discord prompt, run `npm run discord:debug -- <discord-message-link>` before reading source or attributing a failure to the model.
 - For a report since deployment, run `npm run discord:audit -- --channel <id> --since-deploy --include-reply-chains`; inspect all bot replies, bot requests without replies, and reply chains in scope before editing.
 - Use `npm run runs:inspect` with `--channel`, `--revision`, `--since`, or `--warnings-only` for ledger-level narrowing. Do not use browser automation when these script and trace paths are available.

@@ -1,5 +1,6 @@
 import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../tools/imageTools.js";
 import { isOpenRouterHttpError } from "../../models/openrouter.js";
+import { hasExplicitImageGenerationIntent } from "../imageGenerationGuard.js";
 import { cleanResponse } from "../../tools/responseFormatting.js";
 import { stringArgument, stringArrayArgument, numberArgument, booleanArgument } from "./arguments.js";
 import type { ToolName } from "../../tools/registry.js";
@@ -43,6 +44,11 @@ export const imageToolHandlers = {
             }),
             ctx.config.maxReplyChars,
           ),
+          outcome: {
+            kind: "grounded_answer",
+            state: "succeeded",
+            terminal: !hasExplicitImageGenerationIntent(ctx, originalText),
+          },
         };
     } catch (error) {
       if (

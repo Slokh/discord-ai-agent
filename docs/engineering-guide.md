@@ -4,6 +4,10 @@ This guide helps a new coding agent move from an unfamiliar request to a complet
 
 Read [`product-principles.md`](product-principles.md) and [`architecture.md`](architecture.md) first for complex work. The root [`AGENTS.md`](../AGENTS.md) is the concise mandatory rule set.
 
+## Production Is The Default
+
+Assume the local machine is connected to production. Use the production-targeting `runs:inspect`, `tasks:status`, Discord audit/debug, and live-console commands first; they resolve the production control plane through `CONTROL_UI_PUBLIC_URL` or the active Kubernetes context. Do not silently substitute localhost or a local database. Isolated local work is an explicit exception (`--source db` for the inspectors, or a deliberately configured local environment).
+
 ## First 15 Minutes
 
 1. Confirm the worktree and branch with `git status --short` and `git branch --show-current`.

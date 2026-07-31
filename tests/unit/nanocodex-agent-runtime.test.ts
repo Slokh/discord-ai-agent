@@ -66,7 +66,11 @@ function toolContext(runtime: ReturnType<typeof agentRuntime>) {
   return {
     config: {
       ...config,
-      openRouter: { ...config.openRouter, chatModel: "openai/gpt-5.6-luna" },
+      openRouter: {
+        ...config.openRouter,
+        apiKey: "test-key",
+        chatModel: "openai/gpt-5.6-luna",
+      },
     },
     repo: {},
     agentRuntime: runtime,

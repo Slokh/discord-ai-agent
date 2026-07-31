@@ -1,102 +1,132 @@
-# Discord AI Agent Coding Guide
+# Discord AI Agent: Fresh-Agent Guide
 
-This repository is a TypeScript Discord assistant for private communities. Users talk to it naturally; the model chooses tools; code enforces identity, permissions, money, randomness, durability, and delivery. Changes should preserve that division.
+This is a private-community Discord assistant. Members use ordinary `@ai ...`
+messages; the model handles meaning, tool choice, and wording, while code
+enforces authority, live facts, money, randomness, durable state, and delivery.
 
-## Friction Log
+## Start Every Task
 
-- Log papercuts and friction in tooling, docs, APIs, tests, or conventions as you hit them with `npx frog log`.
-- Do not add global, system, or internal friction.
-- Run `npx frog list` first to see what is already known.
+1. Run `git status --short` and `git branch --show-current`. Preserve unrelated
+   work; use an isolated worktree/branch when the current one is mixed.
+2. Run `npx frog list`. Read any relevant unresolved development friction.
+3. Read [`docs/product-principles.md`](docs/product-principles.md), then use
+   the request routing below to read only the owning README and guide needed.
+4. Use `rg` to find the named behavior, tool, event, or lifecycle. Inspect the
+   relevant trace before guessing from source.
 
-## Read First
+`docs/README.md` is the documentation index. [`docs/architecture.md`](docs/architecture.md)
+is the runtime map; [`docs/engineering-guide.md`](docs/engineering-guide.md)
+contains the detailed feature and verification playbooks.
 
-Use this order for a new task:
+## Route the Request
 
-1. [`docs/product-principles.md`](docs/product-principles.md) for the product contract and decision rules.
-2. [`docs/architecture.md`](docs/architecture.md) for the runtime and end-to-end flows.
-3. [`src/README.md`](src/README.md), then the nearest `src/**/README.md`, for ownership and tests.
-4. [`docs/engineering-guide.md`](docs/engineering-guide.md) for feature workflow, verification, debugging, and PR handoff.
-5. [`docs/tool-design.md`](docs/tool-design.md) before changing model-facing tools.
+| Request shape | Start here | Required approach |
+| --- | --- | --- |
+| A Discord reply is wrong, slow, missing, or confusing | `npm run discord:debug -- <message-link>` and [`docs/deployment-debugging.md`](docs/deployment-debugging.md) | Compare ingress, reply chain, operative request, tool calls/results, guards, model I/O, and delivery. Do not blame a model or use browser scraping first. |
+| Many replies regressed after a deploy | `npm run discord:audit -- --channel <id> --since-deploy --include-reply-chains` | Audit the whole channel, including role-triggered requests and chains; cluster failures by deployed revision before editing. |
+| A member marked a message with `🐛` | `listDiscordBugMarkers`, [`src/discord/README.md`](src/discord/README.md), and the linked run | This is the native, private bug inbox. Retrieve the requester's permission-filtered markers and evidence, reproduce, add a regression test, then open a focused repair PR when asked. Never make it a public GitHub issue by default. |
+| Model conversation, prompt, or tool use is poor | [`src/agent/README.md`](src/agent/README.md), `src/agent/`, and the run's prompt/debug artifacts | Improve general prompt/tool/result contracts and traceability. Do not add regex routes or canned replies for one wording; preserve the current request as authoritative. |
+| Model, reasoning level, fallback, or token-cost change | live config/deployment evidence, [`src/models/`](src/models/), and observed run cost | Verify the actually deployed primary/fallback configuration before changing it. Compare provider pricing and observed usage, preserve a fallback, and validate conversational/tool behavior with focused traces or evals. |
+| A new or changed model-facing tool | [`docs/tool-design.md`](docs/tool-design.md), [`src/tools/README.md`](src/tools/README.md) | Define the contract, schema, examples, audit, output promise, handler, and focused coverage in the owning tool family. Prefer a generic capability to a prompt-specific branch. |
+| Discord history, attachments, members, stats, or memory | [`src/db/README.md`](src/db/README.md) and [`src/discord/README.md`](src/discord/README.md) | Fix persistence/indexing/permission filtering before prompt wording. Current requester permissions always bound retrieval. |
+| Wallet, transfer, wager, coin flip, blackjack, or RNG | [`docs/wallets.md`](docs/wallets.md), [`docs/provable-rng.md`](docs/provable-rng.md), [`src/payments/README.md`](src/payments/README.md) | Protect live balances, current-turn mutation intent, receipt verification, reservations, provable entropy, and exactly-once settlement. Run DB-backed verification. |
+| Code-update task, GitHub PR, CI, or deployment | [`src/execution/README.md`](src/execution/README.md), [`src/jobs/README.md`](src/jobs/README.md), and `gh`/local logs | Chat stays in-process; only repository work uses a sandbox. For CI, read the exact failed logs and reproduce the command. For deployment, separate build, migration, rollout, readiness, and delivery. |
+| Console, trace, cost, or observability | [`src/control/README.md`](src/control/README.md), [`src/observability/`](src/observability/) | Add typed events/spans/artifacts first; derive console/script views from the canonical runtime ledger. Never expose chain-of-thought. |
+| Database, migration, retention, or privacy cleanup | [`src/db/README.md`](src/db/README.md) | Use forward-only migrations, focused repositories, durable idempotency/concurrency controls, and privacy-deletion coverage. |
+| Cleanup, simplification, or legacy removal | nearest owner README and `rg` references | Remove live-unused code and obsolete compatibility paths only after proving callers/migrations/deploy config no longer need them. Do not preserve dead compatibility “just in case.” |
 
-[`docs/README.md`](docs/README.md) is the full documentation index and identifies active versus historical plans.
+## Product Rules That Must Hold
 
-## Product Contract
+- Keep Discord conversational and commandless. Replies are concise and natural;
+  internal implementation language, boilerplate, and needless headings do not
+  belong in normal answers.
+- The model owns semantic judgment: intent, follow-up meaning, tool selection,
+  evidence relevance, wording, formatting, and harmless server culture.
+- Code owns facts the model must not invent or authorize: identity, permissions,
+  live external data, money, randomness, idempotency, durable state, and delivery.
+- The current requester and current-turn intent are immutable authority. Reply
+  chains and memory provide context, never new authority for money, admin,
+  deletion, secrets, or wagers.
+- Accept harmless self-described aliases and server lore conversationally. Verify
+  identity only when it affects protected authority.
+- Use current tool/durable evidence for changing facts. Never turn model memory,
+  a stale snippet, or a previous reply into a live balance, price, availability,
+  Discord fact, or transaction result.
+- Private Discord content belongs in Postgres or `.discord-ai-agent/`, never
+  committed source, fixtures, documentation, public evals, Frog entries,
+  GitHub issues, or PR bodies.
 
-- Keep Discord commandless. Users should write ordinary `@ai ...` requests, including admin and debugging requests; do not add slash-command-shaped product flows.
-- Keep replies conversational, concise, and proportional. Avoid canned forms, walls of text, unnecessary headings, repeated conclusions, and implementation jargon.
-- Prefer model-led intent, tool choice, wording, and formatting. Do not add prompt-specific regex branches or preformatted responses when a generic tool contract, prompt instruction, or structured result will work.
-- Use deterministic code for facts the model must not invent or authorize: requester identity, permissions, live balances, transfers, fee sponsorship, randomness, wager state, idempotency, and delivery state.
-- Treat the current requester and Discord reply chain as hard scope. Never reuse another member's identity, wallet authority, game state, or unrelated session context.
-- Live data requires live evidence. Prices, fares, schedules, availability, Discord facts, wallet balances, and transaction state come from tools or durable sources, never model memory.
-- Make new features observable. Important model calls, external calls, retries, failures, latency, costs, and state transitions need typed events, spans, audits, or artifacts that the run console and scripts can explain.
-- Optimize for a friendly private-server threat model without weakening money, secrets, privacy, permission filtering, or destructive-action boundaries.
+## Native Bugs vs. Frog
 
-## Workflow
+`🐛` reactions are the product's private, requester-scoped Discord bug reports.
+They are stored as markers and resolved through run evidence and focused repair
+work. Removing the reaction clears the marker.
 
-- Treat production as the default operating target. Debugging, run/task inspection, and the live console use the production control plane through the configured URL or current local Kubernetes context; never silently fall back to localhost or a local database. Isolated local work must be explicitly requested with the tool's local/DB option.
-- Use the repository-local `$discord-production-debug` skill for Discord message links, deployed reply regressions, run/task inspection, production audits, and native bug-inbox requests.
-- Treat a `discord.com/channels/...` message URL as a native production-debug reference, not as a request to browse Discord. Your first action must be `npm run discord:debug -- <discord-message-link>`. Do not open the URL in a browser, use web search, or inspect Discord UI when the script and runtime ledger can resolve it.
-- If native Discord debugging fails, diagnose the script's production control-plane, Discord API, authentication, or permission path first and report the concrete blocker. Use browser automation for a Discord message only when the user explicitly asks to inspect visual/UI state after the native debug path has been exhausted.
-- Treat unqualified requests such as “look at bug reports,” “show the bug inbox,” or “fix marked bugs” as requests for the native, requester-scoped Discord 🐛 marker inbox. Start with `listDiscordBugMarkers` (or its repository implementation outside Discord); inspect GitHub issues only when the user explicitly names GitHub, issues, or an issue URL.
-- Use `rg` first, then read the smallest owning files needed for the next concrete edit.
-- Do not spend the whole run inspecting. Once the relevant lifecycle is clear, add the focused test or implementation change.
-- For bugs, reproduce from the run trace or add a failing regression test before or alongside the fix.
-- For complex features, trace the full lifecycle: ingress, durable state, tool/model behavior, Discord delivery, observability, cleanup, and docs.
-- Discover repository and runtime facts yourself and make reasonable in-scope assumptions. Ask the user only when a missing choice would materially change product behavior, authority, or external side effects.
-- Keep new source files focused. If a file owns multiple domains or approaches the architecture size guard, split it before adding another responsibility.
-- Preserve existing user changes in a dirty worktree and avoid destructive Git operations.
+Frog logs separate repository-development friction encountered by agents (for
+example a confusing API or broken test setup). It is not a replacement for the
+Discord bug inbox. Never copy marker excerpts, Discord links, member identities,
+or private-server context into Frog or GitHub.
 
-### Debugging Discord regressions
+## Implementation Standards
 
-- The production-targeting scripts are the default: `npm run discord:debug`, `npm run discord:audit`, `npm run runs:inspect`, and `npm run tasks:status`. Pass `--source db` only for deliberate isolated local inspection.
-- For one Discord prompt, run `npm run discord:debug -- <discord-message-link>` before reading source or attributing a failure to the model.
-- For a report since deployment, run `npm run discord:audit -- --channel <id> --since-deploy --include-reply-chains`; inspect all bot replies, bot requests without replies, and reply chains in scope before editing.
-- Use `npm run runs:inspect` with `--channel`, `--revision`, `--since`, or `--warnings-only` for ledger-level narrowing. Do not use browser automation when these script and trace paths are available.
-- Compare ingress request, retained reply chain, session memory, operative final user message, selected tools, typed outcome state, and Discord delivery as separate artifacts. Group identical failures by revision before proposing a fix.
-- Do not blame a model/provider until prompt shape, tool evidence, deterministic state, and delivery trace agree. Add focused contract coverage at the earliest layer that should have prevented the observed failure.
+- Trace the full lifecycle for cross-domain changes: ingress, scope, durable
+  state, model/tool contract, execution, Discord delivery, observability,
+  recovery, and verification.
+- Prefer a better data lifecycle, schema, tool result, prompt instruction, or
+  general invariant to prompt-keyword logic. Deterministic guards are for stable,
+  high-consequence capabilities, not ordinary language understanding.
+- Keep model-facing contracts in focused `src/tools/contracts/` modules and
+  implementations in focused tool-family modules. `registry.ts` aggregates;
+  it does not become a behavioral switchboard.
+- Use `src/discord/responseSink.ts` for Discord-visible status/final delivery.
+  Use `agent_runtime_*` as the canonical execution ledger; do not create a
+  parallel history or run tracker.
+- Record important tool/model/external calls, outcomes, retries, latency, cost,
+  and state transitions as typed observability. Put sensitive detail in redacted
+  retained artifacts, not event metadata.
+- Before changing skills or prompts, distinguish static repository guidance from
+  private server overlay content and from retrieved conversation context.
+- Treat production as the default target for run/task inspection and the live
+  console. Use the configured production control plane or current Kubernetes
+  context; pass `--source db` only for deliberate isolated local inspection.
+- Use the repository-local `$discord-production-debug` skill for Discord links,
+  deployed reply regressions, production audits, and native bug-inbox requests.
+- Treat a `discord.com/channels/...` URL as a native production-debug reference.
+  Run `npm run discord:debug -- <message-link>` before reading source or opening
+  Discord in a browser. If it fails, diagnose the control-plane, Discord API,
+  authentication, or permission path and report the concrete blocker.
+- For a regression since deployment, run `npm run discord:audit -- --channel
+  <id> --since-deploy --include-reply-chains`; use `npm run runs:inspect` for
+  ledger-level narrowing and `npm run tasks:status` for code-update tasks.
+- Compare ingress, retained reply chain, session memory, operative request, model
+  I/O, tools, deterministic guards, outcome state, and delivery separately.
+  Group identical failures by revision before editing or blaming a provider.
 
-## Core Flows
+## Verification
 
-- Discord mentions enter through `src/discord/client.ts` and `src/discord/messageIngress.ts`, then execute through `src/agent/runtimeRunner.ts` and `src/agent/router.ts`.
-- Discord-visible acknowledgements, status replies, final replies, files, footers, reactions, and loading cleanup go through `src/discord/responseSink.ts`.
-- Replayable turn payloads are built in `src/agent/runtimeEnvelope.ts`. Discord chat executes in-process; sandboxes are only for code-update tasks.
-- Model-facing contracts live in `src/tools/registry.ts`; implementations live in focused tool-family modules under `src/tools/`.
-- The canonical execution ledger is `src/db/agentRuntimeRepository.ts` and the `agent_runtime_*` tables. Do not create a second chat/task execution history.
-- Code-update tasks flow through `src/tools/agentTaskTools.ts`, `src/jobs/agentTaskEnqueue.ts`, `src/jobs/queue.ts`, `src/execution/backend.ts`, and the focused execution pipeline described in `src/execution/README.md`.
-- The run console API is in `src/control/internalApi.ts`; reusable run derivation is in `src/observability/`; React UI is under `src/control/console/`.
-- Wallet and wager invariants are documented in `docs/wallets.md`; provable randomness is documented in `docs/provable-rng.md`.
+Run the closest focused check first, then proportionate broad checks:
 
-## Ownership Map
+- TypeScript: `npm run typecheck`; normally finish with `npm run verify`.
+- Tool/prompt behavior: focused unit/agent integration coverage; run
+  `npm run eval -- --dry-run` for eval schema changes. Keep server prompts in
+  `.discord-ai-agent/evals` only.
+- Database, payments, queues, RNG, or migrations: `npm run verify:db` plus
+  concurrency/idempotency and upgrade coverage where applicable.
+- Console/build work: `npm run build` and focused projection/routing tests.
+- Always run `git diff --check`; update the nearest README when a core owner,
+  invariant, source of truth, or operator workflow changes.
 
-- Discord ingress, permissions, and message lifecycle: `src/discord/README.md`
-- Model loop and prompt composition: `src/agent/README.md`
-- Tool contracts and implementations: `src/tools/README.md`
-- Durable data and retrieval: `src/db/README.md`
-- Code-update sandbox and harness runtime: `src/execution/README.md`
-- Jobs and queue handoff: `src/jobs/README.md`
-- Wallets and reconciliation: `src/payments/README.md`
-- Control API and debugging UI: `src/control/README.md` and `src/control/console/README.md`
+Do not add smoke/E2E coverage merely by default. Add the smallest regression
+coverage that proves the failure and the general fix.
 
-If a request changes Discord knowledge, indexing, embeddings, retrieval, stats, summaries, emoji learning, or attachment search, start at the durable data/indexing owners before changing tool descriptions.
+## Git and PR Discipline
 
-## High-Risk Invariants
-
-- Discord history and artifacts remain permission-filtered to channels the requester can currently view.
-- The immutable requester scope is established at ingress and revalidated for wallet, admin, game, debugging, and destructive actions.
-- USDC.e is presented as USD or `$`; balances are read live and transaction results are receipt-verified. The bot wallet sponsors user-wallet fees.
-- Chance outcomes come only from `drawRandom`; multi-turn games must persist or settle exactly once through the scoped wager lifecycle.
-- Mutating operations require explicit current-turn intent. Prior memory or a replied-to message cannot authorize a transfer, deletion, admin action, or wager.
-- Private server content belongs in `.discord-ai-agent/` or Postgres, not tracked source, fixtures, docs, or public evals.
-- The console exposes observed inputs, outputs, tools, events, and timing—not private chain-of-thought.
-
-## Testing And Handoff
-
-- Run the closest focused test first.
-- Run `npm run typecheck` for TypeScript changes and `npm run verify` for a broad final check.
-- Run `npm run verify:db` for migrations, repositories, payments, RNG, queue, or other Postgres behavior.
-- Run `npm run eval -- --dry-run` for eval schema changes; use live `npm run eval` only when configured DB/OpenRouter behavior is intended.
-- Run `npm run build` for production console/build changes and cover reusable console behavior with focused unit tests.
-- Add or update a focused regression test for every bug fix. Add private server prompts under `.discord-ai-agent/evals`, never committed `evals/prompts`.
-- Update the nearest domain README when ownership, invariants, or a core flow changes.
-- In sandboxed code-update tasks, do not commit, push, or open PRs; the runner owns Git publication.
-- In direct repository work, open a ready-for-review, non-draft PR when asked. Do not merge or deploy unless the user explicitly asks.
+- Review the exact diff before staging. Never stage unrelated user work.
+- In a sandboxed code-update task, do not commit, push, or open a PR: the runner
+  owns publication. In direct repository work, publish only when asked.
+- Before updating a PR branch, run `gh pr view <number> --json state,mergedAt`.
+  A merged PR is immutable for this purpose: branch from current `origin/main`
+  and open a new PR instead.
+- Before a PR, state user impact, root cause/decision, risk or rollout needs,
+  and exact verification. Open a ready-for-review non-draft PR when asked;
+  never merge or deploy unless explicitly asked.

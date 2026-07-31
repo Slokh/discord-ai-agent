@@ -16,6 +16,7 @@ const CUSTOM_RANDOM_WAGER = new RegExp(
   `(?:\\b(?:bet|wager|stake|risk)\\b[\\s\\S]{0,240}\\b${RANDOM_ACTION}\\b[\\s\\S]{0,160}\\b${RANDOM_TARGET}\\b|\\b${RANDOM_ACTION}\\b[\\s\\S]{0,160}\\b${RANDOM_TARGET}\\b[\\s\\S]{0,240}\\b(?:bet|wager|stake|risk)\\b)`,
   "i",
 );
+const ALL_IN_RANDOM_WAGER = new RegExp(`\\ball[ -]?in\\b[\\s\\S]{0,80}\\b${RANDOM_TARGET}\\b`, "i");
 const DISCUSSION_PREFIX = /^\s*(?:what|which|why|how|should|is|are|do|does|did|tell|explain)\b/i;
 const EXECUTION_OVERRIDE = /\b(?:please|for me|right now|go ahead|can you|could you|would you|let(?:'s| us))\b/i;
 const BARE_DICE_REQUEST = new RegExp(`^\\s*(?:please\\s+)?${DICE_EXPRESSION}\\s*[.!]?\\s*$`, "i");
@@ -74,7 +75,7 @@ export function classifyRandomRequest(text: string): RandomRequestIntent {
   if (isDeferredExternalOutcomeWager(text)) return null;
   const normalized = text.trim();
   if (DISCUSSION_PREFIX.test(normalized) && !EXECUTION_OVERRIDE.test(normalized)) return null;
-  return BARE_DICE_REQUEST.test(normalized) || DIRECT_RANDOM_ACTION.test(normalized) || REQUESTED_RANDOM_ACTION.test(normalized) || CUSTOM_RANDOM_WAGER.test(normalized) || requiresWalletBackedWager(normalized)
+  return BARE_DICE_REQUEST.test(normalized) || DIRECT_RANDOM_ACTION.test(normalized) || REQUESTED_RANDOM_ACTION.test(normalized) || CUSTOM_RANDOM_WAGER.test(normalized) || ALL_IN_RANDOM_WAGER.test(normalized) || requiresWalletBackedWager(normalized)
     ? "draw"
     : null;
 }
@@ -203,6 +204,10 @@ export class RandomOutcomeGuard {
 
   requiresRandomWorkflowForTurn() {
     return this.requiresRandomWorkflow();
+  }
+
+  shouldForceDrawAfterWalletBalance(toolName: ToolName, result: AgentResponse) {
+    return toolName === "getWalletBalance" && result.status !== "error" && this.requiresRandomWorkflow();
   }
 
   async inspectDraft(responseContent: string): Promise<RandomOutcomeGuardDecision> {

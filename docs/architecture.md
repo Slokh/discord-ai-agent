@@ -71,7 +71,7 @@ For durable knowledge changes such as excluding a channel, deleting indexed hist
 
 ### Code Update Request To PR
 
-1. The model calls `runCodingAgent` when any guild member explicitly asks the bot to update itself or to debug/fix GitHub, CI, PR, deployment, repository, or previous code-update task failures. Admission is open to members and still enforces the configured per-user daily codegen limit.
+1. The model calls `runCodingAgent` when any guild member explicitly asks the bot to update itself or to debug/fix GitHub, CI, PR, deployment, repository, or previous code-update task failures. Admission is the same for every member; the OpenRouter account credit limit is the spend ceiling.
 2. `src/tools/agentTaskTools.ts` edits the Discord status message with progress, creates the `runCodingAgent` tool message plus task-linked execution in the durable session, and then enqueues the sandbox worker. `src/jobs/agentTaskEnqueue.ts` writes the same canonical runtime records when a caller has not already created them.
 3. `src/jobs/agentTaskEnqueue.ts` owns the queue handoff transaction, then `src/jobs/queue.ts` claims the task and launches the configured execution backend.
 4. `src/execution/backend.ts` starts either a Kubernetes Job or local process sandbox.
@@ -86,7 +86,7 @@ Code-update tasks live in the generic agent runtime. New control-plane work shou
 1. `src/observability/runs.ts` normalizes process runs, agent-runtime executions/messages/events/artifacts, trace events, tool audits, terminal logs, and task projections. Chat-run console views are derived from runtime executions/events/messages/artifacts; process runs remain for crawler, embedding, and task infrastructure.
 2. `src/control/internalApi.ts` exposes `/api/runs`, `/api/runs/:id`, artifact fetch, and streams.
 3. `src/control/console/` renders the React run console, including a dedicated Prompt Debugger for provider usage, cost, prompt/tool-schema composition, exact observed request/response captures, tool-round transcripts, and critical-path recommendations per call. Captures use the authenticated artifact API, pass through repository secret redaction, follow runtime artifact retention, and intentionally do not expose private chain-of-thought.
-4. `scripts/inspectRun.ts`, `scripts/agentTaskStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths.
+4. `scripts/inspectRun.ts`, `scripts/agentTaskStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths. Operator scripts target the production control plane by default, resolving it from configured deployment access or the local Kubernetes context; direct local database inspection is explicit only.
 5. `inspectAgentLogs` accepts Discord message links, message IDs, run IDs, or trace IDs, and automatically resolves the reply root/direct parent when invoked from a Discord reply. For requester-visible runs it prioritizes model-round, prompt-composition, cache/cost, and critical-path diagnosis before normalized trace evidence; explicit `detail=model_io` requests may load bounded, secret-redacted prompt/response excerpts.
 6. Worker processes run `src/observability/artifactRetention.ts` periodically to delete expired large process-run and agent-runtime artifacts and their chunks.
 

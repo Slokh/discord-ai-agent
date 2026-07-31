@@ -21,7 +21,7 @@ Owns the React debugging UI for runs, traces, artifacts, terminal output, and co
 - Terminal and artifact viewers.
 - A Prompt Debugger for each observed provider call: purpose, revision, token/cache use, estimated cost, prompt/schema composition, offered/requested tools, exact secret-redacted request/response captures, latency, and outcome.
 - Prompt captures show observed provider messages and tool schemas. They never claim to expose private chain-of-thought, and older runs without captures remain readable through aggregate telemetry.
-- Fixture and live-proxy local development, with reusable behavior covered by focused unit tests.
+- Fixture development is explicit; the live proxy targets the deployed production control plane by default, with reusable behavior covered by focused unit tests.
 
 ## Change Routing
 

@@ -1,11 +1,10 @@
 import { type Client, type Interaction, type Message } from "discord.js";
 import { enqueueAgentRuntimeSessionExecution } from "../../agent/runtimeControlPlane.js";
-import { agentRuntimeTurnInputText, type AgentRuntimeTurnEnvelope } from "../../agent/runtimeEnvelope.js";
+import type { AgentRuntimeTurnEnvelope } from "../../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution } from "../../agent/runtimeLedger.js";
 import { durationMs, logger } from "../../util/logger.js";
 import { runWithTrace } from "../../util/trace.js";
 import { executeDiscordAgentRequest } from "../agentDelivery.js";
-import { checkIngressBudget } from "../messageIngress.js";
 import { discordChannelThreadKey } from "../mentionParsing.js";
 import { DiscordResponseSink } from "../responseSink.js";
 import { fetchDiscordMessage, recordTraceEvent, type DiscordAgentRequestInput } from "../requestContext.js";
@@ -106,12 +105,6 @@ async function enqueueInteractionTurn(
   const interactionContext: NonNullable<AgentRuntimeTurnEnvelope["interaction"]> = interaction.isModalSubmit()
     ? normalizedModal!.submission
     : normalizeMessageComponentInteraction(interaction);
-  const modelInputText = agentRuntimeTurnInputText({ text: basePrompt, interaction: interactionContext });
-  const budget = await checkIngressBudget(input, { guildId: interaction.guildId!, channelId: interaction.channelId, userId: interaction.user.id, requestId: interaction.id, text: modelInputText });
-  if (!budget.allowed) {
-    await new DiscordInteractionResponder(interaction).ephemeral(budget.message);
-    return;
-  }
   const consumed = await input.repo.resolveDiscordComponentAction({
     token,
     guildId: interaction.guildId!,

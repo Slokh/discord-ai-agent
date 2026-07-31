@@ -31,6 +31,7 @@ describe("random outcome guard", () => {
   it.each([
     "put 0.25 on roulette and pick the most likely numbers",
     "put the rest of my balance on roulette",
+    "all in on heads",
     "bet $1 on black",
     "blackjack, 0.25",
     "roulette red 0.40",
@@ -265,6 +266,19 @@ describe("random outcome guard", () => {
 
     expect(guard.requiresWagerResolution()).toBe(false);
     await expect(guard.inspectDraft("Your total is 16. Hit or stand?")).resolves.toBe("allow");
+  });
+
+  it("forces the verified draw after a successful balance read for an all-in wager", () => {
+    const guard = new RandomOutcomeGuard({} as ToolContext, "all in on heads");
+
+    expect(guard.shouldForceDrawAfterWalletBalance(
+      "getWalletBalance",
+      { content: "Available balance: $5.00." },
+    )).toBe(true);
+    expect(guard.shouldForceDrawAfterWalletBalance(
+      "getWalletBalance",
+      { content: "Balance unavailable.", status: "error" },
+    )).toBe(false);
   });
 
   it("tracks scoped wager lifecycle without exposing an opaque wager id", () => {

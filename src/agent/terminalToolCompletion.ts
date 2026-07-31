@@ -87,3 +87,24 @@ export async function completeDirectToolResponse(
     memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
   };
 }
+
+export async function completeTerminalToolResult(
+  ctx: ToolContext,
+  input: Omit<Parameters<typeof completeDirectToolResponse>[1], "completionKind">,
+): Promise<AgentResponse | null> {
+  if (!input.result.outcome?.terminal || input.result.status === "error") return null;
+  return await completeDirectToolResponse(ctx, {
+    ...input,
+    completionKind: "grounded terminal tool result",
+  });
+}
+
+export async function completeDirectCodegenToolResult(
+  ctx: ToolContext,
+  input: Omit<Parameters<typeof completeDirectToolResponse>[1], "completionKind">,
+): Promise<AgentResponse> {
+  return await completeDirectToolResponse(ctx, {
+    ...input,
+    completionKind: "direct codegen tool result",
+  });
+}

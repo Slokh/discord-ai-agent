@@ -46,7 +46,9 @@ import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import type { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
 import { PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE, PublicUrlEvidenceGuard } from "./publicUrlEvidenceGuard.js";
 import {
+  completeDirectCodegenToolResult,
   completeDirectToolResponse,
+  completeTerminalToolResult,
   isSuccessfulGeneratedImageArtifact,
   synthesizeGeneratedImageArtifactIfReady,
 } from "./terminalToolCompletion.js";
@@ -139,6 +141,7 @@ async function runAgentModelLoopInternal(
     invalidToolCallRecoveryAttempted: false,
   };
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
+  let forcedToolNextRound: ToolName | null = null;
   const wagerResolutionRouter = new WagerResolutionRouter();
   const modelCallBudget: ModelCallBudget = {
     used: 0,
@@ -257,8 +260,9 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const forcedToolThisRound = compoundToolCompletion.takeForcedTool() ??
+      const forcedToolThisRound = forcedToolNextRound ?? compoundToolCompletion.takeForcedTool() ??
         imageGenerationGuard.takeForcedTool() ?? imageEvidenceGuard.takeForcedTool();
+      forcedToolNextRound = null;
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
@@ -724,17 +728,24 @@ async function runAgentModelLoopInternal(
           : toolResultContentForPrompt(route.name, result) + repeatNudge,
       });
 
-      if (route.name === "runCodingAgent") {
-        return await completeDirectToolResponse(ctx, {
+      if (route.name === "runCodingAgent") return await completeDirectCodegenToolResult(ctx, {
           routeName: route.name,
           result,
           files,
           memoryEvents,
           requestLogger,
           startedAt,
-          completionKind: "direct codegen tool result",
         });
-      }
+      if (randomOutcomeGuard.shouldForceDrawAfterWalletBalance(route.name, result)) forcedToolNextRound = "drawRandom";
+      const terminalResult = await completeTerminalToolResult(ctx, {
+        routeName: route.name,
+        result,
+        files,
+        memoryEvents,
+        requestLogger,
+        startedAt,
+      });
+      if (terminalResult) return terminalResult;
     }
     // The expanded capability is represented by the executed tool result and
     // the schemas on the next call. Reasserting `text` keeps the user request

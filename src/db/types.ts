@@ -69,6 +69,37 @@ export type DiscordBugMarker = {
   promptLink: string | null;
 };
 
+export type DiscordBugReportStatus = "pending" | "queued" | "running" | "completed" | "failed";
+export type DiscordBugReportDisposition =
+  | "confirmed_fixed"
+  | "confirmed_unfixed"
+  | "expected_behavior"
+  | "not_reproducible"
+  | "already_fixed"
+  | "insufficient_evidence";
+
+export type DiscordBugReport = {
+  reportId: string;
+  guildId: string;
+  channelId: string;
+  sourceMessageId: string;
+  sourceSessionId: string | null;
+  sourceExecutionId: string | null;
+  sourceRevision: string;
+  reportedByUserId: string;
+  taskId: string | null;
+  statusMessageId: string | null;
+  status: DiscordBugReportStatus;
+  disposition: DiscordBugReportDisposition | null;
+  summary: string | null;
+  prUrl: string | null;
+  mergeCommitSha: string | null;
+  deployedRevision: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+};
+
 export type DiscordUserLookupResult = {
   id: string;
   username: string | null;

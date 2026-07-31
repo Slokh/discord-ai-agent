@@ -5,6 +5,9 @@ import { logger } from "../util/logger.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { shouldProcessGuildEvent } from "./mentionParsing.js";
 import { recordTraceEvent } from "./requestContext.js";
+import { automateDiscordBugReport } from "./bugReportAutomation.js";
+import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
+import type { JobRuntime } from "../jobs/queue.js";
 
 export const DISCORD_BUG_MARKER_EMOJI = "🐛";
 
@@ -15,7 +18,7 @@ export function isDiscordBugMarkerReaction(emoji: ReactionEmojiLike | null | und
 }
 
 export async function handleDiscordBugMarkerReaction(
-  input: { config: AppConfig; repo: DiscordAiAgentRepository },
+  input: { config: AppConfig; repo: DiscordAiAgentRepository; agentRuntime?: AgentRuntimeRepository; jobs?: JobRuntime; botUserId?: string | null },
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser | null,
   present: boolean
@@ -46,6 +49,13 @@ export async function handleDiscordBugMarkerReaction(
       markedMessageId: message.id
     }
   });
+  if (present) {
+    await automateDiscordBugReport({
+      ...input,
+      message: message as Message,
+      reportedByUserId: user.id
+    });
+  }
   return true;
 }
 

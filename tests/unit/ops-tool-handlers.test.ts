@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   inspectAgentLogs: vi.fn(),
   reportStatus: vi.fn(),
   setAgentModel: vi.fn(),
-  setUserTurnLimit: vi.fn(),
   getSpendSummary: vi.fn(),
 }));
 
@@ -20,7 +19,6 @@ vi.mock("../../src/tools/agentModelTools.js", () => ({
 vi.mock("../../src/tools/discordOpsTools.js", () => ({
   inspectAgentLogs: mocks.inspectAgentLogs,
   reportStatus: mocks.reportStatus,
-  setUserTurnLimit: mocks.setUserTurnLimit,
 }));
 vi.mock("../../src/tools/spendTools.js", () => ({
   getSpendSummary: mocks.getSpendSummary,
@@ -37,7 +35,6 @@ describe("opsToolHandlers", () => {
     mocks.inspectAgentLogs.mockResolvedValue(" agent logs ");
     mocks.reportStatus.mockResolvedValue(" report status ");
     mocks.setAgentModel.mockResolvedValue(" model updated ");
-    mocks.setUserTurnLimit.mockResolvedValue(" turn limit updated ");
     mocks.getSpendSummary.mockResolvedValue(" spend summary ");
   });
 
@@ -49,22 +46,6 @@ describe("opsToolHandlers", () => {
     await expect(opsToolHandlers.getDeploymentStatus(ctx, route("getDeploymentStatus", {}), "deploy"))
       .resolves.toEqual({ content: "deployment status" });
     expect(mocks.getDeploymentStatus).toHaveBeenCalledWith(ctx);
-  });
-
-  it("normalizes user turn-limit arguments", async () => {
-    await expect(opsToolHandlers.setUserTurnLimit(ctx, route("setUserTurnLimit", {
-      action: " set ",
-      userId: " user-1 ",
-      turnsPerDay: "25",
-      reason: " moderation ",
-    }), "set the limit")).resolves.toEqual({ content: "turn limit updated" });
-
-    expect(mocks.setUserTurnLimit).toHaveBeenCalledWith(ctx, {
-      action: "set",
-      userId: "user-1",
-      turnsPerDay: 25,
-      reason: "moderation",
-    });
   });
 
   it("normalizes agent-model arguments", async () => {

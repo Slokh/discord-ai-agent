@@ -86,6 +86,21 @@ or private-server context into Frog or GitHub.
   retained artifacts, not event metadata.
 - Before changing skills or prompts, distinguish static repository guidance from
   private server overlay content and from retrieved conversation context.
+- Treat production as the default target for run/task inspection and the live
+  console. Use the configured production control plane or current Kubernetes
+  context; pass `--source db` only for deliberate isolated local inspection.
+- Use the repository-local `$discord-production-debug` skill for Discord links,
+  deployed reply regressions, production audits, and native bug-inbox requests.
+- Treat a `discord.com/channels/...` URL as a native production-debug reference.
+  Run `npm run discord:debug -- <message-link>` before reading source or opening
+  Discord in a browser. If it fails, diagnose the control-plane, Discord API,
+  authentication, or permission path and report the concrete blocker.
+- For a regression since deployment, run `npm run discord:audit -- --channel
+  <id> --since-deploy --include-reply-chains`; use `npm run runs:inspect` for
+  ledger-level narrowing and `npm run tasks:status` for code-update tasks.
+- Compare ingress, retained reply chain, session memory, operative request, model
+  I/O, tools, deterministic guards, outcome state, and delivery separately.
+  Group identical failures by revision before editing or blaming a provider.
 
 ## Verification
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Discord Production Debugging"
+  short_description: "Trace Discord replies through native production tooling"
+  default_prompt: "Use $discord-production-debug to inspect this Discord message or production reply regression."

@@ -1,6 +1,7 @@
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { collectAgentTaskStatusSnapshot, formatAgentTaskStatusSnapshot, type AgentTaskStatusSnapshot } from "../src/observability/agentTaskStatus.js";
+import { resolveProductionControlPlane } from "./productionControlPlane.js";
 
 type Args = {
   source: "db" | "api";
@@ -18,8 +19,11 @@ async function main() {
   const snapshot =
     args.source === "api"
       ? await loadFromApi({
-          apiUrl: (args.apiUrl ?? config.controlUi.publicUrl)?.replace(/\/$/, ""),
-          auth: args.auth ?? config.controlUi.authPassword,
+          ...resolveProductionControlPlane({
+            apiUrl: args.apiUrl ?? config.controlUi.publicUrl,
+            auth: args.auth ?? config.controlUi.authPassword,
+            namespace: config.execution.kubernetes.namespace,
+          }),
           args
         })
       : await loadFromDatabase(config, args);
@@ -41,7 +45,6 @@ async function loadFromDatabase(config: ReturnType<typeof loadConfig>, args: Arg
 }
 
 async function loadFromApi(input: { apiUrl?: string; auth?: string; args: Args }): Promise<AgentTaskStatusSnapshot> {
-  if (!input.apiUrl) throw new Error("--api-url or CONTROL_UI_PUBLIC_URL is required with --source api.");
   const headers = input.auth ? { authorization: `Bearer ${input.auth}` } : undefined;
   const url = new URL("/api/tasks/status", input.apiUrl);
   url.searchParams.set("limit", String(input.args.limit));
@@ -107,7 +110,7 @@ function reviveNullableDate(value: Date | string | null) {
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    source: process.env.AGENT_TASK_STATUS_SOURCE === "api" ? "api" : "db",
+    source: process.env.AGENT_TASK_STATUS_SOURCE === "db" ? "db" : "api",
     limit: 10,
     staleAfterMs: 15 * 60 * 1000,
     json: false
@@ -182,9 +185,9 @@ Usage:
   npm run tasks:status -- [options]
 
 Options:
-  --source <db|api>          Data source. Default: db, or AGENT_TASK_STATUS_SOURCE=api.
-  --api-url <url>            Control UI/API base URL. Implies --source api.
-  --auth <password>          Control UI password for API mode. Defaults to CONTROL_UI_AUTH_PASSWORD.
+  --source <db|api>          Data source. Default: production API; use db only for intentional isolated local work.
+  --api-url <url>            Production Control UI/API base URL. Implies --source api.
+  --auth <password>          Production Control UI password. Defaults to env or Kubernetes secret.
   --limit <count>            Rows per section. Default: 10.
   --stale-minutes <minutes>  Mark active tasks/leases stale after this long without progress. Default: 15.
   --json                     Print raw JSON.

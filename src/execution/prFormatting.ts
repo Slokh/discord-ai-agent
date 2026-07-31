@@ -44,11 +44,11 @@ export function codeUpdatePullRequestTitle(title: string) {
   return `${cleaned[0]?.toUpperCase() ?? ""}${cleaned.slice(1)}`;
 }
 
-export function codeUpdatePullRequestBody(input: { env: { taskRequest: string; requestedBy: string } }) {
+export function codeUpdatePullRequestBody(input: { env: { taskRequest: string; requestedBy: string; taskType?: string } }) {
   return [
     "## Why",
     "",
-    input.env.taskRequest.trim(),
+    input.env.taskType === "bug_report" ? "Validated from a 🐛 reaction on an AI reply. Original private Discord evidence is intentionally omitted." : input.env.taskRequest.trim(),
     "",
     "## Changes",
     "",

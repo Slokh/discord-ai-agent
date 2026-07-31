@@ -63,6 +63,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
   targetPullRequestUrl?: string | null;
   parentExecutionId?: string | null;
   taskId?: string | null;
+  taskType?: AgentTaskJob["taskType"];
 }): Promise<AgentRuntimeCodeUpdateEnqueueResult> {
   const taskId = input.taskId?.trim() || `task-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const executionId = agentRuntimeCodeUpdateExecutionId(taskId);
@@ -70,6 +71,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
   const traceId = input.traceId ?? input.session.traceId ?? taskId;
   const parentAgentThreadKey = input.session.threadKey ?? threadKey;
   const selection = codegenExecutionSelection(input.config);
+  const taskType = input.taskType ?? "code_update";
   const job: Omit<AgentTaskJob, "taskType"> = {
     taskId,
     traceId,
@@ -100,7 +102,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     discordResponseChannelId: job.discordResponseChannelId,
     discordResponseMessageId: job.discordResponseMessageId,
     retriedFromTaskId: job.retriedFromTaskId,
-    taskType: "code_update",
+    taskType,
     title: input.title,
     request: input.request,
     requestedBy: input.requestedBy,
@@ -155,7 +157,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     provider: selection.codegenProvider,
     reasoningEffort: "low",
     metadata: {
-      taskType: "code_update",
+      taskType,
       source: "agent.runtime.tool",
       queue: "agent.task",
       parentAgentSessionId: input.session.sessionId,
@@ -196,7 +198,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
   try {
     queueResult = await input.jobs.enqueueAgentTask({
       ...job,
-      taskType: "code_update",
+      taskType,
       runtimeMirror: "external"
     });
   } catch (error) {

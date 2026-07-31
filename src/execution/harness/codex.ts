@@ -23,6 +23,7 @@ import {
   truncateSingleLine
 } from "../sandboxUtils.js";
 import { CodegenNoDiffError, type AgentAttemptSummary, type AgentRunSummary, type CodegenHarnessAdapter, type CodegenHarnessRunInput } from "./types.js";
+import { readBugReportResult } from "../bugReportResult.js";
 
 const CODEX_APP_SERVER_MAX_ATTEMPTS = 2;
 const CODEX_EXEC_FALLBACK_MAX_ATTEMPTS = 1;
@@ -108,6 +109,9 @@ export async function runCodexWithRecovery(input: CodegenHarnessRunInput): Promi
   try {
     return await runCodexAppServerWithRecovery(input);
   } catch (error) {
+    if (error instanceof CodegenNoDiffError && input.env.taskType === "bug_report" && await readBugReportResult(input.env.bugReportResultPath)) {
+      return { attempts: error.attempts };
+    }
     if (error instanceof CodegenNoDiffError) {
       throw error;
     }

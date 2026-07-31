@@ -14,6 +14,10 @@ Read these in order before owning a complex feature:
 
 The root [`AGENTS.md`](../AGENTS.md) contains the concise rules automatically supplied to coding agents. Keep it short enough to remain useful and put deeper explanations here.
 
+## Operating Target
+
+Production is the default for operator and debugging work. The run inspector, task-status script, Discord audit/debug scripts, and live console resolve the deployed control plane from `CONTROL_UI_PUBLIC_URL` or the current local Kubernetes context; they never silently fall back to a local database or localhost. Use explicit local/DB flags only for intentional isolated development.
+
 ## Current Reference
 
 | Document | Use it for |

@@ -122,10 +122,12 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
       });
       await this.createConfigMap(namespace, configMapName, labels, {
         TASK_ID: job.taskId,
+        TASK_TYPE: job.taskType,
         TRACE_ID: job.traceId ?? job.taskId,
         SANDBOX_RUN_ID: sandboxRunId,
         TASK_TITLE: job.title,
         TASK_REQUEST: job.request,
+        BUG_REPORT_RESULT_PATH: `/tmp/${job.taskId}-bug-report-result.json`,
         REQUESTED_BY: job.requestedBy,
         TARGET_BRANCH: job.targetBranch ?? "",
         TARGET_PULL_REQUEST_NUMBER: job.targetPullRequestNumber == null ? "" : String(job.targetPullRequestNumber),
@@ -537,10 +539,12 @@ export function buildSandboxRunnerEnv(input: {
   return {
     ...(input.baseEnv ?? process.env),
     TASK_ID: input.job.taskId,
+    TASK_TYPE: input.job.taskType,
     TRACE_ID: input.job.traceId ?? input.job.taskId,
     SANDBOX_RUN_ID: input.sandboxRunId,
     TASK_TITLE: input.job.title,
     TASK_REQUEST: input.job.request,
+    BUG_REPORT_RESULT_PATH: `/tmp/${input.job.taskId}-bug-report-result.json`,
     REQUESTED_BY: input.job.requestedBy,
     TARGET_BRANCH: input.job.targetBranch ?? "",
     TARGET_PULL_REQUEST_NUMBER: input.job.targetPullRequestNumber == null ? "" : String(input.job.targetPullRequestNumber),

@@ -14,6 +14,7 @@ const PAST_OR_LEDGER_REFERENCE = /\b(?:past|previous|recent|latest|last|earlier|
 const SETTLED_OUTCOME_QUESTION = /\b(?:why|how|did)\b[\s\S]{0,80}\b(?:i|my|me)\b[\s\S]{0,80}\b(?:win|won|lose|lost|loss|payout|paid)\b|\b(?:i|my|me)\b[\s\S]{0,80}\b(?:win|won|lose|lost|loss|payout|paid)\b[\s\S]{0,80}\b(?:why|how|did)\b/i;
 const HYPOTHETICAL_WAGER = /\b(?:if|would|could|might|hypothetical|suppose|imagine|fictional|fake|pretend|simulated)\b[\s\S]{0,80}\b(?:win|won|lose|lost|bet|wager|payout|history)\b/i;
 const CURRENT_WAGER_ACTION = /\b(?:bet|wager|stake|risk|put)\b[\s\S]{0,50}(?:\$\s*(?:\d|\.\d)|\b(?:all|everything|balance|bankroll)\b)/i;
+const ALL_IN_WAGER_ACTION = /\ball[ -]?in\b[\s\S]{0,80}\b(?:heads|tails|coin|dice|blackjack|roulette|poker|craps|slots?)\b/i;
 const REQUESTER_WAGER_CORRECTION =
   /\b(?:that|this|it|those|these)(?:['’]s|\s+is)?\b[\s\S]{0,60}\b(?:not|isn['’]?t|wasn['’]?t|ain['’]?t|wrong|incorrect)\b[\s\S]{0,60}\b(?:my|mine)\b|\b(?:my|mine)\b[\s\S]{0,60}\b(?:not|isn['’]?t|wasn['’]?t|ain['’]?t|wrong|incorrect)\b[\s\S]{0,60}\b(?:that|this|it|those|these)\b/i;
 
@@ -60,6 +61,10 @@ export function walletBalanceReadAllowedForCurrentScope(
   text: string,
   replyContext?: DiscordReplyContext | null,
 ) {
+  // An explicit wallet-backed game may need one live balance read to turn an
+  // all-in request into a bounded wager. This is read-only; drawRandom still
+  // independently validates current-turn RNG and wager authorization.
+  if (CURRENT_WAGER_ACTION.test(text) || ALL_IN_WAGER_ACTION.test(text)) return true;
   if (hasExplicitWalletBalanceIntent(text)) return true;
   if (!replyContext || !/\b(?:my|mine|your|yours|theirs?|what about|how much)\b/i.test(text)) {
     return false;

@@ -10,6 +10,8 @@ Owns internal HTTP APIs, sandbox callbacks, metrics, and debugging surfaces.
 - Metrics, model-call cost/latency accounting, secret-redacted prompt/response artifacts, and lightweight HTML fallback pages.
 - React run console source under `console/`.
 
+The operator-facing scripts and live console target this deployed control plane by default. Do not add a silent localhost or local-database fallback; isolated local access must be selected explicitly.
+
 ## Change Routing
 
 - API shape changes start in the focused `internalApi*` owner: `internalApi.ts` for route dispatch, `internalApiParsers.ts` for boundary validation, `internalApiAuth.ts` for authentication, `internalApiStreams.ts` for SSE, and `internalApiServer.ts` for lifecycle. Then update console API clients and tests.

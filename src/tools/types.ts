@@ -223,6 +223,8 @@ export type AgentResponse = {
     nextTool?: string;
     /** A wallet-backed wager is active after this result and requires a typed lifecycle transition. */
     wagerActive?: boolean;
+    /** The tool result is already a complete, grounded answer to the request. */
+    terminal?: boolean;
   };
   files?: AgentFile[];
   tables?: AgentTable[];

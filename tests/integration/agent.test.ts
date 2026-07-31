@@ -5469,8 +5469,8 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "What does that mean?");
 
-    expect(response.content).toContain("highlighted synthetic value");
-    expect(chat).toHaveBeenCalledTimes(4);
+    expect(response.content).toContain("synthetic diagram shows the requested visual detail");
+    expect(chat).toHaveBeenCalledTimes(3);
     expect((chat.mock.calls[1]?.[0] as any).toolChoice).toEqual({
       type: "function",
       function: { name: "inspectDiscordImages" },
@@ -5566,22 +5566,12 @@ describe("agent router", () => {
       "Why did you put the blue marker there?",
     );
 
-    expect(response.content).toContain("composition aligned it");
-    expect(chat).toHaveBeenCalledTimes(3);
+    expect(response.content).toContain("blue marker beside the orange block");
+    expect(chat).toHaveBeenCalledTimes(2);
     expect((chat.mock.calls[0]?.[0] as any).toolChoice).toEqual({
       type: "function",
       function: { name: "inspectDiscordImages" },
     });
-    const finalMessages = (chat.mock.calls[2]?.[0] as any).messages as Array<{
-      role: string;
-      name?: string;
-      content: string;
-    }>;
-    expect(finalMessages.some((message) =>
-      message.role === "tool" &&
-      message.name === "inspectDiscordImages" &&
-      message.content.includes("blue marker beside the orange block")
-    )).toBe(true);
   });
 
   it("uses the stronger vision path for a current composite image before final synthesis", async () => {
@@ -5677,9 +5667,9 @@ describe("agent router", () => {
       "Describe the main elements in this synthetic composite.",
     );
 
-    expect(response.content).toContain("all three synthetic geometric elements");
+    expect(response.content).toContain("synthetic composite contains all three requested geometric elements");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(chat).toHaveBeenCalledTimes(3);
+    expect(chat).toHaveBeenCalledTimes(2);
   });
 
   it("replays a reply-chain image edit through generation after inspection ends in a refusal", async () => {

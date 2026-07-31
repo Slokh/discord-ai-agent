@@ -56,16 +56,13 @@ export function expandToolsetPromptContext(
 
 export function appendToolRoundContinuation(
   messages: ChatMessage[],
-  reminder: string,
-  expandedToolGuidance: string | undefined,
+  originalUserRequest: string,
 ) {
+  // A tool result must be followed by a user turn for provider-compatible
+  // tool-call ordering. Reassert the actual Discord request verbatim: putting
+  // a control reminder here made that reminder the model's apparent task.
   messages.push({
     role: "user",
-    content: [
-      reminder,
-      expandedToolGuidance
-        ? `Newly enabled tool guidance:\n${expandedToolGuidance}`
-        : null,
-    ].filter((content): content is string => Boolean(content)).join("\n\n"),
+    content: originalUserRequest,
   });
 }

@@ -26,6 +26,7 @@ The root [`AGENTS.md`](../AGENTS.md) contains the concise rules automatically su
 | [`local-acceptance.md`](local-acceptance.md) | Manual local acceptance checks across Discord and Docker. |
 | [`local-kubernetes.md`](local-kubernetes.md) | Optional local Kubernetes full-loop setup. |
 | [`eks-deploy.md`](eks-deploy.md) | Production EKS deployment and operational debugging. |
+| [`deployment-debugging.md`](deployment-debugging.md) | Script-first post-deploy Discord prompt, reply-chain, and run-trace investigation. |
 
 ## Direction And History
 

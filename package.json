@@ -51,6 +51,8 @@
     "eval": "tsx scripts/eval.ts",
     "eval:export-feedback": "tsx scripts/exportRunFeedbackEvals.ts",
     "runs:inspect": "tsx scripts/inspectRun.ts",
+    "discord:audit": "tsx scripts/discordDebug.ts --audit",
+    "discord:debug": "tsx scripts/discordDebug.ts",
     "payments:status": "tsx scripts/payments.ts status",
     "payments:reconcile": "tsx scripts/payments.ts reconcile",
     "payments:provision-bot": "tsx scripts/payments.ts provision-bot",

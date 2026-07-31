@@ -6,6 +6,7 @@ import {
   initialToolsetState,
   type ToolsetState,
 } from "../../src/agent/modelToolset.js";
+import { appendToolRoundContinuation } from "../../src/agent/toolsetPromptContext.js";
 import type { AgentToolRoute } from "../../src/agent/routerShared.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
@@ -32,6 +33,20 @@ function requestAdditionalToolsRoute(
 }
 
 describe("model toolset", () => {
+  it("keeps the original Discord request as the final user message after a tool round", () => {
+    const messages = [
+      { role: "system" as const, content: "Internal policy" },
+      { role: "user" as const, content: "balances" },
+      { role: "assistant" as const, content: "", tool_calls: [] },
+      { role: "tool" as const, tool_call_id: "call-1", name: "listWalletBalances", content: "| Wallet | Balance |" },
+    ];
+
+    appendToolRoundContinuation(messages, "balances");
+
+    expect(messages.at(-1)).toEqual({ role: "user", content: "balances" });
+    expect(messages.at(-1)?.content).not.toContain("final user message");
+  });
+
   it("selects a minimal scoped toolset and lets the model request randomness when needed", () => {
     const ctx = context();
     const state = initialToolsetState(ctx, "hello there");

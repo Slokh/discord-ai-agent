@@ -80,6 +80,17 @@ export function formatRunInspection(snapshot: RunSnapshot, options: RunInspectio
   );
   if (run.bottleneck) lines.push(`Bottleneck: ${run.bottleneck.name} (${formatSeconds(run.bottleneck.durationMs)})`);
   if (Object.keys(run.links).length > 0) lines.push(wrapLine("Links", compactJson(run.links, 600)));
+  const revision = stringFromUnknown(run.metadata.appRevision);
+  if (revision) lines.push(`Revision: ${revision}`);
+
+  const warnings = snapshot.events.filter((event) => event.level === "warn");
+  if (warnings.length > 0) {
+    lines.push("");
+    lines.push(`Warnings (${warnings.length}):`);
+    for (const warning of warnings.slice(0, 8)) {
+      lines.push(`- ${warning.name}${warning.summary ? `: ${truncateSingleLine(warning.summary, 220)}` : ""}`);
+    }
+  }
 
   if (snapshot.relatedRuns.length > 0) {
     lines.push("");

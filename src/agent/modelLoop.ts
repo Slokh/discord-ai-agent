@@ -10,7 +10,7 @@ import {
   synthesizeFinalAnswerWithoutTools,
 } from "./finalSynthesis.js";
 import {
-  chatMessages, CURRENT_REQUEST_RESPONSE_REMINDER, loadServerOverlay, prepareDiscordEmojiPromptContext,
+  chatMessages, loadServerOverlay, prepareDiscordEmojiPromptContext,
   replyContextAttachmentCount,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -196,6 +196,20 @@ async function runAgentModelLoopInternal(
   });
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     const roundStartedAt = Date.now();
+    const operativeUserContent = [...messages].reverse().find((message) => message.role === "user")?.content;
+    const operativeUserMessage = typeof operativeUserContent === "string" ? operativeUserContent : "";
+    if (operativeUserMessage !== text) {
+      await recordAgentEvent(ctx, {
+        eventName: "agent.prompt.request_replaced",
+        level: "warn",
+        summary: "The operative user message differs from the ingress Discord request.",
+        metadata: {
+          round: round + 1,
+          requestPreview: previewText(text, 300),
+          operativeUserPreview: previewText(operativeUserMessage, 300),
+        },
+      });
+    }
     requestLogger.debug(
       {
         round: round + 1,
@@ -560,7 +574,6 @@ async function runAgentModelLoopInternal(
     );
     const parallelToolResults = await executeIndependentToolRoutesInParallel(ctx, modelRoutes, successfulToolCallKeys, text);
     let redundantToolReason: string | null = null;
-    let expandedToolGuidance: string | undefined;
     for (const route of modelRoutes) {
       ctx.noteProgress?.();
       hasAttemptedTool = true;
@@ -617,7 +630,7 @@ async function runAgentModelLoopInternal(
         });
       }
       if (route.name === "requestAdditionalTools") {
-        ({ toolsetState, toolGuidance: expandedToolGuidance } = expandToolsetPromptContext(toolsetState, route.arguments));
+        ({ toolsetState } = expandToolsetPromptContext(toolsetState, route.arguments));
       }
       requestLogger.info(
         {
@@ -626,6 +639,7 @@ async function runAgentModelLoopInternal(
           outputChars: result.content.length,
           fileCount: result.files?.length ?? 0,
           tableCount: result.tables?.length ?? 0,
+          outcome: result.outcome,
           skippedRedundantToolCall: isRedundantToolCall || undefined,
           repeatedToolResult: isRepeatedToolResult || undefined,
         },
@@ -722,7 +736,10 @@ async function runAgentModelLoopInternal(
         });
       }
     }
-    appendToolRoundContinuation(messages, CURRENT_REQUEST_RESPONSE_REMINDER, expandedToolGuidance);
+    // The expanded capability is represented by the executed tool result and
+    // the schemas on the next call. Reasserting `text` keeps the user request
+    // authoritative without turning internal guidance into visible dialogue.
+    appendToolRoundContinuation(messages, text);
     const compoundCompletion = compoundToolCompletion.takeTerminalAction();
     if (compoundCompletion) {
       return await completeDirectToolResponse(ctx, {

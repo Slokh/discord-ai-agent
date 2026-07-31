@@ -171,6 +171,8 @@ Live evals can call providers and use configured private data. Run them only whe
 
 ## Debugging Order
 
+For post-deploy Discord regressions, first follow [`deployment-debugging.md`](deployment-debugging.md). Audit the whole affected channel and its reply chains since the deployed revision before treating a linked response as an isolated failure.
+
 For a Discord link or “what happened here” report:
 
 1. Run `npm run runs:inspect -- <link> --terminal` or use `inspectAgentLogs` from a Discord reply.

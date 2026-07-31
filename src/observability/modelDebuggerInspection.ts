@@ -63,9 +63,9 @@ export function formatModelIoCaptures(captures: Array<{ kind: string; name: stri
 }
 
 function modelCallFacts(snapshot: RunSnapshot): ModelCallFact[] {
-  const observed = snapshot.events.filter((event) => event.name === "agent.model.call.completed" || event.name === "agent.model.call.failed");
-  const events = observed.length > 0 ? observed : snapshot.events.filter((event) => event.name === "agent.model.round.complete");
-  return events.map((event) => {
+  return snapshot.events
+    .filter((event) => event.name === "agent.model.call.completed" || event.name === "agent.model.call.failed")
+    .map((event) => {
     const metadata = event.metadata;
     const usage = record(metadata.usage);
     return {
@@ -84,7 +84,7 @@ function modelCallFacts(snapshot: RunSnapshot): ModelCallFact[] {
       urlCitationCount: positiveNumber(metadata.urlCitationCount),
       sections: promptSections(metadata.promptSections),
     };
-  });
+    });
 }
 
 function criticalPathDiagnosis(input: { wallMs: number; modelMs: number; toolMs: number; uninstrumentedMs: number; calls: number }) {

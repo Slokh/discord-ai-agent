@@ -46,10 +46,6 @@ export async function fetchRunList(input: { includeEmbeddings?: boolean } = {}):
   };
 }
 
-export async function fetchRuns(input: { includeEmbeddings?: boolean } = {}): Promise<RunSummary[]> {
-  return (await fetchRunList(input)).runs;
-}
-
 export async function fetchRunSnapshot(runId: string): Promise<RunSnapshot> {
   if (useFixtures) {
     const snapshot = fixtureSnapshots.find((item) => item.run.runId === runId);

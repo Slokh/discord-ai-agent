@@ -53,24 +53,4 @@ describe("console model-call projection", () => {
       }),
     ]);
   });
-
-  it("falls back to legacy round events", () => {
-    const snapshot = {
-      events: [{
-        id: "legacy",
-        source: "runtime",
-        level: "info",
-        name: "agent.model.round.complete",
-        summary: "Round 2",
-        createdAt: "2026-07-10T00:00:00.000Z",
-        durationMs: 500,
-        metadata: { round: 2, model: "legacy/model", usage: { totalTokens: 20 } },
-      }],
-    } as unknown as Pick<RunSnapshot, "events">;
-
-    expect(modelCallsFromSnapshot(snapshot)[0]).toEqual(expect.objectContaining({
-      purpose: "tool_selection_round_2",
-      model: "legacy/model",
-    }));
-  });
 });

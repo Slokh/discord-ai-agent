@@ -32,11 +32,11 @@ async function main() {
   const startsCrawlWorker = startsWorker && config.worker.crawlEnabled;
   const startsEmbeddingWorker = startsWorker && config.worker.embeddingEnabled;
   const startsTaskWorker = startsWorker && config.worker.taskEnabled;
-  const startsDiscordAgentWorker = startsWorker && config.worker.discordAgentEnabled;
-  const startsDiscordClient = startsBot || startsCrawlWorker || startsDiscordAgentWorker;
-  const startsPaymentRuntime = startsBot || startsDiscordAgentWorker;
-  if (startsBot || startsCrawlWorker || startsDiscordAgentWorker) assertDiscordConfig(config);
-  if (startsBot || startsEmbeddingWorker || startsTaskWorker || startsDiscordAgentWorker) assertOpenRouterConfig(config);
+  const startsAgentRuntimeWorker = startsWorker && config.worker.agentRuntimeEnabled;
+  const startsDiscordClient = startsBot || startsCrawlWorker || startsAgentRuntimeWorker;
+  const startsPaymentRuntime = startsBot || startsAgentRuntimeWorker;
+  if (startsBot || startsCrawlWorker || startsAgentRuntimeWorker) assertDiscordConfig(config);
+  if (startsBot || startsEmbeddingWorker || startsTaskWorker || startsAgentRuntimeWorker) assertOpenRouterConfig(config);
   if (startsApi) assertTaskCallbackConfig(config);
   if (startsTaskWorker) assertExecutionConfig(config);
   if (startsPaymentRuntime && config.payments.walletEnabled) assertPaymentConfig(config);
@@ -65,7 +65,7 @@ async function main() {
         crawlEnabled: startsCrawlWorker,
         embeddingEnabled: startsEmbeddingWorker,
         taskEnabled: startsTaskWorker,
-        discordAgentEnabled: startsDiscordAgentWorker
+        agentRuntimeEnabled: startsAgentRuntimeWorker
       },
       payments: {
         walletEnabled: config.payments.walletEnabled,
@@ -134,7 +134,7 @@ async function main() {
         }
       };
   logger.info(
-    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsDiscordAgentWorker },
+    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker },
     "Starting job runtime"
   );
   const jobs = await startJobs({
@@ -158,7 +158,7 @@ async function main() {
     crawlWorker: startsCrawlWorker,
     embeddingWorker: startsEmbeddingWorker,
     taskWorker: startsTaskWorker,
-    discordAgentWorker: startsDiscordAgentWorker,
+    agentRuntimeWorker: startsAgentRuntimeWorker,
     repo,
     agentRuntimeRepo,
     openRouter,
@@ -166,7 +166,7 @@ async function main() {
   });
   jobRuntimeRef.current = jobs;
   logger.info(
-    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsDiscordAgentWorker },
+    { startsApi, startsBot, startsWorker, startsCrawlWorker, startsEmbeddingWorker, startsTaskWorker, startsAgentRuntimeWorker },
     "Job runtime ready"
   );
   const internalApi = startsApi ? await startInternalApi({ config, repo, agentRuntimeRepo, paymentRepo, db: pool, jobs }) : null;

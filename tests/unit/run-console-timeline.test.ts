@@ -273,7 +273,7 @@ describe("run console timeline", () => {
     ]);
   });
 
-  it("enriches old model rounds with requested tool args from hidden tool-start rows", () => {
+  it("enriches model rounds with requested tool args from hidden tool-start rows", () => {
     const enriched = enrichModelRoundToolRequests([
       timelineStep({
         id: "model",
@@ -443,11 +443,11 @@ describe("run console timeline", () => {
       runEvent({ id: "mention", name: "discord.mention.received", summary: "please open a PR", createdAt: atMs(0) }),
       runEvent({
         id: "model",
-        name: "agent.model.round.complete",
-        summary: "Round 1: runCodingAgent",
+        name: "agent.model.call.completed",
+        summary: "tool_selection_round_1",
         createdAt: atMs(24_380),
         durationMs: 24_380,
-        metadata: { selectedLocalTools: ["runCodingAgent"] }
+        metadata: { purpose: "tool_selection_round_1", requestedToolCalls: ["runCodingAgent"] }
       }),
       runEvent({
         id: "tool",

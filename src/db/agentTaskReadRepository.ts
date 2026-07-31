@@ -574,14 +574,3 @@ export async function getAgentRuntimeTaskEvents(pool: DbPool, input: {
     return result.rows.map(rowToTaskEvent);
   }
 
-
-export async function getTaskProgressEvents(pool: DbPool, input: {
-    guildId: string;
-    visibleChannelIds: string[];
-    traceId?: string;
-    limit: number;
-  }): Promise<TaskEvent[]> {
-    return getAgentRuntimeTaskEvents(pool, input);
-  }
-
-

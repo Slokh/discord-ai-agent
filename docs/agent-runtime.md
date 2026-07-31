@@ -40,7 +40,7 @@ Chat prompt execution runs in-process through `src/agent/runtimeRunner.ts`, `src
 
 When the model calls `runCodingAgent`, `src/tools/agentTaskTools.ts` creates a `runCodingAgent` tool message and a task-linked runtime execution in the current session when one is available, then enqueues the `agent.task` pg-boss job. `src/jobs/agentTaskEnqueue.ts` owns the enqueue transaction and writes the runtime records when the caller has not already created them.
 
-The `agent_tasks` row remains the task projection used by Discord notifications, queue workers, and compatibility task APIs, but the runtime session/execution/event rows are the canonical execution ledger. Sandbox progress, command summaries, lifecycle transitions, and terminal state are recorded as `agent.task.*` events in `agent_runtime_events`.
+The `agent_tasks` row remains the task projection used by Discord notifications and queue workers, but the runtime session/execution/event rows are the canonical execution ledger. Sandbox progress, command summaries, lifecycle transitions, and terminal state are recorded as `agent.task.*` events in `agent_runtime_events`.
 
 ## Sandbox lease model
 

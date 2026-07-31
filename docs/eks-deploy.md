@@ -236,9 +236,9 @@ helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
 
 The default allowed hosts cover GitHub, OpenRouter, and npm package downloads. Add more hosts only for tools the sandbox actually needs.
 
-## Public Task Viewer
+## Public Run Console
 
-The code-update task viewer redirects from `/tasks` to the run console on the API service. Keep the default cluster-internal service for the lowest-cost setup, then open it with:
+The run console is served by the API service. Keep the default cluster-internal service for the lowest-cost setup, then open it with:
 
 ```bash
 kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080

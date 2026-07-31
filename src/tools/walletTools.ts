@@ -551,10 +551,6 @@ export async function reconcileWalletTransfers(ctx: ToolContext): Promise<string
   return content;
 }
 
-export async function getGameWalletBalance(ctx: ToolContext): Promise<string> {
-  return getWalletBalance(ctx, { owner: "requester" });
-}
-
 function paymentRequester(ctx: ToolContext) {
   const scope = ctx.requesterScope;
   if (scope) {

@@ -1954,7 +1954,7 @@ describe("getAgentTaskStatus", () => {
       terminalRenderedAt: null,
       updatedAt: new Date("2026-07-01T12:01:00.000Z")
     };
-    const getTaskProgressEventsForTask = vi.fn(async () => [
+    const getAgentRuntimeTaskEventsForTask = vi.fn(async () => [
       {
         id: 2,
         taskId: "task-1",
@@ -1969,7 +1969,7 @@ describe("getAgentTaskStatus", () => {
     const ctx = {
       repo: {
         getAgentTask: vi.fn(async () => task),
-        getTaskProgressEventsForTask,
+        getAgentRuntimeTaskEventsForTask,
         getSandboxCommandEvents: vi.fn(async () => []),
         auditTool
       },
@@ -1982,7 +1982,7 @@ describe("getAgentTaskStatus", () => {
     const response = await getAgentTaskStatus(ctx, { taskId: "task-1", limit: 3 });
 
     expect(response).toContain("agent.task.progress task=task-1 - Runtime event won.");
-    expect(getTaskProgressEventsForTask).toHaveBeenCalledWith({ taskId: "task-1", limit: 3 });
+    expect(getAgentRuntimeTaskEventsForTask).toHaveBeenCalledWith({ taskId: "task-1", limit: 3 });
     expect(auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "getAgentTaskStatus",
@@ -2070,7 +2070,7 @@ describe("getAgentTaskStatus", () => {
     const ctx = {
       repo: {
         getAgentTask: vi.fn(async () => task),
-        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getAgentRuntimeTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         auditTool
       },
@@ -2175,7 +2175,7 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:00:02Z")
           }
         ]),
-        getTaskProgressEvents: vi.fn(async () => [
+        getAgentRuntimeTaskEvents: vi.fn(async () => [
           {
             id: 1,
             taskId: "task-1",
@@ -2225,7 +2225,7 @@ describe("inspectAgentLogs", () => {
       traceId: "trace-1",
       limit: 10
     });
-    expect(ctx.repo.getTaskProgressEvents).toHaveBeenCalledWith({
+    expect(ctx.repo.getAgentRuntimeTaskEvents).toHaveBeenCalledWith({
       guildId: "guild",
       visibleChannelIds: ["channel"],
       traceId: "trace-1",
@@ -2339,7 +2339,7 @@ describe("inspectAgentLogs", () => {
         ]),
         getProcessRunArtifact: vi.fn(async () => undefined),
         getAgentRuntimeArtifact,
-        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getAgentRuntimeTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => [
           {
             id: 1,
@@ -2362,7 +2362,7 @@ describe("inspectAgentLogs", () => {
         listProcessRunsForTrace: vi.fn(async () => [run]),
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
-        getTaskProgressEvents: vi.fn(async () => []),
+        getAgentRuntimeTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
         auditTool
@@ -2432,7 +2432,7 @@ describe("inspectAgentLogs", () => {
         getProcessRunSpans: vi.fn(async () => []),
         getProcessRunEvents: vi.fn(async () => []),
         getProcessRunArtifacts: vi.fn(async () => []),
-        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getAgentRuntimeTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => []),
         getSandboxRunsForTask: vi.fn(async () => []),
         getTraceEventsForTrace: vi.fn(async () => []),
@@ -2442,7 +2442,7 @@ describe("inspectAgentLogs", () => {
         listProcessRunsForTrace: vi.fn(async () => []),
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
-        getTaskProgressEvents: vi.fn(async () => []),
+        getAgentRuntimeTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
         getAgentRuntimeArtifact,

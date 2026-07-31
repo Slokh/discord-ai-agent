@@ -857,25 +857,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         })
       ])
     );
-    await expect(repo.getTaskProgressEvents({ guildId, visibleChannelIds: [channelId], traceId, limit: 10 })).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          taskId,
-          traceId,
-          eventName: "agent.task.started",
-          summary: "Starting Kubernetes sandbox.",
-          metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
-        }),
-        expect.objectContaining({
-          taskId,
-          traceId,
-          eventName: "agent.task.progress",
-          summary: "Running tests.",
-          metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
-        })
-      ])
-    );
-    await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual(
+    await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           taskId,
@@ -1583,7 +1565,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ]);
     await expect(repo.listRecentAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
     // Tasks without a registered runtime execution have no runtime events.
-    await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual([]);
+    await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([]);
     await expect(repo.getSandboxCommandEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
       expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
     ]);

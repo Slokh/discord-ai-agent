@@ -1153,7 +1153,7 @@ describe("drawRandom", () => {
     }), expect.any(Function));
   });
 
-  it("uses the scoped wager when a legacy model call corrupts the opaque wager id", async () => {
+  it("uses the scoped wager when a model call corrupts the opaque wager id", async () => {
     const getCurrentWager = vi.fn(async () => ({ id: "wager_68db51b7-1466-4ed4-b20c-128f8aeab273" }));
     const settleWager = vi.fn(async () => ({ wager: {}, transfer: null, userBalance: null }));
     const { ctx } = fakeContext({

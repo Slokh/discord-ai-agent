@@ -43,7 +43,7 @@ describe("config", () => {
         "WORKER_CRAWL_ENABLED",
         "WORKER_EMBEDDING_ENABLED",
         "WORKER_TASK_ENABLED",
-        "WORKER_DISCORD_AGENT_ENABLED",
+        "WORKER_AGENT_RUNTIME_ENABLED",
         "SPOTIFY_CLIENT_ID",
         "SPOTIFY_CLIENT_SECRET",
         "SPOTIFY_MARKET",
@@ -99,7 +99,7 @@ describe("config", () => {
           crawlEnabled: true,
           embeddingEnabled: true,
           taskEnabled: true,
-          discordAgentEnabled: true,
+          agentRuntimeEnabled: true,
           retention: {
             eventsDays: 60,
             auditDays: 90,
@@ -270,14 +270,14 @@ describe("config", () => {
         WORKER_CRAWL_ENABLED: "false",
         WORKER_EMBEDDING_ENABLED: "0",
         WORKER_TASK_ENABLED: "true",
-        WORKER_DISCORD_AGENT_ENABLED: "no"
+        WORKER_AGENT_RUNTIME_ENABLED: "no"
       },
       () => {
         expect(loadConfig().worker).toEqual({
           crawlEnabled: false,
           embeddingEnabled: false,
           taskEnabled: true,
-          discordAgentEnabled: false,
+          agentRuntimeEnabled: false,
           retention: {
             eventsDays: 60,
             auditDays: 90,

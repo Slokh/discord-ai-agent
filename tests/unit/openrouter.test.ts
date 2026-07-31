@@ -336,7 +336,7 @@ describe("OpenRouterClient", () => {
     expect(JSON.stringify(result.urlCitations)).not.toContain("scraped content");
   });
 
-  it("normalizes the legacy server-tool usage field", async () => {
+  it("normalizes the alternate server-tool usage field", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
       choices: [{ message: { content: "Grounded answer" } }],
       usage: { server_tool_use: { web_search_requests: 1 } },

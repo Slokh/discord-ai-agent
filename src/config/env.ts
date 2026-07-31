@@ -104,7 +104,7 @@ const defaults = {
   workerCrawlEnabled: true,
   workerEmbeddingEnabled: true,
   workerTaskEnabled: true,
-  workerDiscordAgentEnabled: true,
+  workerAgentRuntimeEnabled: true,
   retentionEventsDays: 60,
   retentionAuditDays: 90,
   retentionEmbeddingRunsDays: 14,
@@ -226,7 +226,7 @@ const envSchema = z.object({
   WORKER_CRAWL_ENABLED: booleanFromEnv.default(defaults.workerCrawlEnabled),
   WORKER_EMBEDDING_ENABLED: booleanFromEnv.default(defaults.workerEmbeddingEnabled),
   WORKER_TASK_ENABLED: booleanFromEnv.default(defaults.workerTaskEnabled),
-  WORKER_DISCORD_AGENT_ENABLED: booleanFromEnv.default(defaults.workerDiscordAgentEnabled),
+  WORKER_AGENT_RUNTIME_ENABLED: booleanFromEnv.default(defaults.workerAgentRuntimeEnabled),
 
   RETENTION_EVENTS_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionEventsDays),
   RETENTION_AUDIT_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionAuditDays),
@@ -371,7 +371,7 @@ export function loadConfig() {
       crawlEnabled: parsed.data.WORKER_CRAWL_ENABLED ?? defaults.workerCrawlEnabled,
       embeddingEnabled: parsed.data.WORKER_EMBEDDING_ENABLED ?? defaults.workerEmbeddingEnabled,
       taskEnabled: parsed.data.WORKER_TASK_ENABLED ?? defaults.workerTaskEnabled,
-      discordAgentEnabled: parsed.data.WORKER_DISCORD_AGENT_ENABLED ?? defaults.workerDiscordAgentEnabled,
+      agentRuntimeEnabled: parsed.data.WORKER_AGENT_RUNTIME_ENABLED ?? defaults.workerAgentRuntimeEnabled,
       retention: {
         eventsDays: parsed.data.RETENTION_EVENTS_DAYS,
         auditDays: parsed.data.RETENTION_AUDIT_DAYS,

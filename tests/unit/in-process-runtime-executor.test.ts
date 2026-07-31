@@ -12,7 +12,7 @@ describe("in-process agent runtime executor", () => {
     vi.resetAllMocks();
   });
 
-  it("delegates to the compatibility model router", async () => {
+  it("delegates to the model router", async () => {
     vi.mocked(handleAgentRequest).mockResolvedValue({ content: "hello" });
 
     await expect(

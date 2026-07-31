@@ -27,7 +27,7 @@ describe("run summaries", () => {
     expect(extractDiscordMessageId("not a message")).toBeNull();
   });
 
-  it("derives codegen run summaries from legacy task rows", () => {
+  it("derives codegen run summaries from the current task projection", () => {
     const createdAt = new Date("2026-06-30T12:00:00Z");
     const completedAt = new Date("2026-06-30T12:02:00Z");
     const task = agentTaskRecord({ createdAt, startedAt: createdAt, completedAt, updatedAt: completedAt });
@@ -109,7 +109,7 @@ describe("run summaries", () => {
       {
         getProcessRun: async () => undefined,
         getAgentTask: async (taskId: string) => (taskId === task.taskId ? task : undefined),
-        getTaskProgressEventsForTask: async () => [
+        getAgentRuntimeTaskEventsForTask: async () => [
           {
             id: 2,
             taskId: task.taskId,

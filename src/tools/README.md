@@ -56,7 +56,7 @@ Owns model-facing local tool contracts and implementations.
 - Tool schemas, runtime validation, and taxonomy: `tests/unit/tool-registry.test.ts` and `tests/unit/tool-contract-validation.test.ts`.
 - Per-family handler ownership, complete routing, and fail-fast drift checks: `tests/unit/tool-handler-conformance.test.ts`.
 - Tool scoping and argument coercion: `tests/unit/tool-scope.test.ts` and `tests/unit/tool-arguments.test.ts`.
-- Tool behavior: focused `tests/unit/*-tools.test.ts` files; `tests/unit/core-tools.test.ts` covers shared/compatibility behavior.
+- Tool behavior: focused `tests/unit/*-tools.test.ts` files; `tests/unit/core-tools.test.ts` covers shared cross-tool behavior.
 - End-to-end model/tool behavior: `tests/integration/agent.test.ts`.
 
 ## Structure

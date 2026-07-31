@@ -40,7 +40,7 @@ spec:
               value: "false"
             - name: WORKER_TASK_ENABLED
               value: "true"
-            - name: WORKER_DISCORD_AGENT_ENABLED
+            - name: WORKER_AGENT_RUNTIME_ENABLED
               value: "false"
             - name: CODEGEN_EXECUTION_BACKEND
               value: {{ .Values.codegenWorker.executionBackend | quote }}

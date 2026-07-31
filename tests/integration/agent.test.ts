@@ -7161,7 +7161,7 @@ describe("agent router", () => {
       config: codeUpdateTestConfig(),
       repo: {
         getAgentTask: vi.fn(async () => task),
-        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getAgentRuntimeTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         storeProcessRunArtifact,
         auditTool

@@ -374,12 +374,6 @@ export class DiscordAiAgentRepository {
     traceId?: string;
     limit: number;
   }): Promise<TaskEvent[]> { return agentTaskRepository.getAgentRuntimeTaskEvents(this.pool, input); }
-  getTaskProgressEvents(input: {
-    guildId: string;
-    visibleChannelIds: string[];
-    traceId?: string;
-    limit: number;
-  }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskProgressEvents(this.pool, input); }
   getAgentRuntimeEventsForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeEvent[]> { return agentTaskRepository.getAgentRuntimeEventsForTrace(this.pool, input); }
   getAgentRuntimeMessagesForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeMessage[]> { return agentTaskRepository.getAgentRuntimeMessagesForTrace(this.pool, input); }
   listAgentRuntimeChatExecutions(input: { limit?: number } = {}): Promise<AgentRuntimeChatExecution[]> { return agentTaskRepository.listAgentRuntimeChatExecutions(this.pool, input); }
@@ -387,7 +381,6 @@ export class DiscordAiAgentRepository {
   getAgentRuntimeArtifactsForExecution(input: { executionId: string; sessionId: string }): Promise<AgentRuntimeArtifactRecord[]> { return agentTaskRepository.getAgentRuntimeArtifactsForExecution(this.pool, input); }
   getAgentRuntimeArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> { return agentTaskRepository.getAgentRuntimeArtifact(this.pool, input); }
   getAgentRuntimeTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getAgentRuntimeTaskEventsForTask(this.pool, input); }
-  getTaskProgressEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskProgressEventsForTask(this.pool, input); }
   getAgentTaskMetrics(): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     agentTaskBacklog: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>;

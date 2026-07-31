@@ -1,14 +1,3 @@
-const HTTP_URL = /https?:\/\/[^\s<>()]+/gi;
-
-export function hasConfiguredRunConsoleUrl(
-  text: string,
-  configuredPublicUrl: string | null | undefined,
-) {
-  return (text.match(HTTP_URL) ?? []).some((value) =>
-    isConfiguredRunConsoleUrl(value, configuredPublicUrl)
-  );
-}
-
 export function isConfiguredRunConsoleUrl(
   value: string,
   configuredPublicUrl: string | null | undefined,

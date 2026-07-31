@@ -87,7 +87,6 @@ config:
   memoryCompactionThreshold: "100"
   memoryCompactionKeepRecent: "30"
   crawlScheduleCron: "0 6 * * *"
-  toolsetScoping: "true"
   walletEnabled: "false"
   userWalletsEnabled: "false"
   walletBalancesPublic: "false"

@@ -47,7 +47,6 @@ describe("config", () => {
         "SPOTIFY_CLIENT_ID",
         "SPOTIFY_CLIENT_SECRET",
         "SPOTIFY_MARKET",
-        "TOOLSET_SCOPING",
         "WALLET_ENABLED",
         "USER_WALLETS_ENABLED",
         "WALLET_BALANCES_PUBLIC",
@@ -119,7 +118,6 @@ describe("config", () => {
         });
         expect(config.discordAgentResponseTimeoutMs).toBe(1_800_000);
         expect(config.agentPromptMaxConcurrency).toBe(4);
-        expect(config.toolsetScoping).toBe(true);
         expect(config.crawlFetchRetries).toBe(3);
         expect(config.crawlRetryBaseMs).toBe(1000);
         expect(config.crawlRetryMaxMs).toBe(30_000);
@@ -193,12 +191,6 @@ describe("config", () => {
   it("rejects embedding dimensions that do not match the migrated vector index", () => {
     withEnv({ EMBEDDING_DIMENSIONS: "3072" }, () => {
       expect(() => loadConfig()).toThrow(/must remain 1536/);
-    });
-  });
-
-  it("allows disabling toolset scoping", () => {
-    withEnv({ TOOLSET_SCOPING: "false" }, () => {
-      expect(loadConfig().toolsetScoping).toBe(false);
     });
   });
 

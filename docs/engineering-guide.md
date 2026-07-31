@@ -49,7 +49,7 @@ Do not create parallel state because an existing read path is inconvenient.
 | Per-channel conversation continuity | Conversation memory repository | Prompt assembly in `src/agent/promptBuilder.ts` |
 | Request identity and scope | Immutable Discord turn envelope/requester scope | `ToolContext`, permission and action guards |
 | Discord delivery obligations | `delivery_obligations` repository | `src/discord/responseSink.ts` and startup sweeps |
-| Code-update task compatibility state | `agent_tasks` projection linked to an agent-runtime execution | Discord task notifications and task APIs |
+| Code-update task state | `agent_tasks` projection linked to an agent-runtime execution | Discord task notifications and task APIs |
 | Wallet accounts, transfers, and wagers | Payment repository plus receipt-verified onchain state | Wallet service, payment tools, payments console |
 | Chance sessions and draws | RNG repository | Non-model proof footers and verifier script |
 | Static prompt skills | Repository `skills/` directory | Prompt loader |
@@ -126,12 +126,12 @@ Read [`agent-runtime.md`](agent-runtime.md) and [`../src/execution/README.md`](.
 
 - New schema changes are forward-only numbered migrations. Do not edit a released migration to change production state.
 - Update the migration-upgrade fixture/test when the previous released schema must be proven upgradeable.
-- Put a query in the focused repository that owns the lifecycle; keep `src/db/repositories.ts` as a compatibility facade.
+- Put a query in the focused repository that owns the lifecycle; expose only the focused repository contract each caller needs.
 - Serialize competing mutations with transactions, row locks, advisory locks, unique constraints, or idempotency keys appropriate to the invariant.
 - Test cleanup and privacy deletion alongside creation when the state is derived from Discord content.
 - Run `npm run verify:db` before publishing DB-backed changes.
 
-Fresh installs currently use the squashed baseline plus later forward migrations. Older pre-squash installs use the documented one-time legacy transition; do not assume every deployed database was created from the latest baseline.
+Deployments use the squashed baseline plus later forward migrations.
 
 ## Observability Requirements
 

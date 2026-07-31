@@ -9,7 +9,7 @@ import type { AgentResponse, ToolContext } from "./types.js";
 
 export { normalizeOpenRouterModelId } from "./agentModelId.js";
 
-export type AgentModelAction =
+type AgentModelAction =
   | { action: "set"; model: string }
   | { action: "reset" };
 
@@ -49,15 +49,6 @@ export function effectiveAgentChatModel(ctx: ToolContext): string | undefined {
   return ctx.chatModelOverride?.trim() ||
     ctx.config.openRouter?.chatModel?.trim() ||
     undefined;
-}
-
-/** Backwards-compatible action shape for callers that do not need continuation text. */
-export function agentModelActionForPrompt(text: string): AgentModelAction | null {
-  const intent = agentModelIntentForPrompt(text);
-  if (!intent) return null;
-  return intent.action === "reset"
-    ? { action: "reset" }
-    : { action: "set", model: intent.target };
 }
 
 export async function setAgentModel(

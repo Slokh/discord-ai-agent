@@ -19,7 +19,6 @@ const CUSTOM_RANDOM_WAGER = new RegExp(
 const DISCUSSION_PREFIX = /^\s*(?:what|which|why|how|should|is|are|do|does|did|tell|explain)\b/i;
 const EXECUTION_OVERRIDE = /\b(?:please|for me|right now|go ahead|can you|could you|would you|let(?:'s| us))\b/i;
 const BARE_DICE_REQUEST = new RegExp(`^\\s*(?:please\\s+)?${DICE_EXPRESSION}\\s*[.!]?\\s*$`, "i");
-const WHOLE_BALANCE_WAGER = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
 const DISCORD_CUSTOM_EMOJI = /<a?:[A-Za-z0-9_]+:\d+>/g;
 const DISCORD_SNOWFLAKE_METADATA = /<[@#][!&]?\d+>|https?:\/\/(?:www\.)?discord(?:app)?\.com\/channels\/\d+\/\d+\/\d+/gi;
 const LONG_NUMBER = /\b\d{16,}\b/;
@@ -133,50 +132,6 @@ function randomReplyContextTexts(input: {
       : []),
   ];
 }
-
-export function randomActionNeedsWalletBalance(text: string): boolean {
-  return randomToolForPrompt(text) === "drawRandom" && WHOLE_BALANCE_WAGER.test(text);
-}
-
-export function forcedRandomActionRouteForPrompt(text: string, userWalletsEnabled: boolean): {
-  initialTool: "drawRandom" | "revealRandomness" | "getWalletBalance";
-  afterWalletBalanceTool: "drawRandom" | null;
-} | null {
-  const randomTool = randomToolForPrompt(text);
-  if (!randomTool) return null;
-  if (randomTool === "drawRandom" && userWalletsEnabled && randomActionNeedsWalletBalance(text)) {
-    return { initialTool: "getWalletBalance", afterWalletBalanceTool: "drawRandom" };
-  }
-  return { initialTool: randomTool, afterWalletBalanceTool: null };
-}
-
-export class ForcedRandomActionRouter {
-  private readonly route;
-  private nextTool: ToolName | null = null;
-
-  constructor(text: string, userWalletsEnabled: boolean, forceDraw = false) {
-    this.route = forceDraw
-      ? { initialTool: "drawRandom" as const, afterWalletBalanceTool: null }
-      : forcedRandomActionRouteForPrompt(text, userWalletsEnabled);
-  }
-
-  takeToolForRound(round: number): ToolName | null {
-    const tool = this.nextTool ?? (round === 0 ? this.route?.initialTool ?? null : null);
-    this.nextTool = null;
-    return tool;
-  }
-
-  noteToolResult(toolName: ToolName, status?: AgentResponse["status"]) {
-    if (toolName === "getWalletBalance" && this.route?.afterWalletBalanceTool && status !== "error") {
-      this.nextTool = this.route.afterWalletBalanceTool;
-    }
-  }
-
-  forceDrawNextRound() {
-    this.nextTool = "drawRandom";
-  }
-}
-
 
 export class RandomOutcomeGuard {
   private attemptedDraw = false;

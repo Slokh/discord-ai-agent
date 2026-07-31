@@ -1,5 +1,4 @@
 import { TOOL_GROUPS, type ToolGroup } from "../tools/registry.js";
-import { requiresAgentSelfHistory } from "../tools/agentMemoryIntent.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import {
   requestAdditionalToolGroups,
@@ -22,24 +21,10 @@ export type ToolsetState = {
 };
 const scopedToolsetCache = new WeakMap<ToolsetState, ScopedToolset>();
 
-/** Compatibility routing for deployments that explicitly opt out of scoped tools. */
-export function forcedAgentMemoryToolForPrompt(text: string): "getRecentAgentMemory" | null {
-  return requiresAgentSelfHistory(text) ? "getRecentAgentMemory" : null;
-}
-
 export function initialToolsetState(
   ctx: ToolContext,
   text: string,
 ): ToolsetState {
-  if (!ctx.config.toolsetScoping) {
-    const groups = new Set(TOOL_GROUPS);
-    const state: ToolsetState = { groups, expandedAll: true };
-    scopedToolsetCache.set(
-      state,
-      scopedToolset({ config: ctx.config, groups }),
-    );
-    return state;
-  }
   const groups = selectToolGroups({
       text,
       hasImageAttachments: hasImageContext(ctx.requestAttachments, ctx.replyContext),
@@ -131,7 +116,7 @@ function contextAttachments(
   return [
     ...attachments,
     ...(replyContext?.chain.flatMap((message) => message.attachments) ?? []),
-  ];
+  ].filter((attachment): attachment is DiscordAttachmentContext => Boolean(attachment));
 }
 
 function isImageAttachment(attachment: DiscordAttachmentContext) {

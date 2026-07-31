@@ -18,7 +18,7 @@ export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./dis
 export type { GuildAgentSettings } from "./agentSettingsRepository.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
-// for repository-permissions.test.ts import-compatibility coverage:
+// for repository-permissions.test.ts coverage:
 // c.parent_id = ANY($2::text[]) AND c.type IN (10, 11)
 
 export class DiscordAiAgentRepository {

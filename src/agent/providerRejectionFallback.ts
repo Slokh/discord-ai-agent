@@ -1,6 +1,5 @@
 import {
   isOpenRouterHttpError,
-  isRetryableOpenRouterHttpError,
   type ChatResult,
 } from "../models/openrouter.js";
 import type { ToolContext } from "../tools/types.js";
@@ -72,80 +71,18 @@ export async function recoverProviderRejectedModelCall(
     },
   });
 
-  try {
-    return await runObservedModelCall(ctx, {
-      purpose: "tool_selection_provider_rejection_fallback",
-      metadata: {
-        round: input.round,
-        fallbackFor: "tool_selection",
-        toolGroups: input.toolGroups,
-        forcedToolName: input.forcedToolName,
-        primaryModel: input.chat.model,
-        primaryStatus: input.error.status,
-        afterToolEvidence: input.afterToolEvidence,
-        afterToolsetExpansion: input.afterToolsetExpansion,
-      },
-      chat: recoveryChat,
-    });
-  } catch (recoveryError) {
-    const utilityModel = ctx.config.openRouter?.utilityModel?.trim();
-    if (
-      !isRetryableOpenRouterHttpError(recoveryError) ||
-      !utilityModel ||
-      utilityModel === input.chat.model ||
-      utilityModel === fallbackModel
-    ) {
-      throw recoveryError;
-    }
-    if (!(await reserveModelCall(
-      ctx,
-      input.modelCallBudget,
-      "provider_rejection_rescue",
-      {
-        round: input.round,
-        utilityModel,
-        recoveryStatus: recoveryError.status,
-      },
-    ))) {
-      throw recoveryError;
-    }
-
-    await recordAgentEvent(ctx, {
-      eventName: "agent.model.provider_rejection_rescue",
-      level: "warn",
-      summary: `Recovery model failed transiently; retrying with ${utilityModel}`,
-      metadata: {
-        round: input.round,
-        primaryModel: input.chat.model,
-        primaryStatus: input.error.status,
-        recoveryModel: fallbackModel,
-        recoveryStatus: recoveryError.status,
-        recoveryCode: recoveryError.code,
-        utilityModel,
-        afterToolEvidence: input.afterToolEvidence,
-        afterToolsetExpansion: input.afterToolsetExpansion,
-      },
-    });
-
-    return await runObservedModelCall(ctx, {
-      purpose: "tool_selection_provider_rejection_rescue",
-      metadata: {
-        round: input.round,
-        fallbackFor: "provider_rejection_fallback",
-        toolGroups: input.toolGroups,
-        forcedToolName: input.forcedToolName,
-        primaryModel: input.chat.model,
-        primaryStatus: input.error.status,
-        recoveryModel: fallbackModel,
-        recoveryStatus: recoveryError.status,
-        afterToolEvidence: input.afterToolEvidence,
-        afterToolsetExpansion: input.afterToolsetExpansion,
-      },
-      chat: {
-        ...recoveryChat,
-        model: utilityModel,
-        reasoningEffort: undefined,
-      },
-    });
-  }
+  return runObservedModelCall(ctx, {
+    purpose: "tool_selection_provider_rejection_fallback",
+    metadata: {
+      round: input.round,
+      fallbackFor: "tool_selection",
+      toolGroups: input.toolGroups,
+      forcedToolName: input.forcedToolName,
+      primaryModel: input.chat.model,
+      primaryStatus: input.error.status,
+      afterToolEvidence: input.afterToolEvidence,
+      afterToolsetExpansion: input.afterToolsetExpansion,
+    },
+    chat: recoveryChat,
+  });
 }

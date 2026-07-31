@@ -27,7 +27,6 @@ export function runtimeVersionMetadata(config?: AppConfig | null) {
       embeddingDimensions: config.embeddingDimensions,
       maxHistoryResults: config.maxHistoryResults,
       maxThreadSummaryMessages: config.maxThreadSummaryMessages,
-      toolsetScoping: config.toolsetScoping,
       promptConcurrency: config.agentPromptMaxConcurrency,
       chatTimeouts: config.chatTimeouts,
     } : { config: "unknown" })),

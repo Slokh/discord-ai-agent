@@ -216,7 +216,7 @@ export const discordActionToolContracts = [
         wager: {
           type: "object",
           description:
-            "Optional wallet-backed wager for the CURRENT REQUESTER only. Decide authorization from the current request, never another member or stale context. Supply interactionMode and a structured rule whenever the game has a machine-checkable outcome; code validates fairness and all wallet invariants before funds or entropy move. Legacy prose rule parsing remains only as a compatibility fallback.",
+            "Optional wallet-backed wager for the CURRENT REQUESTER only. Decide authorization from the current request, never another member or stale context. Supply interactionMode; if maxPayoutUsd exceeds stakeUsd, also supply a structured rule. Code validates fairness and all wallet invariants before funds or entropy move.",
           properties: {
             playerUserId: { type: "string", description: "Discord user ID of the current requester whose wallet is at risk. Must exactly match Current Discord requester; third-party wagers are rejected." },
             stakeUsd: { type: "number", description: "Positive USD-denominated stake taken from the user's game wallet." },
@@ -236,7 +236,7 @@ export const discordActionToolContracts = [
               additionalProperties: false,
             }
           },
-          required: ["playerUserId", "stakeUsd", "maxPayoutUsd", "game"],
+          required: ["playerUserId", "stakeUsd", "maxPayoutUsd", "game", "interactionMode"],
           additionalProperties: false
         }
       },

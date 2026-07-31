@@ -288,7 +288,7 @@ Common optional settings:
 | `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all`. Chat needs `bot` for ingress/delivery and a worker with `WORKER_DISCORD_AGENT_ENABLED=true` for execution. Sandbox callbacks and the run console need `api`. Use `all` only with the complete combined-role configuration. |
 | `RUN_MIGRATIONS` | `true` | Run migrations on process startup; Helm runtime pods set this to `false` because migrations run as a hook |
 
-Fresh installs apply the squashed `migrations/001_initial.sql` baseline followed by every later numbered forward migration. If you are upgrading a database created before the migration squash, run `scripts/legacy-schema-transition.sql` once to rename the old runtime tables/columns in place before applying the current migration chain.
+Fresh installs and deployments apply the squashed `migrations/001_initial.sql` baseline followed by every later numbered forward migration.
 
 ## Private Content And The Overlay Boundary
 

@@ -13,7 +13,6 @@ function context(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     config: {
       maxReplyChars: 1800,
-      toolsetScoping: true,
       openRouter: {},
     },
     requestAttachments: [],
@@ -33,35 +32,6 @@ function requestAdditionalToolsRoute(
 }
 
 describe("model toolset", () => {
-  it("starts with every group when scoping is disabled", () => {
-    const state = initialToolsetState(
-      context({
-        config: {
-          maxReplyChars: 1800,
-          toolsetScoping: false,
-          openRouter: {},
-        } as ToolContext["config"],
-      }),
-      "hello",
-    );
-
-    expect(state.expandedAll).toBe(true);
-    expect(state.groups).toEqual(
-      new Set([
-        "core",
-        "discord-retrieval",
-        "generated-data",
-        "presentation",
-        "discord-action",
-        "image",
-        "spotify",
-        "codegen",
-        "ops",
-        "external",
-      ]),
-    );
-  });
-
   it("selects a minimal scoped toolset and lets the model request randomness when needed", () => {
     const ctx = context();
     const state = initialToolsetState(ctx, "hello there");

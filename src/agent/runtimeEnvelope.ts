@@ -17,7 +17,7 @@ export type AgentRuntimeConversationMessageSnapshot = {
 };
 
 export type AgentRuntimeTurnEnvelope = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 2;
   source: "discord";
   requestKind?: "message" | "component" | "modal";
   requestId: string;
@@ -180,7 +180,7 @@ export async function loadAgentRuntimeTurnEnvelope(input: {
   const artifact = await input.agentRuntime.getArtifact({ artifactId: input.artifactId });
   if (!artifact?.content) return null;
   const parsed = JSON.parse(artifact.content) as AgentRuntimeTurnEnvelope;
-  if ((parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) || parsed.source !== "discord") {
+  if (parsed.schemaVersion !== 2 || parsed.source !== "discord") {
     throw new Error(`Unsupported agent runtime turn envelope artifact: ${input.artifactId}`);
   }
   return parsed;

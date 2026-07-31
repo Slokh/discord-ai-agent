@@ -1,5 +1,5 @@
 /**
- * Sandbox runner entrypoint and compatibility facade.
+ * Sandbox runner entrypoint.
  *
  * This file is executed directly inside the codegen sandbox
  * (`node dist/src/execution/sandboxRunner.js`). The implementation lives in

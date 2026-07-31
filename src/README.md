@@ -24,7 +24,7 @@ Use this map before broad repository exploration. Each folder README owns the de
 ## Agent-Friendly Rules
 
 - Prefer the closest domain README over scanning a large barrel file.
-- Preserve compatibility facades, but put new implementation in the owning domain module.
+- Keep implementation in the owning domain module; do not retain obsolete alternate paths.
 - For Discord knowledge/indexing changes, start at storage/crawl/persistence/retrieval boundaries before model-facing tool text.
 - For codegen latency/reliability changes, inspect execution context, prompt rendering, harness events, and run diagnostics before changing models.
 - For UI observability changes, keep data derivation separate from React rendering so diagnostics can be reused by scripts and the bot.

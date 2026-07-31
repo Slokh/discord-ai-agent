@@ -23,15 +23,10 @@ export function primaryChatPolicy(ctx: ToolContext): AgentChatPolicy {
 
 export function recoveryChatPolicy(ctx: ToolContext): AgentChatPolicy {
   const configuredFallback = nonEmpty(ctx.config.openRouter?.chatFallbackModel);
-  const legacyRecoveryModel = nonEmpty(ctx.config.openRouter?.utilityModel);
   return {
-    model: configuredFallback ?? legacyRecoveryModel,
-    reasoningEffort: configuredFallback
-      ? ctx.config.openRouter?.chatFallbackReasoningEffort
-      : undefined,
-    maxTokens: configuredFallback
-      ? (ctx.config.openRouter?.chatFallbackMaxTokens ?? 3_072)
-      : 4_096,
+    model: configuredFallback,
+    reasoningEffort: ctx.config.openRouter?.chatFallbackReasoningEffort,
+    maxTokens: ctx.config.openRouter?.chatFallbackMaxTokens ?? 3_072,
   };
 }
 
@@ -58,14 +53,6 @@ export function agentChatRequest(
         : 0.2,
     retryPolicy: "expensive" as const,
   };
-}
-
-export function timeoutFallbackChatRequest(
-  chat: ReturnType<typeof agentChatRequest>,
-  model: string,
-  messages: ChatMessage[],
-) {
-  return { ...chat, model, reasoningEffort: undefined, messages };
 }
 
 function nonEmpty(value: string | undefined) {

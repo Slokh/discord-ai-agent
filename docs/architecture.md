@@ -81,6 +81,17 @@ For durable knowledge changes such as excluding a channel, deleting indexed hist
 
 Code-update tasks live in the generic agent runtime. New control-plane work should use `src/db/agentRuntimeRepository.ts` and `/api/agent/sessions/:threadKey` rather than adding codegen-only APIs.
 
+### In-Sandbox Coding Agent Operation
+
+Each code-update task runs one isolated coding agent inside the sandbox the execution backend provisions. The agent's operating loop is deterministic at its boundaries so the run console, `tasks:status`, and Discord progress edits all read the same `agent.task.*` event stream:
+
+1. Read the root `AGENTS.md` before editing, then batch one targeted reconnaissance pass: the closest owning source, the nearest caller/helper, the nearest folder README, and the closest focused test.
+2. Make the first focused code edit once the owner is clear; avoid alternating search and read once the lifecycle is named.
+3. Cover the changed behavior with a focused test or the closest existing test, then run the proportional checks (`npm run typecheck` for TypeScript contract changes, the nearest focused test command, and `npm run docs:check` for documentation changes).
+4. Leave a tested worktree and report what changed. The execution runner owns commit, push, and PR creation; the in-sandbox agent never publishes, merges, deploys, or mutates GitHub state directly.
+
+Progress is reported through the helper progress shim so Discord status edits and the run console reflect reconnaissance, first edit, focused checks, and terminal handoff without exposing private chain-of-thought.
+
 ### Run Console And Debugging
 
 1. `src/observability/runs.ts` normalizes process runs, agent-runtime executions/messages/events/artifacts, trace events, tool audits, terminal logs, and task projections. Chat-run console views are derived from runtime executions/events/messages/artifacts; process runs remain for crawler, embedding, and task infrastructure.

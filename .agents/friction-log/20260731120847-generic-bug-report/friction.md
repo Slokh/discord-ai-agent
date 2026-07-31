@@ -1,6 +1,7 @@
 ---
 title: 'Generic bug-report requests can route to GitHub instead of the native inbox'
 severity: 'minor'
+issue: 'Slokh/discord-ai-agent#309'
 ---
 
 ## Expected Behavior

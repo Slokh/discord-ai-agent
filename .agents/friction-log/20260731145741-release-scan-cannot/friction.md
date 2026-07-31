@@ -1,6 +1,7 @@
 ---
 title: 'Release scan cannot allow an additional public fork owner'
 severity: 'minor'
+issue: 'Slokh/discord-ai-agent#310'
 ---
 
 ## Expected Behavior

@@ -25,6 +25,9 @@ type DeniedTerm = {
 // legitimate and exempt from the owner-handle rule. Built from pieces so this
 // file does not itself trip the scanner.
 const publicRepoPath = ["github.com/", "Slo", "kh", "/discord-ai-agent"].join("").toLowerCase();
+// This exact repository is also a public, source-pinned build dependency. Keep
+// the exemption narrow so unrelated owner mentions remain release findings.
+const publicNanocodexForkPath = ["github.com/", "Slo", "kh", "/nanocodex"].join("").toLowerCase();
 
 type PatternRule = {
   ruleId: string;
@@ -54,7 +57,10 @@ const deniedTerms: DeniedTerm[] = [
   deny("private-phrase", ["bato", "mon"]),
   {
     ...deny("private-owner", ["Slo", "kh"]),
-    allowLine: (line) => line.toLowerCase().includes(publicRepoPath)
+    allowLine: (line) => {
+      const lower = line.toLowerCase();
+      return lower.includes(publicRepoPath) || lower.includes(publicNanocodexForkPath);
+    }
   }
 ];
 

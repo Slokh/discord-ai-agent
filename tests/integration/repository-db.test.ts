@@ -511,6 +511,10 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(agentRuntimeRepo.getBinaryArtifact({ artifactId: binaryArtifact.artifactId })).resolves.toEqual(
       expect.objectContaining({ data: binaryData }),
     );
+    await expect(agentRuntimeRepo.getLatestBinaryArtifactForSession({
+      sessionId,
+      kind: "discord_delivery_file",
+    })).resolves.toEqual(expect.objectContaining({ artifactId: binaryArtifact.artifactId, data: binaryData }));
     const expiredArtifact = await agentRuntimeRepo.storeArtifact({
       sessionId,
       executionId,
@@ -550,7 +554,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         prUrl: "https://github.com/example/discord-ai-agent/pull/1",
         draft: false,
         verifyPassed: true,
-        harnessThreadId: "codex-thread-1"
+        harnessThreadId: "nanocodex-thread-1"
       })
     ).resolves.toEqual(expect.objectContaining({ status: "succeeded", prUrl: "https://github.com/example/discord-ai-agent/pull/1" }));
   });
@@ -1484,7 +1488,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.markAgentTaskProgress({
       taskId,
       step: "codex_activity",
-      statusMessage: "codex is still running after 1741s.",
+      statusMessage: "nanocodex is still running after 1741s.",
       metadata: { durationMs: 1_741_000 }
     });
     await repo.markAgentTaskFailed({
@@ -1495,7 +1499,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.markAgentTaskProgress({
       taskId,
       step: "codex_activity",
-      statusMessage: "codex is still running after 1771s.",
+      statusMessage: "nanocodex is still running after 1771s.",
       metadata: { durationMs: 1_771_000 }
     });
 
@@ -1545,8 +1549,8 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await repo.markAgentTaskProgress({
       taskId,
       step: "codex_activity",
-      statusMessage: "codex is still running.",
-      metadata: { command: "codex exec -", stderrTail: "live stderr tail", durationMs: 30_000 }
+      statusMessage: "nanocodex is still running.",
+      metadata: { command: "nanocodex run", stderrTail: "live stderr tail", durationMs: 30_000 }
     });
     await repo.recordSandboxCommandEvent({
       taskId,

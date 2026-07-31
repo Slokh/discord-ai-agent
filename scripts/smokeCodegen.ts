@@ -16,7 +16,6 @@ type CallbackRecord = {
 };
 
 type SmokeArgs = {
-  harness: "codex" | "opencode";
   model: string;
   title: string;
   request: string;
@@ -33,7 +32,6 @@ type SmokeSuiteCase = {
   title?: string;
   request?: string;
   requestFile?: string;
-  harness?: "codex" | "opencode";
   model?: string;
   timeoutMs?: number;
   closePr?: boolean;
@@ -50,7 +48,6 @@ type SmokeSuite = {
 type SmokeRunResult = {
   id?: string;
   title: string;
-  harness: string;
   model: string;
   taskId?: string;
   status: string;
@@ -84,7 +81,7 @@ async function main() {
 async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<typeof loadConfig>; githubToken: string }): Promise<SmokeRunResult> {
   const { args, config, githubToken } = input;
   const caseSlug = args.caseId ? `${safeFileName(args.caseId)}-` : "";
-  const taskId = `task-local-${args.harness}-${caseSlug}${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const taskId = `task-local-nanocodex-${caseSlug}${Date.now()}-${randomUUID().slice(0, 8)}`;
   const sandboxRunId = `run-local-${randomUUID()}`;
   const taskToken = `local-smoke-${randomUUID()}`;
   const workDir = path.resolve(".discord-ai-agent", "codegen-smoke", taskId);
@@ -127,7 +124,7 @@ async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<
   const controlPlaneInternalUrl = await listen(server);
   process.stdout.write(`local control plane: ${controlPlaneInternalUrl}\n`);
   process.stdout.write(`task id: ${taskId}\n`);
-  process.stdout.write(`harness/model: ${args.harness} / ${args.model}\n`);
+  process.stdout.write(`NanoCodex model: ${args.model}\n`);
   process.stdout.write(`artifacts: ${artifactDir}\n`);
   if (args.requestFile) process.stdout.write(`request file: ${args.requestFile}\n`);
 
@@ -146,9 +143,8 @@ async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<
       GITHUB_REPOSITORY: config.github.repository,
       GITHUB_BASE_BRANCH: config.github.baseBranch,
       OPENROUTER_API_KEY: config.openRouter.apiKey,
-      OPENROUTER_CHAT_MODEL: config.openRouter.chatModel,
+      OPENROUTER_BASE_URL: config.openRouter.baseUrl,
       OPENROUTER_CODEGEN_MODEL: args.model,
-      CODEGEN_HARNESS: args.harness,
       SANDBOX_CACHE_DIR: cacheDir,
       SANDBOX_STARTED_AT_MS: String(Date.now()),
       NODE_ENV: "production"
@@ -174,7 +170,6 @@ async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<
 
   const summary = formatSmokeSummary({
     taskId,
-    harness: args.harness,
     model: args.model,
     title: args.title,
     request: args.request,
@@ -203,7 +198,6 @@ async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<
   return {
     id: args.caseId,
     title: args.title,
-    harness: args.harness,
     model: args.model,
     taskId,
     status,
@@ -239,7 +233,6 @@ async function runSmokeSuite(input: { args: SmokeArgs; suite: SmokeSuite; config
       results.push({
         id: testCase.id,
         title: caseArgs.title,
-        harness: caseArgs.harness,
         model: caseArgs.model,
         status: "error",
         durationMs: 0,
@@ -271,7 +264,6 @@ function skippedSuiteResult(testCase: SmokeSuiteCase, defaults: SmokeArgs): Smok
   return {
     id: testCase.id,
     title: testCase.title ?? testCase.id,
-    harness: testCase.harness ?? defaults.harness,
     model: testCase.model ?? defaults.model,
     status: "skipped",
     durationMs: 0,
@@ -287,7 +279,6 @@ async function argsForSuiteCase(defaults: SmokeArgs, testCase: SmokeSuiteCase, s
     ...defaults,
     caseId: testCase.id,
     suiteFile: undefined,
-    harness: testCase.harness ?? defaults.harness,
     model: testCase.model ?? defaults.model,
     title: testCase.title ?? testCase.id,
     request: requestFile ? await fs.readFile(requestFile, "utf8") : testCase.request!,
@@ -323,7 +314,7 @@ export function formatSmokeSuiteSummary(input: {
     ""
   ].filter((line): line is string => line !== undefined);
   for (const result of input.results) {
-    lines.push(`- ${result.id ?? result.taskId ?? result.title}: ${result.status} (${result.harness} / ${result.model}, ${formatDuration(result.durationMs)})`);
+    lines.push(`- ${result.id ?? result.taskId ?? result.title}: ${result.status} (${result.model}, ${formatDuration(result.durationMs)})`);
     if (result.summaryPath) lines.push(`  Summary: ${result.summaryPath}`);
     if (result.prUrl) lines.push(`  PR: ${result.prUrl}`);
     if (result.error) lines.push(`  Error: ${result.error}`);
@@ -350,7 +341,6 @@ function spawnRunner(input: { env: NodeJS.ProcessEnv; useBuiltRunner: boolean })
 
 export function formatSmokeSummary(input: {
   taskId: string;
-  harness: string;
   model: string;
   title: string;
   request: string;
@@ -368,7 +358,7 @@ export function formatSmokeSummary(input: {
     "",
     `Task: ${input.taskId}`,
     `Status: ${status}`,
-    `Harness: ${input.harness}`,
+    "Harness: NanoCodex",
     `Model: ${input.model}`,
     `Duration: ${formatDuration(input.durationMs)}`,
     `Exit: ${input.exit.code ?? "signal"}${input.exit.signal ? ` (${input.exit.signal})` : ""}`,
@@ -510,17 +500,12 @@ function normalizeSmokeSuiteCase(value: unknown, index: number, suitePath: strin
   const item = objectRecord(value);
   if (!item) throw new Error(`Invalid codegen smoke suite ${suitePath}: cases[${index}] must be an object.`);
   const id = stringField(item, "id") ?? `case-${index + 1}`;
-  const harness = stringField(item, "harness");
-  if (harness && harness !== "codex" && harness !== "opencode") {
-    throw new Error(`Invalid codegen smoke suite ${suitePath}: cases[${index}].harness must be codex or opencode.`);
-  }
   const timeoutMs = numberField(item, "timeoutMs");
   return {
     id,
     title: stringField(item, "title"),
     request: stringField(item, "request"),
     requestFile: stringField(item, "requestFile"),
-    harness: harness as SmokeSuiteCase["harness"],
     model: stringField(item, "model"),
     timeoutMs,
     closePr: booleanField(item, "closePr"),
@@ -545,8 +530,6 @@ function booleanField(value: Record<string, unknown>, key: string) {
 }
 
 export async function parseArgs(values: string[]): Promise<SmokeArgs> {
-  const harness = valueFor(values, "--harness") ?? "opencode";
-  if (harness !== "codex" && harness !== "opencode") throw new Error("--harness must be codex or opencode");
   const suiteFile = valueFor(values, "--suite");
   const requestFile = valueFor(values, "--request-file");
   const request = requestFile
@@ -554,8 +537,7 @@ export async function parseArgs(values: string[]): Promise<SmokeArgs> {
     : valueFor(values, "--request") ??
       "Make a tiny README.md wording change for a temporary local codegen smoke test. Keep it to one sentence and do not modify behavior.";
   return {
-    harness,
-    model: valueFor(values, "--model") ?? process.env.OPENROUTER_CODEGEN_MODEL ?? process.env.OPENROUTER_CHAT_MODEL ?? "z-ai/glm-5.2",
+    model: valueFor(values, "--model") ?? process.env.OPENROUTER_CODEGEN_MODEL ?? "openai/gpt-5.6-sol",
     title: valueFor(values, "--title") ?? "Local codegen smoke test",
     request,
     requestFile: requestFile ? path.resolve(requestFile) : undefined,

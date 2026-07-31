@@ -244,7 +244,7 @@ function cacheFromProgressEvents(events: TaskEvent[]) {
     if (cacheType === "dependencies" && cacheStatus) {
       cache.dependencies = cacheStatus;
       cache.dependencyCacheKey = stringFromUnknown(event.metadata.lockHash);
-      if (event.metadata.reason === "dependency_files_changed_after_codex") cache.dependencyRefreshAfterCodex = true;
+      if (event.metadata.reason === "dependency_files_changed_after_nanocodex") cache.dependencyRefreshAfterCodegen = true;
     }
     const taskCache = recordFromUnknown(event.metadata.cache);
     if (taskCache) Object.assign(cache, taskCache);
@@ -259,8 +259,8 @@ function formatCompactTimingLine(timings: Record<string, unknown> | undefined) {
     ["startup", timings.sandboxStartup],
     ["repo", timings.repo],
     ["deps", timings.dependencies],
-    ["deps2", timings.dependenciesPostCodex],
-    ["codex", timings.codex],
+    ["deps2", timings.dependenciesPostCodegen],
+    ["nanocodex", timings.nanocodex],
     ["scan", timings.scan],
     ["push", timings.push],
     ["PR", timings.pr]
@@ -277,7 +277,7 @@ function formatCompactCacheLine(cache: Record<string, unknown> | undefined) {
   if (!cache) return "";
   const repo = stringFromUnknown(cache.repo);
   const dependencies = stringFromUnknown(cache.dependencies);
-  const dependencyRefresh = cache.dependencyRefreshAfterCodex ? " | refreshed deps after Codex" : "";
+  const dependencyRefresh = cache.dependencyRefreshAfterCodegen ? " | refreshed deps after NanoCodex" : "";
   const key = stringFromUnknown(cache.dependencyCacheKey);
   const keySuffix = key ? ` ${key.slice(0, 18)}` : "";
   const parts = [repo ? `repo=${repo}` : "", dependencies ? `deps=${dependencies}${keySuffix}` : ""].filter(Boolean);

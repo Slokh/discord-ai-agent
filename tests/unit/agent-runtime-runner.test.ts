@@ -8,7 +8,7 @@ vi.mock("../../src/discord/agentDelivery.js", () => ({
 }));
 
 describe("agent runtime runner factory", () => {
-  it("uses the in-process executor and forwards delivery obligations", async () => {
+  it("uses the NanoCodex executor and forwards delivery obligations", async () => {
     const deliveryObligations = { markDelivered: vi.fn() };
     const runner = createAgentRuntimeRunner({
       config: loadConfig(),
@@ -23,7 +23,7 @@ describe("agent runtime runner factory", () => {
 
     expect(runQueuedAgentRuntimeExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentExecutor: expect.objectContaining({ name: "in-process" }),
+        agentExecutor: expect.objectContaining({ name: "nanocodex" }),
         deliveryObligations
       }),
       expect.objectContaining({ runId: "message-1" })

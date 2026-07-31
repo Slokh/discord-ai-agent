@@ -560,12 +560,7 @@ function codegenDiagnosticsForRun(run: RunSummary, events: RunEvent[]) {
   }
   const firstDiff = [...events].reverse().find((event) => {
     const step = eventMetadataStep(event);
-    return (
-      step === "codex_first_diff" ||
-      step === "codex_app_server_first_diff" ||
-      step === "opencode_first_diff" ||
-      step === "opencode_first_edit"
-    );
+    return step === "nanocodex_first_edit";
   });
   const noDiff = [...events]
     .reverse()

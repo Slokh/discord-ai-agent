@@ -571,7 +571,7 @@ function normalizeAgentTaskStatuses(statuses: string[] | undefined): AgentTaskSt
 
 function formatCodegenMetricSummary(rows: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>) {
   if (rows.length === 0) return "none yet";
-  const preferred = ["repo", "dependencies", "dependenciesPostCodex", "codex", "verify", "scan", "push", "pr", "total"];
+  const preferred = ["repo", "dependencies", "dependenciesPostCodegen", "nanocodex", "verify", "scan", "push", "pr", "total"];
   const byPhase = new Map(rows.map((row) => [row.phase, row]));
   return preferred
     .map((phase) => byPhase.get(phase))

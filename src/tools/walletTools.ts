@@ -358,8 +358,8 @@ export async function requestStarterFunds(ctx: ToolContext): Promise<string> {
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
     return "Per-user USD wallets are not enabled in this deployment.";
   }
-  if (!hasExplicitStarterFundsIntent(ctx.requestText ?? "")) {
-    return "No starter funds were sent. Ask explicitly for $1, starter funds, a refill, or money to start playing again.";
+  if (!hasExplicitStarterFundsIntent(ctx.requestText ?? "", ctx.config.payments.initialGrantUsd ?? 0.1)) {
+    return "No starter funds were sent. Ask explicitly for starter funds, a refill, or a top-up to start playing again.";
   }
   const result = await ctx.walletService.requestStarterFunds({
     guildId: actor.guildId,
@@ -396,7 +396,7 @@ export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<str
   const requestText = ctx.requestText ?? "";
   if (promptExcludesRealWallet(requestText)) return null;
   const needsWalletActionPreflight =
-    isExplicitStarterFundsPrompt(requestText) ||
+    isExplicitStarterFundsPrompt(requestText, ctx.config.payments.initialGrantUsd ?? 0.1) ||
     isExplicitWalletTransferPrompt(requestText) ||
     requiresWalletBackedWagerForContext(ctx);
   if (!needsWalletActionPreflight) return null;
@@ -727,8 +727,8 @@ function hasExplicitExistingWalletRebalanceIntent(text: string): boolean {
     /\b(?:sweep|rebalance|reset|move|return|transfer|set)\b/i.test(text);
 }
 
-function hasExplicitStarterFundsIntent(text: string): boolean {
-  return isExplicitStarterFundsPrompt(text);
+function hasExplicitStarterFundsIntent(text: string, targetUsd: number): boolean {
+  return isExplicitStarterFundsPrompt(text, targetUsd);
 }
 
 function isFundedBalance(balance: { formatted: string; amountAtomic?: bigint }): boolean {

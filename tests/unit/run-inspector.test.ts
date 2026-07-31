@@ -11,7 +11,7 @@ describe("run inspector formatting", () => {
     expect(report).toContain("codegen run task-1");
     expect(report).toContain("no_changes: replace-thinking");
     expect(report).toContain("Duration: 16m 43s");
-    expect(report).toContain("Bottleneck: codex (16m 1s)");
+    expect(report).toContain("Bottleneck: nanocodex (16m 1s)");
     expect(report).toContain("Model usage:");
     expect(report).toContain("- Token usage: input=100 output=25 total=125 cached_input=40 across 1 LLM call (z-ai/glm-5.2)");
     expect(report).toContain("- Estimated audited cost: $0.004200 across 1 model/tool audit");
@@ -22,15 +22,15 @@ describe("run inspector formatting", () => {
     expect(report).toContain("- 1234567890123450000 | discord | succeeded | 1.234s | User asked for a code update");
     expect(report).toContain("trace=1234567890123450000 | message=1234567890123450000");
     expect(report).toContain("- task-retry | codegen | running | unknown | Retry code update");
-    expect(report).toContain("step=opencode_attempt_1");
+    expect(report).toContain("step=nanocodex_attempt_1");
     expect(report).toContain("Slowest spans:");
-    expect(report).toContain("- 16m 1s codex (task, failed)");
+    expect(report).toContain("- 16m 1s nanocodex (task, failed)");
     expect(report).toContain("Timeline");
     expect(report).toContain("runtime info agent.model.call.completed (23.373s)");
     expect(report).toContain("Artifacts:");
-    expect(report).toContain("artifact-prompt | prompt | Codex prompt");
+    expect(report).toContain("artifact-prompt | prompt | NanoCodex prompt");
     expect(report).toContain("Terminal tail");
-    expect(report).toContain("codex exec");
+    expect(report).toContain("nanocodex run");
   });
 
   it("selects artifacts by id, kind, name, or all", () => {
@@ -38,7 +38,7 @@ describe("run inspector formatting", () => {
 
     expect(selectArtifacts(artifacts, "artifact-prompt")).toHaveLength(1);
     expect(selectArtifacts(artifacts, "prompt")).toHaveLength(1);
-    expect(selectArtifacts(artifacts, "Codex")).toHaveLength(1);
+    expect(selectArtifacts(artifacts, "NanoCodex")).toHaveLength(1);
     expect(selectArtifacts(artifacts, "all")).toHaveLength(artifacts.length);
   });
 
@@ -51,85 +51,6 @@ describe("run inspector formatting", () => {
         }
       ])
     ).toContain("full prompt body");
-  });
-
-  it("adds OpenCode latency diagnostics to command log artifacts", () => {
-    const artifact = {
-      ...snapshotFixture().artifacts[0]!,
-      kind: "command_log" as const,
-      name: "OpenCode attempt 1 transcript",
-      content: [
-        "$ opencode run --model openrouter/z-ai/glm-5.2 [prompt]",
-        JSON.stringify({ type: "step_start", timestamp: Date.parse("2026-07-01T00:00:00.000Z"), part: {} }),
-        JSON.stringify({
-          type: "tool_use",
-          timestamp: Date.parse("2026-07-01T00:00:05.000Z"),
-          part: {
-            tool: "read",
-            state: {
-              status: "completed",
-              input: { filePath: "src/discord/client.ts" },
-              time: { start: Date.parse("2026-07-01T00:00:05.000Z"), end: Date.parse("2026-07-01T00:00:05.025Z") }
-            }
-          }
-        }),
-        JSON.stringify({ type: "step_finish", timestamp: Date.parse("2026-07-01T00:00:10.000Z"), part: {} }),
-        JSON.stringify({ type: "step_start", timestamp: Date.parse("2026-07-01T00:00:12.000Z"), part: {} }),
-        JSON.stringify({
-          type: "tool_use",
-          timestamp: Date.parse("2026-07-01T00:00:14.000Z"),
-          part: {
-            tool: "edit",
-            state: {
-              status: "completed",
-              input: { filePath: "src/discord/client.ts" },
-              time: { start: Date.parse("2026-07-01T00:00:14.000Z"), end: Date.parse("2026-07-01T00:00:14.011Z") }
-            }
-          }
-        }),
-        JSON.stringify({ type: "step_finish", timestamp: Date.parse("2026-07-01T00:00:20.000Z"), part: {} })
-      ].join("\n")
-    };
-
-    const report = formatRunArtifacts([artifact]);
-
-    expect(report).toContain("OpenCode latency: total=20.000s");
-    expect(report).toContain("model_wait=17.964s");
-    expect(report).toContain("tool_time=0.036s");
-    expect(report).toContain("first_edit=14.000s");
-    expect(report).toContain("Slowest round: round 1 10.000s (read)");
-  });
-
-  it("includes active OpenCode round diagnostics before a step finishes", () => {
-    const artifact = {
-      ...snapshotFixture().artifacts[0]!,
-      kind: "command_log" as const,
-      name: "OpenCode attempt 1 transcript",
-      content: [
-        "$ opencode run --model openrouter/z-ai/glm-5.2 [prompt]",
-        JSON.stringify({ type: "step_start", timestamp: Date.parse("2026-07-01T00:00:00.000Z"), part: {} }),
-        JSON.stringify({
-          type: "tool_use",
-          timestamp: Date.parse("2026-07-01T00:00:05.000Z"),
-          part: {
-            tool: "read",
-            state: {
-              status: "completed",
-              input: { filePath: "src/execution/sandboxRunner.ts" },
-              time: { start: Date.parse("2026-07-01T00:00:05.000Z"), end: Date.parse("2026-07-01T00:00:05.020Z") }
-            }
-          }
-        })
-      ].join("\n")
-    };
-
-    const report = formatRunArtifacts([artifact]);
-
-    expect(report).toContain("OpenCode latency: total=5.000s");
-    expect(report).toContain("model_wait=4.980s");
-    expect(report).toContain("rounds=1");
-    expect(report).toContain("tool_calls=1");
-    expect(report).toContain("Active round: round 1 running for 5.000s (read)");
   });
 
   it("formats durations as seconds instead of milliseconds", () => {
@@ -148,7 +69,7 @@ describe("run inspector formatting", () => {
         durationMs: 900_000,
         title: "replace thinking",
         summary: "Agent task produced no diff.",
-        bottleneck: { name: "opencode_attempt_1", durationMs: 870_000 },
+        bottleneck: { name: "nanocodex_attempt_1", durationMs: 870_000 },
         links: { pullRequest: "https://github.com/example/repo/pull/1" },
         metadata: {
           failureDiagnosis: {
@@ -168,7 +89,7 @@ describe("run inspector formatting", () => {
     expect(report).toContain("Statuses: failed=1, no_changes=1");
     expect(report).toContain("Codegen diagnoses: no_diff=1");
     expect(report.indexOf("run-slow")).toBeLessThan(report.indexOf("run-failed"));
-    expect(report).toContain("bottleneck=opencode_attempt_1 14m 30s");
+    expect(report).toContain("bottleneck=nanocodex_attempt_1 14m 30s");
     expect(report).toContain("pr=https://github.com/example/repo/pull/1");
     expect(report).toContain("diagnosis=no_diff | The coding agent completed but did not leave a repository diff.");
     expect(report).toContain("next=Inspect the transcript and clarify the requested file or expected behavior.");
@@ -212,7 +133,7 @@ function snapshotFixture(): RunSnapshot {
       kind: "codegen",
       status: "no_changes",
       title: "replace-thinking",
-      summary: "Agent task produced no diff after Codex recovery attempts.",
+      summary: "Agent task produced no diff after NanoCodex attempt.",
       requester: "kartik",
       guildId: "guild",
       channelId: "channel",
@@ -224,15 +145,15 @@ function snapshotFixture(): RunSnapshot {
       updatedAt: new Date("2026-07-01T17:57:04.000Z"),
       durationMs: 1_003_000,
       currentStep: null,
-      bottleneck: { name: "codex", durationMs: 961_000 },
+      bottleneck: { name: "nanocodex", durationMs: 961_000 },
       links: { run: "https://tasks.example/runs/task-1" },
       metadata: {}
     },
     spans: [
       {
-        id: "codex",
+        id: "nanocodex",
         source: "task",
-        name: "codex",
+        name: "nanocodex",
         status: "failed",
         startedAt: new Date("2026-07-01T17:41:27.000Z"),
         completedAt: new Date("2026-07-01T17:57:28.000Z"),
@@ -242,12 +163,12 @@ function snapshotFixture(): RunSnapshot {
       {
         id: "attempt-1",
         source: "command",
-        name: "codex_attempt_1",
+        name: "nanocodex_attempt_1",
         status: "succeeded",
         startedAt: new Date("2026-07-01T17:41:27.000Z"),
         completedAt: new Date("2026-07-01T17:49:27.000Z"),
         durationMs: 480_000,
-        metadata: { command: "codex exec" }
+        metadata: { command: "nanocodex run" }
       },
       {
         id: "llm-round-1",
@@ -306,7 +227,7 @@ function snapshotFixture(): RunSnapshot {
         artifactId: "artifact-prompt",
         runId: "task-1",
         kind: "prompt",
-        name: "Codex prompt",
+        name: "NanoCodex prompt",
         contentType: "text/plain",
         sizeBytes: 8123,
         preview: "Requested update: Replace Thinking with a reaction",
@@ -318,20 +239,20 @@ function snapshotFixture(): RunSnapshot {
     ],
     terminal: {
       lineCount: 1,
-      content: "codex exec",
+      content: "nanocodex run",
       entries: [
         {
           id: "terminal-1",
           source: "command",
           stream: "command",
-          step: "codex_attempt_1",
-          command: "codex exec",
+          step: "nanocodex_attempt_1",
+          command: "nanocodex run",
           createdAt: new Date("2026-07-01T17:41:27.000Z"),
-          content: "codex exec"
+          content: "nanocodex run"
         }
       ]
     },
-    diagnostics: ["codex was the bottleneck"],
+    diagnostics: ["nanocodex was the bottleneck"],
     raw: { sandboxRuns: [] },
     agentTranscript: [
       {
@@ -382,7 +303,7 @@ function snapshotFixture(): RunSnapshot {
         status: "running",
         title: "Retry code update",
         durationMs: null,
-        currentStep: "opencode_attempt_1"
+        currentStep: "nanocodex_attempt_1"
       })
     ],
     generatedAt: new Date("2026-07-01T17:57:29.000Z")

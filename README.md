@@ -181,7 +181,7 @@ When someone asks `@ai update yourself to ...`, the bot creates a durable `agent
 1. Refreshes a cached bare clone of the configured GitHub repo.
 2. Creates a per-task worktree and branch.
 3. Restores dependencies from a package manifest/lockfile-keyed cache, or seeds that cache with `npm ci`.
-4. Runs the configured coding harness, OpenCode by default or Codex when selected, with the requested change.
+4. Runs the embedded NanoCodex runtime with workspace tools and the requested change.
 5. Refreshes dependencies again if the coding harness changed `package.json` or `package-lock.json`.
 6. Runs verification and release scanning.
 7. Pushes an `agent/`-prefixed branch. Pushes to the base branch or protected branches (`main`, `master`, `develop`, `production`, `release*`, `hotfix/*`) are refused.
@@ -244,12 +244,9 @@ Common optional settings:
 | --- | --- | --- |
 | `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
 | `DISCORD_PREMIUM_SKU_IDS` | unset | Comma-separated Discord application SKU snowflakes exposed to the agent for premium Components V2 buttons; all other SKU values fail closed |
-| `OPENROUTER_CHAT_MODEL` | `openai/gpt-5.6-luna` | Main conversational and tool-selection model |
-| `OPENROUTER_CHAT_FALLBACK_MODEL` | `openai/gpt-5.6-terra` | Recovery model for malformed tool calls, empty responses, leaked hosted-tool markup, and repeated-tool termination |
-| `OPENROUTER_CHAT_REASONING_EFFORT` / `OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT` | `medium` / `medium` | OpenRouter reasoning effort for primary chat and recovery calls |
-| `OPENROUTER_CHAT_MAX_TOKENS` / `OPENROUTER_CHAT_FALLBACK_MAX_TOKENS` | `4096` / `3072` | Combined reasoning and visible-output ceilings; Discord separately bounds final visible replies |
-| `OPENROUTER_UTILITY_MODEL` | `openai/gpt-4o-mini` | Lower-cost model for bounded summaries, compaction, and deployment notes |
-| `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
+| `OPENROUTER_CHAT_MODEL` | `openai/gpt-5.6-sol` | NanoCodex conversational and tool-selection model; Sol or Luna only |
+| `OPENROUTER_UTILITY_MODEL` | `openai/gpt-5.6-luna` | NanoCodex-compatible model for bounded summaries, compaction, and deployment notes |
+| `OPENROUTER_CODEGEN_MODEL` | `openai/gpt-5.6-sol` | NanoCodex model for sandboxed PR generation; Sol or Luna only |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
 | `OPENROUTER_TRANSCRIPTION_MODEL` | `openai/whisper-large-v3-turbo` | Audio/video transcription model |
@@ -259,13 +256,12 @@ Common optional settings:
 | `WALLET_BALANCES_PUBLIC` | `false` | Allow every server member to list the member-to-wallet balance directory; owner/ops can always inspect it. |
 | `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | unset | Required when the wallet runtime is enabled. Never exposed to Discord or sandbox tasks. |
 | `TEMPO_NETWORK` / `TEMPO_USD_TOKEN` | `moderato` / `USDC.e` | Tempo network and six-decimal USD wallet token. Validate on Moderato before mainnet cutover. |
-| `WALLET_INITIAL_GRANT_USD` | `1.00` | Automatic first-interaction and zero-balance restart funding. Wallet-backed wagers are limited by available user and treasury funds rather than a fixed payout ceiling. |
+| `WALLET_INITIAL_GRANT_USD` | `0.10` | Automatic wallet-action top-up target. Wallet-backed wagers are limited by available user and treasury funds rather than a fixed payout ceiling. |
 | `GITHUB_BASE_BRANCH` | `main` | PR base branch |
 | `GITHUB_APP_ID` | unset | Preferred production GitHub App ID |
 | `GITHUB_APP_PRIVATE_KEY` | unset | Preferred production GitHub App private key |
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
 | `CODEGEN_EXECUTION_BACKEND` | `local-process` | `local-process` runs code-update tasks in a warm worker child process; `kubernetes-job` runs each task in an isolated Kubernetes Job (advanced) |
-| `CODEGEN_HARNESS` | `opencode` | Coding harness for code-update tasks: `opencode` by default, or `codex` to run tasks through Codex |
 | `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_AGENT_RUNTIME_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated code-update worker |
 | `RETENTION_EVENTS_DAYS` | `60` | Worker-side age cutoff for trace, process-run, agent-runtime, and sandbox command event cleanup; `0` disables event retention cleanup |
 | `RETENTION_AUDIT_DAYS` | `90` | Worker-side age cutoff for `tool_audit_logs`; `0` disables audit cleanup |

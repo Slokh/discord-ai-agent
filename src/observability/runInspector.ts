@@ -1,5 +1,4 @@
 import type { ProcessRunArtifactContent } from "../db/repositories.js";
-import { formatOpenCodeTranscriptDiagnostics, parseOpenCodeTranscript } from "./openCodeTranscript.js";
 import type { RunAgentTranscriptMessage, RunArtifactSummary, RunSnapshot, RunSpan, RunSummary, RunTerminalEntry } from "./runTypes.js";
 
 export type RunInspectionOptions = {
@@ -341,11 +340,6 @@ export function formatRunArtifacts(artifacts: ProcessRunArtifactContent[]): stri
   const lines: string[] = [];
   for (const artifact of artifacts) {
     lines.push(`--- ${artifact.name} (${artifact.artifactId}, ${artifact.kind}, ${formatBytes(artifact.sizeBytes)}) ---`);
-    const openCodeDiagnostics = formatOpenCodeArtifactDiagnostics(artifact);
-    if (openCodeDiagnostics) {
-      lines.push(openCodeDiagnostics);
-      lines.push("");
-    }
     lines.push(artifact.content.trimEnd());
     lines.push("");
   }
@@ -483,9 +477,4 @@ function numberFromUnknown(value: unknown) {
 
 function formatUsd(value: number) {
   return `$${value.toFixed(value < 0.01 ? 6 : 4)}`;
-}
-
-function formatOpenCodeArtifactDiagnostics(artifact: ProcessRunArtifactContent) {
-  if (artifact.kind !== "command_log" || !/\bopencode\b/i.test(artifact.name)) return "";
-  return formatOpenCodeTranscriptDiagnostics(parseOpenCodeTranscript(artifact.content), formatSeconds);
 }

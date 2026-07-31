@@ -30,24 +30,24 @@ describe("agent task Discord notifications", () => {
   it("renders recent activity for running tasks", () => {
     const task = agentTask({
       status: "running",
-      currentStep: "opencode_round_finished",
-      statusMessage: "OpenCode round 1 finished."
+      currentStep: "nanocodex_first_edit",
+      statusMessage: "NanoCodex made its first code edit."
     });
     const events = [
       taskEvent({ id: 1, summary: "Repository ready.", step: "repo_complete", createdAt: new Date("2026-06-30T12:00:05Z") }),
-      taskEvent({ id: 2, summary: "OpenCode round 1 started.", step: "opencode_round_started", createdAt: new Date("2026-06-30T12:00:10Z") }),
-      taskEvent({ id: 3, summary: "OpenCode round 1 finished.", step: "opencode_round_finished", createdAt: new Date("2026-06-30T12:00:15Z") })
+      taskEvent({ id: 2, summary: "NanoCodex is using read_file.", step: "nanocodex_tool_read_file", createdAt: new Date("2026-06-30T12:00:10Z") }),
+      taskEvent({ id: 3, summary: "NanoCodex made its first code edit.", step: "nanocodex_first_edit", createdAt: new Date("2026-06-30T12:00:15Z") })
     ];
 
     expect(renderAgentTaskMessage(task, events).content).toBe(
       [
         "Working on `Improve thing`.",
-        "OpenCode round 1 finished.",
-        "Current phase: model round finished",
+        "NanoCodex made its first code edit.",
+        "Current phase: first edit made",
         "Started <t:1782820800:R> · last progress <t:1782820800:R>",
         "Recent activity:",
         "- <t:1782820805:T> repository ready: Repository ready.",
-        "- <t:1782820810:T> model round started: OpenCode round 1 started.",
+        "- <t:1782820810:T> nanocodex tool read file: NanoCodex is using read_file.",
         "Task ID: `task-1`"
       ].join("\n")
     );
@@ -57,8 +57,8 @@ describe("agent task Discord notifications", () => {
     const task = agentTask({
       status: "no_changes",
       currentStep: "no_changes",
-      statusMessage: "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
-      error: "Agent task produced no diff after Codex app-server recovery attempts; no PR will be opened.",
+      statusMessage: "Agent task produced no diff after NanoCodex attempt; no PR will be opened.",
+      error: "Agent task produced no diff after NanoCodex attempt; no PR will be opened.",
       completedAt: new Date("2026-06-30T12:01:00Z")
     });
 

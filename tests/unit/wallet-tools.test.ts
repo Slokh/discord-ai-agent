@@ -351,25 +351,29 @@ describe("managed wallet tools", () => {
     const transactionHash = `0x${"7".repeat(64)}`;
     const request = vi.fn(async (_input: unknown, record: PaymentEventRecorder) => {
       await record({ eventName: "wallet.transfer.confirmed", summary: "starter", metadata: { transactionHash } });
-      return { granted: true, amountUsd: 1, ...transferResult(transactionHash) };
+      return { granted: true, amountUsd: 0.1, ...transferResult(transactionHash, 100_000n) };
     });
-    const ctx = context({ requestText: "I'm at $0, can I get $1 to play again?", walletService: { requestStarterFunds: request } });
+    const ctx = context({ requestText: "I'm at $0, can I get $0.10 to play again?", walletService: { requestStarterFunds: request } });
 
     const result = await requestStarterFunds(ctx);
 
-    expect(result).toContain("Added $1 USD from the AI treasury");
+    expect(result).toContain("Added $0.1 USD from the AI treasury");
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ requestedByUserId: "requester" }), expect.any(Function));
     expect(ctx.turnOutput?.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
   });
 
-  it("recognizes a natural request for the requester's starter dollar", async () => {
-    const request = vi.fn(async () => ({ granted: true, amountUsd: 1, ...transferResult() }));
+  it("recognizes a natural request for the requester's starter ten cents", async () => {
+    const request = vi.fn(async () => ({
+      granted: true,
+      amountUsd: 0.1,
+      ...transferResult(`0x${"9".repeat(64)}`, 100_000n),
+    }));
     const ctx = context({
-      requestText: "give me my dollar and I'm never giving it back",
+      requestText: "give me ten cents",
       walletService: { requestStarterFunds: request },
     });
 
-    await expect(requestStarterFunds(ctx)).resolves.toContain("Added $1 USD from the AI treasury");
+    await expect(requestStarterFunds(ctx)).resolves.toContain("Added $0.1 USD from the AI treasury");
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -383,10 +387,10 @@ describe("managed wallet tools", () => {
   });
 
   it("automatically tops a dust balance up to the configured starter target", async () => {
-    const request = vi.fn(async () => ({ granted: true as const, amountUsd: 0.994, ...transferResult() }));
+    const request = vi.fn(async () => ({ granted: true as const, amountUsd: 0.094, ...transferResult() }));
     const ctx = context({ requestText: "refill then go again", walletService: { requestStarterFunds: request } });
 
-    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toContain("Automatically added $0.994 USD");
+    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toContain("Automatically added $0.094 USD");
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -618,7 +622,7 @@ function context(input: {
         userWalletsEnabled: true,
         balancesPublic: input.walletBalancesPublic ?? false,
         tempoNetwork: "mainnet",
-        initialGrantUsd: 1
+        initialGrantUsd: 0.1
       }
     },
     guildId: "guild",

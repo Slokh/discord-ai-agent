@@ -23,36 +23,36 @@ export const fixtureSnapshots: RunSnapshot[] = [
       updatedAt: minutesAgo(24),
       durationMs: 18 * 60_000,
       currentStep: "done",
-      bottleneck: { name: "codex", durationMs: 14 * 60_000 },
+      bottleneck: { name: "nanocodex", durationMs: 14 * 60_000 },
       links: { pullRequest: "https://github.com/example/discord-ai-agent/pull/42" },
       metadata: { backend: "kubernetes-sandbox", verifyPassed: true }
     },
     spans: [
       span("sandbox", "succeeded", 42, 41.8, 12_000, "sandbox"),
       span("dependencies", "succeeded", 41.8, 41.2, 36_000, "task"),
-      span("codex", "succeeded", 41.2, 27.2, 14 * 60_000, "command"),
+      span("nanocodex", "succeeded", 41.2, 27.2, 14 * 60_000, "command"),
       span("verify", "succeeded", 27.2, 25.4, 108_000, "command"),
       span("pr", "succeeded", 25.4, 24, 84_000, "process")
     ],
     events: [
       event("task.progress", "info", "Sandbox process started.", 42, "task"),
-      event("sandbox.command", "info", "codex exited 0", 27.2, "command"),
+      event("sandbox.command", "info", "nanocodex exited 0", 27.2, "command"),
       event("task.completed", "info", "Opened pull request.", 24, "task")
     ],
     artifacts: [
-      artifact("artifact-prompt", "prompt", "Codex prompt", 1880),
+      artifact("artifact-prompt", "prompt", "NanoCodex prompt", 1880),
       artifact("artifact-diff", "diff", "Git patch", 9234),
       artifact("artifact-pr", "pr_body", "Pull request body", 1315)
     ],
     terminal: terminal([
-      terminalEntry("terminal-1-command", "command", "codex", "$ codex exec ..."),
-      terminalEntry("terminal-1-stdout", "stdout", "codex", "Reading files...\nEditing src/discord/client.ts\nRunning tests..."),
-      terminalEntry("terminal-1-exit", "exit", "codex", "[exit 0 in 14m]"),
+      terminalEntry("terminal-1-command", "command", "nanocodex", "$ nanocodex run ..."),
+      terminalEntry("terminal-1-stdout", "stdout", "nanocodex", "Reading files...\nEditing src/discord/client.ts\nRunning tests..."),
+      terminalEntry("terminal-1-exit", "exit", "nanocodex", "[exit 0 in 14m]"),
       terminalEntry("terminal-2-command", "command", "scan", "$ npm run scan:release"),
       terminalEntry("terminal-2-stdout", "stdout", "scan", "passed"),
       terminalEntry("terminal-2-exit", "exit", "scan", "[exit 0 in 1m 48s]")
     ]),
-    diagnostics: ["Most time was spent in codex: 14m 0s.", "All checks passed before the PR opened."],
+    diagnostics: ["Most time was spent in nanocodex: 14m 0s.", "All checks passed before the PR opened."],
     raw: {},
     relatedRuns: [],
     generatedAt: now.toISOString()

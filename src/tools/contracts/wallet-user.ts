@@ -115,7 +115,7 @@ export const walletUserToolContracts = [
     category: "external",
     toolClass: "external",
     outputContract: ["eligibility from verified requester balance", "fixed starter amount", "confirmed transaction", "fresh requester and AI balances"],
-    examples: ["@ai I'm at $0, can I get $1 to play again?"],
+    examples: ["@ai I'm at $0, can I get $0.10 to play again?"],
     permissionRequirements: ["explicit_user_request", "requester_scope", "verified_below_starter_balance", "configured_wallet_runtime"],
     auditEvents: ["tool_audit_logs", "wallet.transfer.reserved", "wallet.transfer.confirmed"],
     parameters: {

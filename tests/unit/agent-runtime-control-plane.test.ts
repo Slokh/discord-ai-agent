@@ -152,8 +152,7 @@ describe("agent runtime control plane", () => {
         queueName: "agent.task",
         backendName: "local-process-sandbox",
         codegenBackend: "local-process" as const,
-        codegenHarness: "opencode" as const,
-        codegenModel: "z-ai/glm-5.2",
+        codegenModel: "openai/gpt-5.6-sol" as const,
         codegenProvider: "openrouter"
       }))
     };
@@ -229,15 +228,14 @@ describe("agent runtime control plane", () => {
         taskId: "task-runtime-first",
         status: "queued",
         harness: "runCodingAgent",
-        model: "z-ai/glm-5.2",
+        model: "openai/gpt-5.6-sol",
         metadata: expect.objectContaining({
           queue: "agent.task",
           parentAgentSessionId: "agent-session-1",
           parentAgentExecutionId: "agent-execution-parent",
           parentAgentThreadKey: "discord:guild:channel",
           codegenBackend: "local-process",
-          codegenHarness: "opencode",
-          codegenModel: "z-ai/glm-5.2",
+          codegenModel: "openai/gpt-5.6-sol",
           codegenProvider: "openrouter",
           targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
           targetPullRequestNumber: 120,
@@ -270,7 +268,6 @@ describe("agent runtime control plane", () => {
           backend: "local-process-sandbox",
           parentAgentSessionId: "agent-session-1",
           parentAgentExecutionId: "agent-execution-parent",
-          codegenHarness: "opencode",
           targetBranch: "ai/reuse-existing-pr-branch-follow-up-7ad0",
           targetPullRequestNumber: 120,
           targetPullRequestUrl: "https://github.com/example/discord-ai-agent/pull/120"
@@ -367,7 +364,7 @@ function fakeSession(): AgentRuntimeSessionRecord {
     request: "hello",
     requestedBy: "Kartik",
     status: "queued",
-    harness: "in-process",
+    harness: "nanocodex",
     model: null,
     provider: null,
     harnessThreadId: null,
@@ -392,12 +389,11 @@ function fakeConfig() {
     ...config,
     openRouter: {
       ...config.openRouter,
-      codegenModel: "z-ai/glm-5.2"
+      codegenModel: "openai/gpt-5.6-sol" as const
     },
     execution: {
       ...config.execution,
       codegenBackend: "local-process" as const,
-      codegenHarness: "opencode" as const
     }
   };
 }

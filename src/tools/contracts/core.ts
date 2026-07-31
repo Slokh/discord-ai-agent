@@ -42,7 +42,7 @@ export const coreToolContracts = [
     name: "requestAdditionalTools",
     examples: ["@ai I need another capability"],
     description:
-      "Escalation valve: request additional tool groups when the current scoped tools are insufficient, including presentation for useful native Discord UI. Use this instead of guessing when a needed capability is missing.",
+      "Escalation valve: request additional tool groups when the current scoped tools are insufficient, including presentation for useful native Discord UI. Use this instead of guessing or claiming a capability is unavailable merely because it is not in the current scoped list.",
     userVisible: false,
     mutates: false,
     group: "core",

@@ -394,7 +394,7 @@ Examples:
   npm run runs:inspect -- --list --kind codegen --sort slowest --limit 10
   npm run runs:inspect -- https://discord.com/channels/123/456/789 --terminal
   npm run runs:inspect -- --api-url https://tasks.example task-1782927645982-4bdd1c91
-  npm run runs:inspect -- task-1782927645982-4bdd1c91 --artifact "Codex prompt"
+  npm run runs:inspect -- task-1782927645982-4bdd1c91 --artifact "NanoCodex prompt"
 `);
 }
 

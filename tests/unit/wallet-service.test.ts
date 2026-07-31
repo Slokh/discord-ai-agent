@@ -162,17 +162,17 @@ describe("WalletService", () => {
       upsertRuntimeHealth
     } as unknown as PaymentRepository;
     const provider = providerFake();
-    provider.getBalance = vi.fn(async () => 500_000n);
+    provider.getBalance = vi.fn(async () => 50_000n);
     const service = new WalletService(loadConfig().payments, repo, provider);
 
     await expect(service.recordBotWalletHealth()).resolves.toEqual(expect.objectContaining({
       status: "low_balance",
-      balanceUsd: "0.5"
+      balanceUsd: "0.05"
     }));
     expect(upsertRuntimeHealth).toHaveBeenCalledWith(expect.objectContaining({
       key: "shared_bot_wallet",
       status: "low_balance",
-      details: expect.objectContaining({ alertThresholdUsd: 1, balanceUsd: "0.5" })
+      details: expect.objectContaining({ alertThresholdUsd: 0.1, balanceUsd: "0.05" })
     }));
   });
 

@@ -145,7 +145,7 @@ async function applyAgentModelChange(
     return {
       succeeded: true,
       effectiveModel,
-      content: `Reset this server's primary chat model from \`${previousModel}\` to the configured default \`${effectiveModel}\`. The default is active for any remaining work in this request and future requests; the recovery model is unchanged.`,
+      content: `Reset this server's NanoCodex model from \`${previousModel}\` to the configured default \`${effectiveModel}\`. The default is active for any remaining work in this request and future requests.`,
     };
   }
 
@@ -214,7 +214,7 @@ async function applyAgentModelChange(
   return {
     succeeded: true,
     effectiveModel: model,
-    content: `Switched this server's primary chat model from \`${previousModel}\` to \`${model}\`${source}. It is active for any remaining work in this request and future requests; the recovery model is unchanged.`,
+    content: `Switched this server's NanoCodex model from \`${previousModel}\` to \`${model}\`${source}. It is active for any remaining work in this request and future requests.`,
   };
 }
 
@@ -298,8 +298,8 @@ async function auditModelChange(
         : "agent.model_override.updated",
     level: error ? "warn" : "info",
     summary: error
-      ? "Denied primary chat-model override"
-      : `Primary chat model ${input.action === "reset" ? "reset" : "updated"}`,
+      ? "Denied NanoCodex model override"
+      : `NanoCodex model ${input.action === "reset" ? "reset" : "updated"}`,
     metadata: {
       action: input.action,
       effectiveModel,

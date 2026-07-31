@@ -39,7 +39,7 @@ Code validates the complete tree, enforces Discord limits, compiles it through a
 6. Code validates guild, channel, response message, requester/audience, expiry, state, and opaque token. Single-use controls are consumed transactionally.
 7. A modal-launch action opens its stored modal immediately. A continuation, selection, or modal submission creates a new requester-scoped runtime execution with model-authored action instructions separated from typed current-user submission data.
 8. The turn uses the original human source message for Discord context and reply mechanics while keeping the clicking member as the immutable requester.
-9. The queued or in-process run updates the component message through the normal response sink and records normal runtime, trace, memory, and delivery state.
+9. The queued NanoCodex run updates the component message through the normal response sink and records normal runtime, trace, memory, and delivery state.
 
 ## Delivery And Failure Rules
 

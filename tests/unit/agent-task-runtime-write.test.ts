@@ -42,8 +42,7 @@ describe("agent task runtime write", () => {
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
           codegenBackend: "local-process",
-          codegenHarness: "opencode",
-          codegenModel: "z-ai/glm-5.2",
+          codegenModel: "openai/gpt-5.6-sol",
           codegenProvider: "openrouter"
         })
       })
@@ -84,8 +83,7 @@ describe("agent task runtime write", () => {
           queue: "agent.task",
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
-          codegenHarness: "opencode",
-          codegenModel: "z-ai/glm-5.2"
+          codegenModel: "openai/gpt-5.6-sol"
         })
       })
     );
@@ -103,8 +101,7 @@ describe("agent task runtime write", () => {
           queue: "agent.task",
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
-          codegenHarness: "opencode",
-          codegenModel: "z-ai/glm-5.2"
+          codegenModel: "openai/gpt-5.6-sol"
         })
       })
     );
@@ -138,7 +135,6 @@ describe("agent task runtime write", () => {
           pgbossJobId: "pgboss-job-1",
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
-          codegenHarness: "opencode"
         })
       })
     );

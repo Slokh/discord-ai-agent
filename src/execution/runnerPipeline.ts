@@ -7,9 +7,9 @@ import { renderCodegenContextPack } from "./codegenPrompts.js";
 import { runCommand } from "./commands.js";
 import { buildCodegenContextPack } from "./contextPack.js";
 import { changedDependencyManifestFiles, codegenNpmScriptEnv, prepareDependencies, readDependencyManifestState } from "./dependencyCache.js";
-import { codexHarnessAdapter, codexHomePathForTask } from "./harness/codex.js";
-import { openCodeHarnessAdapter, openCodeModelId } from "./harness/opencode.js";
-import type { AgentRunSummary, CodegenHarnessAdapter, CodegenHarnessRunInput } from "./harness/types.js";
+import { readBugReportResult } from "./bugReportResult.js";
+import { NANOCODEX_RUNTIME_LABEL, nanoCodexModel, runNanoCodex } from "./harness/nanocodex.js";
+import type { AgentRunSummary, NanoCodexRunInput } from "./harness/types.js";
 import { codeUpdateBranchName, codeUpdatePullRequestBody, codeUpdatePullRequestTitle } from "./prFormatting.js";
 import {
   assertCodeUpdatePushAllowed,
@@ -25,16 +25,15 @@ import {
   resolveCodeUpdateTarget,
   sandboxCachePaths
 } from "./repoWorkspace.js";
-import { codegenHarnessDisplayName, loadSandboxEnv, parseGitHubRepository, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
+import { loadSandboxEnv, parseGitHubRepository, type SandboxEnv, type TaskTimings } from "./sandboxEnv.js";
 import { conciseError, formatDuration, uniqueStrings } from "./sandboxUtils.js";
-import { readBugReportResult } from "./bugReportResult.js";
 
 type CacheSummary = {
   repo?: "hit" | "miss";
   dependencies?: "hit" | "miss";
   dependencyCacheKey?: string;
   dependencyFilesChanged?: string[];
-  dependencyRefreshAfterCodex?: boolean;
+  dependencyRefreshAfterCodegen?: boolean;
   toolShims?: string[];
 };
 
@@ -66,7 +65,7 @@ export async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     timings.total = Date.now() - totalStartedAt;
-    const diagnosis = diagnoseCodegenFailure({ error, timings, harness: env.codegenHarness });
+    const diagnosis = diagnoseCodegenFailure({ error, timings });
     await recordCodegenFailureDiagnosis(env, diagnosis).catch((diagnosisError) => {
       console.error("Failed to record codegen failure diagnosis", diagnosisError);
     });
@@ -114,8 +113,6 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     console.error("Failed to prune old sandbox workspaces", error);
   });
   const workRoot = await fs.mkdtemp(path.join(cache.workspacesDir, "task-"));
-  const codexHome = codexHomePathForTask({ sandboxCacheDir: cache.rootDir, workRoot });
-  const opencodeHome = path.join(workRoot, "opencode-home");
   const checkoutDir = path.join(workRoot, "repo");
   const gitEnv = await gitAuthEnv(env.githubToken, workRoot);
   const octokit = new Octokit({ auth: env.githubToken });
@@ -162,7 +159,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     }
     const baseRevision = await gitRevision(checkoutDir, "HEAD");
 
-    const dependencyStateBeforeCodex = await readDependencyManifestState(checkoutDir);
+    const dependencyStateBeforeCodegen = await readDependencyManifestState(checkoutDir);
     await timedPhase(env, timings, "dependencies", "Preparing dependencies from the shared sandbox cache.", async () => {
       const dependencyCache = await prepareDependencies({ env, cache, checkoutDir });
       cacheSummary.dependencies = dependencyCache.cacheStatus;
@@ -173,23 +170,16 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     await timedPhase(env, timings, "toolShims", "Installing sandbox helper tool shims for the codegen harness.", async () => {
       const shims = await writeSandboxToolShims(toolShimDir);
       cacheSummary.toolShims = shims;
-      await progress(env, "tool_shims_ready", "Sandbox helper tools are available for the codegen harness.", { toolShims: shims, harness: env.codegenHarness });
+      await progress(env, "tool_shims_ready", "Sandbox helper tools are available for NanoCodex.", { toolShims: shims, harness: NANOCODEX_RUNTIME_LABEL });
     });
-
-    const harnessAdapter = env.codegenHarness === "opencode" ? openCodeHarnessAdapter : codexHarnessAdapter;
-    await progress(env, "configure", `Writing ephemeral ${codegenHarnessDisplayName(env.codegenHarness)} configuration.`, { harness: env.codegenHarness });
-    await harnessAdapter.writeConfig({ env, checkoutDir, codexHome, opencodeHome });
 
     const contextPack = await timedPhase(env, timings, "context", "Building codegen request context.", async () =>
       buildCodegenContextPack(checkoutDir, env.taskRequest)
     );
-    const harnessInput: CodegenHarnessRunInput = {
+    const nanoCodexInput: NanoCodexRunInput = {
       env,
       checkoutDir,
       gitEnv,
-      workRoot,
-      codexHome,
-      opencodeHome,
       toolShimDir,
       contextPack,
       baseRevision
@@ -208,12 +198,12 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       }
     });
 
-    await runSelectedCodegenHarness({ env, timings, adapter: harnessAdapter, input: harnessInput });
+    await runNanoCodexPhase({ env, timings, input: nanoCodexInput });
 
     const bugReportResult = env.taskType === "bug_report" ? await readBugReportResult(env.bugReportResultPath) : null;
 
-    await progress(env, "diff", `Checking whether ${codegenHarnessDisplayName(env.codegenHarness)} produced real code changes.`, {
-      harness: env.codegenHarness,
+    await progress(env, "diff", "Checking whether NanoCodex produced real code changes.", {
+      harness: NANOCODEX_RUNTIME_LABEL,
       baseRevision
     });
     const changeState = await readGitChangeState(checkoutDir, baseRevision);
@@ -263,22 +253,22 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       metadata: { command: `git diff --no-ext-diff ${baseRevision} --`, ...gitChangeStateMetadata(changeState) }
     });
 
-    const dependencyStateAfterCodex = await readDependencyManifestState(checkoutDir);
-    const dependencyFilesChanged = changedDependencyManifestFiles(dependencyStateBeforeCodex, dependencyStateAfterCodex);
+    const dependencyStateAfterCodegen = await readDependencyManifestState(checkoutDir);
+    const dependencyFilesChanged = changedDependencyManifestFiles(dependencyStateBeforeCodegen, dependencyStateAfterCodegen);
     if (dependencyFilesChanged.length > 0) {
       cacheSummary.dependencyFilesChanged = dependencyFilesChanged;
-      cacheSummary.dependencyRefreshAfterCodex = true;
+      cacheSummary.dependencyRefreshAfterCodegen = true;
       await timedPhase(
         env,
         timings,
-        "dependenciesPostCodex",
+        "dependenciesPostCodegen",
         "Dependency files changed; refreshing dependencies before PR creation.",
         async () => {
           const dependencyCache = await prepareDependencies({
             env,
             cache,
             checkoutDir,
-            reason: "dependency_files_changed_after_codex"
+            reason: "dependency_files_changed_after_nanocodex"
           });
           cacheSummary.dependencies = dependencyCache.cacheStatus;
           cacheSummary.dependencyCacheKey = dependencyCache.lockHash;
@@ -417,7 +407,6 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     await progress(env, "cleanup", "Cleaning up the ephemeral sandbox checkout.").catch(() => undefined);
     await removeCachedWorktree(cache.mirrorDir, checkoutDir).catch(() => undefined);
     await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
-    await fs.rm(codexHome, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -449,48 +438,32 @@ async function timedPhase<T>(
   }
 }
 
-async function runSelectedCodegenHarness(input: {
+async function runNanoCodexPhase(input: {
   env: SandboxEnv;
   timings: TaskTimings;
-  adapter: CodegenHarnessAdapter;
-  input: CodegenHarnessRunInput;
+  input: NanoCodexRunInput;
 }) {
-  if (input.adapter.name === "opencode") {
-    await timedPhase(
-      input.env,
-      input.timings,
-      "opencode",
-      "Running OpenCode to implement the requested change.",
-      async () => {
-        const summary = await input.adapter.run(input.input);
-        await recordAgentAttemptSummary(input.env, "OpenCode attempt summary", summary, "opencode-server");
-      },
-      { model: openCodeModelId(input.env.openRouterCodegenModel), harness: "opencode-server" }
-    );
-    return;
-  }
-
   await timedPhase(
     input.env,
     input.timings,
-    "codex",
-    "Running Codex to implement the requested change.",
+    "nanocodex",
+    "Running NanoCodex to implement the requested change.",
     async () => {
-      const summary = await input.adapter.run(input.input);
-      await recordAgentAttemptSummary(input.env, "Codex attempt summary", summary, "codex-app-server");
+      const summary = await runNanoCodex(input.input);
+      await recordAgentAttemptSummary(input.env, "NanoCodex attempt summary", summary);
     },
-    { model: input.env.openRouterCodegenModel, harness: "codex-app-server", fallbackHarness: "codex-exec-json" }
+    { model: `openai/${nanoCodexModel(input.env.openRouterCodegenModel)}`, harness: NANOCODEX_RUNTIME_LABEL }
   );
 }
 
-async function recordAgentAttemptSummary(env: SandboxEnv, name: string, summary: AgentRunSummary, harness: string) {
+async function recordAgentAttemptSummary(env: SandboxEnv, name: string, summary: AgentRunSummary) {
   await recordArtifact(env, {
     kind: "diagnostic",
     name,
     content: JSON.stringify(summary, null, 2),
     contentType: "application/json",
     metadata: {
-      harness,
+      harness: NANOCODEX_RUNTIME_LABEL,
       attempts: summary.attempts.length,
       producedDiff: summary.attempts.some((attempt) => attempt.producedDiff)
     }
@@ -535,9 +508,9 @@ export async function writeSandboxToolShims(toolShimDir: string): Promise<string
     "agent-progress": [
       "#!/bin/sh",
       "set -eu",
-      "step=${1:-codex_note}",
+      "step=${1:-codegen_note}",
       "if [ \"$#\" -gt 0 ]; then shift; fi",
-      "message=${*:-Codex reported progress.}",
+      "message=${*:-Coding agent reported progress.}",
       "node -e '",
       "const [step, message] = process.argv.slice(1);",
       "const taskId = process.env.TASK_ID;",

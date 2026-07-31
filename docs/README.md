@@ -23,6 +23,7 @@ Production is the default for operator and debugging work. The run inspector, ta
 | Document | Use it for |
 | --- | --- |
 | [`agent-runtime.md`](agent-runtime.md) | Canonical agent sessions, executions, events, artifacts, and code-update task leases. |
+| [`nanocodex-foundation.md`](nanocodex-foundation.md) | Active NanoCodex ownership boundary, clean-cutover rules, and feature-parity gates. |
 | [`discord-rich-components.md`](discord-rich-components.md) | Components V2 rendering, durable actions, interactions, modals, safety, and ownership. |
 | [`evals.md`](evals.md) | Prompt regression suites, private evals, assertions, and comparisons. |
 | [`wallets.md`](wallets.md) | Managed-wallet ownership, live balances, transfers, starter funding, wagers, and reconciliation. |

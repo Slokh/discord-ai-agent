@@ -166,6 +166,25 @@ export class AgentRuntimeArtifactRepository {
     return { ...rowToAgentRuntimeArtifact(row), data: Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content) };
   }
 
+  async getLatestBinaryArtifactForSession(input: { sessionId: string; kind: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
+    const result = await this.pool.query(
+      `
+        SELECT artifact.*, blob.content
+        FROM agent_runtime_artifacts artifact
+        JOIN agent_runtime_artifact_blobs blob USING (artifact_id)
+        WHERE artifact.session_id = $1
+          AND artifact.kind = $2
+          AND (artifact.expires_at IS NULL OR artifact.expires_at > now())
+        ORDER BY artifact.created_at DESC, artifact.artifact_id DESC
+        LIMIT 1
+      `,
+      [input.sessionId, input.kind],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return { ...rowToAgentRuntimeArtifact(row), data: Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content) };
+  }
+
   async getArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> {
     const result = await this.pool.query(
       `

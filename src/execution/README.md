@@ -6,20 +6,19 @@ Owns sandboxed code-update execution from queued task to PR.
 
 - Backend selection and sandbox launch.
 - Repository checkout, branch names, dependency cache, git operations, scan/test commands, push, and PR body/title.
-- Codex and OpenCode harness configuration, prompts, transcripts, recovery, and failure diagnosis.
+- Native NanoCodex configuration, prompts, typed progress events, checkpoints, and failure diagnosis.
 - Codegen repository navigation context and exact request anchors.
 - Task progress callbacks, command artifacts, and terminal output capture.
 
 ## Module Map
 
-- `sandboxRunner.ts`: executable sandbox entrypoint.
-- `runnerPipeline.ts`: `main`/`runCodeUpdate` orchestration, timed phases, tool shims, harness selection.
+- `sandboxRunner.ts`: sandbox entrypoint; re-exports the public runner API.
+- `runnerPipeline.ts`: `main`/`runCodeUpdate` orchestration, timed phases, tool shims, and NanoCodex execution.
 - `repoWorkspace.ts`: cached mirror/worktree, target branch/PR resolution, git state, push refs, git auth.
 - `dependencyCache.ts`: dependency cache key, node_modules restore/install, npm env scrubbing.
-- The codegen container retains a pinned, scanned npm because cache misses run `npm ci --include=dev`; the bot-only final image removes npm.
 - `contextPack.ts`: codegen request context (repo guide excerpt, anchors, project map, check commands).
-- `harness/types.ts`: `CodegenHarness`, `AgentAttemptSummary`, `AgentRunSummary`, `CodegenNoDiffError`, `CodegenHarnessRunInput`, `CodegenHarnessConfigInput`, and `CodegenHarnessAdapter`.
-- `harness/codex.ts` + `harness/opencode.ts`: harness adapters (config, run/recovery, output parsing).
+- `harness/types.ts`: native NanoCodex run summaries and no-diff failure details.
+- `harness/nanocodex.ts`: the code-update adapter for the shared native runtime, workspace-tool configuration, typed progress projection, checkpoint artifact, and output capture.
 - `callbacks.ts`: control-plane progress/complete/command/artifact callbacks.
 - `commands.ts`: sandbox command execution with output capture and activity events.
 - `sandboxEnv.ts`: `SandboxEnv` loading and GitHub repository parsing.
@@ -49,4 +48,9 @@ Owns sandboxed code-update execution from queued task to PR.
 
 - Sandbox prompt/config/git/context behavior: `tests/unit/sandbox-runner.test.ts`.
 - Backend behavior: `tests/unit/kubernetes-backend.test.ts`.
-- Local smoke: `npm run smoke:codegen -- --harness opencode --close-pr`.
+- Local smoke: `npm run smoke:codegen -- --close-pr`.
+
+The `codegen` image uses the same embedded native runtime as Discord chat. The
+owned NanoCodex fork and exact source revision are pinned in
+`native/nanocodex-runtime/Cargo.toml`; Docker, CI, and deployment do not select
+or install another harness.

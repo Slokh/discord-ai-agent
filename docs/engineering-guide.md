@@ -124,7 +124,7 @@ Define or extend typed runtime events first. Put reusable normalization and diag
 
 ### Change code-update tasks
 
-Read [`agent-runtime.md`](agent-runtime.md) and [`../src/execution/README.md`](../src/execution/README.md). Keep chat in-process and sandboxes limited to repository changes. Prefer better ownership docs, exact request anchors, context packaging, cache behavior, progress, and failure diagnosis before changing harnesses. A task must end with a PR or a clear terminal reason.
+Read [`agent-runtime.md`](agent-runtime.md), [`nanocodex-foundation.md`](nanocodex-foundation.md), and [`../src/execution/README.md`](../src/execution/README.md). NanoCodex is the sole agent engine; sandboxes remain limited to repository changes. Preserve exact request anchors, context packaging, cache behavior, progress, and failure diagnosis. A task must end with a PR or a clear terminal reason.
 
 ## Database And Migration Rules
 

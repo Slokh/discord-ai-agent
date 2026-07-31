@@ -52,7 +52,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     {
       area: "Discord mention and reply lifecycle",
       purpose: "Incoming Discord messages are persisted, routed through the model/tool loop, and answered or updated in Discord.",
-      files: ["src/discord/client.ts", "src/discord/responseSink.ts", "src/agent/router.ts", "src/discord/messagePersistence.ts", "src/db/repositories.ts"],
+      files: ["src/discord/client.ts", "src/discord/responseSink.ts", "src/agent/nanocodexAgentRuntime.ts", "src/discord/messagePersistence.ts", "src/db/repositories.ts"],
       checks: ["tests/unit/discord-response-sink.test.ts", "tests/unit/discord-client.test.ts", "tests/integration/agent.test.ts", "tests/unit/message-persistence.test.ts"]
     },
     {
@@ -88,7 +88,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
         "src/tools/discordHistoryFormatting.ts",
         "src/tools/discordStatsFormatting.ts",
         "src/tools/types.ts",
-        "src/agent/router.ts"
+        "src/agent/nanocodexAgentRuntime.ts"
       ],
       checks: ["tests/unit/tool-registry.test.ts", "tests/unit/core-tools.test.ts", "tests/integration/agent.test.ts"]
     },

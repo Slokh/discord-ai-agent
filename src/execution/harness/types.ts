@@ -1,11 +1,9 @@
 import type { CodegenContextPack } from "../contextPack.js";
-import type { CodegenHarness, SandboxEnv } from "../types.js";
-
-export type { CodegenHarness } from "../types.js";
+import type { SandboxEnv } from "../types.js";
 
 export type AgentAttemptSummary = {
   attempt: number;
-  command: "app-server" | "exec" | "resume" | "opencode-run";
+  command: "nanocodex-run";
   exitCode: number;
   durationMs: number;
   producedDiff: boolean;
@@ -28,26 +26,11 @@ export class CodegenNoDiffError extends Error {
   }
 }
 
-export type CodegenHarnessRunInput = {
+export type NanoCodexRunInput = {
   env: SandboxEnv;
   checkoutDir: string;
   gitEnv: NodeJS.ProcessEnv;
-  workRoot: string;
-  codexHome: string;
-  opencodeHome: string;
   toolShimDir: string;
   contextPack: CodegenContextPack;
   baseRevision: string;
 };
-
-export type CodegenHarnessConfigInput = Pick<CodegenHarnessRunInput, "env" | "checkoutDir" | "codexHome" | "opencodeHome">;
-
-export interface CodegenHarnessAdapter {
-  readonly name: CodegenHarness;
-  /** Human-readable harness label used in progress events and artifacts. */
-  readonly artifactHarnessLabel: string;
-  /** Writes the harness's ephemeral configuration before a run. */
-  writeConfig(input: CodegenHarnessConfigInput): Promise<void>;
-  /** Runs the harness (including its internal recovery attempts) and reports attempt summaries. */
-  run(input: CodegenHarnessRunInput): Promise<AgentRunSummary>;
-}

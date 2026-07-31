@@ -266,7 +266,7 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
               WHEN $2 ~* 'git|branch|push|pr|diff|commit' THEN 'git'
               WHEN $2 ~* 'command|verify|scan|dependencies|repo|checkout|test|lint|typecheck' THEN 'command'
               WHEN $2 ~* 'artifact|prompt' THEN 'artifact'
-              WHEN $2 ~* 'codex|model|harness' THEN 'harness'
+              WHEN $2 ~* 'nanocodex|model|harness' THEN 'harness'
               ELSE 'status'
             END,
             CASE WHEN $2 ~* 'failed|error' THEN 'error' ELSE 'info' END,

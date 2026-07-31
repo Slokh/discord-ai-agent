@@ -54,6 +54,7 @@
     "discord:audit": "tsx scripts/discordDebug.ts --audit",
     "discord:debug": "tsx scripts/discordDebug.ts",
     "payments:status": "tsx scripts/payments.ts status",
+    "payments:rebalance": "tsx scripts/payments.ts rebalance",
     "payments:reconcile": "tsx scripts/payments.ts reconcile",
     "payments:provision-bot": "tsx scripts/payments.ts provision-bot",
     "tasks:status": "tsx scripts/agentTaskStatus.ts",

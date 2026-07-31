@@ -135,9 +135,8 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         CONTROL_PLANE_INTERNAL_URL: this.config.execution.controlPlaneInternalUrl,
         GITHUB_REPOSITORY: this.config.github.repository,
         GITHUB_BASE_BRANCH: this.config.github.baseBranch,
-        OPENROUTER_CHAT_MODEL: this.config.openRouter.chatModel,
+        OPENROUTER_BASE_URL: this.config.openRouter.baseUrl,
         OPENROUTER_CODEGEN_MODEL: this.config.openRouter.codegenModel,
-        CODEGEN_HARNESS: this.config.execution.codegenHarness,
         SANDBOX_CACHE_DIR: this.config.execution.sandbox.cacheDir,
         SANDBOX_STARTED_AT_MS: String(Date.now())
       });
@@ -554,9 +553,8 @@ export function buildSandboxRunnerEnv(input: {
     GITHUB_REPOSITORY: input.config.github.repository,
     GITHUB_BASE_BRANCH: input.config.github.baseBranch,
     OPENROUTER_API_KEY: input.config.openRouter.apiKey,
-    OPENROUTER_CHAT_MODEL: input.config.openRouter.chatModel,
+    OPENROUTER_BASE_URL: input.config.openRouter.baseUrl,
     OPENROUTER_CODEGEN_MODEL: input.config.openRouter.codegenModel,
-    CODEGEN_HARNESS: input.config.execution.codegenHarness,
     AGENT_TASK_TOKEN: input.taskToken,
     AGENT_TASK_SIGNATURE_SECRET: input.config.execution.taskSigningSecret,
     SANDBOX_CACHE_DIR: input.config.execution.sandbox.cacheDir,

@@ -8,7 +8,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { runQueuedAgentRuntimeExecution } from "../discord/agentDelivery.js";
 import type { AgentRuntimeExecutionRunner } from "../jobs/queue.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
-import { InProcessAgentRuntimePromptExecutor } from "./runtimeExecutor.js";
+import { NanoCodexAgentRuntimePromptExecutor } from "./runtimeExecutor.js";
 import type { WalletService } from "../payments/walletService.js";
 
 export function createAgentRuntimeRunner(input: {
@@ -22,7 +22,7 @@ export function createAgentRuntimeRunner(input: {
   openRouter: OpenRouterClient;
   client: Client;
 }): AgentRuntimeExecutionRunner {
-  const agentExecutor = new InProcessAgentRuntimePromptExecutor();
+  const agentExecutor = new NanoCodexAgentRuntimePromptExecutor();
   return {
     run: async (job, context) => {
       await runQueuedAgentRuntimeExecution(

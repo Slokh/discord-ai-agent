@@ -1,7 +1,6 @@
-import type { CodegenHarness } from "./types.js";
 export type CodegenAttemptSummaryForDiagnosis = {
   attempt: number;
-  command: "app-server" | "exec" | "resume" | "opencode-run";
+  command: "nanocodex-run";
   exitCode: number;
   durationMs: number;
   producedDiff: boolean;
@@ -36,15 +35,15 @@ export type CodegenFailureDiagnosis = {
   attempts?: Array<Pick<CodegenAttemptSummaryForDiagnosis, "attempt" | "command" | "exitCode" | "durationMs" | "producedDiff" | "finalResponse">>;
 };
 
-export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTimingsForDiagnosis; harness?: CodegenHarness }): CodegenFailureDiagnosis {
+export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTimingsForDiagnosis }): CodegenFailureDiagnosis {
   const error = input.error instanceof Error ? input.error : new Error(String(input.error));
   const message = error.message;
   const attempts = codegenAttemptsFromError(error);
-  const failedPhase = inferFailedCodegenPhase(message, input.timings, input.harness);
+  const failedPhase = inferFailedCodegenPhase(message, input.timings);
   const slowestPhase = slowestCodegenPhase(input.timings);
-  const category = classifyCodegenFailure(message, error.name, failedPhase, input.harness, attempts);
+  const category = classifyCodegenFailure(message, error.name, failedPhase, attempts);
   const status = category === "no_diff" || category === "no_first_edit" ? "no_changes" : "failed";
-  const summary = codegenFailureSummary(category, input.harness);
+  const summary = codegenFailureSummary(category);
   const finalResponse = finalResponseFromAttempts(attempts);
   return {
     category,
@@ -121,7 +120,7 @@ function isCodegenAttemptSummary(value: unknown): value is CodegenAttemptSummary
   const attempt = value as Partial<CodegenAttemptSummaryForDiagnosis>;
   return (
     typeof attempt.attempt === "number" &&
-    ["app-server", "exec", "resume", "opencode-run"].includes(String(attempt.command)) &&
+    attempt.command === "nanocodex-run" &&
     typeof attempt.exitCode === "number" &&
     typeof attempt.durationMs === "number" &&
     typeof attempt.producedDiff === "boolean" &&
@@ -143,21 +142,20 @@ function classifyCodegenFailure(
   message: string,
   errorName: string,
   failedPhase: string | null,
-  harness: CodegenHarness | undefined,
   attempts: CodegenAttemptSummaryForDiagnosis[] = []
 ): CodegenFailureCategory {
   const text = message.toLowerCase();
   if (errorName === "CodegenNoDiffError" || text.includes("produced no diff")) {
     return attempts.length > 0 && !attempts.some((attempt) => attemptProducedEditSignal(attempt)) ? "no_first_edit" : "no_diff";
   }
-  if (errorName === "CodexAppServerStartupError" || text.includes("failed before starting a usable model turn") || text.includes("health probe timed out")) {
+  if (text.includes("failed before starting a usable model turn")) {
     return "harness_startup";
   }
   if (text.includes("release scan failed") || failedPhase === "scan") return "release_scan";
   if (text.includes("git push") || failedPhase === "push") return "git_push";
   if (text.includes("pull request") || text.includes("pulls.create") || failedPhase === "pr") return "github_pr";
   if (text.includes("npm ci") || text.includes("npm install") || failedPhase === "dependencies") return "dependency_install";
-  if (text.includes("codex") || text.includes("opencode") || harness) return "command_failed";
+  if (text.includes("nanocodex")) return "command_failed";
   return "unknown";
 }
 
@@ -167,14 +165,13 @@ function attemptProducedEditSignal(attempt: CodegenAttemptSummaryForDiagnosis) {
   return /(?:\bfirst[_ -]?edit\b|\bfirst[_ -]?diff\b|\bapply_patch\b|\bedit_file\b|\bfile_edit\b|\btool_use\b.*\bedit\b|"name"\s*:\s*"edit"|"tool"\s*:\s*"edit")/.test(text);
 }
 
-function inferFailedCodegenPhase(message: string, timings: TaskTimingsForDiagnosis, harness: CodegenHarness | undefined) {
+function inferFailedCodegenPhase(message: string, timings: TaskTimingsForDiagnosis) {
   const text = message.toLowerCase();
   if (text.includes("release scan")) return "scan";
   if (text.includes("git push")) return "push";
   if (text.includes("pull request")) return "pr";
   if (text.includes("npm ci") || text.includes("npm install")) return "dependencies";
-  if (text.includes("opencode")) return "opencode";
-  if (text.includes("codex")) return harness === "opencode" ? "opencode" : "codex";
+  if (text.includes("nanocodex")) return "nanocodex";
   const phases = Object.entries(timings).filter(([phase, durationMs]) => phase !== "total" && Number.isFinite(durationMs));
   return phases.at(-1)?.[0] ?? null;
 }
@@ -187,8 +184,8 @@ function slowestCodegenPhase(timings: TaskTimingsForDiagnosis) {
   return phases.reduce((slowest, phase) => (phase.durationMs > slowest.durationMs ? phase : slowest), phases[0]!);
 }
 
-function codegenFailureSummary(category: CodegenFailureCategory, harness: CodegenHarness | undefined) {
-  const harnessName = harness ? codegenHarnessDisplayName(harness) : "The coding harness";
+function codegenFailureSummary(category: CodegenFailureCategory) {
+  const harnessName = "NanoCodex";
   switch (category) {
     case "no_first_edit":
       return `${harnessName} finished without making a code edit, so no PR was opened.`;
@@ -232,10 +229,6 @@ function codegenFailureNextAction(category: CodegenFailureCategory, failedPhase:
     case "unknown":
       return "Inspect the terminal command log and failure artifact, then add a classifier if this is a recurring failure mode.";
   }
-}
-
-function codegenHarnessDisplayName(harness: CodegenHarness) {
-  return harness === "opencode" ? "OpenCode" : "Codex";
 }
 
 function formatDuration(ms: number) {

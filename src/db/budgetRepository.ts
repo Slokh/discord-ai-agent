@@ -192,7 +192,22 @@ export class BudgetRepository {
         FROM agent_tasks
         WHERE guild_id = $1
           AND user_id = $2
-          AND task_type IN ('code_update', 'bug_report')
+          AND task_type = 'code_update'
+          AND created_at >= $3
+      `,
+      [input.guildId, input.userId, input.since]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async countUserBugReportTasksSince(input: { guildId: string; userId: string; since: Date }): Promise<number> {
+    const result = await this.pool.query(
+      `
+        SELECT count(*)::int AS count
+        FROM agent_tasks
+        WHERE guild_id = $1
+          AND user_id = $2
+          AND task_type = 'bug_report'
           AND created_at >= $3
       `,
       [input.guildId, input.userId, input.since]

@@ -57,14 +57,14 @@ export async function automateDiscordBugReport(input: {
   try {
     const since = startOfUtcDay(new Date());
     const [userTasks, guildSpend] = await Promise.all([
-      input.config.budget.userCodegenPerDay < 0
+      input.config.budget.userBugReportsPerDay < 0
         ? Promise.resolve(0)
-        : input.budgetRepo.countUserCodegenTasksSince({ guildId, userId: input.reportedByUserId, since }),
+        : input.budgetRepo.countUserBugReportTasksSince({ guildId, userId: input.reportedByUserId, since }),
       input.config.budget.guildDailyUsd < 0
         ? Promise.resolve(0)
         : input.budgetRepo.sumGuildEstimatedCostSince({ guildId, since })
     ]);
-    if (input.config.budget.userCodegenPerDay >= 0 && userTasks >= input.config.budget.userCodegenPerDay) {
+    if (input.config.budget.userBugReportsPerDay >= 0 && userTasks >= input.config.budget.userBugReportsPerDay) {
       throw new Error("The daily automated-fix limit has been reached. This marker remains in the bug inbox.");
     }
     if (input.config.budget.guildDailyUsd >= 0 && guildSpend >= input.config.budget.guildDailyUsd) {

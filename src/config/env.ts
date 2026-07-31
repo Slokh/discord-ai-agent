@@ -124,6 +124,7 @@ const defaults = {
   budgetUserTurnsPerDay: 50,
   budgetUserImagesPerDay: 10,
   budgetUserCodegenPerDay: 1,
+  budgetUserBugReportsPerDay: 3,
   budgetGuildDailyUsd: 10,
   botOwnerUserId: "",
   opsAllowlistUserIds: "",
@@ -253,6 +254,7 @@ const envSchema = z.object({
   BUDGET_USER_TURNS_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserTurnsPerDay),
   BUDGET_USER_IMAGES_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserImagesPerDay),
   BUDGET_USER_CODEGEN_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserCodegenPerDay),
+  BUDGET_USER_BUG_REPORTS_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserBugReportsPerDay),
   BUDGET_GUILD_DAILY_USD: z.coerce.number().min(-1).default(defaults.budgetGuildDailyUsd),
   BOT_OWNER_USER_ID: z.string().default(defaults.botOwnerUserId),
   OPS_ALLOWLIST_USER_IDS: z.string().default(defaults.opsAllowlistUserIds),
@@ -397,6 +399,7 @@ export function loadConfig() {
       userTurnsPerDay: parsed.data.BUDGET_USER_TURNS_PER_DAY,
       userImagesPerDay: parsed.data.BUDGET_USER_IMAGES_PER_DAY,
       userCodegenPerDay: parsed.data.BUDGET_USER_CODEGEN_PER_DAY,
+      userBugReportsPerDay: parsed.data.BUDGET_USER_BUG_REPORTS_PER_DAY,
       guildDailyUsd: parsed.data.BUDGET_GUILD_DAILY_USD
     },
     allowlists: {

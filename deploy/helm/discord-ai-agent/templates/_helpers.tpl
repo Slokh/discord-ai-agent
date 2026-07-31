@@ -112,6 +112,10 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 - name: BUDGET_USER_CODEGEN_PER_DAY
   value: {{ .Values.config.budgetUserCodegenPerDay | quote }}
 {{- end }}
+{{- if .Values.config.budgetUserBugReportsPerDay }}
+- name: BUDGET_USER_BUG_REPORTS_PER_DAY
+  value: {{ .Values.config.budgetUserBugReportsPerDay | quote }}
+{{- end }}
 {{- if .Values.config.budgetGuildDailyUsd }}
 - name: BUDGET_GUILD_DAILY_USD
   value: {{ .Values.config.budgetGuildDailyUsd | quote }}

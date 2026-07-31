@@ -19,6 +19,8 @@ describe("Discord bug report automation", () => {
       request: expect.stringContaining("AI reply marked with 🐛")
     }));
     expect(harness.repo.attachDiscordBugReportTask).toHaveBeenCalledWith(expect.objectContaining({ statusMessageId: "status-1" }));
+    expect(harness.input.budgetRepo.countUserBugReportTasksSince).toHaveBeenCalledOnce();
+    expect(harness.input.budgetRepo.countUserCodegenTasksSince).not.toHaveBeenCalled();
   });
 });
 
@@ -54,12 +56,16 @@ function fakeHarness(created: boolean) {
     message, repo, jobs,
     input: {
       config: {
-        appRevision: "rev-1", budget: { userCodegenPerDay: 2, guildDailyUsd: 10 },
+        appRevision: "rev-1", budget: { userCodegenPerDay: 1, userBugReportsPerDay: 3, guildDailyUsd: 10 },
         execution: { codegenBackend: "local-process", codegenHarness: "opencode" },
         openRouter: { codegenModel: "test/model" }
       },
       repo,
-      budgetRepo: { countUserCodegenTasksSince: vi.fn(async () => 0), sumGuildEstimatedCostSince: vi.fn(async () => 0) },
+      budgetRepo: {
+        countUserCodegenTasksSince: vi.fn(async () => 1),
+        countUserBugReportTasksSince: vi.fn(async () => 0),
+        sumGuildEstimatedCostSince: vi.fn(async () => 0)
+      },
       agentRuntime, jobs, botUserId: "bot-1", message, reportedByUserId: "user-1"
     }
   };

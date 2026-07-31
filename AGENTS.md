@@ -34,6 +34,10 @@ Use this order for a new task:
 ## Workflow
 
 - Treat production as the default operating target. Debugging, run/task inspection, and the live console use the production control plane through the configured URL or current local Kubernetes context; never silently fall back to localhost or a local database. Isolated local work must be explicitly requested with the tool's local/DB option.
+- Use the repository-local `$discord-production-debug` skill for Discord message links, deployed reply regressions, run/task inspection, production audits, and native bug-inbox requests.
+- Treat a `discord.com/channels/...` message URL as a native production-debug reference, not as a request to browse Discord. Your first action must be `npm run discord:debug -- <discord-message-link>`. Do not open the URL in a browser, use web search, or inspect Discord UI when the script and runtime ledger can resolve it.
+- If native Discord debugging fails, diagnose the script's production control-plane, Discord API, authentication, or permission path first and report the concrete blocker. Use browser automation for a Discord message only when the user explicitly asks to inspect visual/UI state after the native debug path has been exhausted.
+- Treat unqualified requests such as “look at bug reports,” “show the bug inbox,” or “fix marked bugs” as requests for the native, requester-scoped Discord 🐛 marker inbox. Start with `listDiscordBugMarkers` (or its repository implementation outside Discord); inspect GitHub issues only when the user explicitly names GitHub, issues, or an issue URL.
 - Use `rg` first, then read the smallest owning files needed for the next concrete edit.
 - Do not spend the whole run inspecting. Once the relevant lifecycle is clear, add the focused test or implementation change.
 - For bugs, reproduce from the run trace or add a failing regression test before or alongside the fix.

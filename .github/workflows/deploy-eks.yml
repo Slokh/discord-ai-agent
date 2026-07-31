@@ -166,4 +166,7 @@ jobs:
             helm_args+=(--set-string "sandbox.cache.storageClassName=$SANDBOX_CACHE_STORAGE_CLASS")
           fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
+            --atomic \
+            --wait \
+            --timeout 10m \
             "${helm_args[@]}"

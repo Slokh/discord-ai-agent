@@ -37,7 +37,7 @@ Owns model-facing local tool contracts and implementations.
 - `guildEmojiTools.ts`: ops-gated custom server emoji creation from generated, attached, replied-to, or URL images, including bounded 128×128 WebP normalization and upload auditing.
 - `toolContext.ts`: shared tool-context helpers such as requester-visible indexed channels and Discord message-id parsing.
 - Discord resolvers, history/retrieval, stats/topics, images/vision, code-update tasks, task status, logs, deployment status, and response cleanup.
-- Restricted expensive/mutating tools are gated in the router before dispatch: codegen defaults to owner-only when `BOT_OWNER_USER_ID` is set, avatar updates and per-user turn limits (`setUserTurnLimit`) use the ops allowlist, primary-model changes (`setAgentModel`) fail closed to the configured owner/ops allowlist, and image generation can opt into the ops allowlist.
+- Restricted expensive/mutating tools are gated in the router before dispatch: avatar updates use the ops allowlist, primary-model changes (`setAgentModel`) fail closed to the configured owner/ops allowlist, and image generation can opt into the ops allowlist. Code-update starts and retries are available to every member.
 
 ## Change Routing
 

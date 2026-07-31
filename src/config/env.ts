@@ -121,10 +121,6 @@ const defaults = {
   maxReplyChars: 1800,
   discordAgentResponseTimeoutMs: 30 * 60 * 1000,
   agentPromptMaxConcurrency: 4,
-  budgetUserTurnsPerDay: 50,
-  budgetUserImagesPerDay: 10,
-  budgetUserCodegenPerDay: 1,
-  budgetGuildDailyUsd: 10,
   botOwnerUserId: "",
   opsAllowlistUserIds: "",
   imageToolsAllowlistOnly: false,
@@ -250,10 +246,6 @@ const envSchema = z.object({
     .max(60 * 60 * 1000)
     .default(defaults.discordAgentResponseTimeoutMs),
   AGENT_PROMPT_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(defaults.agentPromptMaxConcurrency),
-  BUDGET_USER_TURNS_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserTurnsPerDay),
-  BUDGET_USER_IMAGES_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserImagesPerDay),
-  BUDGET_USER_CODEGEN_PER_DAY: z.coerce.number().int().min(-1).default(defaults.budgetUserCodegenPerDay),
-  BUDGET_GUILD_DAILY_USD: z.coerce.number().min(-1).default(defaults.budgetGuildDailyUsd),
   BOT_OWNER_USER_ID: z.string().default(defaults.botOwnerUserId),
   OPS_ALLOWLIST_USER_IDS: z.string().default(defaults.opsAllowlistUserIds),
   IMAGE_TOOLS_ALLOWLIST_ONLY: booleanFromEnv.default(defaults.imageToolsAllowlistOnly),
@@ -393,12 +385,6 @@ export function loadConfig() {
     maxReplyChars: parsed.data.MAX_REPLY_CHARS,
     discordAgentResponseTimeoutMs: parsed.data.DISCORD_AGENT_RESPONSE_TIMEOUT_MS,
     agentPromptMaxConcurrency: parsed.data.AGENT_PROMPT_MAX_CONCURRENCY,
-    budget: {
-      userTurnsPerDay: parsed.data.BUDGET_USER_TURNS_PER_DAY,
-      userImagesPerDay: parsed.data.BUDGET_USER_IMAGES_PER_DAY,
-      userCodegenPerDay: parsed.data.BUDGET_USER_CODEGEN_PER_DAY,
-      guildDailyUsd: parsed.data.BUDGET_GUILD_DAILY_USD
-    },
     allowlists: {
       ownerUserId: parsed.data.BOT_OWNER_USER_ID.trim() || null,
       opsUserIds: parseCsvIds(parsed.data.OPS_ALLOWLIST_USER_IDS),

@@ -6,7 +6,6 @@ import { persistDiscordMessage } from "./messagePersistence.js";
 import { shouldProcessGuildEvent } from "./mentionParsing.js";
 import { recordTraceEvent } from "./requestContext.js";
 import { automateDiscordBugReport } from "./bugReportAutomation.js";
-import type { BudgetRepository } from "../db/budgetRepository.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { JobRuntime } from "../jobs/queue.js";
 
@@ -19,7 +18,7 @@ export function isDiscordBugMarkerReaction(emoji: ReactionEmojiLike | null | und
 }
 
 export async function handleDiscordBugMarkerReaction(
-  input: { config: AppConfig; repo: DiscordAiAgentRepository; budgetRepo?: BudgetRepository; agentRuntime?: AgentRuntimeRepository; jobs?: JobRuntime; botUserId?: string | null },
+  input: { config: AppConfig; repo: DiscordAiAgentRepository; agentRuntime?: AgentRuntimeRepository; jobs?: JobRuntime; botUserId?: string | null },
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser | null,
   present: boolean

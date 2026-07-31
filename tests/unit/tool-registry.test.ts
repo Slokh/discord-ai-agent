@@ -67,7 +67,6 @@ describe("toolRegistry", () => {
       "createDiscordPoll",
       "createDiscordEmoji",
       "updateBotAvatar",
-      "setUserTurnLimit",
       "setAgentModel",
       "drawRandom",
       "awaitRandomWagerAction",

@@ -1,6 +1,6 @@
 import { getDeploymentStatus } from "../../tools/agentTaskTools.js";
 import { setAgentModel } from "../../tools/agentModelTools.js";
-import { inspectAgentLogs, reportStatus, setUserTurnLimit } from "../../tools/discordOpsTools.js";
+import { inspectAgentLogs, reportStatus } from "../../tools/discordOpsTools.js";
 import { getSpendSummary } from "../../tools/spendTools.js";
 import { cleanResponse } from "../../tools/responseFormatting.js";
 import { stringArgument, numberArgument } from "./arguments.js";
@@ -11,19 +11,6 @@ export const opsToolHandlers = {
   "reportStatus": async (ctx, _route, _originalText) => {
     return {
           content: cleanResponse(await reportStatus(ctx), ctx.config.maxReplyChars),
-        };
-  },
-  "setUserTurnLimit": async (ctx, route, _originalText) => {
-    return {
-          content: cleanResponse(
-            await setUserTurnLimit(ctx, {
-              action: stringArgument(route.arguments, "action"),
-              userId: stringArgument(route.arguments, "userId"),
-              turnsPerDay: numberArgument(route.arguments, "turnsPerDay"),
-              reason: stringArgument(route.arguments, "reason"),
-            }),
-            ctx.config.maxReplyChars,
-          ),
         };
   },
   "setAgentModel": async (ctx, route, _originalText) => {

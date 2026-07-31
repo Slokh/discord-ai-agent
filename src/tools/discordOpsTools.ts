@@ -8,6 +8,7 @@ import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { ToolContext } from "./types.js";
 import { formatSandboxCommandEvents, formatTaskEvents } from "./agentTaskTools.js";
 import { boundedLimit, formatToolAuditLogs, formatTraceEvents } from "./discordToolShared.js";
+import { effectiveAgentChatModel } from "./agentModelTools.js";
 
 export async function reportStatus(ctx: ToolContext): Promise<string> {
   const [health, crawl, embeddingBacklog, blockedUsers, turnLimitOverrides] = await Promise.all([
@@ -40,6 +41,7 @@ export async function reportStatus(ctx: ToolContext): Promise<string> {
   });
   return [
     "Discord AI Agent local status:",
+    `- Primary chat model: ${effectiveAgentChatModel(ctx) ?? "provider default"}${ctx.chatModelOverride ? " (server override)" : " (configured default)"}`,
     `- Messages indexed: ${health.messages}`,
     `- Embeddings stored: ${health.embeddings}`,
     `- Embeddings pending/backfill: ${embeddingBacklog}`,
@@ -159,7 +161,7 @@ export async function inspectAgentLogs(
       traceId,
       limit
     }),
-    ctx.repo.getTaskProgressEvents({
+    ctx.repo.getAgentRuntimeTaskEvents({
       guildId: ctx.guildId,
       visibleChannelIds: ctx.visibleChannelIds,
       traceId,

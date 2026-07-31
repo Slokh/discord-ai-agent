@@ -10,7 +10,7 @@ Discord AI Agent is a TypeScript Node app with three production roles:
 - `worker`: queue consumers for chat agent-runtime execution and final Discord delivery, crawl, embeddings, code-update tasks, reconciliation, and cleanup.
 - `api`: internal control plane for sandbox callbacks, run console APIs, metrics, and authenticated debugging UI.
 
-Postgres is the durable source of truth for Discord messages, embeddings, skills, conversation memory, traces, process runs, task projections, sandbox runs, and the canonical `agent_runtime_*` session/execution/message/event/artifact ledger.
+Postgres is the durable source of truth for Discord messages, embeddings, conversation memory, traces, process runs, task projections, sandbox runs, and the canonical `agent_runtime_*` session/execution/message/event/artifact ledger.
 
 ## Architectural Laws
 
@@ -35,7 +35,9 @@ These constraints are intentional. Do not treat them as temporary implementation
 | Pending Discord rendering | Delivery obligations repository | Discord delivery sweeps and `responseSink.ts` |
 | Wallet transfers and wagers | Payment repository plus receipt-verified chain state | Wallet service, payment tools, payments console |
 | Provable chance outcomes | RNG repository | Random tools, proof footers, verifier script |
-| Server overlays and learned skills | Postgres | Prompt/skill loaders and management tools |
+| Server overlays | Postgres | Prompt overlay loader and management surfaces |
+| Per-server primary chat-model override | `guild_agent_settings` through `src/db/agentSettingsRepository.ts` | Request preflight and `modelPolicy.ts` |
+| Static prompt skills | Repository `skills/` directory | Prompt skill loader |
 
 When a new feature needs durable state, extend the focused owner that represents its lifecycle. Do not introduce a convenience table or transcript that becomes a second source of truth.
 
@@ -46,8 +48,9 @@ When a new feature needs durable state, extend the focused owner that represents
 1. `src/discord/client.ts` receives a Discord message and checks whether the bot should respond.
 2. The client persists message/edit/delete state, records trace events, creates the durable agent-runtime session/execution with the user transcript message, and stores replayable turn-envelope/input-lines artifacts. Discord chat turns do not create `process_runs` rows.
 3. Queued execution loads that turn envelope when available, builds a `ToolContext`, and calls the selected prompt executor. The generic `/api/agent/sessions/:threadKey/execute` endpoint accepts durable `input_lines` artifacts and can enqueue this runtime job when called with Discord delivery context, which lets future chat adapters stay thin and route through the durable session API. Discord ingress and the API share the same `src/agent/runtimeControlPlane.ts` queue-handoff helper so the durable session event stream records `agent.execution.job_enqueued` consistently.
-4. `src/agent/router.ts` sends the user request, channel memory, reply context, image context, skills, and tool schemas to the model.
-   The first chat message is the large static system prompt so provider prefix caching can reuse it; requester identity, loaded skills, overlays, session memory, reply context, attachments, and the current user request are appended after that stable prefix. `src/models/openrouter.ts` leaves implicit-cache providers alone and adds an Anthropic-only `cache_control` marker to that first system message; `runs:inspect` surfaces `cached_input` from provider usage metadata.
+4. Request preflight loads the server's durable primary chat-model override. An explicit owner/ops request such as `@ai switch model to moonshotai/kimi-k3`, `@ai switch to Sonnet 5`, or `@ai reset model` is handled deterministically before model selection, so a broken override cannot block its own recovery. Names and aliases are resolved against OpenRouter's bounded, cached live model catalog; exact IDs must be configured or present in that catalog. Reply context may identify what “that” means, but only the current message can authorize the mutation. For a compound request, preflight applies or denies the model change first and sends only the remaining work to the model. Otherwise, `src/agent/router.ts` sends the user request, scoped conversation context, image context, skills, and tool schemas to the model.
+   The first chat message is a compact, stable product/safety prompt so provider prefix caching can reuse it. A separate initial system section adds concise operational playbooks only for the tool groups scoped to the turn; detailed schemas remain the canonical tool contracts. Requester identity, loaded skills, overlays, reply context, attachment guidance, and current-turn reminders remain in the initial contiguous system block before user/assistant session history, which preserves provider-compatible role ordering. Top-level channel mentions use a four-message window containing only the current requester's completed turns and their paired assistant replies; channel-wide compacted summaries are excluded. Explicit replies retain the reply chain plus a requester-scoped four-message lookup used only to recover compact continuation pointers tied to that chain—never unrelated chatter or historical tool bodies. Prior tool evidence must still be retrieved or refreshed before factual claims. `src/models/openrouter.ts` leaves implicit-cache providers alone and adds an Anthropic-only `cache_control` marker to that first system message; `runs:inspect` surfaces `cached_input` from provider usage metadata.
+   Normal Discord conversation and tool selection use the per-server primary override when present, otherwise the configured primary chat model, plus the configured reasoning effort and bounded completion budget. A successful preflight switch applies to remaining work in that same request and future requests, and never changes the recovery model. Malformed tool calls, empty responses, leaked hosted-tool markup, repeated-tool termination, and provider-specific 400/422 request rejection use the configured recovery model for one bounded synthesis or retry; a rejected primary call keeps the remainder of that turn on recovery. Code-update tasks keep their independently configured codegen model.
 5. The model selects local tools aggregated by `src/tools/registry.ts` from focused contract families or OpenRouter-hosted tools. Deployment capabilities narrow and cache local schemas, and the same compiled schemas validate raw arguments before gates or implementations execute.
 6. Local tools execute through a fail-fast typed handler registry plus explicit high-risk delegated routers; turn-scoped files, tables, footer lines, and rich presentation flow through one `AgentTurnOutput` collector. Use `src/tools/README.md` to find the owning family before editing.
 7. Every provider call records a versioned `agent.model.call.*` runtime event with purpose, deployed revision, prompt/schema fingerprints and sizes, model, token/cache use, estimated cost, latency, tool selection, and outcome. Tool actions remain separately audited.
@@ -72,7 +75,7 @@ For durable knowledge changes such as excluding a channel, deleting indexed hist
 2. `src/tools/agentTaskTools.ts` edits the Discord status message with progress, creates the `runCodingAgent` tool message plus task-linked execution in the durable session, and then enqueues the sandbox worker. `src/jobs/agentTaskEnqueue.ts` writes the same canonical runtime records when a caller has not already created them.
 3. `src/jobs/agentTaskEnqueue.ts` owns the queue handoff transaction, then `src/jobs/queue.ts` claims the task and launches the configured execution backend.
 4. `src/execution/backend.ts` starts either a Kubernetes Job or local process sandbox.
-5. `src/execution/runnerPipeline.ts` orchestrates repo preparation, prompt/context, dependency cache, harness execution, tests, scan, push, and PR creation; `src/execution/sandboxRunner.ts` is the compatibility entrypoint. Use `src/execution/README.md` before changing this path.
+5. `src/execution/runnerPipeline.ts` orchestrates repo preparation, prompt/context, dependency cache, harness execution, tests, scan, push, and PR creation; `src/execution/sandboxRunner.ts` is the executable entrypoint. Use `src/execution/README.md` before changing this path.
 6. Sandbox callbacks hit `src/control/internalApi.ts`, which persists command events, artifacts, spans, and terminal output. Worker lifecycle state such as start, warm-lease attachment, sandbox-run attachment, progress, and completion is recorded as `agent.task.*` runtime events.
 7. `src/discord/taskNotifications.ts` edits the original Discord status message with current progress and final PR/failure details from canonical `agent.task.*` runtime events. The run console, trace log inspection, and model-facing task-status tool use the same event stream for code-update task progress.
 
@@ -101,8 +104,8 @@ npm run tasks:status
 
 The base repo ships neutral defaults. Server-specific content lives outside Git in two overlay homes:
 
-- `.discord-ai-agent/` (gitignored): `prompt-overlay.md` persona/prompt overlay (path via `PROMPT_OVERLAY_PATH`, loaded by `src/agent/promptOverlay.ts` and merged into the system prompt each turn), private eval prompts under `evals/`, skill exports, and local sandbox/codegen caches.
-- Postgres: per-guild server overlays (`server_overlays`, loaded in `src/agent/router.ts`), learned skills, user aliases, and all indexed Discord content.
+- `.discord-ai-agent/` (gitignored): `prompt-overlay.md` persona/prompt overlay (path via `PROMPT_OVERLAY_PATH`, loaded by `src/agent/promptOverlay.ts` and merged into the system prompt each turn), private eval prompts under `evals/`, and local sandbox/codegen caches.
+- Postgres: per-guild server overlays (`server_overlays`, loaded in `src/agent/router.ts`), user aliases, and all indexed Discord content.
 
 `scripts/scanRelease.ts` enforces the boundary in CI (`npm run scan:release`): tracked files must not contain known-private strings, real-looking Discord snowflakes outside the fixture allowlist, or secret-shaped tokens.
 

@@ -63,6 +63,17 @@ configure at least `WALLET_ENABLED=true`, `USER_WALLETS_ENABLED=false`, and
 repository variables prevents an automated `main` deployment from silently
 reverting a manually configured Helm release to disabled payment features.
 
+On `main`, CI publishes the runtime and codegen images in parallel with the
+compact merged-revision verification jobs. BuildKit reuses persistent GitHub
+Actions caches for both targets, loads the finished images into Docker, and the
+Docker CLI pushes them to ECR. The Terraform-managed deploy role includes the
+complete ECR image-push permission set, including `ecr:BatchGetImage`, so direct
+BuildKit publishing is also safe after the infrastructure is next applied. The
+deploy workflow starts only after that CI run succeeds and applies the
+already-published commit-tagged images with Helm; it does not rebuild them.
+Superseded CI and CodeQL runs are cancelled, while an active production
+deployment is allowed to finish before the latest pending revision deploys.
+
 To post automatic deployment notes, set the repository variable
 `RELEASE_NOTES_CHANNEL_ID` to the destination Discord channel ID. Before each
 Helm upgrade, the workflow reads `APP_REVISION` from the currently running bot
@@ -225,9 +236,9 @@ helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
 
 The default allowed hosts cover GitHub, OpenRouter, and npm package downloads. Add more hosts only for tools the sandbox actually needs.
 
-## Public Task Viewer
+## Public Run Console
 
-The code-update task viewer redirects from `/tasks` to the run console on the API service. Keep the default cluster-internal service for the lowest-cost setup, then open it with:
+The run console is served by the API service. Keep the default cluster-internal service for the lowest-cost setup, then open it with:
 
 ```bash
 kubectl -n discord-ai-agent port-forward svc/discord-ai-agent-api 8080:8080

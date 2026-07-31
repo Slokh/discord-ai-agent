@@ -2,68 +2,56 @@ import { describe, expect, it } from "vitest";
 import { validateWagerFairness } from "../../src/tools/wagerFairness.js";
 
 describe("wallet wager fairness", () => {
-  it("rejects the marked guaranteed 7d6 duplicate-profit game", () => {
+  it("rejects a structured guaranteed-profit game", () => {
     expect(validateWagerFairness({
       kind: "dice",
       count: 7,
       sides: 6,
-      description: "roll 7 regular dice; player wins if any two match",
+      rule: { kind: "any_match" },
       stakeUsd: 0.3,
       maxPayoutUsd: 0.6,
     })).toMatch(/100%.*guaranteed profit/i);
   });
 
-  it("rejects negative-EV dice threshold payouts", () => {
+  it("rejects negative-EV structured dice threshold payouts", () => {
     expect(validateWagerFairness({
       kind: "dice",
       count: 3,
       sides: 6,
-      description: "Triple Dice Threshold - win if sum >= 8",
+      rule: { kind: "sum", operator: ">=", target: 8 },
       stakeUsd: 0.265,
       maxPayoutUsd: 0.53,
     })).toMatch(/expected payout.*exceeds.*stake/i);
   });
 
-  it("allows a house-neutral machine-checkable dice contract", () => {
+  it("allows a house-neutral structured dice contract", () => {
     expect(validateWagerFairness({
       kind: "dice",
       count: 2,
       sides: 6,
-      description: "win if sum >= 10",
+      rule: { kind: "sum", operator: ">=", target: 10 },
       stakeUsd: 0.1,
       maxPayoutUsd: 0.6,
     })).toBeNull();
   });
 
-  it("refuses real-money coin and dice rules that cannot be checked", () => {
+  it("refuses real-money rules that do not use structured terms", () => {
     expect(validateWagerFairness({
       kind: "dice",
       count: 4,
       sides: 6,
-      description: "a fun custom dice challenge",
       stakeUsd: 1,
       maxPayoutUsd: 2,
-    })).toMatch(/machine-checkable win rule/i);
+    })).toMatch(/structured rule/i);
   });
 
   it("rejects unsupported custom profit rules for every draw kind", () => {
     expect(validateWagerFairness({
       kind: "cards",
       count: 1,
-      description: "draw a card; I win 2x if it is red or black",
       stakeUsd: 1,
       maxPayoutUsd: 2,
-    })).toMatch(/machine-checkable win rule/i);
-  });
-
-  it("does not mistake a standard named game for a custom wager contract", () => {
-    expect(validateWagerFairness({
-      kind: "cards",
-      count: 4,
-      description: "deal me in for $1 blackjack",
-      stakeUsd: 1,
-      maxPayoutUsd: 2.5,
-    })).toBeNull();
+    })).toMatch(/structured rule/i);
   });
 
   it("evaluates duplicate rules over generic bounded integer draws", () => {
@@ -72,7 +60,7 @@ describe("wallet wager fairness", () => {
       count: 7,
       min: 1,
       max: 6,
-      description: "I win 2x if any two numbers match",
+      rule: { kind: "any_match" },
       stakeUsd: 1,
       maxPayoutUsd: 2,
     })).toMatch(/100%.*guaranteed profit/i);
@@ -82,14 +70,33 @@ describe("wallet wager fairness", () => {
     expect(validateWagerFairness({
       kind: "coin",
       count: 1,
-      description: "player wins on heads",
+      rule: { kind: "coin_side", side: "heads" },
       stakeUsd: 1,
       maxPayoutUsd: 3,
     })).toMatch(/expected payout.*exceeds.*stake/i);
     expect(validateWagerFairness({
       kind: "coin",
       count: 1,
-      description: "player wins on either heads or tails",
+      rule: { kind: "coin_side", side: "tails" },
+      stakeUsd: 1,
+      maxPayoutUsd: 3,
+    })).toMatch(/expected payout.*exceeds.*stake/i);
+  });
+
+  it("evaluates structured rules directly", () => {
+    expect(validateWagerFairness({
+      kind: "coin",
+      count: 1,
+      rule: { kind: "coin_side", side: "heads" },
+      stakeUsd: 1,
+      maxPayoutUsd: 3,
+    })).toMatch(/expected payout.*exceeds.*stake/i);
+
+    expect(validateWagerFairness({
+      kind: "dice",
+      count: 7,
+      sides: 6,
+      rule: { kind: "any_match" },
       stakeUsd: 1,
       maxPayoutUsd: 2,
     })).toMatch(/100%.*guaranteed profit/i);

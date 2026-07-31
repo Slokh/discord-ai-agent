@@ -21,9 +21,3 @@ export type {
   DiscordTextDisplaySpec,
   DiscordThumbnailSpec,
 } from "./validation.js";
-
-export type DiscordComponentSubmission = {
-  customId: string;
-  values?: string[];
-  fields?: Record<string, unknown>;
-};

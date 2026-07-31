@@ -110,6 +110,13 @@ export const discordResolverHistoryToolContracts = [
           type: "string",
           description: "Inclusive UTC date upper bound as YYYY-MM-DD. Set this explicitly when the user gives an end date or bounded window."
         },
+        hourOfDayUtc: {
+          type: "integer",
+          minimum: 0,
+          maximum: 23,
+          description:
+            "Optional UTC hour bucket (0-23). Use with query=\"\" plus author/date/channel filters to retrieve the exact messages behind a getDiscordStats groupBy=hourOfDay bucket."
+        },
         limit: {
           type: "number",
           description: "Maximum evidence messages to retrieve for the final answer."
@@ -125,7 +132,7 @@ export const discordResolverHistoryToolContracts = [
     toolClass: "memory",
     examples: ["@ai what did you just say?"],
     description:
-      "Get recent Discord AI Agent conversation memory from the current channel. Use for questions about what the agent previously said, did, generated, linked, opened, or needs to continue. Do not use for factual claims about server history; use Discord history/stat tools for that.",
+      "Get recent Discord AI Agent conversation memory from the current channel. Use for questions, corrections, or disputes about what the agent previously said, called someone, did, generated, linked, opened, or needs to continue. This is the only history tool for the agent's own replies; ordinary Discord history search intentionally covers human-authored server history instead. Do not use for factual claims about server history; use Discord history/stat tools for that.",
     userVisible: true,
     mutates: false,
     group: "discord-retrieval",

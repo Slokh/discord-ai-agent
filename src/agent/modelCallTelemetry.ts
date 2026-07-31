@@ -71,6 +71,7 @@ export async function runObservedModelCall(
     toolSchemas,
     offeredTools: (input.chat.tools ?? []).map((tool) => tool.type === "function" ? tool.function.name : tool.type),
     maxTokens: input.chat.maxTokens ?? 4096,
+    reasoningEffort: input.chat.reasoningEffort ?? null,
     toolChoice: input.chat.toolChoice ?? "auto",
     ...runtimeVersionMetadata(ctx.config),
     ...input.metadata,
@@ -87,6 +88,7 @@ export async function runObservedModelCall(
       requestedModel: input.chat.model ?? "default",
       maxTokens: input.chat.maxTokens ?? 4096,
       temperature: input.chat.temperature ?? null,
+      reasoningEffort: input.chat.reasoningEffort ?? null,
       toolChoice: input.chat.toolChoice ?? "auto",
       messages: modelMessagesForArtifact(input.chat.messages).map((message, index) => ({
         index,
@@ -213,12 +215,13 @@ function promptMessageSection(message: ChatMessage, index: number, count: number
   if (message.role === "tool") return "current_tool_results";
   if (message.tool_calls?.length) return "current_assistant_tool_calls";
   if (content.startsWith("Current Discord requester:")) return "requester_identity";
-  if (content.startsWith("Loaded skills:")) return "loaded_skills";
+  if (content.startsWith("Available skill inventory:")) return "skill_inventory";
   if (content.startsWith("Private server overlay instructions follow.")) return "server_overlay";
   if (content.startsWith("Deployment prompt overlay instructions follow.")) return "deployment_overlay";
   if (content.startsWith("The current user message is a Discord reply.")) return "reply_chain";
   if (content.startsWith("Discord image attachments are available")) return "attachments";
-  if (content.startsWith("Recent completed Discord AI Agent turns")) return "session_memory";
+  if (content.startsWith("Recent completed turns from this channel")) return "session_memory";
+  if (content.startsWith("A historical ") && content.includes(" tool result exists")) return "session_memory";
   if (content.startsWith("Answer only the next user message.")) return "context_guard";
   if (/^\[Earlier Discord AI Agent reply|^\[Earlier .* result/.test(content)) return "session_memory";
   if (message.role === "assistant" || message.role === "user") return "session_memory";

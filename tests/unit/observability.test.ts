@@ -27,7 +27,7 @@ describe("run summaries", () => {
     expect(extractDiscordMessageId("not a message")).toBeNull();
   });
 
-  it("derives codegen run summaries from legacy task rows", () => {
+  it("derives codegen run summaries from the current task projection", () => {
     const createdAt = new Date("2026-06-30T12:00:00Z");
     const completedAt = new Date("2026-06-30T12:02:00Z");
     const task = agentTaskRecord({ createdAt, startedAt: createdAt, completedAt, updatedAt: completedAt });
@@ -57,8 +57,16 @@ describe("run summaries", () => {
       guildId: "guild-1",
       channelId: "channel-1",
       userId: "user-1",
-      metadata: { discordMessageId: "message-1", replyUrl: "https://discord.com/reply" },
-      sessionMetadata: { discordUrl: "https://discord.com/message" },
+      metadata: {
+        discordMessageId: "message-1",
+        replyUrl: "https://discord.com/reply",
+        appRevision: "execution-revision"
+      },
+      sessionMetadata: {
+        discordUrl: "https://discord.com/message",
+        currentMessageId: "newest-message-in-channel",
+        appRevision: "newest-session-revision"
+      },
       createdAt: new Date("2026-07-18T12:00:00Z"),
       startedAt: new Date("2026-07-18T12:00:01Z"),
       completedAt: new Date("2026-07-18T12:00:03Z"),
@@ -70,7 +78,14 @@ describe("run summaries", () => {
       messageId: "message-1",
       source: "agent_runtime",
       durationMs: 2_000,
-      links: { discordMessage: "https://discord.com/message", discordReply: "https://discord.com/reply" }
+      links: { discordMessage: "https://discord.com/message", discordReply: "https://discord.com/reply" },
+      metadata: {
+        discordMessageId: "message-1",
+        replyUrl: "https://discord.com/reply",
+        appRevision: "execution-revision",
+        sessionId: "session-1",
+        executionId: "execution-1"
+      }
     }));
   });
 
@@ -94,7 +109,7 @@ describe("run summaries", () => {
       {
         getProcessRun: async () => undefined,
         getAgentTask: async (taskId: string) => (taskId === task.taskId ? task : undefined),
-        getTaskProgressEventsForTask: async () => [
+        getAgentRuntimeTaskEventsForTask: async () => [
           {
             id: 2,
             taskId: task.taskId,

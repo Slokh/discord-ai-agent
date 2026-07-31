@@ -4,7 +4,7 @@ import type { OpenRouterClient } from "../models/openrouter.js";
 import { durationMs, logger } from "../util/logger.js";
 import { normalizeMessageContent } from "./normalize.js";
 
-export type RetrievalMatchSource = "keyword" | "semantic";
+export type RetrievalMatchSource = "keyword" | "semantic" | "recent_scope";
 
 export type RankedSearchResult = SearchResult & {
   matchSources?: RetrievalMatchSource[];
@@ -22,6 +22,7 @@ export type HistorySearchInput = {
   channelIds?: string[];
   dateFrom?: Date;
   dateTo?: Date;
+  hourOfDayUtc?: number;
 };
 
 export type HistorySearchOutcome = {
@@ -33,6 +34,12 @@ export type HistorySearchOutcome = {
    * spiral into retrying near-identical queries.
    */
   semanticDegraded: boolean;
+  /**
+   * True when semantic matching failed, exact keywords found nothing, and the
+   * result contains recent messages from the same permission and filter scope
+   * for the model to inspect as explicitly broader candidates.
+   */
+  recentFallbackUsed?: boolean;
 };
 
 export type RetrievalSpan = {
@@ -113,7 +120,8 @@ export async function searchDiscordHistory(input: {
       authorIds,
       aboutUserTerms,
       dateFrom: input.search.dateFrom,
-      dateTo: input.search.dateTo
+      dateTo: input.search.dateTo,
+      hourOfDayUtc: input.search.hourOfDayUtc
     });
     return { results: recent, semanticDegraded: false };
   }
@@ -128,57 +136,84 @@ export async function searchDiscordHistory(input: {
     authorIds,
     aboutUserTerms,
     dateFrom: input.search.dateFrom,
-    dateTo: input.search.dateTo
+    dateTo: input.search.dateTo,
+    hourOfDayUtc: input.search.hourOfDayUtc
   }), { queryChars: normalizedQuery.length, candidateLimit });
 
   const semanticPromise = input.config.openRouter.apiKey
     ? (async (): Promise<{ vector: SearchResult[]; semanticDegraded: boolean }> => {
-    const semanticLeg = async () => {
-      const embedded = await observeRetrievalStep(input, "retrieval.query_embedding", () => embedQueryCached({
-        openRouter: input.openRouter,
-        config: input.config,
-        query: normalizedQuery
-      }), { queryChars: normalizedQuery.length });
-      const embedding = embedded.embedding;
-      if (!embedding) throw new Error("query embedding unavailable");
-      return observeRetrievalStep(input, "retrieval.vector_sql", () => input.repo.vectorSearch({
-        guildId: input.search.guildId,
-        visibleChannelIds: searchChannelIds,
-        embedding,
-        limit: candidateLimit,
-        authorIds,
-        aboutUserTerms,
-        dateFrom: input.search.dateFrom,
-        dateTo: input.search.dateTo
-      }), { cachedEmbedding: embedded.cached, candidateLimit });
-    };
-    const semanticStartedAt = Date.now();
-    try {
+      const semanticStartedAt = Date.now();
       try {
-        return { vector: await semanticLeg(), semanticDegraded: false };
-      } catch {
-        // One retry: the embedding is cached from the first attempt and a
-        // timed-out vector query often succeeds warm.
-        return { vector: await semanticLeg(), semanticDegraded: false };
-      }
-    } catch (error) {
-      logger.warn(
-        {
+        const embedded = await observeRetrievalStep(input, "retrieval.query_embedding", () => embedQueryCached({
+          openRouter: input.openRouter,
+          config: input.config,
+          query: normalizedQuery
+        }), { queryChars: normalizedQuery.length });
+        const embedding = embedded.embedding;
+        if (!embedding) return { vector: [], semanticDegraded: true };
+        const vectorLeg = () => observeRetrievalStep(input, "retrieval.vector_sql", () => input.repo.vectorSearch({
           guildId: input.search.guildId,
-          query: normalizedQuery.slice(0, 120),
-          durationMs: durationMs(semanticStartedAt),
-          error: error instanceof Error ? error.message : String(error)
-        },
-        "Semantic history search failed after retry; returning keyword-only results"
-      );
-      return { vector: [], semanticDegraded: true };
-    }
+          visibleChannelIds: searchChannelIds,
+          embedding,
+          limit: candidateLimit,
+          authorIds,
+          aboutUserTerms,
+          dateFrom: input.search.dateFrom,
+          dateTo: input.search.dateTo,
+          hourOfDayUtc: input.search.hourOfDayUtc
+        }), { cachedEmbedding: embedded.cached, candidateLimit });
+        try {
+          return { vector: await vectorLeg(), semanticDegraded: false };
+        } catch {
+          // Retry only the vector query. Repeating a failed interactive
+          // embedding request burns another full provider deadline without
+          // producing a reusable vector.
+          return { vector: await vectorLeg(), semanticDegraded: false };
+        }
+      } catch (error) {
+        logger.warn(
+          {
+            guildId: input.search.guildId,
+            query: normalizedQuery.slice(0, 120),
+            durationMs: durationMs(semanticStartedAt),
+            error: error instanceof Error ? error.message : String(error)
+          },
+          "Semantic history search failed; returning scoped fallback results"
+        );
+        return { vector: [], semanticDegraded: true };
+      }
       })()
     : Promise.resolve({ vector: [], semanticDegraded: false });
 
   const [keyword, semantic] = await Promise.all([keywordPromise, semanticPromise]);
+  let recentFallbackUsed = false;
+  let fallbackResults: RankedSearchResult[] = [];
+  if (semantic.semanticDegraded && keyword.length === 0) {
+    const recent = await observeRetrievalStep(
+      input,
+      "retrieval.recent_scope_fallback",
+      () => input.repo.recentMessagesFromChannels({
+        guildId: input.search.guildId,
+        visibleChannelIds: searchChannelIds,
+        channelIds: input.search.channelIds,
+        limit,
+        authorIds,
+        aboutUserTerms,
+        dateFrom: input.search.dateFrom,
+        dateTo: input.search.dateTo,
+        hourOfDayUtc: input.search.hourOfDayUtc,
+      }),
+      { candidateLimit: limit },
+    );
+    fallbackResults = recent.map((result) => ({
+      ...result,
+      matchSources: ["recent_scope"],
+    }));
+    recentFallbackUsed = fallbackResults.length > 0;
+  }
 
   const merged = await observeRetrievalStep(input, "retrieval.merge_rank", async () => {
+    if (fallbackResults.length > 0) return fallbackResults;
     const fused = mergeResults(keyword, semantic.vector);
     const reranked = difficultQuery ? rerankResults(fused, normalizedQuery) : fused;
     return diversifyResults(reranked, limit);
@@ -186,6 +221,7 @@ export async function searchDiscordHistory(input: {
   return {
     results: merged,
     semanticDegraded: semantic.semanticDegraded,
+    ...(recentFallbackUsed ? { recentFallbackUsed: true } : {}),
   };
 }
 

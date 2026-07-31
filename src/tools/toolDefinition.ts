@@ -1,16 +1,17 @@
 import type { FunctionToolDefinition } from "../models/openrouter.js";
 
 export const TOOL_NAMES = [
-  "listTools", "requestAdditionalTools", "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels",
+  "listTools", "requestAdditionalTools", "loadSkillContext", "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels",
   "searchDiscordHistory", "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",
   "listDiscordBugMarkers", "searchDiscordAttachments", "inspectDiscordFile", "inspectDiscordImages", "getDiscordUserAvatar",
   "getDiscordStats", "getDiscordChannelTopics", "summarizeDiscordHistory", "summarizeDiscordThread", "generateImage",
-  "readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable", "createSkillDraft", "manageSkills", "runCodingAgent",
+  "readGeneratedFile", "queryGeneratedCsv", "queryGeneratedTable", "runCodingAgent",
   "getAgentTaskStatus", "listAgentTasks", "retryAgentTask", "cancelAgentTask", "getDeploymentStatus", "getSpendSummary",
   "undoConversationTurns", "inspectAgentLogs", "reportStatus", "getWalletBalance", "listWalletBalances", "getWagerHistory",
-  "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds", "reconcileWalletTransfers", "getSpotifyPlaylistTracks",
+  "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds", "adminSetWalletStarterAmount",
+  "getWalletFeeSummary", "reconcileWalletTransfers", "getSpotifyPlaylistTracks",
   "getSpotifyAlbumTracks", "getSpotifyArtistDiscography", "getSpotifyPlaylistStats", "compareSpotifyPlaylists", "searchSpotify",
-  "getSpotifyItem", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar", "setUserTurnLimit", "drawRandom",
+  "getSpotifyItem", "addDiscordReaction", "createDiscordPoll", "createDiscordEmoji", "updateBotAvatar", "setUserTurnLimit", "setAgentModel", "drawRandom",
   "awaitRandomWagerAction", "settleRandomWager", "revealRandomness",
 ] as const;
 export type ToolName = typeof TOOL_NAMES[number];

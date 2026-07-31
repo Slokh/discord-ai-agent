@@ -28,9 +28,8 @@ export const CRAWL_GUILD_JOB = "crawl.guild";
 export const EMBED_MESSAGE_JOB = "embedding.message";
 export const AGENT_TASK_JOB = "agent.task";
 export const AGENT_RUNTIME_EXECUTION_JOB = "agent.runtime.execution";
-export const DISCORD_AGENT_REQUEST_JOB = AGENT_RUNTIME_EXECUTION_JOB;
 const EMBEDDING_JOB_BATCH_SIZE = 400;
-const DISCORD_AGENT_JOB_EXPIRE_SECONDS = 10 * 60;
+const AGENT_RUNTIME_JOB_EXPIRE_SECONDS = 10 * 60;
 
 type MessageEmbeddingJob = {
   messageId: string;
@@ -77,20 +76,15 @@ export type AgentRuntimeExecutionJob = {
   enqueuedAt: string;
 };
 
-export type DiscordAgentRequestJob = AgentRuntimeExecutionJob;
-
 export type AgentRuntimeExecutionRunner = {
   run: (job: AgentRuntimeExecutionJob, context: { jobs: JobRuntime }) => Promise<void>;
 };
-
-export type DiscordAgentRequestRunner = AgentRuntimeExecutionRunner;
 
 export type JobRuntime = {
   boss: PgBoss;
   enqueueGuildCrawl: () => Promise<string | null>;
   enqueueMessageEmbedding: (messageId: string, options?: MessageEmbeddingEnqueueOptions) => Promise<string | null>;
   enqueueAgentRuntimeExecution: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
-  enqueueDiscordAgentRequest: (job: AgentRuntimeExecutionJob) => Promise<string | null>;
   enqueueAgentTask: (job: AgentTaskEnqueueInput) => Promise<AgentTaskEnqueueResult>;
   stop: () => Promise<void>;
 };
@@ -101,12 +95,11 @@ export async function startJobs(input: {
   embedding?: EmbeddingJobRunner;
   agentTask?: AgentTaskRunner | ExecutionBackend;
   agentRuntime?: AgentRuntimeExecutionRunner;
-  discordAgent?: DiscordAgentRequestRunner;
   worker?: boolean;
   crawlWorker?: boolean;
   embeddingWorker?: boolean;
   taskWorker?: boolean;
-  discordAgentWorker?: boolean;
+  agentRuntimeWorker?: boolean;
   pgBossSchema?: string;
   repo?: DiscordAiAgentRepository;
   agentRuntimeRepo?: AgentRuntimeRepository;
@@ -116,12 +109,12 @@ export async function startJobs(input: {
   const crawlWorkerEnabled = input.crawlWorker ?? input.worker !== false;
   const embeddingWorkerEnabled = input.embeddingWorker ?? input.worker !== false;
   const taskWorkerEnabled = input.taskWorker ?? false;
-  const discordAgentWorkerEnabled = input.discordAgentWorker ?? false;
+  const agentRuntimeWorkerEnabled = input.agentRuntimeWorker ?? false;
   const boss = input.pgBossSchema
     ? new PgBoss({ connectionString: input.config.databaseUrl, schema: input.pgBossSchema })
     : new PgBoss(input.config.databaseUrl);
   logger.info(
-    { crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled, discordAgentWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" },
+    { crawlWorkerEnabled, embeddingWorkerEnabled, taskWorkerEnabled, agentRuntimeWorkerEnabled, schema: input.pgBossSchema ?? "pgboss" },
     "Starting pg-boss"
   );
   await boss.start();
@@ -130,26 +123,26 @@ export async function startJobs(input: {
   await boss.updateQueue(EMBED_MESSAGE_JOB, { retryLimit: 3, retryDelay: 10, retryBackoff: true });
   await boss.createQueue(AGENT_TASK_JOB, { policy: "short", retryLimit: 0 });
   await boss.updateQueue(AGENT_TASK_JOB, { retryLimit: 0 });
-  await boss.createQueue(DISCORD_AGENT_REQUEST_JOB, {
+  await boss.createQueue(AGENT_RUNTIME_EXECUTION_JOB, {
     policy: "short",
     retryLimit: 2,
     retryDelay: 15,
     retryBackoff: true,
-    expireInSeconds: DISCORD_AGENT_JOB_EXPIRE_SECONDS
+    expireInSeconds: AGENT_RUNTIME_JOB_EXPIRE_SECONDS
   });
-  await boss.updateQueue(DISCORD_AGENT_REQUEST_JOB, {
+  await boss.updateQueue(AGENT_RUNTIME_EXECUTION_JOB, {
     retryLimit: 2,
     retryDelay: 15,
     retryBackoff: true,
-    expireInSeconds: DISCORD_AGENT_JOB_EXPIRE_SECONDS
+    expireInSeconds: AGENT_RUNTIME_JOB_EXPIRE_SECONDS
   });
   logger.info(
     {
-      queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_TASK_JOB, DISCORD_AGENT_REQUEST_JOB],
+      queues: [CRAWL_GUILD_JOB, EMBED_MESSAGE_JOB, AGENT_TASK_JOB, AGENT_RUNTIME_EXECUTION_JOB],
       crawlWorkerEnabled,
       embeddingWorkerEnabled,
       taskWorkerEnabled,
-      discordAgentWorkerEnabled
+      agentRuntimeWorkerEnabled
     },
     "pg-boss ready"
   );
@@ -157,7 +150,7 @@ export async function startJobs(input: {
   const codegenLeaseScheduler =
     taskWorkerEnabled && input.agentTask && input.agentRuntimeRepo ? createSandboxLeaseScheduler(input.config, agentTaskBackendName) : null;
   let stopSandboxLeaseHeartbeat: (() => Promise<void>) | undefined;
-  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || discordAgentWorkerEnabled;
+  const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || agentRuntimeWorkerEnabled;
   const artifactRetentionMaintenance = runsAnyWorker
     ? startArtifactRetentionMaintenance({ repo: input.repo, agentRuntimeRepo: input.agentRuntimeRepo })
     : null;
@@ -223,25 +216,22 @@ export async function startJobs(input: {
     enqueueAgentRuntimeExecution: async (job: AgentRuntimeExecutionJob) => {
       logger.info(
         {
-          queue: DISCORD_AGENT_REQUEST_JOB,
+          queue: AGENT_RUNTIME_EXECUTION_JOB,
           runId: job.runId,
           messageId: job.messageId,
           responseMessageId: job.responseMessageId
         },
         "Enqueueing agent runtime execution"
       );
-      const id = await boss.send(DISCORD_AGENT_REQUEST_JOB, job, {
+      const id = await boss.send(AGENT_RUNTIME_EXECUTION_JOB, job, {
         singletonKey: job.runId,
         retryLimit: 2,
         retryDelay: 15,
         retryBackoff: true,
-        expireInSeconds: DISCORD_AGENT_JOB_EXPIRE_SECONDS
+        expireInSeconds: AGENT_RUNTIME_JOB_EXPIRE_SECONDS
       });
-      logger.info({ queue: DISCORD_AGENT_REQUEST_JOB, runId: job.runId, jobId: id ?? null }, "Agent runtime execution enqueue complete");
+      logger.info({ queue: AGENT_RUNTIME_EXECUTION_JOB, runId: job.runId, jobId: id ?? null }, "Agent runtime execution enqueue complete");
       return id ?? null;
-    },
-    enqueueDiscordAgentRequest: async (job: AgentRuntimeExecutionJob) => {
-      return runtime.enqueueAgentRuntimeExecution(job);
     },
     enqueueAgentTask: async (job) =>
       enqueueAgentTaskJob({
@@ -517,10 +507,10 @@ export async function startJobs(input: {
     logger.warn({ queue: AGENT_TASK_JOB }, "Agent task worker requested without a runner");
   }
 
-  const agentRuntimeRunner = input.agentRuntime ?? input.discordAgent;
-  if (discordAgentWorkerEnabled && agentRuntimeRunner) {
+  const agentRuntimeRunner = input.agentRuntime;
+  if (agentRuntimeWorkerEnabled && agentRuntimeRunner) {
     const threadExecutions = new KeyedSerialQueue();
-    await boss.work<AgentRuntimeExecutionJob>(DISCORD_AGENT_REQUEST_JOB, { batchSize: input.config.agentPromptMaxConcurrency, pollingIntervalSeconds: 1 }, async (jobs) => {
+    await boss.work<AgentRuntimeExecutionJob>(AGENT_RUNTIME_EXECUTION_JOB, { batchSize: input.config.agentPromptMaxConcurrency, pollingIntervalSeconds: 1 }, async (jobs) => {
       await Promise.all(jobs.map((job) => threadExecutions.run(job.data.agentThreadKey ?? job.data.channelId, async () => {
         const startedAt = Date.now();
         await runWithTrace(
@@ -535,7 +525,7 @@ export async function startJobs(input: {
           async () => {
             logger.info(
               {
-                queue: DISCORD_AGENT_REQUEST_JOB,
+                queue: AGENT_RUNTIME_EXECUTION_JOB,
                 jobId: job.id,
                 runId: job.data.runId,
                 messageId: job.data.messageId,
@@ -546,7 +536,7 @@ export async function startJobs(input: {
             const existingRun = await input.repo?.getProcessRun(job.data.runId).catch(() => undefined);
             if (existingRun && isTerminalProcessRunStatus(existingRun.status)) {
               logger.info(
-                { queue: DISCORD_AGENT_REQUEST_JOB, jobId: job.id, runId: job.data.runId, status: existingRun.status },
+                { queue: AGENT_RUNTIME_EXECUTION_JOB, jobId: job.id, runId: job.data.runId, status: existingRun.status },
                 "Skipping queued agent runtime execution because run is already terminal"
               );
               return;
@@ -557,7 +547,7 @@ export async function startJobs(input: {
                 status: "running",
                 summary: "Processing queued agent runtime execution.",
                 metadata: {
-                  queue: DISCORD_AGENT_REQUEST_JOB,
+                  queue: AGENT_RUNTIME_EXECUTION_JOB,
                   pgbossJobId: job.id,
                   workerStartedAt: new Date(startedAt).toISOString()
                 }
@@ -575,7 +565,7 @@ export async function startJobs(input: {
                     startedAt: enqueuedAt,
                     completedAt: new Date(startedAt),
                     durationMs: Math.max(0, startedAt - enqueuedAt.getTime()),
-                    metadata: { queue: DISCORD_AGENT_REQUEST_JOB, pgbossJobId: job.id }
+                    metadata: { queue: AGENT_RUNTIME_EXECUTION_JOB, pgbossJobId: job.id }
                   })
                   .catch((error) => logger.warn({ err: error, runId: job.data.runId }, "Failed to record Discord queue wait span"));
               }
@@ -583,7 +573,7 @@ export async function startJobs(input: {
             try {
               await agentRuntimeRunner.run(job.data, { jobs: runtime });
               logger.info(
-                { queue: DISCORD_AGENT_REQUEST_JOB, jobId: job.id, runId: job.data.runId, durationMs: durationMs(startedAt) },
+                { queue: AGENT_RUNTIME_EXECUTION_JOB, jobId: job.id, runId: job.data.runId, durationMs: durationMs(startedAt) },
                 "Queued agent runtime execution complete"
               );
             } catch (error) {
@@ -594,12 +584,12 @@ export async function startJobs(input: {
                   level: "error",
                   eventName: "discord.agent_request.job_failed",
                   summary: error instanceof Error ? error.message : String(error),
-                  metadata: { queue: DISCORD_AGENT_REQUEST_JOB, pgbossJobId: job.id },
+                  metadata: { queue: AGENT_RUNTIME_EXECUTION_JOB, pgbossJobId: job.id },
                   durationMs: durationMs(startedAt)
                 })
                 .catch((runError) => logger.warn({ err: runError, runId: job.data.runId }, "Failed to record Discord job failure event"));
               logger.error(
-                { err: error, queue: DISCORD_AGENT_REQUEST_JOB, jobId: job.id, runId: job.data.runId, durationMs: durationMs(startedAt) },
+                { err: error, queue: AGENT_RUNTIME_EXECUTION_JOB, jobId: job.id, runId: job.data.runId, durationMs: durationMs(startedAt) },
                 "Queued agent runtime execution failed"
               );
               throw error;
@@ -608,8 +598,8 @@ export async function startJobs(input: {
         );
       })));
     });
-  } else if (discordAgentWorkerEnabled) {
-    logger.warn({ queue: DISCORD_AGENT_REQUEST_JOB }, "Agent runtime execution worker requested without a runner");
+  } else if (agentRuntimeWorkerEnabled) {
+    logger.warn({ queue: AGENT_RUNTIME_EXECUTION_JOB }, "Agent runtime execution worker requested without a runner");
   }
 
   return runtime;

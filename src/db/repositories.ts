@@ -1,5 +1,6 @@
 import type { DbPool } from "./pool.js";
-import * as skillsRepository from "./skillsRepository.js";
+import * as serverOverlayRepository from "./serverOverlayRepository.js";
+import * as agentSettingsRepository from "./agentSettingsRepository.js";
 import * as embeddingRepository from "./embeddingRepository.js";
 import * as conversationMemoryRepository from "./conversationMemoryRepository.js";
 import * as auditRepository from "./auditRepository.js";
@@ -11,16 +12,20 @@ import * as discordEmojiUsageRepository from "./discordEmojiUsageRepository.js";
 import * as deploymentAnnouncementRepository from "./deploymentAnnouncementRepository.js";
 import * as discordComponentActionRepository from "./discordComponentActionRepository.js";
 import * as retrievalRepository from "./retrievalRepository.js";
-import type { PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
-export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, DatabaseSkill, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
+import type { PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
+export type { PersistedAttachment, PersistedMessage, SearchResult, DiscordBugMarker, DiscordUserLookupResult, DiscordUserAlias, DiscordUserReferenceTerms, DiscordChannelLookupResult, DiscordAttachmentSearchResult, DiscordStats, DiscordStatsMetric, DiscordStatsGroupBy, DiscordStatsSort, DiscordStatsRow, DiscordChannelTopicCandidate, ConversationRole, ConversationMessage, AgentMemoryAnchorMessage, AgentMemoryTurnStats, MessageForEmbedding, DeletedConversationTurn, DeletedConversationTurns, InteractionBlock, TraceEventLevel, TraceEvent, ToolAuditLog, ProcessRunKind, ProcessRunStatus, ProcessRunArtifactKind, ProcessRunRecord, ProcessRunSpanRecord, ProcessRunEventRecord, ProcessRunArtifactRecord, ProcessRunArtifactContent, AgentTaskStatus, AgentTaskRecord, TaskEvent, AgentRuntimeEvent, AgentRuntimeMessage, AgentRuntimeChatExecution, AgentRuntimeArtifactRecord, AgentRuntimeArtifactContent, SandboxRunRecord, SandboxCommandEvent, ServerOverlay, AgentRunFeedback } from "./types.js";
 export type { DiscordEmojiCultureProfile, DiscordEmojiUsageExample } from "./discordEmojiUsageRepository.js";
+export type { GuildAgentSettings } from "./agentSettingsRepository.js";
 
 // Retrieval SQL lives in retrievalRepository.ts; keep this guardrail snippet here
-// for repository-permissions.test.ts import-compatibility coverage:
+// for repository-permissions.test.ts coverage:
 // c.parent_id = ANY($2::text[]) AND c.type IN (10, 11)
 
 export class DiscordAiAgentRepository {
   constructor(private readonly pool: DbPool) {}
+  getGuildAgentSettings(guildId: string) { return agentSettingsRepository.getGuildAgentSettings(this.pool, guildId); }
+  setGuildChatModelOverride(input: Parameters<typeof agentSettingsRepository.setGuildChatModelOverride>[1]) { return agentSettingsRepository.setGuildChatModelOverride(this.pool, input); }
+  clearGuildChatModelOverride(guildId: string) { return agentSettingsRepository.clearGuildChatModelOverride(this.pool, guildId); }
   createDiscordComponentActionGeneration(input: Parameters<typeof discordComponentActionRepository.createDiscordComponentActionGeneration>[1]) { return discordComponentActionRepository.createDiscordComponentActionGeneration(this.pool, input); }
   activateDiscordComponentActionGeneration(input: Parameters<typeof discordComponentActionRepository.activateDiscordComponentActionGeneration>[1]) { return discordComponentActionRepository.activateDiscordComponentActionGeneration(this.pool, input); }
   cancelDiscordComponentActionGeneration(input: Parameters<typeof discordComponentActionRepository.cancelDiscordComponentActionGeneration>[1]) { return discordComponentActionRepository.cancelDiscordComponentActionGeneration(this.pool, input); }
@@ -32,24 +37,7 @@ export class DiscordAiAgentRepository {
   latestDeploymentRevision(guildId: string) { return deploymentAnnouncementRepository.latestDeploymentRevision(this.pool, guildId); }
   markDeploymentAnnouncementPosted(input: { guildId: string; revision: string; content: string; comparisonUrl: string; discordMessageId: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementPosted(this.pool, input); }
   markDeploymentAnnouncementFailed(input: { guildId: string; revision: string; error: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementFailed(this.pool, input); }
-  recordSkillChange(input: {
-    skillName: string;
-    filePath: string;
-    requesterId?: string | null;
-    request?: string | null;
-    branchName?: string | null;
-    prUrl?: string | null;
-    content?: string | null;
-    source?: string;
-    merged?: boolean;
-    policyReasons?: string[];
-  }) { return skillsRepository.recordSkillChange(this.pool, input); }
-  listEnabledDatabaseSkills(): Promise<Array<{ name: string; content: string; version: number }>> { return skillsRepository.listEnabledDatabaseSkills(this.pool); }
-  listDatabaseSkills(input: { includeDisabled?: boolean } = {}): Promise<DatabaseSkill[]> { return skillsRepository.listDatabaseSkills(this.pool, input); }
-  upsertDatabaseSkill(input: { name: string; content: string; requesterId?: string | null; request?: string | null }): Promise<DatabaseSkill> { return skillsRepository.upsertDatabaseSkill(this.pool, input); }
-  setDatabaseSkillEnabled(input: { name: string; enabled: boolean; requesterId?: string | null }): Promise<DatabaseSkill | null> { return skillsRepository.setDatabaseSkillEnabled(this.pool, input); }
-  deleteDatabaseSkill(name: string): Promise<boolean> { return skillsRepository.deleteDatabaseSkill(this.pool, name); }
-  getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> { return skillsRepository.getServerOverlay(this.pool, guildId); }
+  getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> { return serverOverlayRepository.getServerOverlay(this.pool, guildId); }
   upsertServerOverlay(input: {
     guildId: string;
     enabled?: boolean;
@@ -57,8 +45,8 @@ export class DiscordAiAgentRepository {
     toolPolicy?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
     updatedBy?: string | null;
-  }): Promise<ServerOverlay> { return skillsRepository.upsertServerOverlay(this.pool, input); }
-  health() { return skillsRepository.health(this.pool); }
+  }): Promise<ServerOverlay> { return serverOverlayRepository.upsertServerOverlay(this.pool, input); }
+  health() { return serverOverlayRepository.health(this.pool); }
   async getRunFeedback(runId: string): Promise<AgentRunFeedback | undefined> {
     const result = await this.pool.query("SELECT * FROM agent_run_feedback WHERE run_id = $1", [runId]);
     return result.rows[0] ? rowToRunFeedback(result.rows[0]) : undefined;
@@ -139,7 +127,12 @@ export class DiscordAiAgentRepository {
       createdAt?: Date;
     };
   }) { return conversationMemoryRepository.appendConversationTurn(this.pool, input); }
-  recentConversationMessages(input: { threadKey: string; limit: number; includeToolResults?: boolean }): Promise<ConversationMessage[]> { return conversationMemoryRepository.recentConversationMessages(this.pool, input); }
+  recentConversationMessages(input: {
+    threadKey: string;
+    limit: number;
+    includeToolResults?: boolean;
+    requesterAuthorId?: string | null;
+  }): Promise<ConversationMessage[]> { return conversationMemoryRepository.recentConversationMessages(this.pool, input); }
   agentMemoryTurnStats(input: {
     guildId: string;
     channelId: string;
@@ -381,12 +374,6 @@ export class DiscordAiAgentRepository {
     traceId?: string;
     limit: number;
   }): Promise<TaskEvent[]> { return agentTaskRepository.getAgentRuntimeTaskEvents(this.pool, input); }
-  getTaskProgressEvents(input: {
-    guildId: string;
-    visibleChannelIds: string[];
-    traceId?: string;
-    limit: number;
-  }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskProgressEvents(this.pool, input); }
   getAgentRuntimeEventsForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeEvent[]> { return agentTaskRepository.getAgentRuntimeEventsForTrace(this.pool, input); }
   getAgentRuntimeMessagesForTrace(input: { traceId: string; limit?: number }): Promise<AgentRuntimeMessage[]> { return agentTaskRepository.getAgentRuntimeMessagesForTrace(this.pool, input); }
   listAgentRuntimeChatExecutions(input: { limit?: number } = {}): Promise<AgentRuntimeChatExecution[]> { return agentTaskRepository.listAgentRuntimeChatExecutions(this.pool, input); }
@@ -394,7 +381,6 @@ export class DiscordAiAgentRepository {
   getAgentRuntimeArtifactsForExecution(input: { executionId: string; sessionId: string }): Promise<AgentRuntimeArtifactRecord[]> { return agentTaskRepository.getAgentRuntimeArtifactsForExecution(this.pool, input); }
   getAgentRuntimeArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> { return agentTaskRepository.getAgentRuntimeArtifact(this.pool, input); }
   getAgentRuntimeTaskEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getAgentRuntimeTaskEventsForTask(this.pool, input); }
-  getTaskProgressEventsForTask(input: { taskId: string; limit?: number }): Promise<TaskEvent[]> { return agentTaskRepository.getTaskProgressEventsForTask(this.pool, input); }
   getAgentTaskMetrics(): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     agentTaskBacklog: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>;
@@ -498,6 +484,7 @@ export class DiscordAiAgentRepository {
     channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
   }): Promise<SearchResult[]> { return retrievalRepository.keywordSearch(this.pool, input); }
   vectorSearch(input: {
     guildId: string;
@@ -510,6 +497,7 @@ export class DiscordAiAgentRepository {
     channelIds?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
   }): Promise<SearchResult[]> { return retrievalRepository.vectorSearch(this.pool, input); }
   recentMessages(input: { guildId: string; channelId: string; limit: number; includeBots?: boolean }): Promise<SearchResult[]> { return retrievalRepository.recentMessages(this.pool, input); }
   recentMessagesFromChannels(input: {
@@ -521,6 +509,7 @@ export class DiscordAiAgentRepository {
     aboutUserTerms?: string[];
     dateFrom?: Date;
     dateTo?: Date;
+    hourOfDayUtc?: number;
     includeBots?: boolean;
   }): Promise<SearchResult[]> { return retrievalRepository.recentMessagesFromChannels(this.pool, input); }
   sampleMessagesFromChannels(input: {

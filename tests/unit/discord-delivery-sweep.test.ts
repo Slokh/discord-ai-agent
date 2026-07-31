@@ -51,22 +51,6 @@ describe("decideDiscordDeliverySweep", () => {
     expect(serializeDiscordDeliveryIntent(intent)).not.toContain("private original");
   });
 
-  it("keeps v1 base64 delivery intents readable across the cutover", async () => {
-    const intent = parseDiscordDeliveryIntent({
-      schemaVersion: 1,
-      deliveryKey: "legacy",
-      requesterUserId: "user-1",
-      content: "done",
-      storedContent: "done",
-      responseRedacted: false,
-      footer: null,
-      presentation: null,
-      files: [{ name: "legacy.txt", contentType: "text/plain", dataBase64: Buffer.from("legacy").toString("base64") }],
-      sourceMessageReaction: null,
-    });
-    await expect(discordDeliveryIntentFiles(intent)).resolves.toEqual([{ name: "legacy.txt", contentType: "text/plain", data: Buffer.from("legacy") }]);
-  });
-
   it("rejects corrupted binary delivery artifacts", async () => {
     const intent = createDiscordDeliveryIntent({
       deliveryKey: "request-1",

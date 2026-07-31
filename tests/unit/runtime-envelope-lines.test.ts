@@ -8,7 +8,7 @@ import {
 describe("runtime envelope input lines", () => {
   it("builds durable input lines from a Discord turn envelope", () => {
     const lines = agentRuntimeInputLinesFromEnvelope({
-      schemaVersion: 1,
+      schemaVersion: 2,
       source: "discord",
       requestId: "request-1",
       threadKey: "discord:guild:channel",

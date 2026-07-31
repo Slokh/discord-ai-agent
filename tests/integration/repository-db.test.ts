@@ -857,25 +857,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         })
       ])
     );
-    await expect(repo.getTaskProgressEvents({ guildId, visibleChannelIds: [channelId], traceId, limit: 10 })).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          taskId,
-          traceId,
-          eventName: "agent.task.started",
-          summary: "Starting Kubernetes sandbox.",
-          metadata: expect.objectContaining({ taskId, step: "sandbox_start", pgbossJobId: "pgboss-job-1" })
-        }),
-        expect.objectContaining({
-          taskId,
-          traceId,
-          eventName: "agent.task.progress",
-          summary: "Running tests.",
-          metadata: expect.objectContaining({ taskId, step: "verify", command: "npm test" })
-        })
-      ])
-    );
-    await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual(
+    await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           taskId,
@@ -1201,7 +1183,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(embeddings.rows[0]?.count).toBe(0);
   });
 
-  it("scrubs tool audit and skill change user content for privacy-deleted users", async () => {
+  it("scrubs tool audit and trace user content for privacy-deleted users", async () => {
     const userId = `user-${randomUUID()}`;
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;
@@ -1228,30 +1210,13 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       summary: "private trace summary",
       metadata: { private: "trace metadata" }
     });
-    await repo.recordSkillChange({
-      skillName: `skill-${randomUUID()}`,
-      filePath: `skills/skill-${randomUUID()}.md`,
-      requesterId: userId,
-      request: "remember my private request",
-      policyReasons: ["blocked in test"]
-    });
-    const dbSkillName = `skill-${randomUUID()}`;
-    await repo.upsertDatabaseSkill({
-      name: dbSkillName,
-      content: "# Private Skill\n\n- Contains user-originated private detail.",
-      requesterId: userId,
-      request: "remember my private database skill"
-    });
-
     await repo.requestUserDeletion(userId);
 
-    const [audit, trace, skillChange, dbSkill] = await Promise.all([
+    const [audit, trace] = await Promise.all([
       pool.query(
         "SELECT user_id, arguments_summary, result_summary, error FROM tool_audit_logs WHERE tool_name = 'searchDiscordHistory' ORDER BY id DESC LIMIT 1"
       ),
-      pool.query("SELECT user_id, summary, metadata FROM trace_events WHERE trace_id = $1 ORDER BY id DESC LIMIT 1", [traceId]),
-      pool.query("SELECT requester_id, request FROM skill_changes ORDER BY id DESC LIMIT 1"),
-      pool.query("SELECT content, enabled, created_by, updated_by FROM skills WHERE name = $1", [dbSkillName])
+      pool.query("SELECT user_id, summary, metadata FROM trace_events WHERE trace_id = $1 ORDER BY id DESC LIMIT 1", [traceId])
     ]);
 
     expect(audit.rows[0]).toMatchObject({
@@ -1264,16 +1229,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       user_id: null,
       summary: null,
       metadata: {}
-    });
-    expect(skillChange.rows[0]).toMatchObject({
-      requester_id: null,
-      request: null
-    });
-    expect(dbSkill.rows[0]).toMatchObject({
-      content: "",
-      enabled: false,
-      created_by: null,
-      updated_by: null
     });
   });
 
@@ -1353,56 +1308,6 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         limit: 10
       })
     ).resolves.toHaveLength(1);
-  });
-
-  it("records policy-blocked skill changes without marking the skill as installed", async () => {
-    const skillName = `skill-${randomUUID()}`;
-    await repo.recordSkillChange({
-      skillName,
-      filePath: `skills/${skillName}.md`,
-      requesterId: `user-${randomUUID()}`,
-      request: "remember this blocked skill",
-      policyReasons: ["blocked by policy"]
-    });
-
-    const [changes, skills] = await Promise.all([
-      pool.query("SELECT count(*)::int AS count FROM skill_changes WHERE skill_name = $1", [skillName]),
-      pool.query("SELECT count(*)::int AS count FROM skills WHERE name = $1", [skillName])
-    ]);
-
-    expect(changes.rows[0]?.count).toBe(1);
-    expect(skills.rows[0]?.count).toBe(0);
-  });
-
-  it("stores private database skills with versioning and enabled-state controls", async () => {
-    const skillName = `skill-${randomUUID()}`;
-    const requesterId = `user-${randomUUID()}`;
-
-    const created = await repo.upsertDatabaseSkill({
-      name: skillName,
-      content: "# Private Skill\n\n- Remember the synthetic preference.",
-      requesterId,
-      request: "learn this synthetic preference"
-    });
-    const updated = await repo.upsertDatabaseSkill({
-      name: skillName,
-      content: "# Private Skill\n\n- Remember the updated synthetic preference.",
-      requesterId,
-      request: "update this synthetic preference"
-    });
-
-    expect(created).toMatchObject({ name: skillName, source: "database", enabled: true, version: 1 });
-    expect(updated).toMatchObject({ name: skillName, source: "database", enabled: true, version: 2 });
-    await expect(repo.listEnabledDatabaseSkills()).resolves.toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: skillName, content: expect.stringContaining("updated synthetic preference"), version: 2 })])
-    );
-
-    await expect(repo.setDatabaseSkillEnabled({ name: skillName, enabled: false, requesterId })).resolves.toMatchObject({ enabled: false });
-    await expect(repo.listEnabledDatabaseSkills()).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ name: skillName })]));
-
-    await expect(repo.setDatabaseSkillEnabled({ name: skillName, enabled: true, requesterId })).resolves.toMatchObject({ enabled: true });
-    await expect(repo.deleteDatabaseSkill(skillName)).resolves.toBe(true);
-    await expect(repo.listDatabaseSkills({ includeDisabled: true })).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ name: skillName })]));
   });
 
   it("stores server overlays", async () => {
@@ -1660,7 +1565,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     ]);
     await expect(repo.listRecentAgentTasks(5)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ taskId })]));
     // Tasks without a registered runtime execution have no runtime events.
-    await expect(repo.getTaskProgressEventsForTask({ taskId, limit: 10 })).resolves.toEqual([]);
+    await expect(repo.getAgentRuntimeTaskEventsForTask({ taskId, limit: 10 })).resolves.toEqual([]);
     await expect(repo.getSandboxCommandEventsForTask({ taskId, limit: 10 })).resolves.toEqual([
       expect.objectContaining({ taskId, sandboxRunId, step: "scan", exitCode: 1, errorTail: "stderr tail" })
     ]);
@@ -1984,6 +1889,60 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
         limit: 10
       })
     ).resolves.toEqual([]);
+  }, 10_000);
+
+  it("filters keyword, vector, and broad recent history to one UTC hour bucket", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const matchingMessageId = `message-${randomUUID()}`;
+    const otherMessageId = `message-${randomUUID()}`;
+    const embedding = Array.from({ length: 1536 }, () => 0.001);
+
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.upsertMessage({
+      id: matchingMessageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "bedtime routine at the matching hour",
+      normalizedContent: "bedtime routine at the matching hour",
+      createdAt: new Date("2026-07-01T09:15:00.000Z")
+    });
+    await repo.upsertMessage({
+      id: otherMessageId,
+      guildId,
+      channelId,
+      authorId: userId,
+      content: "bedtime routine at another hour",
+      normalizedContent: "bedtime routine at another hour",
+      createdAt: new Date("2026-07-01T10:15:00.000Z")
+    });
+    await repo.storeMessageEmbedding({ messageId: matchingMessageId, embedding, model: "test" });
+    await repo.storeMessageEmbedding({ messageId: otherMessageId, embedding, model: "test" });
+
+    const commonFilters = {
+      guildId,
+      visibleChannelIds: [channelId],
+      hourOfDayUtc: 9,
+      limit: 10
+    };
+    await expect(repo.keywordSearch({
+      ...commonFilters,
+      query: "bedtime"
+    })).resolves.toEqual([
+      expect.objectContaining({ messageId: matchingMessageId })
+    ]);
+    await expect(repo.vectorSearch({
+      ...commonFilters,
+      embedding
+    })).resolves.toEqual([
+      expect.objectContaining({ messageId: matchingMessageId })
+    ]);
+    await expect(repo.recentMessagesFromChannels(commonFilters)).resolves.toEqual([
+      expect.objectContaining({ messageId: matchingMessageId })
+    ]);
   }, 10_000);
 
   it("does not return keyword or vector results when a parent channel is excluded", async () => {
@@ -2657,6 +2616,59 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(afterDelete.map((message) => message.role)).toEqual(["assistant"]);
   });
 
+  it("loads top-level conversation memory from only the current requester's turns", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const threadKey = `discord:${guildId}:${channelId}`;
+    await repo.upsertGuild({ id: guildId, name: "test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "general", type: 0 });
+    await repo.ensureConversationSession({ threadKey, guildId, channelId });
+
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "turn-alice",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "alice",
+        authorDisplayName: "Alice",
+        content: "My preferred color is blue.",
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Got it, Alice.",
+      },
+    });
+    await repo.appendConversationTurn({
+      threadKey,
+      turnId: "turn-bob",
+      user: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bob",
+        authorDisplayName: "Bob",
+        content: "Call me Captain Red.",
+      },
+      assistant: {
+        discordMessageId: `message-${randomUUID()}`,
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Sure, Captain Red.",
+      },
+    });
+
+    const aliceMemory = await repo.recentConversationMessages({
+      threadKey,
+      limit: 10,
+      requesterAuthorId: "alice",
+    });
+
+    expect(aliceMemory.map((message) => message.content)).toEqual([
+      "My preferred color is blue.",
+      "Got it, Alice.",
+    ]);
+  });
+
   it("compacts older conversation memory into a snapshot and prepends it to recent context", async () => {
     const guildId = `guild-${randomUUID()}`;
     const channelId = `channel-${randomUUID()}`;
@@ -3077,6 +3089,36 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(budgetRepo.getUserTurnLimitOverride({ guildId, userId })).resolves.toBeUndefined();
   });
 
+  it("stores, replaces, and clears a per-guild chat-model override", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const firstUserId = `user-${randomUUID()}`;
+    const secondUserId = `user-${randomUUID()}`;
+
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toBeUndefined();
+    await expect(repo.setGuildChatModelOverride({
+      guildId,
+      chatModel: "moonshotai/kimi-k3",
+      updatedByUserId: firstUserId,
+    })).resolves.toEqual(expect.objectContaining({
+      guildId,
+      chatModel: "moonshotai/kimi-k3",
+      updatedByUserId: firstUserId,
+    }));
+    await repo.setGuildChatModelOverride({
+      guildId,
+      chatModel: "anthropic/claude-sonnet-5",
+      updatedByUserId: secondUserId,
+    });
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toEqual(expect.objectContaining({
+      guildId,
+      chatModel: "anthropic/claude-sonnet-5",
+      updatedByUserId: secondUserId,
+    }));
+    await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(true);
+    await expect(repo.clearGuildChatModelOverride(guildId)).resolves.toBe(false);
+    await expect(repo.getGuildAgentSettings(guildId)).resolves.toBeUndefined();
+  });
+
   it("rejects turn-limit overrides below -1", async () => {
     const budgetRepo = new BudgetRepository(pool);
     const guildId = `guild-${randomUUID()}`;
@@ -3166,6 +3208,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 });
 
 async function cleanupTestRows(pool: DbPool) {
+  await pool.query("DELETE FROM guild_agent_settings WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM discord_component_actions WHERE guild_id LIKE 'guild-%' OR channel_id LIKE 'channel-%'");
   await pool.query("DELETE FROM deployment_announcements WHERE guild_id LIKE 'guild-%'");
   await pool.query("DELETE FROM agent_run_feedback WHERE run_id LIKE 'run-%'");

@@ -2,7 +2,7 @@
 
 A self-hosted AI agent for private Discord servers.
 
-Mention `@ai` and the bot can answer questions, search server history with Discord permissions, summarize channels, generate images, look things up on the web, remember private server skills, and open code-update PRs for itself.
+Mention `@ai` and the bot can answer questions, search server history with Discord permissions, summarize channels, generate images, look things up on the web, and open code-update PRs for itself.
 
 The interface is intentionally simple: users talk to the bot naturally, and the model chooses tools.
 
@@ -13,7 +13,7 @@ Most Discord bots make people learn commands. Most AI chat apps do not understan
 - One interface: `@ai <request>`
 - Permission-aware memory over indexed Discord history
 - Persistent per-channel conversation context
-- Web, image, stats, summary, and skill tools
+- Web, image, stats, and summary tools
 - Self-hosted data and deployment
 - Sandboxed code-update PRs the bot opens against its own repo
 
@@ -41,7 +41,7 @@ The app has three roles, runnable as one fully configured process (`all`) or spl
 - `worker`: queued chat prompt execution and final Discord delivery, plus crawling, embeddings, code-update tasks, reconciliation, and cleanup. Normal chat needs a Discord-agent worker as well as the bot role.
 - `api`: internal callback API for sandbox task progress and the run console. Needed for code-update PRs and debugging UI.
 
-Postgres with `pgvector` is the source of truth for Discord history, embeddings, skills, traces, the `agent_runtime_*` execution ledger, task projections, and sandbox runs.
+Postgres with `pgvector` is the source of truth for Discord history, embeddings, traces, the `agent_runtime_*` execution ledger, task projections, and sandbox runs.
 
 ## Capabilities
 
@@ -56,7 +56,7 @@ Postgres with `pgvector` is the source of truth for Discord history, embeddings,
 - OpenRouter-hosted web search, web fetch, and datetime tools
 - Public Spotify catalog search, item lookup, playlist/album track-list, artist discography, playlist stats, and playlist comparison tools when Spotify client credentials are configured
 - Optional automatic Privy wallets, managed USD transfers, and provably fair wager settlement on Tempo
-- Private DB-backed skills
+- Repository-managed prompt skills
 - Code-update PRs through sandboxed agent tasks
 - Structured logs and trace/agent-runtime event inspection
 
@@ -132,7 +132,7 @@ npm run dev
 npm run worker
 ```
 
-The copied `.env.example` keeps `WORKER_TASK_ENABLED=false`, so this minimal worker handles chat, crawl, embeddings, retention, and reconciliation without requiring GitHub/code-update credentials. The `bot` role acknowledges and enqueues the request; the Discord-agent worker executes it and completes final delivery.
+The copied `.env.example` keeps `WORKER_TASK_ENABLED=false`, so this minimal worker handles chat, crawl, embeddings, retention, and reconciliation without requiring GitHub/code-update credentials. The `bot` role acknowledges and enqueues the request; the agent-runtime worker executes it and completes final delivery.
 
 To enable code-update PRs, configure the GitHub and task-signing variables, set `WORKER_TASK_ENABLED=true`, and also run `npm run api` for callbacks and the run console. `DISCORD_AI_AGENT_PROCESS_ROLE=all` is available only when the API/task configuration required by every combined role is present.
 
@@ -240,8 +240,11 @@ Common optional settings:
 | --- | --- | --- |
 | `BOT_NAME` | `ai` | Display/default mention name in prompts/docs |
 | `DISCORD_PREMIUM_SKU_IDS` | unset | Comma-separated Discord application SKU snowflakes exposed to the agent for premium Components V2 buttons; all other SKU values fail closed |
-| `OPENROUTER_CHAT_MODEL` | `z-ai/glm-5.2` | Main agent model |
-| `OPENROUTER_UTILITY_MODEL` | main agent model | Lower-cost utility model and one-shot fallback for a primary timeout before any tool executes; production Helm defaults to `openai/gpt-4o-mini` |
+| `OPENROUTER_CHAT_MODEL` | `openai/gpt-5.6-luna` | Main conversational and tool-selection model |
+| `OPENROUTER_CHAT_FALLBACK_MODEL` | `openai/gpt-5.6-terra` | Recovery model for malformed tool calls, empty responses, leaked hosted-tool markup, and repeated-tool termination |
+| `OPENROUTER_CHAT_REASONING_EFFORT` / `OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT` | `medium` / `medium` | OpenRouter reasoning effort for primary chat and recovery calls |
+| `OPENROUTER_CHAT_MAX_TOKENS` / `OPENROUTER_CHAT_FALLBACK_MAX_TOKENS` | `4096` / `3072` | Combined reasoning and visible-output ceilings; Discord separately bounds final visible replies |
+| `OPENROUTER_UTILITY_MODEL` | `openai/gpt-4o-mini` | Lower-cost model for bounded summaries, compaction, and deployment notes |
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |
@@ -259,7 +262,7 @@ Common optional settings:
 | `GITHUB_APP_INSTALLATION_ID` | unset | Preferred production GitHub App installation ID |
 | `CODEGEN_EXECUTION_BACKEND` | `local-process` | `local-process` runs code-update tasks in a warm worker child process; `kubernetes-job` runs each task in an isolated Kubernetes Job (advanced) |
 | `CODEGEN_HARNESS` | `opencode` | Coding harness for code-update tasks: `opencode` by default, or `codex` to run tasks through Codex |
-| `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_DISCORD_AGENT_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated code-update worker |
+| `WORKER_CRAWL_ENABLED` / `WORKER_EMBEDDING_ENABLED` / `WORKER_TASK_ENABLED` / `WORKER_AGENT_RUNTIME_ENABLED` | `true` | Split worker queues across deployments; Helm uses these for the optional dedicated code-update worker |
 | `RETENTION_EVENTS_DAYS` | `60` | Worker-side age cutoff for trace, process-run, agent-runtime, and sandbox command event cleanup; `0` disables event retention cleanup |
 | `RETENTION_AUDIT_DAYS` | `90` | Worker-side age cutoff for `tool_audit_logs`; `0` disables audit cleanup |
 | `RETENTION_EMBEDDING_RUNS_DAYS` | `14` | Worker-side age cutoff for terminal embedding `process_runs` and cascading artifacts/events; `0` disables embedding-run cleanup |
@@ -282,17 +285,17 @@ Common optional settings:
 | `BUDGET_GUILD_DAILY_USD` | `10` | Per-guild daily cap over `tool_audit_logs.estimated_cost_usd`; set to `-1` for unlimited |
 | `BOT_OWNER_USER_ID` / `OPS_ALLOWLIST_USER_IDS` | unset | Restricted administrative-tool allowlists as Discord user IDs. Code-update tasks are available to every member and remain subject to `BUDGET_USER_CODEGEN_PER_DAY`; owner/ops restrictions still protect administrative mutations. |
 | `IMAGE_TOOLS_ALLOWLIST_ONLY` | `false` | When true, image generation also requires owner/ops allowlist membership |
-| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all`. Chat needs `bot` for ingress/delivery and a worker with `WORKER_DISCORD_AGENT_ENABLED=true` for execution. Sandbox callbacks and the run console need `api`. Use `all` only with the complete combined-role configuration. |
+| `DISCORD_AI_AGENT_PROCESS_ROLE` | `bot` | `api`, `bot`, `worker`, or `all`. Chat needs `bot` for ingress/delivery and a worker with `WORKER_AGENT_RUNTIME_ENABLED=true` for execution. Sandbox callbacks and the run console need `api`. Use `all` only with the complete combined-role configuration. |
 | `RUN_MIGRATIONS` | `true` | Run migrations on process startup; Helm runtime pods set this to `false` because migrations run as a hook |
 
-Fresh installs apply the squashed `migrations/001_initial.sql` baseline followed by every later numbered forward migration. If you are upgrading a database created before the migration squash, run `scripts/legacy-schema-transition.sql` once to rename the old runtime tables/columns in place before applying the current migration chain.
+Fresh installs and deployments apply the squashed `migrations/001_initial.sql` baseline followed by every later numbered forward migration.
 
 ## Private Content And The Overlay Boundary
 
 The tracked repo ships neutral defaults only. Everything specific to your server lives in one of two overlay homes, both outside Git:
 
-- `.discord-ai-agent/` (gitignored): persona/prompt overlay, private eval prompts, skill exports, local caches.
-- The database: server overlays (`server_overlays`), learned skills, aliases, and all indexed Discord content.
+- `.discord-ai-agent/` (gitignored): persona/prompt overlay, private eval prompts, and local caches.
+- The database: server overlays (`server_overlays`), aliases, and all indexed Discord content.
 
 Customization points:
 
@@ -303,23 +306,9 @@ Customization points:
 
 `npm run scan:release` enforces the boundary: it fails if known-private strings, real-looking Discord snowflakes, or secret-shaped tokens appear in tracked files.
 
-## Private Skills
+## Prompt Skills
 
-Private server-specific skills live in Postgres, not Git.
-
-```text
-@ai learn this for next time: movie night starts at 8 unless someone says otherwise
-```
-
-Manage skills:
-
-```bash
-npm run skills -- list --all
-npm run skills -- export .discord-ai-agent/skills-export.json
-npm run skills -- import .discord-ai-agent/skills-export.json
-npm run skills -- disable movie-night
-npm run skills -- delete movie-night
-```
+Static prompt skills are loaded only from the repository's `skills/` directory. The runtime does not create, update, load, or manage database-backed skills; use the private prompt overlay for deployment-specific conversational guidance.
 
 ## Security Model
 

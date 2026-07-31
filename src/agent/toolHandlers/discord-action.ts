@@ -1,15 +1,16 @@
 import { drawRandom, revealRandomness, settleRandomWager } from "../../tools/randomTools.js";
-import { isSuccessfulRandomDrawResult } from "../randomOutcomeGuard.js";
+import {
+  isSuccessfulRandomDrawResult,
+  RANDOM_ACTION_NOT_AUTHORIZED_RESPONSE,
+} from "../randomOutcomeGuard.js";
 import { undoConversationTurns } from "../../tools/agentMemoryTools.js";
 import { cleanResponse } from "../../tools/responseFormatting.js";
 import { stringArgument, stringArrayArgument, numberArgument, recordArgument } from "./arguments.js";
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
-// Uniform signatures intentionally expose only the inputs each tool needs.
-/* eslint-disable @typescript-eslint/no-unused-vars */
 export const discordActionToolHandlers = {
-  "undoConversationTurns": async (ctx, route, originalText) => {
+  "undoConversationTurns": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await undoConversationTurns(
@@ -20,7 +21,23 @@ export const discordActionToolHandlers = {
           ),
         };
   },
-  "drawRandom": async (ctx, route, originalText) => {
+  "drawRandom": async (ctx, route, _originalText) => {
+    if (!ctx.randomActionAuthorized) {
+      return {
+        content: RANDOM_ACTION_NOT_AUTHORIZED_RESPONSE,
+        status: "error",
+        errorCode: "random_action_not_authorized",
+        retryable: false,
+      };
+    }
+    const wager = recordArgument(route.arguments, "wager") as {
+      playerUserId?: string;
+      stakeUsd?: number;
+      maxPayoutUsd?: number;
+      game?: string;
+      interactionMode?: "automatic" | "player_decisions";
+      rule?: { kind: "coin_side"; side: "heads" | "tails" } | { kind: "sum"; operator: ">=" | ">" | "<=" | "<" | "="; target: number } | { kind: "any_match" } | { kind: "all_distinct" };
+    } | undefined;
     const content = cleanResponse(
           await drawRandom(ctx, {
             kind: stringArgument(route.arguments, "kind"),
@@ -31,12 +48,7 @@ export const discordActionToolHandlers = {
             options: stringArrayArgument(route.arguments, "options"),
             deckCount: numberArgument(route.arguments, "deckCount"),
             reason: stringArgument(route.arguments, "reason"),
-            wager: recordArgument(route.arguments, "wager") as {
-              playerUserId?: string;
-              stakeUsd?: number;
-              maxPayoutUsd?: number;
-              game?: string;
-            } | undefined,
+            wager,
           }),
           ctx.config.maxReplyChars,
         );
@@ -44,9 +56,10 @@ export const discordActionToolHandlers = {
           content,
           status: isSuccessfulRandomDrawResult(content) ? "ok" : "error",
           retryable: !isSuccessfulRandomDrawResult(content),
+          outcome: randomDrawOutcome(content),
         };
   },
-  "revealRandomness": async (ctx, route, originalText) => {
+  "revealRandomness": async (ctx, _route, _originalText) => {
     return {
           content: cleanResponse(
             await revealRandomness(ctx),
@@ -54,9 +67,8 @@ export const discordActionToolHandlers = {
           ),
         };
   },
-  "settleRandomWager": async (ctx, route, originalText) => {
-    return {
-          content: cleanResponse(
+  "settleRandomWager": async (ctx, route, _originalText) => {
+    const content = cleanResponse(
             await settleRandomWager(ctx, {
               payoutUsd: numberArgument(route.arguments, "payoutUsd"),
               outcome: stringArgument(route.arguments, "outcome") as "player_win" | "player_loss" | "push" | undefined,
@@ -64,8 +76,22 @@ export const discordActionToolHandlers = {
               explanation: stringArgument(route.arguments, "explanation"),
             }),
             ctx.config.maxReplyChars,
-          ),
-        };
+          );
+    return { content, status: content.startsWith("The scoped wallet wager settled.") ? "ok" : "error", outcome: { kind: "wager", state: content.startsWith("The scoped wallet wager settled.") ? "settled" : "failed" } };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
-/* eslint-enable @typescript-eslint/no-unused-vars */
+
+export function randomDrawOutcome(content: string) {
+  if (!isSuccessfulRandomDrawResult(content)) return { kind: "rng_draw", state: "failed" as const };
+  // `drawRandom` normalizes empty/default model arguments before deciding
+  // whether it reserved a wager. The text below is its confirmed lifecycle
+  // result, so it is safe to use for orchestration without trusting raw args.
+  const wagerActive = /\b(?:scoped wallet wager is reserved|continues the scoped active wallet wager)\b/i.test(content);
+  const nextTool = content.match(/\bRequired next (?:action|tool):[\s\S]{0,500}?\bcall\s+(awaitRandomWagerAction|settleRandomWager)\b/i)?.[1];
+  return {
+    kind: "rng_draw",
+    state: "succeeded" as const,
+    wagerActive,
+    ...(nextTool ? { nextTool } : {}),
+  };
+}

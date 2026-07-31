@@ -4,14 +4,14 @@ export const walletUserToolContracts = [
   defineTool({
     name: "getWalletBalance",
     description:
-      "Read a current USD wallet balance. Use owner=requester for 'my/mine' and unqualified balance requests; use owner=bot for 'your/yours', the bot, or the bot treasury. Use owner=user with a resolved userId for another member; owner/ops can always do this, and every member can when WALLET_BALANCES_PUBLIC=true. Another member without a wallet is reported as $0 without creating one. ALWAYS call this instead of answering from memory whenever the user asks about a wallet, balance, bankroll, casino funds, or available money. Existing wallet balances are verified live onchain against USDC.e and presented simply as $ or USD.",
+      "ALWAYS call this for one named person's or the requester's current USD wallet balance (for example, 'my balance', 'what is Alice's balance?', or 'the bot balance'). Do not use it for plural 'balances', 'everyone's balances', or a server-wide wallet directory: those require listWalletBalances. The current request or its Discord reply context must explicitly concern money, a wallet, balance, bankroll, USD/USDC, or available funds. Pronouns such as 'my/mine' choose the owner only after that financial intent is established; never use this tool for unrelated personal facts such as sleep, bedtime, activity, or Discord stats. Use owner=requester for the requester's balance; owner=bot for the bot or treasury; owner=user with a resolved userId for another member. Owner/ops can always read another member, and every member can when WALLET_BALANCES_PUBLIC=true. Another member without a wallet is reported as $0 without creating one. Existing wallet balances are verified live onchain against USDC.e and presented simply as $ or USD.",
     userVisible: true,
     mutates: false,
     group: "external",
     category: "external",
     toolClass: "external",
     outputContract: ["verified current USD balance", "public managed-wallet address", "Tempo network", "onchain verification timestamp"],
-    examples: ["@ai balance", "@ai what's my bankroll?", "@ai what's your balance?"],
+    examples: ["@ai what's my balance?", "@ai what's my bankroll?", "@ai what's your balance?"],
     permissionRequirements: ["configured_wallet_runtime", "requester_scope", "public_balance_directory_or_owner_ops_for_other_users"],
     auditEvents: ["tool_audit_logs", "wallet.provision.*"],
     parameters: {
@@ -34,14 +34,14 @@ export const walletUserToolContracts = [
   defineTool({
     name: "listWalletBalances",
     description:
-      "List the managed wallet directory for this Discord server. ALWAYS use this for plural or server-wide balance or address requests. Use view=balances for 'every user's balance', view=addresses for wallet-address questions, and view=both only when both were explicitly requested. Balance views include the shared AI treasury plus only member wallets with a verified non-$0 balance; $0, unavailable, and missing member wallets are summarized but omitted. Address-only views include the AI and every existing member wallet without repeating balances or creating wallets. This directory is available to owner/ops, or to every member when WALLET_BALANCES_PUBLIC=true.",
+      "List the managed wallet directory for this Discord server. ALWAYS use this for plural or server-wide balance or address requests, including a bare 'balances', 'everyone's balances', or 'server balances'. Use view=balances for 'every user's balance', view=addresses for wallet-address questions, and view=both only when both were explicitly requested. Use getWalletBalance instead for one person's or the requester's singular balance. Balance views include the shared AI treasury plus only member wallets with a verified non-$0 balance; $0, unavailable, and missing member wallets are summarized but omitted. Address-only views include the AI and every existing member wallet without repeating balances or creating wallets. This directory is available to owner/ops, or to every member when WALLET_BALANCES_PUBLIC=true.",
     userVisible: true,
     mutates: false,
     group: "external",
     category: "external",
     toolClass: "external",
     outputContract: ["requested balances, addresses, or both", "shared AI treasury", "only verified non-$0 rows for balance views", "only existing wallets for address-only views", "compact Markdown table"],
-    examples: ["@ai what's the balance of every user in this server?", "@ai can I get their wallet addresses?"],
+    examples: ["@ai balances", "@ai what's the balance of every user in this server?", "@ai can I get their wallet addresses?"],
     permissionRequirements: ["configured_user_wallet_runtime", "live_discord_member_roster", "public_balance_directory_or_owner_ops"],
     auditEvents: ["tool_audit_logs", "wallet.directory.read"],
     parameters: {

@@ -1,19 +1,8 @@
-import type { Logger } from "pino";
 import { isOpenRouterTimeoutError, type ChatMessage } from "../models/openrouter.js";
-import {
-  toolByName,
-  toolDefinitionsForModel,
-  type ToolName,
-} from "../tools/registry.js";
-import { cleanResponse } from "../tools/responseFormatting.js";
-import type {
-  AgentFile,
-  AgentResponse,
-  ToolContext,
-} from "../tools/types.js";
-import { ensureAutomaticStarterFunds } from "../tools/walletTools.js";
+import { toolDefinitionsForModel, type ToolName } from "../tools/registry.js";
+import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { durationMs, logger, previewText } from "../util/logger.js";
-import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
+import { loadSkills, renderSkillInventoryForPrompt } from "../skills/loader.js";
 import { loadPromptOverlayText } from "./promptOverlay.js";
 import {
   finalizeModelRoundWithoutTools,
@@ -21,7 +10,7 @@ import {
   synthesizeFinalAnswerWithoutTools,
 } from "./finalSynthesis.js";
 import {
-  chatMessages, CURRENT_REQUEST_RESPONSE_REMINDER, loadServerOverlay, prepareDiscordEmojiPromptContext,
+  chatMessages, loadServerOverlay, prepareDiscordEmojiPromptContext,
   replyContextAttachmentCount,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -29,7 +18,6 @@ import {
   MAX_MODEL_CALLS_PER_TURN,
   MAX_TOOL_ROUNDS,
   reserveModelCall,
-  type AgentToolRoute,
   type ModelCallBudget,
 } from "./routerShared.js";
 import {
@@ -44,59 +32,83 @@ import {
 } from "./invalidToolCallRecovery.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { coerceGeneratedCsvProducerRoutes, selectExclusiveWagerTransition, selectModelToolRoutes, traceToolRequestMetadata, WagerResolutionRouter } from "./modelToolRoutes.js";
-import { ForcedRandomActionRouter, RandomOutcomeGuard } from "./randomOutcomeGuard.js";
+import { type RandomOutcomeGuard } from "./randomOutcomeGuard.js";
 import {
   FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
   FreshExternalDataGuard,
 } from "./freshExternalDataGuard.js";
-import {
-  currentScopedToolset,
-  expandToolsetState,
-  handleAdditionalToolsRequest,
-  initialToolsetState,
-} from "./modelToolset.js";
-import { walletBalanceRouteForPrompt } from "./walletStatusGuard.js";
-import { walletActionToolForPrompt } from "./walletActionGuard.js";
-import { executeDeterministicWalletBalanceRoute } from "./deterministicWalletRoute.js";
-import { injectActiveGameSession, loadActiveGameSession, type ActiveGameSessionContext } from "./activeGameSession.js";
+import { MemberAvailabilityGuard } from "./memberAvailabilityGuard.js";
+import { currentScopedToolset, expandToolsetState, handleAdditionalToolsRequest } from "./modelToolset.js";
+import { injectActiveGameSession, injectAutomaticStarterFunding, type ActiveGameSessionContext } from "./activeGameSession.js";
 import { skippedRedundantToolResult, toolResultSignature, toolRouteKey } from "./toolRepeatGuard.js";
-import { compactMessagesForModelFallback, synthesizeToolEvidenceAfterTimeout } from "./modelTimeoutFallback.js";
+import { compactMessagesForModelFallback, timeoutNeedsExpandedToolRetry } from "./modelTimeoutFallback.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
-import { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
-import { mediaTranscriptionToolForPrompt } from "./mediaTranscriptionRoute.js";
+import type { RichPresentationOutcomeGuard } from "./richPresentationOutcomeGuard.js";
+import { PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE, PublicUrlEvidenceGuard } from "./publicUrlEvidenceGuard.js";
+import {
+  completeDirectToolResponse,
+  isSuccessfulGeneratedImageArtifact,
+  synthesizeGeneratedImageArtifactIfReady,
+} from "./terminalToolCompletion.js";
+import { agentChatRequest } from "./modelPolicy.js";
+import { executeIndependentToolRoutesInParallel } from "./parallelToolExecution.js";
+import { CompoundToolCompletionGuard } from "./compoundToolCompletion.js";
+import { recoverProviderRejectedModelCall } from "./providerRejectionFallback.js";
+import { ImageEvidenceGuard, ImageGenerationGuard, ReplyContextEvidenceGuard } from "./imageEvidenceGuard.js";
+import { runGuardedAgentRequest } from "./modelLoopRequest.js";
+import { completeAfterToolRoundLimit } from "./modelLoopLimit.js";
+import {
+  appendToolRoundContinuation,
+  expandToolsetPromptContext,
+  prepareInitialToolsetPromptContext,
+} from "./toolsetPromptContext.js";
 export async function runAgentModelLoop(
   ctx: ToolContext,
   userText: string,
 ): Promise<AgentResponse> {
-  ctx.requestText = userText;
-  const automaticStarterFunds = await ensureAutomaticStarterFunds(ctx);
-  const activeGame = await loadActiveGameSession(ctx, userText);
-  const randomOutcomeGuard = new RandomOutcomeGuard(ctx, userText);
-  const richPresentationOutcomeGuard = new RichPresentationOutcomeGuard(ctx);
-  if (activeGame?.actionRequested) randomOutcomeGuard.noteActiveWager(activeGame.wager.id);
-  const freshExternalDataGuard = new FreshExternalDataGuard(ctx, userText);
-  const response = await runAgentModelLoopInternal(ctx, userText, randomOutcomeGuard, freshExternalDataGuard, richPresentationOutcomeGuard, activeGame, automaticStarterFunds);
-  return await richPresentationOutcomeGuard.enforce(await randomOutcomeGuard.enforce(await freshExternalDataGuard.enforce(response)));
+  return await runGuardedAgentRequest(ctx, userText, async (request, executionText) =>
+    runAgentModelLoopInternal(
+      ctx,
+      executionText,
+      request.randomOutcomeGuard,
+      request.freshExternalDataGuard,
+      request.publicUrlEvidenceGuard,
+      request.richPresentationOutcomeGuard,
+      request.activeGame,
+      request.activeGameNeedsRandomDraw,
+      request.automaticStarterFunds,
+    ));
 }
-
 async function runAgentModelLoopInternal(
   ctx: ToolContext,
   userText: string,
   randomOutcomeGuard: RandomOutcomeGuard,
   freshExternalDataGuard: FreshExternalDataGuard,
+  publicUrlEvidenceGuard: PublicUrlEvidenceGuard,
   richPresentationOutcomeGuard: RichPresentationOutcomeGuard,
   activeGame: ActiveGameSessionContext | null,
+  activeGameNeedsRandomDraw: boolean,
   automaticStarterFunds: string | null,
 ): Promise<AgentResponse> {
   const startedAt = Date.now();
+  const imageEvidenceGuard = new ImageEvidenceGuard(ctx, userText), imageGenerationGuard = new ImageGenerationGuard(ctx, userText), replyContextEvidenceGuard = new ReplyContextEvidenceGuard(ctx), memberAvailabilityGuard = new MemberAvailabilityGuard(ctx);
+  const compoundToolCompletion = new CompoundToolCompletionGuard(userText);
   const text = userText.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
-  const skills = renderSkillsForPrompt(await loadSkills({ repo: ctx.repo }));
+  const skills = renderSkillInventoryForPrompt(await loadSkills());
   const serverOverlay = await loadServerOverlay(ctx);
   const promptOverlay = await loadPromptOverlayText(
     ctx.config.promptOverlayPath,
   );
   const discordEmojiContext = await prepareDiscordEmojiPromptContext(ctx, text);
+  const initialToolsetPromptContext = prepareInitialToolsetPromptContext({
+    ctx,
+    text,
+    activeGame,
+    activeGameNeedsRandomDraw,
+  });
+  const { toolGuidance } = initialToolsetPromptContext;
+  let { toolsetState } = initialToolsetPromptContext;
   const messages: ChatMessage[] = chatMessages(
     text,
     skills,
@@ -107,20 +119,13 @@ async function runAgentModelLoopInternal(
     {
       userId: ctx.userId,
       userDisplayName: ctx.userDisplayName,
+      mentionedUsers: ctx.mentionedUsers,
     },
     promptOverlay,
-    discordEmojiContext,
+    discordEmojiContext, { displayName: ctx.config.discord?.botName ?? "" },
+    toolGuidance,
   );
-  if (automaticStarterFunds) {
-    messages.splice(Math.max(0, messages.length - 1), 0, {
-      role: "system",
-      content: [
-        "Automatic starter funding succeeded before this request. Treat the following as verified wallet evidence.",
-        automaticStarterFunds,
-        "Do not call requestStarterFunds again for this request or repeat the transaction hash; the transfer link is added to the footer. Continue with the user request conversationally.",
-      ].join("\n"),
-    });
-  }
+  injectAutomaticStarterFunding(messages, automaticStarterFunds);
   injectActiveGameSession(messages, activeGame);
   const turnOutput = ensureAgentTurnOutput(ctx);
   const { files, tables } = turnOutput;
@@ -135,13 +140,6 @@ async function runAgentModelLoopInternal(
   };
   let forceToolUseNextRound = activeGame?.actionRequested ?? false;
   const wagerResolutionRouter = new WagerResolutionRouter();
-  const forcedWalletBalanceRoute = walletBalanceRouteForPrompt(ctx.config, text);
-  const requestedWalletActionTool = walletActionToolForPrompt(ctx.config, text);
-  const forcedWalletActionTool = automaticStarterFunds && requestedWalletActionTool === "requestStarterFunds"
-    ? null
-    : requestedWalletActionTool;
-  const forcedMediaTranscriptionTool = mediaTranscriptionToolForPrompt(ctx, text);
-  const forcedRandomAction = new ForcedRandomActionRouter(text, Boolean(ctx.config.payments?.userWalletsEnabled));
   const modelCallBudget: ModelCallBudget = {
     used: 0,
     ceiling: MAX_MODEL_CALLS_PER_TURN,
@@ -153,10 +151,11 @@ async function runAgentModelLoopInternal(
     channelId: ctx.channelId,
     userId: ctx.userId,
   });
-  let toolsetState = initialToolsetState(ctx, text);
   let hasAttemptedTool = false;
   let modelTimeoutFallbackAttempted = false;
-
+  let primaryProviderRejected = false;
+  let successfulGeneratedImageArtifact = false;
+  let useRecoveryModelNextRound = false;
   requestLogger.info(
     {
       textPreview: previewText(text),
@@ -195,18 +194,22 @@ async function runAgentModelLoopInternal(
       mentionedChannelCount: ctx.mentionedChannelIds?.length ?? 0,
     },
   });
-  if (forcedWalletBalanceRoute) {
-    return await executeDeterministicWalletBalanceRoute(ctx, {
-      route: forcedWalletBalanceRoute,
-      text,
-      requestLogger,
-      startedAt,
-      modelCallBudget,
-    });
-  }
-
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     const roundStartedAt = Date.now();
+    const operativeUserContent = [...messages].reverse().find((message) => message.role === "user")?.content;
+    const operativeUserMessage = typeof operativeUserContent === "string" ? operativeUserContent : "";
+    if (operativeUserMessage !== text) {
+      await recordAgentEvent(ctx, {
+        eventName: "agent.prompt.request_replaced",
+        level: "warn",
+        summary: "The operative user message differs from the ingress Discord request.",
+        metadata: {
+          round: round + 1,
+          requestPreview: previewText(text, 300),
+          operativeUserPreview: previewText(operativeUserMessage, 300),
+        },
+      });
+    }
     requestLogger.debug(
       {
         round: round + 1,
@@ -254,63 +257,97 @@ async function runAgentModelLoopInternal(
         });
       }
       ctx.noteProgress?.();
-      const forcedToolThisRound = (round === 0 ? forcedWalletActionTool : null) ?? forcedRandomAction.takeToolForRound(round) ?? (round === 0 ? forcedMediaTranscriptionTool : null);
+      const forcedToolThisRound = compoundToolCompletion.takeForcedTool() ??
+        imageGenerationGuard.takeForcedTool() ?? imageEvidenceGuard.takeForcedTool();
       const wagerResolutionRoute = wagerResolutionRouter.take({ forceToolUse: forceToolUseNextRound, initialForcedTool: forcedToolThisRound ?? undefined });
       const toolChoice = wagerResolutionRoute.toolChoice;
       forceToolUseNextRound = false;
-      const chat = {
-          messages,
-          tools: toolDefinitionsForModel({
-            localTools: currentToolset.localTools,
-            serverTools: currentToolset.serverTools,
-          }),
-          toolChoice,
-          temperature: 0.2,
-          maxTokens: 4096,
-          retryPolicy: "expensive",
-        } as const;
+      const roundToolset = freshExternalDataGuard.toolsetForRound(publicUrlEvidenceGuard.toolsetForRound(currentToolset));
+      const useRecoveryModel =
+        useRecoveryModelNextRound || primaryProviderRejected;
+      const chat = agentChatRequest(ctx, {
+        recovery: useRecoveryModel,
+        messages,
+        tools: toolDefinitionsForModel({
+          localTools: roundToolset.localTools,
+          serverTools: roundToolset.serverTools,
+        }),
+        toolChoice,
+      });
+      const usedRecoveryModel = useRecoveryModel;
+      useRecoveryModelNextRound = false;
       try {
         response = await runObservedModelCall(ctx, {
           purpose: "tool_selection",
-          metadata: { round: round + 1, toolGroups: [...toolsetState.groups].sort(), forcedToolName: wagerResolutionRoute.forcedToolName },
+          metadata: {
+            round: round + 1,
+            toolGroups: [...toolsetState.groups].sort(),
+            forcedToolName: wagerResolutionRoute.forcedToolName,
+            recovery: usedRecoveryModel,
+          },
           chat,
         });
       } catch (error) {
-        const recovered = hasAttemptedTool && !modelTimeoutFallbackAttempted
-          ? await synthesizeToolEvidenceAfterTimeout(ctx, {
-              error, round: round + 1, roundStartedAt, text, messages, files, memoryEvents, requestLogger, startedAt, modelCallBudget,
-            })
-          : null;
-        if (recovered) return recovered;
-        const fallbackModel = ctx.config.openRouter?.utilityModel?.trim();
-        const canFallback =
-          isOpenRouterTimeoutError(error) &&
-          !hasAttemptedTool &&
-          !modelTimeoutFallbackAttempted &&
-          Boolean(fallbackModel) &&
-          fallbackModel !== ctx.config.openRouter?.chatModel;
-        if (!canFallback) throw error;
-        if (!(await reserveModelCall(ctx, modelCallBudget, "timeout_fallback", { round: round + 1, fallbackModel }))) {
-          throw error;
+        const retryExpandedToolSelection = timeoutNeedsExpandedToolRetry(messages);
+        const providerFallback = await recoverProviderRejectedModelCall(ctx, {
+          error,
+          usedRecoveryModel,
+          chat,
+          round: round + 1,
+          toolGroups: [...toolsetState.groups].sort(),
+          forcedToolName: wagerResolutionRoute.forcedToolName,
+          afterToolEvidence: hasAttemptedTool,
+          afterToolsetExpansion: retryExpandedToolSelection,
+          modelCallBudget,
+        });
+        if (providerFallback) {
+          primaryProviderRejected = true;
+          response = providerFallback;
+        } else {
+          const fallbackMessages = compactMessagesForModelFallback(messages);
+          const fallbackChat = agentChatRequest(ctx, {
+            recovery: true,
+            messages: fallbackMessages,
+            tools: chat.tools,
+            toolChoice: chat.toolChoice,
+          });
+          const fallbackModel = fallbackChat.model?.trim();
+          const canFallback =
+            isOpenRouterTimeoutError(error) &&
+            !modelTimeoutFallbackAttempted &&
+            Boolean(fallbackModel) &&
+            fallbackModel !== chat.model;
+          if (!canFallback) throw error;
+          if (!(await reserveModelCall(ctx, modelCallBudget, "timeout_fallback", { round: round + 1, fallbackModel }))) {
+            throw error;
+          }
+          modelTimeoutFallbackAttempted = true;
+          await recordAgentEvent(ctx, {
+            eventName: "agent.model.timeout_fallback",
+            level: "warn",
+            summary: `Retrying timed-out model call with ${fallbackModel}`,
+            metadata: {
+              round: round + 1,
+              fallbackModel,
+              originalMessageCount: messages.length,
+              fallbackMessageCount: fallbackMessages.length,
+              afterToolEvidence: hasAttemptedTool,
+              afterToolsetExpansion: retryExpandedToolSelection,
+            },
+          });
+          response = await runObservedModelCall(ctx, {
+            purpose: "tool_selection_timeout_fallback",
+            metadata: {
+              round: round + 1,
+              fallbackFor: "tool_selection",
+              toolGroups: [...toolsetState.groups].sort(),
+              forcedToolName: wagerResolutionRoute.forcedToolName,
+              afterToolEvidence: hasAttemptedTool,
+              afterToolsetExpansion: retryExpandedToolSelection,
+            },
+            chat: fallbackChat,
+          });
         }
-        modelTimeoutFallbackAttempted = true;
-        const fallbackMessages = compactMessagesForModelFallback(messages);
-        await recordAgentEvent(ctx, {
-          eventName: "agent.model.timeout_fallback",
-          level: "warn",
-          summary: `Retrying timed-out model call with ${fallbackModel}`,
-          metadata: { round: round + 1, fallbackModel, originalMessageCount: messages.length, fallbackMessageCount: fallbackMessages.length },
-        });
-        response = await runObservedModelCall(ctx, {
-          purpose: "tool_selection_timeout_fallback",
-          metadata: {
-            round: round + 1,
-            fallbackFor: "tool_selection",
-            toolGroups: [...toolsetState.groups].sort(),
-            forcedToolName: wagerResolutionRoute.forcedToolName,
-          },
-          chat: { ...chat, model: fallbackModel, messages: fallbackMessages },
-        });
       }
       ctx.abortSignal?.throwIfAborted();
       ctx.noteProgress?.();
@@ -330,6 +367,7 @@ async function runAgentModelLoopInternal(
     }
     const modelRoutes = selectExclusiveWagerTransition(coerceGeneratedCsvProducerRoutes(selectModelToolRoutes(response.toolCalls, currentToolset.localTools)));
     freshExternalDataGuard.noteModelResponse(response);
+    publicUrlEvidenceGuard.noteModelResponse(response);
     const toolObservation = modelToolObservation(response);
     const requestedToolRequests = response.toolCalls.map(
       traceToolRequestMetadata,
@@ -393,6 +431,7 @@ async function runAgentModelLoopInternal(
       !recoveryState.invalidToolCallRecoveryAttempted
     ) {
       recoveryState.invalidToolCallRecoveryAttempted = true;
+      useRecoveryModelNextRound = true;
       messages.push(await invalidToolCallRecoveryMessage(ctx, {
         round: round + 1,
         roundStartedAt,
@@ -405,12 +444,34 @@ async function runAgentModelLoopInternal(
       continue;
     }
     if (modelRoutes.length === 0) {
+      if (compoundToolCompletion.hasPendingAction()) {
+        if (compoundToolCompletion.shouldRetryMissingAction()) {
+          messages.push({ role: "assistant", content: response.content });
+          messages.push({
+            role: "user",
+            content: compoundToolCompletion.missingActionGuidance(),
+          });
+          continue;
+        }
+        return await completeDirectToolResponse(ctx, {
+          routeName: "generateImage",
+          result: { content: compoundToolCompletion.incompleteActionResponse() },
+          files,
+          memoryEvents,
+          requestLogger,
+          startedAt,
+          completionKind: "partial compound tool result",
+        });
+      }
       const randomOutcomeDecision = await randomOutcomeGuard.inspectDraft(response.content);
       if (randomOutcomeDecision !== "allow") {
         if (randomOutcomeDecision === "retry") {
+          if (randomOutcomeGuard.requiresRandomWorkflowForTurn()) {
+            toolsetState = expandToolsetState(toolsetState, { groups: ["discord-action"] });
+          }
           messages.push({ role: "assistant", content: response.content });
           messages.push({
-            role: "system",
+            role: "user",
             content: randomOutcomeGuard.retryGuidance(),
           });
           continue;
@@ -421,13 +482,15 @@ async function runAgentModelLoopInternal(
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
         });
       }
+      const memberAvailabilityDecision = await memberAvailabilityGuard.handleDraft(response.content, messages);
+      if (memberAvailabilityDecision === "retry") continue; if (memberAvailabilityDecision !== "allow") return memberAvailabilityDecision;
       const freshExternalDataDecision = await freshExternalDataGuard.inspectDraft(response.content);
       if (freshExternalDataDecision !== "allow") {
         if (freshExternalDataDecision === "retry") {
           forceToolUseNextRound = true;
           messages.push({ role: "assistant", content: response.content });
           messages.push({
-            role: "system",
+            role: "user",
             content: FRESH_EXTERNAL_DATA_RETRY_GUIDANCE,
           });
           continue;
@@ -438,6 +501,25 @@ async function runAgentModelLoopInternal(
           memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
         });
       }
+      const publicUrlEvidenceDecision = await publicUrlEvidenceGuard.inspectDraft(response.content);
+      if (publicUrlEvidenceDecision !== "allow") {
+        if (publicUrlEvidenceDecision === "retry") {
+          forceToolUseNextRound = true;
+          messages.push({ role: "assistant", content: response.content });
+          messages.push({
+            role: "user",
+            content: PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE,
+          });
+          continue;
+        }
+        return publicUrlEvidenceGuard.blockedResponse({
+          files: files.length > 0 ? files : undefined,
+          tables: tables.length > 0 ? tables : undefined,
+          memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
+        });
+      }
+      if (await imageGenerationGuard.retryDraft(response.content, messages, round + 1, toolUseCounts.has("generateImage"))) { toolsetState = expandToolsetState(toolsetState, { groups: ["image"] }); continue; }
+      if (await imageEvidenceGuard.retryDraft(response.content, messages, round + 1) || await replyContextEvidenceGuard.retryDraft(text, response.content, messages, round + 1)) continue;
       return await finalizeModelRoundWithoutTools(ctx, {
         round: round + 1,
         roundStartedAt,
@@ -453,7 +535,6 @@ async function runAgentModelLoopInternal(
         recoveryState,
       });
     }
-
     await recordAgentEvent(ctx, {
       audit: {
         guildId: ctx.guildId,
@@ -524,9 +605,10 @@ async function runAgentModelLoopInternal(
         : route.name === "requestAdditionalTools"
           ? handleAdditionalToolsRequest(ctx, route, toolsetState)
           : await executeLocalToolRoute(ctx, route, text));
-      forcedRandomAction.noteToolResult(route.name, result.status);
       richPresentationOutcomeGuard.noteToolResult(route.name);
-      randomOutcomeGuard.noteToolResult(route.name, result.content);
+      randomOutcomeGuard.noteToolResult(route.name, result);
+      compoundToolCompletion.noteToolResult(route.name, result);
+      publicUrlEvidenceGuard.noteLocalToolResult(route.name, result.status);
       wagerResolutionRouter.arm(randomOutcomeGuard.requiresWagerResolution(), randomOutcomeGuard.requiredWagerResolutionTool());
       const isRepeatedToolResult =
         !isRepeatedExactToolCall &&
@@ -548,7 +630,7 @@ async function runAgentModelLoopInternal(
         });
       }
       if (route.name === "requestAdditionalTools") {
-        toolsetState = expandToolsetState(toolsetState, route.arguments);
+        ({ toolsetState } = expandToolsetPromptContext(toolsetState, route.arguments));
       }
       requestLogger.info(
         {
@@ -557,6 +639,7 @@ async function runAgentModelLoopInternal(
           outputChars: result.content.length,
           fileCount: result.files?.length ?? 0,
           tableCount: result.tables?.length ?? 0,
+          outcome: result.outcome,
           skippedRedundantToolCall: isRedundantToolCall || undefined,
           repeatedToolResult: isRepeatedToolResult || undefined,
         },
@@ -605,6 +688,7 @@ async function runAgentModelLoopInternal(
       }
       if (result.files?.length) files.push(...result.files);
       if (result.tables?.length) tables.push(...result.tables);
+      successfulGeneratedImageArtifact ||= isSuccessfulGeneratedImageArtifact(route.name, result);
       if (!isRedundantToolCall) {
         memoryEvents.push({
           role: "tool",
@@ -652,7 +736,30 @@ async function runAgentModelLoopInternal(
         });
       }
     }
-    messages.push({ role: "system", content: CURRENT_REQUEST_RESPONSE_REMINDER });
+    // The expanded capability is represented by the executed tool result and
+    // the schemas on the next call. Reasserting `text` keeps the user request
+    // authoritative without turning internal guidance into visible dialogue.
+    appendToolRoundContinuation(messages, text);
+    const compoundCompletion = compoundToolCompletion.takeTerminalAction();
+    if (compoundCompletion) {
+      return await completeDirectToolResponse(ctx, {
+        routeName: compoundCompletion.routeName,
+        result: compoundCompletion.result,
+        files,
+        memoryEvents,
+        requestLogger,
+        startedAt,
+        completionKind: "grounded compound tool result",
+      });
+    }
+    const generatedImageCompletion = await synthesizeGeneratedImageArtifactIfReady(ctx, {
+      ready: successfulGeneratedImageArtifact && !compoundToolCompletion.hasPendingAction(),
+      files,
+      memoryEvents,
+      requestLogger,
+      startedAt,
+    });
+    if (generatedImageCompletion) return generatedImageCompletion;
     if (redundantToolReason) {
       return await synthesizeFinalAnswerWithoutTools(ctx, {
         reason: redundantToolReason,
@@ -663,137 +770,18 @@ async function runAgentModelLoopInternal(
         requestLogger,
         startedAt,
         modelCallBudget,
+        recovery: true,
       });
     }
   }
-
-  await recordAgentEvent(ctx, {
-    audit: {
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "agentError",
-      argumentsSummary: text,
-      error: "tool_round_limit",
-    },
+  return await completeAfterToolRoundLimit(ctx, {
+    text,
+    messages,
+    files,
+    tables,
+    memoryEvents,
+    requestLogger,
+    startedAt,
+    modelCallBudget,
   });
-
-  requestLogger.warn(
-    {
-      durationMs: durationMs(startedAt),
-      fileCount: files.length,
-      tableCount: tables.length,
-      memoryEventCount: memoryEvents.length,
-    },
-    "Agent stopped after tool round limit",
-  );
-  await recordAgentEvent(ctx, {
-    eventName: "agent.tool_round_limit",
-    level: "warn",
-    summary: "Agent stopped after tool round limit",
-    metadata: {
-      fileCount: files.length,
-      tableCount: tables.length,
-      memoryEventCount: memoryEvents.length,
-    },
-    durationMs: durationMs(startedAt),
-  });
-  if (memoryEvents.length > 0) {
-    return await synthesizeFinalAnswerWithoutTools(ctx, {
-      reason: "tool round limit",
-      text,
-      messages,
-      files,
-      memoryEvents,
-      requestLogger,
-      startedAt,
-      modelCallBudget,
-    });
-  }
-  return {
-    content: cleanResponse(
-      "I got stuck calling tools repeatedly. Try asking again with a little more detail.",
-      ctx.config.maxReplyChars,
-    ),
-    files: files.length > 0 ? files : undefined,
-    tables: tables.length > 0 ? tables : undefined,
-    memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
-  };
-}
-
-async function executeIndependentToolRoutesInParallel(
-  ctx: ToolContext,
-  routes: AgentToolRoute[],
-  successfulToolCallKeys: Set<string>,
-  originalText: string,
-) {
-  const results = new Map<string, { result: AgentResponse; startedAt: number }>();
-  const names = new Set<ToolName>();
-  const eligible = routes.length > 1 && routes.every((route) => {
-    const tool = toolByName(route.name);
-    if (!tool || tool.mutates || tool.group === "generated-data" || route.name === "requestAdditionalTools") return false;
-    if (names.has(route.name) || successfulToolCallKeys.has(toolRouteKey(route))) return false;
-    names.add(route.name);
-    return true;
-  });
-  if (!eligible) return results;
-
-  await Promise.all(routes.map(async (route) => {
-    const startedAt = Date.now();
-    await recordAgentEvent(ctx, {
-      eventName: "agent.tool.started",
-      summary: route.name,
-      metadata: {
-        toolName: route.name,
-        argumentsPreview: previewText(route.argumentsText, 300),
-        parallel: true,
-      },
-    });
-    const result = await executeLocalToolRoute(ctx, route, originalText);
-    results.set(route.id, { result, startedAt });
-  }));
-  return results;
-}
-
-async function completeDirectToolResponse(
-  ctx: ToolContext,
-  input: {
-    routeName: ToolName;
-    result: AgentResponse;
-    files: AgentFile[];
-    memoryEvents?: NonNullable<AgentResponse["memoryEvents"]>;
-    requestLogger: Logger;
-    startedAt: number;
-    completionKind: string;
-  },
-): Promise<AgentResponse> {
-  const content = cleanResponse(input.result.content, ctx.config.maxReplyChars);
-  const memoryEvents = input.memoryEvents ?? [];
-  input.requestLogger.info(
-    {
-      durationMs: durationMs(input.startedAt),
-      finalChars: content.length,
-      fileCount: input.files.length,
-      memoryEventCount: memoryEvents.length,
-    },
-    `Agent request complete after ${input.completionKind}`,
-  );
-  await recordAgentEvent(ctx, {
-    eventName: "agent.request.complete",
-    summary: `Completed with ${input.completionKind}`,
-    metadata: {
-      toolName: input.routeName,
-      finalChars: content.length,
-      fileCount: input.files.length,
-      memoryEventCount: memoryEvents.length,
-      responseRedacted: Boolean(input.result.storedContent),
-    },
-    durationMs: durationMs(input.startedAt),
-  });
-  return {
-    content,
-    storedContent: input.result.storedContent,
-    files: input.files.length > 0 ? input.files : undefined,
-    memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
-  };
 }

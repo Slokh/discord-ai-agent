@@ -20,8 +20,13 @@ import {
 } from "../../src/tools/discordSummaryTools.js";
 import { findDiscordUsers } from "../../src/tools/discordResolverTools.js";
 import { undoConversationTurns } from "../../src/tools/agentMemoryTools.js";
-import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../src/tools/imageTools.js";
-import { createSkillFromRequest, manageSkills } from "../../src/tools/skillTools.js";
+import {
+  generateImage,
+  getDiscordUserAvatar,
+  imageReferencesForInput,
+  inspectDiscordImages,
+} from "../../src/tools/imageTools.js";
+import { resolveContextImageSelection } from "../../src/tools/imageContextSelection.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 afterEach(() => {
@@ -86,61 +91,6 @@ describe("model-led mutating tools", () => {
     ).toBe("Replace Thinking reply with loading emoji");
     expect(agentUpdateTitleFromRequest("add a calendar integration")).toBe("Add a calendar integration");
     expect(agentUpdateTitleFromRequest("add a calendar integration", "Add calendar support")).toBe("Add calendar support");
-  });
-
-  it("saves a skill from structured model arguments", async () => {
-    const ctx = {
-      config: { openRouter: {}, maxReplyChars: 1800 },
-      repo: {
-        listEnabledDatabaseSkills: vi.fn(async () => []),
-        upsertDatabaseSkill: vi.fn(async (input: { name: string; content: string }) => ({
-          name: input.name,
-          content: input.content,
-          source: "database",
-          version: 1
-        })),
-        auditTool: vi.fn(async () => undefined)
-      },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-      userDisplayName: "User",
-      visibleChannelIds: ["channel"]
-    } as unknown as ToolContext;
-
-    const response = await createSkillFromRequest(ctx, {
-      skillName: "Movie Night",
-      instruction: "movie night votes should use the pinned poll"
-    });
-
-    expect(response).toBe("Saved private skill `movie-night` to the database (v1).");
-    expect(ctx.repo.upsertDatabaseSkill).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "movie-night",
-        request: "movie night votes should use the pinned poll"
-      })
-    );
-  });
-
-  it("lists matching skills and can delete all database skills", async () => {
-    const deleteDatabaseSkill = vi.fn(async () => true);
-    const ctx = {
-      repo: {
-        listDatabaseSkills: vi.fn(async () => [
-          { name: "alex-random-language", content: "# Alex\nUse a random language.", source: "database", enabled: true, version: 3 },
-          { name: "movie-night", content: "# Movies", source: "database", enabled: false, version: 1 },
-        ]),
-        deleteDatabaseSkill,
-        auditTool: vi.fn(async () => undefined),
-      },
-      guildId: "guild",
-      channelId: "channel",
-      userId: "user",
-    } as unknown as ToolContext;
-
-    await expect(manageSkills(ctx, { action: "list", query: "alex" })).resolves.toContain("`alex-random-language` — enabled, database v3");
-    await expect(manageSkills(ctx, { action: "delete", all: true })).resolves.toContain("Deleted 2 database skills");
-    expect(deleteDatabaseSkill).toHaveBeenCalledTimes(2);
   });
 
   it("undoes recent conversation turns through a tool boundary", async () => {
@@ -450,6 +400,44 @@ describe("getDiscordStats", () => {
         limit: 20
       })
     );
+  });
+
+  it("labels hourly stats as UTC and bounds them to observed message timing", async () => {
+    const ctx = {
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["channel"]),
+        discordStats: vi.fn(async () => ({
+          totalMessages: 5,
+          totalAttachments: 0,
+          totalReactions: 0,
+          userCount: 1,
+          channelCount: 1,
+          activeDays: 3,
+          metric: "messages",
+          groupBy: "hourOfDay",
+          rows: [{ key: "20", label: "20:00", value: 5 }],
+          topUsers: [],
+          topChannels: []
+        })),
+        auditTool: vi.fn(async () => undefined)
+      },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"]
+    } as unknown as ToolContext;
+
+    const response = await getDiscordStats(ctx, {
+      authorIds: ["member-id"],
+      groupBy: "hourOfDay",
+      metric: "messages",
+      sort: "labelAsc",
+      limit: 24
+    });
+
+    expect(response).toContain("Time basis: UTC");
+    expect(response).toContain("Observed message timing only");
+    expect(response).toContain("does not establish sleep, location, work schedule, or availability");
   });
 
   it("formats message-level reaction stats with exact message timestamps", async () => {
@@ -819,6 +807,35 @@ describe("answerFromHistory", () => {
     expect(ctx.repo.keywordSearch).not.toHaveBeenCalled();
   });
 
+  it("runs a broad UTC hour scan for exact messages behind an aggregate bucket", async () => {
+    const result = searchResult({
+      authorId: "member-id",
+      createdAt: new Date("2026-05-02T09:15:00.000Z"),
+      normalizedContent: "synthetic hourly evidence",
+    });
+    const ctx = historyAnswerContext({
+      keywordResults: [],
+      recentResults: [result],
+    });
+
+    const response = await answerFromHistory(ctx, "", {
+      authorIds: ["member-id"],
+      dateFrom: "2026-05-01",
+      hourOfDayUtc: 9,
+      requestText: "what were the messages in the 9 am UTC bucket?",
+    });
+
+    expect(response).toContain("UTC hour filter: 09:00–09:59");
+    expect(response).toContain("synthetic hourly evidence");
+    expect(ctx.repo.recentMessagesFromChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorIds: ["member-id"],
+        hourOfDayUtc: 9,
+        dateFrom: new Date("2026-05-01T00:00:00.000Z"),
+      })
+    );
+  });
+
   it("runs broad resolved-user scans when the model passes an empty query", async () => {
     const result = searchResult({ authorId: "rare-user-id", authorUsername: "rare_guest_0001", normalizedContent: "is the ram all the way in" });
     const ctx = historyAnswerContext({
@@ -1013,12 +1030,13 @@ describe("generateImage", () => {
 
   it("returns a recoverable tool error when the image provider rejects the request", async () => {
     const auditTool = vi.fn(async () => undefined);
+    const generateImageMock = vi.fn(async (_prompt: string) => {
+      throw new OpenRouterHttpError({ status: 400, message: "invalid image parameters" });
+    });
     const ctx = {
       repo: { auditTool },
       openRouter: {
-        generateImage: vi.fn(async () => {
-          throw new OpenRouterHttpError({ status: 400, message: "invalid image parameters" });
-        }),
+        generateImage: generateImageMock,
       },
       guildId: "guild",
       channelId: "channel",
@@ -1030,9 +1048,70 @@ describe("generateImage", () => {
     expect(result).toMatchObject({ status: "error", files: [] });
     expect(result.content).toContain("could not accept that image request");
     expect(result.content).not.toContain("invalid image parameters");
+    expect(generateImageMock).toHaveBeenCalledTimes(2);
+    expect(generateImageMock.mock.calls[1]?.[0]).toContain("REQUEST RECOVERY PASS");
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "generateImage",
       error: "image_generation_request_rejected",
+    }));
+  });
+
+  it("validates required image text and retries once before attaching the corrected image", async () => {
+    const firstImage = Buffer.from("first-image-with-typo");
+    const correctedImage = Buffer.from("corrected-image");
+    const generateImageMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        estimatedCostUsd: 0.02,
+        data: [{ b64_json: firstImage.toString("base64"), media_type: "image/png" }],
+      })
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        estimatedCostUsd: 0.02,
+        data: [{ b64_json: correctedImage.toString("base64"), media_type: "image/png" }],
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: false, observedText: ["APEX DAY 7249"] }),
+        model: "test/vision",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: true, observedText: ["APEX DAY 7429"] }),
+        model: "test/vision",
+        raw: {},
+        toolCalls: [],
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: { openRouter: {} },
+      repo: { auditTool },
+      openRouter: { generateImage: generateImageMock, chat },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+    } as unknown as ToolContext;
+
+    const result = await generateImage(ctx, {
+      prompt: "A synthetic race poster with the exact title.",
+      requiredText: ["APEX DAY 7429"],
+    });
+
+    expect(generateImageMock).toHaveBeenCalledTimes(2);
+    expect(generateImageMock.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(result.files).toEqual([
+      expect.objectContaining({ data: correctedImage, contentType: "image/png" }),
+    ]);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining('"generationAttempts":2'),
+      estimatedCostUsd: 0.04,
     }));
   });
 
@@ -1224,6 +1303,114 @@ describe("generateImage", () => {
     });
   });
 
+  it("prioritizes the direct parent over older reply-chain images", async () => {
+    const ctx = {
+      repo: {},
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      visibleChannelIds: ["channel"],
+      replyContext: {
+        messageId: "direct-parent",
+        rootMessageId: "old-root",
+        channelId: "channel",
+        guildId: "guild",
+        authorId: "bot",
+        authorDisplayName: "Bot",
+        authorIsBot: true,
+        content: "Newest image",
+        attachmentSummaries: ["new.png image/png"],
+        attachments: [{
+          id: "new",
+          url: "https://example.com/new.png",
+          filename: "new.png",
+          contentType: "image/png",
+        }],
+        createdAt: null,
+        url: null,
+        chain: [
+          {
+            messageId: "old-root",
+            channelId: "channel",
+            guildId: "guild",
+            authorId: "user",
+            authorDisplayName: "User",
+            authorIsBot: false,
+            content: "Old image",
+            attachmentSummaries: ["old.png image/png"],
+            attachments: [{
+              id: "old",
+              url: "https://example.com/old.png",
+              filename: "old.png",
+              contentType: "image/png",
+            }],
+            createdAt: null,
+            url: null,
+          },
+          {
+            messageId: "direct-parent",
+            channelId: "channel",
+            guildId: "guild",
+            authorId: "bot",
+            authorDisplayName: "Bot",
+            authorIsBot: true,
+            content: "Newest image",
+            attachmentSummaries: ["new.png image/png"],
+            attachments: [{
+              id: "new",
+              url: "https://example.com/new.png",
+              filename: "new.png",
+              contentType: "image/png",
+            }],
+            createdAt: null,
+            url: null,
+          },
+        ],
+      },
+    } as unknown as ToolContext;
+
+    const references = await imageReferencesForInput(ctx, { useContextImages: true });
+
+    expect(references.map((reference) => reference.url)).toEqual([
+      "https://example.com/new.png",
+      "https://example.com/old.png",
+    ]);
+  });
+
+  it("preserves reply images unless the current user explicitly opts out", () => {
+    const ctx = {
+      requestText: "Generate another synthetic variation.",
+      requestAttachments: [],
+      replyContext: {
+        chain: [{
+          attachments: [{
+            id: "synthetic-reference",
+            url: "https://cdn.discordapp.com/synthetic-reference.png",
+            filename: "synthetic-reference.png",
+            contentType: "image/png",
+          }],
+        }],
+      },
+    } as unknown as ToolContext;
+
+    expect(resolveContextImageSelection({
+      requestText: ctx.requestText,
+      requested: false,
+      contextHasImages: true,
+    })).toEqual({
+      useContextImages: true,
+      overrodeModelOptOut: true,
+    });
+    expect(resolveContextImageSelection({
+      requestText: "Generate it from scratch without the previous image.",
+      requested: false,
+      contextHasImages: true,
+    })).toEqual({
+      useContextImages: false,
+      overrodeModelOptOut: false,
+    });
+  });
+
   it("inspects current Discord image attachments with a vision model", async () => {
     const auditTool = vi.fn(async () => undefined);
     const imageBytes = Buffer.from("discord-image");
@@ -1260,7 +1447,7 @@ describe("generateImage", () => {
     expect(result).toContain("It looks like a dashboard screenshot.");
     expect(chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "google/gemini-3.1-flash-lite",
+        model: "google/gemini-3.6-flash",
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "user",
@@ -1767,7 +1954,7 @@ describe("getAgentTaskStatus", () => {
       terminalRenderedAt: null,
       updatedAt: new Date("2026-07-01T12:01:00.000Z")
     };
-    const getTaskProgressEventsForTask = vi.fn(async () => [
+    const getAgentRuntimeTaskEventsForTask = vi.fn(async () => [
       {
         id: 2,
         taskId: "task-1",
@@ -1782,7 +1969,7 @@ describe("getAgentTaskStatus", () => {
     const ctx = {
       repo: {
         getAgentTask: vi.fn(async () => task),
-        getTaskProgressEventsForTask,
+        getAgentRuntimeTaskEventsForTask,
         getSandboxCommandEvents: vi.fn(async () => []),
         auditTool
       },
@@ -1795,7 +1982,7 @@ describe("getAgentTaskStatus", () => {
     const response = await getAgentTaskStatus(ctx, { taskId: "task-1", limit: 3 });
 
     expect(response).toContain("agent.task.progress task=task-1 - Runtime event won.");
-    expect(getTaskProgressEventsForTask).toHaveBeenCalledWith({ taskId: "task-1", limit: 3 });
+    expect(getAgentRuntimeTaskEventsForTask).toHaveBeenCalledWith({ taskId: "task-1", limit: 3 });
     expect(auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "getAgentTaskStatus",
@@ -1883,7 +2070,7 @@ describe("getAgentTaskStatus", () => {
     const ctx = {
       repo: {
         getAgentTask: vi.fn(async () => task),
-        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getAgentRuntimeTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         auditTool
       },
@@ -1988,7 +2175,7 @@ describe("inspectAgentLogs", () => {
             createdAt: new Date("2026-01-01T00:00:02Z")
           }
         ]),
-        getTaskProgressEvents: vi.fn(async () => [
+        getAgentRuntimeTaskEvents: vi.fn(async () => [
           {
             id: 1,
             taskId: "task-1",
@@ -2038,7 +2225,7 @@ describe("inspectAgentLogs", () => {
       traceId: "trace-1",
       limit: 10
     });
-    expect(ctx.repo.getTaskProgressEvents).toHaveBeenCalledWith({
+    expect(ctx.repo.getAgentRuntimeTaskEvents).toHaveBeenCalledWith({
       guildId: "guild",
       visibleChannelIds: ["channel"],
       traceId: "trace-1",
@@ -2152,7 +2339,7 @@ describe("inspectAgentLogs", () => {
         ]),
         getProcessRunArtifact: vi.fn(async () => undefined),
         getAgentRuntimeArtifact,
-        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getAgentRuntimeTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => [
           {
             id: 1,
@@ -2175,7 +2362,7 @@ describe("inspectAgentLogs", () => {
         listProcessRunsForTrace: vi.fn(async () => [run]),
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
-        getTaskProgressEvents: vi.fn(async () => []),
+        getAgentRuntimeTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
         auditTool
@@ -2245,7 +2432,7 @@ describe("inspectAgentLogs", () => {
         getProcessRunSpans: vi.fn(async () => []),
         getProcessRunEvents: vi.fn(async () => []),
         getProcessRunArtifacts: vi.fn(async () => []),
-        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getAgentRuntimeTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEventsForTask: vi.fn(async () => []),
         getSandboxRunsForTask: vi.fn(async () => []),
         getTraceEventsForTrace: vi.fn(async () => []),
@@ -2255,7 +2442,7 @@ describe("inspectAgentLogs", () => {
         listProcessRunsForTrace: vi.fn(async () => []),
         listAgentTasksForTrace: vi.fn(async () => []),
         getTraceEvents: vi.fn(async () => []),
-        getTaskProgressEvents: vi.fn(async () => []),
+        getAgentRuntimeTaskEvents: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         getToolAuditLogs: vi.fn(async () => []),
         getAgentRuntimeArtifact,

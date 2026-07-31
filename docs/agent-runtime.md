@@ -13,7 +13,7 @@ The runtime tables are:
 - `agent_runtime_artifacts` and `agent_runtime_artifact_chunks`: replay and diagnostic payloads such as Discord turn envelopes, `input_lines`, transcripts, and large artifacts.
 - `agent_runtime_sandbox_leases`: warm local-process sandbox slot leases for code-update workers.
 
-`AgentRuntimeRepository` is the single repository class for this ledger. Fresh installs apply the squashed `migrations/001_initial.sql` baseline and every later numbered forward migration; existing pre-squash databases run `scripts/legacy-schema-transition.sql` once before applying the current migration chain, preserving legacy runtime data in place.
+`AgentRuntimeRepository` is the single repository class for this ledger. Deployments apply the squashed `migrations/001_initial.sql` baseline and every later numbered forward migration.
 
 ## Control API
 
@@ -40,7 +40,7 @@ Chat prompt execution runs in-process through `src/agent/runtimeRunner.ts`, `src
 
 When the model calls `runCodingAgent`, `src/tools/agentTaskTools.ts` creates a `runCodingAgent` tool message and a task-linked runtime execution in the current session when one is available, then enqueues the `agent.task` pg-boss job. `src/jobs/agentTaskEnqueue.ts` owns the enqueue transaction and writes the runtime records when the caller has not already created them.
 
-The `agent_tasks` row remains the task projection used by Discord notifications, queue workers, and compatibility task APIs, but the runtime session/execution/event rows are the canonical execution ledger. Sandbox progress, command summaries, lifecycle transitions, and terminal state are recorded as `agent.task.*` events in `agent_runtime_events`.
+The `agent_tasks` row remains the task projection used by Discord notifications and queue workers, but the runtime session/execution/event rows are the canonical execution ledger. Sandbox progress, command summaries, lifecycle transitions, and terminal state are recorded as `agent.task.*` events in `agent_runtime_events`.
 
 ## Sandbox lease model
 

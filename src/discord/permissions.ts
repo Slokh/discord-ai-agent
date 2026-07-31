@@ -1,10 +1,8 @@
 import {
   ChannelType,
   type Guild,
-  type GuildBasedChannel,
   type GuildMember,
-  PermissionsBitField,
-  type TextBasedChannel
+  PermissionsBitField
 } from "discord.js";
 
 const readableTypes = new Set<number>([
@@ -57,11 +55,6 @@ async function fetchGuildChannelById(guild: Guild, channelId: string) {
   const cached = guild.channels.cache.get(channelId);
   if (cached) return cached;
   return guild.channels.fetch(channelId).catch(() => null);
-}
-
-export function isMessageReadableChannel(channel: GuildBasedChannel | TextBasedChannel | null | undefined): boolean {
-  if (!channel || !("type" in channel)) return false;
-  return readableTypes.has(channel.type);
 }
 
 type PermissionLike = {

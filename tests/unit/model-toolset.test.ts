@@ -6,6 +6,7 @@ import {
   initialToolsetState,
   type ToolsetState,
 } from "../../src/agent/modelToolset.js";
+import { appendToolRoundContinuation } from "../../src/agent/toolsetPromptContext.js";
 import type { AgentToolRoute } from "../../src/agent/routerShared.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
@@ -13,7 +14,6 @@ function context(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     config: {
       maxReplyChars: 1800,
-      toolsetScoping: true,
       openRouter: {},
     },
     requestAttachments: [],
@@ -33,36 +33,21 @@ function requestAdditionalToolsRoute(
 }
 
 describe("model toolset", () => {
-  it("starts with every group when scoping is disabled", () => {
-    const state = initialToolsetState(
-      context({
-        config: {
-          maxReplyChars: 1800,
-          toolsetScoping: false,
-          openRouter: {},
-        } as ToolContext["config"],
-      }),
-      "hello",
-    );
+  it("keeps the original Discord request as the final user message after a tool round", () => {
+    const messages = [
+      { role: "system" as const, content: "Internal policy" },
+      { role: "user" as const, content: "balances" },
+      { role: "assistant" as const, content: "", tool_calls: [] },
+      { role: "tool" as const, tool_call_id: "call-1", name: "listWalletBalances", content: "| Wallet | Balance |" },
+    ];
 
-    expect(state.expandedAll).toBe(true);
-    expect(state.groups).toEqual(
-      new Set([
-        "core",
-        "discord-retrieval",
-        "generated-data",
-        "presentation",
-        "discord-action",
-        "image",
-        "spotify",
-        "codegen",
-        "ops",
-        "external",
-      ]),
-    );
+    appendToolRoundContinuation(messages, "balances");
+
+    expect(messages.at(-1)).toEqual({ role: "user", content: "balances" });
+    expect(messages.at(-1)?.content).not.toContain("final user message");
   });
 
-  it("selects a minimal scoped toolset and always exposes provably fair randomness", () => {
+  it("selects a minimal scoped toolset and lets the model request randomness when needed", () => {
     const ctx = context();
     const state = initialToolsetState(ctx, "hello there");
     const tools = currentScopedToolset(ctx, state);
@@ -72,9 +57,24 @@ describe("model toolset", () => {
       groups: new Set(["core", "external"]),
       expandedAll: false,
     });
-    expect(tools.localTools.some((tool) => tool.name === "drawRandom")).toBe(
-      true,
-    );
+    expect(tools.localTools.some((tool) => tool.name === "drawRandom")).toBe(false);
+  });
+
+  it("adds provably fair randomness when the model expands the Discord action capability", () => {
+    const ctx = context();
+    const state = initialToolsetState(ctx, "please continue");
+
+    expect(currentScopedToolset(ctx, state).localTools.some((tool) => tool.name === "drawRandom")).toBe(false);
+
+    const expanded = expandToolsetState(state, {
+      groups: ["discord-retrieval", "image", "discord-action"],
+    });
+    expect(currentScopedToolset(ctx, expanded).localTools.some(
+      (tool) => tool.name === "drawRandom",
+    )).toBe(true);
+    expect(currentScopedToolset(ctx, expanded).localTools.some(
+      (tool) => tool.name === "generateImage",
+    )).toBe(true);
   });
 
   it("distinguishes image attachments from generic replied files", () => {
@@ -161,7 +161,7 @@ describe("model toolset", () => {
     expect(response.content).toContain("discord-retrieval");
   });
 
-  it("expands all groups when a request contains unknown groups", () => {
+  it("does not expand a request containing unknown groups", () => {
     const initial: ToolsetState = {
       groups: new Set(["core", "external"]),
       expandedAll: false,
@@ -172,24 +172,13 @@ describe("model toolset", () => {
         groups: ["image", "discord-action", "not-a-group"],
       }),
     ).toEqual({
-      groups: new Set([
-        "core",
-        "external",
-        "discord-retrieval",
-        "generated-data",
-        "presentation",
-        "discord-action",
-        "image",
-        "spotify",
-        "codegen",
-        "ops",
-      ]),
-      expandedAll: true,
+      groups: new Set(["core", "external"]),
+      expandedAll: false,
     });
     expect(initial.groups).toEqual(new Set(["core", "external"]));
   });
 
-  it("reports invalid-only requests and exposes Discord file inspection", () => {
+  it("reports invalid-only requests without enabling unrelated tools", () => {
     const ctx = context();
     const route = requestAdditionalToolsRoute({
       groups: ["discord-attachments", "discord-context"],
@@ -203,10 +192,10 @@ describe("model toolset", () => {
     const response = handleAdditionalToolsRequest(ctx, route, initial);
     const expanded = expandToolsetState(initial, route.arguments);
 
-    expect(response.content).toContain("Unrecognized groups (discord-attachments, discord-context)");
-    expect(response.content).toContain("inspectDiscordFile");
-    expect(expanded.groups.has("discord-retrieval")).toBe(true);
-    expect(expanded.expandedAll).toBe(true);
+    expect(response.content).toContain("Unrecognized groups were not enabled: discord-attachments, discord-context.");
+    expect(response.content).not.toContain("inspectDiscordFile");
+    expect(expanded.groups).toEqual(new Set(["core", "external"]));
+    expect(expanded.expandedAll).toBe(false);
   });
 
   it("expands to all groups when no specific group is requested", () => {

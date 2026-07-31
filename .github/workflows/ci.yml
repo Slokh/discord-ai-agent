@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+  merge_group:
   push:
     branches:
       - main
@@ -9,8 +10,45 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      container: ${{ steps.filter.outputs.container }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: Classify changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          container=false
+          infrastructure=false
+          while IFS= read -r path; do
+            case "$path" in
+              Dockerfile|.dockerignore|.grype.yaml|package.json|package-lock.json)
+                container=true
+                ;;
+            esac
+            case "$path" in
+              .github/workflows/*|deploy/helm/*|deploy/terraform/*)
+                infrastructure=true
+                ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          printf 'container=%s\n' "$container" >>"$GITHUB_OUTPUT"
+          printf 'infrastructure=%s\n' "$infrastructure" >>"$GITHUB_OUTPUT"
+
+  verify-core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -21,36 +59,38 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run docs:check
-      - run: npx vitest run --coverage
-      - run: npm run test:coverage:changed
+      - name: Lint
+        if: github.event_name == 'pull_request'
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Check documentation
+        if: github.event_name == 'pull_request'
+        run: npm run docs:check
+      - name: Test with coverage
+        if: github.event_name == 'pull_request'
+        run: npx vitest run --coverage
+      - name: Check changed-file coverage
+        if: github.event_name == 'pull_request'
+        run: npm run test:coverage:changed
+      - name: Test merged revision
+        if: github.event_name != 'pull_request'
+        run: npm test
       # Production dependency findings remain visible in the log, but only a
       # Critical advisory blocks a friend-scale release.
-      - run: npm audit --omit=dev --audit-level=critical
-      - run: npm run build
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
-      - run: npm run scan:release
+      - name: Audit production dependencies
+        if: github.event_name == 'pull_request'
+        run: npm audit --omit=dev --audit-level=critical
+      - name: Build production assets
+        run: npm run build
+      - name: Scan release contents
+        run: npm run scan:release
       - uses: actions/upload-artifact@v7
+        if: github.event_name == 'pull_request'
         with:
           name: coverage
           path: coverage/
           if-no-files-found: ignore
-      - uses: azure/setup-helm@v5
-      - run: helm lint deploy/helm/discord-ai-agent
-      - run: helm template discord-ai-agent deploy/helm/discord-ai-agent >/tmp/discord-ai-agent.yaml
-      - run: helm template discord-ai-agent deploy/helm/discord-ai-agent --set codegenWorker.enabled=true --set sandbox.cache.enabled=true --set codegenWorker.lease.acquireTimeoutSeconds=120 --set codegenWorker.lease.acquirePollSeconds=2 >/tmp/discord-ai-agent-codegen-worker.yaml
-      # releases.hashicorp.com occasionally 502s; retry the download once.
-      - uses: hashicorp/setup-terraform@v4
-        id: setup_terraform
-        continue-on-error: true
-      - uses: hashicorp/setup-terraform@v4
-        if: steps.setup_terraform.outcome == 'failure'
-      - run: terraform -chdir=deploy/terraform/aws fmt -check
-      - run: terraform -chdir=deploy/terraform/aws init -backend=false
-      - run: terraform -chdir=deploy/terraform/aws validate
 
   verify-db:
     runs-on: ubuntu-latest
@@ -82,7 +122,29 @@ jobs:
           name: coverage-db
           path: coverage-db/
 
+  infrastructure:
+    needs: changes
+    if: needs.changes.outputs.infrastructure == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - run: helm lint deploy/helm/discord-ai-agent
+      - run: helm template discord-ai-agent deploy/helm/discord-ai-agent >/tmp/discord-ai-agent.yaml
+      - run: helm template discord-ai-agent deploy/helm/discord-ai-agent --set codegenWorker.enabled=true --set sandbox.cache.enabled=true --set codegenWorker.lease.acquireTimeoutSeconds=120 --set codegenWorker.lease.acquirePollSeconds=2 >/tmp/discord-ai-agent-codegen-worker.yaml
+      # releases.hashicorp.com occasionally 502s; retry the download once.
+      - uses: hashicorp/setup-terraform@v4
+        id: setup_terraform
+        continue-on-error: true
+      - uses: hashicorp/setup-terraform@v4
+        if: steps.setup_terraform.outcome == 'failure'
+      - run: terraform -chdir=deploy/terraform/aws fmt -check
+      - run: terraform -chdir=deploy/terraform/aws init -backend=false
+      - run: terraform -chdir=deploy/terraform/aws validate
+
   container-security:
+    needs: changes
+    if: needs.changes.outputs.container == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -133,3 +195,89 @@ jobs:
           name: container-scan-reports
           path: grype-*.sarif
           if-no-files-found: warn
+
+  verify:
+    name: verify
+    needs:
+      - changes
+      - verify-core
+      - infrastructure
+      - container-security
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful checks
+        env:
+          CORE_RESULT: ${{ needs.verify-core.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
+          CONTAINER_RESULT: ${{ needs.container-security.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$CORE_RESULT" != "success" ]; then
+            printf 'verify-core finished with %s\n' "$CORE_RESULT"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_RESULT" != "success" ]; then
+            printf 'changes finished with %s\n' "$CHANGES_RESULT"
+            exit 1
+          fi
+          for result in "$INFRASTRUCTURE_RESULT" "$CONTAINER_RESULT"; do
+            case "$result" in
+              success|skipped) ;;
+              *)
+                printf 'A conditional check finished with %s\n' "$result"
+                exit 1
+                ;;
+            esac
+          done
+
+  publish-images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_REGION != '' && vars.ECR_REPOSITORY != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v4
+      - name: Build runtime image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: final
+          load: true
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime,ignore-error=true
+      # Keep publishing on the Docker CLI path used by the original deploy
+      # workflow. BuildKit probes manifests before direct pushes, which requires
+      # ecr:BatchGetImage on deploy roles created before that permission landed.
+      - name: Push runtime image
+        run: docker push "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+      - name: Build codegen image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: codegen
+          load: true
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}
+          cache-from: |
+            type=gha,scope=runtime
+            type=gha,scope=codegen
+          cache-to: type=gha,mode=max,scope=codegen,ignore-error=true
+      - name: Push codegen image
+        run: docker push "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}-sandbox:${{ env.IMAGE_TAG }}"

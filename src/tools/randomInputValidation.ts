@@ -5,6 +5,26 @@ const MAX_COUNT = 100;
 const MAX_OPTIONS = 100;
 const MAX_SIDES = 1_000_000;
 
+/**
+ * Some providers emit every optional object from a schema with blank or zero
+ * values. An empty wager is not user intent and must not turn a free draw into
+ * a rejected money action. Preserve any substantive wager fields so genuine
+ * malformed wagers still fail validation rather than being silently changed.
+ */
+export function normalizeDrawRandomInput(input: DrawRandomInput): DrawRandomInput {
+  if (!isEmptyWagerPlaceholder(input.wager)) return input;
+  const withoutWager = { ...input };
+  delete withoutWager.wager;
+  return withoutWager;
+}
+
+function isEmptyWagerPlaceholder(wager: DrawRandomInput["wager"]) {
+  if (!wager) return false;
+  return !wager.game?.trim() &&
+    (wager.stakeUsd == null || wager.stakeUsd === 0) &&
+    (wager.maxPayoutUsd == null || wager.maxPayoutUsd === 0);
+}
+
 export function validateDrawInput(kind: string, input: DrawRandomInput): string | null {
   const count = input.count ?? 1;
   if (!Number.isSafeInteger(count) || count < 1 || count > MAX_COUNT) return `count must be an integer between 1 and ${MAX_COUNT}.`;
@@ -47,11 +67,22 @@ export function validateDrawInput(kind: string, input: DrawRandomInput): string 
 
 export function validateWagerInput(input: DrawRandomInput): string | null {
   if (!input.wager) return null;
-  const { playerUserId, stakeUsd, maxPayoutUsd, game } = input.wager;
+  const { playerUserId, stakeUsd, maxPayoutUsd, game, interactionMode, rule } = input.wager;
   if (!playerUserId?.trim()) return "wager.playerUserId is required for a wallet-backed wager.";
   if (!Number.isFinite(stakeUsd) || (stakeUsd ?? 0) <= 0) return "wager.stakeUsd must be a positive amount.";
   if (!Number.isFinite(maxPayoutUsd) || (maxPayoutUsd ?? -1) < 0) return "wager.maxPayoutUsd must be a non-negative amount that includes any returned stake.";
   if (!game?.trim()) return "wager.game is required.";
+  if (interactionMode !== "automatic" && interactionMode !== "player_decisions") {
+    return "wager.interactionMode must be automatic or player_decisions.";
+  }
+  if (rule) {
+    if (rule.kind === "coin_side" && rule.side !== "heads" && rule.side !== "tails") return "coin_side wager.rule requires side=heads or side=tails.";
+    if (rule.kind === "sum" && (![">=", ">", "<=", "<", "="].includes(rule.operator) || !Number.isSafeInteger(rule.target))) return "sum wager.rule requires an integer target and a valid comparison operator.";
+    if (!["coin_side", "sum", "any_match", "all_distinct"].includes(rule.kind)) return "wager.rule kind is not supported.";
+  }
+  if (["coin", "dice", "integers"].includes(input.kind ?? "") && maxPayoutUsd! > stakeUsd! && !rule) {
+    return "wager.rule is required whenever maxPayoutUsd exceeds stakeUsd so the payout can be checked from structured terms.";
+  }
   if (input.kind === "cards" && /\bblackjack\b/i.test(game)) {
     return (input.count ?? 1) === 3
       ? null

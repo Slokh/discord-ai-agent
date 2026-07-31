@@ -26,7 +26,7 @@ describe("run inspector formatting", () => {
     expect(report).toContain("Slowest spans:");
     expect(report).toContain("- 16m 1s codex (task, failed)");
     expect(report).toContain("Timeline");
-    expect(report).toContain("trace info LLM call 1 (23.373s)");
+    expect(report).toContain("runtime info agent.model.call.completed (23.373s)");
     expect(report).toContain("Artifacts:");
     expect(report).toContain("artifact-prompt | prompt | Codex prompt");
     expect(report).toContain("Terminal tail");
@@ -276,13 +276,19 @@ function snapshotFixture(): RunSnapshot {
       },
       {
         id: "llm",
-        source: "trace",
+        source: "runtime",
         level: "info",
-        name: "LLM call 1",
-        summary: "Requested tool runCodingAgent",
+        name: "agent.model.call.completed",
+        summary: "tool_selection_round_1",
         createdAt: new Date("2026-07-01T17:40:45.000Z"),
         durationMs: 23_373,
-        metadata: { tools: ["runCodingAgent"] }
+        metadata: {
+          callId: "call-1",
+          purpose: "tool_selection_round_1",
+          model: "z-ai/glm-5.2",
+          requestedToolCalls: ["runCodingAgent"],
+          usage: { inputTokens: 100, outputTokens: 25, totalTokens: 125, cachedInputTokens: 40 }
+        }
       },
       {
         id: "tool-chat",

@@ -164,6 +164,25 @@ describe("sandboxRunner", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends gh");
   });
 
+  it("keeps npm in the codegen image while removing it from the bot runtime", async () => {
+    const dockerfile = await fs.readFile(path.join(process.cwd(), "Dockerfile"), "utf8");
+    const codegenToolsStage = dockerfile.slice(
+      dockerfile.indexOf("FROM runtime-base AS codegen-tools"),
+      dockerfile.indexOf("FROM runtime-base AS runtime"),
+    );
+    const finalStage = dockerfile.slice(dockerfile.indexOf("FROM runtime AS final"));
+
+    expect(codegenToolsStage).toContain(
+      "npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13 npm@12.0.1",
+    );
+    expect(codegenToolsStage).not.toContain(
+      "rm -f /usr/local/bin/npm /usr/local/bin/npx",
+    );
+    expect(finalStage).toContain(
+      "rm -f /usr/local/bin/npm /usr/local/bin/npx",
+    );
+  });
+
   it("times out a hung OpenCode health probe", async () => {
     const server = createServer(() => {
       // Deliberately leave the request open to match a half-ready server.
@@ -206,7 +225,7 @@ describe("sandboxRunner", () => {
     );
   });
 
-  it("humanizes legacy kebab task titles before opening PRs", () => {
+  it("humanizes generated kebab task titles before opening PRs", () => {
     expect(codeUpdatePullRequestTitle("instead-of-replying-with-a-thinking-placeholder--retry")).toBe(
       "Instead of replying with a thinking placeholder"
     );

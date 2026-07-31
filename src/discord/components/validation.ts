@@ -214,10 +214,6 @@ export function parseDiscordPresentation(value: unknown): DiscordPresentation {
   return discordPresentationSchema.parse(value);
 }
 
-export function parseDiscordStoredComponentActionV1(value: unknown): DiscordStoredComponentAction {
-  return discordStoredComponentActionV1Schema.parse(value);
-}
-
 /** The model and runtime share one schema so Discord protocol constraints cannot drift. */
 export const discordPresentationToolParameters = zodToJsonSchema(discordPresentationSchema, {
   target: "openApi3",

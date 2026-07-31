@@ -170,7 +170,7 @@ export async function getRunSnapshot(
         })
       : Promise.resolve([]),
     task
-      ? repo.getTaskProgressEventsForTask({ taskId: task.taskId, limit: 300 })
+      ? repo.getAgentRuntimeTaskEventsForTask({ taskId: task.taskId, limit: 300 })
       : Promise.resolve([]),
     task
       ? repo.getSandboxCommandEventsForTask({ taskId: task.taskId, limit: 100 })

@@ -1,6 +1,6 @@
 import type { AgentRuntimeRepository, AgentRuntimeSessionRecord } from "../db/agentRuntimeRepository.js";
 import type { ConversationMessage } from "../db/repositories.js";
-import type { DiscordAttachmentContext, DiscordReplyContext } from "../tools/types.js";
+import type { DiscordAttachmentContext, DiscordMentionedUserIdentity, DiscordReplyContext } from "../tools/types.js";
 import type { DiscordInteractionSubmission } from "../discord/components/interactionNormalization.js";
 
 export type AgentRuntimeConversationMessageSnapshot = {
@@ -17,7 +17,7 @@ export type AgentRuntimeConversationMessageSnapshot = {
 };
 
 export type AgentRuntimeTurnEnvelope = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 2;
   source: "discord";
   requestKind?: "message" | "component" | "modal";
   requestId: string;
@@ -35,6 +35,7 @@ export type AgentRuntimeTurnEnvelope = {
   messageCreatedAt: string;
   visibleChannelIds: string[];
   mentionedUserIds: string[];
+  mentionedUsers?: DiscordMentionedUserIdentity[];
   mentionedChannelIds: string[];
   replyContext: DiscordReplyContext | null;
   requestAttachments: DiscordAttachmentContext[];
@@ -64,6 +65,7 @@ export function buildAgentRuntimeTurnEnvelope(input: {
   messageCreatedAt: Date;
   visibleChannelIds: string[];
   mentionedUserIds: string[];
+  mentionedUsers?: DiscordMentionedUserIdentity[];
   mentionedChannelIds: string[];
   replyContext?: DiscordReplyContext | null;
   requestAttachments: DiscordAttachmentContext[];
@@ -92,6 +94,12 @@ export function buildAgentRuntimeTurnEnvelope(input: {
     messageCreatedAt: input.messageCreatedAt.toISOString(),
     visibleChannelIds: input.visibleChannelIds,
     mentionedUserIds: input.mentionedUserIds,
+    mentionedUsers: input.mentionedUsers ?? input.mentionedUserIds.map((userId) => ({
+      userId,
+      mention: `<@${userId}>`,
+      username: null,
+      displayName: null,
+    })),
     mentionedChannelIds: input.mentionedChannelIds,
     replyContext: input.replyContext ?? null,
     requestAttachments: input.requestAttachments,
@@ -172,7 +180,7 @@ export async function loadAgentRuntimeTurnEnvelope(input: {
   const artifact = await input.agentRuntime.getArtifact({ artifactId: input.artifactId });
   if (!artifact?.content) return null;
   const parsed = JSON.parse(artifact.content) as AgentRuntimeTurnEnvelope;
-  if ((parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) || parsed.source !== "discord") {
+  if (parsed.schemaVersion !== 2 || parsed.source !== "discord") {
     throw new Error(`Unsupported agent runtime turn envelope artifact: ${input.artifactId}`);
   }
   return parsed;

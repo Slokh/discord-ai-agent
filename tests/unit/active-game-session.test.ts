@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
-import { injectActiveGameSession, loadActiveGameSession } from "../../src/agent/activeGameSession.js";
+import { activeGameActionNeedsRandomDraw, injectActiveGameSession, loadActiveGameSession } from "../../src/agent/activeGameSession.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("active game sessions", () => {
@@ -27,20 +27,50 @@ describe("active game sessions", () => {
     expect(active?.actionRequested).toBe(false);
   });
 
-  it("injects complete versioned state immediately before the new user message", () => {
+  it("forces randomness only for game actions that need a fresh draw", () => {
+    const blackjack = { wager: wager(), actionRequested: true };
+    expect(activeGameActionNeedsRandomDraw(blackjack, "stand")).toBe(true);
+    expect(activeGameActionNeedsRandomDraw(blackjack, "hit")).toBe(true);
+
+    const dice = {
+      wager: { ...wager(), game: "dice game" },
+      actionRequested: true,
+    };
+    expect(activeGameActionNeedsRandomDraw(dice, "reroll all")).toBe(true);
+    expect(activeGameActionNeedsRandomDraw(dice, "score now")).toBe(false);
+    expect(activeGameActionNeedsRandomDraw(dice, "hold 1 and 3")).toBe(false);
+  });
+
+  it("injects complete versioned state before conversation history", () => {
     const messages: ChatMessage[] = [
       { role: "system", content: "rules" },
+      { role: "user", content: "deal me in" },
+      { role: "assistant", content: "You have 18." },
       { role: "user", content: "stand" },
     ];
     injectActiveGameSession(messages, { wager: wager(), actionRequested: true });
 
-    expect(messages).toHaveLength(3);
+    expect(messages).toHaveLength(5);
     expect(messages[1]?.role).toBe("system");
     expect(messages[1]?.content).toContain("Game: blackjack");
     expect(messages[1]?.content).not.toContain("wager_1");
     expect(messages[1]?.content).toContain("State version: 3");
     expect(messages[1]?.content).toContain('Saved state: {"playerTotal":18,"dealerUp":"9♦"}');
-    expect(messages[2]).toEqual({ role: "user", content: "stand" });
+    expect(messages.at(-1)).toEqual({ role: "user", content: "stand" });
+  });
+
+  it("does not inject a pending game's state into an unrelated current request", () => {
+    const messages: ChatMessage[] = [
+      { role: "system", content: "rules" },
+      { role: "user", content: "what is the stock price today?" },
+    ];
+
+    injectActiveGameSession(messages, { wager: wager(), actionRequested: false });
+
+    expect(messages).toEqual([
+      { role: "system", content: "rules" },
+      { role: "user", content: "what is the stock price today?" },
+    ]);
   });
 });
 

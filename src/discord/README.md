@@ -5,12 +5,13 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 ## Responsibilities
 
 - Bot login, guild scoping, message/reaction/edit/delete events, and mention detection. `taskSupervisor.ts` provides one admission/error/drain lifecycle for every asynchronous gateway and startup task so deploys cannot accept untracked reaction or maintenance work.
-- Reply context, request attachments, image metadata, permissions, and channel visibility.
+- Reply context, bounded reaction summaries, request attachments, image metadata, permissions, channel visibility, and live identity snapshots for explicitly mentioned users. Mention snapshots preserve the canonical mention token plus the current guild display name/username in the replayable turn envelope so the prompt does not infer a different member nickname from old memory. Explicit replies use their retained chain as hard conversational scope: queued execution does not refresh or include generic channel-wide memory. Retained reply ancestors carry exact visible emoji/count metadata without reactor identities so emote questions can select the matching permission-filtered culture profiles.
 - Response sink for acknowledgements, lazy status messages, final replies, attachments, and cleanup.
+- Every response-sink reply, status edit, rich fallback, and continuation disables Discord mention parsing so model-authored text can discuss users, roles, `@everyone`, or `@here` without creating notifications.
 - Components V2 validation and side-effect-free rendering, capability-aware V2 delivery, opaque durable action generations, and requester-scoped typed click/modal ingress live under `components/`; see [`../../docs/discord-rich-components.md`](../../docs/discord-rich-components.md).
 - `api.ts` is the typed outbound Discord mutation boundary for replies, edits, sends, reactions, guild expressions, bot profile changes, and one-shot interaction responses. Interaction callbacks disable retries but still return classified/logged failures.
 - Model-requested message reactions resolve an exact message ID or URL, enforce the requester's live visible-channel set before entering `api.ts`, validate the emoji against Unicode or the current guild palette, and require explicit reaction intent in the current user message.
-- Delivery obligations are persisted for in-flight agent-runtime turns. Before Discord writes, `deliveryIntent.ts` stores a versioned replayable response and references bounded binary file artifacts by size and SHA-256 instead of base64-embedding them in JSON. Startup sweeping validates file integrity, retains v1 read compatibility, and safely completes delivery with stable enforced message nonces or posts a conservative restart notice when no response was ready.
+- Delivery obligations are persisted for in-flight agent-runtime turns. Before Discord writes, `deliveryIntent.ts` stores a versioned replayable response and references bounded binary file artifacts by size and SHA-256 instead of base64-embedding them in JSON. Startup sweeping validates file integrity and safely completes delivery with stable enforced message nonces or posts a conservative restart notice when no response was ready.
 - Queue handoff into durable agent runtime executions.
 - Full-server crawl and incremental message persistence.
 - Code-update task progress rendering back to Discord.
@@ -39,6 +40,10 @@ Owns Discord gateway behavior and user-visible Discord message lifecycle.
 - Crawl/persistence: `tests/unit/crawler.test.ts` and `tests/unit/message-persistence.test.ts`.
 - Bug-marker reactions: `tests/unit/bug-marker-reaction.test.ts`.
 - Deployment notes: `tests/unit/deployment-announcements.test.ts`.
+
+## Debugging deployed replies
+
+Use [`../../docs/deployment-debugging.md`](../../docs/deployment-debugging.md) and its `discord:audit` / `discord:debug` scripts before browser automation. They correlate Discord messages and retained reply chains with canonical agent-runtime traces.
 
 ## Structure
 

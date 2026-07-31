@@ -24,28 +24,32 @@ import type { ToolContext } from "./types.js";
 import { ensureAgentTurnOutput } from "./turnOutput.js";
 import { validateWagerFairness } from "./wagerFairness.js";
 import { wagerRequester } from "./wagerRequesterScope.js";
-import { effectiveMaximumPayoutUsd, requestSelectsAllowedWagerAction } from "./wagerTerms.js";
-import { validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
+import { effectiveMaximumPayoutUsd } from "./wagerTerms.js";
+import { normalizeDrawRandomInput, validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
 import type { DrawRandomInput } from "./randomTypes.js";
+import {
+  prepareStandardWagerSettlement,
+} from "./standardWagerRuntime.js";
 
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
 const RNG_ROOT_SCOPE_SEGMENT = "rng-root";
-
+const WAGER_GAME_SOURCE = String.raw`(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery)`;
 const DRAW_KINDS = new Set(["integers", "dice", "coin", "pick", "shuffle", "cards"]);
 
 export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Promise<string> {
-  const kind = (input.kind ?? "").trim();
-  if (!DRAW_KINDS.has(kind)) {
-    await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
-    return `Unknown draw kind "${kind}". Supported kinds: integers, dice, coin, pick, shuffle, cards.`;
+  input = normalizeDrawRandomInput(input);
+  if (isDeferredExternalOutcomeWager(ctx.requestText ?? "")) {
+    return "This wager depends on a future or third-party outcome, not a draw the bot should perform now. No funds were reserved and no random draw was made. Cross-user deferred wagers are not supported; use a current requester-scoped bot game instead.";
   }
   let continuingWager: WagerReservation | null = null;
   if (ctx.config.payments.userWalletsEnabled && ctx.walletService) {
     continuingWager = await currentWagerForContext(ctx);
-    if (continuingWager && input.wager && requestSelectsAllowedWagerAction(ctx.requestText ?? "", continuingWager)) {
-      input = { ...input, wager: undefined };
-    }
+  }
+  const kind = (input.kind ?? "").trim();
+  if (!DRAW_KINDS.has(kind)) {
+    await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
+    return `Unknown draw kind "${kind}". Supported kinds: integers, dice, coin, pick, shuffle, cards.`;
   }
   if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWagerForContext(ctx)) {
     if (!continuingWager) {
@@ -95,15 +99,17 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
       await auditRng(ctx, "drawRandom", input, error);
       return error;
     }
+  }
+  if (input.wager && (input.wager.rule || ["coin", "dice", "integers"].includes(kind))) {
     const fairnessError = validateWagerFairness({
       kind,
       count: input.count,
       sides: input.sides,
       min: input.min,
       max: input.max,
-      description: [ctx.requestText, input.reason, input.wager.game].filter(Boolean).join("\n"),
       stakeUsd: input.wager.stakeUsd!,
       maxPayoutUsd: effectiveMaxPayoutUsd!,
+      rule: input.wager.rule,
     });
     if (fairnessError) {
       await auditRng(ctx, "drawRandom", input, fairnessError);
@@ -115,19 +121,13 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     await auditRng(ctx, "drawRandom", input, error);
     return error;
   }
-  const explicitStakeUsd = explicitBareWagerAmount(ctx.requestText);
-  if (input.wager && explicitStakeUsd != null && Math.abs(input.wager.stakeUsd! - explicitStakeUsd) > 1e-9) {
-    const error = `Wager stake must match the explicit amount in the current request: $${explicitStakeUsd}. Retry drawRandom with stakeUsd=${explicitStakeUsd}; do not reuse an amount from conversation history.`;
-    await auditRng(ctx, "drawRandom", input, error);
-    return error;
-  }
   let wager: WagerReservation | null = null;
   let wagerInteractionMode: WagerInteractionMode | null = null;
   if (input.wager) {
     const requestId = ctx.requestId ?? ctx.requestMessageId;
     if (!requestId) return "A stable request id is required before a wallet-backed wager can be reserved.";
     try {
-      wagerInteractionMode = inferWagerInteractionMode(ctx.requestText ?? "", input.wager.game!);
+      wagerInteractionMode = input.wager.interactionMode!;
       wager = await ctx.walletService!.reserveWager(
         {
           requestId,
@@ -264,9 +264,28 @@ export function requiresWalletBackedWager(text: string): boolean {
   const money = new RegExp(String.raw`(?:\$\s*${amount}|(?<![\w.])${amount}\s*(?:usd|dollars?|bucks?)\b)`, "i");
   const shorthand = new RegExp(String.raw`(?:\b(?:bet|wager|stake|risk|put)\s+\$?${amount}(?![\w.])|(?<![\w.])\$?${amount}\s+(?:on|per\s+(?:spin|hand|roll|game)|each)\b)`, "i");
   const game = /\b(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery|wager|bet)\b/i;
+  const gameLedStake = new RegExp(String.raw`\b(?:${WAGER_GAME_SOURCE})\b(?:\s*[,;:]\s*|\s+(?:[a-z][a-z'-]*\s+){0,2})\$?\s*${amount}(?![\w.])`, "i");
+  const gameDiscussion = /\b(?:is|are|was|were|has|have|odds?|probabilit(?:y|ies)|payouts?|pays?|returns?|rules?|strategy|recommend(?:ation|ed)?|worth|costs?|equals?|means?|uses?)\b/i;
   const action = /\b(?:play|run|do|give|deal|roll|flip|spin|bet|wager|stake|risk|put|again|more)\b/i;
+  const replayAction = /\b(?:double(?:\s+down)?|let\s+it\s+ride|run\s+(?:it|that)\s+back|rematch|replay)\b/i;
+  const discussion = /^\s*(?:what|which|why|how|should|would|could|is|are|do\s+(?:you|i|we|they)|does|did|explain)\b/i;
+  const executionOverride = /\b(?:please|go\s+ahead|right\s+now|do\s+it|let(?:'s|\s+us)|for\s+me)\b/i;
   const wholeBalance = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
-  return game.test(text) && ((money.test(text) && action.test(text)) || shorthand.test(text) || (wholeBalance.test(text) && action.test(text)));
+  if (discussion.test(text) && !executionOverride.test(text)) return false;
+  return game.test(text) && (
+    (money.test(text) && (action.test(text) || replayAction.test(text))) ||
+    shorthand.test(text) ||
+    (gameLedStake.test(text) && !gameDiscussion.test(text)) ||
+    (wholeBalance.test(text) && (action.test(text) || replayAction.test(text)))
+  );
+}
+
+export function isDeferredExternalOutcomeWager(text: string): boolean {
+  if (!requiresWalletBackedWager(text)) return false;
+  const deferredSettlement = /\b(?:remember|save|track|automatically\s+(?:resolve|settle)|resolve|settle)\b[\s\S]{0,120}\b(?:after|when|once|tomorrow|later|future)\b/i;
+  const futureOutcome = /\b(?:after|when|once|tomorrow|later|future|next\s+time)\b[\s\S]{0,100}\b(?:rolls?|flips?|spins?|draws?|picks?|result|outcome|number)\b/i;
+  const thirdParty = /\b(?:another|other|that)\s+(?:user|member|person|player)\b|\b(?:he|she|they)\b|<@!?\d+>/i;
+  return deferredSettlement.test(text) || (futureOutcome.test(text) && thirdParty.test(text));
 }
 
 export function requiresWalletBackedWagerForContext(ctx: ToolContext): boolean {
@@ -302,12 +321,15 @@ export async function settleRandomWager(
   if (!isResolutionSource(input.resolutionSource)) {
     return "resolutionSource must be verified_randomness or player_decision.";
   }
-  if (describesUnfinishedWager(explanation)) {
-    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. If more automatic chance is required, call drawRandom again without a new wager, apply the verified result, and repeat until the outcome is final. Then call settleRandomWager with the final payout.";
-  }
   const wager = await currentWagerForContext(ctx);
   if (!wager) {
     return "Settlement rejected: no active wallet wager exists for this player in this Discord game session. No transfer was created.";
+  }
+  const standardGame =
+    typeof wager.game === "string" &&
+    /^(?:blackjack|coin\s*flip)$/i.test(wager.game.trim());
+  if (!standardGame && describesUnfinishedWager(explanation)) {
+    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. If more automatic chance is required, call drawRandom again without a new wager, apply the verified result, and repeat until the outcome is final. Then call settleRandomWager with the final payout.";
   }
   const suppliedWagerId = input.wagerId?.trim();
   if (suppliedWagerId && suppliedWagerId !== wager.id) {
@@ -319,6 +341,13 @@ export async function settleRandomWager(
     });
   }
   const wagerId = wager.id;
+  const settlement = await prepareStandardWagerSettlement(ctx, wager, {
+    payoutUsd: input.payoutUsd,
+    outcome: input.outcome,
+    resolutionSource: input.resolutionSource,
+    explanation,
+  });
+  if (typeof settlement === "string") return settlement;
   let settled: Awaited<ReturnType<typeof ctx.walletService.settleWager>>;
   try {
     settled = await ctx.walletService.settleWager(
@@ -326,10 +355,10 @@ export async function settleRandomWager(
         wagerId,
         userId: ctx.userId,
         requestId,
-        payoutUsd: input.payoutUsd,
-        outcome: input.outcome,
-        resolutionSource: input.resolutionSource,
-        explanation
+        payoutUsd: settlement.payoutUsd,
+        outcome: settlement.outcome,
+        resolutionSource: settlement.resolutionSource,
+        explanation: settlement.explanation,
       },
       paymentRecorder(ctx)
     );
@@ -342,12 +371,12 @@ export async function settleRandomWager(
   }
   return [
     `The scoped wallet wager settled.`,
-    `Payout: $${input.payoutUsd}.`,
+    `Payout: $${settlement.payoutUsd}.`,
     settled.transfer
       ? `Net transfer: $${atomicToUsd(settled.transfer.amountAtomic, settled.transfer.tokenDecimals)} USD (${settled.transfer.status})${settled.transfer.transactionHash ? ` · ${settled.transfer.transactionHash}` : ""}.`
       : "Net transfer: none (the payout equals the stake).",
     settled.userBalance ? `User wallet balance: $${settled.userBalance.formatted} USD.` : null,
-    `Calculation: ${explanation}`
+    `Calculation: ${settlement.explanation}`
   ].filter((line): line is string => line !== null).join("\n");
 }
 
@@ -368,23 +397,6 @@ export function hasUncommittedPlayerSecretWager(text: string): boolean {
   return /\b(?:guess|predict|tell)\b/i.test(text) && playerPossession.test(text) && (guessSecret.test(text) || directSecret.test(text));
 }
 
-export function inferWagerInteractionMode(text: string, game: string): WagerInteractionMode {
-  const combined = `${game}\n${text}`;
-  if (/\b(?:blackjack|poker|hold\s*['’]?em|yahtzee|video\s+poker)\b/i.test(combined)) {
-    return "player_decisions";
-  }
-  if (/\b(?:choose\s+(?:after|whether)|ask\s+me|let\s+me\s+(?:choose|decide))\b/i.test(combined)) {
-    return "player_decisions";
-  }
-  if (/\b(?:slots?|roulette|craps|dice|die\s+roll|coin\s*flip|heads|tails|wheel|lottery|raffle|random\s+(?:pick|draw|number)|(?:digit|number)[\s_-]*(?:bet|draw)|(?:generate|draw|pick)\s+(?:a\s+)?(?:\d+\s*[- ]?digit\s+)?number)\b/i.test(combined)) {
-    return "automatic";
-  }
-  if (/\b(?:hit|stand|double\s+down|split|fold|call|raise|hold|discard)\b/i.test(combined)) {
-    return "player_decisions";
-  }
-  return "player_decisions";
-}
-
 function isSettlementOutcome(value: unknown): value is WagerSettlementOutcome {
   return value === "player_win" || value === "player_loss" || value === "push";
 }
@@ -395,13 +407,6 @@ function isResolutionSource(value: unknown): value is WagerResolutionSource {
 
 function describesUnfinishedWager(explanation: string): boolean {
   return /\b(?:in\s+progress|await(?:ing|s)?|pending|hit\s+or\s+stand|not\s+(?:yet\s+)?(?:finished|complete|resolved|decided|settled)|to\s+be\s+(?:continued|completed|decided))\b/i.test(explanation);
-}
-
-function explicitBareWagerAmount(requestText: string | undefined): number | null {
-  const match = requestText?.trim().match(/^\$?\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:usd|dollars?|bucks?)?\s*[.!?]?$/i);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export async function revealRandomness(ctx: ToolContext): Promise<string> {
@@ -619,15 +624,6 @@ async function ensureRngSetup(
   if (!rootMessageId) return { rngRepo: ctx.rngRepo, threadKey: baseThreadKey };
 
   const threadKeyPrefix = `${baseThreadKey}:${RNG_ROOT_SCOPE_SEGMENT}:`;
-  if (toolName === "revealRandomness" && !replyRootMessageId) {
-    const latestThreadKey = await ctx.rngRepo.findLatestDrawnActiveSessionThreadKey({
-      channelId: ctx.channelId,
-      requestedByUserId: ctx.userId,
-      legacyThreadKey: baseThreadKey,
-      threadKeyPrefix
-    });
-    if (latestThreadKey) return { rngRepo: ctx.rngRepo, threadKey: latestThreadKey };
-  }
   return { rngRepo: ctx.rngRepo, threadKey: `${threadKeyPrefix}${rootMessageId}` };
 }
 

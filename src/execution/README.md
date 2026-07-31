@@ -12,10 +12,11 @@ Owns sandboxed code-update execution from queued task to PR.
 
 ## Module Map
 
-- `sandboxRunner.ts`: sandbox entrypoint and compatibility facade; re-exports the public runner API.
+- `sandboxRunner.ts`: executable sandbox entrypoint.
 - `runnerPipeline.ts`: `main`/`runCodeUpdate` orchestration, timed phases, tool shims, harness selection.
 - `repoWorkspace.ts`: cached mirror/worktree, target branch/PR resolution, git state, push refs, git auth.
 - `dependencyCache.ts`: dependency cache key, node_modules restore/install, npm env scrubbing.
+- The codegen container retains a pinned, scanned npm because cache misses run `npm ci --include=dev`; the bot-only final image removes npm.
 - `contextPack.ts`: codegen request context (repo guide excerpt, anchors, project map, check commands).
 - `harness/types.ts`: `CodegenHarness`, `AgentAttemptSummary`, `AgentRunSummary`, `CodegenNoDiffError`, `CodegenHarnessRunInput`, `CodegenHarnessConfigInput`, and `CodegenHarnessAdapter`.
 - `harness/codex.ts` + `harness/opencode.ts`: harness adapters (config, run/recovery, output parsing).

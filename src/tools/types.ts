@@ -34,6 +34,7 @@ export type ToolContext = {
   }>;
   visibleChannelIds: string[];
   mentionedUserIds?: string[];
+  mentionedUsers?: DiscordMentionedUserIdentity[];
   mentionedChannelIds?: string[];
   threadKey?: string;
   sessionMessages?: ConversationMessage[];
@@ -44,8 +45,26 @@ export type ToolContext = {
   requestId?: string;
   /** Exact current user request, available to tools that need request-level validation. */
   requestText?: string;
+  /**
+   * Deterministic current-turn authorization for consuming RNG entropy. The
+   * model may always see drawRandom, but the tool must still reject an
+   * unrequested draw before it creates a session or reserves a wager.
+   */
+  randomActionAuthorized?: boolean;
   /** Discord id of the message that triggered this request; assigned by Discord, not the bot. */
   requestMessageId?: string;
+  /** Durable per-guild primary chat-model override loaded before model selection. */
+  chatModelOverride?: string | null;
+  chatModelOverrideLoaded?: boolean;
+  /** Deterministic evidence for any model-setting attempt made during this request. */
+  agentModelMutation?: {
+    attempted: true;
+    succeeded: boolean;
+    action: "set" | "reset";
+    requestedModel?: string;
+    effectiveModel?: string;
+    error?: string;
+  };
   /** False for model-authored generic component follow-ups; mutating tools must fail closed. */
   mutationAuthorizedByCurrentInput?: boolean;
   statusChannelId?: string;
@@ -95,6 +114,13 @@ export type ToolContext = {
   noteProgress?: () => void;
 };
 
+export type DiscordMentionedUserIdentity = {
+  userId: string;
+  mention: string;
+  username: string | null;
+  displayName: string | null;
+};
+
 export type DiscordGuildMemberSummary = {
   userId: string;
   username: string | null;
@@ -140,6 +166,8 @@ export type DiscordReplyContextMessage = {
   content: string;
   attachmentSummaries: string[];
   attachments: DiscordAttachmentContext[];
+  /** Bounded exact emoji/count summaries visible on this retained message. */
+  reactionSummaries?: string[];
   createdAt: string | null;
   url: string | null;
   /** True when Discord exposed this parent through a forwarded message snapshot. */
@@ -188,6 +216,14 @@ export type AgentResponse = {
   errorCode?: string;
   retryable?: boolean;
   limitation?: string;
+  /** Machine-readable tool state for orchestration; never rendered directly to Discord. */
+  outcome?: {
+    kind: string;
+    state: "succeeded" | "failed" | "awaiting_action" | "settled";
+    nextTool?: string;
+    /** A wallet-backed wager is active after this result and requires a typed lifecycle transition. */
+    wagerActive?: boolean;
+  };
   files?: AgentFile[];
   tables?: AgentTable[];
   /** Validated Discord Components V2 presentation rendered by the Discord delivery boundary. */

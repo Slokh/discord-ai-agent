@@ -92,9 +92,9 @@ export const discordActionToolContracts = [
 
   defineTool({
     name: "createDiscordEmoji",
-    examples: ["@ai upload this image as a server emoji named nacho_wizard"],
+    examples: ["@ai upload this image as a server emoji named nacho_wizard", "@ai make this an emote named nacho_wizard"],
     description:
-      "Create a custom emoji in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, or create a server/custom emoji. The image is normalized to a 128x128 WebP with transparent padding under Discord's 256 KiB limit; existing source backgrounds are never falsely treated as transparency. Generated sources require verified alpha by default and fail before upload when they are opaque. Short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
+      "Create a custom emoji (also called an emote) in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, create, or turn something into a server/custom emoji or emote. The image is normalized to a 128x128 WebP with transparent padding under Discord's 256 KiB limit; existing source backgrounds are never falsely treated as transparency. Generated sources require verified alpha by default and fail before upload when they are opaque. Short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -165,7 +165,7 @@ export const discordActionToolContracts = [
   defineTool({
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. An opening blackjack draw must use exactly 3 cards: 2 player cards and 1 dealer upcard; never pre-draw the dealer hole card because every drawn card is published in the proof footer. For standard named games, the runtime may raise maxPayoutUsd to cover legal later actions such as blackjack doubles or splits; treat the returned reserve as authoritative. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. Unknown and decision-based games default to requiring a later player reply. Real-money games based on a secret the player can reveal after the bot acts are unverifiable and will be rejected before funds are reserved. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. An opening blackjack draw must use exactly 3 cards: 2 player cards and 1 dealer upcard; never pre-draw the dealer hole card because every drawn card is published in the proof footer. Standard blackjack supports hit and stand only; code derives whether the next verified card belongs to the player or dealer from the persisted transcript and rejects extra draws after the hand is terminal. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. Unknown and decision-based games default to requiring a later player reply. Real-money games based on a secret the player can reveal after the bot acts are unverifiable and will be rejected before funds are reserved. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
     userVisible: true,
     mutates: true,
     group: "discord-action",
@@ -216,14 +216,27 @@ export const discordActionToolContracts = [
         wager: {
           type: "object",
           description:
-            "Optional wallet-backed wager for the CURRENT REQUESTER only. Interpret the current request in its full conversational context: include a wager when the requester authorizes risking their own wallet, including a terse request that combines a calculation with a chosen game or action. Never wager for a mentioned, replied-to, or third-party user. Do not create a wager when the user is only asking for advice, a calculation, or a hypothetical. Required before the single atomic draw whenever the requester is risking their bot-game balance, including vague repeats of their prior wager. The maximum payout must cover the largest possible total return, including returned stake. Real-money contracts with machine-recognizable rules are probability-checked before reservation and rejected when they guarantee player profit or have expected payout above the stake; put the exact win rule in reason so it can be validated.",
+            "Optional wallet-backed wager for the CURRENT REQUESTER only. Decide authorization from the current request, never another member or stale context. Supply interactionMode; if maxPayoutUsd exceeds stakeUsd, also supply a structured rule. Code validates fairness and all wallet invariants before funds or entropy move.",
           properties: {
             playerUserId: { type: "string", description: "Discord user ID of the current requester whose wallet is at risk. Must exactly match Current Discord requester; third-party wagers are rejected." },
             stakeUsd: { type: "number", description: "Positive USD-denominated stake taken from the user's game wallet." },
             maxPayoutUsd: { type: "number", description: "Maximum possible total payout in USD, including returned stake." },
-            game: { type: "string", description: "Short generic game identifier, such as slots, roulette, dice, or blackjack." }
+            game: { type: "string", description: "Short generic game identifier, such as slots, roulette, dice, or blackjack." },
+            interactionMode: { type: "string", enum: ["automatic", "player_decisions"], description: "Choose automatic when no player decision remains after the draw; choose player_decisions only for a genuine persisted next move." },
+            rule: {
+              type: "object",
+              description: "Optional machine-checkable player win rule for deterministic fairness validation.",
+              properties: {
+                kind: { type: "string", enum: ["coin_side", "sum", "any_match", "all_distinct"] },
+                side: { type: "string", enum: ["heads", "tails"] },
+                operator: { type: "string", enum: [">=", ">", "<=", "<", "="] },
+                target: { type: "number" },
+              },
+              required: ["kind"],
+              additionalProperties: false,
+            }
           },
-          required: ["playerUserId", "stakeUsd", "maxPayoutUsd", "game"],
+          required: ["playerUserId", "stakeUsd", "maxPayoutUsd", "game", "interactionMode"],
           additionalProperties: false
         }
       },

@@ -187,7 +187,7 @@ Extraction order (smallest/highest-value first):
 - [x] `conversationMemoryRepository.ts`: sessions/messages/turn deletion/memory stats (add WS5 compaction here).
 - [x] `processRunRepository.ts` + `auditRepository.ts`: runs/spans/events/artifacts, traces, tool audits (add WS5 retention here).
 - [x] `agentTaskRepository.ts`: remaining task lifecycle after WS2 removes codegen-table writes.
-- [x] `skillsRepository.ts`: skills and skill changes.
+- [x] `serverOverlayRepository.ts`: server overlays and health checks.
 - [x] Reduce `repositories.ts` to a delegating facade; update `src/db/README.md` ownership map.
 
 ### `src/discord/client.ts` (2.1k lines)
@@ -207,7 +207,7 @@ Extraction order (smallest/highest-value first):
 - [x] `promptBuilder.ts`: message assembly (carries WS3 ordering).
 - [x] `finalSynthesis.ts` and `modelRecovery.ts`: synthesis, empty-response and hosted-tool recovery.
 - [x] `runtimeTranscript.ts`: single event-recording helper (from WS2).
-- [x] Keep `handleAgentRequest` as the compatibility entrypoint.
+- [x] Keep `handleAgentRequest` as the thin request entrypoint.
 
 ### `src/tools/coreTools.ts` (1.25k lines → true facade)
 
@@ -306,4 +306,4 @@ Baseline as of 2026-07: verify green (466 passed / 56 skipped), scan:release gre
 
 ## Post-plan cleanup (completed)
 
-The settled runtime cleanup removed the compatibility surfaces that were still present while this checklist was being executed: the `src/tools/coreTools.ts` barrel/facade is gone, durable workflow code and tables are gone, `task_events` and its dual-write/fallback path are gone, and the former `codegen_*` runtime ledger has been renamed to `agent_runtime_*` with `harness_thread_id`. At plan completion, the schema had been squashed into `migrations/001_initial.sql`, with `scripts/legacy-schema-transition.sql` for one-time upgrades of pre-squash databases; later numbered forward migrations now follow that baseline. Legacy `/api/codegen/*` routes were removed in favor of `/api/agent/sessions/:threadKey` and `/api/tasks/status`.
+The settled runtime cleanup removed the temporary compatibility surfaces that were present while this checklist was being executed: the `src/tools/coreTools.ts` barrel/facade is gone, durable workflow code and tables are gone, `task_events` and its dual-write/fallback path are gone, and the former `codegen_*` runtime ledger has been renamed to `agent_runtime_*` with `harness_thread_id`. The schema now uses `migrations/001_initial.sql` plus numbered forward migrations. `/api/codegen/*` routes were removed in favor of `/api/agent/sessions/:threadKey` and `/api/tasks/status`.

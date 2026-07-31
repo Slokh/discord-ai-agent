@@ -52,8 +52,13 @@ function removeBorderConnectedBackground(
   const background = [0, 1, 2].map((channel) => median(border.map((pixel) => pixel[channel] ?? 0)));
   const borderDistances = border.map((pixel) => colorDistance(pixel, background)).sort((a, b) => a - b);
   const borderP95 = borderDistances[Math.min(borderDistances.length - 1, Math.floor(borderDistances.length * 0.95))] ?? 0;
-  if (borderP95 > 30) return null;
-  const tolerance = Math.min(45, Math.max(18, Math.ceil(borderP95 + 24)));
+  const chromaKeyChannel = detectChromaKeyChannel(border, background);
+  if (chromaKeyChannel === null && borderP95 > 30) return null;
+  if (chromaKeyChannel !== null && borderP95 > 100) return null;
+  const tolerance =
+    chromaKeyChannel === null
+      ? Math.min(45, Math.max(18, Math.ceil(borderP95 + 24)))
+      : Math.min(120, Math.max(60, Math.ceil(borderP95 + 35)));
   const toleranceSquared = tolerance * tolerance;
   const pixelCount = width * height;
   const removed = new Uint8Array(pixelCount);
@@ -64,6 +69,10 @@ function removeBorderConnectedBackground(
     if (removed[pixelIndex]) return;
     const offset = pixelIndex * channels;
     if (colorDistanceSquared(input, offset, background) > toleranceSquared) return;
+    if (
+      chromaKeyChannel !== null &&
+      !matchesChromaKey(input, offset, chromaKeyChannel)
+    ) return;
     removed[pixelIndex] = 1;
     queue[queueEnd++] = pixelIndex;
   };
@@ -113,6 +122,31 @@ function removeBorderConnectedBackground(
   right = Math.min(width - 1, right + padding);
   bottom = Math.min(height - 1, bottom + padding);
   return { data, crop: { left, top, width: right - left + 1, height: bottom - top + 1 } };
+}
+
+function detectChromaKeyChannel(border: number[][], background: number[]): number | null {
+  const dominantChannel = background.indexOf(Math.max(...background));
+  const otherChannels = [0, 1, 2].filter((channel) => channel !== dominantChannel);
+  const dominantValue = background[dominantChannel] ?? 0;
+  const dominantGap =
+    dominantValue - Math.max(...otherChannels.map((channel) => background[channel] ?? 0));
+  if (dominantValue < 140 || dominantGap < 80) return null;
+  const matchingSamples = border.filter((pixel) => {
+    const value = pixel[dominantChannel] ?? 0;
+    const otherMaximum = Math.max(...otherChannels.map((channel) => pixel[channel] ?? 0));
+    return value >= 120 && value - otherMaximum >= 50;
+  }).length;
+  return matchingSamples / border.length >= 0.8 ? dominantChannel : null;
+}
+
+function matchesChromaKey(data: Buffer, offset: number, dominantChannel: number) {
+  const value = data[offset + dominantChannel] ?? 0;
+  const otherMaximum = Math.max(
+    ...[0, 1, 2]
+      .filter((channel) => channel !== dominantChannel)
+      .map((channel) => data[offset + channel] ?? 0)
+  );
+  return value >= 100 && value - otherMaximum >= 35;
 }
 
 function rawImageHasTransparency(data: Buffer, channels: number) {

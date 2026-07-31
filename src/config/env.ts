@@ -22,6 +22,7 @@ type ProcessRole = "all" | "api" | "bot" | "worker";
 type CodegenExecutionBackend = "kubernetes-job" | "local-process";
 type CodegenHarness = "codex" | "opencode";
 type TempoNetwork = "moderato" | "mainnet";
+type ReasoningEffort = "max" | "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
 
 function defaultProcessRole(argv = process.argv): ProcessRole {
   const role = argv.find((arg): arg is ProcessRole => arg === "all" || arg === "api" || arg === "bot" || arg === "worker");
@@ -58,7 +59,16 @@ const defaults = {
   openRouterBaseUrl: "https://openrouter.ai/api/v1",
   openRouterAppTitle: "Discord AI Agent",
   openRouterHttpReferer: "http://localhost",
-  openRouterChatModel: "z-ai/glm-5.2",
+  openRouterChatModel: "openai/gpt-5.6-luna",
+  openRouterChatFallbackModel: "openai/gpt-5.6-terra",
+  openRouterChatReasoningEffort: "medium" as ReasoningEffort,
+  openRouterChatFallbackReasoningEffort: "medium" as ReasoningEffort,
+  // Reasoning and visible output share the completion budget. Keep enough room
+  // for medium reasoning while Discord still bounds final visible replies.
+  openRouterChatMaxTokens: 4_096,
+  openRouterChatFallbackMaxTokens: 3_072,
+  openRouterCodegenModel: "z-ai/glm-5.2",
+  openRouterUtilityModel: "openai/gpt-4o-mini",
   openRouterEmbeddingModel: "qwen/qwen3-embedding-8b",
   openRouterImageModel: "google/gemini-3.1-flash-image",
   openRouterTranscriptionModel: "openai/whisper-large-v3-turbo",
@@ -94,7 +104,7 @@ const defaults = {
   workerCrawlEnabled: true,
   workerEmbeddingEnabled: true,
   workerTaskEnabled: true,
-  workerDiscordAgentEnabled: true,
+  workerAgentRuntimeEnabled: true,
   retentionEventsDays: 60,
   retentionAuditDays: 90,
   retentionEmbeddingRunsDays: 14,
@@ -129,8 +139,7 @@ const defaults = {
   tempoNetwork: "moderato" as TempoNetwork,
   tempoUsdToken: "USDC.e",
   walletInitialGrantUsd: 1,
-  promptOverlayPath: ".discord-ai-agent/prompt-overlay.md",
-  toolsetScoping: true
+  promptOverlayPath: ".discord-ai-agent/prompt-overlay.md"
 } as const;
 
 const envSchema = z.object({
@@ -162,6 +171,20 @@ const envSchema = z.object({
   OPENROUTER_APP_TITLE: z.string().default(defaults.openRouterAppTitle),
   OPENROUTER_HTTP_REFERER: z.string().default(defaults.openRouterHttpReferer),
   OPENROUTER_CHAT_MODEL: z.string().default(defaults.openRouterChatModel),
+  OPENROUTER_CHAT_FALLBACK_MODEL: z.string().default(defaults.openRouterChatFallbackModel),
+  OPENROUTER_CHAT_REASONING_EFFORT: z
+    .enum(["max", "xhigh", "high", "medium", "low", "minimal", "none"])
+    .default(defaults.openRouterChatReasoningEffort),
+  OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT: z
+    .enum(["max", "xhigh", "high", "medium", "low", "minimal", "none"])
+    .default(defaults.openRouterChatFallbackReasoningEffort),
+  OPENROUTER_CHAT_MAX_TOKENS: z.coerce.number().int().min(1_100).max(128_000).default(defaults.openRouterChatMaxTokens),
+  OPENROUTER_CHAT_FALLBACK_MAX_TOKENS: z.coerce
+    .number()
+    .int()
+    .min(1_100)
+    .max(128_000)
+    .default(defaults.openRouterChatFallbackMaxTokens),
   OPENROUTER_CODEGEN_MODEL: z.string().optional(),
   OPENROUTER_UTILITY_MODEL: z.string().optional(),
   OPENROUTER_EMBEDDING_MODEL: z.string().default(defaults.openRouterEmbeddingModel),
@@ -203,7 +226,7 @@ const envSchema = z.object({
   WORKER_CRAWL_ENABLED: booleanFromEnv.default(defaults.workerCrawlEnabled),
   WORKER_EMBEDDING_ENABLED: booleanFromEnv.default(defaults.workerEmbeddingEnabled),
   WORKER_TASK_ENABLED: booleanFromEnv.default(defaults.workerTaskEnabled),
-  WORKER_DISCORD_AGENT_ENABLED: booleanFromEnv.default(defaults.workerDiscordAgentEnabled),
+  WORKER_AGENT_RUNTIME_ENABLED: booleanFromEnv.default(defaults.workerAgentRuntimeEnabled),
 
   RETENTION_EVENTS_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionEventsDays),
   RETENTION_AUDIT_DAYS: z.coerce.number().int().min(0).max(3650).default(defaults.retentionAuditDays),
@@ -248,8 +271,7 @@ const envSchema = z.object({
   TEMPO_NETWORK: z.enum(["moderato", "mainnet"]).default(defaults.tempoNetwork),
   TEMPO_USD_TOKEN: nonEmptyStringWithDefault(defaults.tempoUsdToken),
   WALLET_INITIAL_GRANT_USD: z.coerce.number().min(0).max(100).default(defaults.walletInitialGrantUsd),
-  PROMPT_OVERLAY_PATH: z.string().trim().default(defaults.promptOverlayPath),
-  TOOLSET_SCOPING: booleanFromEnv.default(defaults.toolsetScoping)
+  PROMPT_OVERLAY_PATH: z.string().trim().default(defaults.promptOverlayPath)
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -261,8 +283,8 @@ export function loadConfig() {
     throw new Error(`Invalid environment configuration:\n${formatted}`);
   }
   const chatModel = parsed.data.OPENROUTER_CHAT_MODEL;
-  const codegenModel = parsed.data.OPENROUTER_CODEGEN_MODEL?.trim() || chatModel;
-  const utilityModel = parsed.data.OPENROUTER_UTILITY_MODEL?.trim() || chatModel;
+  const codegenModel = parsed.data.OPENROUTER_CODEGEN_MODEL?.trim() || defaults.openRouterCodegenModel;
+  const utilityModel = parsed.data.OPENROUTER_UTILITY_MODEL?.trim() || defaults.openRouterUtilityModel;
 
   return {
     nodeEnv: parsed.data.NODE_ENV,
@@ -290,6 +312,11 @@ export function loadConfig() {
       appTitle: parsed.data.OPENROUTER_APP_TITLE,
       httpReferer: parsed.data.OPENROUTER_HTTP_REFERER,
       chatModel,
+      chatFallbackModel: parsed.data.OPENROUTER_CHAT_FALLBACK_MODEL,
+      chatReasoningEffort: parsed.data.OPENROUTER_CHAT_REASONING_EFFORT,
+      chatFallbackReasoningEffort: parsed.data.OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT,
+      chatMaxTokens: parsed.data.OPENROUTER_CHAT_MAX_TOKENS,
+      chatFallbackMaxTokens: parsed.data.OPENROUTER_CHAT_FALLBACK_MAX_TOKENS,
       codegenModel,
       utilityModel,
       embeddingModel: parsed.data.OPENROUTER_EMBEDDING_MODEL,
@@ -344,7 +371,7 @@ export function loadConfig() {
       crawlEnabled: parsed.data.WORKER_CRAWL_ENABLED ?? defaults.workerCrawlEnabled,
       embeddingEnabled: parsed.data.WORKER_EMBEDDING_ENABLED ?? defaults.workerEmbeddingEnabled,
       taskEnabled: parsed.data.WORKER_TASK_ENABLED ?? defaults.workerTaskEnabled,
-      discordAgentEnabled: parsed.data.WORKER_DISCORD_AGENT_ENABLED ?? defaults.workerDiscordAgentEnabled,
+      agentRuntimeEnabled: parsed.data.WORKER_AGENT_RUNTIME_ENABLED ?? defaults.workerAgentRuntimeEnabled,
       retention: {
         eventsDays: parsed.data.RETENTION_EVENTS_DAYS,
         auditDays: parsed.data.RETENTION_AUDIT_DAYS,
@@ -396,8 +423,7 @@ export function loadConfig() {
       usdToken: parsed.data.TEMPO_USD_TOKEN,
       initialGrantUsd: parsed.data.WALLET_INITIAL_GRANT_USD
     },
-    promptOverlayPath: parsed.data.PROMPT_OVERLAY_PATH,
-    toolsetScoping: parsed.data.TOOLSET_SCOPING ?? defaults.toolsetScoping
+    promptOverlayPath: parsed.data.PROMPT_OVERLAY_PATH
   };
 }
 

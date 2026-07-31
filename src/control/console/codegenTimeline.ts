@@ -78,8 +78,8 @@ export function codegenTimelineTrace(
 
   const modelSelection = event(
     (candidate) =>
-      candidate.name === "agent.model.round.complete" &&
-      stringArrayMetadata(candidate.metadata.selectedLocalTools).some(
+      candidate.name === "agent.model.call.completed" &&
+      stringArrayMetadata(candidate.metadata.requestedToolCalls).some(
         isCodegenToolName,
       ),
   );

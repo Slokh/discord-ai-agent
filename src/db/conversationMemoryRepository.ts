@@ -144,11 +144,26 @@ export async function appendConversationTurn(pool: DbPool, input: {
     }
   }
 
-export async function recentConversationMessages(pool: DbPool, input: { threadKey: string; limit: number; includeToolResults?: boolean }): Promise<ConversationMessage[]> {
+export async function recentConversationMessages(pool: DbPool, input: {
+    threadKey: string;
+    limit: number;
+    includeToolResults?: boolean;
+    requesterAuthorId?: string | null;
+  }): Promise<ConversationMessage[]> {
     const includeToolResults = input.includeToolResults ?? false;
+    const requesterAuthorId = input.requesterAuthorId?.trim() || null;
     const result = await pool.query(
       `
-        WITH eligible AS (
+        WITH requester_turns AS (
+          SELECT
+            nullif(metadata->>'turnId', '') AS turn_id,
+            discord_message_id
+          FROM conversation_messages
+          WHERE thread_key = $1
+            AND role = 'user'
+            AND author_id = $4
+        ),
+        eligible AS (
           SELECT
             m.id,
             m.thread_key,
@@ -183,6 +198,33 @@ export async function recentConversationMessages(pool: DbPool, input: { threadKe
           WHERE m.thread_key = $1
             AND m.content <> ''
             AND (
+              $4::text IS NULL
+              OR (m.role = 'user' AND m.author_id = $4)
+              OR (
+                m.role = 'assistant'
+                AND EXISTS (
+                  SELECT 1
+                  FROM requester_turns requester_turn
+                  WHERE (
+                    requester_turn.turn_id IS NOT NULL
+                    AND requester_turn.turn_id = m.metadata->>'turnId'
+                  ) OR (
+                    requester_turn.discord_message_id IS NOT NULL
+                    AND requester_turn.discord_message_id = m.metadata->>'promptDiscordMessageId'
+                  )
+                )
+              )
+              OR (
+                m.role = 'tool'
+                AND EXISTS (
+                  SELECT 1
+                  FROM requester_turns requester_turn
+                  WHERE requester_turn.turn_id IS NOT NULL
+                    AND requester_turn.turn_id = m.metadata->>'turnId'
+                )
+              )
+            )
+            AND (
               m.role = 'assistant'
               OR (
                 m.role = 'user'
@@ -214,9 +256,12 @@ export async function recentConversationMessages(pool: DbPool, input: { threadKe
         FROM recent
         ORDER BY turn_completed_at ASC, turn_order ASC, created_at ASC, id ASC
       `,
-      [input.threadKey, input.limit, includeToolResults]
+      [input.threadKey, input.limit, includeToolResults, requesterAuthorId]
     );
     const messages = result.rows.map(rowToConversationMessage);
+    // Compacted snapshots summarize every member in the channel and therefore
+    // cannot safely enter a requester-scoped chat prompt.
+    if (requesterAuthorId) return messages;
     const snapshot = await pool.query(
       `
         SELECT snapshot_id, thread_key, summary, message_count, created_at

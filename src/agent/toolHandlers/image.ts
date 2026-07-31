@@ -1,4 +1,5 @@
 import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../tools/imageTools.js";
+import { isOpenRouterHttpError } from "../../models/openrouter.js";
 import { cleanResponse } from "../../tools/responseFormatting.js";
 import { stringArgument, stringArrayArgument, numberArgument, booleanArgument } from "./arguments.js";
 import type { ToolName } from "../../tools/registry.js";
@@ -11,6 +12,7 @@ export const imageToolHandlers = {
     const prompt = stringArgument(route.arguments, "prompt") ?? originalText;
     const image = await generateImage(ctx, {
           prompt,
+          requiredText: stringArrayArgument(route.arguments, "requiredText"),
           referenceImageUrls: stringArrayArgument(
             route.arguments,
             "referenceImageUrls",
@@ -18,6 +20,7 @@ export const imageToolHandlers = {
           useContextImages: booleanArgument(route.arguments, "useContextImages"),
           outputFormat: stringArgument(route.arguments, "outputFormat") as "png" | "jpeg" | "webp" | undefined,
           background: stringArgument(route.arguments, "background") as "auto" | "transparent" | "opaque" | undefined,
+          aspectRatio: stringArgument(route.arguments, "aspectRatio") as "1:1" | "16:9" | "9:16" | "4:3" | "3:4" | undefined,
         });
     return {
           content: cleanResponse(image.content, ctx.config.maxReplyChars),
@@ -26,7 +29,8 @@ export const imageToolHandlers = {
         };
   },
   "inspectDiscordImages": async (ctx, route, originalText) => {
-    return {
+    try {
+      return {
           content: cleanResponse(
             await inspectDiscordImages(ctx, {
               question: stringArgument(route.arguments, "question") ?? originalText,
@@ -40,6 +44,31 @@ export const imageToolHandlers = {
             ctx.config.maxReplyChars,
           ),
         };
+    } catch (error) {
+      if (
+        !isOpenRouterHttpError(error) ||
+        error.status !== 400 ||
+        !/\bURL did not return an image\b/i.test(error.message)
+      ) {
+        throw error;
+      }
+      await ctx.repo.auditTool({
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        userId: ctx.userId,
+        toolName: "inspectDiscordImages",
+        argumentsSummary: "Scoped image inspection request",
+        error: "image_source_unreadable",
+      });
+      return {
+        content: cleanResponse(
+          "The supplied URL did not resolve to an image. If it is a public webpage, use web_fetch or web_search to inspect the page instead.",
+          ctx.config.maxReplyChars,
+        ),
+        status: "error" as const,
+        errorCode: "image_source_unreadable",
+      };
+    }
   },
   "getDiscordUserAvatar": async (ctx, route, originalText) => {
     return {

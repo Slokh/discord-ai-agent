@@ -7,7 +7,7 @@ import { createPool } from "../../src/db/pool.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
-describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
+describe.skipIf(!runDbTests)("forward migration upgrades", () => {
   it("upgrades the previous schema through runtime spans, projections, and feedback without losing events", async () => {
     const pool = createPool(loadConfig());
     const schema = `upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -51,6 +51,10 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM mpp_payment_attempts"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await client.query(`
+        INSERT INTO skills(name, file_path, source, content)
+        VALUES ('legacy-database-skill', 'database:legacy-database-skill.md', 'database', '# Legacy')
+      `);
       await client.query("INSERT INTO agent_run_feedback(run_id, rating, capture_eval) VALUES ('execution', 'good', true)");
       await expect(client.query("SELECT count(*)::int AS count FROM agent_run_feedback")).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 1 })] }));
       for (const version of [
@@ -65,15 +69,71 @@ describe.skipIf(!runDbTests)("migration upgrade compatibility", () => {
         "020_discord_component_action_generations",
         "021_discord_component_action_expiry_index",
         "022_agent_runtime_binary_artifacts",
+        "023_wallet_guild_settings",
+        "024_remove_database_skills",
+        "025_guild_agent_settings",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
+      await client.query(`
+        INSERT INTO agent_runtime_artifacts(
+          artifact_id, session_id, execution_id, kind, name, content_type,
+          size_bytes, preview, redacted, metadata
+        ) VALUES (
+          'legacy-delivery', 'session', 'execution', 'discord_delivery_intent', 'legacy delivery', 'application/json',
+          1, '', false, '{}'::jsonb
+        );
+        INSERT INTO agent_runtime_artifact_chunks(artifact_id, chunk_index, content)
+        VALUES (
+          'legacy-delivery', 0,
+          '{"schemaVersion":1,"deliveryKey":"request","requesterUserId":"user","content":"done","storedContent":"done","responseRedacted":false,"footer":null,"presentation":null,"files":[{"name":"legacy.txt","contentType":"text/plain","dataBase64":"bGVnYWN5"}],"sourceMessageReaction":null}'
+        );
+        INSERT INTO agent_runtime_artifacts(
+          artifact_id, session_id, execution_id, kind, name, content_type,
+          size_bytes, preview, redacted, metadata
+        ) VALUES ('legacy-envelope', 'session', 'execution', 'turn_envelope', 'legacy envelope', 'application/json', 1, '', false, '{}'::jsonb);
+        INSERT INTO agent_runtime_artifact_chunks(artifact_id, chunk_index, content)
+        VALUES ('legacy-envelope', 0, '{"schemaVersion":1,"source":"discord","requestId":"request"}');
+        INSERT INTO agent_runtime_artifact_chunks(artifact_id, chunk_index, content)
+        VALUES ('legacy-envelope', 1, ' ');
+        INSERT INTO rng_sessions(
+          id, thread_key, guild_id, channel_id, created_by_user_id, server_seed, commitment
+        ) VALUES ('legacy-rng', 'legacy-thread', 'guild', 'channel', 'user', 'seed', 'commitment');
+        INSERT INTO rng_draws(session_id, nonce, kind, params, outcome, message_id)
+        VALUES ('legacy-rng', 0, 'coin', '{}'::jsonb, '{"kind":"coin","values":["heads"]}'::jsonb, 'root-message');
+      `);
+      await client.query(await readFile(path.resolve("migrations/026_remove_legacy_delivery_and_rng_scopes.sql"), "utf8"));
       await expect(client.query("SELECT count(*)::int AS count FROM discord_emoji_channel_profiles"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM discord_component_actions"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM agent_runtime_artifact_blobs"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 1 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM wallet_guild_settings"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM skills WHERE source = 'database'"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM guild_agent_settings"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 0 })] }));
+      await expect(client.query(`
+        SELECT string_agg(content, '' ORDER BY chunk_index)::jsonb ->> 'schemaVersion' AS version
+        FROM agent_runtime_artifact_chunks
+        WHERE artifact_id = 'legacy-delivery'
+      `)).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ version: "2" })] }));
+      await expect(client.query(`
+        SELECT content
+        FROM agent_runtime_artifact_blobs
+        WHERE artifact_id = 'legacy-delivery:delivery-file:1'
+      `)).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ content: Buffer.from("legacy") })] }));
+      await expect(client.query("SELECT thread_key FROM rng_sessions WHERE id = 'legacy-rng'"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ thread_key: "legacy-thread:rng-root:root-message" })] }));
+      await expect(client.query(`
+        SELECT string_agg(content, '' ORDER BY chunk_index)::jsonb ->> 'schemaVersion' AS version
+        FROM agent_runtime_artifact_chunks
+        WHERE artifact_id = 'legacy-envelope'
+      `)).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ version: "2" })] }));
+      await expect(client.query("SELECT count(*)::int AS count FROM agent_runtime_artifact_chunks WHERE artifact_id = 'legacy-envelope'"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 1 })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

@@ -70,7 +70,7 @@ export const imageToolContracts = [
     toolClass: "generation",
     examples: ["@ai make an image of a wizard eating nachos"],
     description:
-      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for explicit make/draw/generate/regenerate requests and edits like 'make this into...', 'modify this', or 'use the attached image as a reference'. Do not call it for diagnosis-only questions such as why an image has a background or what format it uses unless the user also asks to change or regenerate the image. For emojis, stickers, cutouts, or background removal, request background=transparent and outputFormat=png; the tool also infers those settings from an explicit transparent/emoji/sticker prompt and reports the actual returned format and alpha status.",
+      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for explicit make/draw/generate/regenerate requests and edits like 'make this into...', 'modify this', or 'use the attached image as a reference'. When the requested image must visibly contain exact words, names, labels, punctuation, or numbers, put every verbatim string in requiredText so the result is visually validated and corrected once before delivery. Do not call it for diagnosis-only questions such as why an image has a background or what format it uses unless the user also asks to change or regenerate the image. For emojis, stickers, cutouts, or background removal, request background=transparent and outputFormat=png; the tool also infers those settings from an explicit transparent/emoji/sticker prompt and reports the actual returned format and alpha status.",
     userVisible: true,
     mutates: false,
     group: "image",
@@ -81,6 +81,12 @@ export const imageToolContracts = [
           type: "string",
           description: "The image generation or edit prompt."
         },
+        requiredText: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Every exact string that must be visibly rendered in the image, copied verbatim from the user's request or reply context. Set this for signs, labels, titles, names, scores, numbers, and quoted wording."
+        },
         referenceImageUrls: {
           type: "array",
           items: { type: "string" },
@@ -88,7 +94,8 @@ export const imageToolContracts = [
         },
         useContextImages: {
           type: "boolean",
-          description: "Whether to include images attached to the current request or replied-to chain as references. Defaults to true when context images exist."
+          description:
+            "Whether to include images attached to the current request or replied-to chain as references. Defaults to true when context images exist. Set false only when the current user explicitly asks to ignore, exclude, or avoid those images."
         },
         outputFormat: {
           type: "string",
@@ -99,6 +106,11 @@ export const imageToolContracts = [
           type: "string",
           enum: ["auto", "transparent", "opaque"],
           description: "Requested background treatment. Use transparent for emojis, stickers, cutouts, and explicit background removal."
+        },
+        aspectRatio: {
+          type: "string",
+          enum: ["1:1", "16:9", "9:16", "4:3", "3:4"],
+          description: "Requested canvas aspect ratio. Use 3:4 for portrait, 16:9 for landscape, and 1:1 for square unless the user gives an explicit supported ratio."
         }
       },
       required: ["prompt"],

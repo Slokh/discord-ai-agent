@@ -16,6 +16,7 @@ export type HistoryAnswerOptions = {
   channelQueries?: string[];
   dateFrom?: string | Date;
   dateTo?: string | Date;
+  hourOfDayUtc?: number;
   limit?: number;
   requestText?: string;
 };
@@ -25,6 +26,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
   const syntaxFilters = extractHistorySearchSyntax(question);
   const explicitDateFrom = coerceDateStart(options.dateFrom) ?? syntaxFilters.dateFrom;
   const explicitDateTo = coerceDateEnd(options.dateTo) ?? syntaxFilters.dateTo;
+  const hourOfDayUtc = normalizeUtcHour(options.hourOfDayUtc);
   const historyFilters = {
     dateFrom: explicitDateFrom,
     dateTo: explicitDateTo
@@ -56,7 +58,7 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
   const query = (syntaxFilters.query || (hasSyntaxFilters ? "" : question)).trim();
   const effectiveQuery = buildHistoryRetrievalQuery(query);
   const visibleIndexedChannels = await visibleIndexedChannelIdsForRequest(ctx);
-  const { results, semanticDegraded } = await searchDiscordHistory({
+  const { results, semanticDegraded, recentFallbackUsed } = await searchDiscordHistory({
     repo: ctx.repo,
     openRouter: ctx.openRouter,
     config: ctx.config,
@@ -79,7 +81,8 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
       aboutUserTerms,
       channelIds: uniqueStrings(channelIds),
       dateFrom: historyFilters.dateFrom,
-      dateTo: historyFilters.dateTo
+      dateTo: historyFilters.dateTo,
+      hourOfDayUtc
     }
   });
 
@@ -95,9 +98,10 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
       aboutUserIds,
       channelIds: uniqueStrings(channelIds),
       dateFrom: historyFilters.dateFrom?.toISOString(),
-      dateTo: historyFilters.dateTo?.toISOString()
+      dateTo: historyFilters.dateTo?.toISOString(),
+      hourOfDayUtc
     }),
-    resultSummary: summarizeForAudit({ resultCount: results.length, semanticDegraded })
+    resultSummary: summarizeForAudit({ resultCount: results.length, semanticDegraded, recentFallbackUsed })
   });
 
   const context = formatSearchResults(results);
@@ -111,13 +115,26 @@ export async function answerFromHistory(ctx: ToolContext, question: string, opti
     results,
     context,
     dateFrom: historyFilters.dateFrom,
-    dateTo: historyFilters.dateTo
+    dateTo: historyFilters.dateTo,
+    hourOfDayUtc
   });
   if (!semanticDegraded) return evidence;
+  if (recentFallbackUsed) {
+    return [
+      "Note: semantic matching timed out and exact keywords found nothing. These are recent messages from the exact requested permission and filter scope, included as broader candidates. Verify their relevance before answering and say when the evidence is inconclusive.",
+      evidence,
+    ].join("\n");
+  }
   return [
     "Note: semantic search was unavailable for this query (timeout); these are exact-keyword matches only and may be incomplete.",
     evidence
   ].join("\n");
+}
+
+function normalizeUtcHour(value: number | undefined) {
+  return value != null && Number.isInteger(value) && value >= 0 && value <= 23
+    ? value
+    : undefined;
 }
 
 export async function getRecentDiscordMessages(

@@ -4,8 +4,8 @@ Owns Privy application wallets, Tempo transfers, generic wagers, and wallet reco
 
 ## Responsibilities
 
-- `privyTempoWalletProvider.ts`: deterministic Privy provisioning, Tempo token resolution, balances, transfers, fee sponsorship, receipt verification, and confirmed-block balance snapshots after transfers.
-- `walletService.ts`: network-scoped shared/user wallet lifecycle, balances, below-target starter top-ups, managed transfers, wager settlement, reconciliation, and bot-wallet health.
+- `privyTempoWalletProvider.ts`: deterministic Privy provisioning, Tempo token resolution, balances, transfers, fee sponsorship, receipt verification, receipt-backed fee accounting, and confirmed-block balance snapshots after transfers.
+- `walletService.ts`: network-scoped shared/user wallet lifecycle, balances, guild-overridable below-target starter top-ups and existing-wallet rebalancing, managed transfers, fee summaries, wager settlement, reconciliation, and bot-wallet health.
 - `reconciler.ts`: uncertain/submitted transfer reconciliation, stale wager expiry, and periodic wallet health checks.
 - Durable wallet ledgers and locks live in `src/db/paymentRepository.ts`; use forward-only migrations for schema changes.
 

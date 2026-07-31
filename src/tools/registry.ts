@@ -96,11 +96,9 @@ export function toolByName(name: string): ToolRegistryEntry | undefined {
 }
 
 function toolDescriptionForModel(tool: ToolRegistryEntry): string {
-  const argumentExample = tool.argumentExamples[0];
   return [
     tool.description,
-    `Tool class: ${tool.toolClass}. Returns: ${tool.outputContract.join("; ")}.`,
-    argumentExample ? `Example arguments: ${JSON.stringify(argumentExample)}` : "",
+    `Returns: ${tool.outputContract.join("; ")}.`,
   ].filter(Boolean).join("\n");
 }
 

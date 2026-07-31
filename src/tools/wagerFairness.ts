@@ -1,10 +1,7 @@
+import type { WagerRule } from "./randomTypes.js";
+
 const EPSILON = 1e-9;
 const MAX_SUM_ENUMERATION_WORK = 1_000_000;
-const OBVIOUS_GUARANTEED_WIN = /\b(?:guaranteed\s+win|always\s+wins?|cannot\s+lose|can['’]?t\s+lose|unlosable|no\s+losing\s+outcome)\b/i;
-const CUSTOM_WIN_RULE = /\b(?:i|player|user|prompter)\s+wins?\b|\b(?:wins?|pays?|payout)\s+(?:if|when|unless)\b|\bif\s+.{1,120}\b(?:wins?|pays?|gets?)\b/i;
-const ANY_MATCH = /(?:\bany\s+(?:two|2)\s+(?:(?:dice|numbers?|values?|results?)\s+)?match\b|\b(?:pair|duplicate)\b)/i;
-const ALL_DISTINCT = /(?:\b(?:all\s+)?(?:(?:dice|numbers?|values?|results?)\s+)?(?:are\s+)?(?:unique|distinct)\b|\bno\s+(?:two\s+)?(?:(?:dice|numbers?|values?|results?)\s+)?match\b)/i;
-const EITHER_COIN_SIDE = /(?:\beither\s+heads\s+or\s+tails\b|\bheads\s+or\s+tails\b|\bregardless\s+of\s+(?:the\s+)?(?:coin|result|side)\b)/i;
 
 export type WagerFairnessInput = {
   kind: string;
@@ -12,26 +9,25 @@ export type WagerFairnessInput = {
   sides?: number;
   min?: number;
   max?: number;
-  description: string;
   stakeUsd: number;
   maxPayoutUsd: number;
+  rule?: WagerRule;
 };
 
 /**
- * Rejects machine-recognizable real-money contracts whose maximum payout has
- * negative expected value for the treasury. Profitable coin and dice rules
- * must be recognizable; recognized rules are evaluated from the same draw
- * parameters that produce the outcome.
+ * Rejects real-money contracts whose structured outcome rule gives the
+ * treasury negative expected value. Rules are evaluated from the same draw
+ * parameters that produce the outcome; prose is never interpreted as money
+ * authorization or a game contract.
  */
 export function validateWagerFairness(input: WagerFairnessInput): string | null {
   if (input.maxPayoutUsd <= input.stakeUsd + EPSILON) return null;
   const probability = winProbability(input);
   if (probability == null) {
-    if (input.kind !== "coin" && input.kind !== "dice" && !CUSTOM_WIN_RULE.test(input.description)) return null;
     return [
       "Real-money wager rejected before funds were reserved or randomness was consumed.",
-      "The game does not include a machine-checkable win rule, so the treasury cannot verify that the payout is fair.",
-      "For dice or bounded integers, use an explicit duplicate/distinct or sum comparison rule; for a coin, state the winning side. Otherwise play without real money.",
+      "The structured rule does not describe a machine-checkable outcome for this draw, so the treasury cannot verify that the payout is fair.",
+      "For dice or bounded integers, use a duplicate/distinct or sum rule; for a coin, use coin_side. Otherwise play without real money.",
     ].join(" ");
   }
   const expectedPayout = probability * input.maxPayoutUsd;
@@ -54,37 +50,22 @@ export function validateWagerFairness(input: WagerFairnessInput): string | null 
 }
 
 function winProbability(input: WagerFairnessInput): number | null {
-  if (OBVIOUS_GUARANTEED_WIN.test(input.description)) return 1;
-  if (input.kind === "coin") return coinWinProbability(input);
-  if (input.kind === "integers") return integerWinProbability(input);
-  if (input.kind !== "dice") return null;
-  const count = positiveInteger(input.count ?? 1);
-  const sides = positiveInteger(input.sides ?? 6);
-  if (count == null || sides == null) return null;
-  if (ANY_MATCH.test(input.description)) return duplicateProbability(count, sides);
-  if (ALL_DISTINCT.test(input.description)) return 1 - duplicateProbability(count, sides);
-  const sumRule = parseSumRule(input.description);
-  return sumRule ? uniformSumProbability(count, 1, sides, sumRule) : null;
+  return input.rule ? structuredRuleProbability(input) : null;
 }
 
-function integerWinProbability(input: WagerFairnessInput): number | null {
+function structuredRuleProbability(input: WagerFairnessInput): number | null {
+  const rule = input.rule;
+  if (!rule) return null;
+  if (rule.kind === "coin_side") return input.kind === "coin" && (input.count ?? 1) === 1 ? 0.5 : null;
   const count = positiveInteger(input.count ?? 1);
-  const min = input.min;
-  const max = input.max;
-  if (count == null || typeof min !== "number" || typeof max !== "number" || !Number.isSafeInteger(min) || !Number.isSafeInteger(max) || max < min) {
-    return null;
-  }
-  const outcomes = max - min + 1;
-  if (ANY_MATCH.test(input.description)) return duplicateProbability(count, outcomes);
-  if (ALL_DISTINCT.test(input.description)) return 1 - duplicateProbability(count, outcomes);
-  const sumRule = parseSumRule(input.description);
-  return sumRule ? uniformSumProbability(count, min, max, sumRule) : null;
-}
-
-function coinWinProbability(input: WagerFairnessInput): number | null {
-  if ((input.count ?? 1) !== 1) return null;
-  if (EITHER_COIN_SIDE.test(input.description)) return 1;
-  return /\b(?:heads|tails)\b/i.test(input.description) ? 0.5 : null;
+  const bounds = input.kind === "dice"
+    ? { min: 1, max: positiveInteger(input.sides ?? 6) }
+    : { min: input.min, max: input.max };
+  if (count == null || !Number.isSafeInteger(bounds.min) || !Number.isSafeInteger(bounds.max) || bounds.max! < bounds.min!) return null;
+  const outcomes = bounds.max! - bounds.min! + 1;
+  if (rule.kind === "any_match") return duplicateProbability(count, outcomes);
+  if (rule.kind === "all_distinct") return 1 - duplicateProbability(count, outcomes);
+  return uniformSumProbability(count, bounds.min!, bounds.max!, rule);
 }
 
 function duplicateProbability(count: number, sides: number): number {
@@ -95,26 +76,6 @@ function duplicateProbability(count: number, sides: number): number {
 }
 
 type SumRule = { operator: ">=" | ">" | "<=" | "<" | "="; target: number };
-
-function parseSumRule(description: string): SumRule | null {
-  const symbolic = description.match(/\b(?:sum|total)\s*(?:is\s*)?(>=|>|<=|<|==|=)\s*(-?\d+)\b/i);
-  if (symbolic) {
-    const operator = symbolic[1] === "==" ? "=" : symbolic[1];
-    return { operator: operator as SumRule["operator"], target: Number(symbolic[2]) };
-  }
-  const phrases: Array<[RegExp, SumRule["operator"]]> = [
-    [/\b(?:sum|total)\s*(?:is\s*)?(?:at\s+least|no\s+less\s+than)\s*(-?\d+)\b/i, ">="],
-    [/\b(?:sum|total)\s*(?:is\s*)?(?:more\s+than|above|over)\s*(-?\d+)\b/i, ">"],
-    [/\b(?:sum|total)\s*(?:is\s*)?(?:at\s+most|no\s+more\s+than)\s*(-?\d+)\b/i, "<="],
-    [/\b(?:sum|total)\s*(?:is\s*)?(?:less\s+than|below|under)\s*(-?\d+)\b/i, "<"],
-    [/\b(?:sum|total)\s*(?:equals?|is|of)\s*(-?\d+)\b/i, "="],
-  ];
-  for (const [pattern, operator] of phrases) {
-    const match = description.match(pattern);
-    if (match) return { operator, target: Number(match[1]) };
-  }
-  return null;
-}
 
 function uniformSumProbability(count: number, min: number, max: number, rule: SumRule): number | null {
   const outcomes = max - min + 1;

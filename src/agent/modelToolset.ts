@@ -21,13 +21,10 @@ export type ToolsetState = {
 };
 const scopedToolsetCache = new WeakMap<ToolsetState, ScopedToolset>();
 
-export function initialToolsetState(ctx: ToolContext, text: string): ToolsetState {
-  if (!ctx.config.toolsetScoping) {
-    const groups = new Set(TOOL_GROUPS);
-    const state = { groups, expandedAll: true };
-    scopedToolsetCache.set(state, scopedToolset({ config: ctx.config, groups }));
-    return state;
-  }
+export function initialToolsetState(
+  ctx: ToolContext,
+  text: string,
+): ToolsetState {
   const groups = selectToolGroups({
       text,
       hasImageAttachments: hasImageContext(ctx.requestAttachments, ctx.replyContext),
@@ -37,9 +34,12 @@ export function initialToolsetState(ctx: ToolContext, text: string): ToolsetStat
         ? [ctx.replyContext.content, ...ctx.replyContext.chain.map((message) => message.content)].join("\n")
         : undefined,
       config: ctx.config,
-    });
-  const state = { groups, expandedAll: false };
-  scopedToolsetCache.set(state, scopedToolset({ config: ctx.config, groups }));
+  });
+  const state: ToolsetState = { groups, expandedAll: false };
+  scopedToolsetCache.set(
+    state,
+    scopedToolset({ config: ctx.config, groups }),
+  );
   return state;
 }
 
@@ -57,14 +57,18 @@ export function handleAdditionalToolsRequest(
   state: ToolsetState,
 ): AgentResponse {
   const requestedGroups = stringArrayArgument(route.arguments, "groups");
-  const scoped = requestAdditionalToolGroups({ requestedGroups, currentGroups: state.groups, config: ctx.config });
+  const scoped = requestAdditionalToolGroups({
+    requestedGroups,
+    currentGroups: state.groups,
+    config: ctx.config,
+  });
   const reason = stringArgument(route.arguments, "reason") ?? "No reason provided.";
   const invalidGroups = (requestedGroups ?? []).filter((group) => !TOOL_GROUPS.includes(group as ToolGroup));
   return {
     content: cleanResponse(
       [
         `Additional tool groups enabled: ${[...scoped.groups].sort().join(", ")}.`,
-        invalidGroups.length > 0 ? `Unrecognized groups (${invalidGroups.join(", ")}) were replaced by all available groups.` : null,
+        invalidGroups.length > 0 ? `Unrecognized groups were not enabled: ${invalidGroups.join(", ")}.` : null,
         `Available tools now: ${scoped.localTools.map((tool) => tool.name).join(", ")}; ${scoped.serverTools.map((tool) => tool.type).join(", ")}.`,
         `Reason: ${reason}`,
       ].filter(Boolean).join("\n"),
@@ -80,10 +84,14 @@ export function expandToolsetState(
   const requestedGroups = stringArrayArgument(args, "groups");
   const validRequestedGroups = requestedGroups?.filter((group): group is ToolGroup => TOOL_GROUPS.includes(group as ToolGroup)) ?? [];
   const hasInvalidRequestedGroup = requestedGroups?.some((group) => !TOOL_GROUPS.includes(group as ToolGroup)) ?? false;
-  const groups = validRequestedGroups.length > 0 && !hasInvalidRequestedGroup ? validRequestedGroups : TOOL_GROUPS;
+  const groups = requestedGroups == null
+    ? TOOL_GROUPS
+    : validRequestedGroups.length > 0 && !hasInvalidRequestedGroup
+      ? validRequestedGroups
+      : [];
   return {
     groups: new Set([...state.groups, ...groups]),
-    expandedAll: validRequestedGroups.length === 0 || hasInvalidRequestedGroup,
+    expandedAll: requestedGroups == null,
   };
 }
 
@@ -108,7 +116,7 @@ function contextAttachments(
   return [
     ...attachments,
     ...(replyContext?.chain.flatMap((message) => message.attachments) ?? []),
-  ];
+  ].filter((attachment): attachment is DiscordAttachmentContext => Boolean(attachment));
 }
 
 function isImageAttachment(attachment: DiscordAttachmentContext) {

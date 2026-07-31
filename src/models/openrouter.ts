@@ -1,9 +1,14 @@
 import type { AppConfig } from "../config/env.js";
 import { durationMs, logger } from "../util/logger.js";
+import { openRouterReasoning, openRouterTemperature, type OpenRouterReasoningEffort } from "./openrouterReasoning.js";
+import { fetchOpenRouterModels, type OpenRouterModel } from "./openrouterModels.js";
 import { transcribeAudioViaOpenRouter, type TranscriptionInput, type TranscriptionResult } from "./openrouterTranscription.js";
+import { extractEstimatedCostUsd, extractTokenUsage, type OpenRouterTokenUsage } from "./openrouterUsage.js";
 
 export type { TranscriptionResult } from "./openrouterTranscription.js";
-
+export type { OpenRouterReasoningEffort } from "./openrouterReasoning.js";
+export type { OpenRouterTokenUsage } from "./openrouterUsage.js";
+export type { OpenRouterModel } from "./openrouterModels.js";
 export type ChatContentPart =
   | { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl?: "1h" } }
   | { type: "image_url"; image_url: { url: string } };
@@ -66,14 +71,6 @@ export type OpenRouterUrlCitation = {
   endIndex?: number;
 };
 
-export type OpenRouterTokenUsage = {
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  reasoningTokens?: number;
-  cachedInputTokens?: number;
-};
-
 export type ImageResult = {
   data: Array<{
     url?: string;
@@ -125,6 +122,14 @@ const MAX_CITATION_TITLE_CHARS = 300;
 export class OpenRouterClient {
   constructor(private readonly config: AppConfig["openRouter"]) {}
 
+  async listModels(options: { signal?: AbortSignal } = {}): Promise<OpenRouterModel[]> {
+    return fetchOpenRouterModels(
+      (path, body, timeoutMs, requestOptions) =>
+        this.request(path, body, timeoutMs, requestOptions),
+      options.signal,
+    );
+  }
+
   async chat(input: {
     messages: ChatMessage[];
     model?: string;
@@ -132,11 +137,16 @@ export class OpenRouterClient {
     toolChoice?: ToolChoice;
     temperature?: number;
     maxTokens?: number;
+    reasoningEffort?: OpenRouterReasoningEffort;
     retryPolicy?: OpenRouterRetryPolicy;
     signal?: AbortSignal;
   }): Promise<ChatResult> {
     const startedAt = Date.now();
     const model = input.model ?? this.config.chatModel;
+    const temperature = openRouterTemperature(
+      input.reasoningEffort,
+      input.temperature,
+    );
     const localToolCount = input.tools?.filter((tool) => tool.type === "function").length ?? 0;
     const hostedToolCount = input.tools?.filter((tool) => tool.type !== "function").length ?? 0;
     logger.info(
@@ -149,7 +159,8 @@ export class OpenRouterClient {
         localToolCount,
         hostedToolCount,
         maxTokens: input.maxTokens ?? 4096,
-        temperature: input.temperature ?? 0.3
+        temperature,
+        reasoningEffort: input.reasoningEffort
       },
       "OpenRouter chat request"
     );
@@ -161,8 +172,9 @@ export class OpenRouterClient {
         messages: messagesForPromptCaching(model, input.messages),
         tools: input.tools,
         tool_choice: input.toolChoice,
-        temperature: input.temperature ?? 0.3,
-        max_tokens: input.maxTokens ?? 4096
+        temperature,
+        max_tokens: input.maxTokens ?? 4096,
+        reasoning: openRouterReasoning(input.reasoningEffort)
       },
       OPENROUTER_CHAT_TIMEOUT_MS,
       { retryPolicy: input.retryPolicy, signal: input.signal }
@@ -338,7 +350,12 @@ export class OpenRouterClient {
     path: string,
     body: Record<string, unknown>,
     timeoutMs: number,
-    options: { retryPolicy?: OpenRouterRetryPolicy; maxAttempts?: number; signal?: AbortSignal } = {}
+    options: {
+      retryPolicy?: OpenRouterRetryPolicy;
+      maxAttempts?: number;
+      signal?: AbortSignal;
+      method?: "GET" | "POST";
+    } = {}
   ): Promise<any> {
     if (!this.config.apiKey) {
       throw new Error("OPENROUTER_API_KEY is required for this operation.");
@@ -363,14 +380,14 @@ export class OpenRouterClient {
       let text: string;
       try {
         response = await fetch(`${this.config.baseUrl}${path}`, {
-          method: "POST",
+          method: options.method ?? "POST",
           headers: {
             Authorization: `Bearer ${this.config.apiKey}`,
             "Content-Type": "application/json",
             "HTTP-Referer": this.config.httpReferer,
             "X-Title": this.config.appTitle
           },
-          body: JSON.stringify(body),
+          body: options.method === "GET" ? undefined : JSON.stringify(body),
           signal: abortController.signal
         });
         // Keep the deadline active until the complete body is consumed. Fetch can
@@ -555,34 +572,6 @@ export function isOpenRouterHttpError(error: unknown): error is OpenRouterHttpEr
   return error instanceof OpenRouterHttpError;
 }
 
-function extractEstimatedCostUsd(json: any): number | undefined {
-  const usage = json?.usage;
-  const rawCost = usage?.cost ?? usage?.total_cost ?? usage?.cost_usd ?? usage?.total_cost_usd;
-  const cost = typeof rawCost === "string" ? Number(rawCost) : rawCost;
-  return typeof cost === "number" && Number.isFinite(cost) ? cost : undefined;
-}
-
-function extractTokenUsage(json: any): OpenRouterTokenUsage | undefined {
-  const usage = json?.usage;
-  if (!usage || typeof usage !== "object") return undefined;
-  const normalized: OpenRouterTokenUsage = {
-    inputTokens: firstNumber(usage.prompt_tokens, usage.input_tokens, usage.inputTokens),
-    outputTokens: firstNumber(usage.completion_tokens, usage.output_tokens, usage.outputTokens),
-    totalTokens: firstNumber(usage.total_tokens, usage.totalTokens),
-    reasoningTokens: firstNumber(usage.reasoning_tokens, usage.reasoningTokens),
-    cachedInputTokens: firstNumber(
-      usage.cached_tokens,
-      usage.cached_input_tokens,
-      usage.cachedInputTokens,
-      usage.prompt_tokens_details?.cached_tokens,
-      usage.input_tokens_details?.cached_tokens,
-      usage.cache_read_input_tokens
-    )
-  };
-  const compact = Object.fromEntries(Object.entries(normalized).filter(([, value]) => value != null)) as OpenRouterTokenUsage;
-  return Object.keys(compact).length > 0 ? compact : undefined;
-}
-
 function extractServerToolUse(json: any): Record<string, number> | undefined {
   const normalized: Record<string, number> = {};
   const sources = [json?.usage?.server_tool_use, json?.usage?.server_tool_use_details];
@@ -632,14 +621,6 @@ function nonNegativeInteger(value: unknown) {
   const parsed = typeof value === "string" ? Number(value) : value;
   if (typeof parsed !== "number" || !Number.isFinite(parsed) || parsed < 0) return undefined;
   return Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(parsed));
-}
-
-function firstNumber(...values: unknown[]): number | undefined {
-  for (const value of values) {
-    const parsed = typeof value === "string" ? Number(value) : value;
-    if (typeof parsed === "number" && Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
 }
 
 function finishReasonFromChoice(choice: any): string | undefined {

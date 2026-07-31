@@ -1,9 +1,11 @@
 import type { Client, Message } from "discord.js";
 import type { Logger } from "pino";
 import { isOpenRouterContentFilterError } from "../models/openrouter.js";
-import type { DiscordAgentRequestJob } from "../jobs/queue.js";
+import type { AgentRuntimeExecutionJob } from "../jobs/queue.js";
 import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
 import { InProcessAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
+import { continuationEvidenceFromResponse } from "../agent/continuationEvidence.js";
+import { isInternalControlText } from "../agent/internalControlText.js";
 import { agentRuntimeTurnInputText, assertAgentRuntimeTurnEnvelopeScope, loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
 import { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution } from "../agent/runtimeLedger.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
@@ -41,7 +43,7 @@ import {
 
 export async function runQueuedAgentRuntimeExecution(
   input: DiscordAgentRequestInput & { client: Client },
-  job: DiscordAgentRequestJob
+  job: AgentRuntimeExecutionJob
 ) {
   const existingDelivery = job.agentExecutionId
     ? await input.deliveryObligations?.getByExecutionId(job.agentExecutionId).catch(() => undefined)
@@ -193,6 +195,12 @@ export async function executeDiscordAgentRequest(
   const userDisplayName = turnEnvelope.userDisplayName;
   const visibleChannelIds = turnEnvelope.visibleChannelIds;
   const mentionedUserIds = turnEnvelope.mentionedUserIds;
+  const mentionedUsers = turnEnvelope.mentionedUsers ?? mentionedUserIds.map((userId) => ({
+    userId,
+    mention: `<@${userId}>`,
+    username: null,
+    displayName: null,
+  }));
   const mentionedChannelIds = turnEnvelope.mentionedChannelIds;
   const replyContext = turnEnvelope.replyContext ?? undefined;
   const requestAttachments = turnEnvelope.requestAttachments;
@@ -243,6 +251,7 @@ export async function executeDiscordAgentRequest(
       }),
       visibleChannelIds,
       mentionedUserIds,
+      mentionedUsers,
       mentionedChannelIds,
       threadKey,
       sessionMessages: priorSessionMessages,
@@ -461,7 +470,14 @@ export async function executeDiscordAgentRequest(
       requestLogger.debug({ memoryEventCount: response.memoryEvents.length }, "Kept tool results in trace memory only");
     }
 
-    await input.repo.appendConversationTurn({
+    if (isInternalControlText(storedResponseContent)) {
+      await recordTraceEvent(input.repo, {
+        eventName: "agent.memory.internal_control_rejected",
+        level: "warn",
+        summary: "Skipped internal control text instead of persisting it as assistant conversation memory.",
+        metadata: { replyMessageId: finalReply.id },
+      }).catch((error) => requestLogger.warn({ err: error }, "Failed to record rejected assistant-memory content"));
+    } else await input.repo.appendConversationTurn({
       threadKey,
       turnId: request.requestId,
       user: {
@@ -487,7 +503,8 @@ export async function executeDiscordAgentRequest(
           discordUrl: finalReply.url,
           responseRedacted,
           sourceMessageReaction: reactionOutcome?.added[0] ?? null,
-          files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? []
+          files: response.files?.map((file) => ({ name: file.name, contentType: file.contentType, bytes: file.data.length })) ?? [],
+          continuationEvidence: continuationEvidenceFromResponse(response),
         }
       }
     }).catch((error) => requestLogger.warn({ err: error, replyMessageId: finalReply.id }, "Failed to append delivered Discord turn to conversation memory"));

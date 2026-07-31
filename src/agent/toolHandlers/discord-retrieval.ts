@@ -9,8 +9,6 @@ import { stringArgument, stringArgumentPreservingEmpty, stringArrayArgument, enu
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
-// Uniform signatures intentionally expose only the inputs each tool needs.
-/* eslint-disable @typescript-eslint/no-unused-vars */
 export const discordRetrievalToolHandlers = {
   "findDiscordUsers": async (ctx, route, originalText) => {
     return {
@@ -36,7 +34,7 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "listDiscordBugMarkers": async (ctx, route, originalText) => {
+  "listDiscordBugMarkers": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(await listDiscordBugMarkers(ctx, {
             limit: numberArgument(route.arguments, "limit"),
@@ -55,7 +53,7 @@ export const discordRetrievalToolHandlers = {
           }),
         };
   },
-  "summarizeDiscordThread": async (ctx, route, originalText) => {
+  "summarizeDiscordThread": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await summarizeCurrentThread(ctx, {
@@ -65,7 +63,7 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "getRecentDiscordMessages": async (ctx, route, originalText) => {
+  "getRecentDiscordMessages": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await getRecentDiscordMessages(ctx, {
@@ -77,7 +75,7 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "getRecentAgentMemory": async (ctx, route, originalText) => {
+  "getRecentAgentMemory": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await getRecentAgentMemory(ctx, {
@@ -91,7 +89,7 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "getAgentMemoryStats": async (ctx, route, originalText) => {
+  "getAgentMemoryStats": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await getAgentMemoryStats(ctx, {
@@ -123,7 +121,7 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "searchDiscordAttachments": async (ctx, route, originalText) => {
+  "searchDiscordAttachments": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await searchDiscordAttachments(ctx, {
@@ -137,7 +135,7 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "getDiscordStats": async (ctx, route, originalText) => {
+  "getDiscordStats": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await getDiscordStats(ctx, {
@@ -165,7 +163,7 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "getDiscordChannelTopics": async (ctx, route, originalText) => {
+  "getDiscordChannelTopics": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await getDiscordChannelTopics(ctx, {
@@ -239,6 +237,7 @@ export const discordRetrievalToolHandlers = {
               ),
               dateFrom: stringArgument(route.arguments, "dateFrom"),
               dateTo: stringArgument(route.arguments, "dateTo"),
+              hourOfDayUtc: numberArgument(route.arguments, "hourOfDayUtc"),
               limit: numberArgument(route.arguments, "limit"),
               requestText: originalText,
             },
@@ -248,4 +247,3 @@ export const discordRetrievalToolHandlers = {
       };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
-/* eslint-enable @typescript-eslint/no-unused-vars */

@@ -7,6 +7,11 @@ const config = {
   appTitle: "Discord AI Agent Test",
   httpReferer: "http://localhost",
   chatModel: "test/chat",
+  chatFallbackModel: "test/chat-fallback",
+  chatReasoningEffort: "low" as const,
+  chatFallbackReasoningEffort: "medium" as const,
+  chatMaxTokens: 2_560,
+  chatFallbackMaxTokens: 3_072,
   codegenModel: "test/codegen",
   utilityModel: "test/utility",
   embeddingModel: "test/embed",
@@ -18,6 +23,33 @@ describe("OpenRouterClient", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("loads the model catalog with a GET request", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
+      data: [
+        {
+          id: "anthropic/claude-sonnet-5",
+          name: "Anthropic: Claude Sonnet 5",
+          canonical_slug: "anthropic/claude-sonnet-5",
+        },
+      ],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenRouterClient(config);
+    await expect(client.listModels()).resolves.toEqual([{
+      id: "anthropic/claude-sonnet-5",
+      name: "Anthropic: Claude Sonnet 5",
+      canonicalSlug: "anthropic/claude-sonnet-5",
+    }]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://openrouter.test/api/v1/models",
+      expect.objectContaining({
+        method: "GET",
+        body: undefined,
+      }),
+    );
   });
 
   it("sends embedding dimensions", async () => {
@@ -176,7 +208,7 @@ describe("OpenRouterClient", () => {
           prompt_tokens: 11,
           completion_tokens: 4,
           total_tokens: 15,
-          reasoning_tokens: "2",
+          completion_tokens_details: { reasoning_tokens: "2" },
           prompt_tokens_details: { cached_tokens: 3 }
         }
       })
@@ -222,6 +254,37 @@ describe("OpenRouterClient", () => {
         body: expect.stringContaining("\"tools\"")
       })
     );
+  });
+
+  it("sends bounded reasoning effort without returning reasoning details", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model: "openai/gpt-5.6-luna",
+        choices: [{ message: { content: "Short answer" } }],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new OpenRouterClient(config).chat({
+      model: "openai/gpt-5.6-luna",
+      messages: [{ role: "user", content: "hello" }],
+      reasoningEffort: "low",
+      maxTokens: 2_560,
+    });
+
+    const body = JSON.parse(
+      String(
+        ((fetchMock.mock.calls[0] as unknown[] | undefined)?.[1] as
+          | RequestInit
+          | undefined)?.body ?? "{}",
+      ),
+    );
+    expect(body).toMatchObject({
+      model: "openai/gpt-5.6-luna",
+      max_tokens: 2_560,
+      reasoning: { effort: "low", exclude: true },
+    });
+    expect(body.temperature).toBeUndefined();
   });
 
   it("normalizes transparent server-tool usage and bounded URL citations", async () => {
@@ -273,7 +336,7 @@ describe("OpenRouterClient", () => {
     expect(JSON.stringify(result.urlCitations)).not.toContain("scraped content");
   });
 
-  it("normalizes the legacy server-tool usage field", async () => {
+  it("normalizes the alternate server-tool usage field", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
       choices: [{ message: { content: "Grounded answer" } }],
       usage: { server_tool_use: { web_search_requests: 1 } },

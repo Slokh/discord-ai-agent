@@ -1,4 +1,5 @@
 import type { ToolContext } from "../tools/types.js";
+import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
 
 const MEDIA_TRANSCRIPTION_GUIDANCE =
   "I can transcribe common audio and video attachments. Attach the media here or reply to the Discord message containing it, and I’ll transcribe it.";
@@ -6,19 +7,53 @@ const MEDIA_TRANSCRIPTION_GUIDANCE =
 export type CapabilityClaimCorrection = {
   content: string;
   corrected: boolean;
-  capability?: "discord_media_transcription";
+  capability?: "discord_media_transcription" | "runtime_model_identity" | "agent_model_mutation";
 };
 
 /**
- * Keep model-authored capability claims aligned with deterministic deployed
- * capabilities. This guard is intentionally narrow: it only corrects a hard
- * media-transcription refusal when the request has no attachment to inspect.
+ * Keep model-authored capability and runtime-identity claims aligned with
+ * deterministic observed facts. Corrections remain intentionally narrow.
  */
 export function correctKnownCapabilityClaim(
   ctx: ToolContext,
   userText: string,
   content: string,
+  actualModel?: string,
 ): CapabilityClaimCorrection {
+  if (hasRuntimeModelIdentityIntent(userText)) {
+    const model = (actualModel ?? effectiveAgentChatModel(ctx) ?? "")
+      .replace(/`/g, "")
+      .trim();
+    if (model) {
+      return {
+        content: `This reply is running on \`${model}\`.`,
+        corrected: content.trim() !== `This reply is running on \`${model}\`.`,
+        capability: "runtime_model_identity",
+      };
+    }
+  }
+
+  if (hasAgentModelMutationCompletionClaim(content)) {
+    const mutation = ctx.agentModelMutation;
+    if (!mutation?.succeeded) {
+      return {
+        content: "I didn’t change this server’s model. The current message must explicitly ask for a switch or reset, and only the configured bot owner or an ops admin can make that change.",
+        corrected: true,
+        capability: "agent_model_mutation",
+      };
+    }
+    if (mutation.effectiveModel) {
+      const corrected = replaceConflictingModelIds(content, mutation.effectiveModel);
+      if (corrected !== content) {
+        return {
+          content: corrected,
+          corrected: true,
+          capability: "agent_model_mutation",
+        };
+      }
+    }
+  }
+
   if (hasDiscordAttachment(ctx)) return { content, corrected: false };
 
   const requestContext = [userText, ...replyContextText(ctx)].join("\n");
@@ -34,6 +69,26 @@ export function correctKnownCapabilityClaim(
     corrected: true,
     capability: "discord_media_transcription",
   };
+}
+
+function hasAgentModelMutationCompletionClaim(content: string) {
+  const start = content.trim().slice(0, 500);
+  return /^(?:done\b[\s,:—-]*)?(?:(?:i(?:'ve|\s+have)?\s+)?(?:switched|changed|set)\b.{0,160}(?:\bmodel\b|\bto\s+(?:`?[a-z0-9._-]+\/[a-z0-9._:-]+`?|\b(?:sonnet|kimi|claude|gpt)\b))|(?:(?:this|the)\s+server(?:'s)?\s+)?(?:primary\s+|chat\s+)?model\s+is\s+now\b)/is
+    .test(start);
+}
+
+function replaceConflictingModelIds(content: string, effectiveModel: string) {
+  return content.replace(
+    /`?([A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*)`?/g,
+    (full, model: string) =>
+      model.toLowerCase() === effectiveModel.toLowerCase()
+        ? full
+        : `\`${effectiveModel}\``,
+  );
+}
+
+function hasRuntimeModelIdentityIntent(value: string) {
+  return /\b(?:what|which)\s+(?:(?:ai|language|chat)\s+)?(?:model|llm)\s+(?:(?:are|is)\s+(?:you|this)|(?:do|does)\s+(?:you|this|the bot)\s+use|are\s+we\s+using)\b/i.test(value);
 }
 
 function hasDiscordAttachment(ctx: ToolContext) {

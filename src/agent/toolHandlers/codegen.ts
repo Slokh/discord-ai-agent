@@ -4,8 +4,6 @@ import { stringArgument, stringArrayArgument, numberArgument } from "./arguments
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
-// Uniform signatures intentionally expose only the inputs each tool needs.
-/* eslint-disable @typescript-eslint/no-unused-vars */
 export const codegenToolHandlers = {
   "runCodingAgent": async (ctx, route, originalText) => {
     return {
@@ -30,7 +28,7 @@ export const codegenToolHandlers = {
           ),
         };
   },
-  "getAgentTaskStatus": async (ctx, route, originalText) => {
+  "getAgentTaskStatus": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await getAgentTaskStatus(ctx, {
@@ -41,7 +39,7 @@ export const codegenToolHandlers = {
           ),
         };
   },
-  "listAgentTasks": async (ctx, route, originalText) => {
+  "listAgentTasks": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await listAgentTasks(ctx, {
@@ -52,7 +50,7 @@ export const codegenToolHandlers = {
           ),
         };
   },
-  "retryAgentTask": async (ctx, route, originalText) => {
+  "retryAgentTask": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await retryAgentTask(ctx, {
@@ -62,7 +60,7 @@ export const codegenToolHandlers = {
           ),
         };
   },
-  "cancelAgentTask": async (ctx, route, originalText) => {
+  "cancelAgentTask": async (ctx, route, _originalText) => {
     return {
           content: cleanResponse(
             await cancelAgentTask(ctx, {
@@ -74,4 +72,3 @@ export const codegenToolHandlers = {
         };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
-/* eslint-enable @typescript-eslint/no-unused-vars */

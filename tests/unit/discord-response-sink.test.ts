@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_DISCORD_LOADING_REACTION, DiscordResponseSink, discordDeliveryNonce } from "../../src/discord/responseSink.js";
 
+const suppressedMentions = { parse: [], repliedUser: false };
+
 describe("DiscordResponseSink", () => {
   it("acknowledges with a loading reaction and replies final content when no status message exists", async () => {
     const reaction = fakeReaction();
@@ -16,9 +18,29 @@ describe("DiscordResponseSink", () => {
     const result = await sink.sendFinal({ content: "done" });
 
     expect(sourceMessage.react).toHaveBeenCalledWith(DEFAULT_DISCORD_LOADING_REACTION);
-    expect(sourceMessage.reply).toHaveBeenCalledWith({ content: "done" });
+    expect(sourceMessage.reply).toHaveBeenCalledWith({
+      content: "done",
+      allowedMentions: suppressedMentions
+    });
     expect(reaction.users.remove).toHaveBeenCalledWith("bot-user");
     expect(result.usedStatusMessage).toBe(false);
+  });
+
+  it("suppresses all Discord mention parsing on the primary final reply", async () => {
+    const sourceMessage = fakeMessage();
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: sourceMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any
+    });
+
+    await sink.sendFinal({ content: "Synthetic notice for @everyone and @here." });
+
+    expect(sourceMessage.reply).toHaveBeenCalledWith({
+      content: "Synthetic notice for @everyone and @here.",
+      allowedMentions: suppressedMentions
+    });
   });
 
   it("uses stable enforced nonces to make retried message creation idempotent", async () => {
@@ -34,6 +56,7 @@ describe("DiscordResponseSink", () => {
       content: "done",
       nonce: `${discordDeliveryNonce("request-1")}00`,
       enforceNonce: true,
+      allowedMentions: suppressedMentions,
     });
   });
 
@@ -56,7 +79,8 @@ describe("DiscordResponseSink", () => {
     });
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# [trace](<https://tasks.example/runs/run-1>) · 42.183s"
+      content: "done\n\n-# 💸 [transfer](<https://explore.tempo.xyz/tx/abc>)\n-# [trace](<https://tasks.example/runs/run-1>) · 42.183s",
+      allowedMentions: suppressedMentions
     });
   });
 
@@ -85,7 +109,8 @@ describe("DiscordResponseSink", () => {
         "1     🍒      🍋      ❌ Loss",
         "2     🍀      🍀      85x — +$420",
         "```"
-      ].join("\n")
+      ].join("\n"),
+      allowedMentions: suppressedMentions
     });
   });
 
@@ -182,9 +207,18 @@ describe("DiscordResponseSink", () => {
     const secondStatus = await sink.updateStatus("still working");
     const result = await sink.sendFinal({ content: "done" });
 
-    expect(sourceMessage.reply).toHaveBeenCalledWith("working");
-    expect(statusMessage.edit).toHaveBeenCalledWith("still working");
-    expect(editedStatusMessage.edit).toHaveBeenCalledWith({ content: "done" });
+    expect(sourceMessage.reply).toHaveBeenCalledWith({
+      content: "working",
+      allowedMentions: suppressedMentions
+    });
+    expect(statusMessage.edit).toHaveBeenCalledWith({
+      content: "still working",
+      allowedMentions: suppressedMentions
+    });
+    expect(editedStatusMessage.edit).toHaveBeenCalledWith({
+      content: "done",
+      allowedMentions: suppressedMentions
+    });
     expect(firstStatus.id).toBe("status-1");
     expect(secondStatus.id).toBe("status-1");
     expect(result.usedStatusMessage).toBe(true);
@@ -204,7 +238,10 @@ describe("DiscordResponseSink", () => {
     await sink.updateStatus("still running");
 
     expect(sourceMessage.reply).not.toHaveBeenCalled();
-    expect(statusMessage.edit).toHaveBeenCalledWith("still running");
+    expect(statusMessage.edit).toHaveBeenCalledWith({
+      content: "still running",
+      allowedMentions: suppressedMentions
+    });
   });
 
   it("attaches final response files through the shared sink", async () => {
@@ -223,7 +260,8 @@ describe("DiscordResponseSink", () => {
 
     expect(sourceMessage.reply).toHaveBeenCalledWith({
       content: "image",
-      files: [expect.objectContaining({ name: "image.png" })]
+      files: [expect.objectContaining({ name: "image.png" })],
+      allowedMentions: suppressedMentions
     });
   });
 
@@ -285,7 +323,10 @@ describe("DiscordResponseSink", () => {
       registrations: [],
     });
 
-    expect(statusMessage.edit).toHaveBeenCalledWith(fallbackPayload);
+    expect(statusMessage.edit).toHaveBeenCalledWith({
+      ...fallbackPayload,
+      allowedMentions: suppressedMentions
+    });
   });
 
   it("falls back to cached loading reaction cleanup when the acknowledgement reaction was not captured", async () => {
@@ -352,7 +393,10 @@ describe("DiscordResponseSink", () => {
 
     await sink.acknowledge();
 
-    expect(sourceMessage.reply).toHaveBeenCalledWith("Working on it...");
+    expect(sourceMessage.reply).toHaveBeenCalledWith({
+      content: "Working on it...",
+      allowedMentions: suppressedMentions
+    });
   });
 
   it("adds reactions to a final reply message", async () => {

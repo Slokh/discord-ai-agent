@@ -37,6 +37,12 @@ export async function awaitRandomWagerAction(ctx: ToolContext, input: {
 
   const wager = await currentWagerForContext(ctx);
   if (!wager) return "Could not pause wallet game: no active wager exists for this player in this Discord game session.";
+  if (
+    wager.game.trim().toLowerCase() === "blackjack" &&
+    allowedActions.some((action) => action !== "hit" && action !== "stand")
+  ) {
+    return "Could not pause wallet game: standard blackjack currently supports only hit and stand so settlement remains deterministic.";
+  }
   const suppliedWagerId = input.wagerId?.trim();
   if (suppliedWagerId && suppliedWagerId !== wager.id) {
     await paymentRecorder(ctx)({

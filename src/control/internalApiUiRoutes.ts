@@ -86,31 +86,5 @@ export async function handleInternalUiRoute(
     return true;
   }
 
-  if (method === "GET" && url.pathname === "/tasks") {
-    if (
-      !authorizedUi(input.config, input.request, input.response, url, {
-        redirectOnQueryAuth: true,
-      })
-    )
-      return true;
-    sendRedirect(input.response, "/runs");
-    return true;
-  }
-
-  const taskPageMatch = url.pathname.match(/^\/tasks\/([^/]+)$/);
-  if (method === "GET" && taskPageMatch) {
-    if (
-      !authorizedUi(input.config, input.request, input.response, url, {
-        redirectOnQueryAuth: true,
-      })
-    )
-      return true;
-    sendRedirect(
-      input.response,
-      `/runs/${encodeURIComponent(decodeURIComponent(taskPageMatch[1] ?? ""))}`,
-    );
-    return true;
-  }
-
   return false;
 }

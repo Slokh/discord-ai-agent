@@ -3,11 +3,24 @@ import { atomicToUsd } from "../payments/money.js";
 import type { WagerReservation } from "../payments/types.js";
 import { wagerThreadKeyForContext } from "../tools/randomTools.js";
 import type { ToolContext } from "../tools/types.js";
+import { insertInitialSystemContext } from "./promptBuilder.js";
 
 export type ActiveGameSessionContext = {
   wager: WagerReservation;
   actionRequested: boolean;
 };
+
+export function activeGameActionNeedsRandomDraw(
+  active: ActiveGameSessionContext | null,
+  userText: string,
+) {
+  if (!active?.actionRequested) return false;
+  const action = userText.trim().toLowerCase();
+  if (/\bblackjack\b/i.test(active.wager.game)) {
+    return /\b(?:hit|stand|double|split)\b/i.test(action);
+  }
+  return /\b(?:roll|reroll|draw|deal|spin|flip)\b/i.test(action);
+}
 
 export async function loadActiveGameSession(
   ctx: ToolContext,
@@ -32,7 +45,10 @@ export function injectActiveGameSession(
   messages: ChatMessage[],
   active: ActiveGameSessionContext | null
 ) {
-  if (!active) return;
+  // A reply chain may contain an unresolved game while the current user starts a
+  // complete new request. Only inject the game when this turn selected one of
+  // its durable allowed actions, so it cannot compete with the current task.
+  if (!active?.actionRequested) return;
   const wager = active.wager;
   const state = JSON.stringify(wager.decisionState);
   const content = [
@@ -46,7 +62,22 @@ export function injectActiveGameSession(
     wager.actionPrompt ? `Pending prompt: ${wager.actionPrompt}` : null,
     "Treat the latest user message as the only new input. If it selects an allowed action, apply exactly that action to the saved state. Use drawRandom without a new wager only if that action needs additional chance, then either call awaitRandomWagerAction with the updated complete state and current version or call settleRandomWager for a final outcome using resolutionSource=player_decision. Never reserve a second wager for this game. If the message is a question or does not choose an allowed action, answer conversationally without changing state."
   ].filter((line): line is string => line !== null).join("\n");
-  messages.splice(Math.max(0, messages.length - 1), 0, { role: "system", content });
+  insertInitialSystemContext(messages, content);
+}
+
+export function injectAutomaticStarterFunding(
+  messages: ChatMessage[],
+  funding: string | null,
+) {
+  if (!funding) return;
+  insertInitialSystemContext(
+    messages,
+    [
+      "Automatic starter funding succeeded before this request. Treat the following as verified wallet evidence.",
+      funding,
+      "Do not call requestStarterFunds again for this request or repeat the transaction hash; the transfer link is added to the footer. Continue with the user request conversationally.",
+    ].join("\n"),
+  );
 }
 
 function matchesAllowedAction(text: string, actions: string[]) {

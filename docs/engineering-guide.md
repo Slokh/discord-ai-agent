@@ -49,11 +49,12 @@ Do not create parallel state because an existing read path is inconvenient.
 | Per-channel conversation continuity | Conversation memory repository | Prompt assembly in `src/agent/promptBuilder.ts` |
 | Request identity and scope | Immutable Discord turn envelope/requester scope | `ToolContext`, permission and action guards |
 | Discord delivery obligations | `delivery_obligations` repository | `src/discord/responseSink.ts` and startup sweeps |
-| Code-update task compatibility state | `agent_tasks` projection linked to an agent-runtime execution | Discord task notifications and task APIs |
+| Code-update task state | `agent_tasks` projection linked to an agent-runtime execution | Discord task notifications and task APIs |
 | Wallet accounts, transfers, and wagers | Payment repository plus receipt-verified onchain state | Wallet service, payment tools, payments console |
 | Chance sessions and draws | RNG repository | Non-model proof footers and verifier script |
-| Private skills and server overlay | Postgres | Prompt loader and skill tools |
-| Server-specific local content | `.discord-ai-agent/` | Prompt overlay, private evals, exported skills |
+| Static prompt skills | Repository `skills/` directory | Prompt loader |
+| Private server overlay | Postgres or `.discord-ai-agent/` | Server/prompt overlay loaders |
+| Server-specific local content | `.discord-ai-agent/` | Prompt overlay and private evals |
 
 See [`agent-runtime.md`](agent-runtime.md), [`wallets.md`](wallets.md), and [`provable-rng.md`](provable-rng.md) before changing those high-risk areas.
 
@@ -115,7 +116,7 @@ Read [`wallets.md`](wallets.md) and [`provable-rng.md`](provable-rng.md). Preser
 
 ### Change the run console or tracing
 
-Define or extend typed runtime events first. Put reusable normalization and diagnostics in `src/observability/`; keep React focused on rendering. Show observed model I/O, tools, events, latency, cost, cache use, and artifacts without claiming private chain-of-thought. Add pure-helper unit tests and Playwright coverage for important workflows.
+Define or extend typed runtime events first. Put reusable normalization and diagnostics in `src/observability/`; keep React focused on rendering. Show observed model I/O, tools, events, latency, cost, cache use, and artifacts without claiming private chain-of-thought. Add focused unit tests for reusable projections, routing, streaming, and formatting behavior.
 
 ### Change code-update tasks
 
@@ -125,12 +126,12 @@ Read [`agent-runtime.md`](agent-runtime.md) and [`../src/execution/README.md`](.
 
 - New schema changes are forward-only numbered migrations. Do not edit a released migration to change production state.
 - Update the migration-upgrade fixture/test when the previous released schema must be proven upgradeable.
-- Put a query in the focused repository that owns the lifecycle; keep `src/db/repositories.ts` as a compatibility facade.
+- Put a query in the focused repository that owns the lifecycle; expose only the focused repository contract each caller needs.
 - Serialize competing mutations with transactions, row locks, advisory locks, unique constraints, or idempotency keys appropriate to the invariant.
 - Test cleanup and privacy deletion alongside creation when the state is derived from Discord content.
 - Run `npm run verify:db` before publishing DB-backed changes.
 
-Fresh installs currently use the squashed baseline plus later forward migrations. Older pre-squash installs use the documented one-time legacy transition; do not assume every deployed database was created from the latest baseline.
+Deployments use the squashed baseline plus later forward migrations.
 
 ## Observability Requirements
 
@@ -160,15 +161,17 @@ Choose coverage by behavior, not file type.
 | Repository or migration | DB integration and upgrade test where relevant | `npm run verify:db` |
 | Wallet/RNG concurrency or idempotency | Unit plus DB-backed invariant test | `npm run verify:db` |
 | Discord delivery lifecycle | Response-sink/API/delivery unit test | `npm run verify` |
-| Run-console interaction | Pure projection test plus Playwright | `npm run build && npm run test:e2e` |
+| Run-console interaction | Pure projection and routing tests plus a production build | `npm run build` |
 | Deployment/Helm/Terraform | Render/lint/validate the changed layer | CI production checks |
 | Documentation links | `npm run docs:check` | `npm run verify` |
 
-`npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB flag, a critical-level production dependency audit, documentation checks, and the release scanner. CI additionally runs coverage, changed-file coverage, production build, Playwright, Helm, Terraform, DB coverage, CodeQL, and container security.
+`npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB flag, a critical-level production dependency audit, documentation checks, and the release scanner. Pull-request CI additionally runs coverage and changed-file coverage, always runs DB coverage, and runs Helm/Terraform or container security only when their owned inputs change. Main keeps a compact merged-revision test/build gate while publishing cached release images in parallel; deployment reuses those exact images.
 
 Live evals can call providers and use configured private data. Run them only when that is intended; keep server-specific cases under `.discord-ai-agent/evals`.
 
 ## Debugging Order
+
+For post-deploy Discord regressions, first follow [`deployment-debugging.md`](deployment-debugging.md). Audit the whole affected channel and its reply chains since the deployed revision before treating a linked response as an isolated failure.
 
 For a Discord link or “what happened here” report:
 

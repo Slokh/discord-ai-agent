@@ -1,10 +1,354 @@
 import { describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { handleAgentRequest } from "../../src/agent/router.js";
-import { OpenRouterTimeoutError } from "../../src/models/openrouter.js";
+import type { RngDrawInput, RngSessionRecord, RngSessionTx } from "../../src/db/rngRepository.js";
+import {
+  OpenRouterContentFilterError,
+  OpenRouterHttpError,
+  OpenRouterTimeoutError,
+} from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
+import { rngCommitment } from "../../src/rng/provable.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("agent router", () => {
+
+  it("replays a reply-chain emote question with exact reacted emoji and learned visible usage", async () => {
+    const targetProfiles = [
+      {
+        emojiId: "101",
+        inlineUses: 2,
+        reactionUses: 6,
+        messageCount: 4,
+        lastUsedAt: new Date("2026-07-20T00:00:00.000Z"),
+        examples: [{
+          emojiId: "101",
+          kind: "reaction" as const,
+          messageId: "example-1",
+          content: "synthetic celebration context",
+          createdAt: new Date("2026-07-20T00:00:00.000Z"),
+        }],
+      },
+      {
+        emojiId: "102",
+        inlineUses: 1,
+        reactionUses: 4,
+        messageCount: 3,
+        lastUsedAt: new Date("2026-07-19T00:00:00.000Z"),
+        examples: [{
+          emojiId: "102",
+          kind: "reaction" as const,
+          messageId: "example-2",
+          content: "synthetic uncertainty context",
+          createdAt: new Date("2026-07-19T00:00:00.000Z"),
+        }],
+      },
+    ];
+    const listDiscordEmojiCultureProfiles = vi.fn(async (input: { emojiIds: string[] }) =>
+      input.emojiIds.length === 2 ? targetProfiles : []);
+    const chat = vi.fn(async (request: { messages: Array<{ content: unknown }> }) => {
+      const prompt = request.messages.map((message) => String(message.content)).join("\n");
+      const grounded =
+        prompt.includes("Reactions visible on this message: <:party:101> ×1, <:hmm:102> ×1") &&
+        prompt.includes("<:party:101> (4 observed messages)") &&
+        prompt.includes("<:hmm:102> (3 observed messages)");
+      return {
+        content: grounded
+          ? "Two custom reactions are on that ancestor; one is used for celebration and the other for uncertainty."
+          : "I cannot identify which emote you mean from the reply.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+        listDiscordEmojiCultureProfiles,
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      discordGuildEmojis: [
+        { id: "101", name: "party", animated: false, mention: "<:party:101>" },
+        { id: "102", name: "hmm", animated: false, mention: "<:hmm:102>" },
+        { id: "103", name: "unrelated", animated: false, mention: "<:unrelated:103>" },
+      ],
+      sessionMessages: [],
+      replyContext: {
+        messageId: "parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "AI",
+        authorIsBot: true,
+        content: "A synthetic reply.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: "2026-07-23T18:00:00.000Z",
+        url: "https://discord.com/channels/g/c/parent",
+        rootMessageId: "root",
+        chain: [
+          {
+            messageId: "root",
+            channelId: "c",
+            guildId: "g",
+            authorId: "u",
+            authorDisplayName: "User",
+            authorIsBot: false,
+            content: "A synthetic ancestor.",
+            attachmentSummaries: [],
+            attachments: [],
+            reactionSummaries: ["<:party:101> ×1", "<:hmm:102> ×1"],
+            createdAt: "2026-07-23T17:59:00.000Z",
+            url: "https://discord.com/channels/g/c/root",
+          },
+          {
+            messageId: "parent",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "AI",
+            authorIsBot: true,
+            content: "A synthetic reply.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-23T18:00:00.000Z",
+            url: "https://discord.com/channels/g/c/parent",
+          },
+        ],
+      },
+      requestId: "message-emote-question",
+      requestMessageId: "message-emote-question",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what does that emote mean?");
+
+    expect(response.content).toContain("Two custom reactions");
+    expect(listDiscordEmojiCultureProfiles).toHaveBeenCalledWith(expect.objectContaining({
+      guildId: "g",
+      visibleChannelIds: ["c"],
+      emojiIds: ["101", "102"],
+      limit: 2,
+    }));
+  });
+
+  it("answers a follow-up from its retained ancestor chain instead of asking for repeated context", async () => {
+    const chat = vi.fn(async (request: { messages: Array<{ content: unknown }> }) => {
+      const prompt = request.messages.map((message) => String(message.content)).join("\n");
+      const grounded =
+        prompt.includes("The opening lineup lists Rowan as the starter and Casey as the backup.") &&
+        prompt.includes("Casey is the listed backup.") &&
+        prompt.includes("Non-empty reply messages are already available context");
+      return {
+        content: grounded
+          ? "Yes—based on the retained lineup context, Casey is the backup for the opener."
+          : "I need the lineup context before I can answer.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const root = {
+      messageId: "root-lineup",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "The opening lineup lists Rowan as the starter and Casey as the backup.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-25T00:00:00.000Z",
+      url: "https://discord.com/channels/g/c/root-lineup",
+    };
+    const parent = {
+      messageId: "parent-lineup",
+      channelId: "c",
+      guildId: "g",
+      authorId: "bot",
+      authorDisplayName: "AI",
+      authorIsBot: true,
+      content: "Casey is the listed backup.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-25T00:01:00.000Z",
+      url: "https://discord.com/channels/g/c/parent-lineup",
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        ...parent,
+        rootMessageId: root.messageId,
+        chain: [root, parent],
+      },
+      requestId: "lineup-follow-up",
+      requestMessageId: "lineup-follow-up",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "can the backup play the opener?");
+
+    expect(response.content).toContain("Casey is the backup");
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays a harmless terse follow-up when the first draft falsely denies its retained Discord chain", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content:
+          "I can't access Discord member messages, so provide the relevant context before I can answer.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockImplementationOnce(async (request: { messages: Array<{ content: unknown }> }) => {
+        const prompt = request.messages
+          .map((message) => String(message.content))
+          .join("\n");
+        expect(prompt).toContain("The permission-visible Discord reply chain is already included");
+        expect(prompt).toContain("A synthetic member shared a playful server nickname.");
+        return {
+          content:
+            "Based on the retained exchange, it reads as a playful nickname rather than a verified profile fact.",
+          model: "router-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const root = {
+      messageId: "root-opinion",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "A synthetic member shared a playful server nickname.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-28T00:00:00.000Z",
+      url: "https://discord.com/channels/g/c/root-opinion",
+    };
+    const parent = {
+      messageId: "parent-opinion",
+      channelId: "c",
+      guildId: "g",
+      authorId: "bot",
+      authorDisplayName: "AI",
+      authorIsBot: true,
+      content: "That nickname sounds intentionally playful.",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: "2026-07-28T00:01:00.000Z",
+      url: "https://discord.com/channels/g/c/parent-opinion",
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        ...parent,
+        rootMessageId: root.messageId,
+        chain: [root, parent],
+      },
+      requestId: "opinion-follow-up",
+      requestMessageId: "opinion-follow-up",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "give a brief opinion");
+
+    expect(response.content).toContain("playful nickname");
+    expect(response.content).not.toContain("can't access Discord");
+    expect(chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers ordinary chat without inspecting or funding the requester's wallet", async () => {
+    const requestStarterFunds = vi.fn(async () => ({
+      granted: true as const,
+      amountUsd: 1,
+      transfer: { status: "confirmed", transactionHash: `0x${"7".repeat(64)}` },
+      destination: { balance: { formatted: "1" } },
+      source: { balance: { formatted: "22" } },
+    }));
+    const chat = vi.fn(async () => ({
+      content: "Recursion is when a process solves a problem by calling itself on a smaller version.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          tempoNetwork: "mainnet",
+          privyAppId: "app",
+          privyAppSecret: "secret",
+        },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      walletService: { requestStarterFunds },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "message-ordinary-chat",
+      requestMessageId: "message-ordinary-chat",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what is recursion?");
+
+    expect(response.content).toBe("Recursion is when a process solves a problem by calling itself on a smaller version.");
+    expect(response.footerLines ?? []).toEqual([]);
+    expect(requestStarterFunds).not.toHaveBeenCalled();
+    const modelRequest = (chat.mock.calls as any[])[0]?.[0];
+    expect(JSON.stringify(modelRequest.messages)).not.toContain("Automatic starter funding");
+  });
+
   it("automatically tops up starter funds before handling a below-target user request", async () => {
     const transactionHash = `0x${"8".repeat(64)}`;
     const requestStarterFunds = vi.fn(async (_input, record) => {
@@ -30,7 +374,6 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -74,180 +417,6 @@ describe("agent router", () => {
     expect(response.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
   });
 
-  it("uses the requester's verified wallet balance in a conversational response", async () => {
-    const chat = vi.fn(async () => ({
-      content: "You have exactly **$1.00** in your wallet.",
-      model: "router-model",
-      raw: {},
-      toolCalls: [],
-    }));
-    const getUserWalletSummary = vi.fn(async () => ({
-      wallet: { address: `0x${"1".repeat(40)}` },
-      balance: { formatted: "1", token: { symbol: "USDC.e" } }
-    }));
-    const ctx = {
-      config: {
-        maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: {},
-        payments: {
-          walletEnabled: true,
-          userWalletsEnabled: true,
-          privyAppId: "app",
-          privyAppSecret: "secret"
-        }
-      },
-      repo: {
-        auditTool: vi.fn(async () => undefined),
-        recordTraceEvent: vi.fn(async () => undefined)
-      },
-      walletService: { getUserWalletSummary },
-      openRouter: { chat },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      sessionMessages: [],
-      requestId: "message-1",
-      requestMessageId: "message-1"
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "balance");
-
-    expect(response.content).toBe("You have exactly **$1.00** in your wallet.");
-    expect(response.content).not.toContain("USDC.e");
-    expect(chat).toHaveBeenCalledTimes(1);
-    const synthesisRequest = (chat.mock.calls as any[])[0]?.[0];
-    expect(synthesisRequest.messages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ role: "user", content: expect.stringContaining("Your wallet: $1 USD") }),
-    ]));
-    expect(getUserWalletSummary).toHaveBeenCalledWith({ guildId: "g", userId: "u" }, expect.any(Function));
-  });
-
-  it("uses the verified bot balance in a conversational response", async () => {
-    const chat = vi.fn(async () => ({
-      content: "I currently have **$5.95** available.",
-      model: "router-model",
-      raw: {},
-      toolCalls: [],
-    }));
-    const getBotWalletSummary = vi.fn(async () => ({
-      wallet: { address: `0x${"2".repeat(40)}` },
-      balance: { formatted: "5.95", token: { symbol: "USDC.e" } },
-    }));
-    const getUserWalletSummary = vi.fn();
-    const ctx = {
-      config: {
-        maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: {},
-        payments: {
-          walletEnabled: true,
-          userWalletsEnabled: true,
-          privyAppId: "app",
-          privyAppSecret: "secret",
-        },
-      },
-      repo: {
-        auditTool: vi.fn(async () => undefined),
-        recordTraceEvent: vi.fn(async () => undefined),
-      },
-      walletService: { getBotWalletSummary, getUserWalletSummary },
-      openRouter: { chat },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      sessionMessages: [],
-      requestId: "message-2",
-      requestMessageId: "message-2",
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "what's your balance?");
-
-    expect(response.content).toBe("I currently have **$5.95** available.");
-    expect(getBotWalletSummary).toHaveBeenCalledWith("g", expect.any(Function));
-    expect(getUserWalletSummary).not.toHaveBeenCalled();
-    expect(chat).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses the live member wallet directory in a conversational response", async () => {
-    const chat = vi.fn(async () => ({
-      content: "Only AI and Alice have positive balances:\n\n```text\nWallet  Balance\nAI      $9.5\nAlice   $2.5\n```",
-      model: "router-model",
-      raw: {},
-      toolCalls: [],
-    }));
-    const traceEvents: Array<{ eventName: string; metadata?: Record<string, unknown> }> = [];
-    const listExistingUserWalletSummaries = vi.fn(async () => [{
-      userId: "alice",
-      wallet: { address: `0x${"3".repeat(40)}` },
-      balance: { formatted: "2.5", amountAtomic: 2_500_000n },
-      error: null,
-    }]);
-    const fetchDiscordGuildMembers = vi.fn(async () => [
-      { userId: "alice", username: "alice", displayName: "Alice", isBot: false },
-      { userId: "bob", username: "bob", displayName: "Bob", isBot: false },
-    ]);
-    const ctx = {
-      config: {
-        maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: {},
-        allowlists: { ownerUserId: null, opsUserIds: [] },
-        payments: {
-          walletEnabled: true,
-          userWalletsEnabled: true,
-          balancesPublic: true,
-          privyAppId: "app",
-          privyAppSecret: "secret",
-        },
-      },
-      repo: {
-        auditTool: vi.fn(async () => undefined),
-        getDiscordUserReferenceTerms: vi.fn(async () => [{
-          userId: "alice", username: "alice", globalName: "Alice", aliases: [], terms: []
-        }]),
-        recordTraceEvent: vi.fn(async (event) => {
-          traceEvents.push(event as { eventName: string; metadata?: Record<string, unknown> });
-        }),
-      },
-      walletService: {
-        listExistingUserWalletSummaries,
-        getBotWalletSummary: vi.fn(async () => ({
-          wallet: { address: `0x${"4".repeat(40)}` },
-          balance: { formatted: "9.5", amountAtomic: 9_500_000n }
-        }))
-      },
-      fetchDiscordGuildMembers,
-      openRouter: { chat },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      sessionMessages: [],
-      requestId: "message-3",
-      requestMessageId: "message-3",
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "every user's balance");
-
-    expect(response.content).toContain("```text\nWallet  Balance\nAI      $9.5\nAlice   $2.5\n```");
-    expect(response.content).not.toContain("Bob");
-    expect(chat).toHaveBeenCalledTimes(1);
-    expect(listExistingUserWalletSummaries).toHaveBeenCalledWith({ guildId: "g" });
-    expect(fetchDiscordGuildMembers).not.toHaveBeenCalled();
-    expect(traceEvents).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        eventName: "agent.deterministic_tool.selected",
-        metadata: expect.objectContaining({ toolName: "listWalletBalances" }),
-      }),
-    ]));
-  });
-
   it("lets the model present a model-selected wallet directory instead of returning the tool format verbatim", async () => {
     const chat = vi.fn()
       .mockResolvedValueOnce({
@@ -269,7 +438,6 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: false,
         openRouter: {},
         allowlists: { ownerUserId: null, opsUserIds: [] },
         payments: {
@@ -322,71 +490,6 @@ describe("agent router", () => {
         content: expect.stringContaining("| Alice | $2.5 |"),
       }),
     ]));
-  });
-
-  it("forces an explicit named transfer through the wallet tool on the first model round", async () => {
-    const transactionHash = `0x${"5".repeat(64)}`;
-    const chat = vi.fn()
-      .mockResolvedValueOnce({
-        content: "",
-        model: "router-model",
-        raw: {},
-        toolCalls: [{
-          id: "transfer-luke",
-          name: "transferWalletFunds",
-          argumentsText: JSON.stringify({ destination: "user", destinationUserId: "luke", amountUsd: 1 }),
-        }],
-      })
-      .mockResolvedValueOnce({ content: "Luke has his dollar back.", model: "router-model", raw: {}, toolCalls: [] });
-    const transferFromUser = vi.fn(async () => ({
-      transfer: { status: "confirmed", transactionHash },
-      source: { wallet: {}, balance: { formatted: "1" } },
-      destination: { wallet: {}, balance: { formatted: "1" } },
-    }));
-    const ctx = {
-      config: {
-        maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: {},
-        allowlists: { ownerUserId: null, opsUserIds: [] },
-        payments: {
-          walletEnabled: true,
-          userWalletsEnabled: true,
-          tempoNetwork: "mainnet",
-          privyAppId: "app",
-          privyAppSecret: "secret",
-        },
-      },
-      repo: {
-        auditTool: vi.fn(async () => undefined),
-        recordTraceEvent: vi.fn(async () => undefined),
-      },
-      walletService: { transferFromUser },
-      fetchDiscordGuildMembers: vi.fn(async () => [
-        { userId: "luke-id", username: "lukester", displayName: "Luke", isBot: false },
-      ]),
-      openRouter: { chat },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      sessionMessages: [],
-      requestId: "message-transfer",
-      requestMessageId: "message-transfer",
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "give luke back $1 so he can use it");
-
-    expect(response.content).toContain("Luke has his dollar back");
-    expect(chat.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
-      toolChoice: { type: "function", function: { name: "transferWalletFunds" } },
-    }));
-    expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
-      requestedByUserId: "u",
-      destination: { kind: "user", userId: "luke-id" },
-      amountUsd: 1,
-    }), expect.any(Function));
   });
 
   it("resumes a generic wallet game from versioned state in a Discord reply", async () => {
@@ -457,7 +560,6 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1_800,
-        toolsetScoping: true,
         openRouter: {},
         payments: {
           walletEnabled: true,
@@ -498,7 +600,34 @@ describe("agent router", () => {
         attachments: [],
         createdAt: null,
         url: null,
-        chain: [],
+        chain: [
+          {
+            messageId: "123456789012345669",
+            channelId: "c",
+            guildId: "g",
+            authorId: "u",
+            authorDisplayName: "User",
+            authorIsBot: false,
+            content: "A synthetic root request.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: null,
+            url: null,
+          },
+          {
+            messageId: "123456789012345671",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "ai",
+            authorIsBot: true,
+            content: "A synthetic earlier response.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: null,
+            url: null,
+          },
+        ],
       },
     } as unknown as ToolContext;
 
@@ -518,98 +647,6 @@ describe("agent router", () => {
     }), expect.any(Function));
   });
 
-  it("retries malformed tool calls with the original reply context and toolset", async () => {
-    const traceEvents: any[] = [];
-    const auditTool = vi.fn(async () => undefined);
-    const chat = vi
-      .fn()
-      .mockResolvedValueOnce({
-        content: "",
-        model: "router-model",
-        raw: {},
-        toolCalls: [{
-          id: "malformed-call",
-          name: "drawRandom(kind</arg_key><arg_value>integers</arg_value>",
-          argumentsText: "{}",
-        }],
-      })
-      .mockResolvedValueOnce({
-        content: "",
-        model: "router-model",
-        raw: {},
-        toolCalls: [{
-          id: "valid-call",
-          name: "drawRandom",
-          argumentsText: JSON.stringify({
-            kind: "integers",
-            count: 30,
-            min: 1,
-            max: 8,
-            reason: "10 slot spins × 3 reels",
-          }),
-        }],
-      })
-      .mockResolvedValueOnce({
-        content: "I couldn't complete verified spins because the RNG store is unavailable.",
-        model: "router-model",
-        raw: {},
-        toolCalls: [],
-      });
-    const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
-      repo: {
-        auditTool,
-        recordTraceEvent: vi.fn(async (event: any) => {
-          traceEvents.push(event);
-        }),
-      },
-      openRouter: { chat },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      threadKey: "discord:g:c",
-      visibleChannelIds: ["c"],
-      sessionMessages: [],
-      replyContext: {
-        messageId: "previous-reply",
-        channelId: "c",
-        guildId: "g",
-        rootMessageId: "original-request",
-        authorId: "bot",
-        authorDisplayName: "ai",
-        authorIsBot: true,
-        content: "10 spins at $5 each with slot results",
-        createdAt: "2026-07-13T18:49:13.000Z",
-        url: null,
-        attachmentSummaries: [],
-        attachments: [],
-        chain: [],
-      },
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "10 more, win this time");
-
-    expect(response.content).toContain("RNG store is unavailable");
-    expect(chat).toHaveBeenCalledTimes(3);
-    const recoveryRequest = chat.mock.calls[1]?.[0] as {
-      messages?: Array<{ role: string; content: string }>;
-      tools?: Array<{ function?: { name?: string } }>;
-    };
-    expect(recoveryRequest.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
-    expect(recoveryRequest.messages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ role: "system", content: expect.stringContaining("10 spins at $5 each with slot results") }),
-      expect.objectContaining({ role: "system", content: expect.stringContaining("Do not claim that context is missing") }),
-      expect.objectContaining({ role: "user", content: "10 more, win this time" }),
-    ]));
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
-      toolName: "agentError",
-      error: "invalid_model_tool_call",
-    }));
-    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "drawRandom" }));
-    expect(traceEvents.some((event) => event.eventName === "agent.invalid_tool_call_recovery.started")).toBe(true);
-  });
-
   it("rejects a fabricated chance outcome and retries with drawRandom available", async () => {
     const traceEvents: any[] = [];
     const chat = vi
@@ -627,7 +664,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: { maxReplyChars: 1800, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -653,7 +690,7 @@ describe("agent router", () => {
     };
     expect(retryRequest.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
     expect(retryRequest.messages?.some((message) =>
-      message.role === "system" && message.content.includes("verified chance workflow is incomplete")
+      message.role === "user" && message.content.includes("verified chance workflow is incomplete")
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
       .toBe(true);
@@ -675,7 +712,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: { maxReplyChars: 1800, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "g",
@@ -696,74 +733,11 @@ describe("agent router", () => {
     };
     expect(retryRequest.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        role: "system",
+        role: "user",
         content: expect.stringContaining("user did not ask you to perform"),
       }),
     ]));
     expect(retryRequest.messages?.some((message) => message.content.includes("Do not call drawRandom unless"))).toBe(true);
-  });
-
-  it("forces the reveal tool for an explicit randomness reveal", async () => {
-    const chat = vi.fn(async () => ({
-      content: "I will reveal the committed RNG session.",
-      model: "router-model",
-      raw: {},
-      toolCalls: [],
-    }));
-    const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
-      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
-      openRouter: { chat },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      sessionMessages: [],
-    } as unknown as ToolContext;
-
-    await handleAgentRequest(ctx, "Reveal randomness");
-
-    const request = ((chat.mock.calls as any[])[0]?.[0] ?? {}) as {
-      toolChoice?: unknown;
-      tools?: Array<{ function?: { name?: string } }>;
-    };
-    expect(request.toolChoice).toEqual({ type: "function", function: { name: "revealRandomness" } });
-    expect(request.tools?.some((tool) => tool.function?.name === "revealRandomness")).toBe(true);
-  });
-
-  it("does not short-circuit a balance-backed roulette wager into tool-free synthesis", async () => {
-    const getUserWalletSummary = vi.fn();
-    const chat = vi.fn(async () => ({
-      content: "I need a verified balance and RNG draw before resolving that wager.",
-      model: "router-model",
-      raw: {},
-      toolCalls: [],
-    }));
-    const ctx = {
-      config: {
-        maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: {},
-        payments: { walletEnabled: true, userWalletsEnabled: true, privyAppId: "app", privyAppSecret: "secret" },
-      },
-      repo: { auditTool: vi.fn(async () => undefined), recordTraceEvent: vi.fn(async () => undefined) },
-      walletService: { getUserWalletSummary },
-      openRouter: { chat },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      sessionMessages: [],
-    } as unknown as ToolContext;
-
-    await handleAgentRequest(ctx, "bet the rest of my balance on roulette");
-
-    expect(getUserWalletSummary).not.toHaveBeenCalled();
-    const request = ((chat.mock.calls as any[])[0]?.[0] ?? {}) as { tools?: Array<{ function?: { name?: string } }> };
-    expect(request.tools?.some((tool) => tool.function?.name === "getWalletBalance")).toBe(true);
-    expect(request.tools?.some((tool) => tool.function?.name === "drawRandom")).toBe(true);
   });
 
   it("re-executes an exact drawRandom call after a failed result instead of treating it as successful evidence", async () => {
@@ -778,9 +752,15 @@ describe("agent router", () => {
         model: "router-model",
         raw: {},
         toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "I still couldn't complete a verified coin flip because the RNG service is unavailable.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
+      config: { maxReplyChars: 1800, openRouter: {}, payments: { walletEnabled: false, userWalletsEnabled: false } },
       repo: { auditTool, recordTraceEvent: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "g",
@@ -793,9 +773,131 @@ describe("agent router", () => {
 
     const response = await handleAgentRequest(ctx, "flip a coin");
 
-    expect(response.content).toContain("couldn't complete a verified coin flip");
+    expect(response.content).toContain("couldn't complete a verified random draw");
+    expect(chat).toHaveBeenCalledTimes(4);
     const drawAudits = (auditTool.mock.calls as any[]).filter((call) => call[0]?.toolName === "drawRandom");
     expect(drawAudits).toHaveLength(2);
+  });
+
+  it("retries an invalid random pick before returning a user-visible outcome", async () => {
+    const serverSeed = "09".repeat(32);
+    const session: RngSessionRecord = {
+      id: "rng_invalid_pick_retry",
+      threadKey: "g:c",
+      guildId: "g",
+      channelId: "c",
+      createdByUserId: "u",
+      serverSeed,
+      commitment: rngCommitment(serverSeed),
+      clientSeed: null,
+      clientSeedSource: null,
+      nonceCounter: 0,
+      deckCount: null,
+      shuffleNonce: null,
+      deckPosition: null,
+      status: "active",
+      prevSessionId: null,
+      createdAt: new Date("2026-07-25T00:00:00.000Z"),
+      revealedAt: null,
+    };
+    const draws: RngDrawInput[] = [];
+    const rngRepo = {
+      withActiveSession: vi.fn(async (
+        _input: unknown,
+        callback: (tx: RngSessionTx, created: boolean) => Promise<unknown>,
+      ) => callback({
+        session,
+        setClientSeed: async (clientSeed: string, source: string) => {
+          const justSet = session.clientSeed == null;
+          session.clientSeed ??= clientSeed;
+          session.clientSeedSource ??= source;
+          return { clientSeed: session.clientSeed, justSet };
+        },
+        takeNonce: async () => session.nonceCounter++,
+        recordDraw: async (input: RngDrawInput) => {
+          draws.push(input);
+          return {
+            id: draws.length,
+            sessionId: session.id,
+            ...input,
+            reason: input.reason ?? null,
+            requestId: input.requestId ?? null,
+            messageId: input.messageId ?? null,
+            requestedByUserId: input.requestedByUserId ?? null,
+            createdAt: new Date("2026-07-25T00:00:00.000Z"),
+          };
+        },
+        setShoe: async () => undefined,
+        claimDeckCards: async () => null,
+      }, true)),
+    };
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "invalid-pick",
+          name: "drawRandom",
+          argumentsText: JSON.stringify({ kind: "pick", options: ["amber"] }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "I need another option before I can make the random choice.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "corrected-pick",
+          name: "drawRandom",
+          argumentsText: JSON.stringify({ kind: "pick", options: ["amber", "teal"] }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The verified random pick is complete.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const traceEvents: any[] = [];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      rngRepo,
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "g:c",
+      requestId: "invalid-pick-request",
+      requestMessageId: "invalid-pick-request",
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "pick one random option from amber or teal");
+
+    expect(response.content).toBe("The verified random pick is complete.");
+    expect(chat).toHaveBeenCalledTimes(4);
+    expect(draws).toHaveLength(1);
+    expect(traceEvents.some((event) => event.eventName === "agent.random_outcome_guard.rejected"))
+      .toBe(true);
   });
 
   it("rejects fabricated live fares and retries with fresh retrieval tools", async () => {
@@ -821,7 +923,7 @@ describe("agent router", () => {
         urlCitations: [{ url: "https://example.com/current-fares", title: "Current fares" }],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -850,11 +952,11 @@ describe("agent router", () => {
       toolChoice?: string;
     };
     expect(retryRequest.toolChoice).toBe("required");
-    expect(retryRequest.tools).toEqual(expect.arrayContaining([
+    expect(retryRequest.tools).toEqual([
       expect.objectContaining({ type: "openrouter:web_search" }),
-    ]));
+    ]);
     expect(retryRequest.messages?.some((message) =>
-      message.role === "system" && message.content.includes("time-sensitive request without fresh tool evidence")
+      message.role === "user" && message.content.includes("time-sensitive request without fresh tool evidence")
     )).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.fresh_external_data_guard.rejected"))
       .toBe(true);
@@ -868,6 +970,107 @@ describe("agent router", () => {
         }),
       }),
     ]));
+  });
+
+  it("retries current-roster predictions with only fresh web retrieval enabled", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "Boston beats Denver in six based on the current lineups.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "After checking the current rosters, my prediction is Boston over Denver in six.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{
+          url: "https://example.com/current-nba-rosters",
+          title: "Current NBA rosters",
+        }],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Predict the NBA Finals with current rosters.",
+    );
+
+    expect(response.content).toContain("After checking the current rosters");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: "required",
+      tools: [expect.objectContaining({ type: "openrouter:web_search" })],
+    }));
+  });
+
+  it("rejects an unverified time-to-launch answer and requires fresh web evidence", async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "The new public beta launches within the next few hours.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The official launch page lists tomorrow, but it does not give an exact hour.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{ url: "https://example.com/official-launch", title: "Official launch" }],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "how much longer til i can access the new public beta?",
+    );
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(response.content).toContain("does not give an exact hour");
+    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: "required",
+      tools: [expect.objectContaining({ type: "openrouter:web_search" })],
+    }));
   });
 
   it("accepts transparent hosted search evidence on the first round without a duplicate retry", async () => {
@@ -885,7 +1088,7 @@ describe("agent router", () => {
       urlCitations: [{ url: "https://example.com/current-odds", title: "Current odds" }],
     }));
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async (event: any) => {
@@ -919,6 +1122,130 @@ describe("agent router", () => {
     ]));
   });
 
+  it("rechecks a denied current product when the cited search evidence covers only alternatives", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: 'There is no "Nimbus Note X"; compare Nimbus Note Air and Nimbus Note Pro instead.',
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{
+          url: "https://example.test/nimbus-note-air",
+          title: "Nimbus Note Air",
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Nimbus Note X is currently available, so it belongs in the school comparison.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          web_search_requests: 1,
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+        urlCitations: [{
+          url: "https://example.test/nimbus-note-x",
+          title: "Nimbus Note X availability",
+        }],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Nimbus Note X vs Nimbus Note Air vs Nimbus Note Pro for school",
+    );
+
+    expect(response.content).toContain("currently available");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      toolChoice: "required",
+      tools: [expect.objectContaining({ type: "openrouter:web_search" })],
+    }));
+    expect((chat.mock.calls[1]?.[0] as any).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("exact disputed name"),
+      }),
+    ]));
+    expect(traceEvents.some((event) => event.eventName === "agent.fresh_external_data_guard.rejected"))
+      .toBe(true);
+  });
+
+  it("corrects an invented future schedule for a mentioned member", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "Avery should be online within the next two hours and will be playing by tonight.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "I can't know another member's availability from a mention alone. Ask them to confirm a concrete time.",
+        model: "router-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: { maxReplyChars: 1800, openRouter: {} },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => {
+          traceEvents.push(event);
+        }),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      mentionedUserIds: ["member-1"],
+      sessionMessages: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "How soon can Avery play ranked games with <@member-1>?",
+    );
+
+    expect(response.content).toContain("Ask them to confirm");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect((chat.mock.calls[1]?.[0] as any).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("future availability"),
+      }),
+    ]));
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.member_availability_guard.rejected"
+    )).toBe(true);
+  });
+
   it("still blocks a second ungrounded live-data draft when no fresh evidence was observed", async () => {
     const chat = vi
       .fn()
@@ -940,7 +1267,7 @@ describe("agent router", () => {
         },
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined),
@@ -983,7 +1310,7 @@ describe("agent router", () => {
         toolCalls: [],
       });
     const ctx = {
-      config: { maxReplyChars: 1800, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, openRouter: {} },
       repo: {
         auditTool: vi.fn(async () => undefined),
         recordTraceEvent: vi.fn(async () => undefined),
@@ -1034,7 +1361,7 @@ describe("agent router", () => {
       })
     ]);
     const ctx = {
-      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: false, openRouter: {} },
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         keywordSearch,
@@ -1107,6 +1434,77 @@ describe("agent router", () => {
         ])
       })
     );
+  });
+
+  it("treats a simple personal update as the new conversational state instead of continuing an old argument", async () => {
+    const chat = vi.fn(async (request: { messages: Array<{ role: string; content: unknown }> }) => {
+      const currentRequestReminder = String(
+        request.messages.find(
+          (message) =>
+            message.role === "system" &&
+            String(message.content).includes("Simple personal updates"),
+        )?.content ?? "",
+      );
+      return {
+        content: currentRequestReminder.includes("Simple personal updates")
+          ? "Got it — I’ll plan around you being unavailable that month."
+          : "That does not address the earlier disagreement.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          role: "user",
+          authorId: "u",
+          authorDisplayName: "User",
+          content: "Earlier synthetic disagreement.",
+          metadata: {},
+          createdAt: new Date("2026-07-23T12:00:00Z"),
+        },
+        {
+          role: "assistant",
+          authorId: null,
+          authorDisplayName: "AI",
+          content: "Earlier synthetic argumentative response.",
+          metadata: {},
+          createdAt: new Date("2026-07-23T12:01:00Z"),
+        },
+      ],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "I won’t be available that month.");
+
+    expect(response.content).toBe("Got it — I’ll plan around you being unavailable that month.");
+    expect(chat).toHaveBeenCalledTimes(1);
+    const modelRequest = (chat.mock.calls as any[])[0]?.[0];
+    const reminderIndex = modelRequest.messages.findIndex(
+      (message: { role: string; content: string }) =>
+        message.role === "system" &&
+        message.content.includes("Simple personal updates"),
+    );
+    const firstConversationIndex = modelRequest.messages.findIndex(
+      (message: { role: string }) => message.role !== "system",
+    );
+    expect(reminderIndex).toBeGreaterThanOrEqual(0);
+    expect(reminderIndex).toBeLessThan(firstConversationIndex);
+    expect(modelRequest.messages.at(-1)).toEqual({
+      role: "user",
+      content: "I won’t be available that month.",
+    });
   });
 
   it("preserves long final model answers so Discord delivery can split them", async () => {
@@ -1249,10 +1647,99 @@ describe("agent router", () => {
       ?.messages ?? [];
     const mainSystemPrompt = messages.find((message) => message.role === "system" && message.content.includes("For Discord replies"))?.content ?? "";
     const replyPrompt = messages.find((message) => message.role === "system" && message.content.includes("The current user message is a Discord reply"))?.content ?? "";
-    expect(mainSystemPrompt).toContain("treat the reply-chain context as primary");
+    expect(mainSystemPrompt).toContain("current message remains the task");
     expect(mainSystemPrompt).toContain("Do not infer birthdays");
-    expect(replyPrompt).toContain("primary context");
+    expect(replyPrompt).toContain("it alone determines the task and subject");
     expect(replyPrompt).toContain("Do not switch to unrelated channel memory");
+  });
+
+  it("keeps named direct-parent referents for a short plural follow-up", async () => {
+    const chat = vi.fn(async (request: { messages: Array<{ role: string; content: string }> }) => {
+      const replyPrompt = request.messages.find(
+        (message) => message.role === "system" && message.content.includes("The current user message is a Discord reply")
+      )?.content ?? "";
+      expect(replyPrompt).toContain("direct parent is the strongest conversational anchor for vague references");
+      expect(replyPrompt).toContain("only for a genuinely incomplete follow-up");
+      return {
+        content: "Nova is more deliberate; River is more spontaneous.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: []
+      };
+    });
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: {
+        auditTool: vi.fn(async () => undefined)
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "requester",
+      userDisplayName: "Requester",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        messageId: "bot-parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "Nova prefers plans made in advance, while River likes keeping options open.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: "2026-07-24T03:30:00.000Z",
+        url: "https://discord.com/channels/g/c/bot-parent",
+        rootMessageId: "root",
+        chain: [
+          {
+            messageId: "root",
+            channelId: "c",
+            guildId: "g",
+            authorId: "other-member",
+            authorDisplayName: "Other",
+            authorIsBot: false,
+            content: "Not really.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:28:00.000Z",
+            url: "https://discord.com/channels/g/c/root"
+          },
+          {
+            messageId: "requester-question",
+            channelId: "c",
+            guildId: "g",
+            authorId: "requester",
+            authorDisplayName: "Requester",
+            authorIsBot: false,
+            content: "How do their preferences differ?",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:29:00.000Z",
+            url: "https://discord.com/channels/g/c/requester-question"
+          },
+          {
+            messageId: "bot-parent",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "ai",
+            authorIsBot: true,
+            content: "Nova prefers plans made in advance, while River likes keeping options open.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:30:00.000Z",
+            url: "https://discord.com/channels/g/c/bot-parent"
+          }
+        ]
+      }
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "Could you compare how they approach it?");
+
+    expect(response.content).toBe("Nova is more deliberate; River is more spontaneous.");
+    expect(chat).toHaveBeenCalledTimes(1);
   });
 
   it("injects a prominent self-referential identity instruction for the current requester", async () => {
@@ -1291,129 +1778,69 @@ describe("agent router", () => {
     expect(requesterMessage.content).toContain("name: UserB");
 
     const skillIndex = messages.findIndex(
-      (m) => m.role === "system" && m.content.startsWith("Loaded skills:")
+      (m) => m.role === "system" && m.content.startsWith("Available skill inventory:")
     );
     expect(skillIndex).toBeGreaterThanOrEqual(0);
     expect(requesterIndex).toBeLessThan(skillIndex);
   });
 
-  it("lets the model route status requests to reportStatus", async () => {
-    const ctx = {
-      config: { maxReplyChars: 1800, openRouter: { embeddingModel: "test/embed" }, discord: { clientId: "bot" } },
-      repo: {
-        health: vi.fn(async () => ({ messages: 1, embeddings: 1, toolCalls: 0 })),
-        getCrawlStatus: vi.fn(async () => [{ status: "complete", channels: 1, messages: 1 }]),
-        embeddingBacklog: vi.fn(async () => 0),
-        interactionBlockCount: vi.fn(async () => 0),
-        auditTool: vi.fn(async () => undefined)
-      },
-      openRouter: {
-        chat: vi
-          .fn()
-          .mockResolvedValueOnce({
-            content: "",
-            model: "router-model",
-            raw: {},
-            estimatedCostUsd: 0.001,
-            toolCalls: [{ id: "call-1", name: "reportStatus", argumentsText: "{}" }]
-          })
-          .mockResolvedValueOnce({
-            content: "Messages indexed: 1",
-            model: "chat-model",
-            raw: {},
-            toolCalls: []
-          })
-      },
-      github: {},
-      guildId: "g",
+  it("answers its configured Discord name through an unrelated retained reply chain", async () => {
+    const chat = vi.fn(async (request: {
+      messages: Array<{ role: string; content: string }>;
+    }) => {
+      const prompt = request.messages.map((message) => message.content).join("\n");
+      return {
+        content: prompt.includes('Current Discord bot identity: display name "Lantern"')
+          ? "I'm Lantern."
+          : "I'm Discord AI Agent.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const replyChain = Array.from({ length: 7 }, (_, index) => ({
+      messageId: `synthetic-chain-${index}`,
       channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      mentionedUserIds: []
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "status");
-    expect(response.content).toMatch(/Messages indexed: 1/);
-    expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
-    expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        tools: expect.arrayContaining([
-          expect.objectContaining({ type: "function", function: expect.objectContaining({ name: "reportStatus" }) }),
-          expect.objectContaining({ type: "openrouter:web_search" })
-        ])
-      })
-    );
-  });
-
-  it("presents sandbox-first GitHub CI debugging guidance to the model", async () => {
-    const chat = vi.fn(async () => ({
-      content: "I should hand this to the sandbox.",
-      model: "router-model",
-      raw: {},
-      toolCalls: []
+      guildId: "g",
+      authorId: index % 2 === 0 ? "bot" : "other-member",
+      authorDisplayName: index % 2 === 0 ? "Lantern" : "Other Member",
+      authorIsBot: index % 2 === 0,
+      content: index % 2 === 0
+        ? "An earlier unrelated assistant response."
+        : "An earlier unrelated member follow-up.",
+      attachmentSummaries: [],
+      attachments: [],
+      reactionSummaries: [],
+      createdAt: `2026-07-28T18:0${index}:00.000Z`,
+      url: null,
     }));
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        github: { repository: "example/discord-ai-agent", token: "test-token" },
-        execution: { taskSigningSecret: "test-secret" }
+        discord: { botName: "Lantern" },
       },
       repo: {
-        auditTool: vi.fn(async () => undefined)
+        auditTool: vi.fn(async () => undefined),
       },
       openRouter: { chat },
-      github: {},
       guildId: "g",
       channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
+      userId: "current-member",
+      userDisplayName: "Current Member",
       visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
       replyContext: {
-        rootMessageId: "root",
-        messageId: "bot-reply",
-        channelId: "c",
-        guildId: "g",
-        authorId: "bot",
-        authorDisplayName: "Discord AI Agent",
-        authorIsBot: true,
-        content: "Done: https://github.com/example/discord-ai-agent/pull/111\nRun console: https://tasks.example/runs/task-1",
-        attachmentSummaries: [],
-        attachments: [],
-        createdAt: "2026-07-04T00:10:00.000Z",
-        url: "https://discord.com/channels/g/c/bot-reply",
-        chain: []
-      }
+        ...replyChain[6],
+        rootMessageId: replyChain[0].messageId,
+        chain: replyChain,
+      },
     } as unknown as ToolContext;
 
-    await handleAgentRequest(ctx, "there's a CI error");
+    const response = await handleAgentRequest(ctx, "what should I call you?");
 
-    const firstCall = (chat as any).mock.calls[0]?.[0];
-    expect(firstCall).toBeTruthy();
-    expect(firstCall.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "system",
-          content: expect.stringContaining("For GitHub, PR, CI, check, test, deployment, repository, or self-update debugging/fixing, call runCodingAgent")
-        }),
-        expect.objectContaining({
-          role: "system",
-          content: expect.stringContaining("Done: https://github.com/example/discord-ai-agent/pull/111")
-        })
-      ])
-    );
-    expect(firstCall.tools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "function",
-          function: expect.objectContaining({
-            name: "runCodingAgent",
-            description: expect.stringContaining("gh CLI access")
-          })
-        })
-      ])
-    );
+    expect(response.content).toBe("I'm Lantern.");
+    expect(chat).toHaveBeenCalledTimes(1);
   });
 
   it("mirrors model-selected tool turns into the durable agent runtime session", async () => {
@@ -1933,10 +2360,10 @@ describe("agent router", () => {
     expect(response.content).toContain("Messages indexed: 2");
     expect(ctx.openRouter.chat).toHaveBeenCalledWith(expect.objectContaining({ tools: expect.any(Array) }));
     const secondRoundMessages = (ctx.openRouter.chat as any).mock.calls[1][0].messages;
-    expect(secondRoundMessages.at(-1)).toEqual(expect.objectContaining({
-      role: "system",
-      content: expect.stringContaining("default to one short paragraph")
-    }));
+    expect(secondRoundMessages.at(-1)).toEqual({
+      role: "user",
+      content: "how's the index looking overall"
+    });
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -2664,7 +3091,15 @@ describe("agent router", () => {
     ]);
     const recentArgs = JSON.stringify({ authorIds: ["tyler-id"], limit: 20 });
     const ctx = {
-      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 10,
+        openRouter: {
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatFallbackReasoningEffort: "medium",
+          chatFallbackMaxTokens: 3_072,
+        },
+      },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         recentMessagesFromChannels,
@@ -2707,6 +3142,11 @@ describe("agent router", () => {
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
     // Forced final synthesis is deliberately tool-free so models cannot leak tool-call markup.
     expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[2][0]).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-terra",
+      reasoningEffort: "medium",
+      maxTokens: 3_072,
+    }));
     expect(ctx.openRouter.chat).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
@@ -2788,6 +3228,98 @@ describe("agent router", () => {
     );
     expect(ctx.repo.keywordSearch).not.toHaveBeenCalled();
     expect(ctx.repo.vectorSearch).not.toHaveBeenCalled();
+  });
+
+  it("answers from scoped recent candidates when a semantic history lookup times out", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const recentMessagesFromChannels = vi.fn(async () => [
+      agentSearchResult({
+        messageId: "synthetic-recent-update",
+        authorId: "member-id",
+        authorUsername: "member",
+        normalizedContent:
+          "The synthetic release moved to the next scheduled window.",
+        createdAt: new Date("2026-07-20T12:00:00.000Z"),
+      }),
+    ]);
+    const embed = vi.fn(async () => {
+      throw new Error("OpenRouter request timed out after 4000ms (/embeddings).");
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "router-model",
+        raw: {},
+        toolCalls: [{
+          id: "search-timeout",
+          name: "searchDiscordHistory",
+          argumentsText: JSON.stringify({
+            query: "release",
+            dateFrom: "2026-07-01",
+            dateTo: "2026-07-28",
+            limit: 20,
+          }),
+        }],
+      })
+      .mockImplementationOnce(async (request: { messages: Array<{ role: string; content: unknown }> }) => {
+        const toolContent = request.messages
+          .filter((message) => message.role === "tool")
+          .map((message) => String(message.content))
+          .join("\n");
+        expect(toolContent).toContain("semantic matching timed out");
+        expect(toolContent).toContain("The synthetic release moved to the next scheduled window.");
+        return {
+          content:
+            "The retained history says the synthetic release moved to the next scheduled window.",
+          model: "final-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 20,
+        openRouter: {
+          apiKey: "test-key",
+          embeddingModel: "test/embed",
+        },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async () => ["c"]),
+        keywordSearch: vi.fn(async () => []),
+        vectorSearch: vi.fn(async () => []),
+        recentMessagesFromChannels,
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool,
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat, embed },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "what was the latest synthetic release update this month?",
+    );
+
+    expect(response.content).toContain("moved to the next scheduled window");
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(ctx.repo.vectorSearch).not.toHaveBeenCalled();
+    expect(recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({
+      guildId: "g",
+      visibleChannelIds: ["c"],
+      dateFrom: new Date("2026-07-01T00:00:00.000Z"),
+      dateTo: new Date("2026-07-28T23:59:59.999Z"),
+      limit: 20,
+    }));
   });
 
   it("passes about-user filters from model-selected history searches", async () => {
@@ -2931,6 +3463,330 @@ describe("agent router", () => {
     expect(auditTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentToolRepeatGuard" }));
   });
 
+  it("returns a generated image after one provider rejection without requiring another model tool call", async () => {
+    const traceEvents: any[] = [];
+    const imageBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const generateImage = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterHttpError({ status: 400, message: "synthetic rejected request" }))
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: imageBytes.toString("base64"), media_type: "image/png" }],
+      });
+    const firstPrompt = "A synthetic futuristic library scene with blue lights and geometric shelves. ".repeat(8);
+    const chat = vi.fn(async () => ({
+      content: "",
+      model: "slow/primary",
+      raw: {},
+      toolCalls: [{
+        id: "image-attempt-1",
+        name: "generateImage",
+        argumentsText: JSON.stringify({ prompt: firstPrompt }),
+      }],
+    }));
+    const replyChain = Array.from({ length: 24 }, (_value, index) => ({
+      messageId: `synthetic-parent-${index + 1}`,
+      channelId: "c",
+      guildId: "g",
+      authorId: index % 4 === 0 ? "member" : "bot",
+      authorDisplayName: index % 4 === 0 ? "Member" : "Bot",
+      authorIsBot: index % 4 !== 0,
+      content: index === 23
+        ? "The synthetic scene is a futuristic library with blue lights."
+        : `Synthetic reply-chain context ${index + 1}.`,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: new Date(2026, 0, 1, 0, index).toISOString(),
+      url: null,
+    }));
+    const sessionMessages = Array.from({ length: 25 }, (_value, index) => ({
+      id: index + 1,
+      threadKey: "discord:g:c",
+      discordMessageId: `synthetic-session-${index + 1}`,
+      role: index % 2 === 0 ? "assistant" as const : "user" as const,
+      authorId: index % 2 === 0 ? "bot" : "member",
+      authorDisplayName: index % 2 === 0 ? "Bot" : "Member",
+      content: `Synthetic session context ${index + 1}.`,
+      parts: [],
+      metadata: {},
+      createdAt: new Date(2026, 0, 1, 1, index),
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/final" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages,
+      requestAttachments: [],
+      replyContext: {
+        ...replyChain[23],
+        rootMessageId: replyChain[0]!.messageId,
+        chain: replyChain,
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "make an image of this synthetic scene with blue lights");
+
+    expect(response.content).toContain("Generated image for: A synthetic futuristic library scene");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png", data: imageBytes }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("REQUEST RECOVERY PASS");
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(traceEvents.some((event) => event.eventName === "agent.final_synthesis.started")).toBe(false);
+    expect(traceEvents).toContainEqual(expect.objectContaining({
+      eventName: "agent.request.complete",
+      metadata: expect.objectContaining({ toolName: "generateImage" }),
+    }));
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
+  });
+
+  it("continues a generated avatar request through the Discord mutation before replying", async () => {
+    const imageBytes = Buffer.from("synthetic-avatar-image");
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{
+        b64_json: imageBytes.toString("base64"),
+        media_type: "image/png",
+      }],
+    }));
+    const discordFetch = vi.fn(async () => new Response(
+      JSON.stringify({ id: "bot-id", avatar: "avatar-hash", username: "Bot" }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", discordFetch);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-avatar",
+          name: "generateImage",
+          argumentsText: JSON.stringify({ prompt: "A synthetic geometric avatar." }),
+        }],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({
+          type: "function",
+          function: { name: "updateBotAvatar" },
+        });
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "set-avatar",
+            name: "updateBotAvatar",
+            argumentsText: "{}",
+          }],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        discord: { token: "discord-token" },
+        allowlists: { ownerUserId: "u", opsUserIds: ["u"] },
+        openRouter: { chatModel: "tool-model", utilityModel: "utility-model" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "generate a new image and use it as your pfp",
+    );
+
+    expect(response.content).toContain("Updated my Discord bot avatar");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png", data: imageBytes }),
+    ]);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(discordFetch).toHaveBeenCalledWith(
+      "https://discord.com/api/v10/users/@me",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+  });
+
+  it("switches by verified alias and runs compound work on the new model", async () => {
+    const chat = vi.fn(async (input: { model?: string }) => ({
+      content: "The comparison is ready.",
+      model: input.model ?? "unknown",
+      raw: {},
+      toolCalls: [],
+    }));
+    const setGuildChatModelOverride = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: {
+          chatModel: "moonshotai/kimi-k3",
+          chatFallbackModel: "fallback/recovery",
+        },
+        allowlists: { ownerUserId: "owner", opsUserIds: ["operator"] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride: vi.fn(async () => true),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: {
+        chat,
+        listModels: vi.fn(async () => [
+          { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
+          { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" },
+        ]),
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "owner",
+      userDisplayName: "Owner",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "compound-model-switch",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "switch to sonnet5, then compare MacBook Air vs Neo for Georgia Tech OMSA",
+    );
+
+    expect(response.content).toContain("anthropic/claude-sonnet-5");
+    expect(response.content).toContain("comparison is ready");
+    expect(setGuildChatModelOverride).toHaveBeenCalledWith({
+      guildId: "g",
+      chatModel: "anthropic/claude-sonnet-5",
+      updatedByUserId: "owner",
+    });
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      model: "anthropic/claude-sonnet-5",
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("compare MacBook Air vs Neo"),
+        }),
+      ]),
+    }));
+  });
+
+  it("continues compound work on the old model when the requester cannot switch", async () => {
+    const chat = vi.fn(async (input: { model?: string }) => ({
+      content: "Here is the comparison.",
+      model: input.model ?? "unknown",
+      raw: {},
+      toolCalls: [],
+    }));
+    const setGuildChatModelOverride = vi.fn();
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: { chatModel: "moonshotai/kimi-k3" },
+        allowlists: { ownerUserId: "owner", opsUserIds: ["operator"] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride: vi.fn(),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "friend",
+      userDisplayName: "Friend",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "unauthorized-compound-switch",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "switch to sonnet5, then compare the two laptops",
+    );
+
+    expect(response.content).toContain("restricted");
+    expect(response.content).toContain("Here is the comparison");
+    expect(setGuildChatModelOverride).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      model: "moonshotai/kimi-k3",
+    }));
+  });
+
+  it("handles typo-tolerant standalone model switches without a chat call", async () => {
+    const chat = vi.fn();
+    const setGuildChatModelOverride = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: { chatModel: "moonshotai/kimi-k3" },
+        allowlists: { ownerUserId: "owner", opsUserIds: [] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride: vi.fn(),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: {
+        chat,
+        listModels: vi.fn(async () => [
+          { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
+          { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" },
+        ]),
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "owner",
+      userDisplayName: "Owner",
+      visibleChannelIds: ["c"],
+      requestId: "typo-model-switch",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "USE TOOL TO SWITXH MODEL TO SONNET 5",
+    );
+
+    expect(response.content).toContain("anthropic/claude-sonnet-5");
+    expect(setGuildChatModelOverride).toHaveBeenCalledOnce();
+    expect(chat).not.toHaveBeenCalled();
+  });
+
   it("synthesizes a final answer instead of dumping raw tool output at the tool round limit", async () => {
     const auditTool = vi.fn(async () => undefined);
     let recentCall = 0;
@@ -3014,7 +3870,7 @@ describe("agent router", () => {
       toolCalls: [{ id: `call-${round}`, name, argumentsText: JSON.stringify(argumentsValue) }]
     });
     const ctx = {
-      config: { maxReplyChars: 1800, maxHistoryResults: 10, toolsetScoping: true, openRouter: {} },
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         findDiscordUsers: vi.fn(async () => [{
@@ -3061,10 +3917,161 @@ describe("agent router", () => {
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "tool_round_limit" }));
   });
 
+  it("replays a terse named-member activity follow-up with bounded UTC evidence", async () => {
+    const auditTool = vi.fn(async () => undefined);
+    const toolCall = (round: number, name: string, argumentsValue: Record<string, unknown>) => ({
+      content: "",
+      model: `tool-model-${round}`,
+      raw: {},
+      toolCalls: [{ id: `call-${round}`, name, argumentsText: JSON.stringify(argumentsValue) }]
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce(toolCall(1, "requestAdditionalTools", {
+        groups: ["discord-retrieval"],
+        reason: "Need permission-filtered member activity evidence"
+      }))
+      .mockResolvedValueOnce(toolCall(2, "findDiscordUsers", { query: "river" }))
+      .mockResolvedValueOnce(toolCall(3, "getDiscordStats", {
+        authorIds: ["member-2"],
+        metric: "messages",
+        groupBy: "hourOfDay",
+        sort: "labelAsc",
+        limit: 24
+      }))
+      .mockImplementationOnce(async (request: { messages: Array<{ role: string; name?: string; content: string }> }) => {
+        const statsEvidence = request.messages.find(
+          (message) => message.role === "tool" && message.name === "getDiscordStats"
+        )?.content ?? "";
+        const prompt = request.messages.map((message) => message.content).join("\n");
+        expect(statsEvidence).toContain("Time basis: UTC");
+        expect(statsEvidence).toContain("Observed message timing only");
+        expect(prompt).toContain("direct parent is the strongest conversational anchor for vague references");
+        return {
+          content: "River’s indexed messages peak around 20:00 UTC.",
+          model: "final-model",
+          raw: {},
+          toolCalls: []
+        };
+      });
+    const discordStats = vi.fn(async () => ({
+      totalMessages: 12,
+      totalAttachments: 0,
+      totalReactions: 0,
+      userCount: 1,
+      channelCount: 2,
+      activeDays: 6,
+      metric: "messages" as const,
+      groupBy: "hourOfDay" as const,
+      rows: [
+        {
+          key: "20",
+          label: "20:00",
+          value: 5,
+          authorId: null,
+          authorUsername: null,
+          channelId: null,
+          channelName: null,
+          messageId: null,
+          messageLink: null,
+          periodStart: null,
+          messageCount: 5,
+          activeDays: 4,
+          channelCreatedAt: null,
+          channelAgeDays: null
+        }
+      ],
+      topUsers: [],
+      topChannels: []
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        findDiscordUsers: vi.fn(async () => [{
+          id: "member-2",
+          username: "river",
+          globalName: "River",
+          isBot: false,
+          messageCount: 12
+        }]),
+        discordStats,
+        auditTool
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "requester",
+      userDisplayName: "Requester",
+      visibleChannelIds: ["c"],
+      replyContext: {
+        messageId: "bot-parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        authorIsBot: true,
+        content: "Nova’s indexed messages peak around 18:00 UTC.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: "2026-07-24T03:30:00.000Z",
+        url: "https://discord.com/channels/g/c/bot-parent",
+        rootMessageId: "root",
+        chain: [
+          {
+            messageId: "root",
+            channelId: "c",
+            guildId: "g",
+            authorId: "other-member",
+            authorDisplayName: "Other",
+            authorIsBot: false,
+            content: "When does Nova post most often?",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:29:00.000Z",
+            url: "https://discord.com/channels/g/c/root"
+          },
+          {
+            messageId: "bot-parent",
+            channelId: "c",
+            guildId: "g",
+            authorId: "bot",
+            authorDisplayName: "ai",
+            authorIsBot: true,
+            content: "Nova’s indexed messages peak around 18:00 UTC.",
+            attachmentSummaries: [],
+            attachments: [],
+            createdAt: "2026-07-24T03:30:00.000Z",
+            url: "https://discord.com/channels/g/c/bot-parent"
+          }
+        ]
+      }
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "and river?");
+
+    expect(response.content).toBe("River’s indexed messages peak around 20:00 UTC.");
+    expect(chat).toHaveBeenCalledTimes(4);
+    expect(discordStats).toHaveBeenCalledWith(expect.objectContaining({
+      authorIds: ["member-2"],
+      groupBy: "hourOfDay",
+      metric: "messages"
+    }));
+  });
+
   it("synthesizes a final answer when the model returns empty content after tool evidence", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
-      config: { maxReplyChars: 1800, maxHistoryResults: 10, openRouter: {} },
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 10,
+        openRouter: {
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatFallbackReasoningEffort: "medium",
+          chatFallbackMaxTokens: 3_072,
+        },
+      },
       repo: {
         getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
         keywordSearch: vi.fn(async () => [agentSearchResult()]),
@@ -3108,6 +4115,11 @@ describe("agent router", () => {
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(3);
     // Forced final synthesis is deliberately tool-free so models cannot leak tool-call markup.
     expect((ctx.openRouter.chat as any).mock.calls[2][0].tools).toBeUndefined();
+    expect((ctx.openRouter.chat as any).mock.calls[2][0]).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-terra",
+      reasoningEffort: "medium",
+      maxTokens: 3_072,
+    }));
   });
 
   it("falls back to compact evidence bullets when forced final synthesis is empty", async () => {
@@ -3180,6 +4192,69 @@ describe("agent router", () => {
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "chat", model: "chat-model" }));
   });
 
+  it("retries a provider-rejected primary request with the configured recovery model", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new OpenRouterHttpError({
+          status: 400,
+          message: "Server tool request failed",
+        }),
+      )
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.model).toBe("openai/gpt-5.6-terra");
+        expect(request.reasoningEffort).toBe("medium");
+        expect(request.maxTokens).toBe(3_072);
+        return {
+          content: "Hey Kartik, what's up?",
+          model: "openai/gpt-5.6-terra",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {
+          chatModel: "moonshotai/kimi-k3",
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatFallbackReasoningEffort: "medium",
+          chatFallbackMaxTokens: 3_072,
+          utilityModel: "openai/gpt-4o-mini",
+        },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "Kartik",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "hello");
+
+    expect(response.content).toBe("Hey Kartik, what's up?");
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect((chat.mock.calls[0]?.[0] as any).model).toBe(
+      "moonshotai/kimi-k3",
+    );
+    expect(
+      traceEvents.some(
+        (event) =>
+          event.eventName === "agent.model.provider_rejection_fallback",
+      ),
+    ).toBe(true);
+  });
+
   it("corrects a false transcription refusal from the initial timeout fallback", async () => {
     const traceEvents: any[] = [];
     const chat = vi
@@ -3194,8 +4269,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback", chatFallbackModel: "fast/fallback" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
       repo: {
@@ -3233,13 +4307,2408 @@ describe("agent router", () => {
       "I can transcribe common audio and video attachments. Attach the media here or reply to the Discord message containing it, and I’ll transcribe it.",
     );
     expect(chat).toHaveBeenCalledTimes(2);
-    expect((chat.mock.calls[0]?.[0] as any).model).toBeUndefined();
+    expect((chat.mock.calls[0]?.[0] as any).model).toBe("slow/primary");
     expect((chat.mock.calls[1]?.[0] as any).model).toBe("fast/fallback");
     expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
     expect(traceEvents.some((event) => event.eventName === "agent.capability_claim.corrected")).toBe(true);
   });
 
-  it("corrects a false transcription refusal from tool-evidence timeout synthesis", async () => {
+  it("retries tool selection after an expanded code-update toolset times out", async () => {
+    const enqueueAgentTask = vi.fn(async () => ({ jobId: "job-1", taskId: "task-timeout-retry" }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [{
+          id: "expand-code-tools",
+          name: "requestAdditionalTools",
+          argumentsText: JSON.stringify({
+            groups: ["codegen"],
+            reason: "Need to implement the requested dashboard change.",
+          }),
+        }],
+      })
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.model).toBe("fast/fallback");
+        expect(request.tools.some((tool: any) => tool.function?.name === "runCodingAgent")).toBe(true);
+        return {
+          content: "",
+          model: "fast/fallback",
+          raw: {},
+          toolCalls: [{
+            id: "run-code-update",
+            name: "runCodingAgent",
+            argumentsText: JSON.stringify({
+              request: "Add a privacy-safe activity chart to the dashboard.",
+              title: "Add activity chart",
+            }),
+          }],
+        };
+      });
+    const chain = Array.from({ length: 6 }, (_, index) => ({
+      messageId: `synthetic-chain-${index + 1}`,
+      rootMessageId: "synthetic-chain-1",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: `Synthetic dashboard planning context ${index + 1}.`,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    }));
+    const ctx = {
+      config: {
+        ...codeUpdateTestConfig(),
+        openRouter: {
+          ...codeUpdateTestConfig().openRouter,
+          chatModel: "slow/primary",
+          utilityModel: "fast/fallback", chatFallbackModel: "fast/fallback",
+        },
+      },
+      repo: {
+        upsertAgentTaskQueued: vi.fn(async () => undefined),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      github: {},
+      jobs: { enqueueAgentTask },
+      ...fakeAgentRuntimeContext(),
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      threadKey: "discord:g:c",
+      statusChannelId: "c",
+      statusMessageId: "reply-1",
+      updateStatus: vi.fn(async () => undefined),
+      requestAttachments: [{
+        attachmentId: "synthetic-spec",
+        filename: "public-dashboard-spec.txt",
+        contentType: "text/plain",
+        size: 64,
+        url: "https://example.com/public-dashboard-spec.txt",
+      }],
+      sessionMessages: Array.from({ length: 25 }, (_, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Synthetic retained session context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(`2026-07-24T00:${String(index).padStart(2, "0")}:00.000Z`),
+      })),
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "Please implement the activity chart from this synthetic spec.");
+
+    expect(response.content).toMatch(/Task ID: `task-[^`]+`/);
+    expect(enqueueAgentTask).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(3);
+    const expandedMessages = (chat.mock.calls[1]?.[0] as any).messages;
+    expect(expandedMessages).toContainEqual({
+      role: "user",
+      content: "Please implement the activity chart from this synthetic spec.",
+    });
+    expect(expandedMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "tool",
+        name: "requestAdditionalTools",
+        content: expect.stringContaining("Additional tool groups enabled"),
+      }),
+    ]));
+    expect((chat.mock.calls[2]?.[0] as any).tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ function: expect.objectContaining({ name: "runCodingAgent" }) }),
+    ]));
+  });
+
+  it("answers model identity without inheriting unrelated reply-chain URL intent", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi.fn().mockResolvedValueOnce({
+      content: "I don't have access to the exact model identifier.",
+      model: "provider/example-model",
+      raw: {},
+      toolCalls: [],
+    });
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+    ) => ({
+      messageId,
+      rootMessageId: "synthetic-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage(
+        "synthetic-root",
+        "Give me a concise status update.",
+        false,
+      ),
+      replyMessage(
+        "synthetic-parent",
+        "Previous context is available at https://example.com/synthetic-reference",
+        true,
+      ),
+    ];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: { chatModel: "configured/primary-model" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: Array.from({ length: 25 }, (_value, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "assistant" as const : "user" as const,
+        content: `Synthetic retained context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(2026, 6, 24, 2, index),
+      })),
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "What language model is this?",
+    );
+
+    expect(response.content).toBe(
+      "This reply is running on `provider/example-model`.",
+    );
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(traceEvents.some(
+      (event) => event.eventName === "agent.public_url_evidence_guard.rejected",
+    )).toBe(false);
+    expect(traceEvents.some(
+      (event) =>
+        event.eventName === "agent.capability_claim.corrected" &&
+        event.metadata?.capability === "runtime_model_identity",
+    )).toBe(true);
+  });
+
+  it("does not inspect a bot trace URL when the user asks for a reply transformation", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi.fn().mockResolvedValueOnce({
+      content: "Think of it like a point guard reading the defense and making the simple pass.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    });
+    const parent = {
+      messageId: "synthetic-parent",
+      rootMessageId: "synthetic-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "I mixed up the context.\nTrace: https://tasks.example.com/runs/synthetic",
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...parent, chain: [parent] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "Explain this in basketball.");
+
+    expect(response.content).toContain("point guard");
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(traceEvents.some(
+      (event) => event.eventName === "agent.public_url_evidence_guard.rejected",
+    )).toBe(false);
+  });
+
+  it("preserves a hosted citation when a confirmed reply-chain result promises a link", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi.fn().mockResolvedValueOnce({
+      content: "Yep — I found it, and here's the link.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+      serverToolUse: {
+        web_search_requests: 1,
+        tool_calls_requested: 1,
+        tool_calls_executed: 1,
+      },
+      urlCitations: [{
+        url: "https://example.com/synthetic-match",
+        title: "Synthetic public match",
+      }],
+    });
+    const chain = Array.from({ length: 12 }, (_value, index) => ({
+      messageId: `synthetic-link-chain-${index + 1}`,
+      rootMessageId: "synthetic-link-chain-1",
+      channelId: "c",
+      guildId: "g",
+      authorId: index % 2 === 0 ? "u" : "bot",
+      authorDisplayName: index % 2 === 0 ? "User" : "Bot",
+      authorIsBot: index % 2 === 1,
+      content: index === 11
+        ? "I found a likely public match and can share the source."
+        : `Synthetic public lookup context ${index + 1}.`,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: index === 11 ? "https://example.com/prior-public-source" : null,
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: Array.from({ length: 25 }, (_value, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "assistant" as const : "user" as const,
+        content: `Synthetic retained lookup context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(2026, 6, 24, 3, index),
+      })),
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "ok it is");
+
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(response.content).toContain(
+      "Source: <https://example.com/synthetic-match>",
+    );
+    expect(traceEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "agent.hosted_citation_link.appended",
+        metadata: expect.objectContaining({ citationCount: 1 }),
+      }),
+    ]));
+  });
+
+  it("retries a timed-out public-link follow-up with hosted URL evidence", async () => {
+    const traceEvents: any[] = [];
+    const chat = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
+      .mockResolvedValueOnce({
+        content: "I can't tell what that public post contains from the link alone.",
+        model: "fast/fallback",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The linked public post is defining a fictional racing term.",
+        model: "fast/fallback",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: {
+          tool_calls_requested: 1,
+          tool_calls_executed: 1,
+        },
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback", chatFallbackModel: "fast/fallback" },
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: {
+        messageId: "parent",
+        rootMessageId: "parent",
+        channelId: "c",
+        guildId: "g",
+        authorId: "u",
+        authorDisplayName: "User",
+        authorIsBot: false,
+        content: "https://example.com/public-post",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what is this term?");
+
+    expect(response.content).toContain("defining a fictional racing term");
+    expect(chat).toHaveBeenCalledTimes(3);
+    const recoveryRequest = (chat.mock.calls[2]?.[0] ?? {}) as {
+      messages?: Array<{ role: string; content: string }>;
+      tools?: Array<{ type?: string }>;
+      toolChoice?: string;
+    };
+    expect(recoveryRequest.toolChoice).toBe("required");
+    expect(recoveryRequest.tools).toEqual([
+      expect.objectContaining({ type: "openrouter:web_search" }),
+    ]);
+    expect(recoveryRequest.messages?.some((message) =>
+      message.role === "user" && message.content.includes("exact scoped URL")
+    )).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.public_url_evidence_guard.rejected"))
+      .toBe(true);
+  });
+
+  it("recovers from an HTML URL misrouted to image inspection with hosted web evidence", async () => {
+    const traceEvents: any[] = [];
+    const auditTool = vi.fn(async () => undefined);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-html-as-image",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            imageUrls: ["https://example.com/synthetic-page"],
+            useContextImages: false,
+          }),
+        }],
+      })
+      .mockRejectedValueOnce(new OpenRouterHttpError({
+        status: 400,
+        message: "URL did not return an image (received text/html)",
+      }))
+      .mockResolvedValueOnce({
+        content: "I couldn't inspect that page as an image.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic page documents a fictional racing term.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+        serverToolUse: { web_search_requests: 1 },
+        urlCitations: [{
+          url: "https://example.com/synthetic-page",
+          title: "Synthetic page",
+        }],
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool,
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [{
+        id: "context-image",
+        url: "https://cdn.discordapp.com/context.png",
+        filename: "context.png",
+        contentType: "image/png",
+      }],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Inspect https://example.com/synthetic-page",
+    );
+
+    expect(response.content).toContain("documents a fictional racing term");
+    expect(chat).toHaveBeenCalledTimes(4);
+    const retry = (chat.mock.calls[3]?.[0] ?? {}) as {
+      tools?: Array<{ type?: string }>;
+      toolChoice?: string;
+    };
+    expect(retry.toolChoice).toBe("required");
+    expect(retry.tools).toEqual([
+      expect.objectContaining({ type: "openrouter:web_search" }),
+    ]);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "inspectDiscordImages",
+      error: "image_source_unreadable",
+    }));
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.public_url_evidence_guard.rejected"
+    )).toBe(true);
+  });
+
+  it("retrieves exact messages behind a UTC hourly aggregate follow-up", async () => {
+    const exactMessages = [
+      agentSearchResult({
+        messageId: "hourly-message-1",
+        authorId: "member-1",
+        createdAt: new Date("2026-05-02T09:10:00.000Z"),
+        normalizedContent: "synthetic first hourly message",
+      }),
+      agentSearchResult({
+        messageId: "hourly-message-2",
+        authorId: "member-1",
+        createdAt: new Date("2026-05-03T09:20:00.000Z"),
+        normalizedContent: "synthetic second hourly message",
+      }),
+    ];
+    const recentMessagesFromChannels = vi.fn(async () => exactMessages);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "hourly-search",
+          name: "searchDiscordHistory",
+          argumentsText: JSON.stringify({
+            query: "",
+            authorIds: ["member-1"],
+            dateFrom: "2026-05-01",
+            hourOfDayUtc: 9,
+            limit: 25,
+          }),
+        }],
+      })
+      .mockImplementationOnce(async (request: { messages: Array<{ role: string; name?: string; content: string }> }) => {
+        const evidence = request.messages.find(
+          (message) => message.role === "tool" && message.name === "searchDiscordHistory"
+        )?.content ?? "";
+        expect(evidence).toContain("UTC hour filter: 09:00–09:59");
+        expect(evidence).toContain("synthetic first hourly message");
+        expect(evidence).toContain("synthetic second hourly message");
+        return {
+          content: "Those two synthetic messages are the exact 09:00 UTC matches.",
+          model: "final-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 25,
+        openRouter: {},
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        recentMessagesFromChannels,
+        getCrawlStatus: vi.fn(async () => []),
+        auditTool: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "requester",
+      userDisplayName: "Requester",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      replyContext: {
+        messageId: "bot-parent",
+        rootMessageId: "root",
+        channelId: "c",
+        guildId: "g",
+        authorId: "bot",
+        authorDisplayName: "AI",
+        authorIsBot: true,
+        content: "There were two messages in the 09:00 UTC aggregate bucket.",
+        attachmentSummaries: [],
+        attachments: [],
+        createdAt: null,
+        url: null,
+        chain: [],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "what were the two messages at 9 am?");
+
+    expect(response.content).toContain("exact 09:00 UTC matches");
+    expect(recentMessagesFromChannels).toHaveBeenCalledWith(expect.objectContaining({
+      authorIds: ["member-1"],
+      hourOfDayUtc: 9,
+      dateFrom: new Date("2026-05-01T00:00:00.000Z"),
+    }));
+  });
+
+  it("rejects an unrelated wallet read and recovers a bedtime stats follow-up", async () => {
+    const getBalance = vi.fn();
+    const discordStats = vi.fn(async () => ({
+      totalMessages: 12,
+      totalAttachments: 0,
+      totalReactions: 0,
+      userCount: 1,
+      channelCount: 1,
+      activeDays: 6,
+      metric: "messages" as const,
+      groupBy: "hourOfDay" as const,
+      rows: [{ key: "6", label: "06:00", value: 4 }],
+      topUsers: [],
+      topChannels: [],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "wrong-wallet-tool",
+          name: "getWalletBalance",
+          argumentsText: JSON.stringify({ owner: "requester" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "expand-retrieval",
+          name: "requestAdditionalTools",
+          argumentsText: JSON.stringify({
+            groups: ["discord-retrieval"],
+            reason: "Need requester-visible activity timing evidence",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "bedtime-stats",
+          name: "getDiscordStats",
+          argumentsText: JSON.stringify({
+            authorIds: ["requester"],
+            metric: "messages",
+            groupBy: "hourOfDay",
+            sort: "labelAsc",
+            limit: 24,
+          }),
+        }],
+      })
+      .mockImplementationOnce(async (request: { messages: Array<{ role: string; name?: string; content: string }> }) => {
+        const walletResult = request.messages.find(
+          (message) => message.role === "tool" && message.name === "getWalletBalance"
+        )?.content ?? "";
+        expect(walletResult).toContain("explicit current or replied financial request");
+        return {
+          content: "Your synthetic activity evidence suggests a 06:00 UTC cutoff for a seven-hour sleep target.",
+          model: "final-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        maxHistoryResults: 25,
+        openRouter: {},
+        payments: {
+          walletEnabled: true,
+          userWalletsEnabled: true,
+          privyAppId: "test-app",
+          privyAppSecret: "test-secret",
+        },
+      },
+      repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        discordStats,
+        auditTool: vi.fn(async () => undefined),
+      },
+      walletService: { getBalance },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "requester",
+      userDisplayName: "Requester",
+      visibleChannelIds: ["c"],
+      sessionMessages: [{
+        id: 1,
+        threadKey: "g:c",
+        role: "assistant",
+        content: "Your recent indexed activity timing was grouped by UTC hour.",
+        metadata: {},
+        createdAt: new Date("2026-07-24T00:00:00.000Z"),
+      }],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "my bedtime. 7 hour average.");
+
+    expect(response.content).toContain("seven-hour sleep target");
+    expect(getBalance).not.toHaveBeenCalled();
+    expect(discordStats).toHaveBeenCalledWith(expect.objectContaining({
+      authorIds: ["requester"],
+      groupBy: "hourOfDay",
+    }));
+  });
+
+  it("replays a terse image follow-up and delivers only typography-validated output", async () => {
+    const firstImage = Buffer.from("synthetic-image-with-typo");
+    const correctedImage = Buffer.from("synthetic-corrected-image");
+    const generateImage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: firstImage.toString("base64"), media_type: "image/png" }],
+      })
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: correctedImage.toString("base64"), media_type: "image/png" }],
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "expand-image-tools",
+          name: "requestAdditionalTools",
+          argumentsText: JSON.stringify({
+            groups: ["image"],
+            reason: "The reply-chain request needs an image-generation tool.",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-poster",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A synthetic racing poster with the exact title APEX DAY 7429.",
+            requiredText: ["APEX DAY 7429"],
+            useContextImages: false,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: false, observedText: ["APEX DAY 7249"] }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: true, observedText: ["APEX DAY 7429"] }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The corrected synthetic poster is ready.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const replyMessage = (messageId: string, content: string) => ({
+      messageId,
+      rootMessageId: "root-image-request",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content,
+      attachmentSummaries: [],
+      attachments: [],
+      createdAt: null,
+      url: null,
+    });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: {
+        ...replyMessage("reply-image-request", "Use the earlier synthetic concept."),
+        chain: [
+          replyMessage("root-image-request", "Create a racing poster titled APEX DAY 7429."),
+          replyMessage("reply-2", "Keep the title exact."),
+          replyMessage("reply-3", "Use the same synthetic layout."),
+          replyMessage("reply-image-request", "Use the earlier synthetic concept."),
+        ],
+      },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "that version please");
+
+    expect(response.content).toContain("Generated image for:");
+    expect(response.content).toContain("APEX DAY 7429");
+    expect(response.files).toEqual([
+      expect.objectContaining({ data: correctedImage, contentType: "image/png" }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
+    expect(chat).toHaveBeenCalledTimes(4);
+  });
+
+  it("inherits exact image text from a reply chain when the model omits requiredText", async () => {
+    const firstImage = Buffer.from("synthetic-image-with-typo");
+    const correctedImage = Buffer.from("synthetic-corrected-image");
+    const generateImage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: firstImage.toString("base64"), media_type: "image/png" }],
+      })
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{ b64_json: correctedImage.toString("base64"), media_type: "image/png" }],
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-poster",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A synthetic racing poster with the exact title APEX DAY 7429.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: false, observedText: ["APEX DAY 7249"] }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ matches: true, observedText: ["APEX DAY 7429"] }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The corrected synthetic poster is ready.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId,
+      rootMessageId: "root-image-request",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "image attachment"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage("root-image-request", "Create a racing poster titled APEX DAY 7429.", false),
+      replyMessage("first-poster", "Here is the first version.", true, [{
+        id: "first-image",
+        url: "https://cdn.discordapp.com/first.png",
+        filename: "first.png",
+        contentType: "image/png",
+      }]),
+      replyMessage("adjustment", "Keep the title exact in the next version.", false),
+      replyMessage("ready", "I can revise that version.", true),
+      replyMessage("layout", "Keep the same synthetic layout.", false),
+      replyMessage("layout-ready", "I’ll preserve that layout.", true),
+    ];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "that version please");
+
+    expect(response.content).toContain("Generated image for:");
+    expect(response.content).toContain("APEX DAY 7429");
+    expect(response.files).toEqual([
+      expect.objectContaining({ data: correctedImage, contentType: "image/png" }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("APEX DAY 7429");
+    expect(chat).toHaveBeenCalledTimes(3);
+  });
+
+  it("delivers a deterministic exact-text fallback after repeated reply-chain typography misses", async () => {
+    const generatedImage = await sharp({
+      create: {
+        width: 960,
+        height: 640,
+        channels: 3,
+        background: { r: 34, g: 52, b: 76 },
+      },
+    }).png().toBuffer();
+    const generateImage = vi.fn(async (_prompt: string) => ({
+      model: "test/image",
+      raw: {},
+      data: [{ b64_json: generatedImage.toString("base64"), media_type: "image/png" }],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-exact-poster",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A synthetic event poster based on the retained reference image.",
+            requiredText: ["SYNTHETIC SUMMER FESTIVAL", "FRIDAY AT SEVEN · ALL WELCOME"],
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          matches: false,
+          observedText: ["SYNTHETIC SUMER FESTIVAL"],
+        }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          matches: false,
+          observedText: ["FRIDAY AT SEVEN · ALL WELCOM"],
+        }),
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The corrected synthetic poster is ready.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId,
+      rootMessageId: "root-exact-poster",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "image attachment"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage(
+        "root-exact-poster",
+        "Create a synthetic event poster with two exact lines of visible text.",
+        false,
+      ),
+      replyMessage("first-exact-poster", "Here is the reference layout.", true, [{
+        id: "reference-image",
+        url: "https://cdn.discordapp.com/reference.png",
+        filename: "reference.png",
+        contentType: "image/png",
+      }]),
+      replyMessage("exact-text-reminder", "Keep both requested lines exact.", false),
+    ];
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "try now");
+
+    expect(response.content).toContain("Typography fallback:");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png" }),
+    ]);
+    const outputFile = response.files?.[0];
+    expect(outputFile).toBeDefined();
+    await expect(sharp(outputFile!.data).metadata()).resolves.toMatchObject({
+      width: 960,
+      height: 640,
+      format: "png",
+    });
+    expect(generateImage).toHaveBeenCalledTimes(3);
+    expect(generateImage.mock.calls[2]?.[0]).toContain("render no readable text");
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining('"textOverlayFallback":true'),
+    }));
+  });
+
+  it("recovers a false visual refusal by inspecting a retained reply-chain image", async () => {
+    const imageBytes = Buffer.from("synthetic-reply-image");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(imageBytes, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(imageBytes.length),
+      },
+    })));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "I can't access the earlier image from this Discord reply.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-retained-image",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "What does the visual detail mean?",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic diagram shows the requested visual detail.",
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "It means the highlighted synthetic value increased.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const traceEvents: any[] = [];
+    const root = {
+      messageId: "root-image",
+      rootMessageId: "root-image",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "Here is a synthetic diagram.",
+      attachmentSummaries: ["diagram.png image/png"],
+      attachments: [{
+        id: "diagram",
+        url: "https://cdn.discordapp.com/diagram.png",
+        filename: "diagram.png",
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    };
+    const firstAnswer = {
+      ...root,
+      messageId: "first-answer",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "The diagram has a highlighted value.",
+      attachmentSummaries: [],
+      attachments: [],
+    };
+    const followUp = {
+      ...root,
+      messageId: "follow-up",
+      content: "Please keep using that diagram.",
+      attachmentSummaries: [],
+      attachments: [],
+    };
+    const parent = {
+      ...firstAnswer,
+      messageId: "parent-answer",
+      content: "I’ll keep the diagram in context.",
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...parent, chain: [root, firstAnswer, followUp, parent] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "What does that mean?");
+
+    expect(response.content).toContain("highlighted synthetic value");
+    expect(chat).toHaveBeenCalledTimes(4);
+    expect((chat.mock.calls[1]?.[0] as any).toolChoice).toEqual({
+      type: "function",
+      function: { name: "inspectDiscordImages" },
+    });
+    expect(traceEvents.some((event) => event.eventName === "agent.image_evidence.retry")).toBe(true);
+  });
+
+  it("inspects a directly replied generated image before explaining its visual outcome", async () => {
+    const imageBytes = Buffer.from("synthetic-generated-image");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(imageBytes, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(imageBytes.length),
+      },
+    })));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-generated-image",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "Why is the blue marker placed there?",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic image places the blue marker beside the orange block.",
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "The marker landed there because the composition aligned it with the orange block.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const repliedImage = {
+      messageId: "generated-reply",
+      rootMessageId: "request-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "Generated a synthetic diagram.",
+      attachmentSummaries: ["diagram.png image/png"],
+      attachments: [{
+        id: "diagram",
+        url: "https://cdn.discordapp.com/diagram.png",
+        filename: "diagram.png",
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    };
+    const rootRequest = {
+      ...repliedImage,
+      messageId: "request-root",
+      rootMessageId: "request-root",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "Create a synthetic diagram.",
+      attachmentSummaries: [],
+      attachments: [],
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...repliedImage, chain: [rootRequest, repliedImage] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Why did you put the blue marker there?",
+    );
+
+    expect(response.content).toContain("composition aligned it");
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect((chat.mock.calls[0]?.[0] as any).toolChoice).toEqual({
+      type: "function",
+      function: { name: "inspectDiscordImages" },
+    });
+    const finalMessages = (chat.mock.calls[2]?.[0] as any).messages as Array<{
+      role: string;
+      name?: string;
+      content: string;
+    }>;
+    expect(finalMessages.some((message) =>
+      message.role === "tool" &&
+      message.name === "inspectDiscordImages" &&
+      message.content.includes("blue marker beside the orange block")
+    )).toBe(true);
+  });
+
+  it("uses the stronger vision path for a current composite image before final synthesis", async () => {
+    const sourceImage = await sharp(Buffer.from(`
+      <svg xmlns="http://www.w3.org/2000/svg" width="320" height="180">
+        <rect width="320" height="180" fill="#f6f7fb"/>
+        <circle cx="82" cy="90" r="44" fill="#3568d4"/>
+        <rect x="176" y="46" width="92" height="88" rx="12" fill="#f09a38"/>
+        <path d="M46 142 L118 142 L82 104 Z" fill="#45a66b"/>
+      </svg>
+    `)).png().toBuffer();
+    const fetchMock = vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-current-composite",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "Describe the main elements in this synthetic composite.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.model).toBe("google/gemini-3.6-flash");
+        expect(request.messages).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "image_url",
+                image_url: {
+                  url: expect.stringMatching(/^data:image\/png;base64,/),
+                },
+              }),
+            ]),
+          }),
+        ]));
+        return {
+          content: "The synthetic composite contains all three requested geometric elements.",
+          model: "strong-vision-model",
+          raw: {},
+          toolCalls: [],
+        };
+      })
+      .mockImplementationOnce(async (request: any) => {
+        const toolEvidence = request.messages.find(
+          (message: any) => message.role === "tool" && message.name === "inspectDiscordImages",
+        )?.content ?? "";
+        expect(toolEvidence).toContain("all three requested geometric elements");
+        return {
+          content: "It shows all three synthetic geometric elements.",
+          model: "final-model",
+          raw: {},
+          toolCalls: [],
+        };
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [{
+        id: "current-composite",
+        url: "https://cdn.discordapp.com/current-composite.png",
+        filename: "current-composite.png",
+        contentType: "image/png",
+      }],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Describe the main elements in this synthetic composite.",
+    );
+
+    expect(response.content).toContain("all three synthetic geometric elements");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(3);
+  });
+
+  it("replays a reply-chain image edit through generation after inspection ends in a refusal", async () => {
+    const sourceImage = Buffer.from("synthetic-source-image");
+    const generatedImage = Buffer.from("synthetic-edited-image");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    })));
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{
+        b64_json: generatedImage.toString("base64"),
+        media_type: "image/png",
+      }],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-edit-reference",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "Describe the synthetic source image for an edit.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic source is a simple blue landscape.",
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "I can describe the image, but I can't create the edited version here.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({
+          type: "function",
+          function: { name: "generateImage" },
+        });
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "generate-edited-reference",
+            name: "generateImage",
+            argumentsText: JSON.stringify({
+              prompt: "Turn the synthetic blue landscape into a watercolor.",
+              useContextImages: true,
+            }),
+          }],
+        };
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the watercolor edit.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const traceEvents: any[] = [];
+    const source = {
+      messageId: "synthetic-source",
+      rootMessageId: "synthetic-source",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "Use this synthetic landscape.",
+      attachmentSummaries: ["landscape.png image/png"],
+      attachments: [{
+        id: "landscape",
+        url: "https://cdn.discordapp.com/landscape.png",
+        filename: "landscape.png",
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    };
+    const parent = {
+      ...source,
+      messageId: "synthetic-parent",
+      authorId: "bot",
+      authorDisplayName: "Bot",
+      authorIsBot: true,
+      content: "I can use that image as a reference.",
+      attachmentSummaries: [],
+      attachments: [],
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...parent, chain: [source, parent] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Make this image into a synthetic watercolor.",
+    );
+
+    expect(response.content).toContain("Generated image for: Turn the synthetic blue landscape into a watercolor.");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(4);
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.image_generation.retry"
+    )).toBe(true);
+  });
+
+  it("replays a terse portrait refinement across a deep generated-image reply chain", async () => {
+    const sourceImage = await sharp({
+      create: { width: 800, height: 450, channels: 3, background: { r: 30, g: 80, b: 120 } },
+    }).png().toBuffer();
+    const portraitImage = await sharp({
+      create: { width: 600, height: 800, channels: 3, background: { r: 80, g: 40, b: 120 } },
+    }).png().toBuffer();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    })));
+    const generateImage = vi.fn(async (_prompt: string, options: any) => {
+      expect(options.aspectRatio).toBe("3:4");
+      expect(options.inputReferences).toHaveLength(1);
+      return {
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: portraitImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      };
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-portrait-refinement",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A portrait composition of the retained synthetic character and scene.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the portrait refinement.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const replyMessage = (
+      index: number,
+      authorIsBot: boolean,
+      content: string,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId: `synthetic-portrait-${index}`,
+      rootMessageId: "synthetic-portrait-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "synthetic-scene.png image/png"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = Array.from({ length: 20 }, (_value, index) =>
+      replyMessage(
+        index,
+        index % 2 === 1,
+        index % 2 === 0
+          ? `Synthetic scene refinement ${index / 2 + 1}.`
+          : `Acknowledged synthetic refinement ${(index + 1) / 2}.`,
+      ));
+    chain.push(
+      replyMessage(20, false, "Generate the current synthetic scene."),
+      replyMessage(21, true, "Here is the generated synthetic scene.", [{
+        id: "synthetic-generated-scene",
+        url: "https://cdn.discordapp.com/synthetic-generated-scene.png",
+        filename: "synthetic-generated-scene.png",
+        contentType: "image/png",
+      }]),
+      replyMessage(22, false, "Keep the same character."),
+      replyMessage(23, true, "I’ll preserve the same synthetic character."),
+    );
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "portrait layout");
+    const metadata = await sharp(response.files?.[0]?.data).metadata();
+
+    expect(chain).toHaveLength(24);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(metadata).toMatchObject({ width: 600, height: 800 });
+    expect(response.content).toContain("Requested aspect ratio: 3:4");
+    expect(response.content).toContain("Actual dimensions: 600x800");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png", data: portraitImage }),
+    ]);
+  });
+
+  it("keeps the generated reply image when the model disables context for a follow-up generation", async () => {
+    const sourceImage = Buffer.from("synthetic-deep-chain-source");
+    const generatedImage = Buffer.from("synthetic-deep-chain-variation");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    })));
+    const generateImage = vi.fn(async (_prompt: string, options: any) => {
+      expect(options.inputReferences).toHaveLength(1);
+      expect(options.inputReferences[0].image_url.url).toMatch(
+        /^data:image\/png;base64,/,
+      );
+      return {
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: generatedImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      };
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-reference-follow-up",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A new setting with the retained synthetic subject.",
+            useContextImages: false,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the follow-up variation.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const chain = deepGeneratedImageReplyChain(
+      "synthetic-preserved-reference",
+    );
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Please generate an image with the same synthetic subject in a garden.",
+    );
+
+    expect(chain).toHaveLength(24);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(response.content).toContain("Used 1 reference image.");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+  });
+
+  it("replays deep-chain visual correction feedback and preserves the source image", async () => {
+    const sourceImage = Buffer.from("synthetic-correction-source");
+    const generatedImage = Buffer.from("synthetic-corrected-result");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    })));
+    const generateImage = vi.fn(async (_prompt: string, options: any) => {
+      expect(options.inputReferences).toHaveLength(1);
+      return {
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: generatedImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      };
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "I understand the correction.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({
+          type: "function",
+          function: { name: "generateImage" },
+        });
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "generate-corrected-reference",
+            name: "generateImage",
+            argumentsText: JSON.stringify({
+              prompt: "Correct the output while retaining the same synthetic subject.",
+              useContextImages: false,
+            }),
+          }],
+        };
+      });
+    const traceEvents: any[] = [];
+    const chain = deepGeneratedImageReplyChain(
+      "synthetic-correction-reference",
+    );
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain.at(-1), chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "No, it should keep the same synthetic subject.",
+    );
+
+    expect(chain).toHaveLength(24);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(response.content).toContain("Used 1 reference image.");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.image_generation.retry"
+    )).toBe(true);
+  });
+
+  it("delivers a conservative image fallback after a text-only generation safety false positive", async () => {
+    const generatedImage = Buffer.from("synthetic-safe-fallback-image");
+    const generateImage = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterContentFilterError({
+        status: 400,
+        model: "test/image",
+        message: "synthetic content filter",
+      }))
+      .mockResolvedValueOnce({
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: generatedImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-benign-scene",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "A photorealistic portrait of a fictional famous explorer having coffee.",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the clearly illustrated fallback.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Create a benign portrait of a fictional famous explorer having coffee.",
+    );
+
+    expect(response.content).toContain("Safety fallback:");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("clearly stylized");
+    expect(generateImage.mock.calls[1]?.[0]).toContain(
+      "fictional famous explorer having coffee",
+    );
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining('"safetyFallbackUsed":true'),
+    }));
+  });
+
+  it("inlines a current Discord attachment before inspection-led image generation", async () => {
+    const sourceImage = Buffer.from("synthetic-current-discord-image");
+    const generatedImage = Buffer.from("synthetic-current-edited-image");
+    const fetchMock = vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generateImage = vi.fn(async (_prompt: string, options: any) => {
+      expect(options.inputReferences).toHaveLength(1);
+      expect(options.inputReferences[0].image_url.url).toMatch(
+        /^data:image\/png;base64,/,
+      );
+      expect(options.inputReferences[0].image_url.url).not.toContain(
+        "cdn.discordapp.com",
+      );
+      return {
+        model: "test/image",
+        raw: {},
+        data: [{
+          b64_json: generatedImage.toString("base64"),
+          media_type: "image/png",
+        }],
+      };
+    });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "inspect-current-reference",
+          name: "inspectDiscordImages",
+          argumentsText: JSON.stringify({
+            question: "Describe the current synthetic image before editing it.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "The synthetic source is a simple geometric landscape.",
+        model: "vision-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "generate-current-reference",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "Turn the current synthetic landscape into a watercolor.",
+            useContextImages: true,
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the watercolor edit.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [{
+        id: "current-image",
+        url: "https://cdn.discordapp.com/current.png",
+        filename: "current.png",
+        contentType: "image/png",
+      }],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Turn this current synthetic image into a watercolor.",
+    );
+
+    expect(response.content).toContain("Generated image for: Turn the current synthetic landscape into a watercolor.");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalled();
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries an opaque reply-chain background removal and delivers a transparent PNG", async () => {
+    const width = 24;
+    const height = 24;
+    const noisyBackground = Buffer.alloc(width * height * 3);
+    for (let pixel = 0; pixel < width * height; pixel += 1) {
+      const value = (pixel + Math.floor(pixel / width)) % 2 === 0 ? 28 : 232;
+      noisyBackground.fill(value, pixel * 3, pixel * 3 + 3);
+    }
+    const opaqueUnremovable = await sharp(noisyBackground, {
+      raw: { width, height, channels: 3 },
+    }).png().toBuffer();
+    const subject = await sharp({
+      create: {
+        width: 8,
+        height: 8,
+        channels: 3,
+        background: { r: 25, g: 90, b: 210 },
+      },
+    }).png().toBuffer();
+    const opaqueRecoverable = await sharp({
+      create: {
+        width,
+        height,
+        channels: 3,
+        background: { r: 0, g: 255, b: 0 },
+      },
+    }).composite([{ input: subject, left: 8, top: 8 }]).png().toBuffer();
+    const sourceImage = await sharp({
+      create: {
+        width: 12,
+        height: 12,
+        channels: 3,
+        background: { r: 80, g: 120, b: 180 },
+      },
+    }).png().toBuffer();
+    const fetchMock = vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generateImage = vi
+      .fn(async (_prompt: string, options: any) => {
+        expect(options.inputReferences).toHaveLength(4);
+        expect(options.inputReferences.every((reference: any) =>
+          /^data:image\/png;base64,/.test(reference.image_url.url)
+        )).toBe(true);
+        return {
+          model: "test/image",
+          raw: {},
+          data: [{
+            b64_json: (
+              generateImage.mock.calls.length === 1
+                ? opaqueUnremovable
+                : opaqueRecoverable
+            ).toString("base64"),
+            media_type: "image/png",
+          }],
+        };
+      });
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "remove-retained-background",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "Remove the background from the retained synthetic subject.",
+            useContextImages: true,
+            outputFormat: "png",
+            background: "transparent",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the transparent cutout.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const chain = Array.from({ length: 4 }, (_value, index) => ({
+      messageId: `synthetic-reference-${index + 1}`,
+      rootMessageId: "synthetic-reference-1",
+      channelId: "c",
+      guildId: "g",
+      authorId: index % 2 === 0 ? "u" : "bot",
+      authorDisplayName: index % 2 === 0 ? "User" : "Bot",
+      authorIsBot: index % 2 !== 0,
+      content: `Synthetic image context ${index + 1}.`,
+      attachmentSummaries: [`reference-${index + 1}.png image/png`],
+      attachments: [{
+        id: `reference-${index + 1}`,
+        url: `https://cdn.discordapp.com/reference-${index + 1}.png`,
+        filename: `reference-${index + 1}.png`,
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...chain[3], chain },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "remove the background");
+    const deliveredFile = response.files?.[0];
+    expect(deliveredFile).toBeDefined();
+    if (!deliveredFile) throw new Error("expected the transparent image file");
+    const normalized = await sharp(deliveredFile.data)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const alpha = Array.from(
+      { length: normalized.data.length / normalized.info.channels },
+      (_value, index) => normalized.data[
+        index * normalized.info.channels + normalized.info.channels - 1
+      ],
+    );
+
+    expect(response.content).toContain("Transparency fallback:");
+    expect(response.content).toContain("real alpha transparency");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png" }),
+    ]);
+    expect(alpha).toContain(0);
+    expect(alpha).toContain(255);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain("chroma-key green background");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining('"transparencyFallbackUsed":true'),
+    }));
+  });
+
+  it("recovers a blocked transparent reply edit with the same inlined reference", async () => {
+    const sourceImage = await sharp({
+      create: {
+        width: 16,
+        height: 16,
+        channels: 3,
+        background: { r: 210, g: 205, b: 195 },
+      },
+    }).png().toBuffer();
+    const subject = await sharp({
+      create: {
+        width: 6,
+        height: 6,
+        channels: 3,
+        background: { r: 35, g: 95, b: 220 },
+      },
+    }).png().toBuffer();
+    const chromaBackground = Buffer.alloc(20 * 20 * 3);
+    for (let pixel = 0; pixel < 20 * 20; pixel += 1) {
+      const offset = pixel * 3;
+      chromaBackground[offset] = (pixel * 37) % 56;
+      chromaBackground[offset + 1] = 190 + ((pixel * 17) % 66);
+      chromaBackground[offset + 2] = (pixel * 29) % 46;
+    }
+    const recoverableImage = await sharp(chromaBackground, {
+      raw: { width: 20, height: 20, channels: 3 },
+    }).composite([{ input: subject, left: 7, top: 7 }]).png().toBuffer();
+    const fetchMock = vi.fn(async () => new Response(sourceImage, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(sourceImage.length),
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generateImage = vi
+      .fn()
+      .mockRejectedValueOnce(new OpenRouterContentFilterError({
+        status: 400,
+        model: "test/image",
+        message: "synthetic content filter",
+      }))
+      .mockImplementationOnce(async (_prompt: string, options: any) => {
+        expect(options.inputReferences).toHaveLength(1);
+        expect(options.inputReferences[0].image_url.url).toMatch(
+          /^data:image\/png;base64,/,
+        );
+        return {
+          model: "test/image",
+          raw: {},
+          data: [{
+            b64_json: recoverableImage.toString("base64"),
+            media_type: "image/png",
+          }],
+        };
+      });
+    const referenceUrl = "https://cdn.discordapp.com/synthetic-reference.png";
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [{
+          id: "make-reference-transparent",
+          name: "generateImage",
+          argumentsText: JSON.stringify({
+            prompt: "Make the referenced synthetic image transparent.",
+            referenceImageUrls: [referenceUrl],
+            outputFormat: "png",
+            background: "transparent",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the transparent version.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const auditTool = vi.fn(async () => undefined);
+    const sourceMessage = {
+      messageId: "synthetic-source",
+      rootMessageId: "synthetic-source",
+      channelId: "c",
+      guildId: "g",
+      authorId: "u",
+      authorDisplayName: "User",
+      authorIsBot: false,
+      content: "Use this synthetic image.",
+      attachmentSummaries: ["synthetic-reference.png image/png"],
+      attachments: [{
+        id: "synthetic-reference",
+        url: referenceUrl,
+        filename: "synthetic-reference.png",
+        contentType: "image/png",
+      }],
+      createdAt: null,
+      url: null,
+    };
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: { auditTool },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestAttachments: [],
+      replyContext: { ...sourceMessage, chain: [sourceMessage] },
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "make it transparent");
+    const deliveredFile = response.files?.[0];
+    expect(deliveredFile).toBeDefined();
+    if (!deliveredFile) throw new Error("expected the recovered transparent image");
+    const normalized = await sharp(deliveredFile.data)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const alpha = Array.from(
+      { length: normalized.data.length / normalized.info.channels },
+      (_value, index) => normalized.data[
+        index * normalized.info.channels + normalized.info.channels - 1
+      ],
+    );
+
+    expect(response.content).toContain("Reference safety fallback:");
+    expect(response.content).toContain("real alpha transparency");
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png" }),
+    ]);
+    expect(alpha).toContain(0);
+    expect(alpha).toContain(255);
+    expect(generateImage).toHaveBeenCalledTimes(2);
+    expect(generateImage.mock.calls[1]?.[0]).toContain(
+      "BACKGROUND-REMOVAL RECOVERY PASS",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "generateImage",
+      resultSummary: expect.stringContaining(
+        '"referenceTransparencyFallbackUsed":true',
+      ),
+    }));
+  });
+
+  it("replays a terse retained-context image request and delivers a generated file", async () => {
+    const generatedImage = Buffer.from("synthetic-brighter-image");
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
+      raw: {},
+      data: [{
+        b64_json: generatedImage.toString("base64"),
+        media_type: "image/png",
+      }],
+    }));
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: "I can't make that visual in this chat.",
+        model: "tool-model",
+        raw: {},
+        toolCalls: [],
+      })
+      .mockImplementationOnce(async (request: any) => {
+        expect(request.toolChoice).toEqual({
+          type: "function",
+          function: { name: "generateImage" },
+        });
+        expect(request.tools).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            function: expect.objectContaining({ name: "generateImage" }),
+          }),
+        ]));
+        return {
+          content: "",
+          model: "tool-model",
+          raw: {},
+          toolCalls: [{
+            id: "generate-brighter-version",
+            name: "generateImage",
+            argumentsText: JSON.stringify({
+              prompt: "Make the retained synthetic landscape brighter.",
+              useContextImages: false,
+            }),
+          }],
+        };
+      })
+      .mockResolvedValueOnce({
+        content: "Here is the brighter version.",
+        model: "final-model",
+        raw: {},
+        toolCalls: [],
+      });
+    const traceEvents: any[] = [];
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
+      },
+      openRouter: { chat, generateImage },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          id: 1,
+          threadKey: "g:c",
+          discordMessageId: "prior-request",
+          role: "user",
+          authorId: "u",
+          authorDisplayName: "User",
+          content: "Create a synthetic landscape image.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-25T20:00:00.000Z"),
+        },
+        {
+          id: 2,
+          threadKey: "g:c",
+          discordMessageId: "prior-response",
+          role: "assistant",
+          authorId: "bot",
+          authorDisplayName: "Bot",
+          content: "I can help with that image.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-25T20:00:01.000Z"),
+        },
+      ],
+      requestAttachments: [],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "make it brighter");
+
+    expect(response.content).toContain("Generated image for: Make the retained synthetic landscape brighter.");
+    expect(response.files).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        data: generatedImage,
+      }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(traceEvents.some((event) =>
+      event.eventName === "agent.image_generation.retry"
+    )).toBe(true);
+  });
+
+  it("corrects a false transcription refusal from the tool-capable timeout retry", async () => {
     const traceEvents: any[] = [];
     const chat = vi
       .fn()
@@ -3259,8 +6728,7 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback" },
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback", chatFallbackModel: "fast/fallback" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
       repo: {
@@ -3283,158 +6751,210 @@ describe("agent router", () => {
       "I can transcribe common audio and video attachments. Attach the media here or reply to the Discord message containing it, and I’ll transcribe it.",
     );
     expect(chat).toHaveBeenCalledTimes(3);
-    expect((chat.mock.calls[1]?.[0] as any).model).toBeUndefined();
+    expect((chat.mock.calls[1]?.[0] as any).model).toBe("slow/primary");
     expect((chat.mock.calls[2]?.[0] as any).model).toBe("fast/fallback");
-    expect((chat.mock.calls[2]?.[0] as any).tools).toBeUndefined();
-    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(true);
+    expect((chat.mock.calls[2]?.[0] as any).tools).toBeDefined();
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
     expect(traceEvents.some((event) => event.eventName === "agent.capability_claim.corrected")).toBe(true);
   });
 
-  it("transcribes a public X video from the full Discord reply chain before answering", async () => {
-    const publicMediaUrl = "https://x.com/example/status/42/video/1";
-    const transcribeAudio = vi.fn(async () => ({
-      text: "A fictional speaker verifies the release candidate.",
-      model: "test/transcription",
+  it("continues a chart retry with the utility model when the primary model times out after stats", async () => {
+    const traceEvents: any[] = [];
+    const chartBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const generateImage = vi.fn(async () => ({
+      model: "test/image",
       raw: {},
-      durationSeconds: 5,
-      estimatedCostUsd: 0.001,
+      data: [{ b64_json: chartBytes.toString("base64"), media_type: "image/png" }],
     }));
     const chat = vi
       .fn()
+      .mockResolvedValueOnce({
+        content: "",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [{
+          id: "expand-chart-tools",
+          name: "requestAdditionalTools",
+          argumentsText: JSON.stringify({
+            groups: ["discord-retrieval", "image"],
+            reason: "The reply-chain retry needs fresh activity evidence and a replacement chart.",
+          }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        content: "I’ll refresh the synthetic activity evidence first.",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [
+          {
+            id: "find-synthetic-channel",
+            name: "findDiscordChannels",
+            argumentsText: JSON.stringify({ query: "synthetic-project" }),
+          },
+          {
+            id: "server-yearly-stats",
+            name: "getDiscordStats",
+            argumentsText: JSON.stringify({
+              metric: "messages",
+              groupBy: "year",
+              sort: "dateAsc",
+              includeBots: false,
+            }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: "I’ll compare the full server trend with the selected channel before rebuilding the chart.",
+        model: "slow/primary",
+        raw: {},
+        toolCalls: [
+          {
+            id: "server-yearly-stats-expanded",
+            name: "getDiscordStats",
+            argumentsText: JSON.stringify({
+              metric: "messages",
+              groupBy: "year",
+              sort: "dateAsc",
+              includeBots: false,
+              limit: 15,
+            }),
+          },
+          {
+            id: "channel-yearly-stats",
+            name: "getDiscordStats",
+            argumentsText: JSON.stringify({
+              channelIds: ["synthetic-channel"],
+              metric: "messages",
+              groupBy: "year",
+              sort: "dateAsc",
+              includeBots: false,
+              limit: 15,
+            }),
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new OpenRouterTimeoutError({ timeoutMs: 45_000, path: "/chat/completions" }))
       .mockImplementationOnce(async (request: any) => {
-        expect(request.tools.some((tool: any) => tool.function?.name === "inspectDiscordFile")).toBe(true);
-        expect(request.toolChoice).toEqual({ type: "function", function: { name: "inspectDiscordFile" } });
+        expect(request.model).toBe("fast/fallback");
+        expect(request.tools).toEqual(expect.arrayContaining([
+          expect.objectContaining({ function: expect.objectContaining({ name: "generateImage" }) }),
+        ]));
         return {
           content: "",
-          model: "tool-model",
+          model: "fast/fallback",
           raw: {},
           toolCalls: [{
-            id: "inspect-public-video",
-            name: "inspectDiscordFile",
-            argumentsText: "{}",
+            id: "generate-replacement-chart",
+            name: "generateImage",
+            argumentsText: JSON.stringify({
+              prompt: "A synthetic yearly Discord activity comparison chart using only the supplied tool evidence.",
+              useContextImages: false,
+              outputFormat: "png",
+            }),
           }],
         };
-      })
-      .mockResolvedValueOnce({
-        content: "The clip says: A fictional speaker verifies the release candidate.",
-        model: "answer-model",
-        raw: {},
-        toolCalls: [],
       });
-    vi.stubGlobal("fetch", vi.fn(async (input: URL | RequestInfo) => {
-      const url = String(input);
-      if (url.startsWith("https://cdn.syndication.twimg.com/tweet-result?")) {
-        return new Response(JSON.stringify({
-          mediaDetails: [{
-            type: "video",
-            video_info: { variants: [{ content_type: "video/mp4", bitrate: 256000, url: "https://video.twimg.com/example/clip.mp4" }] },
-          }],
-        }), { headers: { "content-type": "application/json" } });
-      }
-      return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "video/mp4" } });
-    }));
+    const yearlyStats = {
+      totalMessages: 42,
+      totalAttachments: 0,
+      totalReactions: 0,
+      userCount: 4,
+      channelCount: 2,
+      activeDays: 10,
+      metric: "messages" as const,
+      groupBy: "year" as const,
+      rows: [
+        { key: "2025", label: "2025", value: 18, messageCount: 18, periodStart: new Date("2025-01-01T00:00:00.000Z") },
+        { key: "2026", label: "2026", value: 24, messageCount: 24, periodStart: new Date("2026-01-01T00:00:00.000Z") },
+      ],
+      topUsers: [],
+      topChannels: [],
+    };
+    const replyMessage = (
+      messageId: string,
+      content: string,
+      authorIsBot: boolean,
+      attachments: Array<Record<string, unknown>> = [],
+    ) => ({
+      messageId,
+      rootMessageId: "synthetic-root",
+      channelId: "c",
+      guildId: "g",
+      authorId: authorIsBot ? "bot" : "u",
+      authorDisplayName: authorIsBot ? "Bot" : "User",
+      authorIsBot,
+      content,
+      attachmentSummaries: attachments.map(() => "image attachment"),
+      attachments,
+      createdAt: null,
+      url: null,
+    });
+    const chain = [
+      replyMessage("synthetic-root", "Rank yearly server message activity.", false),
+      replyMessage("synthetic-2", "Here are the yearly server totals.", true),
+      replyMessage("synthetic-3", "Use the complete yearly range.", false),
+      replyMessage("synthetic-4", "Here is the expanded yearly ranking.", true),
+      replyMessage("synthetic-5", "Make that a chart.", false),
+      replyMessage("synthetic-6", "Here is the first chart.", true, [{
+        attachmentId: "synthetic-chart",
+        filename: "synthetic-chart.jpg",
+        contentType: "image/jpeg",
+        size: 256_000,
+        url: "https://example.com/synthetic-chart.jpg",
+      }]),
+      replyMessage("synthetic-7", "Compare it with the synthetic project channel.", false),
+      replyMessage("synthetic-8", "I can rebuild the chart with that channel comparison.", true),
+    ];
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: {},
+        openRouter: { chatModel: "slow/primary", utilityModel: "fast/fallback", chatFallbackModel: "fast/fallback" },
         payments: { walletEnabled: false, userWalletsEnabled: false },
       },
       repo: {
+        getVisibleIndexedChannelIds: vi.fn(async (_guildId: string, channelIds: string[]) => channelIds),
+        findDiscordChannels: vi.fn(async () => [{
+          channelId: "synthetic-channel",
+          channelName: "synthetic-project",
+          parentId: null,
+          parentName: null,
+          type: 0,
+        }]),
+        discordStats: vi.fn(async () => yearlyStats),
         auditTool: vi.fn(async () => undefined),
-        recordTraceEvent: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async (event: any) => traceEvents.push(event)),
       },
-      openRouter: { chat, transcribeAudio },
+      openRouter: { chat, generateImage },
       guildId: "g",
       channelId: "c",
       userId: "u",
       userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      requestMessageId: "request",
+      visibleChannelIds: ["c", "synthetic-channel"],
+      sessionMessages: Array.from({ length: 25 }, (_value, index) => ({
+        id: index + 1,
+        threadKey: "discord:g:c",
+        role: index % 2 === 0 ? "assistant" as const : "user" as const,
+        content: `Synthetic retained context ${index + 1}.`,
+        metadata: {},
+        createdAt: new Date(2026, 6, 24, 0, index),
+      })),
       requestAttachments: [],
-      replyContext: replyChainWithContent(publicMediaUrl),
+      replyContext: { ...chain.at(-1), chain },
     } as unknown as ToolContext;
 
-    try {
-      const response = await handleAgentRequest(ctx, "transcribe this");
+    const response = await handleAgentRequest(ctx, "try again");
 
-      expect(response.content).toContain("release candidate");
-      expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
-      expect(chat).toHaveBeenCalledTimes(2);
-      const secondRequest = (chat.mock.calls as any[])[1][0];
-      expect(secondRequest.messages).toEqual(expect.arrayContaining([
-        expect.objectContaining({ role: "tool", content: expect.stringContaining("Parser: openrouter-transcription") }),
-      ]));
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("transcribes a QuickTime MOV attachment before answering", async () => {
-    const transcribeAudio = vi.fn(async () => ({
-      text: "A fictional MOV recording confirms the audio path.",
-      model: "test/transcription",
-      raw: {},
-      durationSeconds: 3,
-      estimatedCostUsd: 0.001,
-    }));
-    const chat = vi
-      .fn()
-      .mockImplementationOnce(async (request: any) => {
-        expect(request.toolChoice).toEqual({ type: "function", function: { name: "inspectDiscordFile" } });
-        return {
-          content: "",
-          model: "tool-model",
-          raw: {},
-          toolCalls: [{ id: "inspect-mov", name: "inspectDiscordFile", argumentsText: "{}" }],
-        };
-      })
-      .mockResolvedValueOnce({
-        content: "The recording confirms the audio path.",
-        model: "answer-model",
-        raw: {},
-        toolCalls: [],
-      });
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(
-      new Uint8Array([1, 2, 3]),
-      { headers: { "content-type": "video/quicktime" } },
-    )));
-    const ctx = {
-      config: {
-        maxReplyChars: 1800,
-        toolsetScoping: true,
-        openRouter: {},
-        payments: { walletEnabled: false, userWalletsEnabled: false },
-      },
-      repo: {
-        auditTool: vi.fn(async () => undefined),
-        recordTraceEvent: vi.fn(async () => undefined),
-      },
-      openRouter: { chat, transcribeAudio },
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"],
-      requestMessageId: "request",
-      requestAttachments: [{
-        id: "mov-attachment",
-        url: "https://cdn.discordapp.com/attachments/example/recording.mov",
-        filename: "recording.mov",
-        contentType: "video/quicktime",
-        sizeBytes: 3,
-      }],
-    } as unknown as ToolContext;
-
-    try {
-      const response = await handleAgentRequest(ctx, "transcribe this");
-
-      expect(response.content).toContain("audio path");
-      expect(transcribeAudio).toHaveBeenCalledWith(expect.objectContaining({ format: "mp4" }));
-      expect(chat).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(response.files).toEqual([
+      expect.objectContaining({ contentType: "image/png", data: chartBytes }),
+    ]);
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(chat).toHaveBeenCalledTimes(5);
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_fallback")).toBe(true);
+    expect(traceEvents.some((event) => event.eventName === "agent.model.timeout_synthesis_fallback")).toBe(false);
   });
 
   it("recovers when a hosted OpenRouter tool call leaks as text", async () => {
@@ -3442,7 +6962,11 @@ describe("agent router", () => {
     const ctx = {
       config: {
         maxReplyChars: 1800,
-        openRouter: { utilityModel: "utility/recovery" }
+        openRouter: {
+          chatFallbackModel: "openai/gpt-5.6-terra",
+          chatFallbackReasoningEffort: "medium",
+          chatFallbackMaxTokens: 3_072,
+        }
       },
       repo: {
         auditTool
@@ -3476,7 +7000,11 @@ describe("agent router", () => {
 
     expect(response.content).toBe("Check your rank from the game's ranked mode screen.");
     expect(ctx.openRouter.chat).toHaveBeenCalledTimes(2);
-    expect((ctx.openRouter.chat as any).mock.calls[1][0].model).toBe("utility/recovery");
+    expect((ctx.openRouter.chat as any).mock.calls[1][0]).toEqual(expect.objectContaining({
+      model: "openai/gpt-5.6-terra",
+      reasoningEffort: "medium",
+      maxTokens: 3_072,
+    }));
     expect((ctx.openRouter.chat as any).mock.calls[1][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: "openrouter:web_fetch" })]));
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "agentError", error: "hosted_tool_markup_leaked" }));
   });
@@ -3636,7 +7164,7 @@ describe("agent router", () => {
       config: codeUpdateTestConfig(),
       repo: {
         getAgentTask: vi.fn(async () => task),
-        getTaskProgressEventsForTask: vi.fn(async () => []),
+        getAgentRuntimeTaskEventsForTask: vi.fn(async () => []),
         getSandboxCommandEvents: vi.fn(async () => []),
         storeProcessRunArtifact,
         auditTool
@@ -3774,17 +7302,168 @@ describe("agent router", () => {
         messages: expect.arrayContaining([
           expect.objectContaining({ role: "user", content: "Kartik: make an image of a wizard eating nachos" }),
           expect.objectContaining({
-            role: "assistant",
-            content: "[Earlier generateImage result; not authoritative unless refreshed] Generated image for: a wizard eating nachos"
+            role: "system",
+            content: "A historical generateImage tool result exists, but its body is omitted. Request the relevant memory or retrieval tool, or rerun the operation, if that evidence is needed."
           }),
           expect.objectContaining({
             role: "assistant",
-            content: "[Earlier Discord AI Agent reply; not authoritative for Discord facts] Generated image for: a wizard eating nachos"
+            content: "Generated image for: a wizard eating nachos"
           }),
           expect.objectContaining({ role: "user", content: "what image did we generate earlier?" })
         ])
       })
     );
+  });
+
+  it("does not carry another member's form of address into a top-level requester turn", async () => {
+    const chat = vi.fn(async (request: {
+      messages?: Array<{ role: string; content: string }>;
+    }) => {
+      const protectsRequesterAddress = request.messages?.some((message) =>
+        message.role === "system" &&
+        message.content.includes("Do not carry another member's form of address")
+      ) ?? false;
+      return {
+        content: protectsRequesterAddress
+          ? "That fictional account constraint is clear."
+          : "Nice try, captain. That fictional account constraint is clear.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const priorMessages = [
+      {
+        id: 1,
+        threadKey: "discord:g:c",
+        discordMessageId: "prior-1",
+        role: "user",
+        authorId: "other-user",
+        authorDisplayName: "Other User",
+        content: "In this roleplay, call me captain.",
+        parts: [],
+        metadata: {},
+        createdAt: new Date("2026-07-27T20:00:00.000Z"),
+      },
+      {
+        id: 2,
+        threadKey: "discord:g:c",
+        discordMessageId: "prior-2",
+        role: "assistant",
+        authorId: "bot",
+        authorDisplayName: "ai",
+        content: "Understood, captain.",
+        parts: [],
+        metadata: {},
+        createdAt: new Date("2026-07-27T20:00:01.000Z"),
+      },
+    ];
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "current-user",
+      userDisplayName: "Current User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        ...priorMessages,
+        ...priorMessages,
+        ...priorMessages,
+        ...priorMessages,
+        priorMessages[0],
+      ],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Make sure this fictional checklist does not claim that all $250 belongs in my demo account; it is only a sample constraint for the document.",
+    );
+
+    expect(response.content).toBe("That fictional account constraint is clear.");
+    expect(response.content).not.toContain("captain");
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("owns an unwanted form-of-address correction without assigning another member's persona", async () => {
+    const chat = vi.fn(async (request: {
+      messages?: Array<{ role: string; content: string }>;
+    }) => {
+      const protectsRequesterAddress = request.messages?.some((message) =>
+        message.role === "system" &&
+        message.content.includes("Do not carry another member's form of address")
+      ) ?? false;
+      return {
+        content: protectsRequesterAddress
+          ? "That form of address was carried over incorrectly from unrelated channel context. I won't use it for you."
+          : "I used it because you previously asked me to call you that.",
+        model: "chat-model",
+        raw: {},
+        toolCalls: [],
+      };
+    });
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: {},
+        payments: { walletEnabled: false, userWalletsEnabled: false },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      github: {},
+      guildId: "g",
+      channelId: "c",
+      userId: "current-user",
+      userDisplayName: "Current User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [
+        {
+          id: 1,
+          threadKey: "discord:g:c",
+          discordMessageId: "prior-1",
+          role: "user",
+          authorId: "other-user",
+          authorDisplayName: "Other User",
+          content: "In this roleplay, call me captain.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-27T20:00:00.000Z"),
+        },
+        {
+          id: 2,
+          threadKey: "discord:g:c",
+          discordMessageId: "prior-2",
+          role: "assistant",
+          authorId: "bot",
+          authorDisplayName: "ai",
+          content: "Understood, captain.",
+          parts: [],
+          metadata: {},
+          createdAt: new Date("2026-07-27T20:00:01.000Z"),
+        },
+      ],
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "Why did you call me captain when I never asked for that name in this conversation?",
+    );
+
+    expect(response.content).toContain("carried over incorrectly");
+    expect(response.content).not.toContain("you previously asked");
+    expect(chat).toHaveBeenCalledTimes(1);
   });
 
   it("passes Discord reply parent context to the model for follow-up continuity", async () => {
@@ -3844,7 +7523,7 @@ describe("agent router", () => {
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "system",
-            content: expect.stringContaining("The current user message is a Discord reply. Use this oldest-to-newest parent chain")
+            content: expect.stringContaining("The current user message is a Discord reply, and it alone determines the task")
           }),
           expect.objectContaining({ role: "system", content: expect.stringContaining("Author: Alice") }),
           expect.objectContaining({ role: "system", content: expect.stringContaining("Content: should I merge this PR?") }),
@@ -3853,57 +7532,6 @@ describe("agent router", () => {
         ])
       })
     );
-  });
-
-  it("executes model-selected skill drafts through the structured tool boundary", async () => {
-    const upsertDatabaseSkill = vi.fn(async (input: { name: string; content: string }) => ({
-      name: input.name,
-      content: input.content,
-      source: "database",
-      version: 1
-    }));
-    const ctx = {
-      config: { maxReplyChars: 1800, openRouter: {} },
-      repo: {
-        listEnabledDatabaseSkills: vi.fn(async () => []),
-        upsertDatabaseSkill,
-        auditTool: vi.fn(async () => undefined)
-      },
-      openRouter: {
-        chat: vi
-          .fn()
-          .mockResolvedValueOnce({
-            content: "",
-            model: "router-model",
-            raw: {},
-            toolCalls: [
-              {
-                id: "call-1",
-                name: "createSkillDraft",
-                argumentsText: JSON.stringify({ skillName: "movie-night", instruction: "movie night is on Fridays" })
-              }
-            ]
-          })
-          .mockResolvedValueOnce({
-            content: "Saved that as a private skill.",
-            model: "chat-model",
-            raw: {},
-            toolCalls: []
-          })
-      },
-      github: {},
-      guildId: "g",
-      channelId: "c",
-      userId: "u",
-      userDisplayName: "User",
-      visibleChannelIds: ["c"]
-    } as unknown as ToolContext;
-
-    const response = await handleAgentRequest(ctx, "what is movie night?");
-
-    expect(response.content).toBe("Saved that as a private skill.");
-    expect(upsertDatabaseSkill).toHaveBeenCalledWith(expect.objectContaining({ name: "movie-night", request: "movie night is on Fridays" }));
-    expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "createSkillDraft" }));
   });
 
   it("executes model-selected undo requests through the local undo tool", async () => {
@@ -4521,30 +8149,165 @@ describe("agent router", () => {
       })
     );
   });
-});
 
-function replyChainWithContent(content: string) {
-  const ancestor = {
-    messageId: "ancestor",
-    channelId: "c",
-    guildId: "g",
-    authorId: "u",
-    authorDisplayName: "User",
-    authorIsBot: false,
-    content,
-    attachmentSummaries: [],
-    attachments: [],
-    createdAt: null,
-    url: null,
-  };
-  return {
-    ...ancestor,
-    messageId: "parent",
-    rootMessageId: "ancestor",
-    content: "please try this media",
-    chain: [ancestor],
-  };
-}
+  it("does not force an empty RNG call for another member's deferred future wager", async () => {
+    const chat = vi.fn(async () => ({
+      content: "I can’t reserve a cross-user future wager. Use a current bot-run game instead.",
+      model: "router-model",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1800,
+        openRouter: {},
+        payments: { walletEnabled: true, userWalletsEnabled: true },
+      },
+      repo: {
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      sessionMessages: [],
+      requestId: "deferred-wager-request",
+      requestMessageId: "deferred-wager-request",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(
+      ctx,
+      "bet $0.25 that another member's three-digit number tomorrow is in range, remember it and settle after they roll",
+    );
+
+    expect(response.content).toContain("cross-user future wager");
+    expect(chat).toHaveBeenCalledOnce();
+    expect((chat.mock.calls as any[])[0]?.[0]?.toolChoice).not.toEqual({
+      type: "function",
+      function: { name: "drawRandom" },
+    });
+  });
+
+  it("lets a configured owner switch and reset the server model without calling the current model", async () => {
+    const chat = vi.fn();
+    const setGuildChatModelOverride = vi.fn(async () => undefined);
+    const clearGuildChatModelOverride = vi.fn(async () => true);
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: { chatModel: "configured/default" },
+        allowlists: { ownerUserId: "owner", opsUserIds: ["operator"] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride,
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: {
+        chat,
+        listModels: vi.fn(async () => [
+          { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
+        ]),
+      },
+      guildId: "g",
+      channelId: "c",
+      userId: "owner",
+      userDisplayName: "Owner",
+      visibleChannelIds: ["c"],
+      requestId: "model-switch-request",
+    } as unknown as ToolContext;
+
+    const switched = await handleAgentRequest(ctx, "switch model to moonshotai/kimi-k3");
+    expect(switched.content).toContain("moonshotai/kimi-k3");
+    expect(setGuildChatModelOverride).toHaveBeenCalledWith({
+      guildId: "g",
+      chatModel: "moonshotai/kimi-k3",
+      updatedByUserId: "owner",
+    });
+    expect(chat).not.toHaveBeenCalled();
+
+    const reset = await handleAgentRequest(ctx, "reset model");
+    expect(reset.content).toContain("configured default");
+    expect(clearGuildChatModelOverride).toHaveBeenCalledWith("g");
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthorized exact model switches without invoking a model", async () => {
+    const chat = vi.fn();
+    const setGuildChatModelOverride = vi.fn();
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: { chatModel: "configured/default" },
+        allowlists: { ownerUserId: "owner", opsUserIds: ["operator"] },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => undefined),
+        setGuildChatModelOverride,
+        clearGuildChatModelOverride: vi.fn(),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "friend",
+      userDisplayName: "Friend",
+      visibleChannelIds: ["c"],
+      requestId: "unauthorized-model-switch",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "switch model to moonshotai/kimi-k3");
+
+    expect(response.content).toContain("restricted");
+    expect(setGuildChatModelOverride).not.toHaveBeenCalled();
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("uses a durable guild override for the next primary model request", async () => {
+    const chat = vi.fn(async () => ({
+      content: "The server override is active.",
+      model: "moonshotai/kimi-k3",
+      raw: {},
+      toolCalls: [],
+    }));
+    const ctx = {
+      config: {
+        maxReplyChars: 1_800,
+        openRouter: {
+          chatModel: "configured/default",
+          chatFallbackModel: "fallback/recovery",
+        },
+      },
+      repo: {
+        getGuildAgentSettings: vi.fn(async () => ({
+          chatModel: "moonshotai/kimi-k3",
+        })),
+        auditTool: vi.fn(async () => undefined),
+        recordTraceEvent: vi.fn(async () => undefined),
+      },
+      openRouter: { chat },
+      guildId: "g",
+      channelId: "c",
+      userId: "u",
+      userDisplayName: "User",
+      visibleChannelIds: ["c"],
+      requestId: "model-override-request",
+    } as unknown as ToolContext;
+
+    const response = await handleAgentRequest(ctx, "hello");
+
+    expect(response.content).toContain("override is active");
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      model: "moonshotai/kimi-k3",
+    }));
+  });
+});
 
 function fakeAgentRuntimeContext() {
   return {
@@ -4584,7 +8347,6 @@ function presentationTestContext(chat: ReturnType<typeof vi.fn>) {
   return {
     config: {
       maxReplyChars: 1800,
-      toolsetScoping: true,
       openRouter: {},
       discord: { premiumSkuIds: [] },
       payments: { walletEnabled: false, userWalletsEnabled: false },
@@ -4612,6 +8374,48 @@ function codeUpdateTestConfig() {
     openRouter: { codegenModel: "z-ai/glm-5.2" },
     execution: { codegenBackend: "local-process", codegenHarness: "opencode", taskSigningSecret: "test-secret" }
   };
+}
+
+function deepGeneratedImageReplyChain(referenceId: string) {
+  const message = (
+    index: number,
+    authorIsBot: boolean,
+    content: string,
+    attachments: Array<Record<string, unknown>> = [],
+  ) => ({
+    messageId: `synthetic-image-chain-${index}`,
+    rootMessageId: "synthetic-image-chain-root",
+    channelId: "c",
+    guildId: "g",
+    authorId: authorIsBot ? "bot" : "u",
+    authorDisplayName: authorIsBot ? "Bot" : "User",
+    authorIsBot,
+    content,
+    attachmentSummaries: attachments.map(() => "synthetic-reference.png image/png"),
+    attachments,
+    createdAt: null,
+    url: null,
+  });
+  const chain = Array.from({ length: 20 }, (_value, index) =>
+    message(
+      index,
+      index % 2 === 1,
+      index % 2 === 0
+        ? `Synthetic visual refinement ${index / 2 + 1}.`
+        : `Acknowledged visual refinement ${(index + 1) / 2}.`,
+    ));
+  chain.push(
+    message(20, false, "Generate the current synthetic subject."),
+    message(21, true, "Here is the generated synthetic subject.", [{
+      id: referenceId,
+      url: `https://cdn.discordapp.com/${referenceId}.png`,
+      filename: `${referenceId}.png`,
+      contentType: "image/png",
+    }]),
+    message(22, false, "Keep the subject consistent."),
+    message(23, true, "I’ll keep the synthetic subject consistent."),
+  );
+  return chain;
 }
 
 function channelTopicCandidate(content: string, embedding: number[]) {

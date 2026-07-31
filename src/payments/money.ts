@@ -27,12 +27,6 @@ export function stableId(prefix: string, ...parts: string[]): string {
   return `${prefix}_${digest}`;
 }
 
-export function safeUsdNumber(amountAtomic: bigint, decimals: number): number {
-  const value = Number(atomicToUsd(amountAtomic, decimals));
-  if (!Number.isFinite(value)) throw new Error("Amount cannot be represented as a finite USD number");
-  return value;
-}
-
 function decimalNumberToString(value: number): string {
   if (!Number.isFinite(value) || value < 0) throw new Error(`Invalid non-negative USD amount: ${value}`);
   const rendered = value.toString();

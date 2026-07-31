@@ -59,11 +59,17 @@ config:
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
-  openRouterChatModel: z-ai/glm-5.2
-  # Also serves as the one-shot fallback when the primary model times out
-  # before any tool has executed.
+  openRouterChatModel: openai/gpt-5.6-luna
+  openRouterChatFallbackModel: openai/gpt-5.6-terra
+  openRouterChatReasoningEffort: medium
+  openRouterChatFallbackReasoningEffort: medium
+  # Reasoning and visible output share the completion budget; Discord bounds
+  # final visible replies.
+  openRouterChatMaxTokens: "4096"
+  openRouterChatFallbackMaxTokens: "3072"
+  # Used for bounded summaries, compaction, and deployment notes.
   openRouterUtilityModel: openai/gpt-4o-mini
-  # Optional. Defaults to openRouterChatModel when empty.
+  # Optional. Defaults to GLM 5.2 when empty.
   openRouterCodegenModel: z-ai/glm-5.2
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
@@ -80,7 +86,6 @@ config:
   memoryCompactionThreshold: "100"
   memoryCompactionKeepRecent: "30"
   crawlScheduleCron: "0 6 * * *"
-  toolsetScoping: "true"
   walletEnabled: "false"
   userWalletsEnabled: "false"
   walletBalancesPublic: "false"
@@ -146,7 +151,7 @@ worker:
     crawl: true
     embedding: true
     task: true
-    discordAgent: true
+    agentRuntime: true
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }

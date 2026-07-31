@@ -3,10 +3,8 @@ import { cleanAgentResponse, stringArgument, stringArrayArgument, numberArgument
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
-// Uniform signatures intentionally expose only the inputs each tool needs.
-/* eslint-disable @typescript-eslint/no-unused-vars */
 export const generatedDataToolHandlers = {
-  "readGeneratedFile": async (ctx, route, originalText) => {
+  "readGeneratedFile": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await readGeneratedFile(ctx, {
             fileName: stringArgument(route.arguments, "fileName"),
@@ -17,7 +15,7 @@ export const generatedDataToolHandlers = {
           ctx.config.maxReplyChars,
         );
   },
-  "queryGeneratedCsv": async (ctx, route, originalText) => {
+  "queryGeneratedCsv": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await queryGeneratedCsv(ctx, {
             fileName: stringArgument(route.arguments, "fileName"),
@@ -33,7 +31,7 @@ export const generatedDataToolHandlers = {
           ctx.config.maxReplyChars,
         );
   },
-  "queryGeneratedTable": async (ctx, route, originalText) => {
+  "queryGeneratedTable": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await queryGeneratedTable(ctx, {
             tableName: stringArgument(route.arguments, "tableName"),
@@ -50,4 +48,3 @@ export const generatedDataToolHandlers = {
         );
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
-/* eslint-enable @typescript-eslint/no-unused-vars */

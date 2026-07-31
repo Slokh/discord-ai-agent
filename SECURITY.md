@@ -16,11 +16,11 @@ If a token, database URL, or private export is accidentally committed or posted 
 1. Revoke or rotate the secret at the provider.
 2. Remove the public artifact.
 3. Audit Kubernetes/EKS, GitHub, OpenRouter, Discord, and database logs for suspicious access.
-4. Treat Discord message dumps, embeddings, trace logs, and private skill exports as sensitive even when no API token is present.
+4. Treat Discord message dumps, embeddings, trace logs, and private prompt overlays as sensitive even when no API token is present.
 
 ## Data Handling
 
-Discord AI Agent stores indexed message content, metadata, embeddings, traces, tool audit logs, conversation memory, aliases, blocked users, and private database skills. Do not publish production databases, dumps, logs, `.discord-ai-agent/`, or skill exports.
+Discord AI Agent stores indexed message content, metadata, embeddings, traces, tool audit logs, conversation memory, aliases, blocked users, and server overlays. Do not publish production databases, dumps, logs, or `.discord-ai-agent/`.
 
 The bot should run with least-privilege Discord permissions and should not be granted Administrator.
 

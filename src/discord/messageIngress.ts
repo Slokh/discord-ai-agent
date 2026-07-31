@@ -169,7 +169,7 @@ export async function handleMessageCreate(
     discordUrl: message.url,
     status: "queued",
     source: "discord.ingress",
-    executorName: input.agentExecutor?.name ?? "in-process",
+    executorName: input.agentExecutor?.name ?? "nanocodex",
     appRevision: input.config.appRevision,
     config: input.config
   }).catch((error) => {
@@ -275,7 +275,7 @@ export async function handleMessageCreate(
         responseContent: errorContent,
         error: error instanceof Error ? error.message : String(error),
         durationMs: durationMs(messageStartedAt),
-        executorName: input.agentExecutor?.name ?? "in-process"
+        executorName: input.agentExecutor?.name ?? "nanocodex"
       }).catch((runtimeError) => requestLogger.warn({ err: runtimeError }, "Failed to mark enqueue failure in agent runtime"));
       return;
     }

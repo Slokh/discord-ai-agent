@@ -40,11 +40,13 @@ async function main() {
   }
 
   const [
-    { handleAgentRequest },
+    { NanoCodexAgentRuntimePromptExecutor },
+    { ensureAgentRuntimePromptExecution, finishAgentRuntimePromptExecution },
     { loadConfig },
     { runMigrations },
     { createPool },
     { DiscordAiAgentRepository },
+    { AgentRuntimeRepository },
     { PaymentRepository },
     { OpenRouterClient },
     { PrivyTempoWalletProvider },
@@ -52,11 +54,13 @@ async function main() {
     { startJobs },
     { runWithTrace }
   ] = await Promise.all([
-    import("../src/agent/router.js"),
+    import("../src/agent/runtimeExecutor.js"),
+    import("../src/agent/runtimeLedger.js"),
     import("../src/config/env.js"),
     import("../src/db/migrate.js"),
     import("../src/db/pool.js"),
     import("../src/db/repositories.js"),
+    import("../src/db/agentRuntimeRepository.js"),
     import("../src/db/paymentRepository.js"),
     import("../src/models/openrouter.js"),
     import("../src/payments/privyTempoWalletProvider.js"),
@@ -73,6 +77,7 @@ async function main() {
 
   const pool = createPool(config);
   const repo = new DiscordAiAgentRepository(pool);
+  const agentRuntime = new AgentRuntimeRepository(pool);
   const paymentRepo = new PaymentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const walletProvider = config.payments.walletEnabled && config.payments.privyAppId && config.payments.privyAppSecret
@@ -128,6 +133,24 @@ async function main() {
     }
 
     const requestId = `local-${randomUUID().slice(0, 8)}`;
+    const runtimeRef = await ensureAgentRuntimePromptExecution({
+      agentRuntime,
+      guildId,
+      channelId: currentChannel.id,
+      userId: args.userId,
+      userDisplayName: args.userName,
+      threadKey,
+      requestId,
+      text: args.prompt,
+      rawContent: args.prompt,
+      discordUrl: `local://prompt/${requestId}`,
+      status: "running",
+      source: "cli.prompt",
+      executorName: "nanocodex",
+      appRevision: config.appRevision,
+      config,
+    });
+    if (!runtimeRef) throw new Error("Could not create the NanoCodex runtime ledger for the local prompt.");
     await repo.upsertProcessRun({
       runId: requestId,
       traceId: requestId,
@@ -166,10 +189,13 @@ async function main() {
       },
       async () => {
         try {
-          return await handleAgentRequest(
-            {
+          return await new NanoCodexAgentRuntimePromptExecutor().execute({
+            toolContext: {
               config,
               repo,
+              agentRuntime,
+              agentRuntimeSession: runtimeRef.session,
+              agentRuntimeExecutionId: runtimeRef.executionId,
               openRouter,
               jobs,
               walletService,
@@ -182,11 +208,30 @@ async function main() {
               mentionedChannelIds: explicitChannelMentionIds(args.prompt),
               threadKey,
               sessionMessages: priorSessionMessages,
-              requestId
+              requestId,
+              requestMessageId: requestId,
+              mutationAuthorizedByCurrentInput: true,
             },
-            stripOptionalBotAddress(args.prompt, config.discord.clientId, config.discord.botName)
-          );
+            text: stripOptionalBotAddress(args.prompt, config.discord.clientId, config.discord.botName),
+            timeoutMs: config.chatTimeouts.hardMs,
+            hardTimeoutMs: config.chatTimeouts.hardMs,
+            silenceTimeoutMs: config.chatTimeouts.silenceMs,
+            turnEnvelope: { requestId } as never,
+          });
         } catch (error) {
+          await finishAgentRuntimePromptExecution({
+            agentRuntime,
+            session: runtimeRef.session,
+            executionId: runtimeRef.executionId,
+            traceId: requestId,
+            status: "failed",
+            replyMessageId: requestId,
+            replyUrl: `local://prompt/${requestId}`,
+            responseContent: "",
+            error: error instanceof Error ? error.message : String(error),
+            durationMs: Date.now() - agentStartedAt,
+            executorName: "nanocodex",
+          });
           await repo.recordProcessRunSpan({
             runId: requestId,
             spanId: "agent.request",
@@ -207,6 +252,18 @@ async function main() {
         }
       }
     );
+    await finishAgentRuntimePromptExecution({
+      agentRuntime,
+      session: runtimeRef.session,
+      executionId: runtimeRef.executionId,
+      traceId: requestId,
+      status: "succeeded",
+      replyMessageId: requestId,
+      replyUrl: `local://prompt/${requestId}`,
+      responseContent: response.content,
+      durationMs: Date.now() - agentStartedAt,
+      executorName: "nanocodex",
+    });
     await repo.recordProcessRunSpan({
       runId: requestId,
       spanId: "agent.request",

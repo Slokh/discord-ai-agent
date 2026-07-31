@@ -45,8 +45,6 @@ export type AgentTaskCompletionEvent = {
   metadata?: Record<string, unknown>;
 };
 
-export type CodegenHarness = "codex" | "opencode";
-
 export type SandboxEnv = {
   taskType: AgentTaskJob["taskType"];
   taskId: string;
@@ -66,9 +64,8 @@ export type SandboxEnv = {
   githubRepository: string;
   githubBaseBranch: string;
   openRouterApiKey: string;
-  openRouterChatModel: string;
+  openRouterBaseUrl?: string;
   openRouterCodegenModel: string;
-  codegenHarness: CodegenHarness;
   sandboxCacheDir: string;
   sandboxStartedAtMs: number | null;
 };

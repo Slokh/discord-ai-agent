@@ -40,8 +40,8 @@ describe("agent task enqueue", () => {
         queueName: "agent.task",
         backendName: "local-process-sandbox",
         codegenBackend: "local-process",
-        codegenHarness: "opencode",
-        codegenModel: "z-ai/glm-5.2",
+        codegenModel: "openai/gpt-5.6-terra",
+        codegenReasoningEffort: "medium",
         codegenProvider: "openrouter"
       })
     );

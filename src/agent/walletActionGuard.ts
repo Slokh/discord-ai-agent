@@ -32,18 +32,19 @@ const WORD_AMOUNTS: Readonly<Record<string, number>> = {
 export function walletActionToolForPrompt(config: AppConfig, text: string): ForcedWalletActionTool | null {
   if (!config.payments?.walletEnabled || !config.payments.userWalletsEnabled) return null;
   const normalized = text.trim();
-  if (USD_AMOUNT.test(normalized) && isExplicitStarterFundsPrompt(normalized)) return "requestStarterFunds";
+  if (isExplicitStarterFundsPrompt(normalized, config.payments.initialGrantUsd ?? 0.1)) return "requestStarterFunds";
   if (isExplicitWalletTransferPrompt(normalized)) return "transferWalletFunds";
   return null;
 }
 
-export function isExplicitStarterFundsPrompt(text: string): boolean {
+export function isExplicitStarterFundsPrompt(text: string, targetUsd = 1): boolean {
   const normalized = text.trim();
-  return Boolean(
-    normalized &&
-    !promptExcludesRealWallet(normalized) &&
-    (STARTER_REQUEST.test(normalized) || PERSONAL_STARTER_DOLLAR.test(normalized))
-  );
+  if (!normalized || promptExcludesRealWallet(normalized)) return false;
+  if (STARTER_REQUEST.test(normalized)) return true;
+  if (targetUsd === 1 && PERSONAL_STARTER_DOLLAR.test(normalized)) return true;
+  const configuredAmount = targetUsd.toFixed(6).replace(/0+$/, "").replace(/\.$/, "").replace(".", "\\.");
+  return new RegExp(`\\$\\s*${configuredAmount}(?:0*)\\b`, "i").test(normalized) ||
+    (targetUsd === 0.1 && /\b(?:give|send|spot|lend)?\s*(?:me\s+)?(?:my\s+)?(?:ten|10)\s+cents?\b/i.test(normalized));
 }
 
 export function isExplicitWalletTransferPrompt(text: string): boolean {

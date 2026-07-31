@@ -4,6 +4,7 @@ import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import { resolveGitHubTaskToken } from "../github/appToken.js";
 import { parseGitHubRepository } from "../github/repository.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
+import { UTILITY_REASONING } from "../agent/modelPolicy.js";
 import { logger } from "../util/logger.js";
 import { discordSend } from "./api.js";
 
@@ -163,6 +164,7 @@ async function generatePatchNotes(openRouter: Pick<OpenRouterClient, "chat">, co
   const evidence = comparisonEvidence(comparison);
   const result = await openRouter.chat({
     model: config.openRouter.utilityModel,
+    reasoningEffort: UTILITY_REASONING,
     messages: [
       {
         role: "system",

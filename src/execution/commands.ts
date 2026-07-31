@@ -122,10 +122,8 @@ export async function runCommand(
 
 function shouldEmitCommandActivity(step: string) {
   return (
-    step === "codex" ||
-    step.startsWith("codex_attempt_") ||
-    step === "opencode" ||
-    step.startsWith("opencode_attempt_") ||
+    step === "nanocodex" ||
+    step.startsWith("nanocodex_attempt_") ||
     step === "verify" ||
     step === "scan" ||
     step === "dependencies"

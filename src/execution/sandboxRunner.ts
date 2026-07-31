@@ -9,7 +9,7 @@
  * - `repoWorkspace.ts`: mirror/worktree/branch/git state/push.
  * - `dependencyCache.ts`: install/restore/manifest dependency cache.
  * - `contextPack.ts`: codegen request context building.
- * - `harness/codex.ts` + `harness/opencode.ts`: harness adapters.
+ * - `harness/nanocodex.ts`: native NanoCodex workspace execution and typed progress projection.
  * - `callbacks.ts` + `commands.ts`: control-plane callbacks and command runs.
  */
 import { main } from "./runnerPipeline.js";

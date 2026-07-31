@@ -20,19 +20,19 @@ export const runtimeAdminToolContracts = [
   defineTool({
     name: "setAgentModel",
     examples: [
-      "@ai switch model to moonshotai/kimi-k3",
-      "@ai switch to Sonnet 5",
+      "@ai switch model to Luna",
+      "@ai switch to Sol",
       "@ai reset model",
     ],
     description:
-      "Set or reset this Discord server's durable primary chat-model override only when the current Discord message explicitly requests that mutation. A verified OpenRouter model ID or unambiguous catalog name/alias is accepted; prior messages may identify what 'that' means but never authorize a change. The current message's target is authoritative, even if a model-generated tool argument differs. A successful change applies to remaining work in the same request and future requests, and does not change the recovery model. Restricted to the configured bot owner or ops allowlist.",
+      "Set or reset this Discord server's durable NanoCodex model override only when the current Discord message explicitly requests that mutation. Only Sol, Luna, or their exact OpenRouter IDs are accepted. Prior messages may identify what 'that' means but never authorize a change. The current message's target is authoritative, even if a model-generated tool argument differs. A successful change applies to remaining work in the same request and future requests. Restricted to the configured bot owner or ops allowlist.",
     userVisible: true,
     mutates: true,
     group: "ops",
     category: "ops",
     toolClass: "ops",
     outputContract: [
-      "previous and effective primary chat model",
+      "previous and effective NanoCodex model",
       "whether the override was set or reset",
       "when the change takes effect",
       "failure reason when authorization or model syntax is invalid",
@@ -52,7 +52,7 @@ export const runtimeAdminToolContracts = [
         },
         model: {
           type: "string",
-          description: "The model named in the current request, as an OpenRouter provider/model ID or unambiguous catalog alias. Required when action is set. Never infer a different target from older context.",
+          description: "Sol, Luna, or the exact corresponding OpenRouter model ID named in the current request. Required when action is set. Never infer a different target from older context.",
         },
       },
       additionalProperties: false,

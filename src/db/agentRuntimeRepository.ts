@@ -159,7 +159,7 @@ export class AgentRuntimeRepository {
         )
         VALUES (
           $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, coalesce($10, 'queued'), coalesce($11, 'codex'),
+          $7, $8, $9, coalesce($10, 'queued'), coalesce($11, 'nanocodex'),
           $12, $13, $14, $15::jsonb,
           CASE WHEN $10::text = 'running' THEN now() ELSE NULL END,
           CASE WHEN $10::text IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN now() ELSE NULL END,
@@ -283,7 +283,7 @@ export class AgentRuntimeRepository {
         )
         VALUES (
           $1, $2, $3, $4, coalesce($5, 1), coalesce($6, 'queued'),
-          coalesce($7, 'codex-app-server'), $8, $9, $10, $11, $12, $13::jsonb,
+          coalesce($7, 'nanocodex'), $8, $9, $10, $11, $12, $13::jsonb,
           CASE WHEN $6::text = 'running' THEN now() ELSE NULL END,
           CASE WHEN $6::text IN ('succeeded', 'failed', 'no_changes', 'cancelled') THEN now() ELSE NULL END,
           now()
@@ -516,6 +516,10 @@ export class AgentRuntimeRepository {
 
   getBinaryArtifact(input: { artifactId: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
     return this.artifacts.getBinaryArtifact(input);
+  }
+
+  getLatestBinaryArtifactForSession(input: { sessionId: string; kind: string }): Promise<AgentRuntimeBinaryArtifactContent | undefined> {
+    return this.artifacts.getLatestBinaryArtifactForSession(input);
   }
 
   getArtifact(input: { artifactId: string }): Promise<AgentRuntimeArtifactContent | undefined> {

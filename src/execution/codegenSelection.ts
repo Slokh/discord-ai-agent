@@ -1,18 +1,19 @@
 import type { AppConfig } from "../config/env.js";
+import { CODEGEN_REASONING } from "../agent/modelPolicy.js";
 
 export type CodegenExecutionSelection = {
   codegenBackend: AppConfig["execution"]["codegenBackend"];
-  codegenHarness: AppConfig["execution"]["codegenHarness"];
   codegenModel: string;
   codegenProvider: string;
+  codegenReasoningEffort: typeof CODEGEN_REASONING;
 };
 
 export function codegenExecutionSelection(config: AppConfig): CodegenExecutionSelection {
   return {
     codegenBackend: config.execution.codegenBackend,
-    codegenHarness: config.execution.codegenHarness,
     codegenModel: config.openRouter.codegenModel,
-    codegenProvider: providerForCodegenModel(config.openRouter.codegenModel)
+    codegenProvider: providerForCodegenModel(config.openRouter.codegenModel),
+    codegenReasoningEffort: CODEGEN_REASONING,
   };
 }
 

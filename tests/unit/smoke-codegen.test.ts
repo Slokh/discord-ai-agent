@@ -5,18 +5,23 @@ import { describe, expect, it } from "vitest";
 import { formatSmokeSuiteSummary, formatSmokeSummary, loadSmokeSuite, parseArgs } from "../../scripts/smokeCodegen.js";
 
 describe("codegen smoke script helpers", () => {
+  it("defaults smoke runs to NanoCodex Terra", async () => {
+    await expect(parseArgs([])).resolves.toEqual(
+      expect.objectContaining({ model: "openai/gpt-5.6-terra" })
+    );
+  });
+
   it("loads long smoke requests from a file", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegen-smoke-request-"));
     try {
       const requestPath = path.join(tempDir, "request.txt");
       await fs.writeFile(requestPath, "Make the codegen task update a fixture file.\n", "utf8");
 
-      const args = await parseArgs(["--harness", "opencode", "--model", "z-ai/glm-5.2", "--request-file", requestPath]);
+      const args = await parseArgs(["--model", "openai/gpt-5.6-luna", "--request-file", requestPath]);
 
       expect(args.request).toBe("Make the codegen task update a fixture file.\n");
       expect(args.requestFile).toBe(requestPath);
-      expect(args.harness).toBe("opencode");
-      expect(args.model).toBe("z-ai/glm-5.2");
+      expect(args.model).toBe("openai/gpt-5.6-luna");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -36,8 +41,7 @@ describe("codegen smoke script helpers", () => {
               id: "tool-schema",
               title: "Improve tool schema",
               request: "Make a small fixture edit.",
-              harness: "opencode",
-              model: "z-ai/glm-5.2",
+              model: "openai/gpt-5.6-luna",
               timeoutMs: 120000,
               closePr: true
             },
@@ -52,10 +56,9 @@ describe("codegen smoke script helpers", () => {
         "utf8"
       );
 
-      await expect(parseArgs(["--suite", suitePath, "--harness", "codex", "--close-pr"])).resolves.toEqual(
+      await expect(parseArgs(["--suite", suitePath, "--close-pr"])).resolves.toEqual(
         expect.objectContaining({
           suiteFile: suitePath,
-          harness: "codex",
           closePr: true
         })
       );
@@ -68,8 +71,7 @@ describe("codegen smoke script helpers", () => {
             title: "Improve tool schema",
             request: "Make a small fixture edit.",
             requestFile: undefined,
-            harness: "opencode",
-            model: "z-ai/glm-5.2",
+            model: "openai/gpt-5.6-luna",
             timeoutMs: 120000,
             closePr: true,
             skip: undefined,
@@ -80,7 +82,6 @@ describe("codegen smoke script helpers", () => {
             title: undefined,
             request: "Skip this one.",
             requestFile: undefined,
-            harness: undefined,
             model: undefined,
             timeoutMs: undefined,
             closePr: undefined,
@@ -108,8 +109,7 @@ describe("codegen smoke script helpers", () => {
         {
           id: "readme",
           title: "README smoke",
-          harness: "opencode",
-          model: "z-ai/glm-5.2",
+          model: "openai/gpt-5.6-sol",
           status: "succeeded",
           durationMs: 4000,
           summaryPath: ".discord-ai-agent/codegen-smoke/readme/summary.md",
@@ -118,8 +118,7 @@ describe("codegen smoke script helpers", () => {
         {
           id: "tool-schema",
           title: "Tool schema smoke",
-          harness: "codex",
-          model: "openai/gpt-5.4",
+          model: "openai/gpt-5.6-luna",
           status: "no_changes",
           durationMs: 8000,
           error: "Agent task produced no diff."
@@ -127,8 +126,7 @@ describe("codegen smoke script helpers", () => {
         {
           id: "expensive",
           title: "Expensive smoke",
-          harness: "opencode",
-          model: "z-ai/glm-5.2",
+          model: "openai/gpt-5.6-sol",
           status: "skipped",
           durationMs: 0,
           skipped: true,
@@ -141,16 +139,15 @@ describe("codegen smoke script helpers", () => {
     expect(summary).toContain("Passed: 1/2");
     expect(summary).toContain("Failed: 1");
     expect(summary).toContain("Skipped: 1");
-    expect(summary).toContain("- tool-schema: no_changes (codex / openai/gpt-5.4, 8.0s)");
+    expect(summary).toContain("- tool-schema: no_changes (openai/gpt-5.6-luna, 8.0s)");
     expect(summary).toContain("Error: Agent task produced no diff.");
     expect(summary).toContain("Skip reason: costly");
   });
 
   it("summarizes terminal failures with diagnosis metadata", () => {
     const summary = formatSmokeSummary({
-      taskId: "task-local-opencode-1",
-      harness: "opencode",
-      model: "z-ai/glm-5.2",
+      taskId: "task-local-nanocodex-1",
+      model: "openai/gpt-5.6-sol",
       title: "Local smoke",
       request: "Make a tiny change.",
       workDir: "/tmp/work",
@@ -160,12 +157,12 @@ describe("codegen smoke script helpers", () => {
       callbacks: [
         {
           at: "2026-07-03T06:00:00.000Z",
-          path: "/internal/tasks/task-local-opencode-1/events",
-          body: { step: "opencode_attempt_1", message: "Starting OpenCode server attempt 1/1." }
+          path: "/internal/tasks/task-local-nanocodex-1/events",
+          body: { step: "nanocodex_attempt_1", message: "Starting NanoCodex attempt 1/1." }
         },
         {
           at: "2026-07-03T06:00:02.000Z",
-          path: "/internal/tasks/task-local-opencode-1/complete",
+          path: "/internal/tasks/task-local-nanocodex-1/complete",
           body: { status: "no_changes", error: "Agent task produced no diff." }
         }
       ],
@@ -175,10 +172,10 @@ describe("codegen smoke script helpers", () => {
         metadata: {
           failureDiagnosis: {
             category: "no_diff",
-            summary: "OpenCode finished but left the repository with no code diff.",
+            summary: "NanoCodex finished but left the repository with no code diff.",
             nextAction: "Inspect the harness transcript and request context.",
-            failedPhase: "opencode",
-            slowestPhase: { name: "opencode", durationMs: 2000 }
+            failedPhase: "nanocodex",
+            slowestPhase: { name: "nanocodex", durationMs: 2000 }
           }
         }
       }
@@ -189,7 +186,7 @@ describe("codegen smoke script helpers", () => {
     expect(summary).toContain("## Failure Diagnosis");
     expect(summary).toContain("- category: no_diff");
     expect(summary).toContain("- nextAction: Inspect the harness transcript and request context.");
-    expect(summary).toContain("- slowestPhase: opencode (2.0s)");
-    expect(summary).toContain("Starting OpenCode server attempt 1/1.");
+    expect(summary).toContain("- slowestPhase: nanocodex (2.0s)");
+    expect(summary).toContain("Starting NanoCodex attempt 1/1.");
   });
 });

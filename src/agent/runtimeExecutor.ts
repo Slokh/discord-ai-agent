@@ -1,6 +1,6 @@
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import type { AgentRuntimeTurnEnvelope } from "./runtimeEnvelope.js";
-import { executeInProcessAgentRuntime } from "./inProcessRuntimeExecutor.js";
+import { executeNanoCodexAgentRuntime } from "./nanocodexAgentRuntime.js";
 
 export type AgentRuntimePromptExecutionInput = {
   toolContext: ToolContext;
@@ -18,16 +18,16 @@ export type AgentRuntimePromptExecutor = {
   execute: (input: AgentRuntimePromptExecutionInput) => Promise<AgentResponse>;
 };
 
-export class InProcessAgentRuntimePromptExecutor implements AgentRuntimePromptExecutor {
-  readonly name = "in-process";
+export class NanoCodexAgentRuntimePromptExecutor implements AgentRuntimePromptExecutor {
+  readonly name = "nanocodex";
 
   async execute(input: AgentRuntimePromptExecutionInput): Promise<AgentResponse> {
-    return executeInProcessAgentRuntime({
+    return executeNanoCodexAgentRuntime({
       toolContext: input.toolContext,
       text: input.text,
       timeoutMs: input.timeoutMs,
       silenceTimeoutMs: input.silenceTimeoutMs,
-      hardTimeoutMs: input.hardTimeoutMs
+      hardTimeoutMs: input.hardTimeoutMs,
     });
   }
 }

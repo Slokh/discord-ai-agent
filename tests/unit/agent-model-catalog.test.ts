@@ -2,62 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAgentModel } from "../../src/tools/agentModelCatalog.js";
 import type { AppConfig } from "../../src/config/env.js";
 
-const config = {
-  openRouter: {
-    chatModel: "moonshotai/kimi-k3",
-    chatFallbackModel: "fallback/recovery",
-  },
-} as AppConfig;
+const config = { openRouter: { chatModel: "openai/gpt-5.6-sol" } } as unknown as AppConfig;
+const openRouter = { listModels: vi.fn(async () => []) };
 
-describe("agent model catalog resolution", () => {
-  it("resolves current catalog names and compact aliases", async () => {
-    const openRouter = client([
-      { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
-      { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" },
-      { id: "anthropic/claude-sonnet-5:batch", name: "Anthropic: Claude Sonnet 5" },
-    ]);
-
-    await expect(resolveAgentModel("Sonnet 5", { config, openRouter }))
-      .resolves.toEqual({ ok: true, model: "anthropic/claude-sonnet-5" });
-    await expect(resolveAgentModel("kimi k3", { config, openRouter }))
-      .resolves.toEqual({ ok: true, model: "moonshotai/kimi-k3" });
+describe("NanoCodex model resolution", () => {
+  it("resolves Sol and Luna aliases without consulting a provider catalog", async () => {
+    await expect(resolveAgentModel("Sol", { config, openRouter }))
+      .resolves.toEqual({ ok: true, model: "openai/gpt-5.6-sol" });
+    await expect(resolveAgentModel("gpt 5.6 luna", { config, openRouter }))
+      .resolves.toEqual({ ok: true, model: "openai/gpt-5.6-luna" });
+    expect(openRouter.listModels).not.toHaveBeenCalled();
   });
 
-  it("requires exact IDs to exist in configuration or the live catalog", async () => {
-    const openRouter = client([]);
+  it("accepts exact NanoCodex model IDs", async () => {
+    await expect(resolveAgentModel("openai/gpt-5.6-sol", { config, openRouter }))
+      .resolves.toEqual({ ok: true, model: "openai/gpt-5.6-sol" });
+  });
 
-    await expect(resolveAgentModel("unknown/not-real", { config, openRouter }))
+  it("rejects models outside the NanoCodex foundation", async () => {
+    await expect(resolveAgentModel("anthropic/claude-sonnet-5", { config, openRouter }))
       .resolves.toEqual({ ok: false, reason: "not_found" });
   });
-
-  it("returns candidates instead of guessing across ambiguous aliases", async () => {
-    const openRouter = client([
-      { id: "one/nova", name: "Nova" },
-      { id: "two/nova", name: "Nova" },
-    ]);
-
-    await expect(resolveAgentModel("nova", { config, openRouter }))
-      .resolves.toEqual({
-        ok: false,
-        reason: "ambiguous",
-        candidates: ["one/nova", "two/nova"],
-      });
-  });
-
-  it("falls back only to configured models when the catalog is unavailable", async () => {
-    const openRouter = {
-      listModels: vi.fn(async () => {
-        throw new Error("catalog unavailable");
-      }),
-    };
-
-    await expect(resolveAgentModel("Kimi K3", { config, openRouter }))
-      .resolves.toEqual({ ok: true, model: "moonshotai/kimi-k3" });
-    await expect(resolveAgentModel("anthropic/claude-sonnet-5", { config, openRouter }))
-      .resolves.toEqual({ ok: false, reason: "catalog_unavailable", candidates: undefined });
-  });
 });
-
-function client(models: Array<{ id: string; name: string }>) {
-  return { listModels: vi.fn(async () => models) };
-}

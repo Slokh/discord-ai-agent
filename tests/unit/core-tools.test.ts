@@ -127,8 +127,8 @@ describe("model-led mutating tools", () => {
       config: {
         maxReplyChars: 1800,
         github: {},
-        openRouter: { codegenModel: "z-ai/glm-5.2" },
-        execution: { codegenBackend: "local-process", codegenHarness: "opencode" }
+        openRouter: { codegenModel: "openai/gpt-5.6-sol" },
+        execution: { codegenBackend: "local-process" }
       },
       repo: { auditTool: vi.fn(async () => undefined) },
       jobs: { enqueueAgentTask },
@@ -170,7 +170,7 @@ describe("formatAgentTaskResult", () => {
             timingsMs: {
               total: 123_000,
               dependencies: 500,
-              codex: 100_000,
+              nanocodex: 100_000,
               verify: 2_000,
               push: 1_000,
               pr: 750
@@ -179,7 +179,7 @@ describe("formatAgentTaskResult", () => {
               repo: "hit",
               dependencies: "miss",
               dependencyCacheKey: "node-22-abcdef1234567890",
-              dependencyRefreshAfterCodex: true
+              dependencyRefreshAfterCodegen: true
             }
           }
         }
@@ -188,9 +188,9 @@ describe("formatAgentTaskResult", () => {
 
     expect(response).toContain("Done: https://github.com/example/repo/pull/1");
     expect(response).toContain("Timings: total=2m 3s");
-    expect(response).toContain("codex=1m 40s");
+    expect(response).toContain("nanocodex=1m 40s");
     expect(response).toContain("Cache: repo=hit | deps=miss node-22-abcdef123");
-    expect(response).toContain("refreshed deps after Codex");
+    expect(response).toContain("refreshed deps after NanoCodex");
   });
 
   it("includes a run-console link when one is provided", () => {
@@ -222,17 +222,17 @@ describe("formatAgentTaskResult", () => {
           metadata: {
             failureDiagnosis: {
               category: "no_first_edit",
-              summary: "OpenCode finished without making a code edit, so no PR was opened.",
+              summary: "NanoCodex finished without making a code edit, so no PR was opened.",
               nextAction: "Improve context packaging so the agent makes an early focused edit.",
-              finalResponse: "The limit is defined in src/agent/router.ts and should be raised there."
+              finalResponse: "The limit is defined in src/agent/nanocodexAgentRuntime.ts and should be raised there."
             }
           }
         }
       ] as any
     });
 
-    expect(response).toContain("No PR opened: OpenCode finished without making a code edit, so no PR was opened. Task ID: `task-1`.");
-    expect(response).toContain("Agent answer:\nThe limit is defined in src/agent/router.ts and should be raised there.");
+    expect(response).toContain("No PR opened: NanoCodex finished without making a code edit, so no PR was opened. Task ID: `task-1`.");
+    expect(response).toContain("Agent answer:\nThe limit is defined in src/agent/nanocodexAgentRuntime.ts and should be raised there.");
     expect(response).toContain("Next: Improve context packaging so the agent makes an early focused edit.");
     expect(response).not.toContain("the coding agent did not produce a code diff");
   });
@@ -1006,6 +1006,7 @@ describe("generateImage", () => {
   it("returns a recoverable tool error when the image provider blocks the prompt", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { auditTool },
       openRouter: {
         generateImage: vi.fn(async () => {
@@ -1425,6 +1426,7 @@ describe("generateImage", () => {
       toolCalls: []
     }));
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { auditTool },
       openRouter: { chat },
       guildId: "guild",
@@ -1447,7 +1449,8 @@ describe("generateImage", () => {
     expect(result).toContain("It looks like a dashboard screenshot.");
     expect(chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "google/gemini-3.6-flash",
+        model: "openai/gpt-5.6-luna",
+        reasoningEffort: "high",
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "user",
@@ -1480,6 +1483,7 @@ describe("generateImage", () => {
       toolCalls: []
     }));
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { auditTool: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "guild",
@@ -1529,6 +1533,7 @@ describe("generateImage", () => {
       toolCalls: []
     }));
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { auditTool: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "guild",
@@ -1606,6 +1611,7 @@ describe("generateImage", () => {
       toolCalls: []
     }));
     const ctx = {
+      config: { openRouter: { utilityModel: "openai/gpt-5.6-luna" } },
       repo: { messageAttachments, auditTool: vi.fn(async () => undefined) },
       openRouter: { chat },
       guildId: "111111111111111111",
@@ -1872,7 +1878,7 @@ describe("getDeploymentStatus", () => {
       guildId: "guild",
       channelId: "channel",
       status: "running",
-      currentStep: "codex",
+      currentStep: "nanocodex",
       title: "make codegen faster",
       requestedBy: "kartik",
       createdAt: new Date("2026-07-01T12:00:00.000Z"),
@@ -1905,7 +1911,7 @@ describe("getDeploymentStatus", () => {
     const response = await getDeploymentStatus(ctx);
 
     expect(response).toContain("Active code updates:");
-    expect(response).toContain("`task-stale` | running | step=codex");
+    expect(response).toContain("`task-stale` | running | step=nanocodex");
     expect(response).toContain("elapsed=30m 0s | idle=20m 0s | stale");
     expect(listAgentTasks).toHaveBeenCalledWith(expect.objectContaining({ statuses: ["queued", "running"], limit: 5 }));
     expect(auditTool).toHaveBeenCalledWith(
@@ -1935,8 +1941,8 @@ describe("getAgentTaskStatus", () => {
       requestedBy: "kartik",
       status: "running",
       backend: "local-process-sandbox",
-      currentStep: "opencode_round_finished",
-      statusMessage: "OpenCode round 1 finished.",
+      currentStep: "nanocodex_first_edit",
+      statusMessage: "NanoCodex made its first code edit.",
       branchName: null,
       prUrl: null,
       draft: null,
@@ -1962,7 +1968,7 @@ describe("getAgentTaskStatus", () => {
         eventName: "agent.task.progress",
         level: "info",
         summary: "Runtime event won.",
-        metadata: { taskId: "task-1", step: "opencode_round_finished" },
+        metadata: { taskId: "task-1", step: "nanocodex_first_edit" },
         createdAt: new Date("2026-07-01T12:01:00.000Z")
       }
     ]);
@@ -2310,9 +2316,9 @@ describe("inspectAgentLogs", () => {
           {
             id: 1,
             runId: "run-1",
-            spanId: "codex",
+            spanId: "nanocodex",
             parentSpanId: null,
-            name: "opencode_attempt_1",
+            name: "nanocodex_attempt_1",
             status: "failed",
             metadata: {},
             startedAt: new Date("2026-01-01T00:01:00Z"),
@@ -2388,7 +2394,7 @@ describe("inspectAgentLogs", () => {
     expect(response).toContain("[REDACTED]");
     expect(response).not.toContain("sk-or-v1-");
     expect(response).toContain("Failure diagnosis: The verification command failed.");
-    expect(response).toContain("Most time was spent in opencode_attempt_1");
+    expect(response).toContain("Most time was spent in nanocodex_attempt_1");
     expect(response).toContain("Terminal tail");
     expect(response).toContain("npm run verify");
     expect(ctx.repo.findProcessRunByDiscordMessageId).toHaveBeenCalledWith("1234567890123450031");

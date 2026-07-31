@@ -91,7 +91,7 @@ In Discord:
 Expected behavior:
 
 - The bot replies with a single Thinking message.
-- The message edits as the task moves through sandbox startup, repo refresh/worktree, dependency cache, Codex, verify, scan, push, and PR.
+- The message edits as the task moves through sandbox startup, repo refresh/worktree, dependency cache, NanoCodex, verify, scan, push, and PR.
 - A sandbox Job appears in Kubernetes.
 - A `discord-ai-agent-sandbox-cache` PVC is created by the chart and reused across sandbox Jobs.
 - The final Discord edit contains the PR link or a concise failure summary, plus phase timing and cache hit/miss details.

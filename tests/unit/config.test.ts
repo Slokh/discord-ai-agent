@@ -15,11 +15,6 @@ describe("config", () => {
         "DISCORD_PREMIUM_SKU_IDS",
         "RUN_MIGRATIONS",
         "OPENROUTER_CHAT_MODEL",
-        "OPENROUTER_CHAT_FALLBACK_MODEL",
-        "OPENROUTER_CHAT_REASONING_EFFORT",
-        "OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT",
-        "OPENROUTER_CHAT_MAX_TOKENS",
-        "OPENROUTER_CHAT_FALLBACK_MAX_TOKENS",
         "OPENROUTER_CODEGEN_MODEL",
         "OPENROUTER_UTILITY_MODEL",
         "OPENROUTER_TRANSCRIPTION_MODEL",
@@ -30,7 +25,6 @@ describe("config", () => {
         "CONTROL_UI_PUBLIC_URL",
         "CONTROL_PLANE_INTERNAL_URL",
         "TASK_SIGNING_SECRET",
-        "CODEGEN_HARNESS",
         "CODEGEN_EXECUTION_BACKEND",
         "KUBERNETES_NAMESPACE",
         "SANDBOX_IMAGE",
@@ -67,13 +61,8 @@ describe("config", () => {
         expect(config.runMigrations).toBe(true);
         expect(config.embeddingDimensions).toBe(1536);
         expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-luna");
-        expect(config.openRouter.chatFallbackModel).toBe("openai/gpt-5.6-terra");
-        expect(config.openRouter.chatReasoningEffort).toBe("medium");
-        expect(config.openRouter.chatFallbackReasoningEffort).toBe("medium");
-        expect(config.openRouter.chatMaxTokens).toBe(4_096);
-        expect(config.openRouter.chatFallbackMaxTokens).toBe(3_072);
-        expect(config.openRouter.codegenModel).toBe("z-ai/glm-5.2");
-        expect(config.openRouter.utilityModel).toBe("openai/gpt-4o-mini");
+        expect(config.openRouter.codegenModel).toBe("openai/gpt-5.6-terra");
+        expect(config.openRouter.utilityModel).toBe("openai/gpt-5.6-luna");
         expect(config.openRouter.transcriptionModel).toBe("openai/whisper-large-v3-turbo");
         expect(config.github.repository).toBe("owner/repo");
         expect(config.internalApi.host).toBe("0.0.0.0");
@@ -82,7 +71,6 @@ describe("config", () => {
         expect(config.controlUi.publicUrl).toBeNull();
         expect(config.execution.controlPlaneInternalUrl).toBe("http://discord-ai-agent-api:8080");
         expect(config.execution.taskSigningSecret).toBe("");
-        expect(config.execution.codegenHarness).toBe("opencode");
         expect(config.execution.codegenBackend).toBe("local-process");
         expect(config.execution.sandbox.cacheDir).toBe("/var/cache/discord-ai-agent");
         expect(config.execution.sandbox.taskTimeoutSeconds).toBe(1800);
@@ -129,7 +117,7 @@ describe("config", () => {
           privyAppSecret: null,
           tempoNetwork: "moderato",
           usdToken: "USDC.e",
-          initialGrantUsd: 1
+          initialGrantUsd: 0.1
         });
       }
     );
@@ -217,31 +205,31 @@ describe("config", () => {
     });
   });
 
-  it("allows codegen to use a different model than normal chat", () => {
-    withEnv({ OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2", OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.5" }, () => {
+  it("allows codegen to use every NanoCodex coding model", () => {
+    withEnv({ OPENROUTER_CHAT_MODEL: "openai/gpt-5.6-sol", OPENROUTER_CODEGEN_MODEL: "openai/gpt-5.6-terra" }, () => {
       const config = loadConfig();
-      expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
-      expect(config.openRouter.codegenModel).toBe("openai/gpt-5.5");
+      expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-sol");
+      expect(config.openRouter.codegenModel).toBe("openai/gpt-5.6-terra");
     });
   });
 
-  it("allows utility calls to use a different model than normal chat", () => {
-    withEnv({ OPENROUTER_CHAT_MODEL: "z-ai/glm-5.2", OPENROUTER_UTILITY_MODEL: "openai/gpt-4o-mini" }, () => {
+  it("allows utility calls to use the other NanoCodex model", () => {
+    withEnv({ OPENROUTER_CHAT_MODEL: "openai/gpt-5.6-sol", OPENROUTER_UTILITY_MODEL: "openai/gpt-5.6-luna" }, () => {
       const config = loadConfig();
-      expect(config.openRouter.chatModel).toBe("z-ai/glm-5.2");
-      expect(config.openRouter.utilityModel).toBe("openai/gpt-4o-mini");
+      expect(config.openRouter.chatModel).toBe("openai/gpt-5.6-sol");
+      expect(config.openRouter.utilityModel).toBe("openai/gpt-5.6-luna");
+    });
+  });
+
+  it("rejects agent models outside NanoCodex", () => {
+    withEnv({ OPENROUTER_CHAT_MODEL: "anthropic/claude-sonnet-5" }, () => {
+      expect(() => loadConfig()).toThrow(/OPENROUTER_CHAT_MODEL/);
     });
   });
 
   it("allows selecting the kubernetes-job codegen backend", () => {
     withEnv({ CODEGEN_EXECUTION_BACKEND: "kubernetes-job" }, () => {
       expect(loadConfig().execution.codegenBackend).toBe("kubernetes-job");
-    });
-  });
-
-  it("allows selecting the OpenCode codegen harness", () => {
-    withEnv({ CODEGEN_HARNESS: "opencode" }, () => {
-      expect(loadConfig().execution.codegenHarness).toBe("opencode");
     });
   });
 

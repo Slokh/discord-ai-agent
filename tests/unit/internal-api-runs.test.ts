@@ -61,7 +61,7 @@ describe("internal API run endpoints", () => {
     await expect(detail.json()).resolves.toEqual(
       expect.objectContaining({
         run: expect.objectContaining({ runId: "run-1" }),
-        relatedRuns: [expect.objectContaining({ runId: "task-1", kind: "codegen", currentStep: "opencode_attempt_1" })]
+        relatedRuns: [expect.objectContaining({ runId: "task-1", kind: "codegen", currentStep: "nanocodex_attempt_1" })]
       })
     );
 
@@ -178,7 +178,7 @@ describe("internal API run endpoints", () => {
         channelId: "channel-1",
         userId: "user-1",
         model: "z-ai/glm-5.2",
-        harness: "opencode"
+        harness: "nanocodex-native-v1"
       })
     });
     expect(create.status).toBe(200);
@@ -350,7 +350,7 @@ function fakeRepo(options: { onListProcessRuns?: (input: { includeEmbeddings?: b
     messageId: null,
     requester: "test",
     source: "agent_task",
-    metadata: { parentAgentExecutionId: "agent-execution-1", currentStep: "opencode_attempt_1" },
+    metadata: { parentAgentExecutionId: "agent-execution-1", currentStep: "nanocodex_attempt_1" },
     links: {},
     startedAt: new Date("2026-06-30T12:00:02Z"),
     completedAt: null,
@@ -434,7 +434,7 @@ function fakeAgentTaskStatusPool() {
               requested_by: "kartik",
               status: "running",
               backend: "local-process-sandbox",
-              current_step: "codex",
+              current_step: "nanocodex",
               status_message: "Running codegen.",
               branch_name: null,
               pr_url: null,
@@ -539,7 +539,7 @@ function fakeAgentRuntimeRepo() {
         request: input.request,
         requestedBy: input.requestedBy,
         status: input.status ?? existing?.status ?? "queued",
-        harness: input.harness ?? existing?.harness ?? "codex",
+        harness: input.harness ?? existing?.harness ?? "nanocodex",
         model: input.model ?? existing?.model ?? null,
         provider: input.provider ?? existing?.provider ?? null,
         harnessThreadId: input.harnessThreadId ?? existing?.harnessThreadId ?? null,
@@ -595,7 +595,7 @@ function fakeAgentRuntimeRepo() {
         traceId: input.traceId ?? null,
         attempt: input.attempt ?? 1,
         status: input.status ?? "queued",
-        harness: input.harness ?? "codex-app-server",
+        harness: input.harness ?? "nanocodex-native-v1",
         model: input.model ?? null,
         provider: input.provider ?? null,
         reasoningEffort: input.reasoningEffort ?? null,

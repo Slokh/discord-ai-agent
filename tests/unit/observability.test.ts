@@ -364,7 +364,7 @@ describe("run summaries", () => {
   });
 
   it("diagnoses active codegen runs as inspectable live progress", () => {
-    const run = codegenRun({ status: "running", currentStep: "codex_app_server_attempt_1" });
+    const run = codegenRun({ status: "running", currentStep: "nanocodex_attempt_1" });
 
     expect(diagnosticsForRun(run, [], [])).toContain("Coding agent is running; inspect the latest harness, tool, and command events for live progress.");
   });
@@ -374,8 +374,8 @@ describe("run summaries", () => {
     const events = [
       runEvent({
         name: "task.progress",
-        summary: "Codex app-server attempt 1 finished without a code diff.",
-        metadata: { step: "codex_app_server_attempt_1_no_diff" }
+        summary: "NanoCodex attempt 1 finished without a code diff.",
+        metadata: { step: "nanocodex_attempt_1_no_diff" }
       })
     ];
 

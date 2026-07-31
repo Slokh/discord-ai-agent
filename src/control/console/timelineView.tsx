@@ -1,11 +1,5 @@
 import { Clock3, Link2, Wrench } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import {
-  parseOpenCodeTranscript,
-  type ParsedOpenCodeTranscript,
-} from "../../observability/openCodeTranscript.js";
-import { fetchArtifact } from "./api.js";
-import { isOpenCodeTranscriptArtifact } from "./codegenArtifacts.js";
+import { useMemo, useState } from "react";
 import { codegenTimelineTrace } from "./codegenTimeline.js";
 import { Empty, MetadataPreview } from "./consolePrimitives.js";
 import { runHref } from "./consoleRouting.js";
@@ -27,11 +21,7 @@ import {
   timelineTrace,
   uniqueStrings,
 } from "./timelineCore.js";
-import {
-  type TimelineStep,
-  type TimelineStepGroup,
-  type TimelineStepKind,
-} from "./timelineModel.js";
+import { type TimelineStep, type TimelineStepGroup } from "./timelineModel.js";
 import {
   formatToolArgumentValue,
   isModelRoundTimelineStep,
@@ -41,11 +31,8 @@ import {
   timelineToolRequests,
   type TimelineToolRequest,
 } from "./timelineText.js";
-import {
-  OpenCodeRoundContent,
-  TimelineArtifactInline,
-} from "./transcriptViews.js";
-import type { EventLevel, RunArtifact, RunSnapshot } from "./types.js";
+import { TimelineArtifactInline } from "./transcriptViews.js";
+import type { EventLevel, RunSnapshot } from "./types.js";
 
 export {
   timelineStepSummaryText,
@@ -54,7 +41,6 @@ export {
   timelineToolRequests,
 } from "./timelineText.js";
 
-type OpenCodeTranscriptItem = ParsedOpenCodeTranscript["items"][number];
 export function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
   const [level, setLevel] = useState<EventLevel | "all">("all");
   const [source, setSource] = useState<string>("all");
@@ -194,69 +180,7 @@ export function Timeline({ snapshot }: { snapshot: RunSnapshot }) {
 }
 
 function TimelineGroupItems({ group }: { group: TimelineStepGroup }) {
-  const parentOpenCodeArtifact =
-    group.parent.artifact && isOpenCodeTranscriptArtifact(group.parent.artifact)
-      ? group.parent.artifact
-      : undefined;
-  const openCodeArtifactStep = group.children.find(
-    (child) => child.artifact && isOpenCodeTranscriptArtifact(child.artifact),
-  );
-  const promotedOpenCode = usePromotedOpenCodeActivity(
-    parentOpenCodeArtifact ?? openCodeArtifactStep?.artifact,
-  );
-  const hasPromotableArtifact = Boolean(
-    parentOpenCodeArtifact ?? openCodeArtifactStep?.artifact,
-  );
-  const isWaitingForOpenCodeArtifact =
-    hasPromotableArtifact &&
-    !promotedOpenCode.content &&
-    promotedOpenCode.error == null;
-  const shouldPromoteOpenCode =
-    isWaitingForOpenCodeArtifact ||
-    promotedOpenCode.loading ||
-    promotedOpenCode.transcript?.isTranscript;
-  const visibleChildren =
-    shouldPromoteOpenCode && openCodeArtifactStep?.artifact
-      ? group.children.filter(
-          (child) =>
-            child.artifact?.artifactId !==
-            openCodeArtifactStep.artifact?.artifactId,
-        )
-      : group.children;
-
-  if (parentOpenCodeArtifact) {
-    if (isWaitingForOpenCodeArtifact)
-      return <OpenCodeRoundLoadingItem group={group} />;
-    if (promotedOpenCode.transcript?.isTranscript) {
-      return (
-        <>
-          {promotedOpenCode.transcript.items.map((item) => (
-            <OpenCodeRoundTimelineItem
-              key={`${group.id}-${item.id}`}
-              item={item}
-            />
-          ))}
-        </>
-      );
-    }
-    return <TimelineGroupItem group={group} />;
-  }
-
-  return (
-    <>
-      <TimelineGroupItem group={{ ...group, children: visibleChildren }} />
-      {isWaitingForOpenCodeArtifact && (
-        <OpenCodeRoundLoadingItem group={group} />
-      )}
-      {promotedOpenCode.transcript?.isTranscript &&
-        promotedOpenCode.transcript.items.map((item) => (
-          <OpenCodeRoundTimelineItem
-            key={`${group.id}-${item.id}`}
-            item={item}
-          />
-        ))}
-    </>
-  );
+  return <TimelineGroupItem group={group} />;
 }
 
 function TimelineGroupItem({ group }: { group: TimelineStepGroup }) {
@@ -306,150 +230,6 @@ function TimelineGroupItem({ group }: { group: TimelineStepGroup }) {
       </article>
     </li>
   );
-}
-
-function usePromotedOpenCodeActivity(artifact?: RunArtifact) {
-  const [state, setState] = useState<{
-    artifactId: string | null;
-    content: string;
-    loading: boolean;
-    error: string | null;
-  }>({
-    artifactId: null,
-    content: "",
-    loading: false,
-    error: null,
-  });
-
-  useEffect(() => {
-    if (!artifact) {
-      setState((current) =>
-        current.artifactId == null &&
-        !current.content &&
-        !current.loading &&
-        current.error == null
-          ? current
-          : { artifactId: null, content: "", loading: false, error: null },
-      );
-      return;
-    }
-    let disposed = false;
-    setState({
-      artifactId: artifact.artifactId,
-      content: "",
-      loading: true,
-      error: null,
-    });
-    fetchArtifact(artifact.runId, artifact.artifactId)
-      .then((content) => {
-        if (!disposed)
-          setState({
-            artifactId: artifact.artifactId,
-            content,
-            loading: false,
-            error: null,
-          });
-      })
-      .catch((loadError) => {
-        if (!disposed) {
-          setState({
-            artifactId: artifact.artifactId,
-            content: "",
-            loading: false,
-            error:
-              loadError instanceof Error
-                ? loadError.message
-                : String(loadError),
-          });
-        }
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [artifact?.artifactId, artifact?.runId]);
-
-  const transcript = useMemo(
-    () => (state.content ? parseOpenCodeTranscript(state.content) : null),
-    [state.content],
-  );
-  return { ...state, transcript };
-}
-
-function OpenCodeRoundLoadingItem({ group }: { group: TimelineStepGroup }) {
-  const step: TimelineStep = {
-    id: `${group.id}-opencode-loading`,
-    kind: "model",
-    title: "Loading OpenCode activity",
-    summary: "",
-    createdAt: group.parent.createdAt,
-    durationMs: null,
-    durationStartedAt: null,
-    gapMs: null,
-    offset: group.parent.offset,
-    source: "opencode",
-    status: "running",
-    level: null,
-    metadata: {},
-  };
-  return (
-    <li className="timeline-step model running opencode-promoted-round">
-      <div className="timeline-rail">
-        <div className="timeline-dot" />
-      </div>
-      <article className="timeline-card">
-        <TimelineStepHeader step={step} />
-        <span className="timeline-artifact-loading">
-          Loading full OpenCode transcript...
-        </span>
-        <TimelineStepMeta step={step} />
-      </article>
-    </li>
-  );
-}
-
-function OpenCodeRoundTimelineItem({ item }: { item: OpenCodeTranscriptItem }) {
-  const step = openCodeRoundTimelineStep(item);
-  return (
-    <li
-      className={`timeline-step ${step.kind} ${step.level ?? step.status ?? ""} opencode-promoted-round`}
-    >
-      <div className="timeline-rail">
-        <div className="timeline-dot" />
-      </div>
-      <article className="timeline-card">
-        <TimelineStepHeader step={step} />
-        <OpenCodeRoundContent item={item} />
-        <TimelineStepMeta step={step} />
-      </article>
-    </li>
-  );
-}
-
-function openCodeRoundTimelineStep(item: OpenCodeTranscriptItem): TimelineStep {
-  return {
-    id: item.id,
-    kind: openCodeRoundTimelineKind(item),
-    title: item.title,
-    summary: item.body,
-    createdAt: item.timestamp,
-    durationMs: item.durationMs,
-    durationStartedAt: item.durationMs != null ? item.timestamp : null,
-    gapMs: null,
-    offset: "",
-    source: "opencode",
-    status: item.active ? "running" : null,
-    level: item.kind === "error" ? "error" : null,
-    metadata: {},
-  };
-}
-
-function openCodeRoundTimelineKind(
-  item: OpenCodeTranscriptItem,
-): TimelineStepKind {
-  if (item.kind === "error") return "error";
-  if (item.kind === "tool") return "tool";
-  if (item.kind === "tokens") return "event";
-  return "model";
 }
 
 function TimelineStepDetails({ step }: { step: TimelineStep }) {

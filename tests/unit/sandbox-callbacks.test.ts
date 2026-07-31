@@ -121,9 +121,7 @@ function sandboxEnv(controlPlaneInternalUrl: string): SandboxEnv {
     githubRepository: "example/repo",
     githubBaseBranch: "main",
     openRouterApiKey: "openrouter-key",
-    openRouterChatModel: "test/model",
-    openRouterCodegenModel: "test/model",
-    codegenHarness: "opencode",
+    openRouterCodegenModel: "openai/gpt-5.6-sol",
     sandboxCacheDir: "/tmp/cache",
     sandboxStartedAtMs: null
   };

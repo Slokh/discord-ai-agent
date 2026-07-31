@@ -28,7 +28,7 @@ describe("agent task status formatter", () => {
     expect(report).toContain("Agent task status");
     expect(report).toContain("active agent sessions: 1 | active tasks: 2 | stale active: 1");
     expect(report).toContain("Agent runtime session counts: running=1");
-    expect(report).toContain("agent-session-active running | execution=running | harness=opencode");
+    expect(report).toContain("agent-session-active running | execution=running | harness=nanocodex-native-v1");
     expect(report).toContain("pg-boss agent.task queue: active=1, created=2");
     expect(report).toContain("task-stale running stale");
     expect(report).toContain("sandbox-stale leased stale");
@@ -69,7 +69,7 @@ function snapshotFixture(): AgentTaskStatusSnapshot {
         title: "Discord prompt",
         requestedBy: "kartik",
         status: "running",
-        harness: "opencode",
+        harness: "nanocodex-native-v1",
         model: "z-ai/glm-5.2",
         executionId: "agent-execution-active",
         executionStatus: "running",
@@ -97,7 +97,7 @@ function snapshotFixture(): AgentTaskStatusSnapshot {
         requestedBy: "kartik",
         status: "running",
         backend: "local-process-sandbox",
-        currentStep: "codex",
+        currentStep: "nanocodex",
         statusMessage: "Running codegen.",
         branchName: null,
         prUrl: null,

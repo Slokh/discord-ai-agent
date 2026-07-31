@@ -62,4 +62,14 @@ describe("release scanner", () => {
     const flagged = scanContent("docs/example.md", `maintained by @${ownerName}`);
     expect(flagged).toEqual([expect.objectContaining({ ruleId: "private-owner", line: 1 })]);
   });
+
+  it("allows only the exact public NanoCodex fork path for a pinned dependency", () => {
+    const forkUrl = `https://github.com/${ownerName}/nanocodex.git`;
+    expect(scanContent("Cargo.toml", `nanocodex = { git = "${forkUrl}", rev = "abc" }`)).toEqual([]);
+
+    const unrelated = `https://github.com/${ownerName}/another-repository.git`;
+    expect(scanContent("Cargo.toml", `dependency = { git = "${unrelated}" }`)).toEqual([
+      expect.objectContaining({ ruleId: "private-owner", line: 1 })
+    ]);
+  });
 });

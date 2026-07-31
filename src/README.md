@@ -9,13 +9,13 @@ Use this map before broad repository exploration. Each folder README owns the de
 - `tools/`: Model-facing local tool contracts and implementations.
 - `db/`: Durable Postgres access for Discord history, embeddings, tasks, run console data, traces, and workflows.
 - `memory/`: Retrieval orchestration, message normalization, and embedding workers.
-- `execution/`: Code-update sandbox runtime, harness prompts/config, git/cache operations, artifacts, failure diagnosis, and PR packaging.
+- `execution/`: Code-update sandbox runtime, NanoCodex prompts/config, git/cache operations, artifacts, failure diagnosis, and PR packaging.
 - `control/`: Internal API, metrics, sandbox callbacks, and run console.
 - `observability/`: Run normalization, codegen status, redaction, artifact retention, and terminal-first inspection helpers.
 - `jobs/`: pg-boss queue setup, durable queue handoffs, worker dispatch, and warm codegen leases.
 - `payments/`: Privy/Tempo wallet provider, managed-wallet service, transfers, wagers, and reconciliation.
 - `rng/`: Deterministic commit-reveal entropy and draw mapping; durable RNG state lives in `db/`.
-- `models/`: OpenRouter client, hosted-tool requests, provider usage, cache metadata, and model-call transport.
+- `models/`: Direct provider clients for deterministic tool APIs such as embeddings, images, and transcription; the agent loop itself belongs to NanoCodex.
 - `config/`: Environment parsing, defaults, process-role configuration, and feature/deployment gates.
 - `github/`: GitHub App/PAT credential resolution and repository helpers used outside the sandbox pipeline.
 - `skills/`: Repository-managed prompt skill loading and policy validation.

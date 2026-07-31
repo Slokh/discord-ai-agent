@@ -2,8 +2,8 @@ import type { Client, Message } from "discord.js";
 import type { Logger } from "pino";
 import { isOpenRouterContentFilterError } from "../models/openrouter.js";
 import type { AgentRuntimeExecutionJob } from "../jobs/queue.js";
-import { isAgentRuntimeTimeoutError } from "../agent/inProcessRuntimeExecutor.js";
-import { InProcessAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
+import { isAgentRuntimeTimeoutError } from "../agent/runtimeTimeouts.js";
+import { NanoCodexAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
 import { continuationEvidenceFromResponse } from "../agent/continuationEvidence.js";
 import { isInternalControlText } from "../agent/internalControlText.js";
 import { agentRuntimeTurnInputText, assertAgentRuntimeTurnEnvelopeScope, loadAgentRuntimeTurnEnvelope } from "../agent/runtimeEnvelope.js";
@@ -132,7 +132,7 @@ export async function executeDiscordAgentRequest(
   request: DiscordAgentExecutionRequest
 ) {
   if (!message.guildId || !message.guild) throw new Error("Discord agent request message is not attached to a guild.");
-  const agentExecutor = input.agentExecutor ?? new InProcessAgentRuntimePromptExecutor();
+  const agentExecutor = input.agentExecutor ?? new NanoCodexAgentRuntimePromptExecutor();
   const guildId = message.guildId;
   const requestLogger = logger.child({
     traceId: request.requestId,

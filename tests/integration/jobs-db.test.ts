@@ -250,8 +250,8 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           harness: "runCodingAgent",
           metadata: expect.objectContaining({
             runtime: "agent",
-            codegenHarness: "opencode",
-            codegenModel: "z-ai/glm-5.2",
+            codegenModel: "openai/gpt-5.6-terra",
+            codegenReasoningEffort: "medium",
             parentAgentSessionId: "agent-session-parent",
             parentAgentExecutionId: "agent-execution-parent"
           })
@@ -270,11 +270,12 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
           taskId,
           status: "running",
           harness: "runCodingAgent",
+          reasoningEffort: "medium",
           sandboxRunId: "sandbox-run-1",
           metadata: expect.objectContaining({
             runtime: "agent",
-            codegenHarness: "opencode",
-            codegenModel: "z-ai/glm-5.2",
+            codegenModel: "openai/gpt-5.6-terra",
+            codegenReasoningEffort: "medium",
             parentAgentSessionId: "agent-session-parent",
             parentAgentExecutionId: "agent-execution-parent"
           })

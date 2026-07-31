@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { primaryChatPolicy, recoveryChatPolicy } from "../../src/agent/modelPolicy.js";
 import {
   effectiveAgentChatModel,
   loadAgentModelOverride,
@@ -16,34 +15,32 @@ describe("agent model settings", () => {
     expect(normalizeOpenRouterModelId("provider/model with spaces")).toBeNull();
   });
 
-  it("loads the durable override once and applies it only to primary chat", async () => {
-    const getGuildAgentSettings = vi.fn(async () => ({ chatModel: "moonshotai/kimi-k3" }));
+  it("loads the durable NanoCodex override once", async () => {
+    const getGuildAgentSettings = vi.fn(async () => ({ chatModel: "openai/gpt-5.6-luna" }));
     const ctx = context("owner", { getGuildAgentSettings });
 
     await loadAgentModelOverride(ctx);
     await loadAgentModelOverride(ctx);
 
     expect(getGuildAgentSettings).toHaveBeenCalledTimes(1);
-    expect(effectiveAgentChatModel(ctx)).toBe("moonshotai/kimi-k3");
-    expect(primaryChatPolicy(ctx).model).toBe("moonshotai/kimi-k3");
-    expect(recoveryChatPolicy(ctx).model).toBe("fallback/recovery");
+    expect(effectiveAgentChatModel(ctx)).toBe("openai/gpt-5.6-luna");
   });
 
   it("sets and resets the server override for configured owners and ops", async () => {
     const repo = settingsRepo();
     const ownerCtx = context("owner", repo);
-    ownerCtx.requestText = "switch to Sonnet 5";
+    ownerCtx.requestText = "switch to Luna";
 
     await expect(setAgentModel(ownerCtx, {
       action: "set",
-      model: "Sonnet 5",
-    })).resolves.toContain("Switched this server's primary chat model");
+      model: "Luna",
+    })).resolves.toContain("Switched this server's NanoCodex model");
     expect(repo.setGuildChatModelOverride).toHaveBeenCalledWith({
       guildId: "guild",
-      chatModel: "anthropic/claude-sonnet-5",
+      chatModel: "openai/gpt-5.6-luna",
       updatedByUserId: "owner",
     });
-    expect(effectiveAgentChatModel(ownerCtx)).toBe("anthropic/claude-sonnet-5");
+    expect(effectiveAgentChatModel(ownerCtx)).toBe("openai/gpt-5.6-luna");
 
     const opsCtx = context("operator", repo);
     opsCtx.chatModelOverride = "bad-provider/missing-model";
@@ -52,17 +49,17 @@ describe("agent model settings", () => {
     await expect(setAgentModel(opsCtx, { action: "reset" }))
       .resolves.toContain("configured default");
     expect(repo.clearGuildChatModelOverride).toHaveBeenCalledWith("guild");
-    expect(effectiveAgentChatModel(opsCtx)).toBe("configured/default");
+    expect(effectiveAgentChatModel(opsCtx)).toBe("openai/gpt-5.6-sol");
   });
 
   it("denies unconfigured users and leaves durable state unchanged", async () => {
     const repo = settingsRepo();
     const ctx = context("friend", repo);
-    ctx.requestText = "switch to Kimi K3";
+    ctx.requestText = "switch to Luna";
 
     await expect(setAgentModel(ctx, {
       action: "set",
-      model: "moonshotai/kimi-k3",
+      model: "openai/gpt-5.6-luna",
     })).resolves.toContain("restricted");
     expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
     expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
@@ -105,11 +102,11 @@ describe("agent model settings", () => {
   it("rejects a model-generated target that conflicts with the current request", async () => {
     const repo = settingsRepo();
     const ctx = context("owner", repo);
-    ctx.requestText = "switch back to Kimi K3";
+    ctx.requestText = "switch to Luna";
 
     await expect(setAgentModel(ctx, {
       action: "set",
-      model: "moonshotai/kimi-k2",
+      model: "openai/gpt-5.6-sol",
     })).resolves.toContain("current message authorizes");
     expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
     expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
@@ -133,8 +130,7 @@ function context(userId: string, repo: Record<string, unknown>): ToolContext {
     config: {
       maxReplyChars: 1_800,
       openRouter: {
-        chatModel: "configured/default",
-        chatFallbackModel: "fallback/recovery",
+        chatModel: "openai/gpt-5.6-sol",
       },
       allowlists: {
         ownerUserId: "owner",
@@ -143,11 +139,7 @@ function context(userId: string, repo: Record<string, unknown>): ToolContext {
     },
     repo,
     openRouter: {
-      listModels: vi.fn(async () => [
-        { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" },
-        { id: "moonshotai/kimi-k2", name: "MoonshotAI: Kimi K2" },
-        { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3" },
-      ]),
+      listModels: vi.fn(async () => []),
     },
     guildId: "guild",
     channelId: "channel",

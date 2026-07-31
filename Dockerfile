@@ -11,6 +11,15 @@ COPY migrations ./migrations
 COPY skills ./skills
 RUN npm run build
 
+FROM rust:1.97-trixie AS nanocodex-build
+WORKDIR /build
+COPY native/nanocodex-runtime /discord-agent-nanocodex-runtime
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends build-essential cmake git libssl-dev pkg-config \
+  && rm -rf /var/lib/apt/lists/*
+RUN cargo build --locked --release --manifest-path /discord-agent-nanocodex-runtime/Cargo.toml \
+  && cp /discord-agent-nanocodex-runtime/target/release/discord-agent-nanocodex-runtime /discord-agent-nanocodex-runtime-bin
+
 FROM node:22-trixie-slim AS runtime-base
 WORKDIR /app
 ENV NODE_ENV=production
@@ -20,10 +29,23 @@ RUN apt-get update \
   && mkdir -p /var/cache/discord-ai-agent \
   && chown -R node:node /app /var/cache/discord-ai-agent
 
-FROM runtime-base AS codegen-tools
+FROM runtime-base AS runtime
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev \
+  && rm -f package-lock.json
+COPY --chown=node:node --from=build /app/dist ./dist
+COPY --from=nanocodex-build /discord-agent-nanocodex-runtime-bin /usr/local/bin/discord-agent-nanocodex-runtime
+COPY --chown=node:node migrations ./migrations
+COPY --chown=node:node skills ./skills
+USER node
+CMD ["node", "dist/src/index.js"]
+
+FROM runtime AS codegen
 USER root
+RUN npm install --global npm@11.19.0 \
+  && npm cache clean --force
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl git ripgrep \
+  && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \
   && mkdir -p -m 755 /etc/apt/keyrings \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
   && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -31,23 +53,8 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13 npm@12.0.1
+RUN test -x /usr/local/bin/discord-agent-nanocodex-runtime
 USER node
-
-FROM runtime-base AS runtime
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev \
-  && rm -f package-lock.json
-COPY --chown=node:node --from=build /app/dist ./dist
-COPY --chown=node:node migrations ./migrations
-COPY --chown=node:node skills ./skills
-USER node
-CMD ["node", "dist/src/index.js"]
-
-FROM codegen-tools AS codegen
-COPY --chown=node:node --from=runtime /app /app
-USER node
-CMD ["node", "dist/src/index.js"]
 
 FROM runtime AS final
 USER root

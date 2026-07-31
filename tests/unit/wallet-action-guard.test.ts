@@ -13,7 +13,7 @@ describe("wallet action guard", () => {
     ["send Luke .3", "transferWalletFunds"],
     ["send 0.3 to Luke", "transferWalletFunds"],
     ["🙂 send it to the bot please 🙂", "transferWalletFunds"],
-    ["I'm at $0, can I get $1 to play again?", "requestStarterFunds"]
+    ["I'm at $0, can I get $0.10 to play again?", "requestStarterFunds"]
   ] as const)("routes %s", (prompt, expected) => {
     expect(walletActionToolForPrompt(config, prompt)).toBe(expected);
   });

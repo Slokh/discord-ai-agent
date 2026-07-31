@@ -219,9 +219,9 @@ Extraction order (smallest/highest-value first):
 - [x] `runnerPipeline.ts`: `runCodeUpdate` orchestration only.
 - [x] `repoWorkspace.ts`: mirror/worktree/branch/git state/push.
 - [x] `dependencyCache.ts`: install/restore/manifest cache.
-- [x] `harness/codex.ts` and `harness/opencode.ts` behind a `CodegenHarnessAdapter` interface; rename Codex-centric shared types (`CodexAttemptSummary` → `AgentAttemptSummary`).
+- [x] Keep NanoCodex as the sole code-update harness with one direct runner contract.
 - [x] `contextPack.ts`, `callbacks.ts`, `commands.ts`.
-- [x] Decide: keep both harnesses behind the adapter, or keep OpenCode (current default) and drop the Codex app-server + exec fallback until wanted.
+- [x] Remove alternate harness adapters, selection configuration, and transcript compatibility paths.
 
 Exit criteria: no source file over ~800 lines in these domains; folder READMEs updated; `npm run verify` green after each extraction.
 
@@ -268,7 +268,7 @@ Goal: docs match the code; CI catches what matters; the repo has public-project 
 
 ### Config and onboarding accuracy
 
-- [x] Sync `.env.example` with `src/config/env.ts` (63 vars read, 24 documented): add at minimum `DATABASE_URL`, `CONTROL_UI_AUTH_PASSWORD`, `OPENROUTER_CODEGEN_MODEL`, `CODEGEN_HARNESS`, `CODEGEN_EXECUTION_BACKEND`, worker toggles, and sandbox resource knobs — or generate a full env reference doc from the config schema and link it.
+- [x] Sync `.env.example` with `src/config/env.ts`, including database, control UI, NanoCodex model, execution backend, worker toggles, and sandbox resource knobs.
 - [x] Fix README: quickstart `.env` includes `DATABASE_URL`; document `CONTROL_UI_AUTH_PASSWORD`; align the loading-reaction default; clarify which roles (`bot`/`worker`/`api`) are needed for which features.
 - [x] Update `docs/architecture.md` and folder READMEs after WS2/WS6 land (remove aspirational "migration direction" phrasing that no longer applies).
 

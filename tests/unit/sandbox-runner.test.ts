@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -21,19 +20,9 @@ import {
   dependencyCacheKey,
 } from "../../src/execution/dependencyCache.js";
 import {
-  codexConfigToml,
-  codexExecArgs,
-  codexHomePathForTask,
-  codexResumeExecArgs,
-} from "../../src/execution/harness/codex.js";
-import {
-  fetchOpenCodeHealth,
-  extractOpenCodeFinalText,
-  openCodeConfigJson,
-  openCodeModelId,
-  openCodeRunArgs,
-  openCodeServeArgs,
-} from "../../src/execution/harness/opencode.js";
+  nanoCodexModel,
+  nanoCodexProcessEnv,
+} from "../../src/execution/harness/nanocodex.js";
 import {
   codeUpdateBranchName,
   codeUpdatePullRequestBody,
@@ -56,93 +45,23 @@ async function git(cwd: string, args: string[]) {
 }
 
 describe("sandboxRunner", () => {
-  it("runs Codex with full access inside the external Kubernetes sandbox", () => {
-    const args = codexExecArgs({ checkoutDir: "/tmp/work/repo", model: "z-ai/glm-5.2" });
-
-    expect(args).toEqual([
-      "exec",
-      "--json",
-      "-C",
-      "/tmp/work/repo",
-      "--dangerously-bypass-approvals-and-sandbox",
-      "-m",
-      "z-ai/glm-5.2",
-      "-"
-    ]);
-    expect(args).not.toContain("--ask-for-approval");
-    expect(args).not.toContain("--ephemeral");
-  });
-
-  it("resumes the persisted Codex session for recovery attempts", () => {
-    expect(codexResumeExecArgs({ model: "z-ai/glm-5.2" })).toEqual([
-      "exec",
-      "resume",
-      "--last",
-      "--json",
-      "--dangerously-bypass-approvals-and-sandbox",
-      "-m",
-      "z-ai/glm-5.2",
-      "-"
-    ]);
-  });
-
-  it("writes a Centaur-like Codex harness profile", () => {
-    const config = codexConfigToml({ checkoutDir: "/tmp/work/repo", model: "openai/gpt-5.5" });
-
-    expect(config).toContain('model = "openai/gpt-5.5"');
-    expect(config).toContain('approval_policy = "never"');
-    expect(config).toContain('sandbox_mode = "danger-full-access"');
-    expect(config).toContain('model_reasoning_effort = "low"');
-    expect(config).toContain('model_verbosity = "low"');
-    expect(config).toContain('personality = "pragmatic"');
-    expect(config).toContain('service_tier = "fast"');
-    expect(config).toContain("[features]");
-    expect(config).toContain("fast_mode = true");
-    expect(config).toContain("runtime_metrics = true");
-    expect(config).toContain("[model_providers.openrouter]");
-    expect(config).toContain('wire_api = "responses"');
-    expect(config).toContain('[projects."/tmp/work/repo"]');
-    expect(config).toContain('trust_level = "trusted"');
-  });
-
-  it("builds OpenCode server and run commands from the shared codegen model", () => {
-    expect(openCodeModelId("z-ai/glm-5.2")).toBe("openrouter/z-ai/glm-5.2");
-    expect(openCodeModelId("openrouter/z-ai/glm-5.2")).toBe("openrouter/z-ai/glm-5.2");
-    expect(openCodeServeArgs(4123)).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "4123"]);
-    expect(
-      openCodeRunArgs({
-        serverUrl: "http://127.0.0.1:4123",
-        checkoutDir: "/tmp/work/repo",
-        model: "z-ai/glm-5.2",
-        title: "Update the README",
-        prompt: "Please edit the README."
+  it("runs only NanoCodex-supported models through the native runtime", () => {
+    expect(nanoCodexModel("openai/gpt-5.6-sol")).toBe("gpt-5.6-sol");
+    expect(nanoCodexModel("openai/gpt-5.6-terra")).toBe("gpt-5.6-terra");
+    expect(nanoCodexModel("openai/gpt-5.6-luna")).toBe("gpt-5.6-luna");
+    expect(() => nanoCodexModel("openrouter/openai/gpt-5.6-luna")).toThrow(/supports OpenRouter model/);
+    expect(() => nanoCodexModel("z-ai/glm-5.2")).toThrow(/supports OpenRouter model/);
+    const env = nanoCodexProcessEnv(
+      { PATH: "/usr/bin" },
+      "/tmp/tool-shims"
+    );
+    expect(env).toEqual(
+      expect.objectContaining({
+        PATH: `/tmp/tool-shims${path.delimiter}/usr/bin`,
+        AGENT_TOOL_SHIM_DIR: "/tmp/tool-shims",
       })
-    ).toEqual([
-      "run",
-      "--attach",
-      "http://127.0.0.1:4123",
-      "--model",
-      "openrouter/z-ai/glm-5.2",
-      "--format",
-      "json",
-      "--title",
-      "Update the README",
-      "Please edit the README."
-    ]);
-    expect(JSON.parse(openCodeConfigJson({ model: "z-ai/glm-5.2" }))).toEqual({
-      $schema: "https://opencode.ai/config.json",
-      model: "openrouter/z-ai/glm-5.2"
-    });
-  });
-
-  it("extracts the final assistant text from OpenCode JSON output", () => {
-    const output = [
-      '{"type":"tool_use","timestamp":1,"part":{"tool":"grep","state":{"status":"completed"}}}',
-      '{"type":"text","timestamp":2,"part":{"text":"First answer."}}',
-      '{"type":"text","timestamp":3,"part":{"text":"Final useful answer."}}'
-    ].join("\n");
-
-    expect(extractOpenCodeFinalText(output)).toBe("Final useful answer.");
+    );
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
   });
 
   it("treats question-plus-change codegen prompts as implementation requests", () => {
@@ -157,78 +76,17 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("where is this defined");
   });
 
-  it("validates bugs before edits and omits private evidence from PR bodies", () => {
-    const env = {
-      taskId: "bug-1", taskType: "bug_report" as const,
-      bugReportResultPath: "/tmp/bug-1.json", requestedBy: "user-1",
-      taskRequest: "secret-channel-run-payload"
-    };
-    expect(codeUpdatePrompt(env)).toContain("Reproduce or establish the defect");
-    const body = codeUpdatePullRequestBody({ env });
-    expect(body).toContain("Original private Discord evidence is intentionally omitted");
-    expect(body).not.toContain("secret-channel-run-payload");
-  });
-
   it("installs GitHub CLI in the sandbox runtime image", async () => {
     const dockerfile = await fs.readFile(path.join(process.cwd(), "Dockerfile"), "utf8");
+    const cargoManifest = await fs.readFile(path.join(process.cwd(), "native/nanocodex-runtime/Cargo.toml"), "utf8");
 
     expect(dockerfile).toContain("https://cli.github.com/packages");
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends gh");
-  });
-
-  it("keeps npm in the codegen image while removing it from the bot runtime", async () => {
-    const dockerfile = await fs.readFile(path.join(process.cwd(), "Dockerfile"), "utf8");
-    const codegenToolsStage = dockerfile.slice(
-      dockerfile.indexOf("FROM runtime-base AS codegen-tools"),
-      dockerfile.indexOf("FROM runtime-base AS runtime"),
-    );
-    const finalStage = dockerfile.slice(dockerfile.indexOf("FROM runtime AS final"));
-
-    expect(codegenToolsStage).toContain(
-      "npm install -g @openai/codex@0.142.4 opencode-ai@1.17.13 npm@12.0.1",
-    );
-    expect(codegenToolsStage).not.toContain(
-      "rm -f /usr/local/bin/npm /usr/local/bin/npx",
-    );
-    expect(finalStage).toContain(
-      "rm -f /usr/local/bin/npm /usr/local/bin/npx",
-    );
-  });
-
-  it("times out a hung OpenCode health probe", async () => {
-    const server = createServer(() => {
-      // Deliberately leave the request open to match a half-ready server.
-    });
-    const serverUrl = await new Promise<string>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("Unable to bind test server."));
-          return;
-        }
-        resolve(`http://127.0.0.1:${address.port}`);
-      });
-    });
-
-    try {
-      const startedAt = Date.now();
-      await expect(fetchOpenCodeHealth({ serverUrl, timeoutMs: 25 })).rejects.toThrow("OpenCode health probe timed out");
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
-
-  it("keeps Codex home outside the temporary workspace when a persistent sandbox cache exists", () => {
-    expect(
-      codexHomePathForTask({
-        sandboxCacheDir: "/var/cache/discord-ai-agent",
-        workRoot: "/tmp/discord-ai-agent-workspaces/example-discord-ai-agent-156e554d18/task-PN8sBv"
-      })
-    ).toBe("/var/cache/discord-ai-agent/codex-home/task-PN8sBv");
+    expect(dockerfile).toContain("npm install --global npm@11.19.0");
+    expect(dockerfile).not.toContain("nanocodex-bin");
+    expect(cargoManifest).toContain("9da913aeed3361b708cca8308e016125b84b9430");
+    expect(dockerfile).toContain("/usr/local/bin/discord-agent-nanocodex-runtime");
+    expect(dockerfile).not.toContain("/usr/local/bin/nanocodex");
   });
 
   it("uses concise agent-prefixed branch names for code updates", () => {
@@ -237,7 +95,7 @@ describe("sandboxRunner", () => {
     );
   });
 
-  it("humanizes generated kebab task titles before opening PRs", () => {
+  it("humanizes legacy kebab task titles before opening PRs", () => {
     expect(codeUpdatePullRequestTitle("instead-of-replying-with-a-thinking-placeholder--retry")).toBe(
       "Instead of replying with a thinking placeholder"
     );
@@ -280,26 +138,24 @@ describe("sandboxRunner", () => {
 
   it("classifies terminal codegen failures with actionable next steps", () => {
     const noDiff = diagnoseCodegenFailure({
-      error: new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."),
-      timings: { repo: 120, opencode: 20_000, total: 21_000 },
-      harness: "opencode"
+      error: new Error("Agent task produced no diff after NanoCodex attempt; no PR will be opened."),
+      timings: { repo: 120, nanocodex: 20_000, total: 21_000 }
     });
 
     expect(noDiff).toEqual(
       expect.objectContaining({
         category: "no_diff",
         status: "no_changes",
-        failedPhase: "opencode",
-        slowestPhase: { name: "opencode", durationMs: 20_000 }
+        failedPhase: "nanocodex",
+        slowestPhase: { name: "nanocodex", durationMs: 20_000 }
       })
     );
-    expect(noDiff.summary).toContain("OpenCode finished but left the repository with no code diff");
+    expect(noDiff.summary).toContain("NanoCodex finished but left the repository with no code diff");
     expect(noDiff.nextAction).toContain("repository navigation context");
 
     const scan = diagnoseCodegenFailure({
       error: new Error("Release scan failed after agent task; refusing to push generated changes."),
-      timings: { repo: 100, scan: 2500, total: 3000 },
-      harness: "codex"
+      timings: { repo: 100, scan: 2500, total: 3000 }
     });
 
     expect(scan).toEqual(
@@ -314,17 +170,17 @@ describe("sandboxRunner", () => {
   });
 
   it("distinguishes no-diff failures where the harness never made an edit", () => {
-    const error = Object.assign(new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."), {
+    const error = Object.assign(new Error("Agent task produced no diff after NanoCodex attempt; no PR will be opened."), {
       name: "CodegenNoDiffError",
       attempts: [
         {
           attempt: 1,
-          command: "opencode-run",
+          command: "nanocodex-run",
           exitCode: 0,
           durationMs: 12_000,
           producedDiff: false,
           finalResponse: "I found the config but did not edit it.",
-          stdoutTail: "OpenCode read files and described a plan.",
+          stdoutTail: "NanoCodex read files and described a plan.",
           stderrTail: ""
         }
       ]
@@ -332,33 +188,32 @@ describe("sandboxRunner", () => {
 
     const diagnosis = diagnoseCodegenFailure({
       error,
-      timings: { opencode: 12_000, total: 13_000 },
-      harness: "opencode"
+      timings: { nanocodex: 12_000, total: 13_000 }
     });
 
     expect(diagnosis).toEqual(
       expect.objectContaining({
         category: "no_first_edit",
         status: "no_changes",
-        failedPhase: "opencode"
+        failedPhase: "nanocodex"
       })
     );
-    expect(diagnosis.summary).toContain("OpenCode finished without making a code edit");
+    expect(diagnosis.summary).toContain("NanoCodex finished without making a code edit");
     expect(diagnosis.nextAction).toContain("early focused edit");
     expect(diagnosis.finalResponse).toBe("I found the config but did not edit it.");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Attempts");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Harness Final Answer");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("I found the config but did not edit it.");
-    expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("attempt 1: command=opencode-run");
+    expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("attempt 1: command=nanocodex-run");
   });
 
   it("keeps no-diff failures with edit signals in the normal no-diff category", () => {
-    const error = Object.assign(new Error("Agent task produced no diff after OpenCode attempt; no PR will be opened."), {
+    const error = Object.assign(new Error("Agent task produced no diff after NanoCodex attempt; no PR will be opened."), {
       name: "CodegenNoDiffError",
       attempts: [
         {
           attempt: 1,
-          command: "opencode-run",
+          command: "nanocodex-run",
           exitCode: 0,
           durationMs: 15_000,
           producedDiff: false,
@@ -371,8 +226,7 @@ describe("sandboxRunner", () => {
     expect(
       diagnoseCodegenFailure({
         error,
-        timings: { opencode: 15_000, total: 16_000 },
-        harness: "opencode"
+        timings: { nanocodex: 15_000, total: 16_000 }
       })
     ).toEqual(expect.objectContaining({ category: "no_diff", status: "no_changes" }));
   });
@@ -542,7 +396,6 @@ describe("sandboxRunner", () => {
       NODE_ENV: "production",
       NPM_CONFIG_PRODUCTION: "true",
       npm_config_omit: "dev",
-      CODEGEN_HARNESS: "opencode",
       OPENROUTER_API_KEY: "sk-test",
       GITHUB_TOKEN: "ghp-test",
       DATABASE_URL: "postgres://example",
@@ -556,7 +409,6 @@ describe("sandboxRunner", () => {
     expect(env.NODE_ENV).toBe("development");
     expect(env.NPM_CONFIG_PRODUCTION).toBeUndefined();
     expect(env.npm_config_omit).toBeUndefined();
-    expect(env.CODEGEN_HARNESS).toBeUndefined();
     expect(env.OPENROUTER_API_KEY).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();

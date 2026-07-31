@@ -72,6 +72,20 @@ describe("active game sessions", () => {
       { role: "user", content: "what is the stock price today?" },
     ]);
   });
+
+  it("does not inject a pending game's state into an unrelated current request", () => {
+    const messages: ChatMessage[] = [
+      { role: "system", content: "rules" },
+      { role: "user", content: "what is the stock price today?" },
+    ];
+
+    injectActiveGameSession(messages, { wager: wager(), actionRequested: false });
+
+    expect(messages).toEqual([
+      { role: "system", content: "rules" },
+      { role: "user", content: "what is the stock price today?" },
+    ]);
+  });
 });
 
 function context(getActiveGameSession: ReturnType<typeof vi.fn>): ToolContext {

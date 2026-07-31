@@ -26,16 +26,11 @@ export function isCodegenAttemptArtifact(
   const step = normalizedTimelineName(
     stringMetadata(artifact.metadata.step) ?? "",
   );
-  if (
-    step === `opencode attempt ${attempt}` ||
-    step === `codex attempt ${attempt}` ||
-    step === `codex app server attempt ${attempt}`
-  )
-    return true;
+  if (step === `nanocodex attempt ${attempt}`) return true;
   const name = normalizedTimelineName(artifact.name);
   return (
-    name.includes(`attempt ${attempt} transcript`) ||
-    name.includes(`opencode attempt ${attempt} command log`)
+    name.includes(`nanocodex attempt ${attempt} command log`) ||
+    name === "nanocodex prompt"
   );
 }
 
@@ -97,26 +92,9 @@ export function timelineStepFromCodegenArtifact(
 }
 
 export function timelineArtifactTitle(artifact: RunArtifact) {
-  if (isOpenCodeTranscriptArtifact(artifact)) return "OpenCode activity";
-  if (isCodexTranscriptArtifact(artifact)) return artifact.name;
   if (artifact.kind === "command_log") {
     const match = artifact.name.match(/^(.+?) command log$/i);
     if (match?.[1]) return `Command: ${match[1]}`;
   }
   return artifact.name;
-}
-
-export function isCodexTranscriptArtifact(artifact: RunArtifact) {
-  return (
-    artifact.kind === "command_log" &&
-    /\bcodex\b.+\btranscript\b/i.test(artifact.name)
-  );
-}
-
-export function isOpenCodeTranscriptArtifact(artifact: RunArtifact) {
-  if (artifact.kind !== "command_log") return false;
-  const step = normalizedTimelineName(
-    stringMetadata(artifact.metadata.step) ?? artifact.name,
-  );
-  return /\bopencode attempt \d+\b/.test(step);
 }

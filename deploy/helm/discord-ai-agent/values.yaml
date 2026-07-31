@@ -42,9 +42,6 @@ codegen:
   # Prefer codegenWorker.enabled=true for warm local-process codegen so normal
   # worker queues stay separate from code execution.
   executionBackend: kubernetes-job
-  # codex uses the Codex app-server harness. opencode uses OpenCode serve + run
-  # while keeping the rest of the sandbox, verification, and PR flow unchanged.
-  harness: opencode
 
 secret:
   existingSecretName: discord-ai-agent-env
@@ -59,18 +56,10 @@ config:
   botName: ai
   githubRepository: owner/repo
   githubBaseBranch: main
+  # Discord chat uses Luna/high; code updates use Terra/medium.
   openRouterChatModel: openai/gpt-5.6-luna
-  openRouterChatFallbackModel: openai/gpt-5.6-terra
-  openRouterChatReasoningEffort: medium
-  openRouterChatFallbackReasoningEffort: medium
-  # Reasoning and visible output share the completion budget; Discord bounds
-  # final visible replies.
-  openRouterChatMaxTokens: "4096"
-  openRouterChatFallbackMaxTokens: "3072"
-  # Used for bounded summaries, compaction, and deployment notes.
-  openRouterUtilityModel: openai/gpt-4o-mini
-  # Optional. Defaults to GLM 5.2 when empty.
-  openRouterCodegenModel: z-ai/glm-5.2
+  openRouterUtilityModel: openai/gpt-5.6-luna
+  openRouterCodegenModel: openai/gpt-5.6-terra
   openRouterEmbeddingModel: qwen/qwen3-embedding-8b
   openRouterImageModel: google/gemini-3.1-flash-image
   openRouterTranscriptionModel: openai/whisper-large-v3-turbo
@@ -91,7 +80,7 @@ config:
   walletBalancesPublic: "false"
   tempoNetwork: moderato
   tempoUsdToken: USDC.e
-  walletInitialGrantUsd: "1.00"
+  walletInitialGrantUsd: "0.10"
   databaseUrlSecretKey: DATABASE_URL
   discordTokenSecretKey: DISCORD_TOKEN
   discordClientIdSecretKey: DISCORD_CLIENT_ID

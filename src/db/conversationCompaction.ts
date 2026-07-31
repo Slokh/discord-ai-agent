@@ -1,6 +1,7 @@
 import type { DbPool } from "./pool.js";
 import type { ConversationMessage } from "./repositories.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
+import { UTILITY_REASONING } from "../agent/modelPolicy.js";
 import { logger } from "../util/logger.js";
 
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
@@ -114,6 +115,7 @@ async function compactThread(
   if (messages.length === 0) return { deleted: 0 };
   const response = await openRouter.chat({
     model: utilityModel,
+    reasoningEffort: UTILITY_REASONING,
     temperature: 0.1,
     maxTokens: 1600,
     retryPolicy: "cheap",

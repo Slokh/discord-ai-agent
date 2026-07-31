@@ -1,5 +1,6 @@
 import { buildHistoryRetrievalQuery, formatSearchResults } from "../memory/search.js";
 import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
+import { UTILITY_REASONING } from "../agent/modelPolicy.js";
 import { logger } from "../util/logger.js";
 import { summarizeForAudit } from "../util/text.js";
 import type { ToolContext } from "./types.js";
@@ -71,6 +72,7 @@ export async function getDiscordChannelTopics(
 
   const response = await runObservedModelCall(ctx, { purpose: "channel_topic_summary", chat: {
     model: utilityOpenRouterModel(ctx),
+    reasoningEffort: UTILITY_REASONING,
     messages: [
       {
         role: "system",
@@ -176,6 +178,7 @@ export async function summarizeDiscordHistory(
 
   const response = await runObservedModelCall(ctx, { purpose: "discord_history_summary", chat: {
     model: utilityOpenRouterModel(ctx),
+    reasoningEffort: UTILITY_REASONING,
     messages: [
       {
         role: "system",
@@ -445,6 +448,7 @@ export async function summarizeCurrentThread(ctx: ToolContext, input: { question
     : messages.map((message) => `${message.authorUsername ?? message.authorId}: ${message.normalizedContent}`).join("\n");
   const response = await runObservedModelCall(ctx, { purpose: "discord_thread_summary", chat: {
     model: utilityOpenRouterModel(ctx),
+    reasoningEffort: UTILITY_REASONING,
     messages: [
       {
         role: "system",

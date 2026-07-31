@@ -20,9 +20,7 @@ function nonEmptyStringWithDefault(defaultValue: string) {
 
 type ProcessRole = "all" | "api" | "bot" | "worker";
 type CodegenExecutionBackend = "kubernetes-job" | "local-process";
-type CodegenHarness = "codex" | "opencode";
 type TempoNetwork = "moderato" | "mainnet";
-type ReasoningEffort = "max" | "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
 
 function defaultProcessRole(argv = process.argv): ProcessRole {
   const role = argv.find((arg): arg is ProcessRole => arg === "all" || arg === "api" || arg === "bot" || arg === "worker");
@@ -60,15 +58,8 @@ const defaults = {
   openRouterAppTitle: "Discord AI Agent",
   openRouterHttpReferer: "http://localhost",
   openRouterChatModel: "openai/gpt-5.6-luna",
-  openRouterChatFallbackModel: "openai/gpt-5.6-terra",
-  openRouterChatReasoningEffort: "medium" as ReasoningEffort,
-  openRouterChatFallbackReasoningEffort: "medium" as ReasoningEffort,
-  // Reasoning and visible output share the completion budget. Keep enough room
-  // for medium reasoning while Discord still bounds final visible replies.
-  openRouterChatMaxTokens: 4_096,
-  openRouterChatFallbackMaxTokens: 3_072,
-  openRouterCodegenModel: "z-ai/glm-5.2",
-  openRouterUtilityModel: "openai/gpt-4o-mini",
+  openRouterCodegenModel: "openai/gpt-5.6-terra",
+  openRouterUtilityModel: "openai/gpt-5.6-luna",
   openRouterEmbeddingModel: "qwen/qwen3-embedding-8b",
   openRouterImageModel: "google/gemini-3.1-flash-image",
   openRouterTranscriptionModel: "openai/whisper-large-v3-turbo",
@@ -83,7 +74,6 @@ const defaults = {
   controlUiPublicUrl: "",
   controlPlaneInternalUrl: "http://discord-ai-agent-api:8080",
   taskSigningSecret: "",
-  codegenHarness: "opencode" as CodegenHarness,
   codegenExecutionBackend: "local-process" as CodegenExecutionBackend,
   kubernetesNamespace: process.env.POD_NAMESPACE || "discord-ai-agent",
   sandboxImage: "discord-ai-agent-sandbox:latest",
@@ -134,7 +124,7 @@ const defaults = {
   walletBalancesPublic: false,
   tempoNetwork: "moderato" as TempoNetwork,
   tempoUsdToken: "USDC.e",
-  walletInitialGrantUsd: 1,
+  walletInitialGrantUsd: 0.1,
   promptOverlayPath: ".discord-ai-agent/prompt-overlay.md"
 } as const;
 
@@ -166,23 +156,18 @@ const envSchema = z.object({
   OPENROUTER_BASE_URL: z.string().url().default(defaults.openRouterBaseUrl),
   OPENROUTER_APP_TITLE: z.string().default(defaults.openRouterAppTitle),
   OPENROUTER_HTTP_REFERER: z.string().default(defaults.openRouterHttpReferer),
-  OPENROUTER_CHAT_MODEL: z.string().default(defaults.openRouterChatModel),
-  OPENROUTER_CHAT_FALLBACK_MODEL: z.string().default(defaults.openRouterChatFallbackModel),
-  OPENROUTER_CHAT_REASONING_EFFORT: z
-    .enum(["max", "xhigh", "high", "medium", "low", "minimal", "none"])
-    .default(defaults.openRouterChatReasoningEffort),
-  OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT: z
-    .enum(["max", "xhigh", "high", "medium", "low", "minimal", "none"])
-    .default(defaults.openRouterChatFallbackReasoningEffort),
-  OPENROUTER_CHAT_MAX_TOKENS: z.coerce.number().int().min(1_100).max(128_000).default(defaults.openRouterChatMaxTokens),
-  OPENROUTER_CHAT_FALLBACK_MAX_TOKENS: z.coerce
-    .number()
-    .int()
-    .min(1_100)
-    .max(128_000)
-    .default(defaults.openRouterChatFallbackMaxTokens),
-  OPENROUTER_CODEGEN_MODEL: z.string().optional(),
-  OPENROUTER_UTILITY_MODEL: z.string().optional(),
+  OPENROUTER_CHAT_MODEL: z.preprocess(
+    emptyAsUndefined,
+    z.enum(["openai/gpt-5.6-sol", "openai/gpt-5.6-luna"]).default(defaults.openRouterChatModel)
+  ),
+  OPENROUTER_CODEGEN_MODEL: z.preprocess(
+    emptyAsUndefined,
+    z.enum(["openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/gpt-5.6-luna"]).default(defaults.openRouterCodegenModel)
+  ),
+  OPENROUTER_UTILITY_MODEL: z.preprocess(
+    emptyAsUndefined,
+    z.enum(["openai/gpt-5.6-sol", "openai/gpt-5.6-luna"]).default(defaults.openRouterUtilityModel)
+  ),
   OPENROUTER_EMBEDDING_MODEL: z.string().default(defaults.openRouterEmbeddingModel),
   OPENROUTER_IMAGE_MODEL: z.string().default(defaults.openRouterImageModel),
   OPENROUTER_TRANSCRIPTION_MODEL: z.string().default(defaults.openRouterTranscriptionModel),
@@ -199,7 +184,6 @@ const envSchema = z.object({
   CONTROL_UI_PUBLIC_URL: z.string().default(defaults.controlUiPublicUrl),
   CONTROL_PLANE_INTERNAL_URL: z.string().url().default(defaults.controlPlaneInternalUrl),
   TASK_SIGNING_SECRET: z.string().default(defaults.taskSigningSecret),
-  CODEGEN_HARNESS: z.enum(["codex", "opencode"]).default(defaults.codegenHarness),
   CODEGEN_EXECUTION_BACKEND: z.enum(["kubernetes-job", "local-process"]).default(defaults.codegenExecutionBackend),
 
   KUBERNETES_NAMESPACE: z.string().default(defaults.kubernetesNamespace),
@@ -274,9 +258,9 @@ export function loadConfig() {
     const formatted = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n");
     throw new Error(`Invalid environment configuration:\n${formatted}`);
   }
-  const chatModel = parsed.data.OPENROUTER_CHAT_MODEL;
-  const codegenModel = parsed.data.OPENROUTER_CODEGEN_MODEL?.trim() || defaults.openRouterCodegenModel;
-  const utilityModel = parsed.data.OPENROUTER_UTILITY_MODEL?.trim() || defaults.openRouterUtilityModel;
+  const chatModel: string = parsed.data.OPENROUTER_CHAT_MODEL;
+  const codegenModel: string = parsed.data.OPENROUTER_CODEGEN_MODEL;
+  const utilityModel: string = parsed.data.OPENROUTER_UTILITY_MODEL;
 
   return {
     nodeEnv: parsed.data.NODE_ENV,
@@ -304,11 +288,6 @@ export function loadConfig() {
       appTitle: parsed.data.OPENROUTER_APP_TITLE,
       httpReferer: parsed.data.OPENROUTER_HTTP_REFERER,
       chatModel,
-      chatFallbackModel: parsed.data.OPENROUTER_CHAT_FALLBACK_MODEL,
-      chatReasoningEffort: parsed.data.OPENROUTER_CHAT_REASONING_EFFORT,
-      chatFallbackReasoningEffort: parsed.data.OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT,
-      chatMaxTokens: parsed.data.OPENROUTER_CHAT_MAX_TOKENS,
-      chatFallbackMaxTokens: parsed.data.OPENROUTER_CHAT_FALLBACK_MAX_TOKENS,
       codegenModel,
       utilityModel,
       embeddingModel: parsed.data.OPENROUTER_EMBEDDING_MODEL,
@@ -334,7 +313,6 @@ export function loadConfig() {
     execution: {
       controlPlaneInternalUrl: parsed.data.CONTROL_PLANE_INTERNAL_URL.replace(/\/$/, ""),
       taskSigningSecret: parsed.data.TASK_SIGNING_SECRET,
-      codegenHarness: parsed.data.CODEGEN_HARNESS,
       codegenBackend: parsed.data.CODEGEN_EXECUTION_BACKEND,
       sandbox: {
         cacheDir: parsed.data.SANDBOX_CACHE_DIR,

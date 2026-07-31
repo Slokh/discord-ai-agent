@@ -27,7 +27,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
   config?: AppConfig | null;
 }): Promise<AgentPromptExecutionRef | null> {
   if (!input.agentRuntime) return null;
-  const executorName = input.executorName?.trim() || "in-process";
+  const executorName = input.executorName?.trim() || "nanocodex";
   const versions = runtimeVersionMetadata(input.config);
   if (input.appRevision) versions.appRevision = input.appRevision;
   const executionId = input.agentExecutionId ?? `agent-execution-${input.requestId}`;
@@ -128,7 +128,7 @@ export async function finishAgentRuntimePromptExecution(input: {
   executorName?: string | null;
 }) {
   if (!input.agentRuntime || !input.session || !input.executionId) return;
-  const executorName = input.executorName?.trim() || "in-process";
+  const executorName = input.executorName?.trim() || "nanocodex";
   await input.agentRuntime.appendMessage({
     sessionId: input.session.sessionId,
     messageId: `agent-assistant-message-${input.replyMessageId}`,

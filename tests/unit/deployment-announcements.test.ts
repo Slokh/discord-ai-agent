@@ -55,6 +55,7 @@ describe("deployment announcements", () => {
     );
     expect(fixture.openRouter.chat).toHaveBeenCalledWith(expect.objectContaining({
       model: fixture.config.openRouter.utilityModel,
+      reasoningEffort: "high",
       toolChoice: "none"
     }));
     expect(fixture.send).toHaveBeenCalledWith(expect.objectContaining({

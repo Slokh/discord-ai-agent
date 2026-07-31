@@ -34,7 +34,7 @@ The task status health endpoint is `GET /api/tasks/status`; the matching npm scr
 
 Discord mentions enter through `src/discord/client.ts`, persist a user transcript message, create an agent-runtime execution, and store replayable artifacts through `src/agent/runtimeEnvelope.ts`. Queue handoff uses `src/agent/runtimeControlPlane.ts` to enqueue an `agent.runtime.execution` pg-boss job with ids for the session, execution, turn envelope, and input-lines artifact.
 
-Chat prompt execution runs in-process through `src/agent/runtimeRunner.ts`, `src/agent/runtimeExecutor.ts`, and `src/agent/inProcessRuntimeExecutor.ts`. Sandboxes are not used for chat turns. The executor loads the stored envelope/input lines, builds the `ToolContext`, runs the model loop, mirrors assistant/tool transcript state into `agent_runtime_messages`, records `agent.execution.*` events, and lets Discord delivery code render acknowledgements, status, final replies, files, and cleanup.
+Chat prompt execution runs through the retained native NanoCodex engine selected by `src/agent/runtimeRunner.ts` and `src/agent/runtimeExecutor.ts`. Sandboxes are not used for chat turns. The executor loads the stored envelope/input lines, builds the immutable requester-scoped `ToolContext`, resumes the latest Nano checkpoint, routes tool calls through deterministic application gates, stores the next checkpoint, records `agent.execution.*` events, and lets Discord delivery code render acknowledgements, status, final replies, files, and cleanup.
 
 ## Code-update tasks
 

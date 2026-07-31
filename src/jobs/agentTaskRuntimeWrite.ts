@@ -111,7 +111,7 @@ export async function writeAgentTaskQueuedToRuntime(input: {
         harness: "runCodingAgent",
         model: selection.codegenModel,
         provider: selection.codegenProvider,
-        reasoningEffort: "low",
+        reasoningEffort: selection.codegenReasoningEffort,
         metadata: executionMetadata
       });
     }
@@ -125,7 +125,7 @@ export async function writeAgentTaskQueuedToRuntime(input: {
       harness: "runCodingAgent",
       model: selection.codegenModel,
       provider: selection.codegenProvider,
-      reasoningEffort: "low",
+      reasoningEffort: selection.codegenReasoningEffort,
       metadata: executionMetadata
     });
   }

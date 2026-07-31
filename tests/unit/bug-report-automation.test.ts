@@ -48,14 +48,14 @@ function fakeHarness(created: boolean) {
     recordEvent: vi.fn(async () => undefined), updateExecution: vi.fn(async () => undefined)
   };
   const jobs = {
-    enqueueAgentTask: vi.fn(async () => ({ jobId: "job-1", queueName: "agent.task", backendName: "local-process", codegenBackend: "local-process", codegenHarness: "opencode", codegenModel: "test/model", codegenProvider: "openrouter" }))
+    enqueueAgentTask: vi.fn(async () => ({ jobId: "job-1", queueName: "agent.task", backendName: "local-process", codegenBackend: "local-process", codegenModel: "openai/gpt-5.6-sol", codegenProvider: "openrouter" }))
   };
   return {
     message, repo, jobs,
     input: {
       config: {
         appRevision: "rev-1",
-        execution: { codegenBackend: "local-process", codegenHarness: "opencode" },
+        execution: { codegenBackend: "local-process" },
         openRouter: { codegenModel: "test/model" }
       },
       repo,

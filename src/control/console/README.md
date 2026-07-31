@@ -7,7 +7,7 @@ Owns the React debugging UI for runs, traces, artifacts, terminal output, and co
 - Run list filters, search, and jump-to-run.
 - Run overview diagnostics and bottleneck summaries.
 - Timeline building, grouping, and rendering.
-- `codexTranscript.ts`: Codex app-server transcript parsing for timeline and artifact rendering.
+- `codegenArtifacts.ts` and `codegenTimeline.ts`: NanoCodex event and artifact projection for code-update runs.
 - `timelineText.ts`: pure timeline display names, summary suppression, and requested-tool argument formatting.
 - `timelineModel.ts`: pure timeline normalization, de-duplication, timing, and parent/child grouping.
 - `timelineCore.tsx` and `codegenTimeline.ts`: generic and codegen-specific trace projection; codegen artifact mapping stays in `codegenArtifacts.ts`.
@@ -17,7 +17,6 @@ Owns the React debugging UI for runs, traces, artifacts, terminal output, and co
 - `runDashboard.tsx`, `runComparison.tsx`, and `runFeedback.tsx`: aggregate debugging, purpose-level regression comparison, and private eval capture.
 - `promptDebugger.tsx`, `criticalPath.ts`, and `modelCalls.tsx`: exact observed model inputs/outputs, prompt composition, tool rounds, token/cache/cost accounting, and bottleneck recommendations.
 - `consoleRouting.ts`: URL state for run detail tabs.
-- OpenCode transcript formatting currently uses `src/observability/openCodeTranscript.ts`.
 - Terminal and artifact viewers.
 - A Prompt Debugger for each observed provider call: purpose, revision, token/cache use, estimated cost, prompt/schema composition, offered/requested tools, exact secret-redacted request/response captures, latency, and outcome.
 - Prompt captures show observed provider messages and tool schemas. They never claim to expose private chain-of-thought, and older runs without captures remain readable through aggregate telemetry.

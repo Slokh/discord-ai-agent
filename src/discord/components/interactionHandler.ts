@@ -125,7 +125,7 @@ async function enqueueInteractionTurn(
     agentRuntime: input.agentRuntime,
     guildId: interaction.guildId!, channelId: interaction.channelId, userId: interaction.user.id, userDisplayName: displayName,
     threadKey, requestId: interaction.id, text: basePrompt, rawContent: basePrompt, discordUrl: interaction.message.url,
-    status: "queued", source: `discord.${requestKind}`, executorName: input.agentExecutor?.name ?? "in-process", appRevision: input.config.appRevision, config: input.config,
+    status: "queued", source: `discord.${requestKind}`, executorName: input.agentExecutor?.name ?? "nanocodex", appRevision: input.config.appRevision, config: input.config,
   });
   if (!runtime) throw new Error("Could not create the agent runtime ledger for the Discord interaction.");
   const responseSink = new DiscordResponseSink({ client, sourceMessage, statusMessage: interaction.message, maxReplyChars: input.config.maxReplyChars, deliveryKey: interaction.id, logger: logger.child({ traceId: interaction.id, userId: interaction.user.id }) });

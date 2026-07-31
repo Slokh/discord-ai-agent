@@ -3548,7 +3548,7 @@ describe("agent router", () => {
       expect.objectContaining({ contentType: "image/png", data: imageBytes }),
     ]);
     expect(generateImage).toHaveBeenCalledTimes(2);
-    expect(generateImage.mock.calls[1]?.[0]).toContain("REQUEST-COMPATIBILITY RECOVERY PASS");
+    expect(generateImage.mock.calls[1]?.[0]).toContain("REQUEST RECOVERY PASS");
     expect(chat).toHaveBeenCalledTimes(1);
     expect(traceEvents.some((event) => event.eventName === "agent.final_synthesis.started")).toBe(false);
     expect(traceEvents).toContainEqual(expect.objectContaining({

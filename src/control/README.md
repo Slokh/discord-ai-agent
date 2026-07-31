@@ -25,4 +25,4 @@ Owns internal HTTP APIs, sandbox callbacks, metrics, and debugging surfaces.
 
 ## Boundaries
 
-Keep HTTP transport, authentication, parsing, streaming, metrics, and server lifecycle independent. `internalApi.ts` dispatches authenticated domain operations and must not become a compatibility facade.
+Keep HTTP transport, authentication, parsing, streaming, metrics, and server lifecycle independent. `internalApi.ts` dispatches authenticated domain operations and must not become a broad aggregation layer.

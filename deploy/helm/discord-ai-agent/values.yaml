@@ -67,8 +67,7 @@ config:
   # final visible replies.
   openRouterChatMaxTokens: "4096"
   openRouterChatFallbackMaxTokens: "3072"
-  # Also serves as the one-shot fallback when the primary model times out
-  # before any tool has executed.
+  # Used for bounded summaries, compaction, and deployment notes.
   openRouterUtilityModel: openai/gpt-4o-mini
   # Optional. Defaults to GLM 5.2 when empty.
   openRouterCodegenModel: z-ai/glm-5.2

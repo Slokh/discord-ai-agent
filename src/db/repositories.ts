@@ -1,5 +1,5 @@
 import type { DbPool } from "./pool.js";
-import * as skillsRepository from "./skillsRepository.js";
+import * as serverOverlayRepository from "./serverOverlayRepository.js";
 import * as agentSettingsRepository from "./agentSettingsRepository.js";
 import * as embeddingRepository from "./embeddingRepository.js";
 import * as conversationMemoryRepository from "./conversationMemoryRepository.js";
@@ -37,7 +37,7 @@ export class DiscordAiAgentRepository {
   latestDeploymentRevision(guildId: string) { return deploymentAnnouncementRepository.latestDeploymentRevision(this.pool, guildId); }
   markDeploymentAnnouncementPosted(input: { guildId: string; revision: string; content: string; comparisonUrl: string; discordMessageId: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementPosted(this.pool, input); }
   markDeploymentAnnouncementFailed(input: { guildId: string; revision: string; error: string }) { return deploymentAnnouncementRepository.markDeploymentAnnouncementFailed(this.pool, input); }
-  getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> { return skillsRepository.getServerOverlay(this.pool, guildId); }
+  getServerOverlay(guildId: string): Promise<ServerOverlay | undefined> { return serverOverlayRepository.getServerOverlay(this.pool, guildId); }
   upsertServerOverlay(input: {
     guildId: string;
     enabled?: boolean;
@@ -45,8 +45,8 @@ export class DiscordAiAgentRepository {
     toolPolicy?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
     updatedBy?: string | null;
-  }): Promise<ServerOverlay> { return skillsRepository.upsertServerOverlay(this.pool, input); }
-  health() { return skillsRepository.health(this.pool); }
+  }): Promise<ServerOverlay> { return serverOverlayRepository.upsertServerOverlay(this.pool, input); }
+  health() { return serverOverlayRepository.health(this.pool); }
   async getRunFeedback(runId: string): Promise<AgentRunFeedback | undefined> {
     const result = await this.pool.query("SELECT * FROM agent_run_feedback WHERE run_id = $1", [runId]);
     return result.rows[0] ? rowToRunFeedback(result.rows[0]) : undefined;

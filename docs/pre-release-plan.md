@@ -187,7 +187,7 @@ Extraction order (smallest/highest-value first):
 - [x] `conversationMemoryRepository.ts`: sessions/messages/turn deletion/memory stats (add WS5 compaction here).
 - [x] `processRunRepository.ts` + `auditRepository.ts`: runs/spans/events/artifacts, traces, tool audits (add WS5 retention here).
 - [x] `agentTaskRepository.ts`: remaining task lifecycle after WS2 removes codegen-table writes.
-- [x] `skillsRepository.ts`: skills and skill changes.
+- [x] `serverOverlayRepository.ts`: server overlays and health checks.
 - [x] Reduce `repositories.ts` to a delegating facade; update `src/db/README.md` ownership map.
 
 ### `src/discord/client.ts` (2.1k lines)
@@ -207,7 +207,7 @@ Extraction order (smallest/highest-value first):
 - [x] `promptBuilder.ts`: message assembly (carries WS3 ordering).
 - [x] `finalSynthesis.ts` and `modelRecovery.ts`: synthesis, empty-response and hosted-tool recovery.
 - [x] `runtimeTranscript.ts`: single event-recording helper (from WS2).
-- [x] Keep `handleAgentRequest` as the compatibility entrypoint.
+- [x] Keep `handleAgentRequest` as the thin request entrypoint.
 
 ### `src/tools/coreTools.ts` (1.25k lines → true facade)
 

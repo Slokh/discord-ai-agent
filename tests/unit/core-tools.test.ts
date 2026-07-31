@@ -1049,7 +1049,7 @@ describe("generateImage", () => {
     expect(result.content).toContain("could not accept that image request");
     expect(result.content).not.toContain("invalid image parameters");
     expect(generateImageMock).toHaveBeenCalledTimes(2);
-    expect(generateImageMock.mock.calls[1]?.[0]).toContain("REQUEST-COMPATIBILITY RECOVERY PASS");
+    expect(generateImageMock.mock.calls[1]?.[0]).toContain("REQUEST RECOVERY PASS");
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "generateImage",
       error: "image_generation_request_rejected",

@@ -244,7 +244,7 @@ Common optional settings:
 | `OPENROUTER_CHAT_FALLBACK_MODEL` | `openai/gpt-5.6-terra` | Recovery model for malformed tool calls, empty responses, leaked hosted-tool markup, and repeated-tool termination |
 | `OPENROUTER_CHAT_REASONING_EFFORT` / `OPENROUTER_CHAT_FALLBACK_REASONING_EFFORT` | `medium` / `medium` | OpenRouter reasoning effort for primary chat and recovery calls |
 | `OPENROUTER_CHAT_MAX_TOKENS` / `OPENROUTER_CHAT_FALLBACK_MAX_TOKENS` | `4096` / `3072` | Combined reasoning and visible-output ceilings; Discord separately bounds final visible replies |
-| `OPENROUTER_UTILITY_MODEL` | `openai/gpt-4o-mini` | Lower-cost utility model and one-shot fallback for a primary timeout before any tool executes |
+| `OPENROUTER_UTILITY_MODEL` | `openai/gpt-4o-mini` | Lower-cost model for bounded summaries, compaction, and deployment notes |
 | `OPENROUTER_CODEGEN_MODEL` | `z-ai/glm-5.2` | Coding harness model for sandboxed PR generation |
 | `OPENROUTER_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | Embedding model |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Image model |

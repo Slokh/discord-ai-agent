@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 
 const shortText = (max: number) => z.string().trim().min(1).max(max);
 const snowflake = z.string().regex(/^\d{15,22}$/);
@@ -215,10 +214,57 @@ export function parseDiscordPresentation(value: unknown): DiscordPresentation {
 }
 
 /** The model and runtime share one schema so Discord protocol constraints cannot drift. */
-export const discordPresentationToolParameters = zodToJsonSchema(discordPresentationSchema, {
-  target: "openApi3",
-  $refStrategy: "root",
-}) as Record<string, unknown>;
+export const discordPresentationToolParameters = compactDiscordPresentationToolParameters(
+  z.toJSONSchema(discordPresentationSchema, {
+    target: "openapi-3.0",
+    io: "input",
+    reused: "ref",
+  }) as Record<string, unknown>,
+);
+
+function compactDiscordPresentationToolParameters(schema: Record<string, unknown>): Record<string, unknown> {
+  const definitions = isRecord(schema.definitions) ? schema.definitions : {};
+  const premiumDefinitionRefs = new Set(Object.entries(definitions)
+    .filter(([, definition]) => isPremiumButtonJsonSchema(definition))
+    .map(([name]) => `#/definitions/${name}`));
+  const compacted = inlineSelectedJsonSchemaRefs(schema, definitions, premiumDefinitionRefs);
+  const compactedDefinitions = isRecord(compacted.definitions) ? { ...compacted.definitions } : {};
+  for (const ref of premiumDefinitionRefs) delete compactedDefinitions[ref.slice("#/definitions/".length)];
+
+  const properties = isRecord(compacted.properties) ? { ...compacted.properties } : {};
+  for (const name of ["version", "audience", "components"]) {
+    const ref = isRecord(properties[name]) ? properties[name].$ref : undefined;
+    if (typeof ref !== "string" || !ref.startsWith("#/definitions/")) continue;
+    const definition = compactedDefinitions[ref.slice("#/definitions/".length)];
+    if (isRecord(definition)) properties[name] = structuredClone(definition);
+  }
+  return { ...compacted, definitions: compactedDefinitions, properties };
+}
+
+function inlineSelectedJsonSchemaRefs(
+  value: unknown,
+  definitions: Record<string, unknown>,
+  selectedRefs: ReadonlySet<string>,
+): Record<string, unknown> {
+  const visit = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) return candidate.map(visit);
+    if (!isRecord(candidate)) return candidate;
+    const ref = typeof candidate.$ref === "string" ? candidate.$ref : null;
+    if (ref && selectedRefs.has(ref)) {
+      const definition = definitions[ref.slice("#/definitions/".length)];
+      if (isRecord(definition)) return visit(structuredClone(definition));
+    }
+    return Object.fromEntries(Object.entries(candidate).map(([key, child]) => [key, visit(child)]));
+  };
+  return visit(value) as Record<string, unknown>;
+}
+
+function isPremiumButtonJsonSchema(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.properties) || !isRecord(value.properties.style)) return false;
+  return Array.isArray(value.properties.style.enum)
+    && value.properties.style.enum.length === 1
+    && value.properties.style.enum[0] === "premium";
+}
 
 function countComponents(components: unknown[]): number {
   let count = 0;

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { ComponentType, MessageFlags } from "discord.js";
 import { buildDiscordModal, discordComponentToken, prepareDiscordPresentation } from "../../src/discord/components/renderer.js";
-import { parseDiscordPresentation } from "../../src/discord/components/validation.js";
+import {
+  discordPresentationToolParameters,
+  parseDiscordPresentation,
+} from "../../src/discord/components/validation.js";
 import { restrictedToolGate } from "../../src/agent/toolGate.js";
 import { handleDiscordRichInteraction } from "../../src/discord/components/interactionHandler.js";
 import { composeDiscordResponse } from "../../src/tools/discordPresentationTools.js";
@@ -9,6 +12,18 @@ import { decodeDiscordComponentAction, encodeDiscordComponentAction } from "../.
 import { normalizeModalSubmission } from "../../src/discord/components/interactionNormalization.js";
 
 describe("Discord rich components", () => {
+  it("exports inline model tool parameters with Zod's native JSON Schema generator", () => {
+    expect(discordPresentationToolParameters).toEqual(expect.objectContaining({
+      type: "object",
+      properties: expect.objectContaining({
+        version: expect.objectContaining({ default: 1 }),
+        audience: expect.objectContaining({ default: "requester" }),
+        components: expect.objectContaining({ type: "array" }),
+      }),
+      required: ["components"],
+    }));
+  });
+
   it("stores a validated presentation through the model-facing composition tool", async () => {
     const context: Record<string, unknown> = {};
     const result = await composeDiscordResponse(context as any, {

@@ -24,7 +24,11 @@ import type { AgentToolRoute } from "./routerShared.js";
 import { appendAgentRuntimeToolResult, recordAgentEvent } from "./runtimeTranscript.js";
 import { executeLocalToolRoute } from "./toolDispatcher.js";
 import { nanoCodexSessionId, runNanoCodexRuntime, type NanoCodexRuntimeEvent } from "./nanocodexRuntime.js";
-import { loadNanoCodexSessionSnapshot, storeNanoCodexSessionSnapshot } from "./nanocodexSessionState.js";
+import {
+  loadNanoCodexSessionSnapshot,
+  nanoCodexSessionResumeContract,
+  storeNanoCodexSessionSnapshot,
+} from "./nanocodexSessionState.js";
 
 export async function executeNanoCodexAgentRuntime(input: {
   toolContext: ToolContext;
@@ -77,14 +81,10 @@ async function runRetainedNanoCodexTurn(input: {
   const presentationGuard = input.request.richPresentationOutcomeGuard;
   const turnOutput = ensureAgentTurnOutput(ctx);
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
-  const resume = await loadNanoCodexSessionSnapshot({
-    agentRuntime: ctx.agentRuntime,
-    sessionId: session.sessionId,
-  });
-  const prompt = await buildNanoCodexPrompt(
+  const initialPrompt = await buildNanoCodexPrompt(
     ctx,
     text,
-    Boolean(resume),
+    false,
     input.request.automaticStarterFunds,
     input.request.activeGame,
   );
@@ -93,6 +93,18 @@ async function runRetainedNanoCodexTurn(input: {
   // unavailable capabilities from entering the model contract.
   const localTools = scopedToolset({ config: ctx.config, groups: new Set(TOOL_GROUPS) }).localTools;
   const toolDefinitions = localToolDefinitionsForModel(localTools);
+  const resumeContract = nanoCodexSessionResumeContract({
+    instructions: initialPrompt.instructions,
+    tools: toolDefinitions,
+  });
+  const resume = await loadNanoCodexSessionSnapshot({
+    agentRuntime: ctx.agentRuntime,
+    sessionId: session.sessionId,
+    resumeContract,
+  });
+  const prompt = resume
+    ? await buildNanoCodexPrompt(ctx, text, true, input.request.automaticStarterFunds, input.request.activeGame)
+    : initialPrompt;
   const allowedTools = new Set<ToolName>(localTools.map((tool) => tool.name));
   let webEvidenceObserved = false;
   let toolSequence = 0;
@@ -192,6 +204,7 @@ async function runRetainedNanoCodexTurn(input: {
     sessionId: session.sessionId,
     executionId,
     result,
+    resumeContract,
   });
   if (webEvidenceObserved) {
     const hostedEvidence = {

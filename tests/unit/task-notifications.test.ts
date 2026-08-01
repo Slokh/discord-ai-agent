@@ -65,6 +65,21 @@ describe("agent task Discord notifications", () => {
     expect(renderAgentTaskMessage(task).content).toContain("No PR opened: the coding agent did not produce a code diff.");
   });
 
+  it("delivers the grounded result of a successful read-only diagnosis", () => {
+    const task = agentTask({
+      taskType: "diagnosis",
+      status: "succeeded",
+      completedAt: new Date("2026-06-30T12:01:00Z")
+    });
+    const events = [taskEvent({
+      summary: "The CI job is slow because dependency caching misses on every sandbox.",
+      step: "diagnosis_complete"
+    })];
+    expect(renderAgentTaskMessage(task, events).content).toBe(
+      "The CI job is slow because dependency caching misses on every sandbox."
+    );
+  });
+
   it("omits the run console line when no public control UI URL is configured", () => {
     const task = agentTask({ status: "queued" });
 

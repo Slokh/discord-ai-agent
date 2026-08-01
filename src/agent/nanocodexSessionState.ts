@@ -6,6 +6,8 @@ import type { NanoCodexRuntimeResult, NanoCodexSessionSnapshot } from "./nanocod
 export const NANOCODEX_SESSION_SNAPSHOT_ARTIFACT_KIND = "nanocodex_session_snapshot";
 
 export type NanoCodexSessionResumeContract = {
+  contractVersion: 2;
+  model: string;
   instructionsHash: string;
   toolsHash: string;
 };
@@ -18,8 +20,11 @@ export type NanoCodexSessionResumeContract = {
 export function nanoCodexSessionResumeContract(input: {
   instructions: string;
   tools: FunctionToolDefinition[];
+  model: string;
 }): NanoCodexSessionResumeContract {
   return {
+    contractVersion: 2,
+    model: input.model,
     instructionsHash: sha256(input.instructions),
     toolsHash: sha256(JSON.stringify(input.tools)),
   };
@@ -71,7 +76,10 @@ export async function storeNanoCodexSessionSnapshot(input: {
 function sameResumeContract(value: unknown, expected: NanoCodexSessionResumeContract): boolean {
   if (!value || typeof value !== "object") return false;
   const contract = value as Partial<NanoCodexSessionResumeContract>;
-  return contract.instructionsHash === expected.instructionsHash && contract.toolsHash === expected.toolsHash;
+  return contract.contractVersion === expected.contractVersion &&
+    contract.model === expected.model &&
+    contract.instructionsHash === expected.instructionsHash &&
+    contract.toolsHash === expected.toolsHash;
 }
 
 function sha256(value: string): string {

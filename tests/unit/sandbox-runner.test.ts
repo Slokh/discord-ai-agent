@@ -76,6 +76,18 @@ describe("sandboxRunner", () => {
     expect(prompt).toContain("where is this defined");
   });
 
+  it("gives read-only repository diagnosis an explicit no-diff contract", () => {
+    const prompt = codeUpdatePrompt({
+      taskType: "diagnosis",
+      taskId: "task-2",
+      requestedBy: "User (u)",
+      taskRequest: "Explain why this CI job is slow without changing files."
+    });
+    expect(prompt).toContain("read-only diagnosis");
+    expect(prompt).toContain("Do not modify files");
+    expect(prompt).toContain("Keep the checkout unchanged");
+  });
+
   it("installs GitHub CLI in the sandbox runtime image", async () => {
     const dockerfile = await fs.readFile(path.join(process.cwd(), "Dockerfile"), "utf8");
     const cargoManifest = await fs.readFile(path.join(process.cwd(), "native/nanocodex-runtime/Cargo.toml"), "utf8");
@@ -101,7 +113,7 @@ describe("sandboxRunner", () => {
     );
   });
 
-  it("keeps generated PR bodies focused with prompted-by in the footer", () => {
+  it("keeps generated PR bodies focused without private Discord content", () => {
     const body = codeUpdatePullRequestBody({
       env: {
         taskRequest: "Use a loading reaction while the bot is working.",
@@ -113,27 +125,26 @@ describe("sandboxRunner", () => {
       [
         "## Why",
         "",
-        "Use a loading reaction while the bot is working.",
+        "Requested through the private Discord code-update workflow. Original member content and identity are intentionally omitted.",
         "",
         "## Changes",
         "",
-        "- Implemented by the Discord AI Agent sandbox.",
-        "- See the PR diff for the exact code changes.",
+        "- Implemented the requested repository change in the isolated Discord AI Agent sandbox.",
+        "- The diff is limited to the files required by the request and its regression coverage.",
         "",
         "## Testing",
         "",
         "- Agent ran focused checks in the sandbox where applicable.",
+        "- `npm run typecheck`: passed",
         "- `npm run scan:release`: passed",
-        "- Full verification is handled by CI after the PR opens.",
-        "",
-        "---",
-        "",
-        "Prompted by: demo-user (1234567890123450001)"
+        "- Remaining repository verification is enforced by required PR checks before merge."
       ].join("\n")
     );
     expect(body).not.toContain("## Context");
     expect(body).not.toContain("Task ID");
     expect(body).not.toContain("Codegen model");
+    expect(body).not.toContain("loading reaction");
+    expect(body).not.toContain("demo-user");
   });
 
   it("classifies terminal codegen failures with actionable next steps", () => {
@@ -167,6 +178,16 @@ describe("sandboxRunner", () => {
     );
     expect(renderCodegenFailureDiagnosis(scan)).toContain("Category: release_scan");
     expect(renderCodegenFailureDiagnosis(scan)).toContain("- scan: 2.5s");
+
+    const verification = diagnoseCodegenFailure({
+      error: new Error("TypeScript verification failed after agent task; refusing to publish generated changes."),
+      timings: { typecheck: 5_000, total: 6_000 }
+    });
+    expect(verification).toEqual(expect.objectContaining({
+      category: "verification",
+      status: "failed",
+      failedPhase: "typecheck"
+    }));
   });
 
   it("distinguishes no-diff failures where the harness never made an edit", () => {

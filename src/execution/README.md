@@ -31,8 +31,10 @@ Owns sandboxed code-update execution from queued task to PR.
 - Request anchor extraction and exact-match target-file ranking live in `codegenAnchors.ts`.
 - Failure classification and diagnostic text live in `codegenFailureDiagnosis.ts`; runner code only records the diagnosis as progress/artifacts.
 - Initial and recovery coding-agent prompt text lives in `codegenPrompts.ts`; keep it short, generic, and architecture-driven.
+- `runCodingAgent` has explicit `code_change` and read-only `diagnosis` outcome contracts. Diagnosis may succeed with a grounded final result and no diff, never publishes a branch or PR, and must not be used for public-web reading or explanation.
 - Avoid production request classifiers that choose a lifecycle for the agent. Prefer exact anchors plus clear repo/folder ownership docs so the coding agent can decide the implementation path.
 - PR branch/title/body formatting lives in `prFormatting.ts`.
+- PR bodies describe the private Discord workflow and deterministic verification without copying the member request, identity, linked run evidence, or other private server context into GitHub.
 - Kubernetes/local-process launch behavior belongs in `backend.ts` and the queue/reconciler callers.
 - Prompt changes should stay generic and architecture-driven; prefer clearer repo ownership over adding task-specific prompt instructions.
 
@@ -55,3 +57,5 @@ owned NanoCodex fork and exact source revision are pinned in
 `native/nanocodex-runtime/Cargo.toml`; Docker, CI, and deployment do not select
 or install another harness. Code-update execution defaults to Terra with medium
 reasoning, with that policy shared by the runtime ledger and native invocation.
+
+Generated changes pass a sandbox-owned `npm run typecheck` with an explicit Node heap budget and `npm run scan:release` before commit, push, PR creation, or bug-task auto-merge. A failed or resource-exhausted required check is a failed task, not a publishable warning.

@@ -3,7 +3,7 @@ export type AgentTaskStatus = "queued" | "running" | "succeeded" | "failed" | "n
 export type AgentTaskJob = {
   taskId: string;
   traceId?: string;
-  taskType: "code_update" | "bug_report";
+  taskType: "code_update" | "bug_report" | "diagnosis";
   request: string;
   title: string;
   requestedBy: string;

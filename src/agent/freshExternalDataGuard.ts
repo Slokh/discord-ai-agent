@@ -8,9 +8,9 @@ import { previewText } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
 const FRESH_DATA_INTENT =
-  /\b(find|search|compare|check|track|book|buy|cheapest|lowest|best|current|live|latest|today|tonight|tomorrow|this (?:week|weekend|month|season|spring|summer|fall|autumn|winter|year)|next (?:week|weekend|month|season|spring|summer|fall|autumn|winter|year))\b/i;
+  /\b(find|search|compare|check|track|book|buy|cheapest|lowest|best|current|live|latest|still|anymore|now|today|tonight|tomorrow|this (?:week|weekend|month|season|spring|summer|fall|autumn|winter|year)|next (?:week|weekend|month|season|spring|summer|fall|autumn|winter|year))\b/i;
 const TIME_SENSITIVE_SUBJECT =
-  /\b(prices?|fares?|flights?|hotels?|tickets?|availability|schedules?|departures?|arrivals?|weather|forecast|scores?|standings|stocks?|crypto|exchange rates?|resale|listings?|bookable|in stock|rosters?|lineups?|depth charts?|injur(?:y|ies)|trades?|signings?|transactions?)\b/i;
+  /\b(prices?|fares?|flights?|hotels?|tickets?|availability|schedules?|departures?|arrivals?|weather|forecast|scores?|standings|stocks?|crypto|exchange rates?|resale|listings?|bookable|in stock|rosters?|lineups?|depth charts?|injur(?:y|ies)|trades?|signings?|transactions?|accounts?|regions?|servers?|polic(?:y|ies)|rules?|requirements?|compatibility|support(?:ed|s|ing)?)\b/i;
 const CURRENT_SPORTS_INTENT =
   /\b(?:current|live|latest|today|tonight|tomorrow|this (?:season|year)|next (?:season|year))\b/i;
 const CURRENT_SPORTS_SUBJECT =

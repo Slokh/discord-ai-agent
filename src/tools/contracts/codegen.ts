@@ -7,7 +7,7 @@ export const codegenToolContracts = [
     toolClass: "coding",
     examples: ["@ai debug the failing CI on that PR"],
     description:
-      "Start an isolated sandbox task for Discord AI Agent code, repository, GitHub PR, CI, deployment, or self-update work. Any guild member may start a task. The bot will update the same Discord reply with progress and the PR link when the task finishes. Use when the user asks the agent to update itself, add, build, implement, change behavior, debug or fix failing CI/checks/tests, inspect a PR/repo failure, or continue work from a previous code-update task. For Discord messages marked with 🐛, call listDiscordBugMarkers first, inspect the linked run evidence, and start a focused repair task; do not create a GitHub issue or copy private Discord content into the task/PR description. Prefer this over hosted web tools for GitHub, CI, PR, or repository debugging because the sandbox has repo checkout, shell, tests, and gh CLI access.",
+      "Start an isolated repository sandbox for Discord AI Agent code changes or repository/GitHub diagnosis, including requests to debug or fix failing CI/checks/tests. Never use this to read, summarize, rate, or explain a public webpage or other non-repository source; use hosted web search or answer directly instead. Any guild member may start a task. Use mode=code_change only when a repository diff is requested. Use mode=diagnosis for explicitly read-only repository, PR, CI, or deployment investigation; diagnosis succeeds without a diff and never opens a PR. For Discord messages marked with 🐛, call listDiscordBugMarkers first and start a focused code_change repair only after inspecting the linked run evidence.",
     userVisible: true,
     mutates: true,
     group: "codegen",
@@ -18,6 +18,11 @@ export const codegenToolContracts = [
           type: "string",
           description:
             "The full requested agent update, integration, or repository change to implement. Preserve the user's desired outcome, especially when the wording combines investigation with an action like 'where is X defined, can we change/increase/fix it?'. Do not reduce that to a read-only find/debug request."
+        },
+        mode: {
+          type: "string",
+          enum: ["code_change", "diagnosis"],
+          description: "Task outcome contract. Defaults to code_change. Use diagnosis only when the user explicitly requests read-only repository, PR, CI, or deployment investigation."
         },
         title: {
           type: "string",

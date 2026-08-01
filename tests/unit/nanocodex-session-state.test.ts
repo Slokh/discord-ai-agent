@@ -19,7 +19,7 @@ const snapshot = {
 describe("NanoCodex retained session checkpoints", () => {
   it("stores the lossless checkpoint in the canonical runtime ledger", async () => {
     const storeBinaryArtifact = vi.fn(async () => ({ artifactId: "artifact-1" }));
-    const resumeContract = nanoCodexSessionResumeContract({ instructions: "instructions", tools: [] });
+    const resumeContract = nanoCodexSessionResumeContract({ instructions: "instructions", tools: [], model: "gpt-5.6-luna" });
     await storeNanoCodexSessionSnapshot({
       agentRuntime: { storeBinaryArtifact } as never,
       sessionId: "session-1",
@@ -56,7 +56,7 @@ describe("NanoCodex retained session checkpoints", () => {
       getLatestBinaryArtifactForSession: vi.fn(async () => ({
         data: Buffer.from(JSON.stringify(snapshot), "utf8"),
         metadata: {
-          resumeContract: nanoCodexSessionResumeContract({ instructions: "old instructions", tools: [] }),
+          resumeContract: nanoCodexSessionResumeContract({ instructions: "old instructions", tools: [], model: "gpt-5.6-luna" }),
         },
       })),
     } as never;
@@ -64,12 +64,12 @@ describe("NanoCodex retained session checkpoints", () => {
     await expect(loadNanoCodexSessionSnapshot({
       agentRuntime,
       sessionId: "session-1",
-      resumeContract: nanoCodexSessionResumeContract({ instructions: "new instructions", tools: [] }),
+      resumeContract: nanoCodexSessionResumeContract({ instructions: "new instructions", tools: [], model: "gpt-5.6-luna" }),
     })).resolves.toBeUndefined();
   });
 
   it("resumes a checkpoint when its instructions and tool contract match", async () => {
-    const resumeContract = nanoCodexSessionResumeContract({ instructions: "same instructions", tools: [] });
+    const resumeContract = nanoCodexSessionResumeContract({ instructions: "same instructions", tools: [], model: "gpt-5.6-luna" });
     const agentRuntime = {
       getLatestBinaryArtifactForSession: vi.fn(async () => ({
         data: Buffer.from(JSON.stringify(snapshot), "utf8"),

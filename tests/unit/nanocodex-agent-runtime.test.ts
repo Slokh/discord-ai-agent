@@ -160,6 +160,59 @@ describe("NanoCodex agent runtime executor", () => {
       eventName: "agent.nanocodex.post_mutation_recovered",
     }));
   });
+
+  it("delivers a generated image when NanoCodex exits before its final message", async () => {
+    const runtime = agentRuntime();
+    const image = { name: "generated.png", contentType: "image/png", data: Buffer.from("image") };
+    const runRuntime = vi.fn(async (input: any) => {
+      const result = await input.executeTool({ callId: "call-1", name: "generateImage", arguments: { prompt: "a gnome" } });
+      expect(result.success).toBe(true);
+      throw new Error("runtime exited before completion");
+    });
+    const executeToolRoute = vi.fn(async () => ({
+      content: "Generated image for: a gnome",
+      files: [image],
+    }));
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "generate an image of a gnome",
+      timeoutMs: 1_000,
+      runRuntime: runRuntime as never,
+      executeToolRoute: executeToolRoute as never,
+    })).resolves.toMatchObject({
+      content: "Generated image for: a gnome",
+      files: [expect.objectContaining({ name: "generated.png", data: image.data })],
+    });
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.post_tool_output_recovered",
+    }));
+  });
+
+  it("delivers generated files when the hard timeout wins the runtime race", async () => {
+    const runtime = agentRuntime();
+    const image = { name: "generated.png", contentType: "image/png", data: Buffer.from("image") };
+    const runRuntime = vi.fn(async (input: any) => {
+      await input.executeTool({ callId: "call-1", name: "generateImage", arguments: { prompt: "a gnome" } });
+      await new Promise((_, reject) => input.abortSignal.addEventListener("abort", () => reject(input.abortSignal.reason)));
+      return result("unreachable");
+    });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "generate an image of a gnome",
+      timeoutMs: 10,
+      runRuntime: runRuntime as never,
+      executeToolRoute: (async () => ({ content: "Generated image for: a gnome", files: [image] })) as never,
+    })).resolves.toMatchObject({
+      content: "Done — the generated file is attached.",
+      status: "partial",
+      files: [expect.objectContaining({ name: "generated.png", data: image.data })],
+    });
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.timeout_output_recovered",
+    }));
+  });
 });
 
 function toolContext(runtime: ReturnType<typeof agentRuntime>) {

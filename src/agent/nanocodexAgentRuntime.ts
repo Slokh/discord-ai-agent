@@ -12,7 +12,7 @@ import { injectActiveGameSession } from "./activeGameSession.js";
 import { correctKnownCapabilityClaim } from "./capabilityClaimGuard.js";
 import { extractDiscordEmojiResponseIntent } from "./emojiResponseIntent.js";
 import { runGuardedAgentRequest, type GuardedAgentRequest } from "./guardedAgentRequest.js";
-import { withAgentRuntimeTimeouts } from "./runtimeTimeouts.js";
+import { isAgentRuntimeTimeoutError, withAgentRuntimeTimeouts } from "./runtimeTimeouts.js";
 import { loadPromptOverlayText } from "./promptOverlay.js";
 import {
   chatMessages,
@@ -41,20 +41,39 @@ export async function executeNanoCodexAgentRuntime(input: {
   runRuntime?: typeof runNanoCodexRuntime;
   executeToolRoute?: typeof executeLocalToolRoute;
 }): Promise<AgentResponse> {
-  return withAgentRuntimeTimeouts({
-    hardTimeoutMs: input.hardTimeoutMs ?? input.timeoutMs,
-    silenceTimeoutMs: input.silenceTimeoutMs,
-    label: "Discord AI Agent NanoCodex request",
-    promiseFactory: async (noteProgress, abortSignal) => {
-      const ctx = input.toolContext;
-      ctx.noteProgress = noteProgress;
-      ctx.abortSignal = abortSignal;
-      ctx.requestText = input.text;
-      return runGuardedAgentRequest(ctx, input.text, (request, executionText) =>
-        runRetainedNanoCodexTurn({ ...input, text: executionText, toolContext: ctx, request })
-      );
-    },
-  });
+  const ctx = input.toolContext;
+  try {
+    return await withAgentRuntimeTimeouts({
+      hardTimeoutMs: input.hardTimeoutMs ?? input.timeoutMs,
+      silenceTimeoutMs: input.silenceTimeoutMs,
+      label: "Discord AI Agent NanoCodex request",
+      promiseFactory: async (noteProgress, abortSignal) => {
+        ctx.noteProgress = noteProgress;
+        ctx.abortSignal = abortSignal;
+        ctx.requestText = input.text;
+        return runGuardedAgentRequest(ctx, input.text, (request, executionText) =>
+          runRetainedNanoCodexTurn({ ...input, text: executionText, toolContext: ctx, request })
+        );
+      },
+    });
+  } catch (error) {
+    const output = ctx.turnOutput?.snapshot();
+    if (!isAgentRuntimeTimeoutError(error) || !output?.files.length) throw error;
+    await recordAgentEvent(ctx, {
+      eventName: "agent.nanocodex.timeout_output_recovered",
+      level: "warn",
+      summary: "NanoCodex timed out after producing files; delivering the completed output.",
+      metadata: { fileCount: output.files.length, tableCount: output.tables.length },
+    });
+    return {
+      content: "Done — the generated file is attached.",
+      status: "partial",
+      files: output.files,
+      tables: output.tables.length > 0 ? output.tables : undefined,
+      footerLines: output.footerLines.length > 0 ? output.footerLines : undefined,
+      discordPresentation: output.presentation,
+    };
+  }
 }
 
 async function runRetainedNanoCodexTurn(input: {
@@ -85,6 +104,7 @@ async function runRetainedNanoCodexTurn(input: {
   const turnOutput = ensureAgentTurnOutput(ctx);
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   let lastSuccessfulMutatingToolResult: AgentResponse | undefined;
+  let lastSuccessfulFileToolResult: AgentResponse | undefined;
   const initialPrompt = await buildNanoCodexPrompt(
     ctx,
     text,
@@ -178,6 +198,9 @@ async function runRetainedNanoCodexTurn(input: {
       if (tool.mutates && isRecoverableMutationResult(route.name, toolResult)) {
         lastSuccessfulMutatingToolResult = toolResult;
       }
+      if (toolResult.status !== "error" && toolResult.files?.length) {
+        lastSuccessfulFileToolResult = toolResult;
+      }
       randomGuard.noteToolResult(route.name, toolResult);
       presentationGuard.noteToolResult(route.name);
       publicUrlGuard.noteLocalToolResult(route.name, toolResult.status);
@@ -231,11 +254,17 @@ async function runRetainedNanoCodexTurn(input: {
         error: error instanceof Error ? previewText(error.message, 300) : previewText(String(error), 300),
       },
     });
-    if (!lastSuccessfulMutatingToolResult) throw error;
+    const recoverableToolResult = lastSuccessfulMutatingToolResult ?? lastSuccessfulFileToolResult;
+    if (!recoverableToolResult) throw error;
+    const recoveredMutation = Boolean(lastSuccessfulMutatingToolResult);
     await recordAgentEvent(ctx, {
-      eventName: "agent.nanocodex.post_mutation_recovered",
+      eventName: recoveredMutation
+        ? "agent.nanocodex.post_mutation_recovered"
+        : "agent.nanocodex.post_tool_output_recovered",
       level: "warn",
-      summary: "NanoCodex ended after a successful mutation; returning the durable tool result.",
+      summary: recoveredMutation
+        ? "NanoCodex ended after a successful mutation; returning the durable tool result."
+        : "NanoCodex ended after a successful file-producing tool; returning its delivered output.",
       metadata: {
         toolCalls: toolSequence,
         error: error instanceof Error ? previewText(error.message, 300) : previewText(String(error), 300),
@@ -243,11 +272,11 @@ async function runRetainedNanoCodexTurn(input: {
     });
     const output = turnOutput.snapshot();
     return {
-      ...lastSuccessfulMutatingToolResult,
-      files: output.files.length > 0 ? [...output.files] : lastSuccessfulMutatingToolResult.files,
-      tables: output.tables.length > 0 ? [...output.tables] : lastSuccessfulMutatingToolResult.tables,
-      footerLines: output.footerLines.length > 0 ? [...output.footerLines] : lastSuccessfulMutatingToolResult.footerLines,
-      discordPresentation: output.presentation ?? lastSuccessfulMutatingToolResult.discordPresentation,
+      ...recoverableToolResult,
+      files: output.files.length > 0 ? [...output.files] : recoverableToolResult.files,
+      tables: output.tables.length > 0 ? [...output.tables] : recoverableToolResult.tables,
+      footerLines: output.footerLines.length > 0 ? [...output.footerLines] : recoverableToolResult.footerLines,
+      discordPresentation: output.presentation ?? recoverableToolResult.discordPresentation,
       memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
     };
   }

@@ -38,15 +38,16 @@ describe("NanoCodex agent runtime executor", () => {
     }));
   });
 
-  it("resumes from the latest canonical NanoCodex snapshot without replaying old chat", async () => {
+  it("starts fresh from legacy checkpoints whose resume contract is unavailable", async () => {
     const runtime = agentRuntime();
     runtime.getLatestBinaryArtifactForSession.mockResolvedValue({
       artifact: {} as never,
       data: Buffer.from(JSON.stringify(snapshot()), "utf8"),
     });
     const runRuntime = vi.fn(async (input: any) => {
-      expect(input.resume).toEqual(snapshot());
-      expect(input.prompt).toBe("USER: current request");
+      expect(input.resume).toBeUndefined();
+      expect(input.prompt).toContain("USER: User: old request");
+      expect(input.prompt).toContain("USER: current request");
       return result("resumed");
     });
 

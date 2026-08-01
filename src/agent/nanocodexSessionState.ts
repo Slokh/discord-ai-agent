@@ -1,17 +1,41 @@
+import { createHash } from "node:crypto";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
+import type { FunctionToolDefinition } from "../models/openrouter.js";
 import type { NanoCodexRuntimeResult, NanoCodexSessionSnapshot } from "./nanocodexRuntime.js";
 
 export const NANOCODEX_SESSION_SNAPSHOT_ARTIFACT_KIND = "nanocodex_session_snapshot";
 
+export type NanoCodexSessionResumeContract = {
+  instructionsHash: string;
+  toolsHash: string;
+};
+
+/**
+ * NanoCodex snapshots can only be resumed with the exact instructions and
+ * tool definitions that created them. Keep that compatibility evidence in
+ * artifact metadata without modifying the opaque snapshot itself.
+ */
+export function nanoCodexSessionResumeContract(input: {
+  instructions: string;
+  tools: FunctionToolDefinition[];
+}): NanoCodexSessionResumeContract {
+  return {
+    instructionsHash: sha256(input.instructions),
+    toolsHash: sha256(JSON.stringify(input.tools)),
+  };
+}
+
 export async function loadNanoCodexSessionSnapshot(input: {
   agentRuntime: AgentRuntimeRepository;
   sessionId: string;
+  resumeContract?: NanoCodexSessionResumeContract;
 }): Promise<NanoCodexSessionSnapshot | undefined> {
   const artifact = await input.agentRuntime.getLatestBinaryArtifactForSession({
     sessionId: input.sessionId,
     kind: NANOCODEX_SESSION_SNAPSHOT_ARTIFACT_KIND,
   });
   if (!artifact) return undefined;
+  if (input.resumeContract && !sameResumeContract(artifact.metadata?.resumeContract, input.resumeContract)) return undefined;
   const parsed = JSON.parse(artifact.data.toString("utf8")) as unknown;
   assertNanoCodexSessionSnapshot(parsed);
   return parsed;
@@ -21,6 +45,7 @@ export async function storeNanoCodexSessionSnapshot(input: {
   sessionId: string;
   executionId: string;
   result: NanoCodexRuntimeResult;
+  resumeContract?: NanoCodexSessionResumeContract;
 }): Promise<void> {
   const { snapshot } = input.result;
   assertNanoCodexSessionSnapshot(snapshot);
@@ -36,10 +61,21 @@ export async function storeNanoCodexSessionSnapshot(input: {
       model: snapshot.model,
       lineageId: snapshot.lineage_id,
       promptCacheKey: snapshot.prompt_cache_key,
+      ...(input.resumeContract ? { resumeContract: input.resumeContract } : {}),
       sensitive: true,
       canonical: true,
     },
   });
+}
+
+function sameResumeContract(value: unknown, expected: NanoCodexSessionResumeContract): boolean {
+  if (!value || typeof value !== "object") return false;
+  const contract = value as Partial<NanoCodexSessionResumeContract>;
+  return contract.instructionsHash === expected.instructionsHash && contract.toolsHash === expected.toolsHash;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 export function assertNanoCodexSessionSnapshot(value: unknown): asserts value is NanoCodexSessionSnapshot {

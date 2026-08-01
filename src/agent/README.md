@@ -18,7 +18,9 @@ Owns the retained NanoCodex turn for one requester-scoped Discord prompt.
 
 The deployed Discord agent defaults to Luna with high reasoning. This reasoning policy is fixed in `modelPolicy.ts`; owner/ops model switching remains limited to the interactive Sol/Luna catalog.
 
-Discord transcript messages remain the inspectable product history. A Nano checkpoint is opaque execution state, not a second user-facing history. On the first Nano turn for an existing session, the bounded product transcript seeds the session; subsequent turns send only the current request and resume the checkpoint.
+Discord transcript messages remain the inspectable product history. A Nano checkpoint is opaque execution state, not a second user-facing history. On the first Nano turn for an existing session, the bounded product transcript seeds the session; subsequent turns resume the checkpoint. Only stable agent, skill, overlay, and tool contracts live in Nano instructions. Requester identity, current date, reply chains, channel memory, attachments, game state, and other per-turn Discord material are labeled context in the turn prompt so untrusted member text is never elevated into retained instructions and ordinary follow-ups remain resume-compatible.
+
+If Nano exits after a successful mutating tool call but before its final prose, the runtime records the failure and returns the completed durable tool result through the normal outcome guards. This guarantees that verified transfers and random results can still be delivered without inventing a second model-authored outcome.
 
 ## Module Map
 

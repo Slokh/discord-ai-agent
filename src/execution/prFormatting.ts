@@ -48,22 +48,21 @@ export function codeUpdatePullRequestBody(input: { env: { taskRequest: string; r
   return [
     "## Why",
     "",
-    input.env.taskType === "bug_report" ? "Validated from a 🐛 reaction on an AI reply. Original private Discord evidence is intentionally omitted." : input.env.taskRequest.trim(),
+    input.env.taskType === "bug_report"
+      ? "Validated from a 🐛 reaction on an AI reply. Original private Discord evidence is intentionally omitted."
+      : "Requested through the private Discord code-update workflow. Original member content and identity are intentionally omitted.",
     "",
     "## Changes",
     "",
-    "- Implemented by the Discord AI Agent sandbox.",
-    "- See the PR diff for the exact code changes.",
+    "- Implemented the requested repository change in the isolated Discord AI Agent sandbox.",
+    "- The diff is limited to the files required by the request and its regression coverage.",
     "",
     "## Testing",
     "",
     "- Agent ran focused checks in the sandbox where applicable.",
+    "- `npm run typecheck`: passed",
     "- `npm run scan:release`: passed",
-    "- Full verification is handled by CI after the PR opens.",
-    "",
-    "---",
-    "",
-    `Prompted by: ${input.env.requestedBy}`
+    "- Remaining repository verification is enforced by required PR checks before merge.",
   ].join("\n");
 }
 

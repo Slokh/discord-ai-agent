@@ -6,11 +6,11 @@ import { previewText } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 
 const PUBLIC_URL_INSPECTION_INTENT =
-  /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\b/i;
+  /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand|rate|rating|review|evaluate|critique)\b/i;
 const REPLIED_DEICTIC_URL_INSPECTION_INTENT =
-  /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\s+(?:this|that|it)\b/i;
+  /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand|rate|review|evaluate|critique)\s+(?:this|that|it)\b/i;
 const REPLIED_EXPLICIT_URL_INSPECTION_INTENT =
-  /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand)\b[^.\n]{0,80}\b(?:link|url|site|page|post|article|video|image|tweet|thread)\b/i;
+  /\b(?:what(?:'s| is)?|who(?:'s| is)?|explain|identify|summarize|read|open|check|inspect|look at|tell me about|help me understand|rate|rating|review|evaluate|critique)\b[^.\n]{0,80}\b(?:link|url|site|page|post|article|video|image|tweet|thread)\b/i;
 const PUBLIC_URL_EVIDENCE_KEYS = ["web_fetch_requests", "web_search_requests"] as const;
 
 export const PUBLIC_URL_EVIDENCE_RETRY_GUIDANCE =

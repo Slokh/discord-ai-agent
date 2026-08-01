@@ -43,6 +43,7 @@ export async function main() {
   const totalStartedAt = Date.now();
   try {
     const result = await runCodeUpdate(env, timings, totalStartedAt);
+    const resultSummary = "resultSummary" in result ? result.resultSummary : null;
     await complete(env, {
       status: result.status,
       branchName: result.branchName,
@@ -59,6 +60,7 @@ export async function main() {
         updatedExistingPullRequest: result.updatedExistingPullRequest,
         bugReportDisposition: result.bugReportResult?.disposition ?? null,
         bugReportSummary: result.bugReportResult?.summary ?? null,
+        resultSummary,
         autoMergeEnabled: result.autoMergeEnabled
       }
     });
@@ -160,11 +162,15 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     const baseRevision = await gitRevision(checkoutDir, "HEAD");
 
     const dependencyStateBeforeCodegen = await readDependencyManifestState(checkoutDir);
-    await timedPhase(env, timings, "dependencies", "Preparing dependencies from the shared sandbox cache.", async () => {
-      const dependencyCache = await prepareDependencies({ env, cache, checkoutDir });
-      cacheSummary.dependencies = dependencyCache.cacheStatus;
-      cacheSummary.dependencyCacheKey = dependencyCache.lockHash;
-    });
+    if (env.taskType === "diagnosis") {
+      await progress(env, "dependencies_skipped", "Skipping dependency installation for read-only diagnosis.", { taskType: env.taskType });
+    } else {
+      await timedPhase(env, timings, "dependencies", "Preparing dependencies from the shared sandbox cache.", async () => {
+        const dependencyCache = await prepareDependencies({ env, cache, checkoutDir });
+        cacheSummary.dependencies = dependencyCache.cacheStatus;
+        cacheSummary.dependencyCacheKey = dependencyCache.lockHash;
+      });
+    }
 
     const toolShimDir = path.join(workRoot, "tool-shims");
     await timedPhase(env, timings, "toolShims", "Installing sandbox helper tool shims for the codegen harness.", async () => {
@@ -198,7 +204,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       }
     });
 
-    await runNanoCodexPhase({ env, timings, input: nanoCodexInput });
+    const nanoCodexSummary = await runNanoCodexPhase({ env, timings, input: nanoCodexInput });
 
     const bugReportResult = env.taskType === "bug_report" ? await readBugReportResult(env.bugReportResultPath) : null;
 
@@ -208,6 +214,25 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     });
     const changeState = await readGitChangeState(checkoutDir, baseRevision);
     if (!changeState.hasChanges) {
+      if (env.taskType === "diagnosis") {
+        const resultSummary = nanoCodexSummary.attempts.at(-1)?.finalResponse?.trim();
+        if (!resultSummary) throw new Error("Read-only diagnosis finished without a result.");
+        timings.total = Date.now() - totalStartedAt;
+        await progress(env, "diagnosis_complete", resultSummary, { taskType: env.taskType });
+        return {
+          status: "succeeded" as const,
+          branchName: null,
+          prUrl: null,
+          draft: null,
+          verifyPassed: true,
+          updatedExistingPullRequest: false,
+          autoMergeEnabled: false,
+          bugReportResult: null,
+          resultSummary,
+          timings,
+          cacheSummary
+        };
+      }
       if (bugReportResult && bugReportResult.disposition !== "confirmed_fixed") {
         timings.total = Date.now() - totalStartedAt;
         await recordArtifact(env, {
@@ -278,6 +303,13 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     }
 
     const npmScriptEnv = codegenNpmScriptEnv(process.env);
+    npmScriptEnv.NODE_OPTIONS = [npmScriptEnv.NODE_OPTIONS, "--max-old-space-size=3072"].filter(Boolean).join(" ");
+    const typecheck = await timedPhase(env, timings, "typecheck", "Running the required TypeScript verification before publication.", async () =>
+      runCommand("npm", ["run", "typecheck"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "typecheck", env: npmScriptEnv })
+    );
+    if (typecheck.exitCode !== 0) {
+      throw new Error("TypeScript verification failed after agent task; refusing to publish generated changes.");
+    }
     const scan = await timedPhase(env, timings, "scan", "Running release scan before pushing generated changes.", async () =>
       runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan", env: npmScriptEnv })
     );
@@ -396,7 +428,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       branchName,
       prUrl,
       draft,
-      verifyPassed: null,
+      verifyPassed: true,
       updatedExistingPullRequest,
       autoMergeEnabled,
       bugReportResult,
@@ -443,7 +475,7 @@ async function runNanoCodexPhase(input: {
   timings: TaskTimings;
   input: NanoCodexRunInput;
 }) {
-  await timedPhase(
+  return timedPhase(
     input.env,
     input.timings,
     "nanocodex",
@@ -451,6 +483,7 @@ async function runNanoCodexPhase(input: {
     async () => {
       const summary = await runNanoCodex(input.input);
       await recordAgentAttemptSummary(input.env, "NanoCodex attempt summary", summary);
+      return summary;
     },
     { model: `openai/${nanoCodexModel(input.env.openRouterCodegenModel)}`, harness: NANOCODEX_RUNTIME_LABEL }
   );

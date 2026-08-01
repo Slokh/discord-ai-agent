@@ -19,6 +19,7 @@ type CodegenFailureCategory =
   | "git_push"
   | "github_pr"
   | "dependency_install"
+  | "verification"
   | "command_failed"
   | "unknown";
 
@@ -152,6 +153,7 @@ function classifyCodegenFailure(
     return "harness_startup";
   }
   if (text.includes("release scan failed") || failedPhase === "scan") return "release_scan";
+  if (text.includes("typescript verification failed") || failedPhase === "typecheck") return "verification";
   if (text.includes("git push") || failedPhase === "push") return "git_push";
   if (text.includes("pull request") || text.includes("pulls.create") || failedPhase === "pr") return "github_pr";
   if (text.includes("npm ci") || text.includes("npm install") || failedPhase === "dependencies") return "dependency_install";
@@ -168,6 +170,7 @@ function attemptProducedEditSignal(attempt: CodegenAttemptSummaryForDiagnosis) {
 function inferFailedCodegenPhase(message: string, timings: TaskTimingsForDiagnosis) {
   const text = message.toLowerCase();
   if (text.includes("release scan")) return "scan";
+  if (text.includes("typescript verification") || text.includes("typecheck")) return "typecheck";
   if (text.includes("git push")) return "push";
   if (text.includes("pull request")) return "pr";
   if (text.includes("npm ci") || text.includes("npm install")) return "dependencies";
@@ -201,6 +204,8 @@ function codegenFailureSummary(category: CodegenFailureCategory) {
       return "The agent produced changes, but opening or updating the GitHub pull request failed.";
     case "dependency_install":
       return "Dependency preparation failed before the coding harness could complete.";
+    case "verification":
+      return "The agent produced changes, but required TypeScript verification failed before publication.";
     case "command_failed":
       return `${harnessName} or one of its sandbox commands failed.`;
     case "unknown":
@@ -224,6 +229,8 @@ function codegenFailureNextAction(category: CodegenFailureCategory, failedPhase:
       return "Inspect GitHub API errors, base branch configuration, and pull request permissions.";
     case "dependency_install":
       return "Inspect dependency command logs and cache state; verify the sandbox includes dev dependencies.";
+    case "verification":
+      return "Inspect the typecheck command log, fix the reported contract errors or sandbox resource limit, and rerun before publishing.";
     case "command_failed":
       return `Inspect the ${failedPhase ?? "latest"} command log and harness transcript for the first non-zero exit or thrown error.`;
     case "unknown":

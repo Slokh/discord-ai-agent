@@ -64,6 +64,13 @@ describe("fresh external data guard", () => {
       .toBe(true);
   });
 
+  it("requires fresh evidence for whether product account and region rules still apply", () => {
+    expect(requiresFreshExternalData("does League still use region accounts?"))
+      .toBe(true);
+    expect(requiresFreshExternalData("are those account migration rules supported anymore?"))
+      .toBe(true);
+  });
+
   it("requires fresh evidence for current sports rosters and this-season predictions", () => {
     expect(requiresFreshExternalData(
       "Predict the NBA Finals with current rosters.",

@@ -20,6 +20,7 @@ const ACTIVE_AGENT_TASK_STATUSES: AgentTaskStatus[] = ["queued", "running"];
 const GITHUB_API_BASE_URL = "https://api.github.com";
 
 export type AgentUpdateTarget = {
+  taskType?: "code_update" | "diagnosis";
   targetBranch?: string | null;
   targetPullRequestNumber?: number | null;
   targetPullRequestUrl?: string | null;
@@ -59,6 +60,7 @@ async function enqueueAgentCodeUpdateTask(
     request: string;
     updateName: string;
     requestedBy: string;
+    taskType?: "code_update" | "bug_report" | "diagnosis";
     retriedFromTaskId?: string | null;
     targetBranch?: string | null;
     targetPullRequestNumber?: number | null;
@@ -84,6 +86,7 @@ async function enqueueAgentCodeUpdateTask(
     userId: ctx.userId,
     threadKey: ctx.threadKey,
     parentExecutionId: ctx.agentRuntimeExecutionId,
+    taskType: input.taskType,
     request: input.request.trim(),
     title: input.updateName,
     requestedBy: input.requestedBy,
@@ -396,6 +399,7 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
     request: task.request,
     updateName: task.title,
     requestedBy,
+    taskType: task.taskType === "bug_report" || task.taskType === "diagnosis" ? task.taskType : "code_update",
     retriedFromTaskId: task.taskId
   });
 

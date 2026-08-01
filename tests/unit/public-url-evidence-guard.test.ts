@@ -25,6 +25,10 @@ describe("public URL evidence guard", () => {
       undefined,
       "What is https://example.com/public-post about?",
     )).toBe(true);
+    expect(requiresPublicUrlEvidence(
+      undefined,
+      "Rate this article 1-10: https://example.com/article",
+    )).toBe(true);
   });
 
   it("requires evidence for deictic and explicit reply-link inspection", () => {

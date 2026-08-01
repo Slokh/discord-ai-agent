@@ -5,8 +5,13 @@ import type { SandboxEnv } from "./types.js";
 export type { SandboxEnv, TaskTimings } from "./types.js";
 
 export function loadSandboxEnv(): SandboxEnv {
+  const taskType = process.env.TASK_TYPE === "bug_report"
+    ? "bug_report"
+    : process.env.TASK_TYPE === "diagnosis"
+      ? "diagnosis"
+      : "code_update";
   return {
-    taskType: process.env.TASK_TYPE === "bug_report" ? "bug_report" : "code_update",
+    taskType,
     taskId: requiredEnv("TASK_ID"),
     traceId: requiredEnv("TRACE_ID"),
     sandboxRunId: requiredEnv("SANDBOX_RUN_ID"),

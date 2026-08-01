@@ -13,6 +13,7 @@ export const codegenToolHandlers = {
               stringArgument(route.arguments, "request") ?? originalText,
               stringArgument(route.arguments, "title"),
               {
+                taskType: stringArgument(route.arguments, "mode") === "diagnosis" ? "diagnosis" : "code_update",
                 targetBranch: stringArgument(route.arguments, "targetBranch"),
                 targetPullRequestNumber: numberArgument(
                   route.arguments,

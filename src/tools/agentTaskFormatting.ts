@@ -90,6 +90,11 @@ export function formatAgentTaskResult(input: {
     return withRunConsole(`Working on it...\n\nI’ll update this message with progress and the PR link when it’s ready.\nTask ID: \`${input.taskId}\`.`);
   }
 
+  if (job.status === "succeeded" && job.taskType === "diagnosis") {
+    const result = agentTaskDiagnosisResult(input.taskEvents);
+    return withRunConsole(result || `Repository diagnosis completed. Task ID: \`${input.taskId}\`.`);
+  }
+
   if (job.status === "succeeded" && job.prUrl) {
     if (job.taskType === "bug_report") {
       return withRunConsole(`🐛 Confirmed and fixed: ${job.prUrl}\nRequired checks will auto-merge it, then the normal production deployment will start.`);
@@ -139,6 +144,15 @@ export function formatAgentTaskResult(input: {
   }
 
   return withRunConsole(`I’m still working on that code change. Current status: \`${job.status}\`. Task ID: \`${input.taskId}\`.`);
+}
+
+function agentTaskDiagnosisResult(taskEvents: TaskEvent[] | undefined) {
+  for (const event of [...(taskEvents ?? [])].reverse()) {
+    if (event.metadata?.step !== "diagnosis_complete") continue;
+    const summary = event.summary?.trim();
+    if (summary) return truncateForDiscord(summary, 1_800);
+  }
+  return "";
 }
 
 export function agentTaskRunConsoleUrl(config: Pick<AppConfig, "controlUi">, taskId: string) {

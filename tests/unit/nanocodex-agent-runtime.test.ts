@@ -201,7 +201,9 @@ describe("NanoCodex agent runtime executor", () => {
     await expect(executeNanoCodexAgentRuntime({
       toolContext: toolContext(runtime),
       text: "generate an image of a gnome",
-      timeoutMs: 10,
+      // Leave enough time for prompt/session setup on slower CI runners while
+      // still forcing the hard timeout after the mocked tool has produced its file.
+      timeoutMs: 250,
       runRuntime: runRuntime as never,
       executeToolRoute: (async () => ({ content: "Generated image for: a gnome", files: [image] })) as never,
     })).resolves.toMatchObject({

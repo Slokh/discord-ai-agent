@@ -8,7 +8,6 @@ export const discordStatsSummaryToolContracts = [
     examples: ["@ai rank channels by messages per day"],
     description:
       "Compute permission-filtered Discord analytics over indexed visible messages. Use this for counts, rankings, lowest/highest rankings, activity over time, messages by channel/user, normalized messages-per-day comparisons, attachment stats, reaction totals, and active-day summaries. Time buckets use UTC. Hour-of-day and day-of-week results describe observed message timing only; they do not establish sleep, location, work schedule, or availability. Keep a simple named-person activity follow-up to the requested peak or comparison instead of dumping every bucket.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     parameters: {
@@ -87,7 +86,6 @@ export const discordStatsSummaryToolContracts = [
     examples: ["@ai what are the main recurring topics in each channel?"],
     description:
       "Summarize the main recurring topics, themes, memes, and bits in major Discord channels using sampled indexed messages and stored embeddings. Use this for 'what do people talk about in each channel' rather than exact counts.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     parameters: {
@@ -147,7 +145,6 @@ export const discordStatsSummaryToolContracts = [
     examples: ["@ai what has tyler been up to recently?"],
     description:
       "Summarize representative indexed Discord history over a user, channel, topic, or date window. Use this for broad questions like what a person/channel has been up to, what happened recently, or a recap over time. After resolving a named user/channel, call this rather than answering from resolver output alone. It samples across the window instead of only returning the newest messages.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     parameters: {
@@ -155,6 +152,8 @@ export const discordStatsSummaryToolContracts = [
       properties: {
         question: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "The user's summary question or focus."
         },
         authorIds: {
@@ -212,7 +211,6 @@ export const discordStatsSummaryToolContracts = [
     examples: ["@ai summarize this thread"],
     description:
       "Summarize indexed messages from the current channel or thread. With no question, summarize recent chronological context. With a question, use hybrid semantic/keyword/recent evidence from this channel to focus the summary.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     parameters: {

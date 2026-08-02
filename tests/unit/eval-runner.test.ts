@@ -9,6 +9,7 @@ import {
   filterPrompts,
   formatEvalSummary,
   parseEvalArgs,
+  validateEvalToolNames,
   type EvalPrompt,
   type EvalRunReport
 } from "../../scripts/eval.js";
@@ -50,6 +51,13 @@ describe("eval runner", () => {
     ];
 
     expect(filterPrompts(prompts, { category: "history", filter: "job" }).map((prompt) => prompt.id)).toEqual(["history-job"]);
+  });
+
+  it("rejects stale tool names in eval expectations", () => {
+    expect(() => validateEvalToolNames([{ ...basePrompt, expectedTools: ["deletedTool"] }], "test.json"))
+      .toThrow("Unknown eval tool deletedTool in history-job (test.json)");
+    expect(() => validateEvalToolNames([{ ...basePrompt, expectedRequestedTools: ["openrouter:web_search"] }]))
+      .not.toThrow();
   });
 
   it("builds prompt commands through the real prompt CLI path", () => {

@@ -1,7 +1,6 @@
 import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../tools/imageTools.js";
 import { isOpenRouterHttpError } from "../../models/openrouter.js";
-import { hasExplicitImageGenerationIntent } from "../imageGenerationGuard.js";
-import { cleanResponse } from "../../tools/responseFormatting.js";
+import { cleanToolResponse } from "../../tools/responseFormatting.js";
 import { stringArgument, stringArrayArgument, numberArgument, booleanArgument } from "./arguments.js";
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
@@ -9,8 +8,8 @@ import type { LocalToolHandler } from "./types.js";
 // Uniform signatures intentionally expose only the inputs each tool needs.
  
 export const imageToolHandlers = {
-  "generateImage": async (ctx, route, originalText) => {
-    const prompt = stringArgument(route.arguments, "prompt") ?? originalText;
+  "generateImage": async (ctx, route, _originalText) => {
+    const prompt = stringArgument(route.arguments, "prompt")!;
     const image = await generateImage(ctx, {
           prompt,
           requiredText: stringArrayArgument(route.arguments, "requiredText"),
@@ -18,23 +17,19 @@ export const imageToolHandlers = {
             route.arguments,
             "referenceImageUrls",
           ),
-          useContextImages: booleanArgument(route.arguments, "useContextImages"),
+          useContextImages: booleanArgument(route.arguments, "useContextImages") ?? true,
           outputFormat: stringArgument(route.arguments, "outputFormat") as "png" | "jpeg" | "webp" | undefined,
           background: stringArgument(route.arguments, "background") as "auto" | "transparent" | "opaque" | undefined,
           aspectRatio: stringArgument(route.arguments, "aspectRatio") as "1:1" | "16:9" | "9:16" | "4:3" | "3:4" | undefined,
         });
-    return {
-          content: cleanResponse(image.content, ctx.config.maxReplyChars),
-          files: image.files,
-          status: image.status,
-        };
+    return { ...image, content: cleanToolResponse(image.content, ctx.config.maxReplyChars) };
   },
-  "inspectDiscordImages": async (ctx, route, originalText) => {
+  "inspectDiscordImages": async (ctx, route, _originalText) => {
     try {
       return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await inspectDiscordImages(ctx, {
-              question: stringArgument(route.arguments, "question") ?? originalText,
+              question: stringArgument(route.arguments, "question"),
               imageUrls: stringArrayArgument(route.arguments, "imageUrls"),
               messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
               useContextImages: booleanArgument(
@@ -44,11 +39,6 @@ export const imageToolHandlers = {
             }),
             ctx.config.maxReplyChars,
           ),
-          outcome: {
-            kind: "grounded_answer",
-            state: "succeeded",
-            terminal: !hasExplicitImageGenerationIntent(ctx, originalText),
-          },
         };
     } catch (error) {
       if (
@@ -67,7 +57,7 @@ export const imageToolHandlers = {
         error: "image_source_unreadable",
       });
       return {
-        content: cleanResponse(
+        content: cleanToolResponse(
           "The supplied URL did not resolve to an image. If it is a public webpage, use web_fetch or web_search to inspect the page instead.",
           ctx.config.maxReplyChars,
         ),
@@ -76,11 +66,11 @@ export const imageToolHandlers = {
       };
     }
   },
-  "getDiscordUserAvatar": async (ctx, route, originalText) => {
+  "getDiscordUserAvatar": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await getDiscordUserAvatar(ctx, {
-              query: stringArgument(route.arguments, "query") ?? originalText,
+              query: stringArgument(route.arguments, "query")!,
               limit: numberArgument(route.arguments, "limit"),
             }),
             ctx.config.maxReplyChars,

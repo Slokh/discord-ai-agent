@@ -1,8 +1,8 @@
-import { cleanResponse } from "../../tools/responseFormatting.js";
+import { cleanToolResponse } from "../../tools/responseFormatting.js";
 import type { AgentResponse } from "../../tools/types.js";
 
 export function cleanAgentResponse(response: AgentResponse, maxChars: number): AgentResponse {
-  return { ...response, content: cleanResponse(response.content, maxChars) };
+  return { ...response, content: cleanToolResponse(response.content, maxChars) };
 }
 
 export function stringArgument(args: Record<string, unknown> | undefined, key: string) {

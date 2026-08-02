@@ -65,7 +65,7 @@ Code should own hard guarantees:
 
 When a failure can be fixed by a better schema, result, prompt, data lifecycle, or general guard, prefer that over matching one exact prompt with hidden code.
 
-Deterministic intent guards are appropriate when a model mistake could move money, fabricate live facts, invent chance outcomes, cross a permission boundary, or lose durable state. They should recognize a stable capability and remain narrow enough not to replace normal language understanding.
+Deterministic guards belong at protected capability boundaries where a mistake could move money, consume randomness, cross a permission boundary, mutate durable state, or break delivery. They validate current-turn authority and typed results; they do not scan or rewrite ordinary model prose. Factual quality comes from clear instructions, fresh evidence, and tool-result contracts rather than post-hoc regex classifiers.
 
 ## Truth And Freshness
 
@@ -99,7 +99,7 @@ Managed balances use six-decimal USDC.e but are presented to users as USD or `$`
 - Ordinary users can transfer only from their own managed wallet to another verified member or the bot.
 - Owner/ops corrections can move funds between managed wallets with an explicit reason.
 - Arbitrary external addresses and private-key export are outside the current product.
-- Starter funding is automatic and tops an eligible below-target balance up to the configured amount.
+- Starter funding is model-selected and tops only the immutable requester's eligible below-target balance up to the configured amount.
 - Games reserve real exposure before consuming entropy and settle through the wallet ledger exactly once.
 - The bot should reject games whose stated rules guarantee player profit or whose supported probability contract is provably unfair to the treasury.
 
@@ -130,7 +130,7 @@ Features should strengthen this loop instead of introducing opaque side paths.
 
 - Acknowledge Discord requests quickly and keep the user informed only when work is genuinely long-running.
 - Avoid an extra model call when deterministic code can safely complete the step.
-- Scope tool schemas and dynamic prompt context to what the turn may need.
+- Keep one stable deployment-filtered tool contract so the model can select capabilities directly; reduce contract size only without hiding required schema structure.
 - Move repeated expensive work to ingestion, indexing, caching, or reusable artifacts.
 - Run independent read-only work concurrently where ordering does not matter.
 - Record cost and critical-path timing before optimizing from intuition.

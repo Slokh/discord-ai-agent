@@ -22,9 +22,8 @@ export async function prepareStandardWagerSettlement(
   wager: WagerReservation,
   proposal: WagerSettlementProposal,
 ): Promise<WagerSettlementProposal | string> {
-  const standardGame =
-    typeof wager.game === "string" &&
-    /^(?:blackjack|coin\s*flip)$/i.test(wager.game.trim());
+  const game = (wager.game ?? "").trim().toLowerCase();
+  const standardGame = game === "blackjack" || game === "coinflip" || game === "coin flip";
   if (!standardGame) return proposal;
 
   const session = ctx.rngRepo

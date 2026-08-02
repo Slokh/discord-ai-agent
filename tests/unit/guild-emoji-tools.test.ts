@@ -44,8 +44,8 @@ describe("createDiscordEmoji", () => {
     expect(call?.auditLogReason).toContain("Owner (owner)");
     expect(call?.image.length).toBeLessThanOrEqual(256 * 1024);
     await expect(sharp(call?.image).metadata()).resolves.toMatchObject({ width: 128, height: 128, format: "webp" });
-    expect(response).toContain("<:nacho_wizard:emoji-1>");
-    expect(response).toContain("128×128 WebP");
+    expect(response.content).toContain("<:nacho_wizard:emoji-1>");
+    expect(response.content).toContain("128×128 WebP");
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "createDiscordEmoji" }));
   });
 
@@ -54,8 +54,23 @@ describe("createDiscordEmoji", () => {
       createDiscordEmoji: vi.fn(async () => { throw new Error("the bot role needs Discord's Create Expressions permission"); }),
     });
 
-    await expect(createDiscordEmoji(ctx, { name: "wizard" })).resolves.toContain("Create Expressions permission");
+    await expect(createDiscordEmoji(ctx, { name: "wizard" })).resolves.toMatchObject({ content: expect.stringContaining("Create Expressions permission") });
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining("upload failed") }));
+  });
+
+  it("keeps a completed emoji upload successful when its audit write fails", async () => {
+    const create = vi.fn(async () => ({
+      id: "emoji-1", name: "wizard", animated: false,
+      mention: "<:wizard:emoji-1>", url: "https://discord.test/emoji-1",
+    }));
+    const ctx = context({
+      createDiscordEmoji: create,
+      repo: { auditTool: vi.fn(async () => { throw new Error("audit unavailable"); }) } as unknown as ToolContext["repo"],
+    });
+
+    await expect(createDiscordEmoji(ctx, { name: "wizard" }))
+      .resolves.toMatchObject({ status: "ok", outcome: { state: "succeeded" } });
+    expect(create).toHaveBeenCalledOnce();
   });
 
   it("refuses an opaque generated image before uploading it as a transparent emoji", async () => {
@@ -72,8 +87,8 @@ describe("createDiscordEmoji", () => {
 
     const response = await createDiscordEmoji(ctx, { name: "checkerboard" });
 
-    expect(response).toContain("does not contain verified alpha transparency");
-    expect(response).toContain("checkerboard drawn into a JPEG/PNG is still an opaque background");
+    expect(response.content).toContain("does not contain verified alpha transparency");
+    expect(response.content).toContain("checkerboard drawn into a JPEG/PNG is still an opaque background");
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -97,7 +112,7 @@ describe("createDiscordEmoji", () => {
 
     const response = await createDiscordEmoji(ctx, { name: "tile", requireTransparent: false });
 
-    expect(response).toContain("opaque source retained by request");
+    expect(response.content).toContain("opaque source retained by request");
     expect(create).toHaveBeenCalledOnce();
   });
 
@@ -113,7 +128,7 @@ describe("createDiscordEmoji", () => {
     const dataUrl = `data:image/png;base64,${PNG_PIXEL.toString("base64")}`;
 
     await expect(createDiscordEmoji(ctx, { name: "pixel", imageUrl: dataUrl }))
-      .resolves.toContain("<:pixel:emoji-2>");
+      .resolves.toMatchObject({ content: expect.stringContaining("<:pixel:emoji-2>") });
     expect(create).toHaveBeenCalledOnce();
   });
 
@@ -121,15 +136,15 @@ describe("createDiscordEmoji", () => {
     const create = vi.fn();
     const ctx = context({ createDiscordEmoji: create });
 
-    await expect(createDiscordEmoji(ctx, { name: ":x:" })).resolves.toContain("2–32");
+    await expect(createDiscordEmoji(ctx, { name: ":x:" })).resolves.toMatchObject({ content: expect.stringContaining("2–32") });
     await expect(createDiscordEmoji(ctx, { name: "wizard", imageUrl: "ftp://example.com/wizard.png" }))
-      .resolves.toContain("http(s)");
+      .resolves.toMatchObject({ content: expect.stringContaining("http(s)") });
     expect(create).not.toHaveBeenCalled();
   });
 
   it("explains when no image source is available", async () => {
     const ctx = context({ turnOutput: createAgentTurnOutput(), createDiscordEmoji: vi.fn() });
     await expect(createDiscordEmoji(ctx, { name: "wizard", useContextImage: false }))
-      .resolves.toContain("generated, attached, or replied-to image");
+      .resolves.toMatchObject({ content: expect.stringContaining("generated, attached, or replied-to image") });
   });
 });

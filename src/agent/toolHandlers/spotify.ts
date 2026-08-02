@@ -6,33 +6,33 @@ import type { LocalToolHandler } from "./types.js";
 // Uniform signatures intentionally expose only the inputs each tool needs.
  
 export const spotifyToolHandlers = {
-  "getSpotifyPlaylistTracks": async (ctx, route, originalText) => {
+  "getSpotifyPlaylistTracks": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await getSpotifyPlaylistTracks(ctx, {
             playlistIdOrUrl:
-              stringArgument(route.arguments, "playlistIdOrUrl") ?? originalText,
+              stringArgument(route.arguments, "playlistIdOrUrl")!,
             limit: numberArgument(route.arguments, "limit"),
             format: stringArgument(route.arguments, "format"),
           }),
           ctx.config.maxReplyChars,
         );
   },
-  "getSpotifyAlbumTracks": async (ctx, route, originalText) => {
+  "getSpotifyAlbumTracks": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await getSpotifyAlbumTracks(ctx, {
             albumIdOrUrl:
-              stringArgument(route.arguments, "albumIdOrUrl") ?? originalText,
+              stringArgument(route.arguments, "albumIdOrUrl")!,
             limit: numberArgument(route.arguments, "limit"),
             format: stringArgument(route.arguments, "format"),
           }),
           ctx.config.maxReplyChars,
         );
   },
-  "getSpotifyArtistDiscography": async (ctx, route, originalText) => {
+  "getSpotifyArtistDiscography": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await getSpotifyArtistDiscography(ctx, {
             artistIdOrUrl:
-              stringArgument(route.arguments, "artistIdOrUrl") ?? originalText,
+              stringArgument(route.arguments, "artistIdOrUrl")!,
             includeGroups: stringArrayArgument(route.arguments, "includeGroups"),
             limit: numberArgument(route.arguments, "limit"),
             format: stringArgument(route.arguments, "format"),
@@ -40,43 +40,43 @@ export const spotifyToolHandlers = {
           ctx.config.maxReplyChars,
         );
   },
-  "getSpotifyPlaylistStats": async (ctx, route, originalText) => {
+  "getSpotifyPlaylistStats": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await getSpotifyPlaylistStats(ctx, {
             playlistIdOrUrl:
-              stringArgument(route.arguments, "playlistIdOrUrl") ?? originalText,
+              stringArgument(route.arguments, "playlistIdOrUrl")!,
             limit: numberArgument(route.arguments, "limit"),
           }),
           ctx.config.maxReplyChars,
         );
   },
-  "compareSpotifyPlaylists": async (ctx, route, originalText) => {
+  "compareSpotifyPlaylists": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await compareSpotifyPlaylists(ctx, {
             playlistAIdOrUrl:
-              stringArgument(route.arguments, "playlistAIdOrUrl") ?? originalText,
+              stringArgument(route.arguments, "playlistAIdOrUrl")!,
             playlistBIdOrUrl:
-              stringArgument(route.arguments, "playlistBIdOrUrl") ?? originalText,
+              stringArgument(route.arguments, "playlistBIdOrUrl")!,
             limit: numberArgument(route.arguments, "limit"),
           }),
           ctx.config.maxReplyChars,
         );
   },
-  "searchSpotify": async (ctx, route, originalText) => {
+  "searchSpotify": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await searchSpotify(ctx, {
-            query: stringArgument(route.arguments, "query") ?? originalText,
+            query: stringArgument(route.arguments, "query")!,
             type: stringArgument(route.arguments, "type"),
             limit: numberArgument(route.arguments, "limit"),
           }),
           ctx.config.maxReplyChars,
         );
   },
-  "getSpotifyItem": async (ctx, route, originalText) => {
+  "getSpotifyItem": async (ctx, route, _originalText) => {
     return cleanAgentResponse(
           await getSpotifyItem(ctx, {
             itemIdOrUrl:
-              stringArgument(route.arguments, "itemIdOrUrl") ?? originalText,
+              stringArgument(route.arguments, "itemIdOrUrl")!,
             type: stringArgument(route.arguments, "type"),
           }),
           ctx.config.maxReplyChars,

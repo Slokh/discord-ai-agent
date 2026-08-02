@@ -43,13 +43,14 @@ describe("createDiscordPoll", () => {
       durationHours: 48,
       allowMultiselect: false
     });
-    expect(response).toContain("Posted a native Discord poll");
-    expect(response).toContain("When should we play?");
-    expect(response).toContain("1. Friday");
-    expect(response).toContain("2. Saturday");
-    expect(response).toContain("48 hour(s)");
-    expect(response).toContain("one answer only");
-    expect(response).toContain("https://discord.com/channels/guild/channel/poll-1");
+    expect(response.content).toContain("Posted a native Discord poll");
+    expect(response.content).toContain("When should we play?");
+    expect(response.content).toContain("1. Friday");
+    expect(response.content).toContain("2. Saturday");
+    expect(response.content).toContain("48 hour(s)");
+    expect(response.content).toContain("one answer only");
+    expect(response.content).toContain("https://discord.com/channels/guild/channel/poll-1");
+    expect(response.outcome?.terminal).toBe(true);
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "createDiscordPoll",
@@ -106,22 +107,22 @@ describe("createDiscordPoll", () => {
     });
 
     expect(sendDiscordPoll).not.toHaveBeenCalled();
-    expect(response).toContain("at most 10 answer options");
+    expect(response.content).toContain("at most 10 answer options");
   });
 
   it("rejects empty questions and empty answer lists", async () => {
     const sendDiscordPoll = vi.fn(async () => ({ messageId: "x", channelId: "c", url: "u" }));
     const ctx = fakeContext(sendDiscordPoll);
 
-    expect(await createDiscordPoll(ctx, { question: "   ", answers: ["a"] })).toContain("poll question");
-    expect(await createDiscordPoll(ctx, { question: "q", answers: [] })).toContain("at least one poll answer");
+    expect((await createDiscordPoll(ctx, { question: "   ", answers: ["a"] })).content).toContain("poll question");
+    expect((await createDiscordPoll(ctx, { question: "q", answers: [] })).content).toContain("at least one poll answer");
     expect(sendDiscordPoll).not.toHaveBeenCalled();
   });
 
   it("returns a friendly message when no discord sender is wired", async () => {
     const ctx = fakeContext(undefined);
     const response = await createDiscordPoll(ctx, { question: "q", answers: ["a", "b"] });
-    expect(response).toContain("did not wire up native poll sending");
+    expect(response.content).toContain("did not wire up native poll sending");
   });
 
   it("surfaces sender failures without throwing", async () => {
@@ -130,6 +131,16 @@ describe("createDiscordPoll", () => {
     });
     const ctx = fakeContext(sendDiscordPoll);
     const response = await createDiscordPoll(ctx, { question: "q", answers: ["a"] });
-    expect(response).toContain("Missing Access");
+    expect(response.content).toContain("Missing Access");
+  });
+
+  it("keeps a posted poll successful when its audit write fails", async () => {
+    const sendDiscordPoll = vi.fn(async () => ({ messageId: "poll", channelId: "channel", url: "https://discord.test/poll" }));
+    const ctx = fakeContext(sendDiscordPoll);
+    ctx.repo.auditTool = vi.fn(async () => { throw new Error("audit unavailable"); });
+
+    await expect(createDiscordPoll(ctx, { question: "Pick", answers: ["A", "B"] }))
+      .resolves.toMatchObject({ status: "ok", outcome: { state: "succeeded" } });
+    expect(sendDiscordPoll).toHaveBeenCalledOnce();
   });
 });

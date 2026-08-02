@@ -10,6 +10,7 @@ import {
   renderCodegenContextPack,
 } from "../../src/execution/codegenPrompts.js";
 import {
+  CodegenTaskError,
   diagnoseCodegenFailure,
   renderCodegenFailureDiagnosis,
 } from "../../src/execution/codegenFailureDiagnosis.js";
@@ -179,6 +180,29 @@ describe("sandboxRunner", () => {
     expect(prompts.join("\n")).not.toContain("Requested by");
   });
 
+  it("samples large PR diffs across early and late changed files", async () => {
+    const sections = Array.from({ length: 300 }, (_, index) => [
+      `diff --git a/src/file-${index}.ts b/src/file-${index}.ts`,
+      `--- a/src/file-${index}.ts`,
+      `+++ b/src/file-${index}.ts`,
+      `+marker-${index}-${"x".repeat(900)}`,
+    ].join("\n"));
+    let capturedPrompt = "";
+    await codeUpdatePullRequestMetadata({
+      diffStat: "80 files changed",
+      diffPatch: sections.join("\n"),
+      complete: async ({ userPrompt }) => {
+        capturedPrompt = userPrompt;
+        return { content: JSON.stringify({ title: "Update sampled files", why: "The implementation changes many files.", changes: ["Apply the sampled changes."] }) };
+      },
+    });
+
+    expect(capturedPrompt).toContain("src/file-0.ts");
+    expect(capturedPrompt).toContain("src/file-150.ts");
+    expect(capturedPrompt).toContain("src/file-299.ts");
+    expect(capturedPrompt).toContain("diff sampled across changed files");
+  });
+
   it("falls back to changed source paths instead of bug-report metadata", async () => {
     const diffPatch = "diff --git a/src/agent/nanocodexAgentRuntime.ts b/src/agent/nanocodexAgentRuntime.ts\n+recovery";
     const fallback = deterministicPullRequestMetadata("1 file changed, 1 insertion(+)", diffPatch);
@@ -218,7 +242,7 @@ describe("sandboxRunner", () => {
 
   it("classifies terminal codegen failures with actionable next steps", () => {
     const noDiff = diagnoseCodegenFailure({
-      error: new Error("Agent task produced no diff after NanoCodex attempt; no PR will be opened."),
+      error: new CodegenTaskError("no_diff", "nanocodex", "Agent task produced no diff after NanoCodex attempt; no PR will be opened."),
       timings: { repo: 120, nanocodex: 20_000, total: 21_000 }
     });
 
@@ -234,7 +258,7 @@ describe("sandboxRunner", () => {
     expect(noDiff.nextAction).toContain("repository navigation context");
 
     const scan = diagnoseCodegenFailure({
-      error: new Error("Release scan failed after agent task; refusing to push generated changes."),
+      error: new CodegenTaskError("release_scan", "scan", "Release scan failed after agent task; refusing to push generated changes."),
       timings: { repo: 100, scan: 2500, total: 3000 }
     });
 
@@ -249,7 +273,7 @@ describe("sandboxRunner", () => {
     expect(renderCodegenFailureDiagnosis(scan)).toContain("- scan: 2.5s");
 
     const verification = diagnoseCodegenFailure({
-      error: new Error("TypeScript verification failed after agent task; refusing to publish generated changes."),
+      error: new CodegenTaskError("verification", "typecheck", "TypeScript verification failed after agent task; refusing to publish generated changes."),
       timings: { typecheck: 5_000, total: 6_000 }
     });
     expect(verification).toEqual(expect.objectContaining({
@@ -259,7 +283,7 @@ describe("sandboxRunner", () => {
     }));
   });
 
-  it("distinguishes no-diff failures where the harness never made an edit", () => {
+  it("classifies typed no-diff failures without parsing command output", () => {
     const error = Object.assign(new Error("Agent task produced no diff after NanoCodex attempt; no PR will be opened."), {
       name: "CodegenNoDiffError",
       attempts: [
@@ -283,13 +307,13 @@ describe("sandboxRunner", () => {
 
     expect(diagnosis).toEqual(
       expect.objectContaining({
-        category: "no_first_edit",
+        category: "no_diff",
         status: "no_changes",
         failedPhase: "nanocodex"
       })
     );
-    expect(diagnosis.summary).toContain("NanoCodex finished without making a code edit");
-    expect(diagnosis.nextAction).toContain("early focused edit");
+    expect(diagnosis.summary).toContain("no code diff");
+    expect(diagnosis.nextAction).toContain("repository navigation context");
     expect(diagnosis.finalResponse).toBe("I found the config but did not edit it.");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Attempts");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Harness Final Answer");

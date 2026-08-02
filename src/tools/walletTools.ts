@@ -1,15 +1,8 @@
 import { recordAgentEvent } from "../agent/runtimeTranscript.js";
-import {
-  explicitWalletTransferForPrompt,
-  isExplicitStarterFundsPrompt,
-  isExplicitWalletTransferPrompt,
-} from "../agent/walletActionGuard.js";
-import { promptExcludesRealWallet } from "../agent/walletPromptIntent.js";
 import { atomicToUsd } from "../payments/money.js";
 import type { WagerHistoryEntry } from "../payments/types.js";
 import { summarizeForAudit } from "../util/text.js";
 import { paymentRecorder } from "./paymentToolContext.js";
-import { requiresWalletBackedWagerForContext } from "./randomTools.js";
 import { visibleIndexedChannelIdsForRequest } from "./toolContext.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 
@@ -311,55 +304,50 @@ function walletDirectoryCheckedLine(view: WalletDirectoryView) {
 
 export async function transferWalletFunds(
   ctx: ToolContext,
-  _input: { destination?: WalletEndpointInput; destinationUserId?: string; amountUsd?: number }
-): Promise<string> {
+  input: { destination?: WalletEndpointInput; destinationUserId?: string; amountUsd?: number; entireBalance?: boolean }
+): Promise<AgentResponse> {
   const actor = paymentRequester(ctx);
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
-    return "Per-user USD wallets are not enabled in this deployment.";
+    return walletActionError("not_configured", "Per-user USD wallets are not enabled in this deployment.");
   }
-  const requestedTransfer = explicitWalletTransferForPrompt(ctx.requestText ?? "");
-  if (!requestedTransfer) {
-    return "No transfer was made. Real USD transfers require an explicit send, pay, tip, give, deposit, return, or transfer instruction in the current prompt.";
-  }
-  // The requester's current prompt is authoritative. Model-proposed arguments
-  // remain in the tool contract for selection, but cannot resize or redirect a
-  // transfer if the model resolved a name or amount incorrectly.
+  const amountUsd = input.entireBalance === true ? "balance" : positiveAmount(input.amountUsd);
+  if (amountUsd == null) return walletActionError("invalid_amount", "Provide a positive amountUsd or set entireBalance=true.");
   let destination: { kind: "bot" } | { kind: "user"; userId: string };
   let destinationLabel: string;
-  if (requestedTransfer.destination.kind === "bot") {
+  if (input.destination === "bot") {
     destination = { kind: "bot" };
     destinationLabel = "bot wallet";
-  } else {
-    const reference = requestedTransfer.destination.reference;
+  } else if (input.destination === "user") {
+    const reference = input.destinationUserId?.trim();
+    if (!reference) return walletActionError("missing_destination", "destinationUserId is required when destination=user.");
     const resolved = await resolveWalletUser(ctx, reference);
-    if (!resolved.ok) return resolved.message;
+    if (!resolved.ok) return walletActionError("destination_not_resolved", resolved.message);
     const target = resolved.target;
-    if (target.userId === actor.userId) return "You cannot transfer USD to your own wallet.";
+    if (target.userId === actor.userId) return walletActionError("self_transfer", "You cannot transfer USD to your own wallet.");
     destination = { kind: "user", userId: target.userId };
     destinationLabel = `${target.displayName}'s wallet`;
+  } else {
+    return walletActionError("invalid_destination", "destination must be bot or user.");
   }
   const result = await ctx.walletService.transferFromUser({
     guildId: actor.guildId,
     requestedByUserId: actor.userId,
     destination,
-    amountUsd: requestedTransfer.amountUsd,
+    amountUsd,
     requestId: actor.requestId
   }, paymentRecorder(ctx));
-  const amountUsd = requestedTransfer.amountUsd === "balance"
+  const transferredUsd = amountUsd === "balance"
     ? Number(atomicToUsd(result.transfer.amountAtomic, result.transfer.tokenDecimals))
-    : requestedTransfer.amountUsd;
-  const content = formatManagedTransfer(result, amountUsd, "your wallet", destinationLabel);
-  await audit(ctx, "transferWalletFunds", `$${amountUsd} to ${destinationLabel}`, content);
-  return content;
+    : amountUsd;
+  const content = formatManagedTransfer(result, transferredUsd, "your wallet", destinationLabel);
+  await audit(ctx, "transferWalletFunds", `$${transferredUsd} to ${destinationLabel}`, content).catch(() => undefined);
+  return walletActionSuccess("wallet_transfer", content);
 }
 
-export async function requestStarterFunds(ctx: ToolContext): Promise<string> {
+export async function requestStarterFunds(ctx: ToolContext): Promise<AgentResponse> {
   const actor = paymentRequester(ctx);
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
-    return "Per-user USD wallets are not enabled in this deployment.";
-  }
-  if (!hasExplicitStarterFundsIntent(ctx.requestText ?? "", ctx.config.payments.initialGrantUsd ?? 0.1)) {
-    return "No starter funds were sent. Ask explicitly for starter funds, a refill, or a top-up to start playing again.";
+    return walletActionError("not_configured", "Per-user USD wallets are not enabled in this deployment.");
   }
   const result = await ctx.walletService.requestStarterFunds({
     guildId: actor.guildId,
@@ -369,72 +357,17 @@ export async function requestStarterFunds(ctx: ToolContext): Promise<string> {
   if (!result.granted) {
     const content = `Starter funds top wallets up to $${money(result.targetUsd ?? ctx.config.payments.initialGrantUsd ?? 1)} USD. Your verified wallet balance is already $${result.balance.formatted} USD.`;
     await audit(ctx, "requestStarterFunds", "requester", content);
-    return content;
+    return walletActionSuccess("starter_funds", content);
   }
   const content = [
     `Added $${money(result.amountUsd)} USD from the AI treasury to your wallet.`,
     `Status: ${result.transfer.status}`,
     `Transaction: ${result.transfer.transactionHash ?? "pending reconciliation"}`,
-    `Your balance: $${result.destination.balance.formatted} USD`,
-    `AI balance: $${result.source.balance.formatted} USD`
+    formatPostTransferBalance("Your balance", result.destination.balance),
+    formatPostTransferBalance("AI balance", result.source.balance)
   ].join("\n");
-  await audit(ctx, "requestStarterFunds", `$${money(result.amountUsd)} to requester`, content);
-  return content;
-}
-
-/**
- * Deterministic wallet-action preflight. Requests that explicitly need starter
- * funds, a managed transfer, or a real-money wager can top a below-target
- * requester up before model/tool selection. Ordinary chat never reads or
- * mutates wallet state. The guarded second balance check serializes concurrent
- * top-up requests.
- */
-export async function ensureAutomaticStarterFunds(ctx: ToolContext): Promise<string | null> {
-  if (!ctx.config.payments?.walletEnabled || !ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
-    return null;
-  }
-  const requestText = ctx.requestText ?? "";
-  if (promptExcludesRealWallet(requestText)) return null;
-  const needsWalletActionPreflight =
-    isExplicitStarterFundsPrompt(requestText, ctx.config.payments.initialGrantUsd ?? 0.1) ||
-    isExplicitWalletTransferPrompt(requestText) ||
-    requiresWalletBackedWagerForContext(ctx);
-  if (!needsWalletActionPreflight) return null;
-  const requestStarterFunds = (ctx.walletService as unknown as { requestStarterFunds?: unknown }).requestStarterFunds;
-  if (typeof requestStarterFunds !== "function") return null;
-  const actor = paymentRequester(ctx);
-  try {
-    const result = await ctx.walletService.requestStarterFunds({
-      guildId: actor.guildId,
-      requestedByUserId: actor.userId,
-      requestId: actor.requestId,
-    }, paymentRecorder(ctx));
-    if (!result.granted) return null;
-    const content = [
-      `Automatically added $${money(result.amountUsd)} USD from the AI treasury to restore your verified balance to the $${money(result.targetUsd ?? ctx.config.payments.initialGrantUsd ?? 1)} starter amount.`,
-      `Status: ${result.transfer.status}`,
-      `Transaction: ${result.transfer.transactionHash ?? "pending reconciliation"}`,
-      `Your balance: $${result.destination.balance.formatted} USD`,
-      `AI balance: $${result.source.balance.formatted} USD`,
-    ].join("\n");
-    await audit(ctx, "automaticStarterFunds", "requester_below_starter_balance", content);
-    return content;
-  } catch (error) {
-    await recordAgentEvent(ctx, {
-      eventName: "wallet.starter.auto_failed",
-      level: "warn",
-      summary: error instanceof Error ? error.message : String(error),
-      audit: {
-        guildId: ctx.guildId,
-        channelId: ctx.channelId,
-        userId: ctx.userId,
-        toolName: "automaticStarterFunds",
-        argumentsSummary: "requester_below_starter_balance_preflight",
-        error: error instanceof Error ? error.message : String(error),
-      },
-    }).catch(() => undefined);
-    return null;
-  }
+  await audit(ctx, "requestStarterFunds", `$${money(result.amountUsd)} to requester`, content).catch(() => undefined);
+  return walletActionSuccess("starter_funds", content);
 }
 
 export async function adminTransferWalletFunds(
@@ -447,23 +380,20 @@ export async function adminTransferWalletFunds(
     amountUsd?: number;
     reason?: string;
   }
-): Promise<string> {
+): Promise<AgentResponse> {
   const actor = paymentRequester(ctx);
-  if (!isPaymentAdmin(ctx)) return "Wallet administration is restricted to the bot owner or payment ops allowlist.";
+  if (!isPaymentAdmin(ctx)) return walletActionError("not_authorized", "Wallet administration is restricted to the bot owner or payment ops allowlist.");
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
-    return "Per-user USD wallets are not enabled in this deployment.";
-  }
-  if (!hasExplicitAdminTransferIntent(ctx)) {
-    return "No admin transfer was made. Rebalancing real USD requires an explicit fund, reimburse, restore, correct, move, return, or transfer instruction in the current prompt.";
+    return walletActionError("not_configured", "Per-user USD wallets are not enabled in this deployment.");
   }
   const amountUsd = positiveAmount(input.amountUsd);
-  if (amountUsd == null) return "amountUsd must be a positive USD amount.";
+  if (amountUsd == null) return walletActionError("invalid_amount", "amountUsd must be a positive USD amount.");
   const reason = input.reason?.trim();
-  if (!reason) return "reason is required for an admin transfer.";
+  if (!reason) return walletActionError("missing_reason", "reason is required for an admin transfer.");
   const source = await adminEndpoint(ctx, input.source, input.sourceUserId);
-  if (typeof source === "string") return source;
+  if (typeof source === "string") return walletActionError("source_not_resolved", source);
   const destination = await adminEndpoint(ctx, input.destination, input.destinationUserId);
-  if (typeof destination === "string") return destination;
+  if (typeof destination === "string") return walletActionError("destination_not_resolved", destination);
   const result = await ctx.walletService.transferAsAdmin({
     guildId: actor.guildId,
     requestedByUserId: actor.userId,
@@ -474,8 +404,8 @@ export async function adminTransferWalletFunds(
     reason
   }, paymentRecorder(ctx));
   const content = formatManagedTransfer(result, amountUsd, source.label, destination.label, reason);
-  await audit(ctx, "adminTransferWalletFunds", `$${amountUsd} ${source.label} -> ${destination.label}; ${reason}`, content);
-  return content;
+  await audit(ctx, "adminTransferWalletFunds", `$${amountUsd} ${source.label} -> ${destination.label}; ${reason}`, content).catch(() => undefined);
+  return walletActionSuccess("admin_wallet_transfer", content);
 }
 
 export async function adminSetWalletStarterAmount(
@@ -485,20 +415,19 @@ export async function adminSetWalletStarterAmount(
     rebalanceExisting?: boolean;
     reason?: string;
   }
-): Promise<string> {
+): Promise<AgentResponse> {
   const actor = paymentRequester(ctx);
-  if (!isPaymentAdmin(ctx)) return "Wallet administration is restricted to the bot owner or payment ops allowlist.";
+  if (!isPaymentAdmin(ctx)) return walletActionError("not_authorized", "Wallet administration is restricted to the bot owner or payment ops allowlist.");
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
-    return "Per-user USD wallets are not enabled in this deployment.";
+    return walletActionError("not_configured", "Per-user USD wallets are not enabled in this deployment.");
   }
-  const currentRequest = ctx.requestText ?? "";
-  const amountUsd = explicitStarterTargetForPrompt(currentRequest);
-  if (amountUsd == null) {
-    return "No starter amount was changed. State the new USD or cent amount explicitly in the current prompt.";
-  }
+  const amountUsd = typeof input.amountUsd === "number" && Number.isFinite(input.amountUsd) && input.amountUsd >= 0 && input.amountUsd <= 100
+    ? Number(input.amountUsd.toFixed(6))
+    : null;
+  if (amountUsd == null) return walletActionError("invalid_amount", "amountUsd must be between 0 and 100 USD.");
   const reason = input.reason?.trim();
-  if (!reason) return "reason is required when changing the starter amount.";
-  const rebalanceExisting = hasExplicitExistingWalletRebalanceIntent(currentRequest);
+  if (!reason) return walletActionError("missing_reason", "reason is required when changing the starter amount.");
+  const rebalanceExisting = input.rebalanceExisting === true;
   const result = await ctx.walletService.setStarterTargetAndRebalance({
     guildId: actor.guildId,
     requestedByUserId: actor.userId,
@@ -510,14 +439,20 @@ export async function adminSetWalletStarterAmount(
   const content = [
     `Server starter amount is now $${money(result.targetUsd)} USD.`,
     rebalanceExisting
-      ? `Existing wallets: inspected ${result.inspected}, transferred ${result.transferred}, unchanged ${result.unchanged}, failed ${result.failed}.`
+      ? result.rebalanceError
+        ? `The starter amount was saved, but existing wallets were not rebalanced: ${result.rebalanceError}`
+        : `Existing wallets: inspected ${result.inspected}, transferred ${result.transferred}, unchanged ${result.unchanged}, failed ${result.failed}.`
       : "Existing wallet balances were left unchanged because the current request did not explicitly ask to rebalance them.",
     rebalanceExisting ? `Returned to AI treasury: $${result.totalToTreasuryUsd} USD.` : null,
     rebalanceExisting ? `Added from AI treasury: $${result.totalFromTreasuryUsd} USD.` : null,
     `Reason: ${reason}`
   ].filter((line): line is string => line !== null).join("\n");
-  await audit(ctx, "adminSetWalletStarterAmount", `$${money(result.targetUsd)}; rebalance=${rebalanceExisting}; ${reason}`, content);
-  return content;
+  await audit(ctx, "adminSetWalletStarterAmount", `$${money(result.targetUsd)}; rebalance=${rebalanceExisting}; ${reason}`, content).catch(() => undefined);
+  return {
+    ...walletActionSuccess("starter_amount_update", content),
+    status: result.rebalanceError ? "partial" : "ok",
+    limitation: result.rebalanceError ? "starter_target_saved_rebalance_not_started" : undefined,
+  };
 }
 
 export async function getWalletFeeSummary(ctx: ToolContext): Promise<string> {
@@ -541,14 +476,22 @@ export async function getWalletFeeSummary(ctx: ToolContext): Promise<string> {
   return content;
 }
 
-export async function reconcileWalletTransfers(ctx: ToolContext): Promise<string> {
+export async function reconcileWalletTransfers(ctx: ToolContext): Promise<AgentResponse> {
   paymentRequester(ctx);
-  if (!isPaymentAdmin(ctx)) return "Wallet reconciliation is restricted to the bot owner or payment ops allowlist.";
-  if (!ctx.config.payments.walletEnabled || !ctx.walletService) return "Managed USD wallets are not enabled in this deployment.";
+  if (!isPaymentAdmin(ctx)) return walletActionError("not_authorized", "Wallet reconciliation is restricted to the bot owner or payment ops allowlist.");
+  if (!ctx.config.payments.walletEnabled || !ctx.walletService) return walletActionError("not_configured", "Managed USD wallets are not enabled in this deployment.");
   const result = await ctx.walletService.reconcile(paymentRecorder(ctx));
   const content = `Reconciliation: checked ${result.checked}, confirmed ${result.confirmed}, failed ${result.failed}.`;
   await audit(ctx, "reconcileWalletTransfers", "managed USD wallets", content);
-  return content;
+  return walletActionSuccess("wallet_reconciliation", content);
+}
+
+function walletActionSuccess(kind: string, content: string): AgentResponse {
+  return { content, status: "ok", outcome: { kind, state: "succeeded", terminal: true } };
+}
+
+function walletActionError(errorCode: string, content: string, retryable = false): AgentResponse {
+  return { content, status: "error", errorCode, retryable, outcome: { kind: "wallet_action", state: "failed" } };
 }
 
 function paymentRequester(ctx: ToolContext) {
@@ -688,49 +631,6 @@ function positiveAmount(value: number | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
-export function hasExplicitTransferIntent(text: string): boolean {
-  return isExplicitWalletTransferPrompt(text);
-}
-
-function hasExplicitAdminTransferIntent(ctx: ToolContext): boolean {
-  const currentText = ctx.requestText ?? "";
-  if (ADMIN_TRANSFER_INTENT.test(currentText)) return true;
-  if (!ADMIN_TRANSFER_CONFIRMATION.test(currentText.trim())) return false;
-  const chain = ctx.replyContext?.chain ?? [];
-  const directParent = chain.at(-1);
-  return Boolean(
-    directParent?.authorIsBot &&
-    ADMIN_TRANSFER_INTENT.test(directParent.content) &&
-    chain.some((message) =>
-      !message.authorIsBot &&
-      message.authorId === ctx.userId &&
-      ADMIN_TRANSFER_INTENT.test(message.content)
-    )
-  );
-}
-
-const ADMIN_TRANSFER_INTENT = /\b(?:send|transfer|fund|reimburse|rebalance|restore|correct|repair|move|return|refund|revert|give|sweep)\b/i;
-const ADMIN_TRANSFER_CONFIRMATION = /^(?:yes(?:\s+please)?|confirm(?:ed)?|do it|go ahead|proceed|make (?:it|that) happen)[.!]*$/i;
-
-function explicitStarterTargetForPrompt(text: string): number | null {
-  if (!/\b(?:starter|starting|initial)\b/i.test(text) || !/\b(?:set|change|update|make|reduce|lower|raise)\b/i.test(text)) {
-    return null;
-  }
-  const cents = text.match(/\b(\d+(?:\.\d+)?)\s*cents?\b/i)?.[1];
-  const dollars = text.match(/\$\s*(\d+(?:\.\d+)?|\.\d+)/)?.[1];
-  const value = cents == null ? Number(dollars) : Number(cents) / 100;
-  return Number.isFinite(value) && value >= 0 && value <= 100 ? Number(value.toFixed(6)) : null;
-}
-
-function hasExplicitExistingWalletRebalanceIntent(text: string): boolean {
-  return /\b(?:all|every)\b[\s\S]{0,40}\b(?:user|member|wallet|balance)s?\b/i.test(text) &&
-    /\b(?:sweep|rebalance|reset|move|return|transfer|set)\b/i.test(text);
-}
-
-function hasExplicitStarterFundsIntent(text: string, targetUsd: number): boolean {
-  return isExplicitStarterFundsPrompt(text, targetUsd);
-}
-
 function isFundedBalance(balance: { formatted: string; amountAtomic?: bigint }): boolean {
   return typeof balance.amountAtomic === "bigint" ? balance.amountAtomic > 0n : Number(balance.formatted) > 0;
 }
@@ -776,10 +676,14 @@ function formatManagedTransfer(
     `Transferred $${money(amountUsd)} USD from ${sourceLabel} to ${destinationLabel}.`,
     `Status: ${result.transfer.status}`,
     `Transaction: ${result.transfer.transactionHash ?? "pending reconciliation"}`,
-    `Source balance: $${result.source.balance.formatted} USD`,
-    `Destination balance: $${result.destination.balance.formatted} USD`,
+    formatPostTransferBalance("Source balance", result.source.balance),
+    formatPostTransferBalance("Destination balance", result.destination.balance),
     reason ? `Reason: ${reason}` : null
   ].filter((line): line is string => line !== null).join("\n");
+}
+
+function formatPostTransferBalance(label: string, balance: { formatted: string } | null): string {
+  return balance ? `${label}: $${balance.formatted} USD` : `${label}: unavailable after the confirmed transfer`;
 }
 
 async function audit(ctx: ToolContext, toolName: string, argumentsSummary: string, content: string): Promise<void> {

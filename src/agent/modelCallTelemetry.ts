@@ -4,6 +4,7 @@ import type { ToolContext } from "../tools/types.js";
 import { durationMs, logger } from "../util/logger.js";
 import { recordAgentEvent } from "./runtimeTranscript.js";
 import { runtimeVersionMetadata } from "../observability/runtimeVersions.js";
+import { promptMessageMetadata } from "./promptBuilder.js";
 
 type ChatInput = Parameters<OpenRouterClient["chat"]>[0];
 
@@ -209,21 +210,12 @@ export function promptSectionTelemetry(messages: ChatMessage[], serialized = mes
 }
 
 function promptMessageSection(message: ChatMessage, index: number, count: number) {
-  const content = textContent(message);
+  const metadata = promptMessageMetadata(message);
+  if (metadata) return metadata.section;
   if (index === 0 && message.role === "system") return "base_system_prompt";
   if (index === count - 1 && message.role === "user") return "current_user_request";
   if (message.role === "tool") return "current_tool_results";
   if (message.tool_calls?.length) return "current_assistant_tool_calls";
-  if (content.startsWith("Current Discord requester:")) return "requester_identity";
-  if (content.startsWith("Available skill inventory:")) return "skill_inventory";
-  if (content.startsWith("Private server overlay instructions follow.")) return "server_overlay";
-  if (content.startsWith("Deployment prompt overlay instructions follow.")) return "deployment_overlay";
-  if (content.startsWith("The current user message is a Discord reply.")) return "reply_chain";
-  if (content.startsWith("Discord image attachments are available")) return "attachments";
-  if (content.startsWith("Recent completed turns from this channel")) return "session_memory";
-  if (content.startsWith("A historical ") && content.includes(" tool result exists")) return "session_memory";
-  if (content.startsWith("Answer only the next user message.")) return "context_guard";
-  if (/^\[Earlier Discord AI Agent reply|^\[Earlier .* result/.test(content)) return "session_memory";
   if (message.role === "assistant" || message.role === "user") return "session_memory";
   return "other_system_context";
 }

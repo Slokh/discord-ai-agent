@@ -6,7 +6,6 @@ export const spotifyCatalogToolContracts = [
     examples: ["@ai search Spotify for Running Up That Hill"],
     description:
       "Search Spotify's public catalog for tracks, artists, albums, playlists, shows, episodes, or audiobooks using the Spotify Web API. Use this when the user asks to find music or podcasts/audiobooks on Spotify by name. Results are deterministic Spotify metadata and should be returned directly with Spotify links.",
-    userVisible: true,
     mutates: false,
     group: "spotify",
     category: "external",
@@ -17,6 +16,8 @@ export const spotifyCatalogToolContracts = [
       properties: {
         query: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Search query, such as track title, artist name, album name, or playlist name."
         },
         type: {
@@ -39,7 +40,6 @@ export const spotifyCatalogToolContracts = [
     examples: ["@ai what is this Spotify track? https://open.spotify.com/track/abc123"],
     description:
       "Fetch deterministic public Spotify details for one track, artist, album, playlist, show, episode, audiobook, or chapter. Use this for Spotify item URLs/URIs, or for a bare Spotify ID when the type is known. For full playlist track lists, use getSpotifyPlaylistTracks; for album track lists, use getSpotifyAlbumTracks; for artist release lists, use getSpotifyArtistDiscography.",
-    userVisible: true,
     mutates: false,
     group: "spotify",
     category: "external",
@@ -50,6 +50,8 @@ export const spotifyCatalogToolContracts = [
       properties: {
         itemIdOrUrl: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Spotify open URL, spotify: URI, or bare Spotify ID."
         },
         type: {

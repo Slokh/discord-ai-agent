@@ -88,7 +88,9 @@ async function main() {
           requestId: `wallet-rebalance:${options.batchId}:collect:${movement.walletId}`,
           reason,
         });
-        receiptVerifiedAiBalanceAtomic = usdToAtomic(result.destination.balance.formatted, tokenDecimals);
+        if (result.destination.balance) {
+          receiptVerifiedAiBalanceAtomic = usdToAtomic(result.destination.balance.formatted, tokenDecimals);
+        }
       }
       for (const movement of plan.distribute) {
         const result = await service.transferAsAdmin({
@@ -100,7 +102,9 @@ async function main() {
           requestId: `wallet-rebalance:${options.batchId}:distribute:${movement.walletId}`,
           reason,
         });
-        receiptVerifiedAiBalanceAtomic = usdToAtomic(result.source.balance.formatted, tokenDecimals);
+        if (result.source.balance) {
+          receiptVerifiedAiBalanceAtomic = usdToAtomic(result.source.balance.formatted, tokenDecimals);
+        }
       }
 
       const [finalBot, finalUsers] = await Promise.all([

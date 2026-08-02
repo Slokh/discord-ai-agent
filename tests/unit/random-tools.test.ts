@@ -8,12 +8,11 @@ import type {
   RngSessionTx
 } from "../../src/db/rngRepository.js";
 import type { PaymentEventRecorder } from "../../src/payments/types.js";
+import { paymentError } from "../../src/payments/errors.js";
 import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } from "../../src/rng/provable.js";
 import {
   drawRandom,
-  hasUncommittedPlayerSecretWager,
-  requiresWalletBackedWager,
-  requiresWalletBackedWagerForContext,
+  drawRandomResponse,
   revealRandomness,
   settleRandomWager
 } from "../../src/tools/randomTools.js";
@@ -240,6 +239,26 @@ async function verifyAllDraws(rngRepo: FakeRngRepository, sessionId: string) {
 }
 
 describe("drawRandom", () => {
+  it("returns source-owned typed outcome metadata", async () => {
+    const { ctx } = fakeContext();
+    await expect(drawRandomResponse(ctx, { kind: "coin" })).resolves.toMatchObject({
+      status: "ok",
+      outcome: { kind: "rng_draw", state: "succeeded", wagerActive: false, terminal: true },
+    });
+    await expect(drawRandomResponse(ctx, { kind: "not-real" as never })).resolves.toMatchObject({
+      status: "error",
+      outcome: { kind: "rng_draw", state: "failed" },
+    });
+  });
+  it("returns a committed draw even when post-draw auditing fails", async () => {
+    const { ctx, rngRepo } = fakeContext({
+      repo: { auditTool: vi.fn(async () => { throw new Error("audit unavailable"); }) } as unknown as ToolContext["repo"],
+    });
+
+    await expect(drawRandom(ctx, { kind: "coin" })).resolves.toContain("Provably fair draw complete");
+    expect(rngRepo.draws).toHaveLength(1);
+  });
+
   it("draws dice, records a verifiable draw, and pushes proof footer lines", async () => {
     const { ctx, rngRepo, footerLines } = fakeContext();
 
@@ -601,7 +620,7 @@ describe("drawRandom", () => {
     expect(response).toContain("Maximum total payout reserved: $0.25");
   });
 
-  it("does not infer a wallet wager from an unstructured model draw", async () => {
+  it("does not invent a wallet wager when the typed draw omits one", async () => {
     const reserveWager = vi.fn(async () => ({ id: "wager-1" }));
     const attachWagerDraw = vi.fn(async () => undefined);
     const { ctx, rngRepo } = fakeContext({
@@ -615,9 +634,9 @@ describe("drawRandom", () => {
       reason: "model selected the wrong draw",
     });
 
-    expect(response).toContain("requires a wallet-backed wager");
+    expect(response).toContain("Provably fair draw complete");
     expect(reserveWager).not.toHaveBeenCalled();
-    expect(rngRepo.draws).toEqual([]);
+    expect(rngRepo.draws).toHaveLength(1);
   });
 
   it("still rejects a non-standard blackjack opening that would publish the dealer hole card", async () => {
@@ -680,7 +699,7 @@ describe("drawRandom", () => {
 
   it("returns duplicate request reservations as a recoverable tool result", async () => {
     const reserveWager = vi.fn(async () => {
-      throw new Error("A wallet-backed wager already exists for this Discord request");
+      throw paymentError("wager_already_exists", "A wallet-backed wager already exists for this Discord request");
     });
     const { ctx, rngRepo } = fakeContext({
       requestText: "I bet $0.01 on heads",
@@ -698,7 +717,7 @@ describe("drawRandom", () => {
 
   it("explains insufficient available balance without inventing user-paid fees", async () => {
     const reserveWager = vi.fn(async () => {
-      throw new Error("Insufficient user wallet balance for this wager");
+      throw paymentError("insufficient_user_balance", "Insufficient user wallet balance for this wager");
     });
     const { ctx } = fakeContext({
       requestText: "I bet $1 on heads",
@@ -716,7 +735,7 @@ describe("drawRandom", () => {
 
   it("returns insufficient bot payout capacity as a recoverable tool result", async () => {
     const reserveWager = vi.fn(async () => {
-      throw new Error("The bot wallet cannot cover this wager's maximum payout");
+      throw paymentError("insufficient_bot_coverage", "The bot wallet cannot cover this wager's maximum payout");
     });
     const { ctx, rngRepo } = fakeContext({
       requestText: "I bet $1 on heads",
@@ -733,7 +752,7 @@ describe("drawRandom", () => {
     expect(rngRepo.sessions.size).toBe(0);
   });
 
-  it("refuses to consume randomness for a real-money game until a wallet wager is supplied", async () => {
+  it("keeps an omitted typed wager money-free even when prose mentions money", async () => {
     const reserveWager = vi.fn();
     const getCurrentWager = vi.fn(async () => null);
     const { ctx, rngRepo } = fakeContext({
@@ -743,14 +762,18 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, { kind: "integers", min: 0, max: 99, count: 20 });
 
-    expect(response).toContain("requires a wallet-backed wager");
+    expect(response).toContain("Provably fair draw complete");
     expect(reserveWager).not.toHaveBeenCalled();
-    expect(rngRepo.sessions.size).toBe(0);
+    expect(rngRepo.sessions.size).toBe(1);
   });
 
-  it("allows another verified draw without reserving again when the scoped wager is already active", async () => {
+  it("rejects an untyped blackjack continuation without consuming entropy", async () => {
     const reserveWager = vi.fn();
-    const getCurrentWager = vi.fn(async () => ({ id: "wager-active" }));
+    const getCurrentWager = vi.fn(async () => ({
+      id: "wager-active",
+      game: "blackjack",
+      allowedActions: ["hit", "stand"],
+    }));
     const { ctx, rngRepo } = fakeContext({
       requestText: "bet .1 blackjack",
       walletService: { reserveWager, getCurrentWager } as unknown as ToolContext["walletService"]
@@ -758,18 +781,17 @@ describe("drawRandom", () => {
 
     const response = await drawRandom(ctx, { kind: "cards", count: 1, reason: "continuation card" });
 
-    expect(response).toContain("Provably fair draw complete");
-    expect(response).toContain("continues the scoped active wallet wager");
-    expect(response).toContain("call drawRandom again without a new wager");
+    expect(response).toContain("requires wagerAction=hit or wagerAction=stand");
     expect(getCurrentWager).toHaveBeenCalledWith({
       threadKey: discordRngThreadKey(),
       userId: "user"
     });
     expect(reserveWager).not.toHaveBeenCalled();
-    expect(rngRepo.draws.map((draw) => draw.kind)).toEqual(["shuffle", "cards"]);
+    expect(rngRepo.draws).toEqual([]);
+    expect(rngRepo.sessions.size).toBe(0);
   });
 
-  it("allows a structured continuation draw for an already active wager", async () => {
+  it("allows a typed action permitted by the saved blackjack state", async () => {
     const reserveWager = vi.fn();
     const getCurrentWager = vi.fn(async () => ({
       id: "wager-active",
@@ -785,54 +807,13 @@ describe("drawRandom", () => {
       kind: "cards",
       count: 1,
       reason: "dealer continuation card",
+      wagerAction: "stand",
     });
 
     expect(response).toContain("Provably fair draw complete");
     expect(response).toContain("continues the scoped active wallet wager");
     expect(reserveWager).not.toHaveBeenCalled();
     expect(rngRepo.draws.some((draw) => draw.kind === "cards")).toBe(true);
-  });
-
-  it.each([
-    "500 on roulette black",
-    "bet 2 on a coin flip",
-    "20 more spins at $5 each",
-    "bet .05 blackjack",
-    "blackjack, 0.25",
-    "roulette red 0.40",
-    "coinflip 0.15 tails",
-    "put $.10 on heads",
-    "put the rest of my balance on roulette",
-    "bet my entire bankroll on black",
-    "double down $0.25 on blackjack",
-    "let it ride: $0.25 on blackjack",
-    "run it back for $0.25 on blackjack"
-  ])("recognizes common wager shorthand: %s", (text) => {
-    expect(requiresWalletBackedWager(text)).toBe(true);
-  });
-
-  it.each([
-    "should I double down $0.25 on blackjack?",
-    "would it be smart to let $0.25 ride on blackjack?",
-    "explain whether running it back for $0.25 on blackjack is fair",
-    "blackjack is 21.0",
-    "roulette odds 35.0",
-  ])("keeps replay-language wager discussion non-mutating: %s", (text) => {
-    expect(requiresWalletBackedWager(text)).toBe(false);
-  });
-
-  it("carries a wallet-backed wager requirement into a vague repeat only for the same requester", () => {
-    const { ctx } = fakeContext({
-      requestText: "again",
-      sessionMessages: [
-        { role: "user", authorId: "other", content: "bet $10 roulette" },
-        { role: "user", authorId: "user", content: "flip a coin, heads for $0.50" }
-      ] as ToolContext["sessionMessages"]
-    });
-
-    expect(requiresWalletBackedWagerForContext(ctx)).toBe(true);
-    ctx.userId = "unrelated";
-    expect(requiresWalletBackedWagerForContext(ctx)).toBe(false);
   });
 
   it("rejects non-standard wagered card-by-card openings before reserving funds or consuming entropy", async () => {
@@ -851,38 +832,6 @@ describe("drawRandom", () => {
     expect(response).toContain("exactly 3 public cards");
     expect(reserveWager).not.toHaveBeenCalled();
     expect(rngRepo.sessions.size).toBe(0);
-  });
-
-  it("rejects the incident's uncommitted-secret wager before reserving funds or consuming entropy", async () => {
-    const reserveWager = vi.fn();
-    const { ctx, rngRepo } = fakeContext({
-      requestText: "I bet 1 dollar you cant guess the number I'm thinking of",
-      walletService: { reserveWager } as unknown as ToolContext["walletService"]
-    });
-
-    const response = await drawRandom(ctx, {
-      kind: "integers",
-      min: 1,
-      max: 1_000,
-      wager: { playerUserId: "user", stakeUsd: 1, maxPayoutUsd: 2, game: "guess my number", interactionMode: "automatic", rule: { kind: "sum", operator: "=", target: 1 } }
-    });
-
-    expect(response).toContain("not verifiable");
-    expect(response).toContain("No funds were reserved");
-    expect(reserveWager).not.toHaveBeenCalled();
-    expect(rngRepo.sessions.size).toBe(0);
-  });
-
-  it.each([
-    "Guess the word I've picked and I'll bet $1",
-    "I bet a dollar you cannot tell which card I chose",
-    "Predict the number in my mind for $1"
-  ])("detects an uncommitted player secret: %s", (text) => {
-    expect(hasUncommittedPlayerSecretWager(text)).toBe(true);
-  });
-
-  it("does not block a normal wager on independently generated randomness", () => {
-    expect(hasUncommittedPlayerSecretWager("I bet $1 the next die roll is six")).toBe(false);
   });
 
   it("rejects wallet-backed wagers when user wallets are disabled", async () => {
@@ -1002,7 +951,7 @@ describe("drawRandom", () => {
         kind: "cards",
         params: { deckCount: 1, start: 3, count: 1 },
         outcome: { kind: "cards", cards: ["3♥"] },
-        reason: "blackjack stand continuation card",
+        reason: "blackjack:stand",
         requestId: "stand-request",
         messageId: "stand-request",
         requestedByUserId: "user",
@@ -1015,7 +964,7 @@ describe("drawRandom", () => {
         kind: "cards",
         params: { deckCount: 1, start: 4, count: 1 },
         outcome: { kind: "cards", cards: ["J♦"] },
-        reason: "blackjack stand continuation card",
+        reason: "blackjack:stand",
         requestId: "stand-request",
         messageId: "stand-request",
         requestedByUserId: "user",
@@ -1113,7 +1062,7 @@ describe("drawRandom", () => {
         kind: "cards",
         params: { deckCount: 1, start: 3, count: 1 },
         outcome: { kind: "cards", cards: ["K♦"] },
-        reason: "blackjack stand continuation card",
+        reason: "blackjack:stand",
         requestId: "stand-request",
         messageId: "stand-request",
         requestedByUserId: "user",
@@ -1204,7 +1153,7 @@ describe("drawRandom", () => {
     const { ctx } = fakeContext({
       walletService: {
         getCurrentWager: vi.fn(async () => ({ id: "wager_active" })),
-        settleWager: vi.fn(async () => { throw new Error("Unknown wager wager_active"); })
+        settleWager: vi.fn(async () => { throw paymentError("wager_not_found", "Unknown wager wager_active"); })
       } as unknown as ToolContext["walletService"]
     });
 
@@ -1219,27 +1168,6 @@ describe("drawRandom", () => {
     expect(response).toContain("No transfer was created");
   });
 
-  it("rejects settlement calculations that leave a wallet-backed game unfinished", async () => {
-    const settleWager = vi.fn();
-    const { ctx } = fakeContext({
-      walletService: {
-        getCurrentWager: vi.fn(async () => ({ id: "wager-custom", game: "custom game" })),
-        settleWager,
-      } as unknown as ToolContext["walletService"]
-    });
-
-    const response = await settleRandomWager(ctx, {
-      wagerId: "wager-blackjack",
-      payoutUsd: 0.5,
-      outcome: "push",
-      resolutionSource: "player_decision",
-      explanation: "Blackjack deal in progress; awaiting player action before settling. Choose hit or stand."
-    });
-
-    expect(response).toContain("unfinished game");
-    expect(response).toContain("awaitRandomWagerAction");
-    expect(settleWager).not.toHaveBeenCalled();
-  });
 });
 
 describe("revealRandomness", () => {

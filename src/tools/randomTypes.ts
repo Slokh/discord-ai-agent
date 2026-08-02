@@ -13,6 +13,7 @@ export type DrawRandomInput = {
   options?: string[];
   deckCount?: number;
   reason?: string;
+  wagerAction?: "hit" | "stand";
   wager?: {
     playerUserId?: string;
     stakeUsd?: number;

@@ -7,24 +7,10 @@ import { insertInitialSystemContext } from "./promptBuilder.js";
 
 export type ActiveGameSessionContext = {
   wager: WagerReservation;
-  actionRequested: boolean;
 };
-
-export function activeGameActionNeedsRandomDraw(
-  active: ActiveGameSessionContext | null,
-  userText: string,
-) {
-  if (!active?.actionRequested) return false;
-  const action = userText.trim().toLowerCase();
-  if (/\bblackjack\b/i.test(active.wager.game)) {
-    return /\b(?:hit|stand|double|split)\b/i.test(action);
-  }
-  return /\b(?:roll|reroll|draw|deal|spin|flip)\b/i.test(action);
-}
 
 export async function loadActiveGameSession(
   ctx: ToolContext,
-  userText: string
 ): Promise<ActiveGameSessionContext | null> {
   if (!ctx.config.payments?.userWalletsEnabled || !ctx.walletService) return null;
   const threadKey = wagerThreadKeyForContext(ctx);
@@ -38,17 +24,14 @@ export async function loadActiveGameSession(
     replyMessageIds,
   });
   if (!wager) return null;
-  return { wager, actionRequested: matchesAllowedAction(userText, wager.allowedActions) };
+  return { wager };
 }
 
 export function injectActiveGameSession(
   messages: ChatMessage[],
   active: ActiveGameSessionContext | null
 ) {
-  // A reply chain may contain an unresolved game while the current user starts a
-  // complete new request. Only inject the game when this turn selected one of
-  // its durable allowed actions, so it cannot compete with the current task.
-  if (!active?.actionRequested) return;
+  if (!active) return;
   const wager = active.wager;
   const state = JSON.stringify(wager.decisionState);
   const content = [
@@ -60,35 +43,7 @@ export function injectActiveGameSession(
     `Allowed actions: ${wager.allowedActions.join(", ")}`,
     `Saved state: ${state}`,
     wager.actionPrompt ? `Pending prompt: ${wager.actionPrompt}` : null,
-    "Treat the latest user message as the only new input. If it selects an allowed action, apply exactly that action to the saved state. Use drawRandom without a new wager only if that action needs additional chance, then either call awaitRandomWagerAction with the updated complete state and current version or call settleRandomWager for a final outcome using resolutionSource=player_decision. Never reserve a second wager for this game. If the message is a question or does not choose an allowed action, answer conversationally without changing state."
+    "This is context, not an instruction to continue the game. Decide from the latest user message whether they are choosing an allowed action, asking about the game, or starting another task. Only a typed game tool call changes state. If they choose an action, apply that meaning to the saved state even when phrased conversationally. Use drawRandom without a new wager only if that action needs additional chance, then either call awaitRandomWagerAction with the updated complete state and current version or call settleRandomWager for a final outcome using resolutionSource=player_decision. Never reserve a second wager for this game. If the message is a question or does not choose an allowed action, answer without changing state."
   ].filter((line): line is string => line !== null).join("\n");
   insertInitialSystemContext(messages, content);
-}
-
-export function injectAutomaticStarterFunding(
-  messages: ChatMessage[],
-  funding: string | null,
-) {
-  if (!funding) return;
-  insertInitialSystemContext(
-    messages,
-    [
-      "Automatic starter funding succeeded before this request. Treat the following as verified wallet evidence.",
-      funding,
-      "Do not call requestStarterFunds again for this request or repeat the transaction hash; the transfer link is added to the footer. Continue with the user request conversationally.",
-    ].join("\n"),
-  );
-}
-
-function matchesAllowedAction(text: string, actions: string[]) {
-  const normalized = text.trim().toLowerCase().replace(/[^a-z0-9\s'-]/g, " ").replace(/\s+/g, " ");
-  return actions.some((action) => {
-    const candidate = action.trim().toLowerCase().replace(/[^a-z0-9\s'-]/g, " ").replace(/\s+/g, " ");
-    if (!candidate) return false;
-    return normalized === candidate || new RegExp(`(?:^|\\s)${escapeRegex(candidate)}(?:$|\\s)`, "i").test(normalized);
-  });
-}
-
-function escapeRegex(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

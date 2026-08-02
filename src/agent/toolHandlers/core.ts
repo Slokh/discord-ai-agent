@@ -1,15 +1,8 @@
-import { listTools } from "../../tools/toolListTools.js";
 import { loadSkillContext } from "../../skills/loader.js";
-import { cleanResponse } from "../../tools/responseFormatting.js";
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const coreToolHandlers = {
-  "listTools": async (ctx, _route, _originalText) => {
-    return {
-          content: cleanResponse(await listTools(ctx), ctx.config.maxReplyChars),
-        };
-  },
   "loadSkillContext": async (_ctx, route, _originalText) => {
     const name = typeof route.arguments?.name === "string" ? route.arguments.name : "";
     const skill = await loadSkillContext(name);

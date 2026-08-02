@@ -1,23 +1,8 @@
 import { summarizeForAudit } from "../util/text.js";
 import { resolveAgentModel } from "./agentModelCatalog.js";
-import {
-  agentModelIntentForPrompt,
-  modelTargetFromCurrentContext,
-  type AgentModelIntent,
-} from "./agentModelIntent.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 
 export { normalizeOpenRouterModelId } from "./agentModelId.js";
-
-type AgentModelAction =
-  | { action: "set"; model: string }
-  | { action: "reset" };
-
-export type AgentModelCommandExecution = {
-  response: AgentResponse;
-  continuationText?: string;
-  succeeded: boolean;
-};
 
 type AgentModelSettingsRepository = {
   getGuildAgentSettings(guildId: string): Promise<{ chatModel: string } | undefined>;
@@ -54,21 +39,17 @@ export function effectiveAgentChatModel(ctx: ToolContext): string | undefined {
 export async function setAgentModel(
   ctx: ToolContext,
   input: { action?: string; model?: string },
-): Promise<string> {
-  return (await applyAgentModelChange(ctx, input)).content;
-}
-
-export async function executeAgentModelCommand(
-  ctx: ToolContext,
-  text: string,
-): Promise<AgentModelCommandExecution | null> {
-  const intent = agentModelIntentForPrompt(text);
-  if (!intent) return null;
-  const result = await applyAgentModelChange(ctx, actionFromIntent(intent));
+): Promise<AgentResponse> {
+  const result = await applyAgentModelChange(ctx, input);
   return {
-    response: { content: result.content },
-    continuationText: intent.continuationText,
-    succeeded: result.succeeded,
+    content: result.content,
+    status: result.succeeded ? "ok" : "error",
+    retryable: false,
+    outcome: {
+      kind: "agent_model",
+      state: result.succeeded ? "succeeded" : "failed",
+      terminal: true,
+    },
   };
 }
 
@@ -84,24 +65,7 @@ async function applyAgentModelChange(
   ctx: ToolContext,
   input: { action?: string; model?: string },
 ): Promise<AgentModelChangeResult> {
-  const currentIntent = agentModelIntentForPrompt(ctx.requestText ?? "");
   const requestedAction = normalizeAction(input.action);
-  const evidenceAction = currentIntent?.action ?? requestedAction ?? "set";
-  ctx.agentModelMutation = {
-    attempted: true,
-    succeeded: false,
-    action: evidenceAction,
-    requestedModel: currentIntent?.action === "set" ? currentIntent.target : input.model,
-  };
-
-  if (!currentIntent) {
-    return denyModelChange(
-      ctx,
-      input,
-      "agent_model_current_intent_required",
-      "I didn’t change the server model because the current message does not explicitly ask for a model change. Say `switch model to <provider/model>` in a new message.",
-    );
-  }
   if (!isAgentModelAdmin(ctx)) {
     return denyModelChange(
       ctx,
@@ -110,12 +74,12 @@ async function applyAgentModelChange(
       "Changing the agent model is restricted to the configured bot owner or ops allowlist.",
     );
   }
-  if (!requestedAction || requestedAction !== currentIntent.action) {
+  if (!requestedAction) {
     return denyModelChange(
       ctx,
       input,
       "agent_model_intent_mismatch",
-      "I didn’t change the server model because the requested tool action did not match the current message.",
+      "I didn’t change the server model because action must be set or reset.",
     );
   }
   const repo = modelSettingsRepository(ctx);
@@ -130,32 +94,26 @@ async function applyAgentModelChange(
 
   const defaultModel = ctx.config.openRouter?.chatModel?.trim();
   const previousModel = effectiveAgentChatModel(ctx) ?? "provider default";
-  if (currentIntent.action === "reset") {
+  if (requestedAction === "reset") {
     await repo.clearGuildChatModelOverride(ctx.guildId);
     ctx.chatModelOverride = null;
     ctx.chatModelOverrideLoaded = true;
     const effectiveModel = defaultModel ?? "provider default";
-    ctx.agentModelMutation = {
-      attempted: true,
-      succeeded: true,
-      action: "reset",
-      effectiveModel,
-    };
-    await auditModelChange(ctx, { action: "reset" }, effectiveModel);
+    await auditModelChange(ctx, { action: "reset" }, effectiveModel).catch(() => undefined);
     return {
       succeeded: true,
       effectiveModel,
-      content: `Reset this server's NanoCodex model from \`${previousModel}\` to the configured default \`${effectiveModel}\`. The default is active for any remaining work in this request and future requests.`,
+      content: `Reset this server's NanoCodex model from \`${previousModel}\` to the configured default \`${effectiveModel}\`. The default takes effect on the next request.`,
     };
   }
 
-  const authoritativeTarget = modelTargetFromCurrentContext(ctx, currentIntent.target);
+  const authoritativeTarget = input.model?.trim();
   if (!authoritativeTarget) {
     return denyModelChange(
       ctx,
       input,
       "agent_model_context_target_missing",
-      "I couldn’t identify which model “that” refers to in this reply chain. Name the model or its OpenRouter ID in the current switch request.",
+      "I couldn’t identify the requested model. Name Luna, Sol, or an allowed OpenRouter model ID.",
     );
   }
   const resolution = await resolveAgentModel(authoritativeTarget, {
@@ -172,22 +130,6 @@ async function applyAgentModelChange(
     );
   }
 
-  if (input.model?.trim()) {
-    const toolResolution = await resolveAgentModel(input.model, {
-      config: ctx.config,
-      openRouter: ctx.openRouter,
-      signal: ctx.abortSignal,
-    });
-    if (!toolResolution.ok || toolResolution.model !== resolution.model) {
-      return denyModelChange(
-        ctx,
-        input,
-        "agent_model_intent_mismatch",
-        `I didn’t change the server model because the tool requested \`${input.model}\`, but the current message authorizes \`${resolution.model}\`.`,
-      );
-    }
-  }
-
   const model = resolution.model;
   if (model === defaultModel) {
     await repo.clearGuildChatModelOverride(ctx.guildId);
@@ -202,26 +144,13 @@ async function applyAgentModelChange(
     ctx.chatModelOverride = model;
     ctx.chatModelOverrideLoaded = true;
   }
-  ctx.agentModelMutation = {
-    attempted: true,
-    succeeded: true,
-    action: "set",
-    requestedModel: currentIntent.target,
-    effectiveModel: model,
-  };
-  await auditModelChange(ctx, { action: "set", model }, model);
+  await auditModelChange(ctx, { action: "set", model }, model).catch(() => undefined);
   const source = model === defaultModel ? " (the configured default)" : "";
   return {
     succeeded: true,
     effectiveModel: model,
-    content: `Switched this server's NanoCodex model from \`${previousModel}\` to \`${model}\`${source}. It is active for any remaining work in this request and future requests.`,
+    content: `Switched this server's NanoCodex model from \`${previousModel}\` to \`${model}\`${source}. It takes effect on the next request.`,
   };
-}
-
-function actionFromIntent(intent: AgentModelIntent): AgentModelAction {
-  return intent.action === "reset"
-    ? { action: "reset" }
-    : { action: "set", model: intent.target };
 }
 
 function normalizeAction(value: string | undefined): "set" | "reset" | null {
@@ -250,10 +179,6 @@ async function denyModelChange(
   error: string,
   content: string,
 ): Promise<AgentModelChangeResult> {
-  if (ctx.agentModelMutation) {
-    ctx.agentModelMutation.succeeded = false;
-    ctx.agentModelMutation.error = error;
-  }
   await auditModelChange(ctx, input, undefined, error);
   return { content, succeeded: false };
 }

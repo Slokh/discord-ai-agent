@@ -25,7 +25,7 @@ These decisions drive every workstream. If one is reversed, re-plan the affected
 - **D3. Discord owns delivery state only.** The bot process persists delivery obligations (which message to edit, last event applied) and can recover rendering after a crash by replaying session events. It never owns execution truth.
 - **D4. Local-process is the default code-update backend.** Kubernetes stays supported as the advanced isolation mode, but new adopters get a working code-update flow without a cluster.
 - **D5. Private content lives in the overlay boundary.** Server-specific persona, emoji, examples, evals, and config live in `.discord-ai-agent/` or DB overlays/skills. The base repo ships neutral defaults. `scripts/scanRelease.ts` enforces the boundary.
-- **D6. Cost efficiency is a first-class feature.** Scoped toolsets, prompt-cache-friendly ordering, and model tiering reduce spend. Application-level daily quotas were subsequently removed in favor of the OpenRouter account credit ceiling.
+- **D6. Cost efficiency is a first-class feature.** Stable prompt-cache-friendly tool ordering, deployment-only capability filtering, and model tiering reduce spend. Application-level daily quotas were subsequently removed in favor of the OpenRouter account credit ceiling.
 
 ## Workstream Order
 
@@ -116,11 +116,11 @@ Exit criteria: a Discord turn and a code-update task each produce exactly one wr
 
 Goal: cut typical per-turn input tokens by 50–80%. Today every model round carries ~13k static tokens (41 tool schemas ≈ 11k + system prompt ≈ 2.3k), up to 4 rounds plus synthesis/recovery.
 
-### Scoped toolsets
+### Tool contracts
 
-- [x] Add tool groups to `src/tools/registry.ts` and deterministic per-turn selection. Follow-up hardening split the former 11-tool `core` group into minimal core, generated-data, and Discord-action groups so ordinary chat starts with two local schemas rather than 21 core/retrieval schemas.
+- [x] The original deterministic per-turn tool-group selection was later removed. NanoCodex now receives one stable deployment-filtered contract so semantic tool choice stays with the model and prompt caching remains effective.
 - [x] Register Spotify tools only when `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` are configured (deployment-level allowlist, mirroring Centaur's `TOOL_ALLOWLIST` behavior).
-- [x] Add eval prompts covering toolset-selection misses before enabling by default (`docs/evals.md` flow).
+- [x] Add eval prompts covering semantic tool-selection misses before enabling by default (`docs/evals.md` flow).
 
 ### Prompt-cache-friendly ordering
 

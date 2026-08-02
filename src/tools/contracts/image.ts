@@ -8,7 +8,6 @@ export const imageToolContracts = [
     examples: ["@ai what is in this screenshot?"],
     description:
       "Use a vision model to inspect images from the current Discord request, the replied-to message chain, explicit image URLs, or a Discord message link/ID. Use this when the user asks what is shown in an attached/replied image, screenshot, meme, chart, photo, or visual Discord attachment. Do not use it for text-only history questions.",
-    userVisible: true,
     mutates: false,
     group: "image",
     parameters: {
@@ -41,7 +40,6 @@ export const imageToolContracts = [
     examples: ["@ai enhance my profile picture"],
     description:
       "Resolve a visible Discord user by username, display name, mention, or user ID and return their avatar image URL(s) from Discord's CDN. Use this when the user asks to enhance, inspect, describe, or zoom into their own or someone else's profile picture/avatar/pfp. After this tool returns an avatar URL, call inspectDiscordImages with that URL as an imageUrls entry so the vision model can describe or enhance it. Works for any visible user in the server; resolution prefers an exact user ID or mention, then indexed username/display-name matches.",
-    userVisible: true,
     mutates: false,
     group: "image",
     category: "discord",
@@ -52,6 +50,8 @@ export const imageToolContracts = [
       properties: {
         query: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Discord username, display name, @mention, or user ID whose avatar should be fetched. Use the requester's own ID/mention for my/me avatar requests."
         },
         limit: {
@@ -70,15 +70,17 @@ export const imageToolContracts = [
     toolClass: "generation",
     examples: ["@ai make an image of a wizard eating nachos"],
     description:
-      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for explicit make/draw/generate/regenerate requests and edits like 'make this into...', 'modify this', or 'use the attached image as a reference'. When the requested image must visibly contain exact words, names, labels, punctuation, or numbers, put every verbatim string in requiredText so the result is visually validated and corrected once before delivery. Do not call it for diagnosis-only questions such as why an image has a background or what format it uses unless the user also asks to change or regenerate the image. For emojis, stickers, cutouts, or background removal, request background=transparent and outputFormat=png; the tool also infers those settings from an explicit transparent/emoji/sticker prompt and reports the actual returned format and alpha status.",
-    userVisible: true,
+      "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for explicit make/draw/generate/regenerate requests and edits like 'make this into...', 'modify this', or 'use the attached image as a reference'. When the requested image must visibly contain exact words, names, labels, punctuation, or numbers, put every verbatim string in requiredText so the result is visually validated and corrected once before delivery. Do not call it for diagnosis-only questions such as why an image has a background or what format it uses unless the user also asks to change or regenerate the image. For emojis, stickers, cutouts, or background removal, explicitly request background=transparent and outputFormat=png. Set aspectRatio from the requested composition; the tool does not infer omitted controls.",
     mutates: false,
     group: "image",
+    accessPolicy: "image_allowlist",
     parameters: {
       type: "object",
       properties: {
         prompt: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "The image generation or edit prompt."
         },
         requiredText: {

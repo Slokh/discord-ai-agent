@@ -1,7 +1,7 @@
 import type { FunctionToolDefinition } from "../models/openrouter.js";
 
 export const TOOL_NAMES = [
-  "listTools", "requestAdditionalTools", "loadSkillContext", "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels",
+  "loadSkillContext", "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels",
   "searchDiscordHistory", "getRecentAgentMemory", "getAgentMemoryStats", "getRecentDiscordMessages", "getDiscordMessageContext",
   "listDiscordBugMarkers", "searchDiscordAttachments", "inspectDiscordFile", "inspectDiscordImages", "getDiscordUserAvatar",
   "getDiscordStats", "getDiscordChannelTopics", "summarizeDiscordHistory", "summarizeDiscordThread", "generateImage",
@@ -17,17 +17,17 @@ export const TOOL_NAMES = [
 export type ToolName = typeof TOOL_NAMES[number];
 
 export type ToolGroup = "core" | "discord-retrieval" | "generated-data" | "presentation" | "discord-action" | "image" | "spotify" | "codegen" | "ops" | "external";
-export const TOOL_GROUPS: ToolGroup[] = ["core", "discord-retrieval", "generated-data", "presentation", "discord-action", "image", "spotify", "codegen", "ops", "external"];
 
 export type ToolClass = "resolver" | "retrieval" | "memory" | "stats" | "summary" | "image" | "generation" | "coding" | "ops" | "external";
 
 export type ToolRegistryEntry = {
   name: ToolName;
   description: string;
-  userVisible: boolean;
   mutates: boolean;
   category: "discord" | "generation" | "memory" | "ops" | "coding" | "external";
   group: ToolGroup;
+  deploymentRequirement: "always" | "spotify" | "codegen" | "wallet" | "user_wallet";
+  accessPolicy: "default" | "ops" | "strict_ops" | "image_allowlist";
   toolClass: ToolClass;
   outputContract: string[];
   examples: string[];
@@ -37,24 +37,8 @@ export type ToolRegistryEntry = {
   parameters: FunctionToolDefinition["function"]["parameters"];
 };
 
-type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples"> &
-  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples">>;
-
-export type ToolContract = {
-  name: ToolName;
-  description: string;
-  category: NonNullable<ToolRegistryEntry["category"]>;
-  toolClass: ToolClass;
-  mutates: boolean;
-  userVisible: boolean;
-  parameters: FunctionToolDefinition["function"]["parameters"];
-  whenToUse: string;
-  outputContract: string[];
-  permissionRequirements: string[];
-  auditEvents: string[];
-  examples: string[];
-  argumentExamples: Record<string, unknown>[];
-};
+type ToolDefinitionInput = Omit<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "deploymentRequirement" | "accessPolicy"> &
+  Partial<Pick<ToolRegistryEntry, "outputContract" | "permissionRequirements" | "auditEvents" | "argumentExamples" | "deploymentRequirement" | "accessPolicy">>;
 
 const outputContractByToolClass: Record<ToolClass, string[]> = {
   resolver: ["resolved IDs", "display names", "match confidence or ambiguity notes", "result count"],
@@ -73,6 +57,10 @@ const outputContractByToolClass: Record<ToolClass, string[]> = {
 export function defineTool<const T extends ToolDefinitionInput>(definition: T): T & ToolRegistryEntry {
   return {
     ...definition,
+    deploymentRequirement: definition.deploymentRequirement ?? (
+      definition.group === "spotify" ? "spotify" : definition.group === "codegen" ? "codegen" : "always"
+    ),
+    accessPolicy: definition.accessPolicy ?? "default",
     outputContract: definition.outputContract ?? outputContractByToolClass[definition.toolClass],
     permissionRequirements: definition.permissionRequirements ?? (
       definition.mutates

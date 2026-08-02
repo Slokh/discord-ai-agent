@@ -9,9 +9,8 @@ import { runObservedModelCall } from "../agent/modelCallTelemetry.js";
 import { UTILITY_REASONING } from "../agent/modelPolicy.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import { normalizeGeneratedTransparentImage } from "./imageTransparency.js";
-import { imageSafetyFallbackPrompt, transparentImageRecoveryPrompt } from "./imageGenerationPrompts.js";
+import { transparentImageRecoveryPrompt } from "./imageGenerationPrompts.js";
 import {
-  inferRequiredImageText,
   imageTextCorrectionPrompt,
   normalizeRequiredImageText,
   validateGeneratedImageText,
@@ -20,18 +19,13 @@ import {
   imageTextOverlayBasePrompt,
   renderExactImageTextOverlay,
 } from "./generatedImageTextOverlay.js";
-import {
-  inferredImageAspectRatio,
-  type ImageAspectRatio,
-} from "./imageAspectRatio.js";
+import type { ImageAspectRatio } from "./imageAspectRatio.js";
 import {
   describeGeneratedImageFile,
   generatedImageDimensions,
 } from "./imageOutputInspection.js";
-import { resolveContextImageSelection } from "./imageContextSelection.js";
-import type { AgentFile, DiscordAttachmentContext, ToolContext } from "./types.js";
+import type { AgentFile, AgentResponse, DiscordAttachmentContext, ToolContext } from "./types.js";
 import { extractDiscordMessageId, extractMentionId, visibleIndexedChannelIdsForRequest } from "./toolContext.js";
-import { recoverRejectedImageRequest } from "./imageRequestRejectionRecovery.js";
 const MAX_IMAGE_REFERENCES = 4;
 const MAX_INLINE_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_INLINE_VISION_TOTAL_BYTES = 20 * 1024 * 1024;
@@ -348,33 +342,21 @@ async function materializeGeneratedImageOutputs(
 export async function generateImage(
   ctx: ToolContext,
   input: string | GenerateImageInput
-): Promise<{ content: string; files: AgentFile[]; status?: "ok" | "error" }> {
+): Promise<AgentResponse & { files: AgentFile[] }> {
   const normalizedInput = typeof input === "string" ? { prompt: input } : input;
   const prompt = normalizedInput.prompt.trim();
-  const contextImageSelection = resolveContextImageSelection({ requestText: ctx.requestText, requested: normalizedInput.useContextImages, contextHasImages: contextImageReferences(ctx).length > 0 });
-  const requiredText = normalizeRequiredImageText([
-    ...(normalizedInput.requiredText ?? []),
-    ...inferRequiredImageText([
-      prompt,
-      ctx.requestText ?? "",
-      ...(ctx.replyContext?.chain.map((message) => message.content) ?? []),
-    ]),
-  ]);
+  const requiredText = normalizeRequiredImageText(normalizedInput.requiredText);
   const references = await imageReferencesForInput(ctx, {
     explicitUrls: normalizedInput.referenceImageUrls,
-    useContextImages: contextImageSelection.useContextImages,
+    useContextImages: normalizedInput.useContextImages ?? true,
   });
   const preparedReferences = await inlineDiscordCdnImageReferences(ctx, references);
-  const inferredTransparentBackground = normalizedInput.background == null && wantsTransparentImage(prompt);
-  const background = normalizedInput.background ?? (inferredTransparentBackground ? "transparent" : undefined);
+  const background = normalizedInput.background;
   const outputFormat = normalizedInput.outputFormat ?? (background === "transparent" ? "png" : undefined);
-  const aspectRatio = normalizedInput.aspectRatio ?? inferredImageAspectRatio(prompt);
+  const aspectRatio = normalizedInput.aspectRatio;
   let image;
   let generationAttempts = 1;
-  let activePrompt = prompt;
-  let safetyFallbackUsed = false;
-  let referenceTransparencyFallbackAttempted = false;
-  let referenceTransparencyFallbackUsed = false;
+  const activePrompt = prompt;
   let textValidationFailed = false;
   let textOverlayFallback = false;
   let totalEstimatedCostUsd = 0;
@@ -391,43 +373,10 @@ export async function generateImage(
     image = await ctx.openRouter.generateImage(prompt, imageOptions);
     totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
   } catch (error) {
-    let terminalError = error;
-    if (isOpenRouterContentFilterError(error)) {
-      if (references.length === 0) {
-        generationAttempts += 1;
-        activePrompt = imageSafetyFallbackPrompt(prompt);
-        try {
-          image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
-          totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
-          safetyFallbackUsed = true;
-        } catch (fallbackError) {
-          terminalError = fallbackError;
-        }
-      } else if (background === "transparent") {
-        referenceTransparencyFallbackAttempted = true;
-        generationAttempts += 1;
-        activePrompt = transparentImageRecoveryPrompt(prompt);
-        try {
-          image = await ctx.openRouter.generateImage(activePrompt, imageOptions);
-          totalEstimatedCostUsd += image.estimatedCostUsd ?? 0;
-          referenceTransparencyFallbackUsed = true;
-        } catch (fallbackError) {
-          terminalError = fallbackError;
-        }
-      }
-    }
-    const rejectionRecovery = image ? null : await recoverRejectedImageRequest(ctx.openRouter, terminalError, activePrompt, imageOptions);
-    if (rejectionRecovery) {
-      generationAttempts += 1;
-      activePrompt = rejectionRecovery.prompt;
-      image = rejectionRecovery.image;
-      terminalError = rejectionRecovery.error;
-      totalEstimatedCostUsd += image?.estimatedCostUsd ?? 0;
-    }
     if (!image) {
-      const contentFilterBlocked = isOpenRouterContentFilterError(terminalError);
-      const requestRejected = isOpenRouterHttpError(terminalError) && terminalError.status === 400;
-      if (!contentFilterBlocked && !requestRejected) throw terminalError;
+      const contentFilterBlocked = isOpenRouterContentFilterError(error);
+      const requestRejected = isOpenRouterHttpError(error) && error.status === 400;
+      if (!contentFilterBlocked && !requestRejected) throw error;
       const errorCode = contentFilterBlocked ? "image_generation_blocked" : "image_generation_request_rejected";
       await ctx.repo.auditTool({
         guildId: ctx.guildId,
@@ -443,18 +392,18 @@ export async function generateImage(
           background,
           aspectRatio,
           generationAttempts,
-          referenceTransparencyFallbackAttempted,
-          referenceTransparencyFallbackUsed,
         }),
         resultSummary: errorCode,
         error: errorCode,
-      });
+      }).catch(() => undefined);
       return {
         content: contentFilterBlocked
           ? "Image generation was blocked by the provider's safety filter, so no image was created. Explain that briefly and conversationally, then offer a safe adjustment to the request. Do not expose provider errors or claim that an image was attached."
           : "The image provider could not accept that image request, so no image was created. Explain that briefly and conversationally, then offer to retry with a simpler request. Do not expose provider errors or claim that an image was attached.",
         files: [],
         status: "error",
+        errorCode,
+        retryable: false,
       };
     }
   }
@@ -529,13 +478,15 @@ export async function generateImage(
       error: "generated_image_text_mismatch",
       model: image.model,
       estimatedCostUsd: totalEstimatedCostUsd,
-    });
+    }).catch(() => undefined);
     return {
       content:
         "The image provider misspelled required text twice, so I did not attach an incorrect image. " +
         "Retry the same request and I’ll make another validated attempt.",
       files: [],
       status: "error",
+      errorCode: "generated_image_text_mismatch",
+      retryable: true,
     };
   }
 
@@ -544,7 +495,6 @@ export async function generateImage(
   let transparencyFallbackUsed = false;
   if (
     background === "transparent" &&
-    !referenceTransparencyFallbackUsed &&
     outputs.files.length === 0 &&
     outputs.rejectedOpaqueImages > 0
   ) {
@@ -587,7 +537,6 @@ export async function generateImage(
       referenceImageCount: references.length,
       inlinedReferenceImageCount: preparedReferences.inlined,
       referenceImageInlineFailures: preparedReferences.failed,
-      contextImageSelectionOverridden: contextImageSelection.overrodeModelOptOut,
       outputFormat,
       background,
       aspectRatio,
@@ -596,7 +545,6 @@ export async function generateImage(
       images: image.data.length,
       attachedImages: files.length,
       referenceImageCount: references.length,
-      contextImageSelectionOverridden: contextImageSelection.overrodeModelOptOut,
       outputFormat,
       background,
       aspectRatio,
@@ -606,15 +554,12 @@ export async function generateImage(
       generationAttempts,
       textValidated: requiredText.length > 0,
       textOverlayFallback,
-      safetyFallbackUsed,
-      referenceTransparencyFallbackAttempted,
-      referenceTransparencyFallbackUsed,
       transparencyFallbackUsed,
       transparencyFallbackAttempted,
     }),
     model: image.model,
     estimatedCostUsd: totalEstimatedCostUsd || image.estimatedCostUsd
-  });
+  }).catch(() => undefined);
 
   const promptSummary = truncateForDiscord(prompt, 240);
   const referenceSummary = references.length > 0 ? `\nUsed ${references.length} reference image${references.length === 1 ? "" : "s"}.` : "";
@@ -639,27 +584,14 @@ export async function generateImage(
   const transparencyFallbackSummary = transparencyFallbackUsed
     ? "\nTransparency fallback: regenerated once with a cutout-friendly background and validated real alpha before delivery."
     : "";
-  const referenceTransparencyFallbackSummary =
-    referenceTransparencyFallbackUsed && files.length > 0
-      ? "\nReference safety fallback: retried as a background-only transparent edit and validated real alpha before delivery."
-      : "";
   const textOverlaySummary = textOverlayFallback
     ? "\nTypography fallback: exact requested text was rendered deterministically after the image provider misspelled it twice."
     : "";
-  const safetyFallbackSummary = safetyFallbackUsed
-    ? "\nSafety fallback: generated as a clearly stylized, non-photorealistic illustration after the provider blocked the original rendering."
-    : "";
   const content =
     urls.length > 0
-      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${requestedAspectRatioSummary}${actualOutputSummary}${generatedDimensionsSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}\n${urls.join("\n")}`
-      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${requestedAspectRatioSummary}${actualOutputSummary}${generatedDimensionsSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${referenceTransparencyFallbackSummary}${textOverlaySummary}${safetyFallbackSummary}`;
+      ? `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${requestedAspectRatioSummary}${actualOutputSummary}${generatedDimensionsSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${textOverlaySummary}\n${urls.join("\n")}`
+      : `Generated image for: ${promptSummary}${referenceSummary}${requestedOutputSummary}${requestedAspectRatioSummary}${actualOutputSummary}${generatedDimensionsSummary}${backgroundRemovalSummary}${transparencyFailureSummary}${transparencyFallbackSummary}${textOverlaySummary}`;
   return { content, files };
-}
-
-const TRANSPARENT_IMAGE_INTENT = /\b(?:transparent(?:\s+background)?|no\s+background|remove\s+(?:the\s+)?background|background[- ]?free|cutout|emoji|emote|sticker)\b/i;
-
-function wantsTransparentImage(prompt: string) {
-  return TRANSPARENT_IMAGE_INTENT.test(prompt);
 }
 
 export type ImageReferenceContext = {

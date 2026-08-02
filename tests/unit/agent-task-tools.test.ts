@@ -49,7 +49,10 @@ describe("agent task tools", () => {
     });
 
     await expect(cancelAgentTask(ctx, { taskId: " task-1 ", reason: "not needed" }))
-      .resolves.toContain("Cancelled agent task `task-1`");
+      .resolves.toEqual(expect.objectContaining({
+        content: expect.stringContaining("Cancelled agent task `task-1`"),
+        outcome: expect.objectContaining({ terminal: true }),
+      }));
 
     expect(cancelTask).toHaveBeenCalledWith({ taskId: "task-1", reason: "not needed" });
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "cancelAgentTask" }));

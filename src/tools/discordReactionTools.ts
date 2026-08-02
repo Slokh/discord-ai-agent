@@ -1,5 +1,5 @@
 import { summarizeForAudit } from "../util/text.js";
-import type { ToolContext } from "./types.js";
+import type { AgentResponse, ToolContext } from "./types.js";
 
 export type AddDiscordReactionInput = {
   messageIdOrUrl?: string;
@@ -13,20 +13,17 @@ type DiscordReactionTarget = {
 };
 
 const DISCORD_MESSAGE_URL = /^https?:\/\/(?:www\.)?discord(?:app)?\.com\/channels\/(\d{5,25})\/(\d{5,25})\/(\d{5,25})\/?$/i;
-const DISCORD_MESSAGE_URL_IN_TEXT = /https?:\/\/(?:www\.)?discord(?:app)?\.com\/channels\/(\d{5,25})\/(\d{5,25})\/(\d{5,25})\/?/giu;
 const DISCORD_ID = /^\d{5,25}$/;
 const CUSTOM_EMOJI = /^<a?:[A-Za-z0-9_]{2,32}:\d{5,25}>$/;
 const UNICODE_EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]\uFE0F?\u20E3/u;
-const EXPLICIT_REACTION_INTENT = /(?:\b(?:react|add|put|place|leave)\b[\s\S]{0,80}(?:\p{Extended_Pictographic}|\b(?:emoji|emote|reaction)\b)|(?:\p{Extended_Pictographic}|\b(?:emoji|emote|reaction)\b)[\s\S]{0,80}\b(?:react|add|put|place|leave)\b)/iu;
 
 export async function addDiscordReaction(
   ctx: ToolContext,
   input: AddDiscordReactionInput,
-  currentRequestText: string,
-): Promise<string> {
+  _currentRequestText: string,
+): Promise<AgentResponse> {
   const emoji = input.emoji?.trim() ?? "";
-  const targetNamedInCurrentRequest = requestNamesReactionTarget(currentRequestText, input.messageIdOrUrl);
-  if (ctx.mutationAuthorizedByCurrentInput !== true || (!EXPLICIT_REACTION_INTENT.test(currentRequestText) && !targetNamedInCurrentRequest)) {
+  if (ctx.mutationAuthorizedByCurrentInput === false) {
     return auditReactionFailure(ctx, input, "missing_explicit_current_turn_intent",
       "I can only add a reaction when the current Discord message explicitly asks me to react or add an emoji.");
   }
@@ -39,7 +36,11 @@ export async function addDiscordReaction(
       "That custom emoji is not available in the current Discord server.");
   }
 
-  const target = parseDiscordReactionTarget(input.messageIdOrUrl, ctx.guildId, ctx.channelId);
+  const target = parseDiscordReactionTarget(
+    input.messageIdOrUrl ?? ctx.requestMessageId,
+    ctx.guildId,
+    ctx.channelId,
+  );
   if (!target) {
     return auditReactionFailure(ctx, input, "invalid_message_target",
       "Provide an exact Discord message URL, or a message ID from the current channel. Resolve a described message with Discord search first.");
@@ -53,21 +54,13 @@ export async function addDiscordReaction(
       "I cannot add a Discord reaction from this runtime.");
   }
 
+  let result: Awaited<ReturnType<NonNullable<ToolContext["addDiscordReaction"]>>>;
   try {
-    const result = await ctx.addDiscordReaction({
+    result = await ctx.addDiscordReaction({
       channelId: target.channelId,
       messageId: target.messageId,
       emoji,
     });
-    await ctx.repo.auditTool({
-      guildId: ctx.guildId,
-      channelId: ctx.channelId,
-      userId: ctx.userId,
-      toolName: "addDiscordReaction",
-      argumentsSummary: summarizeForAudit({ target, emoji }),
-      resultSummary: summarizeForAudit({ status: "added", messageId: result.messageId, channelId: result.channelId }),
-    });
-    return `Added ${emoji} to the Discord message: ${result.url}`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await ctx.repo.auditTool({
@@ -78,20 +71,22 @@ export async function addDiscordReaction(
       argumentsSummary: summarizeForAudit({ target, emoji }),
       resultSummary: summarizeForAudit({ status: "failed", error: message }),
       error: message,
-    });
-    return `I could not add that Discord reaction: ${message}`;
+    }).catch(() => undefined);
+    return reactionError("discord_reaction_failed", `I could not add that Discord reaction: ${message}`, true);
   }
-}
-
-function requestNamesReactionTarget(currentRequestText: string, rawTarget: string | undefined): boolean {
-  const target = rawTarget?.trim();
-  if (!target) return false;
-  const parsedTarget = target.match(DISCORD_MESSAGE_URL);
-  if (!parsedTarget) return false;
-  for (const match of currentRequestText.matchAll(DISCORD_MESSAGE_URL_IN_TEXT)) {
-    if (match[1] === parsedTarget[1] && match[2] === parsedTarget[2] && match[3] === parsedTarget[3]) return true;
-  }
-  return false;
+  await ctx.repo.auditTool({
+    guildId: ctx.guildId,
+    channelId: ctx.channelId,
+    userId: ctx.userId,
+    toolName: "addDiscordReaction",
+    argumentsSummary: summarizeForAudit({ target, emoji }),
+    resultSummary: summarizeForAudit({ status: "added", messageId: result.messageId, channelId: result.channelId }),
+  }).catch(() => undefined);
+  return {
+    content: `Added ${emoji} to the Discord message: ${result.url}`,
+    status: "ok",
+    outcome: { kind: "discord_reaction", state: "succeeded", terminal: true },
+  };
 }
 
 export function parseDiscordReactionTarget(
@@ -123,7 +118,7 @@ async function auditReactionFailure(
   input: AddDiscordReactionInput,
   errorCode: string,
   response: string,
-): Promise<string> {
+): Promise<AgentResponse> {
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
     channelId: ctx.channelId,
@@ -132,6 +127,16 @@ async function auditReactionFailure(
     argumentsSummary: summarizeForAudit(input),
     resultSummary: summarizeForAudit({ status: "rejected", errorCode }),
     error: errorCode,
-  });
-  return response;
+  }).catch(() => undefined);
+  return reactionError(errorCode, response);
+}
+
+function reactionError(errorCode: string, content: string, retryable = false): AgentResponse {
+  return {
+    content,
+    status: "error",
+    errorCode,
+    retryable,
+    outcome: { kind: "discord_reaction", state: "failed" },
+  };
 }

@@ -4,30 +4,30 @@ import { findDiscordChannels, findDiscordUsers } from "../../tools/discordResolv
 import { answerFromHistory, getDiscordMessageContext, getDiscordStats, getRecentDiscordMessages, searchDiscordAttachments } from "../../tools/discordRetrievalTools.js";
 import { getDiscordChannelTopics, summarizeCurrentThread, summarizeDiscordHistory } from "../../tools/discordSummaryTools.js";
 import { getAgentMemoryStats, getRecentAgentMemory } from "../../tools/agentMemoryTools.js";
-import { cleanResponse } from "../../tools/responseFormatting.js";
+import { cleanToolResponse } from "../../tools/responseFormatting.js";
 import { stringArgument, stringArgumentPreservingEmpty, stringArrayArgument, enumArgument, numberArgument, booleanArgument } from "./arguments.js";
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const discordRetrievalToolHandlers = {
-  "findDiscordUsers": async (ctx, route, originalText) => {
+  "findDiscordUsers": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await findDiscordUsers(
               ctx,
-              stringArgument(route.arguments, "query") ?? originalText,
+              stringArgument(route.arguments, "query")!,
               numberArgument(route.arguments, "limit"),
             ),
             ctx.config.maxReplyChars,
           ),
         };
   },
-  "findDiscordChannels": async (ctx, route, originalText) => {
+  "findDiscordChannels": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await findDiscordChannels(
               ctx,
-              stringArgument(route.arguments, "query") ?? originalText,
+              stringArgument(route.arguments, "query")!,
               numberArgument(route.arguments, "limit"),
             ),
             ctx.config.maxReplyChars,
@@ -36,15 +36,15 @@ export const discordRetrievalToolHandlers = {
   },
   "listDiscordBugMarkers": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(await listDiscordBugMarkers(ctx, {
+          content: cleanToolResponse(await listDiscordBugMarkers(ctx, {
             limit: numberArgument(route.arguments, "limit"),
           }), Math.max(ctx.config.maxReplyChars, 6_000)),
         };
   },
-  "inspectDiscordFile": async (ctx, route, originalText) => {
+  "inspectDiscordFile": async (ctx, route, _originalText) => {
     return {
           content: await inspectDiscordFile(ctx, {
-            question: stringArgument(route.arguments, "question") ?? originalText,
+            question: stringArgument(route.arguments, "question"),
             messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
             attachmentIdOrName: stringArgument(route.arguments, "attachmentIdOrName"),
             publicMediaUrl: stringArgument(route.arguments, "publicMediaUrl"),
@@ -55,7 +55,7 @@ export const discordRetrievalToolHandlers = {
   },
   "summarizeDiscordThread": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await summarizeCurrentThread(ctx, {
               question: stringArgument(route.arguments, "question"),
             }),
@@ -65,7 +65,7 @@ export const discordRetrievalToolHandlers = {
   },
   "getRecentDiscordMessages": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await getRecentDiscordMessages(ctx, {
               channelIds: stringArrayArgument(route.arguments, "channelIds"),
               authorIds: stringArrayArgument(route.arguments, "authorIds"),
@@ -77,7 +77,7 @@ export const discordRetrievalToolHandlers = {
   },
   "getRecentAgentMemory": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await getRecentAgentMemory(ctx, {
               limit: numberArgument(route.arguments, "limit"),
               includeToolResults: booleanArgument(
@@ -91,7 +91,7 @@ export const discordRetrievalToolHandlers = {
   },
   "getAgentMemoryStats": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await getAgentMemoryStats(ctx, {
               sinceText: stringArgument(route.arguments, "sinceText"),
               sinceMessageIdOrUrl: stringArgument(
@@ -108,12 +108,12 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "getDiscordMessageContext": async (ctx, route, originalText) => {
+  "getDiscordMessageContext": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await getDiscordMessageContext(ctx, {
               messageIdOrUrl:
-                stringArgument(route.arguments, "messageIdOrUrl") ?? originalText,
+                stringArgument(route.arguments, "messageIdOrUrl")!,
               before: numberArgument(route.arguments, "before"),
               after: numberArgument(route.arguments, "after"),
             }),
@@ -123,7 +123,7 @@ export const discordRetrievalToolHandlers = {
   },
   "searchDiscordAttachments": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await searchDiscordAttachments(ctx, {
               query: stringArgument(route.arguments, "query"),
               channelIds: stringArrayArgument(route.arguments, "channelIds"),
@@ -137,7 +137,7 @@ export const discordRetrievalToolHandlers = {
   },
   "getDiscordStats": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await getDiscordStats(ctx, {
               authorIds: stringArrayArgument(route.arguments, "authorIds"),
               channelIds: stringArrayArgument(route.arguments, "channelIds"),
@@ -165,7 +165,7 @@ export const discordRetrievalToolHandlers = {
   },
   "getDiscordChannelTopics": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await getDiscordChannelTopics(ctx, {
               channelIds: stringArrayArgument(route.arguments, "channelIds"),
               channelQueries: stringArrayArgument(
@@ -191,11 +191,11 @@ export const discordRetrievalToolHandlers = {
           ),
         };
   },
-  "summarizeDiscordHistory": async (ctx, route, originalText) => {
+  "summarizeDiscordHistory": async (ctx, route, _originalText) => {
     return {
-          content: cleanResponse(
+          content: cleanToolResponse(
             await summarizeDiscordHistory(ctx, {
-              question: stringArgument(route.arguments, "question") ?? originalText,
+              question: stringArgument(route.arguments, "question")!,
               authorIds: stringArrayArgument(route.arguments, "authorIds"),
               channelIds: stringArrayArgument(route.arguments, "channelIds"),
               aboutUserIds: stringArrayArgument(route.arguments, "aboutUserIds"),
@@ -218,10 +218,10 @@ export const discordRetrievalToolHandlers = {
   },
   "searchDiscordHistory": async (ctx, route, originalText) => {
     return {
-        content: cleanResponse(
+        content: cleanToolResponse(
           await answerFromHistory(
             ctx,
-            stringArgumentPreservingEmpty(route.arguments, "query") ?? originalText,
+            stringArgumentPreservingEmpty(route.arguments, "query")!,
             {
               authorIds: stringArrayArgument(route.arguments, "authorIds"),
               channelIds: stringArrayArgument(route.arguments, "channelIds"),

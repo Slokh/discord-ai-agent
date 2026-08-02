@@ -33,7 +33,7 @@ For a small local bug, the nearest owner and one regression test may be enough. 
 
 1. **Ingress:** What current Discord message, requester identity, mentions, reply context, attachments, and visible channels enter the request?
 2. **Durable state:** Which repository is authoritative? What is the idempotency or concurrency key? How is state deleted or expired?
-3. **Capability selection:** Is this model intent, deterministic routing, or both? Which tool group exposes it?
+3. **Capability selection:** Which deployed tool contract lets the model express the intent, and which deterministic boundary validates it?
 4. **Execution:** Which provider, local tool, external API, queue, or sandbox performs the work? What are the timeout and retry rules?
 5. **Delivery:** How do acknowledgement, status, files, formatting, reactions, footers, and errors reach Discord?
 6. **Observability:** Which typed events, spans, audits, artifacts, costs, and latencies explain the run?

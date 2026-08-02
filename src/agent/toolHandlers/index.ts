@@ -6,6 +6,7 @@ import { codegenToolHandlers } from "./codegen.js";
 import { imageToolHandlers } from "./image.js";
 import { generatedDataToolHandlers } from "./generated-data.js";
 import { spotifyToolHandlers } from "./spotify.js";
+import { walletToolHandlers } from "./wallet.js";
 
 export const handlerFamilies = {
   core: coreToolHandlers,
@@ -16,6 +17,7 @@ export const handlerFamilies = {
   image: imageToolHandlers,
   generatedData: generatedDataToolHandlers,
   spotify: spotifyToolHandlers,
+  wallet: walletToolHandlers,
 } as const;
 
 type UnionToIntersection<T> = (T extends unknown ? (value: T) => void : never) extends (value: infer I) => void ? I : never;

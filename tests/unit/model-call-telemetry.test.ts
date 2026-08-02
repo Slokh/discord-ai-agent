@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { promptSectionTelemetry, runObservedModelCall } from "../../src/agent/modelCallTelemetry.js";
+import { chatMessages } from "../../src/agent/promptBuilder.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 function context(chat: ToolContext["openRouter"]["chat"]): ToolContext {
@@ -156,17 +157,14 @@ describe("runObservedModelCall", () => {
   });
 
   it("attributes prompt bytes to stable debugger sections", () => {
-    expect(promptSectionTelemetry([
-      { role: "system", content: "base" },
-      { role: "system", content: "Current Discord requester: User" },
-      { role: "system", content: "Available skill inventory:\nNo repository skills are installed." },
-      { role: "system", content: "The current user message is a Discord reply. parent" },
-      { role: "user", content: "latest" },
-    ])).toEqual(expect.arrayContaining([
+    const messages = chatMessages("latest", "skills", [], undefined, [], undefined, {
+      userId: "user",
+      userDisplayName: "User",
+    });
+    expect(promptSectionTelemetry(messages)).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "base_system_prompt", messageCount: 1 }),
       expect.objectContaining({ name: "requester_identity", messageCount: 1 }),
       expect.objectContaining({ name: "skill_inventory", messageCount: 1 }),
-      expect.objectContaining({ name: "reply_chain", messageCount: 1 }),
       expect.objectContaining({ name: "current_user_request", messageCount: 1 }),
     ]));
   });

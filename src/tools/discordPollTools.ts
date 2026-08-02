@@ -1,5 +1,5 @@
 import { summarizeForAudit } from "../util/text.js";
-import type { ToolContext } from "./types.js";
+import type { AgentResponse, ToolContext } from "./types.js";
 
 export type CreateDiscordPollInput = {
   question: string;
@@ -25,7 +25,7 @@ const MAX_ANSWER_CHARS = 55;
 export async function createDiscordPoll(
   ctx: ToolContext,
   input: CreateDiscordPollInput
-): Promise<string> {
+): Promise<AgentResponse> {
   const question = (input.question ?? "").trim();
   const answers = (input.answers ?? [])
     .map((answer) => (typeof answer === "string" ? answer.trim() : ""))
@@ -33,24 +33,24 @@ export async function createDiscordPoll(
 
   if (!question) {
     await auditPoll(ctx, input, "missing poll question");
-    return "I need a poll question to create a Discord poll.";
+    return pollError("invalid_poll", "I need a poll question to create a Discord poll.");
   }
   if (question.length > MAX_QUESTION_CHARS) {
     await auditPoll(ctx, input, `poll question over ${MAX_QUESTION_CHARS} chars`);
-    return `Discord caps poll question text at ${MAX_QUESTION_CHARS} characters. Please shorten the question.`;
+    return pollError("invalid_poll", `Discord caps poll question text at ${MAX_QUESTION_CHARS} characters. Please shorten the question.`);
   }
   if (answers.length < MIN_ANSWERS) {
     await auditPoll(ctx, input, "no poll answers");
-    return "I need at least one poll answer option to create a Discord poll.";
+    return pollError("invalid_poll", "I need at least one poll answer option to create a Discord poll.");
   }
   if (answers.length > MAX_ANSWERS) {
     await auditPoll(ctx, input, `too many poll answers (${answers.length})`);
-    return `Discord polls support at most ${MAX_ANSWERS} answer options. You provided ${answers.length}.`;
+    return pollError("invalid_poll", `Discord polls support at most ${MAX_ANSWERS} answer options. You provided ${answers.length}.`);
   }
   const overlongAnswer = answers.find((answer) => answer.length > MAX_ANSWER_CHARS);
   if (overlongAnswer) {
     await auditPoll(ctx, input, `poll answer over ${MAX_ANSWER_CHARS} chars`);
-    return `Discord caps each poll answer at ${MAX_ANSWER_CHARS} characters. Please shorten: "${truncateForAudit(overlongAnswer, 80)}".`;
+    return pollError("invalid_poll", `Discord caps each poll answer at ${MAX_ANSWER_CHARS} characters. Please shorten: "${truncateForAudit(overlongAnswer, 80)}".`);
   }
 
   const durationHours = boundedDuration(input.durationHours);
@@ -58,7 +58,7 @@ export async function createDiscordPoll(
 
   if (!ctx.sendDiscordPoll) {
     await auditPoll(ctx, input, "no discord poll sender available", { durationHours, allowMultiselect });
-    return "I cannot post a Discord poll from here because the bot runtime did not wire up native poll sending. Try asking me in a normal Discord channel.";
+    return pollError("poll_runtime_unavailable", "I cannot post a Discord poll from here because the bot runtime did not wire up native poll sending. Try asking me in a normal Discord channel.");
   }
 
   let result: DiscordPollSendResult;
@@ -67,7 +67,7 @@ export async function createDiscordPoll(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await auditPoll(ctx, input, `poll send failed: ${message}`, { durationHours, allowMultiselect }, true);
-    return `I could not post the Discord poll: ${message}`;
+    return pollError("poll_send_failed", `I could not post the Discord poll: ${message}`, true);
   }
 
   await auditPoll(ctx, input, `posted poll message ${result.messageId}`, {
@@ -75,9 +75,17 @@ export async function createDiscordPoll(
     allowMultiselect,
     messageId: result.messageId,
     url: result.url
-  });
+  }).catch(() => undefined);
 
-  return formatPollResult({ question, answers, durationHours, allowMultiselect, result });
+  return {
+    content: formatPollResult({ question, answers, durationHours, allowMultiselect, result }),
+    status: "ok",
+    outcome: { kind: "discord_poll", state: "succeeded", terminal: true },
+  };
+}
+
+function pollError(errorCode: string, content: string, retryable = false): AgentResponse {
+  return { content, status: "error", errorCode, retryable, outcome: { kind: "discord_poll", state: "failed" } };
 }
 
 function boundedDuration(value: unknown): number {

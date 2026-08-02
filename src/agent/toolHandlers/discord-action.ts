@@ -1,35 +1,60 @@
-import { drawRandom, revealRandomness, settleRandomWager } from "../../tools/randomTools.js";
-import {
-  isSuccessfulRandomDrawResult,
-  RANDOM_ACTION_NOT_AUTHORIZED_RESPONSE,
-} from "../randomOutcomeGuard.js";
-import { undoConversationTurns } from "../../tools/agentMemoryTools.js";
-import { cleanResponse } from "../../tools/responseFormatting.js";
-import { stringArgument, stringArrayArgument, numberArgument, recordArgument } from "./arguments.js";
+import { drawRandomResponse, revealRandomnessResponse, settleRandomWagerResponse } from "../../tools/randomTools.js";
+import { undoConversationTurnsResponse } from "../../tools/agentMemoryTools.js";
+import { updateBotAvatar } from "../../tools/botProfileTools.js";
+import { createDiscordPoll } from "../../tools/discordPollTools.js";
+import { addDiscordReaction } from "../../tools/discordReactionTools.js";
+import { createDiscordEmoji } from "../../tools/guildEmojiTools.js";
+import { composeDiscordResponse } from "../../tools/discordPresentationTools.js";
+import { cleanToolResponse } from "../../tools/responseFormatting.js";
+import { booleanArgument, stringArgument, stringArrayArgument, numberArgument, recordArgument } from "./arguments.js";
 import type { ToolName } from "../../tools/registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const discordActionToolHandlers = {
+  "composeDiscordResponse": async (ctx, route, _originalText) =>
+    composeDiscordResponse(ctx, route.arguments ?? {}),
+  "addDiscordReaction": async (ctx, route, originalText) => {
+    const response = await addDiscordReaction(ctx, {
+      messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
+      emoji: stringArgument(route.arguments, "emoji"),
+    }, originalText);
+    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
+  },
+  "createDiscordPoll": async (ctx, route, _originalText) => {
+    const response = await createDiscordPoll(ctx, {
+      question: stringArgument(route.arguments, "question")!,
+      answers: stringArrayArgument(route.arguments, "answers") ?? [],
+      durationHours: numberArgument(route.arguments, "durationHours"),
+      allowMultiselect: booleanArgument(route.arguments, "allowMultiselect"),
+    });
+    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
+  },
+  "updateBotAvatar": async (ctx, route, _originalText) => {
+    const response = await updateBotAvatar(ctx, {
+      imageUrl: stringArgument(route.arguments, "imageUrl"),
+      messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
+      useContextImage: booleanArgument(route.arguments, "useContextImage"),
+    });
+    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
+  },
+  "createDiscordEmoji": async (ctx, route, _originalText) => {
+    const response = await createDiscordEmoji(ctx, {
+      name: stringArgument(route.arguments, "name"),
+      imageUrl: stringArgument(route.arguments, "imageUrl"),
+      messageIdOrUrl: stringArgument(route.arguments, "messageIdOrUrl"),
+      useContextImage: booleanArgument(route.arguments, "useContextImage"),
+      requireTransparent: booleanArgument(route.arguments, "requireTransparent"),
+    });
+    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
+  },
   "undoConversationTurns": async (ctx, route, _originalText) => {
-    return {
-          content: cleanResponse(
-            await undoConversationTurns(
+    const response = await undoConversationTurnsResponse(
               ctx,
               numberArgument(route.arguments, "count"),
-            ),
-            ctx.config.maxReplyChars,
-          ),
-        };
+            );
+    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
   },
   "drawRandom": async (ctx, route, _originalText) => {
-    if (!ctx.randomActionAuthorized) {
-      return {
-        content: RANDOM_ACTION_NOT_AUTHORIZED_RESPONSE,
-        status: "error",
-        errorCode: "random_action_not_authorized",
-        retryable: false,
-      };
-    }
     const wager = recordArgument(route.arguments, "wager") as {
       playerUserId?: string;
       stakeUsd?: number;
@@ -38,8 +63,7 @@ export const discordActionToolHandlers = {
       interactionMode?: "automatic" | "player_decisions";
       rule?: { kind: "coin_side"; side: "heads" | "tails" } | { kind: "sum"; operator: ">=" | ">" | "<=" | "<" | "="; target: number } | { kind: "any_match" } | { kind: "all_distinct" };
     } | undefined;
-    const content = cleanResponse(
-          await drawRandom(ctx, {
+    const response = await drawRandomResponse(ctx, {
             kind: stringArgument(route.arguments, "kind"),
             count: numberArgument(route.arguments, "count"),
             min: numberArgument(route.arguments, "min"),
@@ -48,50 +72,22 @@ export const discordActionToolHandlers = {
             options: stringArrayArgument(route.arguments, "options"),
             deckCount: numberArgument(route.arguments, "deckCount"),
             reason: stringArgument(route.arguments, "reason"),
+            wagerAction: stringArgument(route.arguments, "wagerAction") as "hit" | "stand" | undefined,
             wager,
-          }),
-          ctx.config.maxReplyChars,
-        );
-    return {
-          content,
-          status: isSuccessfulRandomDrawResult(content) ? "ok" : "error",
-          retryable: !isSuccessfulRandomDrawResult(content),
-          outcome: randomDrawOutcome(content),
-        };
+          });
+    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
   },
   "revealRandomness": async (ctx, _route, _originalText) => {
-    return {
-          content: cleanResponse(
-            await revealRandomness(ctx),
-            ctx.config.maxReplyChars,
-          ),
-        };
+    const response = await revealRandomnessResponse(ctx);
+    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
   },
   "settleRandomWager": async (ctx, route, _originalText) => {
-    const content = cleanResponse(
-            await settleRandomWager(ctx, {
+    const response = await settleRandomWagerResponse(ctx, {
               payoutUsd: numberArgument(route.arguments, "payoutUsd"),
               outcome: stringArgument(route.arguments, "outcome") as "player_win" | "player_loss" | "push" | undefined,
               resolutionSource: stringArgument(route.arguments, "resolutionSource") as "verified_randomness" | "player_decision" | undefined,
               explanation: stringArgument(route.arguments, "explanation"),
-            }),
-            ctx.config.maxReplyChars,
-          );
-    return { content, status: content.startsWith("The scoped wallet wager settled.") ? "ok" : "error", outcome: { kind: "wager", state: content.startsWith("The scoped wallet wager settled.") ? "settled" : "failed" } };
+            });
+    return { ...response, content: cleanToolResponse(response.content, ctx.config.maxReplyChars) };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
-
-export function randomDrawOutcome(content: string) {
-  if (!isSuccessfulRandomDrawResult(content)) return { kind: "rng_draw", state: "failed" as const };
-  // `drawRandom` normalizes empty/default model arguments before deciding
-  // whether it reserved a wager. The text below is its confirmed lifecycle
-  // result, so it is safe to use for orchestration without trusting raw args.
-  const wagerActive = /\b(?:scoped wallet wager is reserved|continues the scoped active wallet wager)\b/i.test(content);
-  const nextTool = content.match(/\bRequired next (?:action|tool):[\s\S]{0,500}?\bcall\s+(awaitRandomWagerAction|settleRandomWager)\b/i)?.[1];
-  return {
-    kind: "rng_draw",
-    state: "succeeded" as const,
-    wagerActive,
-    ...(nextTool ? { nextTool } : {}),
-  };
-}

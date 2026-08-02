@@ -23,9 +23,10 @@ describe("awaitRandomWagerAction", () => {
       expectedVersion: 1,
       allowedActions: ["hit", "stand"],
     }), expect.any(Function));
-    expect(response).toContain("Wallet game paused for player action.");
-    expect(response).toContain("State version: 2");
-    expect(response).toContain("Allowed actions: hit, stand");
+    expect(response.content).toContain("Wallet game paused for player action.");
+    expect(response.content).toContain("State version: 2");
+    expect(response.content).toContain("Allowed actions: hit, stand");
+    expect(response.outcome).toMatchObject({ state: "awaiting_action", terminal: true });
   });
 
   it("rejects invalid state without touching the wallet service", async () => {
@@ -39,7 +40,7 @@ describe("awaitRandomWagerAction", () => {
       prompt: "Choose",
     });
 
-    expect(response).toContain("allowedActions must contain");
+    expect(response.content).toContain("allowedActions must contain");
     expect(awaitGameAction).not.toHaveBeenCalled();
   });
 
@@ -54,8 +55,8 @@ describe("awaitRandomWagerAction", () => {
       prompt: "Confirm to settle?",
     });
 
-    expect(response).toContain("genuine gameplay decisions");
-    expect(response).toContain("Call settleRandomWager immediately");
+    expect(response.content).toContain("genuine gameplay decisions");
+    expect(response.content).toContain("Call settleRandomWager immediately");
     expect(awaitGameAction).not.toHaveBeenCalled();
   });
 
@@ -71,7 +72,8 @@ describe("awaitRandomWagerAction", () => {
       prompt: "Hit again?",
     });
 
-    expect(response).toContain("Could not pause wallet game: Game state version conflict");
+    expect(response.content).toContain("Could not pause wallet game: Game state version conflict");
+    expect(response).toMatchObject({ status: "error", retryable: true });
   });
 });
 

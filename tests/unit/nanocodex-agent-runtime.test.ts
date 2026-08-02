@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { compactNanoCodexToolDefinitions, executeNanoCodexAgentRuntime } from "../../src/agent/nanocodexAgentRuntime.js";
+import { executeNanoCodexAgentRuntime } from "../../src/agent/nanocodexAgentRuntime.js";
 import { loadConfig } from "../../src/config/env.js";
 import { localToolDefinitionsForModel } from "../../src/tools/registry.js";
 
 describe("NanoCodex agent runtime executor", () => {
-  it("keeps the full tool contract while bounding model-facing descriptions", () => {
-    const original = localToolDefinitionsForModel();
-    const compact = compactNanoCodexToolDefinitions(original);
-    expect(compact.map((tool) => tool.function.name)).toEqual(original.map((tool) => tool.function.name));
-    expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(original).length * 0.75);
-    expect(Math.max(...compact.map((tool) => tool.function.description?.length ?? 0))).toBeLessThanOrEqual(600);
+  it("keeps the canonical nested tool contract visible to the model", () => {
+    const definitions = localToolDefinitionsForModel();
+    const presentation = definitions.find((tool) => tool.function.name === "composeDiscordResponse");
+    expect(JSON.stringify(presentation?.function.parameters)).toContain('"media_gallery"');
+    expect(presentation?.function.parameters).toBe(
+      localToolDefinitionsForModel().find((tool) => tool.function.name === "composeDiscordResponse")?.function.parameters,
+    );
   });
 
   it("runs a retained NanoCodex turn with the full deployment-safe tool contract", async () => {
@@ -22,8 +23,9 @@ describe("NanoCodex agent runtime executor", () => {
       expect(input.hostedWebSearch).toBe(true);
       expect(input.instructions).not.toContain("Current Discord requester: Kartik");
       expect(input.prompt).toContain("Current Discord requester: Kartik");
+      expect(input.prompt).toContain("Current NanoCodex model for this turn: `openai/gpt-5.6-luna`");
       expect(input.prompt).toContain("USER: hello");
-      expect(input.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(["listTools", "drawRandom"]));
+      expect(input.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(["loadSkillContext", "drawRandom"]));
       await expect(input.executeTool({ callId: "bad-1", name: "notRegistered", arguments: {} })).resolves.toEqual({
         success: false,
         output: "Tool notRegistered is not available for this request.",
@@ -161,6 +163,48 @@ describe("NanoCodex agent runtime executor", () => {
     }));
   });
 
+  it("retains an earlier committed result when a later mutation fails", async () => {
+    const runtime = agentRuntime();
+    const runRuntime = vi.fn(async (input: any) => {
+      expect((await input.executeTool({ callId: "call-1", name: "drawRandom", arguments: { kind: "coin" } })).success).toBe(true);
+      expect((await input.executeTool({ callId: "call-2", name: "createDiscordPoll", arguments: { question: "Pick", answers: ["A", "B"] } })).success).toBe(false);
+      throw new Error("runtime exited after the second tool");
+    });
+    const executeToolRoute = vi.fn(async (_ctx, route) => route.name === "drawRandom"
+      ? { content: "Coin: heads", status: "ok" as const, outcome: { kind: "rng_draw", state: "succeeded" as const, terminal: true } }
+      : { content: "Poll failed", status: "error" as const, outcome: { kind: "discord_poll", state: "failed" as const, terminal: false } });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "flip then poll",
+      timeoutMs: 1_000,
+      runRuntime: runRuntime as never,
+      executeToolRoute: executeToolRoute as never,
+    })).resolves.toMatchObject({ content: "Coin: heads" });
+  });
+
+  it("returns every committed mutation when NanoCodex exits before its final message", async () => {
+    const runtime = agentRuntime();
+    const runRuntime = vi.fn(async (input: any) => {
+      await input.executeTool({ callId: "call-1", name: "addDiscordReaction", arguments: { emoji: "👍" } });
+      await input.executeTool({ callId: "call-2", name: "createDiscordPoll", arguments: { question: "Pick", answers: ["A", "B"] } });
+      throw new Error("runtime exited after both writes");
+    });
+    const executeToolRoute = vi.fn(async (_ctx, route) => ({
+      content: route.name === "addDiscordReaction" ? "Added 👍." : "Posted the poll.",
+      status: "ok" as const,
+      outcome: { kind: route.name, state: "succeeded" as const, terminal: true },
+    }));
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime), text: "react and poll", timeoutMs: 1_000,
+      runRuntime: runRuntime as never, executeToolRoute: executeToolRoute as never,
+    })).resolves.toMatchObject({
+      content: "Added 👍.\n\nPosted the poll.",
+      outcome: { kind: "mutation_batch", state: "succeeded" },
+    });
+  });
+
   it("delivers a generated image when NanoCodex exits before its final message", async () => {
     const runtime = agentRuntime();
     const image = { name: "generated.png", contentType: "image/png", data: Buffer.from("image") };
@@ -212,6 +256,55 @@ describe("NanoCodex agent runtime executor", () => {
       files: [expect.objectContaining({ name: "generated.png", data: image.data })],
     });
     expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.timeout_output_recovered",
+    }));
+  });
+
+  it("delivers a completed mutation when the hard timeout wins the runtime race", async () => {
+    const runtime = agentRuntime();
+    const runRuntime = vi.fn(async (input: any) => {
+      await input.executeTool({ callId: "call-1", name: "addDiscordReaction", arguments: { emoji: "👍" } });
+      await new Promise((_, reject) => input.abortSignal.addEventListener("abort", () => reject(input.abortSignal.reason)));
+      return result("unreachable");
+    });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime),
+      text: "add the reaction",
+      timeoutMs: 250,
+      runRuntime: runRuntime as never,
+      executeToolRoute: (async () => ({
+        content: "Added 👍 to the Discord message.",
+        status: "ok" as const,
+        outcome: { kind: "discord_reaction", state: "succeeded" as const, terminal: true },
+      })) as never,
+    })).resolves.toMatchObject({
+      content: "Added 👍 to the Discord message.",
+      outcome: { state: "succeeded" },
+    });
+    expect(runtime.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "agent.nanocodex.timeout_mutation_recovered",
+    }));
+  });
+
+  it("does not bypass wager resolution when a timeout follows file generation", async () => {
+    const runtime = agentRuntime();
+    const image = { name: "generated.png", contentType: "image/png", data: Buffer.from("image") };
+    const runRuntime = vi.fn(async (input: any) => {
+      await input.executeTool({ callId: "call-1", name: "generateImage", arguments: { prompt: "a coin" } });
+      await input.executeTool({ callId: "call-2", name: "drawRandom", arguments: { kind: "coin" } });
+      await new Promise((_, reject) => input.abortSignal.addEventListener("abort", () => reject(input.abortSignal.reason)));
+      return result("unreachable");
+    });
+    const executeToolRoute = vi.fn(async (_ctx, route) => route.name === "generateImage"
+      ? { content: "Generated image", files: [image] }
+      : { content: "Coin: heads", status: "ok" as const, outcome: { kind: "rng_draw", state: "succeeded" as const, wagerActive: true } });
+
+    await expect(executeNanoCodexAgentRuntime({
+      toolContext: toolContext(runtime), text: "make a wager", timeoutMs: 250,
+      runRuntime: runRuntime as never, executeToolRoute: executeToolRoute as never,
+    })).rejects.toThrow(/timed out/i);
+    expect(runtime.recordEvent).not.toHaveBeenCalledWith(expect.objectContaining({
       eventName: "agent.nanocodex.timeout_output_recovered",
     }));
   });

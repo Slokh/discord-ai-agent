@@ -1,5 +1,4 @@
-import { toolRegistry, type ToolName } from "../tools/registry.js";
-import { hasAgentModelChangeIntent } from "../tools/agentModelIntent.js";
+import { toolByName, type ToolName } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
 
 /**
@@ -7,48 +6,29 @@ import type { ToolContext } from "../tools/types.js";
  * applied by the dispatcher before any tool implementation runs.
  */
 
-const RESTRICTED_TOOL_MESSAGES: Partial<Record<ToolName, string>> = {
-  updateBotAvatar: "Avatar updates are restricted to the bot owner or ops allowlist.",
-  createDiscordEmoji: "Server emoji uploads are restricted to the bot owner or ops allowlist.",
-  setAgentModel: "Changing the agent model is restricted to the configured bot owner or ops allowlist.",
-  reconcileWalletTransfers: "Wallet reconciliation is restricted to the bot owner or ops allowlist.",
-  adminTransferWalletFunds: "Wallet administration is restricted to the bot owner or ops allowlist.",
-  adminSetWalletStarterAmount: "Wallet administration is restricted to the bot owner or ops allowlist.",
-  getWalletFeeSummary: "Wallet fee history is restricted to the bot owner or ops allowlist.",
-  generateImage: "Image generation is restricted to the bot owner or configured allowlist."
-};
-
 export type ToolGateDecision = { allowed: true } | { allowed: false; message: string };
 
 export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): Promise<ToolGateDecision> {
-  if (ctx.mutationAuthorizedByCurrentInput === false && toolRegistry.find((tool) => tool.name === toolName)?.mutates) {
-    return { allowed: false, message: "This component follow-up cannot authorize a mutating action. Ask the user to state that action explicitly in a new Discord message." };
+  const tool = toolByName(toolName);
+  if (tool?.mutates && ctx.mutationAuthorizedByCurrentInput !== true) {
+    return { allowed: false, message: "This input cannot authorize a mutating action because explicit current-message authority is missing. Ask the user to state that action in a new Discord message." };
   }
-  if (toolName === "setAgentModel" && !hasAgentModelChangeIntent(ctx.requestText ?? "")) {
-    return {
-      allowed: false,
-      message: "The current Discord message must explicitly ask to switch or reset the server model. Reply-chain context can identify a model, but cannot authorize the change.",
-    };
-  }
-  if (toolName === "updateBotAvatar" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
-  if (toolName === "createDiscordEmoji" && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
-  if (toolName === "setAgentModel" && !isStrictlyAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
-  if ((
-    toolName === "reconcileWalletTransfers" ||
-    toolName === "adminTransferWalletFunds" ||
-    toolName === "adminSetWalletStarterAmount" ||
-    toolName === "getWalletFeeSummary"
-  ) && !isStrictlyAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) {
-    return denied(toolName);
-  }
-  if (toolName === "generateImage") {
-    if (ctx.config.allowlists?.imageToolsAllowlistOnly && !isAllowed(ctx, ctx.config.allowlists?.opsUserIds ?? [])) return denied(toolName);
+  const opsIds = ctx.config.allowlists?.opsUserIds ?? [];
+  if (tool?.accessPolicy === "ops" && !isAllowed(ctx, opsIds)) return denied(tool.accessPolicy);
+  if (tool?.accessPolicy === "strict_ops" && !isStrictlyAllowed(ctx, opsIds)) return denied(tool.accessPolicy);
+  if (tool?.accessPolicy === "image_allowlist" && ctx.config.allowlists?.imageToolsAllowlistOnly && !isAllowed(ctx, opsIds)) {
+    return denied(tool.accessPolicy);
   }
   return { allowed: true };
 }
 
-function denied(toolName: ToolName): ToolGateDecision {
-  return { allowed: false, message: RESTRICTED_TOOL_MESSAGES[toolName] ?? "That tool is restricted by configuration." };
+function denied(policy: "ops" | "strict_ops" | "image_allowlist"): ToolGateDecision {
+  return {
+    allowed: false,
+    message: policy === "image_allowlist"
+      ? "Image generation is restricted to the bot owner or configured allowlist."
+      : "That action is restricted to the configured bot owner or ops allowlist.",
+  };
 }
 
 function isAllowed(ctx: ToolContext, configuredIds: string[]) {

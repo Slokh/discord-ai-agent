@@ -14,18 +14,16 @@ import type {
 } from "./types.js";
 import { getStarterTargetUsd as readStarterTargetUsd, getWalletFeeSummary, setStarterTargetAndRebalance as updateStarterTargetAndRebalance, type WalletAdministrationDependencies } from "./walletAdministration.js";
 import { activeManagedWallet, checkedAddress, checkedHash, errorMessage, mapWithConcurrency, networkExternalId, transactionHashFromError } from "./walletRuntimeHelpers.js";
+import { readPostTransferBalances } from "./postTransferBalances.js";
 
 type SubmittedWalletTransfer = WalletTransfer & { confirmedBlockNumber?: bigint };
-
 export class WalletService {
   private usdTokenPromise: Promise<TokenInfo> | null = null;
-
   constructor(
     private readonly config: AppConfig["payments"],
     private readonly repo: PaymentRepository,
     private readonly provider: WalletProvider
   ) {}
-
   async ensureBotWallet(_guildId: string, record?: PaymentEventRecorder): Promise<WalletAccount> {
     return this.ensureWallet({ guildId: SHARED_BOT_GUILD_ID, ownerKind: "bot", discordUserId: null }, record);
   }
@@ -229,6 +227,7 @@ export class WalletService {
     failed: number;
     totalToTreasuryUsd: string;
     totalFromTreasuryUsd: string;
+    rebalanceError?: string;
   }> {
     return updateStarterTargetAndRebalance(this.administrationDependencies(), input, record);
   }
@@ -625,8 +624,8 @@ export class WalletService {
     metadata?: Record<string, unknown>;
   }, record?: PaymentEventRecorder): Promise<{
     transfer: WalletTransfer;
-    source: { wallet: WalletAccount; balance: { formatted: string } };
-    destination: { wallet: WalletAccount; balance: { formatted: string } };
+    source: { wallet: WalletAccount; balance: { formatted: string } | null };
+    destination: { wallet: WalletAccount; balance: { formatted: string } | null };
   }> {
     const token = await this.usdToken();
     const amountAtomic = usdToAtomic(input.amountUsd, token.decimals);
@@ -670,14 +669,20 @@ export class WalletService {
     if (submitted.status !== "confirmed") {
       throw new Error(`Transfer ${submitted.id} is ${submitted.status}; no completed transfer will be reported until it is confirmed`);
     }
-    const [sourceBalance, destinationBalance] = await Promise.all([
-      this.getBalance(input.source, { blockNumber: submitted.confirmedBlockNumber }),
-      this.getBalance(input.destination, { blockNumber: submitted.confirmedBlockNumber })
-    ]);
+    const [sourceBalance, destinationBalance] = await readPostTransferBalances({
+      source: () => this.getBalance(input.source, { blockNumber: submitted.confirmedBlockNumber }),
+      destination: () => this.getBalance(input.destination, { blockNumber: submitted.confirmedBlockNumber }),
+      onFailure: async (side, error) => emit(record, {
+        eventName: "wallet.transfer.post_balance_failed",
+        level: "warn",
+        summary: `Transfer confirmed but ${side} balance refresh failed`,
+        metadata: { transferId: submitted.id, walletId: input[side].id, error: errorMessage(error) },
+      }),
+    });
     return {
       transfer: submitted,
-      source: { wallet: input.source, balance: { formatted: sourceBalance.formatted } },
-      destination: { wallet: input.destination, balance: { formatted: destinationBalance.formatted } }
+      source: { wallet: input.source, balance: sourceBalance ? { formatted: sourceBalance.formatted } : null },
+      destination: { wallet: input.destination, balance: destinationBalance ? { formatted: destinationBalance.formatted } : null }
     };
   }
 
@@ -789,5 +794,6 @@ export class WalletService {
 export const SHARED_BOT_GUILD_ID = "__shared_bot__";
 
 async function emit(record: PaymentEventRecorder | undefined, event: Parameters<PaymentEventRecorder>[0]): Promise<void> {
-  await record?.(event);
+  if (!record) return;
+  await record(event).catch(() => undefined);
 }

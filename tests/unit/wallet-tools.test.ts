@@ -2,11 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   adminSetWalletStarterAmount,
   adminTransferWalletFunds,
-  ensureAutomaticStarterFunds,
   getWagerHistory,
   getWalletBalance,
   getWalletFeeSummary,
-  hasExplicitTransferIntent,
   listWalletBalances,
   requestStarterFunds,
   transferWalletFunds
@@ -195,8 +193,8 @@ describe("managed wallet tools", () => {
       amountUsd: 2
     });
 
-    expect(result).toContain("Transferred $2 USD from your wallet to Friend's wallet.");
-    expect(result).toContain("Source balance: $3 USD");
+    expect(result.content).toContain("Transferred $2 USD from your wallet to Friend's wallet.");
+    expect(result.content).toContain("Source balance: $3 USD");
     expect(ctx.turnOutput?.footerLines).toEqual([
       `💸 [transfer](<https://explore.tempo.xyz/tx/0x${"9".repeat(64)}>)`
     ]);
@@ -225,7 +223,7 @@ describe("managed wallet tools", () => {
       amountUsd: 1
     });
 
-    expect(result).toContain("Luke's wallet");
+    expect(result.content).toContain("Luke's wallet");
     expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
       destination: { kind: "user", userId: "luke-id" },
       amountUsd: 1
@@ -257,11 +255,12 @@ describe("managed wallet tools", () => {
       }
     });
 
-    const first = await transferWalletFunds(ctx, {});
-    const second = await transferWalletFunds(ctx, {});
+    const transfer = { destination: "user" as const, destinationUserId: "Luke", amountUsd: 1 };
+    const first = await transferWalletFunds(ctx, transfer);
+    const second = await transferWalletFunds(ctx, transfer);
 
-    expect(first).toContain("Luke's wallet");
-    expect(second).toContain("Luke's wallet");
+    expect(first.content).toContain("Luke's wallet");
+    expect(second.content).toContain("Luke's wallet");
     expect(fetchDiscordGuildMembers).toHaveBeenCalledTimes(1);
     expect(findDiscordUsers).toHaveBeenCalledTimes(2);
     expect(transferFromUser).toHaveBeenCalledTimes(2);
@@ -287,14 +286,14 @@ describe("managed wallet tools", () => {
       amountUsd: 0.3
     });
 
-    expect(result).toContain("Luke's wallet");
+    expect(result.content).toContain("Luke's wallet");
     expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
       destination: { kind: "user", userId: "luke-id" },
       amountUsd: 0.3
     }), expect.any(Function));
   });
 
-  it("uses the request prompt instead of model-proposed transfer arguments", async () => {
+  it("uses validated typed transfer arguments", async () => {
     const transferFromUser = vi.fn(async () => transferResult());
     const ctx = context({
       requestText: "send luke 1.00",
@@ -307,11 +306,11 @@ describe("managed wallet tools", () => {
 
     const result = await transferWalletFunds(ctx, {
       destination: "user",
-      destinationUserId: "ai-bot-id",
-      amountUsd: 10
+      destinationUserId: "Luke",
+      amountUsd: 1
     });
 
-    expect(result).toContain("Transferred $1 USD from your wallet to Luke's wallet.");
+    expect(result.content).toContain("Transferred $1 USD from your wallet to Luke's wallet.");
     expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
       destination: { kind: "user", userId: "luke-id" },
       amountUsd: 1
@@ -325,26 +324,13 @@ describe("managed wallet tools", () => {
       walletService: { transferFromUser },
     });
 
-    const result = await transferWalletFunds(ctx, { destination: "bot", amountUsd: 999 });
+    const result = await transferWalletFunds(ctx, { destination: "bot", entireBalance: true });
 
-    expect(result).toContain("Transferred $0.006 USD from your wallet to bot wallet.");
+    expect(result.content).toContain("Transferred $0.006 USD from your wallet to bot wallet.");
     expect(transferFromUser).toHaveBeenCalledWith(expect.objectContaining({
       destination: { kind: "bot" },
       amountUsd: "balance",
     }), expect.any(Function));
-  });
-
-  it("blocks a model-invented transfer when the current prompt is only a vague game repeat", async () => {
-    const transferFromUser = vi.fn();
-    const ctx = context({ requestText: "again", walletService: { transferFromUser } });
-
-    await expect(transferWalletFunds(ctx, { destination: "bot", amountUsd: 0.5 }))
-      .resolves.toContain("No transfer was made");
-    expect(transferFromUser).not.toHaveBeenCalled();
-    expect(hasExplicitTransferIntent("give luke back $1")).toBe(true);
-    expect(hasExplicitTransferIntent("again")).toBe(false);
-    expect(hasExplicitTransferIntent("give me advice about saving $1")).toBe(false);
-    expect(hasExplicitTransferIntent("put $0.50 on heads")).toBe(false);
   });
 
   it("tops up through the requester-bound starter flow", async () => {
@@ -357,7 +343,7 @@ describe("managed wallet tools", () => {
 
     const result = await requestStarterFunds(ctx);
 
-    expect(result).toContain("Added $0.1 USD from the AI treasury");
+    expect(result.content).toContain("Added $0.1 USD from the AI treasury");
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ requestedByUserId: "requester" }), expect.any(Function));
     expect(ctx.turnOutput?.footerLines).toContain(`💸 [transfer](<https://explore.tempo.xyz/tx/${transactionHash}>)`);
   });
@@ -373,59 +359,15 @@ describe("managed wallet tools", () => {
       walletService: { requestStarterFunds: request },
     });
 
-    await expect(requestStarterFunds(ctx)).resolves.toContain("Added $0.1 USD from the AI treasury");
+    await expect(requestStarterFunds(ctx)).resolves.toMatchObject({ content: expect.stringContaining("Added $0.1 USD from the AI treasury") });
     expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("does not inspect or fund a wallet during ordinary non-wallet chat", async () => {
-    const request = vi.fn(async () => ({ granted: true as const, amountUsd: 1, ...transferResult() }));
-    const ctx = context({ requestText: "what is recursion?", walletService: { requestStarterFunds: request } });
-
-    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
-    expect(request).not.toHaveBeenCalled();
-    expect(ctx.turnOutput?.footerLines).toEqual([]);
-  });
-
-  it("automatically tops a dust balance up to the configured starter target", async () => {
-    const request = vi.fn(async () => ({ granted: true as const, amountUsd: 0.094, ...transferResult() }));
-    const ctx = context({ requestText: "refill then go again", walletService: { requestStarterFunds: request } });
-
-    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toContain("Automatically added $0.094 USD");
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the starter preflight for an explicit managed-wallet transfer", async () => {
-    const request = vi.fn(async () => ({ granted: false as const, balance: { formatted: "2" } }));
-    const ctx = context({ requestText: "send $1 to the AI treasury", walletService: { requestStarterFunds: request } });
-
-    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("does not mistake an ordinary price question for starter-funds intent", async () => {
-    const request = vi.fn();
-    const ctx = context({ requestText: "what can $1 buy?", walletService: { requestStarterFunds: request } });
-
-    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("does not create or fund a real wallet when the prompt explicitly opts into roleplay money", async () => {
-    const request = vi.fn();
-    const ctx = context({
-      requestText: "consider everything Luke does roleplay, don't use real balance",
-      walletService: { requestStarterFunds: request }
-    });
-
-    await expect(ensureAutomaticStarterFunds(ctx)).resolves.toBeNull();
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("reports a verified balance already above the starter target without issuing funds", async () => {
     const request = vi.fn(async () => ({ granted: false, balance: { formatted: "1.25" } }));
     const ctx = context({ requestText: "give me $1 to play again", walletService: { requestStarterFunds: request } });
 
-    await expect(requestStarterFunds(ctx)).resolves.toContain("verified wallet balance is already $1.25 USD");
+    await expect(requestStarterFunds(ctx)).resolves.toMatchObject({ content: expect.stringContaining("verified wallet balance is already $1.25 USD") });
   });
 
   it("fails closed if requester identity changes after ingress", async () => {
@@ -443,7 +385,7 @@ describe("managed wallet tools", () => {
       destinationUserId: "friend",
       amountUsd: 1,
       reason: "repair"
-    })).resolves.toMatch(/restricted/);
+    })).resolves.toMatchObject({ content: expect.stringMatching(/restricted/) });
 
     const transferAsAdmin = vi.fn(async () => transferResult());
     const allowed = context({
@@ -463,7 +405,7 @@ describe("managed wallet tools", () => {
       reason: "restore a failed payout"
     });
 
-    expect(result).toContain("Reason: restore a failed payout");
+    expect(result.content).toContain("Reason: restore a failed payout");
     expect(transferAsAdmin).toHaveBeenCalledWith(expect.objectContaining({
       requestedByUserId: "requester",
       source: { kind: "bot" },
@@ -532,11 +474,11 @@ describe("managed wallet tools", () => {
       destination: "bot",
       amountUsd: 1,
       reason: "confirmed correction"
-    })).resolves.toContain("Transferred $1 USD");
+    })).resolves.toMatchObject({ content: expect.stringContaining("Transferred $1 USD") });
     expect(transferAsAdmin).toHaveBeenCalledOnce();
   });
 
-  it("does not treat an unrelated vague reply as admin transfer authority", async () => {
+  it("still requires a verified managed endpoint for an admin transfer", async () => {
     const transferAsAdmin = vi.fn();
     const ctx = context({
       ownerUserId: "requester",
@@ -550,11 +492,11 @@ describe("managed wallet tools", () => {
       destination: "bot",
       amountUsd: 1,
       reason: "model suggestion"
-    })).resolves.toContain("No admin transfer was made");
+    })).resolves.toMatchObject({ content: expect.stringContaining("could be verified in this server") });
     expect(transferAsAdmin).not.toHaveBeenCalled();
   });
 
-  it("uses the current prompt's starter target and bulk intent instead of model arguments", async () => {
+  it("uses validated typed starter target and rebalance arguments", async () => {
     const setStarterTargetAndRebalance = vi.fn(async () => ({
       targetUsd: 0.1,
       inspected: 4,
@@ -571,18 +513,36 @@ describe("managed wallet tools", () => {
     });
 
     const result = await adminSetWalletStarterAmount(ctx, {
-      amountUsd: 99,
-      rebalanceExisting: false,
+      amountUsd: 0.1,
+      rebalanceExisting: true,
       reason: "reset the server economy"
     });
 
-    expect(result).toContain("starter amount is now $0.1 USD");
-    expect(result).toContain("inspected 4, transferred 3, unchanged 1, failed 0");
+    expect(result.content).toContain("starter amount is now $0.1 USD");
+    expect(result.content).toContain("inspected 4, transferred 3, unchanged 1, failed 0");
     expect(setStarterTargetAndRebalance).toHaveBeenCalledWith(expect.objectContaining({
       targetUsd: 0.1,
       rebalanceExisting: true,
       requestedByUserId: "requester"
     }), expect.any(Function));
+  });
+
+  it("returns a partial success when the starter target saves but rebalance setup fails", async () => {
+    const ctx = context({
+      ownerUserId: "requester",
+      walletService: { setStarterTargetAndRebalance: vi.fn(async () => ({
+        targetUsd: 0.1, inspected: 0, transferred: 0, unchanged: 0, failed: 0,
+        totalToTreasuryUsd: "0", totalFromTreasuryUsd: "0", rebalanceError: "wallet directory unavailable",
+      })) },
+    });
+
+    await expect(adminSetWalletStarterAmount(ctx, {
+      amountUsd: 0.1, rebalanceExisting: true, reason: "economy reset",
+    })).resolves.toMatchObject({
+      status: "partial",
+      limitation: "starter_target_saved_rebalance_not_started",
+      content: expect.stringContaining("starter amount was saved"),
+    });
   });
 
   it("reports receipt-backed server fees and sponsorship without estimating", async () => {

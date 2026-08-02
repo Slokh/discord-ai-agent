@@ -25,13 +25,10 @@
       "id": "ops-tools-natural-language",
       "category": "ops",
       "prompt": "what can you do?",
-      "expectedTools": [
-        "listTools"
-      ],
       "mustContain": [
         "tools"
       ],
-      "notes": "Natural-language tool list should route through the model-selected listTools tool."
+      "notes": "The model should answer from its stable capability schema without calling an invented tool-list tool."
     },
     {
       "id": "ops-deployment-status",
@@ -46,10 +43,7 @@
       "id": "ops-user-turn-limit",
       "category": "ops",
       "prompt": "limit tyler to 5 posts per day, he's spamming every channel",
-      "expectedTools": [
-        "setUserTurnLimit"
-      ],
-      "notes": "Per-user rate-limit requests should route through setUserTurnLimit (after resolving the user), not through Discord history or freeform replies."
+      "notes": "The model should explain that no per-user turn-limit mutation exists rather than inventing or claiming to perform one."
     },
     {
       "id": "ops-debug-recent-failure",
@@ -296,7 +290,7 @@
         "getSpotifyPlaylistTracks",
         "queryGeneratedCsv"
       ],
-      "notes": "Scoped tool selector should include Spotify for oblique playlist/music requests."
+      "notes": "The stable deployment tool contract should let the model choose Spotify for oblique playlist/music requests."
     },
     {
       "id": "toolscope-codegen-casual-bot-fix-skipped",
@@ -306,7 +300,7 @@
         "runCodingAgent"
       ],
       "skip": true,
-      "skipReason": "Codegen opens PRs; this covers scoped tool selection for casual code-update wording."
+      "skipReason": "Codegen opens PRs; this covers model selection from the stable tool contract for casual code-update wording."
     },
     {
       "id": "toolscope-image-draw-without-image-word-skipped",
@@ -316,7 +310,7 @@
         "generateImage"
       ],
       "skip": true,
-      "skipReason": "Image generation spends credits; this covers scoped tool selection without the literal word image."
+      "skipReason": "Image generation spends credits; this covers model selection from the stable tool contract without the literal word image."
     },
     {
       "id": "random-blackjack-deal",

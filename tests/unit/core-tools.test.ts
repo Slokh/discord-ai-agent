@@ -19,14 +19,13 @@ import {
   summarizeCurrentThread,
 } from "../../src/tools/discordSummaryTools.js";
 import { findDiscordUsers } from "../../src/tools/discordResolverTools.js";
-import { undoConversationTurns } from "../../src/tools/agentMemoryTools.js";
+import { undoConversationTurns, undoConversationTurnsResponse } from "../../src/tools/agentMemoryTools.js";
 import {
   generateImage,
   getDiscordUserAvatar,
   imageReferencesForInput,
   inspectDiscordImages,
 } from "../../src/tools/imageTools.js";
-import { resolveContextImageSelection } from "../../src/tools/imageContextSelection.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 afterEach(() => {
@@ -88,7 +87,7 @@ describe("model-led mutating tools", () => {
       agentUpdateTitleFromRequest(
         'instead of replying "Thinking..." when prompted, can you just react with the <a:loading:123456789012345678> emoji to the prompt. Then reply as normal. open a PR'
       )
-    ).toBe("Replace Thinking reply with loading emoji");
+    ).toBe("Repository update");
     expect(agentUpdateTitleFromRequest("add a calendar integration")).toBe("Add a calendar integration");
     expect(agentUpdateTitleFromRequest("add a calendar integration", "Add calendar support")).toBe("Add calendar support");
   });
@@ -121,6 +120,25 @@ describe("model-led mutating tools", () => {
     expect(deleteDiscordMessageIds).toHaveBeenCalledWith(["reply-1"]);
   });
 
+  it("does not retry a committed undo when Discord reply cleanup fails", async () => {
+    const deleteMostRecentConversationTurns = vi.fn(async () => ({
+      deletedTurns: 1, deletedRows: 2, assistantDiscordMessageIds: ["reply-1"],
+    }));
+    const ctx = {
+      config: { maxReplyChars: 1800 },
+      repo: { deleteMostRecentConversationTurns, auditTool: vi.fn(async () => undefined) },
+      guildId: "guild", channelId: "channel", userId: "user", userDisplayName: "User",
+      visibleChannelIds: ["channel"], threadKey: "discord:guild:channel",
+      deleteDiscordMessageIds: vi.fn(async () => { throw new Error("Discord unavailable"); }),
+    } as unknown as ToolContext;
+
+    await expect(undoConversationTurnsResponse(ctx, 1)).resolves.toMatchObject({
+      status: "partial",
+      content: expect.stringContaining("saved conversation was removed"),
+    });
+    expect(deleteMostRecentConversationTurns).toHaveBeenCalledOnce();
+  });
+
   it("replies with a clear not-configured message instead of enqueueing code updates", async () => {
     const enqueueAgentTask = vi.fn(async () => ({ jobId: "job-1" }));
     const ctx = {
@@ -142,9 +160,10 @@ describe("model-led mutating tools", () => {
 
     const response = await createAgentUpdateFromRequest(ctx, "add a calendar integration");
 
-    expect(response).toContain("Code-update tasks are not configured on this bot");
-    expect(response).toContain("GITHUB_REPOSITORY");
-    expect(response).toContain("TASK_SIGNING_SECRET");
+    expect(response.content).toContain("Code-update tasks are not configured on this bot");
+    expect(response.content).toContain("GITHUB_REPOSITORY");
+    expect(response.content).toContain("TASK_SIGNING_SECRET");
+    expect(response.status).toBe("error");
     expect(enqueueAgentTask).not.toHaveBeenCalled();
   });
 });
@@ -221,7 +240,7 @@ describe("formatAgentTaskResult", () => {
           eventName: "task.completed",
           metadata: {
             failureDiagnosis: {
-              category: "no_first_edit",
+              category: "no_diff",
               summary: "NanoCodex finished without making a code edit, so no PR was opened.",
               nextAction: "Improve context packaging so the agent makes an early focused edit.",
               finalResponse: "The limit is defined in src/agent/nanocodexAgentRuntime.ts and should be raised there."
@@ -1049,8 +1068,7 @@ describe("generateImage", () => {
     expect(result).toMatchObject({ status: "error", files: [] });
     expect(result.content).toContain("could not accept that image request");
     expect(result.content).not.toContain("invalid image parameters");
-    expect(generateImageMock).toHaveBeenCalledTimes(2);
-    expect(generateImageMock.mock.calls[1]?.[0]).toContain("REQUEST RECOVERY PASS");
+    expect(generateImageMock).toHaveBeenCalledTimes(1);
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "generateImage",
       error: "image_generation_request_rejected",
@@ -1134,7 +1152,7 @@ describe("generateImage", () => {
       userId: "user",
     } as unknown as ToolContext;
 
-    const result = await generateImage(ctx, "a cute seahorse emoji");
+    const result = await generateImage(ctx, { prompt: "a cute seahorse emoji", background: "transparent", outputFormat: "png" });
 
     expect(generateImageMock).toHaveBeenCalledWith("a cute seahorse emoji", {
       inputReferences: [],
@@ -1239,6 +1257,25 @@ describe("generateImage", () => {
     );
   });
 
+  it("returns an already-generated image when audit persistence fails", async () => {
+    const generate = vi.fn(async () => ({
+      model: "test/image",
+      estimatedCostUsd: 0.031,
+      raw: {},
+      data: [{ b64_json: Buffer.from("<svg></svg>").toString("base64"), media_type: "image/svg+xml" }],
+    }));
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => { throw new Error("audit unavailable"); }) },
+      openRouter: { generateImage: generate },
+      guildId: "guild", channelId: "channel", userId: "user",
+    } as unknown as ToolContext;
+
+    await expect(generateImage(ctx, "logo")).resolves.toMatchObject({
+      files: [expect.objectContaining({ contentType: "image/svg+xml" })],
+    });
+    expect(generate).toHaveBeenCalledOnce();
+  });
+
   it("fetches returned image URLs into attachments when possible", async () => {
     vi.stubGlobal(
       "fetch",
@@ -1302,6 +1339,22 @@ describe("generateImage", () => {
     expect(generateImageMock).toHaveBeenCalledWith("turn this into pixel art", {
       inputReferences: [{ type: "image_url", image_url: { url: "https://cdn.discordapp.com/image.png" } }]
     });
+  });
+
+  it("omits current Discord images only when explicitly requested", async () => {
+    const generateImageMock = vi.fn(async () => ({ model: "test/image", raw: {}, data: [] }));
+    const ctx = {
+      repo: { auditTool: vi.fn(async () => undefined) },
+      openRouter: { generateImage: generateImageMock },
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      requestAttachments: [{ id: "attachment-1", url: "https://cdn.discordapp.com/image.png", filename: "image.png", contentType: "image/png" }],
+    } as unknown as ToolContext;
+
+    await generateImage(ctx, { prompt: "make something unrelated", useContextImages: false });
+
+    expect(generateImageMock).toHaveBeenCalledWith("make something unrelated", { inputReferences: [] });
   });
 
   it("prioritizes the direct parent over older reply-chain images", async () => {
@@ -1376,40 +1429,6 @@ describe("generateImage", () => {
       "https://example.com/new.png",
       "https://example.com/old.png",
     ]);
-  });
-
-  it("preserves reply images unless the current user explicitly opts out", () => {
-    const ctx = {
-      requestText: "Generate another synthetic variation.",
-      requestAttachments: [],
-      replyContext: {
-        chain: [{
-          attachments: [{
-            id: "synthetic-reference",
-            url: "https://cdn.discordapp.com/synthetic-reference.png",
-            filename: "synthetic-reference.png",
-            contentType: "image/png",
-          }],
-        }],
-      },
-    } as unknown as ToolContext;
-
-    expect(resolveContextImageSelection({
-      requestText: ctx.requestText,
-      requested: false,
-      contextHasImages: true,
-    })).toEqual({
-      useContextImages: true,
-      overrodeModelOptOut: true,
-    });
-    expect(resolveContextImageSelection({
-      requestText: "Generate it from scratch without the previous image.",
-      requested: false,
-      contextHasImages: true,
-    })).toEqual({
-      useContextImages: false,
-      overrodeModelOptOut: false,
-    });
   });
 
   it("inspects current Discord image attachments with a vision model", async () => {

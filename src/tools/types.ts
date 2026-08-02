@@ -45,28 +45,13 @@ export type ToolContext = {
   requestId?: string;
   /** Exact current user request, available to tools that need request-level validation. */
   requestText?: string;
-  /**
-   * Deterministic current-turn authorization for consuming RNG entropy. The
-   * model may always see drawRandom, but the tool must still reject an
-   * unrequested draw before it creates a session or reserves a wager.
-   */
-  randomActionAuthorized?: boolean;
   /** Discord id of the message that triggered this request; assigned by Discord, not the bot. */
   requestMessageId?: string;
   /** Durable per-guild primary chat-model override loaded before model selection. */
   chatModelOverride?: string | null;
   chatModelOverrideLoaded?: boolean;
-  /** Deterministic evidence for any model-setting attempt made during this request. */
-  agentModelMutation?: {
-    attempted: true;
-    succeeded: boolean;
-    action: "set" | "reset";
-    requestedModel?: string;
-    effectiveModel?: string;
-    error?: string;
-  };
-  /** False for model-authored generic component follow-ups; mutating tools must fail closed. */
-  mutationAuthorizedByCurrentInput?: boolean;
+  /** True only for a current Discord message that may authorize model-selected mutations. */
+  mutationAuthorizedByCurrentInput: boolean;
   statusChannelId?: string;
   statusMessageId?: string;
   visibleIndexedChannelIds?: string[];
@@ -100,8 +85,6 @@ export type ToolContext = {
   }) => Promise<DiscordUserAvatarResult | null>;
   fetchDiscordGuildMembers?: (input: { guildId: string }) => Promise<DiscordGuildMemberSummary[]>;
   discordGuildEmojis?: DiscordGuildEmojiSummary[];
-  /** Exact learned custom-emoji mentions eligible as a reaction to the current source message. */
-  discordEmojiReactionChoices?: string[];
   /** Bounded dynamic culture guidance reused by tool-backed final synthesis. */
   discordEmojiCulturePrompt?: string;
   fetchDiscordAttachment?: (input: {
@@ -232,8 +215,6 @@ export type AgentResponse = {
   discordPresentation?: DiscordPresentation;
   /** Non-model footer lines rendered as Discord subtext under the reply. */
   footerLines?: string[];
-  /** Validated custom-emoji mention to add to the Discord message that triggered this response. */
-  sourceMessageReaction?: string;
   storedContent?: string;
   memoryEvents?: Array<{
     role: "tool";

@@ -1,7 +1,6 @@
 import type { ChatContentPart, ChatMessage } from "../models/openrouter.js";
-import { localToolDefinitionsForModel, toolByName, TOOL_GROUPS, type ToolName } from "../tools/registry.js";
-import { scopedToolset } from "../tools/toolScope.js";
-import { cleanResponse } from "../tools/responseFormatting.js";
+import { localToolDefinitionsForModel, toolByName, type ToolName } from "../tools/registry.js";
+import { deploymentToolset } from "../tools/toolScope.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
 import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
@@ -9,16 +8,14 @@ import { PRIMARY_AGENT_REASONING } from "./modelPolicy.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { durationMs, previewText } from "../util/logger.js";
 import { injectActiveGameSession } from "./activeGameSession.js";
-import { correctKnownCapabilityClaim } from "./capabilityClaimGuard.js";
-import { extractDiscordEmojiResponseIntent } from "./emojiResponseIntent.js";
 import { runGuardedAgentRequest, type GuardedAgentRequest } from "./guardedAgentRequest.js";
 import { isAgentRuntimeTimeoutError, withAgentRuntimeTimeouts } from "./runtimeTimeouts.js";
 import { loadPromptOverlayText } from "./promptOverlay.js";
 import {
   chatMessages,
-  CURRENT_REQUEST_RESPONSE_REMINDER,
   loadServerOverlay,
   prepareDiscordEmojiPromptContext,
+  promptMessageMetadata,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
 import type { AgentToolRoute } from "./routerShared.js";
@@ -42,6 +39,8 @@ export async function executeNanoCodexAgentRuntime(input: {
   executeToolRoute?: typeof executeLocalToolRoute;
 }): Promise<AgentResponse> {
   const ctx = input.toolContext;
+  let guardedRequest: GuardedAgentRequest | undefined;
+  const recoveryState: RuntimeRecoveryState = { successfulMutations: [] };
   try {
     return await withAgentRuntimeTimeouts({
       hardTimeoutMs: input.hardTimeoutMs ?? input.timeoutMs,
@@ -51,14 +50,35 @@ export async function executeNanoCodexAgentRuntime(input: {
         ctx.noteProgress = noteProgress;
         ctx.abortSignal = abortSignal;
         ctx.requestText = input.text;
-        return runGuardedAgentRequest(ctx, input.text, (request, executionText) =>
-          runRetainedNanoCodexTurn({ ...input, text: executionText, toolContext: ctx, request })
+        return runGuardedAgentRequest(
+          ctx,
+          input.text,
+          (request, executionText) => runRetainedNanoCodexTurn({ ...input, text: executionText, toolContext: ctx, request, recoveryState }),
+          (request) => { guardedRequest = request; },
         );
       },
     });
   } catch (error) {
     const output = ctx.turnOutput?.snapshot();
-    if (!isAgentRuntimeTimeoutError(error) || !output?.files.length) throw error;
+    if (!isAgentRuntimeTimeoutError(error)) throw error;
+    if (guardedRequest?.randomOutcomeGuard.requiresWagerResolution()) throw error;
+    const recoveredMutation = combineRecoveredMutations(recoveryState.successfulMutations);
+    if (recoveredMutation) {
+      await recordAgentEvent(ctx, {
+        eventName: "agent.nanocodex.timeout_mutation_recovered",
+        level: "warn",
+        summary: "NanoCodex timed out after completed mutations; delivering their durable results.",
+        metadata: { successfulMutationCount: recoveryState.successfulMutations.length, fileCount: output?.files.length ?? 0 },
+      });
+      return {
+        ...recoveredMutation,
+        files: output?.files.length ? [...output.files] : recoveredMutation.files,
+        tables: output?.tables.length ? [...output.tables] : recoveredMutation.tables,
+        footerLines: output?.footerLines.length ? [...output.footerLines] : recoveredMutation.footerLines,
+        discordPresentation: output?.presentation ?? recoveredMutation.discordPresentation,
+      };
+    }
+    if (!output?.files.length) throw error;
     await recordAgentEvent(ctx, {
       eventName: "agent.nanocodex.timeout_output_recovered",
       level: "warn",
@@ -83,6 +103,7 @@ async function runRetainedNanoCodexTurn(input: {
   runRuntime?: typeof runNanoCodexRuntime;
   executeToolRoute?: typeof executeLocalToolRoute;
   request: GuardedAgentRequest;
+  recoveryState: RuntimeRecoveryState;
 }): Promise<AgentResponse> {
   const ctx = input.toolContext;
   const apiKey = ctx.config.openRouter.apiKey;
@@ -98,25 +119,21 @@ async function runRetainedNanoCodexTurn(input: {
   if (!text) return { content: "Say what you need after mentioning me." };
 
   const randomGuard = input.request.randomOutcomeGuard;
-  const freshDataGuard = input.request.freshExternalDataGuard;
-  const publicUrlGuard = input.request.publicUrlEvidenceGuard;
-  const presentationGuard = input.request.richPresentationOutcomeGuard;
   const turnOutput = ensureAgentTurnOutput(ctx);
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
-  let lastSuccessfulMutatingToolResult: AgentResponse | undefined;
+  const successfulMutatingToolResults = input.recoveryState.successfulMutations;
   let lastSuccessfulFileToolResult: AgentResponse | undefined;
   const initialPrompt = await buildNanoCodexPrompt(
     ctx,
     text,
     false,
-    input.request.automaticStarterFunds,
     input.request.activeGame,
   );
   // A stable full schema improves NanoCodex prompt-cache reuse and removes the
   // old mid-turn tool-expansion protocol. Deployment filtering still prevents
   // unavailable capabilities from entering the model contract.
-  const localTools = scopedToolset({ config: ctx.config, groups: new Set(TOOL_GROUPS) }).localTools;
-  const toolDefinitions = compactNanoCodexToolDefinitions(localToolDefinitionsForModel(localTools));
+  const localTools = deploymentToolset(ctx.config).localTools;
+  const toolDefinitions = localToolDefinitionsForModel(localTools);
   const model = effectiveAgentChatModel(ctx) ?? ctx.config.openRouter.chatModel;
   const resumeContract = nanoCodexSessionResumeContract({
     instructions: initialPrompt.instructions,
@@ -129,7 +146,7 @@ async function runRetainedNanoCodexTurn(input: {
     resumeContract,
   });
   const prompt = resume
-    ? await buildNanoCodexPrompt(ctx, text, true, input.request.automaticStarterFunds, input.request.activeGame)
+    ? await buildNanoCodexPrompt(ctx, text, true, input.request.activeGame)
     : initialPrompt;
   const allowedTools = new Set<ToolName>(localTools.map((tool) => tool.name));
   let webEvidenceObserved = false;
@@ -141,7 +158,7 @@ async function runRetainedNanoCodexTurn(input: {
   };
   await recordAgentEvent(ctx, {
     eventName: "agent.nanocodex.contract_prepared",
-    level: promptSizes.toolSchemaBytes > 70_000 || promptSizes.turnContextBytes > 24_000 ? "warn" : "info",
+    level: promptSizes.toolSchemaBytes > 120_000 || promptSizes.turnContextBytes > 24_000 ? "warn" : "info",
     summary: `Prepared NanoCodex contract (${promptSizes.instructionBytes} instruction bytes, ${promptSizes.turnContextBytes} context bytes, ${promptSizes.toolSchemaBytes} tool bytes).`,
     metadata: { ...promptSizes, resumed: Boolean(resume) },
   });
@@ -193,17 +210,14 @@ async function runRetainedNanoCodexTurn(input: {
         summary: route.name,
         metadata: { toolName: route.name, callId: route.id, argumentsPreview: previewText(route.argumentsText, 300) },
       });
-      if (tool.mutates) lastSuccessfulMutatingToolResult = undefined;
       const toolResult = await (input.executeToolRoute ?? executeLocalToolRoute)(ctx, route, text);
       if (tool.mutates && isRecoverableMutationResult(route.name, toolResult)) {
-        lastSuccessfulMutatingToolResult = toolResult;
+        successfulMutatingToolResults.push({ toolName: route.name, result: toolResult });
       }
       if (toolResult.status !== "error" && toolResult.files?.length) {
         lastSuccessfulFileToolResult = toolResult;
       }
       randomGuard.noteToolResult(route.name, toolResult);
-      presentationGuard.noteToolResult(route.name);
-      publicUrlGuard.noteLocalToolResult(route.name, toolResult.status);
       if (toolResult.files?.length) turnOutput.files.push(...toolResult.files);
       if (toolResult.tables?.length) turnOutput.tables.push(...toolResult.tables);
       memoryEvents.push({
@@ -250,13 +264,15 @@ async function runRetainedNanoCodexTurn(input: {
       summary: "NanoCodex runtime ended before a final assistant message.",
       metadata: {
         toolCalls: toolSequence,
-        successfulMutationObserved: Boolean(lastSuccessfulMutatingToolResult),
+        successfulMutationObserved: successfulMutatingToolResults.length > 0,
+        successfulMutationCount: successfulMutatingToolResults.length,
         error: error instanceof Error ? previewText(error.message, 300) : previewText(String(error), 300),
       },
     });
-    const recoverableToolResult = lastSuccessfulMutatingToolResult ?? lastSuccessfulFileToolResult;
+    const recoverableMutationResult = combineRecoveredMutations(successfulMutatingToolResults);
+    const recoverableToolResult = recoverableMutationResult ?? lastSuccessfulFileToolResult;
     if (!recoverableToolResult) throw error;
-    const recoveredMutation = Boolean(lastSuccessfulMutatingToolResult);
+    const recoveredMutation = Boolean(recoverableMutationResult);
     await recordAgentEvent(ctx, {
       eventName: recoveredMutation
         ? "agent.nanocodex.post_mutation_recovered"
@@ -267,6 +283,7 @@ async function runRetainedNanoCodexTurn(input: {
         : "NanoCodex ended after a successful file-producing tool; returning its delivered output.",
       metadata: {
         toolCalls: toolSequence,
+        successfulMutationCount: successfulMutatingToolResults.length,
         error: error instanceof Error ? previewText(error.message, 300) : previewText(String(error), 300),
       },
     });
@@ -288,39 +305,15 @@ async function runRetainedNanoCodexTurn(input: {
     result,
     resumeContract,
   });
-  if (webEvidenceObserved) {
-    const hostedEvidence = {
-      content: result.finalMessage,
-      serverToolUse: { web_search_requests: 1 },
-      urlCitations: [{ url: "nanocodex://hosted-web-search", title: "NanoCodex hosted web evidence", startIndex: 0, endIndex: 0 }],
-    };
-    freshDataGuard.noteModelResponse(hostedEvidence);
-    publicUrlGuard.noteModelResponse(hostedEvidence);
-  }
-  const emojiIntent = extractDiscordEmojiResponseIntent(
-    cleanResponse(result.finalMessage, ctx.config.maxReplyChars),
-    ctx.discordEmojiReactionChoices ?? [],
-  );
   const output = turnOutput.snapshot();
   const response: AgentResponse = {
-    content: emojiIntent.content,
-    sourceMessageReaction: emojiIntent.sourceMessageReaction,
+    content: result.finalMessage.trim() || "Done.",
     files: output.files.length > 0 ? [...output.files] : undefined,
     tables: output.tables.length > 0 ? [...output.tables] : undefined,
     footerLines: output.footerLines.length > 0 ? [...output.footerLines] : undefined,
     discordPresentation: output.presentation,
     memoryEvents: memoryEvents.length > 0 ? memoryEvents : undefined,
   };
-  const capabilityCorrection = correctKnownCapabilityClaim(ctx, text, response.content, model);
-  response.content = capabilityCorrection.content;
-  if (capabilityCorrection.corrected) {
-    await recordAgentEvent(ctx, {
-      eventName: "agent.capability_claim.corrected",
-      level: "warn",
-      summary: `Corrected ${capabilityCorrection.capability ?? "known"} capability claim`,
-      metadata: { capability: capabilityCorrection.capability ?? null, model },
-    });
-  }
   await recordAgentEvent(ctx, {
     eventName: "agent.nanocodex.complete",
     summary: `NanoCodex completed with ${toolSequence} tool calls`,
@@ -329,11 +322,28 @@ async function runRetainedNanoCodexTurn(input: {
   return response;
 }
 
+type RuntimeRecoveryState = {
+  successfulMutations: Array<{ toolName: ToolName; result: AgentResponse }>;
+};
+
+function combineRecoveredMutations(
+  mutations: Array<{ toolName: ToolName; result: AgentResponse }>,
+): AgentResponse | undefined {
+  if (mutations.length === 0) return undefined;
+  if (mutations.length === 1) return mutations[0]!.result;
+  const last = mutations.at(-1)!.result;
+  return {
+    ...last,
+    content: mutations.map(({ result }) => result.content).join("\n\n"),
+    status: mutations.some(({ result }) => result.status === "partial") ? "partial" : "ok",
+    outcome: { kind: "mutation_batch", state: "succeeded", terminal: true },
+  };
+}
+
 async function buildNanoCodexPrompt(
   ctx: ToolContext,
   text: string,
   resumed: boolean,
-  automaticStarterFunds: string | null,
   activeGame: GuardedAgentRequest["activeGame"],
 ) {
   const skills = renderSkillsForPrompt(await loadSkills());
@@ -351,14 +361,11 @@ async function buildNanoCodexPrompt(
     promptOverlay,
     emojiContext,
   );
-  if (automaticStarterFunds) {
+  const currentModel = effectiveAgentChatModel(ctx);
+  if (currentModel) {
     messages.splice(Math.max(0, messages.length - 1), 0, {
       role: "system",
-      content: [
-        "Automatic starter funding succeeded before this request. Treat this as verified wallet evidence.",
-        automaticStarterFunds,
-        "Do not call requestStarterFunds again this turn.",
-      ].join("\n"),
+      content: `Current NanoCodex model for this turn: \`${currentModel}\`. Treat this as verified runtime context when answering model-identity questions.`,
     });
   }
   injectActiveGameSession(messages, activeGame);
@@ -381,17 +388,8 @@ async function buildNanoCodexPrompt(
   };
 }
 
-function isStableNanoCodexInstruction(message: ChatMessage, index: number) {
-  if (message.role !== "system") return false;
-  const content = textContent(message.content);
-  if (index === 0) return true;
-  return (
-    content.startsWith("Current Discord bot identity:") ||
-    content.startsWith("Available skill inventory:") ||
-    content.startsWith("Private server overlay instructions follow.") ||
-    content.startsWith("Deployment prompt overlay instructions follow.") ||
-    content === CURRENT_REQUEST_RESPONSE_REMINDER
-  );
+function isStableNanoCodexInstruction(message: ChatMessage, _index: number) {
+  return message.role === "system" && promptMessageMetadata(message)?.stability === "stable";
 }
 
 function textContent(content: ChatMessage["content"]): string {
@@ -407,88 +405,26 @@ function objectArguments(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function isRecoverableMutationResult(toolName: ToolName, result: AgentResponse) {
-  if (result.status === "error") return false;
-  if (toolName !== "drawRandom") return true;
-  return result.outcome?.kind === "rng_draw" &&
-    result.outcome.state === "succeeded" &&
-    !result.outcome.wagerActive &&
-    !result.outcome.nextTool;
-}
-
-export function compactNanoCodexToolDefinitions(
-  definitions: ReturnType<typeof localToolDefinitionsForModel>,
-): ReturnType<typeof localToolDefinitionsForModel> {
-  return definitions.map((definition) => ({
-    ...definition,
-    function: {
-      ...definition.function,
-      description: compactContractText(definition.function.description ?? "", 600),
-      parameters: compactToolParameters(definition.function.parameters) as typeof definition.function.parameters,
-    },
-  }));
-}
-
-function compactToolParameters(parameters: Record<string, unknown>) {
-  if (JSON.stringify(parameters).length <= 12_000) return compactSchemaDescriptions(parameters);
-  const properties = parameters.properties && typeof parameters.properties === "object"
-    ? Object.fromEntries(Object.entries(parameters.properties as Record<string, unknown>).map(([name, schema]) => [
-        name,
-        shallowModelSchema(schema),
-      ]))
-    : {};
-  return {
-    type: "object",
-    properties,
-    ...(Array.isArray(parameters.required) ? { required: parameters.required } : {}),
-    additionalProperties: false,
-  };
-}
-
-function shallowModelSchema(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const schema = value as Record<string, unknown>;
-  const description = typeof schema.description === "string"
-    ? { description: compactContractText(schema.description, 180) }
-    : {};
-  if (schema.type === "array") {
-    return { type: "array", items: { type: "object", additionalProperties: true }, ...description };
-  }
-  if (schema.type === "object" || schema.properties || schema.oneOf || schema.anyOf || schema.$ref) {
-    return { type: "object", additionalProperties: true, ...description };
-  }
-  return {
-    ...(typeof schema.type === "string" ? { type: schema.type } : {}),
-    ...(Array.isArray(schema.enum) ? { enum: schema.enum } : {}),
-    ...description,
-  };
-}
-
-function compactSchemaDescriptions(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(compactSchemaDescriptions);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .map(([key, entry]) => [
-        key,
-        key === "description" ? undefined : compactSchemaDescriptions(entry),
-      ] as const)
-      .filter(([, entry]) => entry !== undefined),
-  );
-}
-
-function compactContractText(value: string, maxChars: number) {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxChars) return normalized;
-  const sliced = normalized.slice(0, maxChars - 1);
-  const sentence = sliced.lastIndexOf(". ");
-  return `${(sentence >= Math.floor(maxChars / 2) ? sliced.slice(0, sentence + 1) : sliced).trim()}…`;
+function isRecoverableMutationResult(_toolName: ToolName, result: AgentResponse) {
+  return result.status !== "error" && result.outcome?.terminal === true;
 }
 
 function isSuccessfulNanoWebSearchEvent(event: NanoCodexRuntimeEvent) {
   if (event.type !== "tool.result") return false;
-  const serialized = JSON.stringify(event.payload);
-  return /(?:web__run|web_search)/i.test(serialized) && /https?:\/\//i.test(serialized) && !/"status":"failed"/i.test(serialized);
+  const toolName = typeof event.payload.toolName === "string"
+    ? event.payload.toolName
+    : typeof event.payload.tool_name === "string"
+      ? event.payload.tool_name
+      : typeof event.payload.name === "string"
+        ? event.payload.name
+        : undefined;
+  const status = typeof event.payload.status === "string" ? event.payload.status : undefined;
+  const sources = Array.isArray(event.payload.sources)
+    ? event.payload.sources
+    : Array.isArray(event.payload.citations)
+      ? event.payload.citations
+      : [];
+  return (toolName === "web_search" || toolName === "web__run") && status !== "failed" && sources.length > 0;
 }
 
 async function recordNanoCodexEvent(ctx: ToolContext, event: NanoCodexRuntimeEvent) {

@@ -19,7 +19,11 @@ const ctx = { config: { maxReplyChars: 1_800 } } as ToolContext;
 describe("codegenToolHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    for (const mock of Object.values(mocks)) mock.mockResolvedValue(" result ");
+    mocks.getAgentTaskStatus.mockResolvedValue(" result ");
+    mocks.listAgentTasks.mockResolvedValue(" result ");
+    for (const mock of [mocks.createAgentUpdateFromRequest, mocks.retryAgentTask, mocks.cancelAgentTask]) {
+      mock.mockResolvedValue({ content: " result ", status: "ok", outcome: { kind: "agent_task", state: "succeeded", terminal: true } });
+    }
   });
 
   it.each([
@@ -39,7 +43,7 @@ describe("codegenToolHandlers", () => {
       ctx,
       route("runCodingAgent", arguments_),
       "original request",
-    )).resolves.toEqual({ content: "result" });
+    )).resolves.toEqual({ content: "result", status: "ok", outcome: { kind: "agent_task", state: "succeeded", terminal: true } });
 
     expect(mocks.createAgentUpdateFromRequest).toHaveBeenCalledWith(
       ctx,

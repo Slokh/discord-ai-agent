@@ -3,11 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { openRouterServerToolRegistry, toolRegistry } from "../src/tools/registry.js";
 
 const DEFAULT_EVAL_DIR = "evals/prompts";
 const DEFAULT_PRIVATE_EVAL_DIR = ".discord-ai-agent/evals";
 const DEFAULT_OUTPUT_DIR = ".eval-runs";
 const DEFAULT_TIMEOUT_MS = 300_000;
+const KNOWN_EVAL_TOOLS = new Set<string>([
+  ...toolRegistry.map((tool) => tool.name),
+  ...openRouterServerToolRegistry.map((tool) => tool.type),
+]);
 
 const evalPromptSchema = z.object({
   id: z.string().min(1),
@@ -260,6 +265,7 @@ export async function loadEvalPrompts(args: Pick<EvalArgs, "files" | "dirs">): P
   for (const file of [...files].sort()) {
     const raw = JSON.parse(await fs.readFile(file, "utf8")) as unknown;
     const suite = evalSuiteSchema.parse(raw);
+    validateEvalToolNames(suite.prompts, file);
     suites.push(suite);
   }
 
@@ -270,6 +276,16 @@ export async function loadEvalPrompts(args: Pick<EvalArgs, "files" | "dirs">): P
     seen.add(prompt.id);
   }
   return prompts;
+}
+
+export function validateEvalToolNames(prompts: EvalPrompt[], source = "eval suite"): void {
+  for (const prompt of prompts) {
+    for (const name of [...prompt.expectedTools, ...prompt.expectedRequestedTools]) {
+      if (!KNOWN_EVAL_TOOLS.has(name)) {
+        throw new Error(`Unknown eval tool ${name} in ${prompt.id} (${source})`);
+      }
+    }
+  }
 }
 
 export function filterPrompts(prompts: EvalPrompt[], args: Pick<EvalArgs, "filter" | "category">): EvalPrompt[] {

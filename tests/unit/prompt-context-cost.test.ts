@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   chatMessages,
   currentDataGuidance,
-  discordEmojiReactionChoices,
   loadDiscordEmojiPromptContext,
   toolResultContentForPrompt,
 } from "../../src/agent/promptBuilder.js";
@@ -17,7 +16,7 @@ import {
 import type { ConversationMessage } from "../../src/db/repositories.js";
 import { loadConfig } from "../../src/config/env.js";
 import { toolDefinitionsForModel } from "../../src/tools/registry.js";
-import { scopedToolset, selectToolGroups } from "../../src/tools/toolScope.js";
+import { deploymentToolset } from "../../src/tools/toolScope.js";
 import type { DiscordAgentRequestInput } from "../../src/discord/requestContext.js";
 import type { DiscordReplyContext } from "../../src/tools/types.js";
 
@@ -193,7 +192,7 @@ describe("prompt context cost controls", () => {
 
     expect(prompt).toContain("compact server-emoji culture guide");
     expect(prompt).toContain("choose at most one fitting emote treatment");
-    expect(prompt).toContain("<!-- discord-reaction:MENTION -->");
+    expect(prompt).toContain("use addDiscordReaction without a message target");
     expect(prompt).toContain("Never choose both inline use and a reaction");
     expect(prompt).toContain("<:party:1> (6 observed messages)");
     expect(prompt).not.toContain("<a:wave:2>");
@@ -218,39 +217,6 @@ describe("prompt context cost controls", () => {
       queryText: "finally shipped",
       limit: 4,
     });
-  });
-
-  it("offers source-message reactions only for learned reaction patterns", () => {
-    const emojis = [
-      { id: "1", name: "party", animated: false, mention: "<:party:1>" },
-      { id: "2", name: "wave", animated: true, mention: "<a:wave:2>" },
-    ];
-    const baseProfile = {
-      inlineUses: 3,
-      reactionUses: 3,
-      messageCount: 4,
-      lastUsedAt: new Date("2026-07-18T00:00:00Z"),
-    };
-    const profiles = [
-      {
-        ...baseProfile,
-        emojiId: "1",
-        examples: [{
-          emojiId: "1", kind: "reaction" as const, messageId: "message-1",
-          content: "we shipped", createdAt: new Date("2026-07-18T00:00:00Z"),
-        }],
-      },
-      {
-        ...baseProfile,
-        emojiId: "2",
-        examples: [{
-          emojiId: "2", kind: "inline" as const, messageId: "message-2",
-          content: "hello", createdAt: new Date("2026-07-18T00:00:00Z"),
-        }],
-      },
-    ];
-
-    expect(discordEmojiReactionChoices({ emojis, profiles })).toEqual(["<:party:1>"]);
   });
 
   it("bounds learned emoji culture context instead of injecting the full palette", () => {
@@ -475,28 +441,6 @@ describe("prompt context cost controls", () => {
     expect(prompt).not.toContain("Recent completed turns from this channel");
   });
 
-  it("adds concise guidance only for the scoped tools without changing the cached core", () => {
-    const guidance = "Scoped operational guidance for the tools available in this turn:\n- Search fresh Discord evidence first.";
-    const messages = chatMessages(
-      "what did Alex say?",
-      "",
-      [],
-      undefined,
-      [],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      guidance,
-    );
-
-    expect(String(messages[0]?.content)).not.toContain("Search fresh Discord evidence first");
-    expect(messages.some((message) => String(message.content).includes("Search fresh Discord evidence first"))).toBe(true);
-    expect(messages.findIndex((message) => String(message.content).includes("Search fresh Discord evidence first")))
-      .toBeLessThan(messages.findIndex((message) => message.role === "user"));
-  });
-
   it("carries only scoped continuation pointers for a reply, never prior tool bodies", () => {
     const prompt = chatMessages("what did it find?", "", [
       conversationMessage({
@@ -597,17 +541,17 @@ describe("prompt context cost controls", () => {
   });
 
   it("caps large tool results before they re-enter the prompt", () => {
-    const content = "x".repeat(20 * 1024);
+    const content = `${"x".repeat(12 * 1024 - 1)}🙂${"y".repeat(8 * 1024)}`;
     const promptContent = toolResultContentForPrompt("searchDiscordHistory", { content });
     expect(promptContent.length).toBeLessThan(content.length);
     expect(promptContent).toContain("result truncated before re-entering the model prompt");
     expect(promptContent).toContain("agent runtime transcript");
+    expect(promptContent).not.toContain("�");
   });
 
-  it("keeps ordinary-chat static context within a strict schema budget", () => {
+  it("keeps one stable complete deployment contract", () => {
     const config = loadConfig();
-    const groups = selectToolGroups({ text: "hello there", hasImageAttachments: false, config });
-    const tools = scopedToolset({ config, groups });
+    const tools = deploymentToolset(config);
     const definitions = toolDefinitionsForModel({ localTools: tools.localTools, serverTools: tools.serverTools });
     const systemBytes = Buffer.byteLength(String(chatMessages("hello there", "")[0]?.content), "utf8");
     const localSchemaBytes = Buffer.byteLength(
@@ -615,12 +559,13 @@ describe("prompt context cost controls", () => {
       "utf8",
     );
 
-    expect(tools.localTools.map((tool) => tool.name)).toEqual(["listTools", "requestAdditionalTools", "loadSkillContext"]);
+    expect(tools.localTools.map((tool) => tool.name)).toContain("composeDiscordResponse");
+    expect(tools.localTools.map((tool) => tool.name)).not.toContain("requestAdditionalTools");
     expect(systemBytes).toBeLessThan(4_000);
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("searchDiscordHistory");
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("getDiscordStats");
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("runCodingAgent");
-    expect(localSchemaBytes).toBeLessThan(6_000);
-    expect(Buffer.byteLength(JSON.stringify(definitions), "utf8")).toBeLessThan(6_500);
+    expect(localSchemaBytes).toBeLessThan(120_000);
+    expect(Buffer.byteLength(JSON.stringify(definitions), "utf8")).toBeLessThan(125_000);
   });
 });

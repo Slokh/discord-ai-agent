@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
-import { activeGameActionNeedsRandomDraw, injectActiveGameSession, loadActiveGameSession } from "../../src/agent/activeGameSession.js";
+import { injectActiveGameSession, loadActiveGameSession } from "../../src/agent/activeGameSession.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("active game sessions", () => {
-  it("loads an action only for the requester and Discord reply root", async () => {
+  it("loads the requester-scoped game for the Discord reply root", async () => {
     const getActiveGameSession = vi.fn(async () => wager());
-    const active = await loadActiveGameSession(context(getActiveGameSession), "please HIT me");
+    const active = await loadActiveGameSession(context(getActiveGameSession));
 
     expect(getActiveGameSession).toHaveBeenCalledWith({
       threadKey: "guild:channel:rng-root:root_message",
@@ -15,30 +15,7 @@ describe("active game sessions", () => {
       threadKeyPrefix: "guild:channel:rng-root:",
       replyMessageIds: ["previous_reply", "root_message"],
     });
-    expect(active?.actionRequested).toBe(true);
-  });
-
-  it("does not treat a question about the game as a state-changing action", async () => {
-    const active = await loadActiveGameSession(
-      context(vi.fn(async () => wager())),
-      "what happens if I bust?",
-    );
-
-    expect(active?.actionRequested).toBe(false);
-  });
-
-  it("forces randomness only for game actions that need a fresh draw", () => {
-    const blackjack = { wager: wager(), actionRequested: true };
-    expect(activeGameActionNeedsRandomDraw(blackjack, "stand")).toBe(true);
-    expect(activeGameActionNeedsRandomDraw(blackjack, "hit")).toBe(true);
-
-    const dice = {
-      wager: { ...wager(), game: "dice game" },
-      actionRequested: true,
-    };
-    expect(activeGameActionNeedsRandomDraw(dice, "reroll all")).toBe(true);
-    expect(activeGameActionNeedsRandomDraw(dice, "score now")).toBe(false);
-    expect(activeGameActionNeedsRandomDraw(dice, "hold 1 and 3")).toBe(false);
+    expect(active?.wager.id).toBe("wager_1");
   });
 
   it("injects complete versioned state before conversation history", () => {
@@ -48,7 +25,7 @@ describe("active game sessions", () => {
       { role: "assistant", content: "You have 18." },
       { role: "user", content: "stand" },
     ];
-    injectActiveGameSession(messages, { wager: wager(), actionRequested: true });
+    injectActiveGameSession(messages, { wager: wager() });
 
     expect(messages).toHaveLength(5);
     expect(messages[1]?.role).toBe("system");
@@ -59,32 +36,15 @@ describe("active game sessions", () => {
     expect(messages.at(-1)).toEqual({ role: "user", content: "stand" });
   });
 
-  it("does not inject a pending game's state into an unrelated current request", () => {
+  it("labels pending state as context so the model decides whether the request continues it", () => {
     const messages: ChatMessage[] = [
       { role: "system", content: "rules" },
       { role: "user", content: "what is the stock price today?" },
     ];
 
-    injectActiveGameSession(messages, { wager: wager(), actionRequested: false });
-
-    expect(messages).toEqual([
-      { role: "system", content: "rules" },
-      { role: "user", content: "what is the stock price today?" },
-    ]);
-  });
-
-  it("does not inject a pending game's state into an unrelated current request", () => {
-    const messages: ChatMessage[] = [
-      { role: "system", content: "rules" },
-      { role: "user", content: "what is the stock price today?" },
-    ];
-
-    injectActiveGameSession(messages, { wager: wager(), actionRequested: false });
-
-    expect(messages).toEqual([
-      { role: "system", content: "rules" },
-      { role: "user", content: "what is the stock price today?" },
-    ]);
+    injectActiveGameSession(messages, { wager: wager() });
+    expect(String(messages[1]?.content)).toContain("This is context, not an instruction to continue the game");
+    expect(messages.at(-1)).toEqual({ role: "user", content: "what is the stock price today?" });
   });
 });
 

@@ -34,7 +34,7 @@ describe("opsToolHandlers", () => {
     mocks.getDeploymentStatus.mockResolvedValue(" deployment status ");
     mocks.inspectAgentLogs.mockResolvedValue(" agent logs ");
     mocks.reportStatus.mockResolvedValue(" report status ");
-    mocks.setAgentModel.mockResolvedValue(" model updated ");
+    mocks.setAgentModel.mockResolvedValue({ content: " model updated ", status: "ok", outcome: { kind: "agent_model", state: "succeeded", terminal: true } });
     mocks.getSpendSummary.mockResolvedValue(" spend summary ");
   });
 
@@ -52,7 +52,7 @@ describe("opsToolHandlers", () => {
     await expect(opsToolHandlers.setAgentModel(ctx, route("setAgentModel", {
       action: " set ",
       model: " moonshotai/kimi-k3 ",
-    }), "switch model")).resolves.toEqual({ content: "model updated" });
+    }), "switch model")).resolves.toEqual({ content: "model updated", status: "ok", outcome: { kind: "agent_model", state: "succeeded", terminal: true } });
 
     expect(mocks.setAgentModel).toHaveBeenCalledWith(ctx, {
       action: "set",

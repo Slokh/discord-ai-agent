@@ -20,7 +20,8 @@ import type {
   WagerSettlementOutcome
 } from "../payments/types.js";
 import { paymentRecorder } from "./paymentToolContext.js";
-import type { ToolContext } from "./types.js";
+import type { AgentResponse, ToolContext } from "./types.js";
+import { isPaymentDomainError } from "../payments/errors.js";
 import { ensureAgentTurnOutput } from "./turnOutput.js";
 import { validateWagerFairness } from "./wagerFairness.js";
 import { wagerRequester } from "./wagerRequesterScope.js";
@@ -34,29 +35,32 @@ import {
 const MAX_FOOTER_OUTCOME_CHARS = 160;
 const MAX_REVEAL_DRAW_LINES = 25;
 const RNG_ROOT_SCOPE_SEGMENT = "rng-root";
-const WAGER_GAME_SOURCE = String.raw`(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery)`;
 const DRAW_KINDS = new Set(["integers", "dice", "coin", "pick", "shuffle", "cards"]);
 
 export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Promise<string> {
+  return drawRandomCore(ctx, input);
+}
+
+async function drawRandomCore(
+  ctx: ToolContext,
+  input: DrawRandomInput,
+  knownContinuingWager?: WagerReservation | null,
+  onDrawn?: (result: { wagerActive: boolean }) => void,
+): Promise<string> {
   input = normalizeDrawRandomInput(input);
-  if (isDeferredExternalOutcomeWager(ctx.requestText ?? "")) {
-    return "This wager depends on a future or third-party outcome, not a draw the bot should perform now. No funds were reserved and no random draw was made. Cross-user deferred wagers are not supported; use a current requester-scoped bot game instead.";
-  }
-  let continuingWager: WagerReservation | null = null;
-  if (ctx.config.payments.userWalletsEnabled && ctx.walletService) {
+  let continuingWager = knownContinuingWager ?? null;
+  if (knownContinuingWager === undefined && ctx.config.payments.userWalletsEnabled && ctx.walletService) {
     continuingWager = await currentWagerForContext(ctx);
+  }
+  const continuationError = validateWagerContinuation(continuingWager, input);
+  if (continuationError) {
+    await auditRng(ctx, "drawRandom", input, continuationError);
+    return continuationError;
   }
   const kind = (input.kind ?? "").trim();
   if (!DRAW_KINDS.has(kind)) {
     await auditRng(ctx, "drawRandom", input, `unknown kind "${kind}"`);
     return `Unknown draw kind "${kind}". Supported kinds: integers, dice, coin, pick, shuffle, cards.`;
-  }
-  if (ctx.config.payments.userWalletsEnabled && !input.wager && requiresWalletBackedWagerForContext(ctx)) {
-    if (!continuingWager) {
-      const error = "This request risks real USD, so drawRandom requires a wallet-backed wager with stakeUsd, maxPayoutUsd, and game before any randomness is consumed.";
-      await auditRng(ctx, "drawRandom", input, error);
-      return error;
-    }
   }
   const setup = await ensureRngSetup(ctx, "drawRandom", input);
   if (typeof setup === "string") return setup;
@@ -116,11 +120,6 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
       return fairnessError;
     }
   }
-  if (input.wager && hasUncommittedPlayerSecretWager(ctx.requestText ?? "")) {
-    const error = "This real-money wager is not verifiable because its outcome depends on a secret the player can reveal or change after the bot acts. No funds were reserved and no random draw was made. Use play money or a result that was independently committed before the wager.";
-    await auditRng(ctx, "drawRandom", input, error);
-    return error;
-  }
   let wager: WagerReservation | null = null;
   let wagerInteractionMode: WagerInteractionMode | null = null;
   if (input.wager) {
@@ -143,23 +142,22 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
         paymentRecorder(ctx)
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/already exists for this Discord request/i.test(message)) {
+      if (isPaymentDomainError(error) && error.code === "wager_already_exists") {
         const result = "A wallet-backed wager has already been reserved for this Discord request. Use the first successful draw and settle that wager; do not draw or reserve another wager.";
         await auditRng(ctx, "drawRandom", input, result);
         return result;
       }
-      if (/active wallet-backed game already exists/i.test(message)) {
+      if (isPaymentDomainError(error) && error.code === "active_game_exists") {
         const result = "An active wallet-backed game already exists in this Discord reply chain. Continue that game from its saved state or settle it before starting another wager.";
         await auditRng(ctx, "drawRandom", input, result);
         return result;
       }
-      if (/Insufficient user wallet balance/i.test(message)) {
+      if (isPaymentDomainError(error) && error.code === "insufficient_user_balance") {
         const result = "The wager could not be reserved because the user's available wallet balance is below the requested stake. Available balance excludes active wager and transfer reservations; gas fees are paid by the bot fee payer and are not deducted from the user.";
         await auditRng(ctx, "drawRandom", input, result);
         return result;
       }
-      if (/bot wallet cannot cover this wager's maximum payout/i.test(message)) {
+      if (isPaymentDomainError(error) && error.code === "insufficient_bot_coverage") {
         const result = "The wager could not be reserved because the bot wallet cannot currently cover the maximum payout. No funds were reserved and no random draw was made. Try a smaller stake or lower-payout game.";
         await auditRng(ctx, "drawRandom", input, result);
         return result;
@@ -170,7 +168,11 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
 
   const clientSeedValue = ctx.requestMessageId ?? ctx.requestId ?? generateServerSeed();
   const clientSeedSource = ctx.requestMessageId ? "discord_message_id" : ctx.requestId ? "request_id" : "random";
-  const reason = normalizeReason(input.reason);
+  const reason = input.wagerAction
+    ? `blackjack:${input.wagerAction}`
+    : input.wager?.rule?.kind === "coin_side"
+      ? `coin:${input.wager.rule.side}`
+      : normalizeReason(input.reason);
   // Candidate seed for a new session; discarded unpublished when one already exists.
   const candidateServerSeed = generateServerSeed();
 
@@ -241,8 +243,9 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
     );
   }
   ensureAgentTurnOutput(ctx).addFooterLines(...footerLines);
+  onDrawn?.({ wagerActive: Boolean(wager || continuingWager) });
 
-  await auditRng(ctx, "drawRandom", input, `session ${sessionId} nonce ${draw.nonce}: ${draw.summary}`);
+  await auditRng(ctx, "drawRandom", input, `session ${sessionId} nonce ${draw.nonce}: ${draw.summary}`).catch(() => undefined);
 
   return [
     `Provably fair draw complete.`,
@@ -259,46 +262,75 @@ export async function drawRandom(ctx: ToolContext, input: DrawRandomInput): Prom
   ].filter((line): line is string => line !== null).join("\n");
 }
 
-export function requiresWalletBackedWager(text: string): boolean {
-  const amount = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
-  const money = new RegExp(String.raw`(?:\$\s*${amount}|(?<![\w.])${amount}\s*(?:usd|dollars?|bucks?)\b)`, "i");
-  const shorthand = new RegExp(String.raw`(?:\b(?:bet|wager|stake|risk|put)\s+\$?${amount}(?![\w.])|(?<![\w.])\$?${amount}\s+(?:on|per\s+(?:spin|hand|roll|game)|each)\b)`, "i");
-  const game = /\b(?:casino|slots?|spins?|blackjack|roulette|poker|craps|dice|coin\s*flip|flip\s+a\s+coin|heads|tails|lottery|wager|bet)\b/i;
-  const gameLedStake = new RegExp(String.raw`\b(?:${WAGER_GAME_SOURCE})\b(?:\s*[,;:]\s*|\s+(?:[a-z][a-z'-]*\s+){0,2})\$?\s*${amount}(?![\w.])`, "i");
-  const gameDiscussion = /\b(?:is|are|was|were|has|have|odds?|probabilit(?:y|ies)|payouts?|pays?|returns?|rules?|strategy|recommend(?:ation|ed)?|worth|costs?|equals?|means?|uses?)\b/i;
-  const action = /\b(?:play|run|do|give|deal|roll|flip|spin|bet|wager|stake|risk|put|again|more)\b/i;
-  const replayAction = /\b(?:double(?:\s+down)?|let\s+it\s+ride|run\s+(?:it|that)\s+back|rematch|replay)\b/i;
-  const discussion = /^\s*(?:what|which|why|how|should|would|could|is|are|do\s+(?:you|i|we|they)|does|did|explain)\b/i;
-  const executionOverride = /\b(?:please|go\s+ahead|right\s+now|do\s+it|let(?:'s|\s+us)|for\s+me)\b/i;
-  const wholeBalance = /\b(?:all|rest|remainder|remaining|entire|whole)\b[\s\S]{0,40}\b(?:balance|bankroll|funds?|wallet)\b|\b(?:balance|bankroll|funds?|wallet)\b[\s\S]{0,40}\b(?:all|rest|remainder|remaining|entire|whole)\b/i;
-  if (discussion.test(text) && !executionOverride.test(text)) return false;
-  return game.test(text) && (
-    (money.test(text) && (action.test(text) || replayAction.test(text))) ||
-    shorthand.test(text) ||
-    (gameLedStake.test(text) && !gameDiscussion.test(text)) ||
-    (wholeBalance.test(text) && (action.test(text) || replayAction.test(text)))
-  );
+/**
+ * Runtime-facing draw result. It owns mutation outcome metadata so the caller
+ * never has to infer success from prose or perform a fallible post-draw read.
+ */
+export async function drawRandomResponse(ctx: ToolContext, input: DrawRandomInput): Promise<AgentResponse> {
+  const continuingWager = ctx.config.payments.userWalletsEnabled && ctx.walletService
+    ? await currentWagerForContext(ctx)
+    : null;
+  let drawResult: { wagerActive: boolean } | undefined;
+  const content = await drawRandomCore(ctx, input, continuingWager, (result) => { drawResult = result; });
+  const succeeded = Boolean(drawResult);
+  const wagerActive = drawResult?.wagerActive ?? false;
+  return {
+    content,
+    status: succeeded ? "ok" : "error",
+    retryable: !succeeded,
+    outcome: {
+      kind: "rng_draw",
+      state: succeeded ? "succeeded" : "failed",
+      wagerActive,
+      terminal: succeeded && !wagerActive,
+    },
+  };
 }
 
-export function isDeferredExternalOutcomeWager(text: string): boolean {
-  if (!requiresWalletBackedWager(text)) return false;
-  const deferredSettlement = /\b(?:remember|save|track|automatically\s+(?:resolve|settle)|resolve|settle)\b[\s\S]{0,120}\b(?:after|when|once|tomorrow|later|future)\b/i;
-  const futureOutcome = /\b(?:after|when|once|tomorrow|later|future|next\s+time)\b[\s\S]{0,100}\b(?:rolls?|flips?|spins?|draws?|picks?|result|outcome|number)\b/i;
-  const thirdParty = /\b(?:another|other|that)\s+(?:user|member|person|player)\b|\b(?:he|she|they)\b|<@!?\d+>/i;
-  return deferredSettlement.test(text) || (futureOutcome.test(text) && thirdParty.test(text));
-}
-
-export function requiresWalletBackedWagerForContext(ctx: ToolContext): boolean {
-  const requestText = ctx.requestText ?? "";
-  if (requiresWalletBackedWager(requestText)) return true;
-  if (!/^\s*(?:again|same(?:\s+thing)?|one\s+more|do\s+it\s+again|repeat)\b/i.test(requestText)) return false;
-  const previousRequesterPrompt = [...(ctx.sessionMessages ?? [])]
-    .reverse()
-    .find((message) => message.role === "user" && message.authorId === ctx.userId && message.content.trim());
-  return previousRequesterPrompt ? requiresWalletBackedWager(previousRequesterPrompt.content) : false;
+function validateWagerContinuation(wager: WagerReservation | null, input: DrawRandomInput): string | null {
+  if (!wager) {
+    return input.wagerAction
+      ? "wagerAction is only valid while continuing an active blackjack wager. No random draw was made."
+      : null;
+  }
+  if (input.wager) {
+    return "An active wallet-backed game already exists in this Discord reply chain. Continue its saved state without supplying a new wager. No random draw was made."
+  }
+  if (wager.game.trim().toLowerCase() !== "blackjack") return null;
+  if (input.wagerAction !== "hit" && input.wagerAction !== "stand") {
+    return "Continuing blackjack requires wagerAction=hit or wagerAction=stand from the saved game state. No random draw was made."
+  }
+  if (!wager.allowedActions.includes(input.wagerAction)) {
+    return `The saved blackjack game does not allow ${input.wagerAction}; allowed actions are ${wager.allowedActions.join(", ") || "none"}. No random draw was made.`;
+  }
+  if (input.kind !== "cards" || (input.count ?? 1) !== 1) {
+    return "A blackjack continuation must draw exactly one card with kind=cards and count=1. No random draw was made."
+  }
+  return null;
 }
 
 export async function settleRandomWager(
+  ctx: ToolContext,
+  input: Parameters<typeof settleRandomWagerCore>[1],
+): Promise<string> {
+  return settleRandomWagerCore(ctx, input);
+}
+
+export async function settleRandomWagerResponse(
+  ctx: ToolContext,
+  input: Parameters<typeof settleRandomWagerCore>[1],
+): Promise<AgentResponse> {
+  let settled = false;
+  const content = await settleRandomWagerCore(ctx, input, () => { settled = true; });
+  return {
+    content,
+    status: settled ? "ok" : "error",
+    retryable: !settled,
+    outcome: { kind: "wager", state: settled ? "settled" : "failed", terminal: settled },
+  };
+}
+
+async function settleRandomWagerCore(
   ctx: ToolContext,
   input: {
     wagerId?: string;
@@ -306,7 +338,8 @@ export async function settleRandomWager(
     outcome?: WagerSettlementOutcome;
     resolutionSource?: WagerResolutionSource;
     explanation?: string;
-  }
+  },
+  onSettled?: () => void,
 ): Promise<string> {
   if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
   if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
@@ -324,12 +357,6 @@ export async function settleRandomWager(
   const wager = await currentWagerForContext(ctx);
   if (!wager) {
     return "Settlement rejected: no active wallet wager exists for this player in this Discord game session. No transfer was created.";
-  }
-  const standardGame =
-    typeof wager.game === "string" &&
-    /^(?:blackjack|coin\s*flip)$/i.test(wager.game.trim());
-  if (!standardGame && describesUnfinishedWager(explanation)) {
-    return "Settlement rejected: the calculation describes an unfinished game. If the player has a decision, call awaitRandomWagerAction with complete versioned state and allowed actions. If more automatic chance is required, call drawRandom again without a new wager, apply the verified result, and repeat until the outcome is final. Then call settleRandomWager with the final payout.";
   }
   const suppliedWagerId = input.wagerId?.trim();
   if (suppliedWagerId && suppliedWagerId !== wager.id) {
@@ -363,12 +390,12 @@ export async function settleRandomWager(
       paymentRecorder(ctx)
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/unknown wager|not ready to settle|has expired|payout is outside|only the user|settlement outcome|interactive wager|persisted player decision|new Discord reply|stable settlement request/i.test(message)) {
-      return `Settlement rejected: ${message}. No transfer was created.`;
+    if (isPaymentDomainError(error)) {
+      return `Settlement rejected: ${error.message}. No transfer was created.`;
     }
     throw error;
   }
+  onSettled?.();
   return [
     `The scoped wallet wager settled.`,
     `Payout: $${settlement.payoutUsd}.`,
@@ -380,23 +407,6 @@ export async function settleRandomWager(
   ].filter((line): line is string => line !== null).join("\n");
 }
 
-export function hasUncommittedPlayerSecretWager(text: string): boolean {
-  const secret = String.raw`(?:number|digit|word|name|card|color|colour|symbol|thing|answer)`;
-  const playerPossession = new RegExp(
-    String.raw`\b(?:i(?:'m|\s+am)\s+thinking\s+of|i(?:'ve|\s+have)\s+(?:picked|chosen|selected)|i\s+(?:picked|chose|selected)|(?:in|on)\s+my\s+(?:head|mind))\b`,
-    "i"
-  );
-  const guessSecret = new RegExp(
-    String.raw`\bguess(?:es|ed|ing)?\b[^.!?\n]{0,80}\b${secret}\b[^.!?\n]{0,80}(?:thinking\s+of|picked|chosen|selected|in\s+(?:my|your)\s+(?:head|mind))`,
-    "i"
-  );
-  const directSecret = new RegExp(
-    String.raw`\b${secret}\b[^.!?\n]{0,30}(?:i(?:'m|\s+am)\s+thinking\s+of|i(?:'ve|\s+have)\s+(?:picked|chosen|selected)|i\s+(?:picked|chose|selected)|in\s+my\s+(?:head|mind))`,
-    "i"
-  );
-  return /\b(?:guess|predict|tell)\b/i.test(text) && playerPossession.test(text) && (guessSecret.test(text) || directSecret.test(text));
-}
-
 function isSettlementOutcome(value: unknown): value is WagerSettlementOutcome {
   return value === "player_win" || value === "player_loss" || value === "push";
 }
@@ -405,11 +415,22 @@ function isResolutionSource(value: unknown): value is WagerResolutionSource {
   return value === "verified_randomness" || value === "player_decision";
 }
 
-function describesUnfinishedWager(explanation: string): boolean {
-  return /\b(?:in\s+progress|await(?:ing|s)?|pending|hit\s+or\s+stand|not\s+(?:yet\s+)?(?:finished|complete|resolved|decided|settled)|to\s+be\s+(?:continued|completed|decided))\b/i.test(explanation);
+export async function revealRandomness(ctx: ToolContext): Promise<string> {
+  return revealRandomnessCore(ctx);
 }
 
-export async function revealRandomness(ctx: ToolContext): Promise<string> {
+export async function revealRandomnessResponse(ctx: ToolContext): Promise<AgentResponse> {
+  let revealed = false;
+  const content = await revealRandomnessCore(ctx, () => { revealed = true; });
+  return {
+    content,
+    status: revealed ? "ok" : "error",
+    retryable: !revealed,
+    outcome: { kind: "rng_reveal", state: revealed ? "succeeded" : "failed", terminal: true },
+  };
+}
+
+async function revealRandomnessCore(ctx: ToolContext, onRevealed?: () => void): Promise<string> {
   const setup = await ensureRngSetup(ctx, "revealRandomness", {});
   if (typeof setup === "string") return setup;
   const { rngRepo, threadKey } = setup;
@@ -449,7 +470,8 @@ export async function revealRandomness(ctx: ToolContext): Promise<string> {
     `🎲 next fair-play commit sha256:${successor.commitment}`
   );
 
-  await auditRng(ctx, "revealRandomness", {}, `revealed session ${revealed.id} with ${draws.length} draws; next session ${successor.id}`);
+  await auditRng(ctx, "revealRandomness", {}, `revealed session ${revealed.id} with ${draws.length} draws; next session ${successor.id}`).catch(() => undefined);
+  onRevealed?.();
 
   return [
     `Revealed session ${revealed.id}.`,

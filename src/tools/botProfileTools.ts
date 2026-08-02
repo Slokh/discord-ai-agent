@@ -1,5 +1,5 @@
 import { summarizeForAudit } from "../util/text.js";
-import type { AgentFile, ToolContext } from "./types.js";
+import type { AgentFile, AgentResponse, ToolContext } from "./types.js";
 import { imageReferencesForInput } from "./imageTools.js";
 import { updateDiscordBotAvatar } from "../discord/api.js";
 
@@ -19,11 +19,11 @@ const DATA_URI_CONTENT_TYPES: Record<string, string> = {
   "image/gif": "image/gif"
 };
 
-export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarInput = {}): Promise<string> {
+export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarInput = {}): Promise<AgentResponse> {
   const token = ctx.config.discord.token;
   if (!token) {
     await auditAvatar(ctx, input, "missing discord token", true);
-    return "I cannot update my avatar because no Discord bot token is configured.";
+    return avatarError("not_configured", "I cannot update my avatar because no Discord bot token is configured.");
   }
 
   const source = await resolveAvatarSource(ctx, input).catch((error) => {
@@ -33,11 +33,11 @@ export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarIn
 
   if (source.kind === "error") {
     await auditAvatar(ctx, input, `image resolve failed: ${source.message}`, true);
-    return `I could not get an image for the avatar update: ${source.message}`;
+    return avatarError("image_source_unavailable", `I could not get an image for the avatar update: ${source.message}`);
   }
   if (source.kind === "none") {
     await auditAvatar(ctx, input, "no image source", true);
-    return "I need an image URL or a context image to update my avatar. Provide an imageUrl or attach/reply to an image.";
+    return avatarError("missing_image", "I need an image URL or a context image to update my avatar. Provide an imageUrl or attach/reply to an image.");
   }
 
   let dataUri: string;
@@ -46,7 +46,7 @@ export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarIn
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await auditAvatar(ctx, input, `image encode failed: ${message}`, true, { sourceLabel: source.label });
-    return `I could not prepare that image for Discord: ${message}`;
+    return avatarError("image_preparation_failed", `I could not prepare that image for Discord: ${message}`);
   }
 
   let response: Response;
@@ -56,18 +56,18 @@ export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarIn
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await auditAvatar(ctx, input, `discord api network error: ${message}`, true, { sourceLabel: source.label });
-    return `I could not reach Discord's API to update my avatar: ${message}`;
+    return avatarError("discord_api_unavailable", `I could not reach Discord's API to update my avatar: ${message}`, true);
   }
 
   if (response.status === 429) {
     const retryAfter = await parseRetryAfter(response);
     await auditAvatar(ctx, input, `discord rate limited (retry after ${retryAfter}ms)`, true, { sourceLabel: source.label });
-    return `Discord is rate-limiting avatar updates. Try again in about ${Math.max(1, Math.round(retryAfter / 1000))} second(s).`;
+    return avatarError("rate_limited", `Discord is rate-limiting avatar updates. Try again in about ${Math.max(1, Math.round(retryAfter / 1000))} second(s).`, true);
   }
   if (!response.ok) {
     const body = await safeErrorBody(response);
     await auditAvatar(ctx, input, `discord api ${response.status}: ${body}`, true, { sourceLabel: source.label });
-    return `Discord rejected the avatar update (HTTP ${response.status}). ${body}`.trim();
+    return avatarError("discord_api_rejected", `Discord rejected the avatar update (HTTP ${response.status}). ${body}`.trim());
   }
 
   let newAvatarUrl: string | undefined;
@@ -77,15 +77,19 @@ export async function updateBotAvatar(ctx: ToolContext, input: UpdateBotAvatarIn
     // Non-fatal: the PATCH succeeded even if we could not parse the body.
   }
 
-  await auditAvatar(ctx, input, "avatar updated", false, { sourceLabel: source.label, newAvatarUrl });
+  await auditAvatar(ctx, input, "avatar updated", false, { sourceLabel: source.label, newAvatarUrl }).catch(() => undefined);
 
-  return [
+  return { content: [
     "Updated my Discord bot avatar.",
     newAvatarUrl ? `New avatar: ${newAvatarUrl}` : "",
     `Source: ${source.label}`
   ]
     .filter(Boolean)
-    .join("\n");
+    .join("\n"), status: "ok", outcome: { kind: "bot_avatar", state: "succeeded", terminal: true } };
+}
+
+function avatarError(errorCode: string, content: string, retryable = false): AgentResponse {
+  return { content, status: "error", errorCode, retryable, outcome: { kind: "bot_avatar", state: "failed" } };
 }
 
 type AvatarSource =

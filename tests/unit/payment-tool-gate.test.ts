@@ -36,21 +36,27 @@ describe("payment tool permissions", () => {
       .resolves.toEqual(expect.objectContaining({ allowed: false }));
   });
 
-  it("requires model-change intent in the current message", async () => {
+  it("lets an authorized owner use the typed model-setting tool without grammar parsing", async () => {
     const ctx = context("owner");
     ctx.requestText = "I added a tool for changing models";
 
     await expect(restrictedToolGate(ctx, "setAgentModel"))
-      .resolves.toEqual(expect.objectContaining({
-        allowed: false,
-        message: expect.stringContaining("current Discord message"),
-      }));
+      .resolves.toEqual({ allowed: true });
+  });
+
+  it("fails closed when an ingress omits mutation authority", async () => {
+    const ctx = context("owner");
+    delete (ctx as Partial<ToolContext>).mutationAuthorizedByCurrentInput;
+
+    await expect(restrictedToolGate(ctx, "setAgentModel"))
+      .resolves.toEqual(expect.objectContaining({ allowed: false }));
   });
 });
 
 function context(userId: string): ToolContext {
   return {
     userId,
+    mutationAuthorizedByCurrentInput: true,
     requestText: "switch model to moonshotai/kimi-k3",
     config: {
       allowlists: {

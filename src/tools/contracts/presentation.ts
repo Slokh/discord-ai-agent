@@ -6,7 +6,6 @@ export const presentationToolContracts = [
     name: "composeDiscordResponse",
     description:
       "Design an optional Discord Components V2 presentation for the final reply. Use only when native layout or interaction materially improves the answer: clear next-action buttons, bounded choices, a form, media gallery, attached-file display, or a genuinely scannable card. Do not decorate simple answers. Final response text is automatically rendered above these components. Use this semantic schema exactly: pass components as an array, use named component types and styles, and describe interactive behavior with action or prompt. Never send numeric Discord API types/styles, custom_id, callback code, or a JSON-encoded components string; code generates protocol IDs and enforces authority. Supports all current Discord message components: action_row, button, string_select, user_select, role_select, mentionable_select, channel_select, section, text, thumbnail, media_gallery, file, separator, and container. Buttons may continue the conversation, open a modal, navigate to a link, or use a configured premium SKU. Modal fields support text, text_input, all select types, file_upload, radio_group, checkbox_group, and checkbox. Generic component actions never authorize money, wager, admin, deletion, or other mutations.",
-    userVisible: true,
     mutates: false,
     group: "presentation",
     category: "discord",
@@ -25,6 +24,33 @@ export const presentationToolContracts = [
         }],
       }],
     }],
+    scopeForDeployment: (tool, config) => {
+      const premiumSkuIds = config.discord?.premiumSkuIds ?? [];
+      return {
+        ...tool,
+        description: `${tool.description} Premium button SKUs available in this deployment: ${premiumSkuIds.length ? premiumSkuIds.join(", ") : "none"}.`,
+        parameters: scopePremiumButtonSchema(tool.parameters, premiumSkuIds) as ToolRegistryEntry["parameters"],
+      };
+    },
     parameters: discordPresentationToolParameters,
   }),
 ] satisfies ToolRegistryEntry[];
+
+function scopePremiumButtonSchema(value: unknown, skuIds: string[]): unknown {
+  if (Array.isArray(value)) return value.map((item) => scopePremiumButtonSchema(item, skuIds)).filter((item) => item !== undefined);
+  if (!value || typeof value !== "object") return value;
+  const object = value as Record<string, unknown>;
+  const properties = object.properties as Record<string, unknown> | undefined;
+  const style = properties?.style as { enum?: unknown[] } | undefined;
+  if (style?.enum?.length === 1 && style.enum[0] === "premium") {
+    if (!skuIds.length) return undefined;
+    return {
+      ...object,
+      properties: {
+        ...properties,
+        skuId: { type: "string", enum: skuIds, description: "A premium SKU configured for this Discord application." },
+      },
+    };
+  }
+  return Object.fromEntries(Object.entries(object).map(([key, child]) => [key, scopePremiumButtonSchema(child, skuIds)]));
+}

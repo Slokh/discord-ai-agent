@@ -67,11 +67,27 @@ describe("updateBotAvatar", () => {
     expect(headers["Content-Type"]).toBe("application/json");
     const body = JSON.parse(String(captured?.init?.body)) as { avatar: string };
     expect(body.avatar).toMatch(/^data:image\/png;base64,/);
-    expect(response).toContain("Updated my Discord bot avatar");
-    expect(response).toContain("https://cdn.discordapp.com/avatars/bot-id/newhash.png");
+    expect(response.content).toContain("Updated my Discord bot avatar");
+    expect(response.content).toContain("https://cdn.discordapp.com/avatars/bot-id/newhash.png");
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "updateBotAvatar" })
     );
+  });
+
+  it("keeps a completed avatar update successful when its audit write fails", async () => {
+    const ctx = fakeContext({
+      repo: { auditTool: vi.fn(async () => { throw new Error("audit unavailable"); }) } as unknown as ToolContext["repo"],
+    });
+    let patches = 0;
+    stubFetchWith((url) => {
+      if (url === "https://example.com/avatar.png") return new Response(PNG_PIXEL, { headers: { "content-type": "image/png" } });
+      patches += 1;
+      return jsonResponse({ id: "bot-id", avatar: "newhash" });
+    });
+
+    await expect(updateBotAvatar(ctx, { imageUrl: "https://example.com/avatar.png" }))
+      .resolves.toMatchObject({ status: "ok", outcome: { state: "succeeded" } });
+    expect(patches).toBe(1);
   });
 
   it("rejects a non-image URL without calling the Discord API", async () => {
@@ -87,7 +103,7 @@ describe("updateBotAvatar", () => {
 
     const response = await updateBotAvatar(ctx, { imageUrl: "https://example.com/notimage" });
 
-    expect(response).toContain("could not prepare that image");
+    expect(response.content).toContain("could not prepare that image");
     expect(calls).not.toContain("https://discord.com/api/v10/users/@me");
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "updateBotAvatar", error: expect.stringContaining("image encode failed") })
@@ -108,8 +124,8 @@ describe("updateBotAvatar", () => {
 
     const response = await updateBotAvatar(ctx, { imageUrl: "https://example.com/avatar.png" });
 
-    expect(response).toContain("rate-limiting");
-    expect(response).toContain("2 second");
+    expect(response.content).toContain("rate-limiting");
+    expect(response.content).toContain("2 second");
   });
 
   it("surfaces Discord permission/authorization errors from the PATCH", async () => {
@@ -126,8 +142,8 @@ describe("updateBotAvatar", () => {
 
     const response = await updateBotAvatar(ctx, { imageUrl: "https://example.com/avatar.png" });
 
-    expect(response).toContain("HTTP 401");
-    expect(response).toContain("Unauthorized");
+    expect(response.content).toContain("HTTP 401");
+    expect(response.content).toContain("Unauthorized");
   });
 
   it("returns a friendly message when no bot token is configured", async () => {
@@ -142,7 +158,7 @@ describe("updateBotAvatar", () => {
 
     const response = await updateBotAvatar(ctx, { imageUrl: "https://example.com/avatar.png" });
 
-    expect(response).toContain("no Discord bot token is configured");
+    expect(response.content).toContain("no Discord bot token is configured");
     expect(called).toBe(false);
   });
 
@@ -163,8 +179,8 @@ describe("updateBotAvatar", () => {
     expect(captured?.url).toBe("https://discord.com/api/v10/users/@me");
     const body = JSON.parse(String(captured?.body)) as { avatar: string };
     expect(body.avatar).toMatch(/^data:image\/png;base64,/);
-    expect(response).toContain("Updated my Discord bot avatar");
-    expect(response).toContain("generated image: gen-avatar.png");
+    expect(response.content).toContain("Updated my Discord bot avatar");
+    expect(response.content).toContain("generated image: gen-avatar.png");
   });
 
   it("rejects an invalid imageUrl scheme", async () => {
@@ -177,8 +193,8 @@ describe("updateBotAvatar", () => {
 
     const response = await updateBotAvatar(ctx, { imageUrl: "ftp://example.com/x.png" });
 
-    expect(response).toContain("could not get an image");
-    expect(response).toContain("http(s)");
+    expect(response.content).toContain("could not get an image");
+    expect(response.content).toContain("http(s)");
     expect(called).toBe(false);
   });
 
@@ -198,7 +214,7 @@ describe("updateBotAvatar", () => {
 
     const response = await updateBotAvatar(ctx, { imageUrl: "https://example.com/huge.png" });
 
-    expect(response).toContain("too large");
+    expect(response.content).toContain("too large");
     expect(calls).not.toContain("https://discord.com/api/v10/users/@me");
   });
 
@@ -206,7 +222,7 @@ describe("updateBotAvatar", () => {
     const ctx = fakeContext();
     const response = await updateBotAvatar(ctx, { useContextImage: false });
 
-    expect(response).toContain("I need an image URL or a context image");
+    expect(response.content).toContain("I need an image URL or a context image");
   });
 
   it("accepts a data: image URI directly without fetching", async () => {
@@ -229,6 +245,6 @@ describe("updateBotAvatar", () => {
     expect(captured?.url).toBe("https://discord.com/api/v10/users/@me");
     const body = JSON.parse(String(captured?.body)) as { avatar: string };
     expect(body.avatar).toBe(dataUri);
-    expect(response).toContain("Updated my Discord bot avatar");
+    expect(response.content).toContain("Updated my Discord bot avatar");
   });
 });

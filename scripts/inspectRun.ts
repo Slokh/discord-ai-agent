@@ -1,6 +1,6 @@
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
-import { DiscordAiAgentRepository } from "../src/db/repositories.js";
+import { createAppDatabase, type DiscordAiAgentRepository } from "../src/db/repositories.js";
 import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, selectArtifacts } from "../src/observability/runInspector.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../src/observability/runs.js";
 import type { RunSnapshot, RunSummary } from "../src/observability/runTypes.js";
@@ -58,7 +58,7 @@ async function main() {
 
   const pool = createPool(config);
   try {
-    const repo = new DiscordAiAgentRepository(pool);
+    const repo = createAppDatabase(pool);
     if (args.list) {
       const runs = await listRunSummaries(repo, { limit: listFetchLimit(args), includeEmbeddings: args.includeEmbeddings });
       await writeRunList(runs, args, async (runId) => (await getRunSnapshot(repo, runId)) ?? null);

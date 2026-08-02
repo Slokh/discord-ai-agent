@@ -1,68 +1,46 @@
-# Documentation Guide
+# Documentation
 
-This directory is the durable map for operators, contributors, and coding agents. Start with the smallest path that matches the task; do not read every document before making a focused change.
+These guides describe the current system. They are organized by durable concepts, not by the repository's history or by individual source folders.
 
-## New Agent Reading Path
+## Reading paths
 
-Read these in order before owning a complex feature:
+For a first contribution, read:
 
-1. [`product-principles.md`](product-principles.md) — who the product is for, the intended experience, and how to make tradeoffs.
-2. [`architecture.md`](architecture.md) — production roles, sources of truth, and end-to-end runtime flows.
-3. [`../src/README.md`](../src/README.md) — source ownership; continue into the nearest folder README.
-4. [`engineering-guide.md`](engineering-guide.md) — feature workflow, testing matrix, debugging, and handoff expectations.
-5. [`tool-design.md`](tool-design.md) — required reading when adding or changing model-facing tools.
+1. [Product](product.md) for the user experience and model/code boundary.
+2. [Architecture](architecture.md) for processes, data flow, sources of truth, and code ownership.
+3. [Development](development.md) for investigation, implementation, testing, and PR workflow.
 
-The root [`AGENTS.md`](../AGENTS.md) contains the concise rules automatically supplied to coding agents. Keep it short enough to remain useful and put deeper explanations here.
+Then open only the guide that owns the change:
 
-## Operating Target
-
-Production is the default for operator and debugging work. The run inspector, task-status script, Discord audit/debug scripts, and live console resolve the deployed control plane from `CONTROL_UI_PUBLIC_URL` or the current local Kubernetes context; they never silently fall back to a local database or localhost. Use explicit local/DB flags only for intentional isolated development.
-
-## Current Reference
-
-| Document | Use it for |
+| Change | Guide |
 | --- | --- |
-| [`agent-runtime.md`](agent-runtime.md) | Canonical agent sessions, executions, events, artifacts, and code-update task leases. |
-| [`nanocodex-foundation.md`](nanocodex-foundation.md) | Active NanoCodex ownership boundary, clean-cutover rules, and feature-parity gates. |
-| [`discord-rich-components.md`](discord-rich-components.md) | Components V2 rendering, durable actions, interactions, modals, safety, and ownership. |
-| [`evals.md`](evals.md) | Prompt regression suites, private evals, assertions, and comparisons. |
-| [`wallets.md`](wallets.md) | Managed-wallet ownership, live balances, transfers, starter funding, wagers, and reconciliation. |
-| [`provable-rng.md`](provable-rng.md) | Commit-reveal randomness, reply-chain sessions, verification, and known limitations. |
-| [`local-acceptance.md`](local-acceptance.md) | Manual local acceptance checks across Discord and Docker. |
-| [`local-kubernetes.md`](local-kubernetes.md) | Optional local Kubernetes full-loop setup. |
-| [`eks-deploy.md`](eks-deploy.md) | Production EKS deployment and operational debugging. |
-| [`deployment-debugging.md`](deployment-debugging.md) | Script-first post-deploy Discord prompt, reply-chain, and run-trace investigation. |
+| Prompts, model behavior, tools, images, Discord presentation | [Agent system](agent-system.md) |
+| Discord history, retrieval, memory, database, privacy, retention | [Data](data.md) |
+| Wallets, transfers, wagers, games, randomness | [Payments and games](payments.md) |
+| Code-update tasks, sandboxes, GitHub publication | [Code updates](code-updates.md) |
+| Local setup, deployment, console, production debugging | [Operations](operations.md) |
 
-## Direction And History
+## Guide contracts
 
-These documents have different lifecycles. Their status banner is authoritative.
+- [Product](product.md) explains what the system should do and which boundaries must hold.
+- [Architecture](architecture.md) explains what runs, how a request moves, where state lives, and which modules own it.
+- [Agent system](agent-system.md) explains NanoCodex, prompt assembly, tools, typed outcomes, rich responses, and delivery recovery.
+- [Data](data.md) explains Discord indexing, permission-filtered retrieval, conversation memory, the runtime ledger, privacy, migrations, and retention.
+- [Payments and games](payments.md) explains managed wallets, transfer authority, receipt verification, wager state, settlement, and provable RNG.
+- [Code updates](code-updates.md) explains how a conversational request becomes a sandboxed, verified pull request.
+- [Operations](operations.md) explains configuration, process roles, local and Kubernetes operation, observability, and incident investigation.
+- [Development](development.md) explains how agents should navigate, change, test, evaluate, and document the repository.
 
-| Document | Status | Purpose |
-| --- | --- | --- |
-| [`improvement-plan.md`](improvement-plan.md) | Active strategy | Long-term reliability loops and exit criteria; not a prioritized issue tracker. |
-| [`continuation-plan.md`](continuation-plan.md) | Completed foundation snapshot | Records the post-hardening observability, latency, retrieval, and quality work that established the current baseline. |
-| [`pre-release-plan.md`](pre-release-plan.md) | Completed historical plan | Records the large 2026-07 cleanup and its architectural decisions. Do not treat checked items as current work. |
+## Documentation rules
 
-New prioritized work should live in issues or an explicitly active plan, not by reopening historical checklists without reviewing current architecture.
+Documentation is part of the implementation contract:
 
-## Source-Level Maps
+- Describe current behavior in present tense. Git history and closed PRs preserve migration history.
+- Prefer one complete conceptual guide over a README in every source directory.
+- Name the canonical data owner and the main source entry points, but do not inventory every file.
+- Put credentials and deployment inputs in `.env.example`; put stable product and architecture settings in `src/config/env.ts`.
+- Put server-specific prompts, examples, Discord content, and evals in `.discord-ai-agent/` or Postgres, never in tracked docs.
+- Update the owning guide when a source of truth, trust boundary, lifecycle, or operator workflow changes.
+- Keep links relative and run `npm run docs:check` before publication.
 
-Folder READMEs are ownership contracts, not exhaustive API references:
-
-- [`../src/agent/README.md`](../src/agent/README.md) — prompt/model loop and runtime execution.
-- [`../src/discord/README.md`](../src/discord/README.md) — Discord ingress, persistence, permissions, and delivery.
-- [`../src/tools/README.md`](../src/tools/README.md) — tool families, scoping, file inspection, and self-debugging.
-- [`../src/db/README.md`](../src/db/README.md) — durable repositories and query ownership.
-- [`../src/execution/README.md`](../src/execution/README.md) — sandboxed code-update execution.
-- [`../src/jobs/README.md`](../src/jobs/README.md) — pg-boss jobs and queue handoffs.
-- [`../src/payments/README.md`](../src/payments/README.md) — wallet provider, service, and reconciliation.
-- [`../src/control/README.md`](../src/control/README.md) and [`../src/control/console/README.md`](../src/control/console/README.md) — internal APIs and run console.
-
-## Documentation Rules
-
-- Document decisions and invariants, not code that is already obvious from a function body.
-- Put product-wide behavior in `product-principles.md`, cross-domain runtime flow in `architecture.md`, and implementation ownership in the nearest folder README.
-- Update docs in the same PR when a source of truth, permission boundary, feature lifecycle, operator command, or ownership boundary changes.
-- Label plans as active, completed, or historical. A checklist with every item checked is not an active roadmap.
-- Keep examples generic. Private member names, channels, message links, server facts, and eval prompts belong under `.discord-ai-agent/` or in Postgres.
-- Use relative links for repository files and run `npm run docs:check` before publishing documentation changes.
+The root `README.md` is the installation-oriented project overview. `AGENTS.md` is the mandatory task router. `CONTRIBUTING.md` and `SECURITY.md` contain contribution and vulnerability-reporting policy. Everything else belongs in this folder unless it is inseparable from an infrastructure module.

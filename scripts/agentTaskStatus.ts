@@ -62,13 +62,7 @@ function reviveSnapshot(value: AgentTaskStatusSnapshot): AgentTaskStatusSnapshot
     activeTasks: value.activeTasks.map(reviveTask),
     recentTerminalTasks: value.recentTerminalTasks.map(reviveTask),
     activeSandboxRuns: value.activeSandboxRuns.map(reviveSandboxRun),
-    pendingSandboxCleanup: value.pendingSandboxCleanup.map(reviveSandboxRun),
-    leases: value.leases.map((lease) => ({
-      ...lease,
-      heartbeatAt: reviveNullableDate(lease.heartbeatAt),
-      lastUsedAt: reviveNullableDate(lease.lastUsedAt),
-      updatedAt: new Date(lease.updatedAt)
-    }))
+    pendingSandboxCleanup: value.pendingSandboxCleanup.map(reviveSandboxRun)
   };
 }
 

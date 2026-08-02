@@ -46,7 +46,11 @@ async function markdownFiles() {
     "*.md",
     "**/*.md",
   ]);
-  return [...new Set(stdout.trim().split("\n").filter(Boolean))].sort();
+  const candidates = [...new Set(stdout.trim().split("\n").filter(Boolean))].sort();
+  const existing = await Promise.all(
+    candidates.map(async (file) => ((await fs.stat(file).catch(() => null))?.isFile() ? file : null)),
+  );
+  return existing.filter((file): file is string => file != null);
 }
 
 async function inspectMarkdownFile(file: string, content: string): Promise<Finding[]> {

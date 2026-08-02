@@ -24,6 +24,8 @@ Discord AI Agent stores indexed message content, metadata, embeddings, traces, t
 
 The bot should run with least-privilege Discord permissions and should not be granted Administrator.
 
+The canonical data ownership, requester-permission boundary, overlay locations, retention, and deletion rules are documented in [`docs/data.md`](docs/data.md).
+
 ## Automated Security Gates
 
 This project is optimized for small, private Discord deployments rather than a regulated enterprise environment. Release CI blocks on fixable **Critical** production dependency or container findings. High-severity findings remain visible in CI scan reports and the scheduled Security Report workflow, but do not stop unrelated releases.

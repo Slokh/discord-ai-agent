@@ -37,7 +37,7 @@ function deriveCoinflipSettlement(
     return { status: "invalid", reason: "The canonical coinflip draw is unavailable." };
   }
   const result = stringArray(draw.outcome.values)?.[0]?.toLowerCase();
-  const selection = draw.reason?.match(/\bplayer wins on (heads|tails)\b/i)?.[1]?.toLowerCase();
+  const selection = draw.reason?.startsWith("coin:") ? draw.reason.slice("coin:".length) : undefined;
   if (!isCoinSide(result) || !isCoinSide(selection)) {
     return { status: "invalid", reason: "The verified coin result or selected side is unavailable." };
   }
@@ -186,8 +186,8 @@ function replayBlackjack(
     if (!cards || cards.length !== 1) {
       return { status: "invalid", reason: "Each standard blackjack continuation must reveal exactly one card." };
     }
-    const reason = draw.reason ?? "";
-    if (/\bblackjack\s+hit\b/i.test(reason)) {
+    const action = draw.reason?.startsWith("blackjack:") ? draw.reason.slice("blackjack:".length) : "";
+    if (action === "hit") {
       if (dealerStarted) {
         return { status: "invalid", reason: "A player card was drawn after dealer play began." };
       }
@@ -197,19 +197,13 @@ function replayBlackjack(
       playerCards.push(cards[0]!);
       continue;
     }
-    if (/\bblackjack\s+stand\b/i.test(reason)) {
+    if (action === "stand") {
       dealerStarted = true;
       if (dealerCards.length >= 2 && blackjackTotal(dealerCards) >= 17) {
         return { status: "invalid", reason: "The dealer drew after reaching the mandatory stand total." };
       }
       dealerCards.push(cards[0]!);
       continue;
-    }
-    if (/\bblackjack\s+(?:double|split)\b/i.test(reason)) {
-      return {
-        status: "invalid",
-        reason: "Double-down and split settlement are not yet supported by the deterministic blackjack evaluator.",
-      };
     }
     return {
       status: "invalid",

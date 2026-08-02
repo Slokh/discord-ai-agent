@@ -83,7 +83,7 @@ export function validateWagerInput(input: DrawRandomInput): string | null {
   if (["coin", "dice", "integers"].includes(input.kind ?? "") && maxPayoutUsd! > stakeUsd! && !rule) {
     return "wager.rule is required whenever maxPayoutUsd exceeds stakeUsd so the payout can be checked from structured terms.";
   }
-  if (input.kind === "cards" && /\bblackjack\b/i.test(game)) {
+  if (input.kind === "cards" && game.trim().toLowerCase() === "blackjack") {
     return (input.count ?? 1) === 3
       ? null
       : "An opening blackjack draw must contain exactly 3 public cards: 2 for the player and 1 dealer upcard. The RNG footer publishes every drawn card, so never draw the dealer hole card or future dealer cards until a later player action makes them public.";

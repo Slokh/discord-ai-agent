@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAgentRuntimeRunner } from "../../src/agent/runtimeRunner.js";
+import { createAgentRuntimeRunner } from "../../src/discord/agentRuntimeRunner.js";
 import { loadConfig } from "../../src/config/env.js";
 import { runQueuedAgentRuntimeExecution } from "../../src/discord/agentDelivery.js";
 

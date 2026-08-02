@@ -4,10 +4,10 @@ export const walletUserToolContracts = [
   defineTool({
     name: "getWalletBalance",
     description:
-      "ALWAYS call this for one named person's or the requester's current USD wallet balance (for example, 'my balance', 'what is Alice's balance?', or 'the bot balance'). Do not use it for plural 'balances', 'everyone's balances', or a server-wide wallet directory: those require listWalletBalances. The current request or its Discord reply context must explicitly concern money, a wallet, balance, bankroll, USD/USDC, or available funds. Pronouns such as 'my/mine' choose the owner only after that financial intent is established; never use this tool for unrelated personal facts such as sleep, bedtime, activity, or Discord stats. Use owner=requester for the requester's balance; owner=bot for the bot or treasury; owner=user with a resolved userId for another member. Owner/ops can always read another member, and every member can when WALLET_BALANCES_PUBLIC=true. Another member without a wallet is reported as $0 without creating one. Existing wallet balances are verified live onchain against USDC.e and presented simply as $ or USD.",
-    userVisible: true,
+      "ALWAYS call this for one named person's or the requester's current USD wallet balance (for example, 'my balance', 'what is Alice's balance?', or 'the bot balance'). Do not use it for plural 'balances', 'everyone's balances', or a server-wide wallet directory: those require listWalletBalances. The current request or its Discord reply context must explicitly concern money, a wallet, balance, bankroll, USD/USDC, or available funds. Pronouns such as 'my/mine' choose the owner only after that financial intent is established; never use this tool for unrelated personal facts such as sleep, bedtime, activity, or Discord stats. Use owner=requester for the requester's balance; owner=bot for the bot or treasury; owner=user with a resolved userId for another member. Members may read managed wallet balances. Another member without a wallet is reported as $0 without creating one. Existing wallet balances are verified live onchain against USDC.e and presented simply as $ or USD.",
     mutates: false,
     group: "external",
+    deploymentRequirement: "wallet",
     category: "external",
     toolClass: "external",
     outputContract: ["verified current USD balance", "public managed-wallet address", "Tempo network", "onchain verification timestamp"],
@@ -34,10 +34,10 @@ export const walletUserToolContracts = [
   defineTool({
     name: "listWalletBalances",
     description:
-      "List the managed wallet directory for this Discord server. ALWAYS use this for plural or server-wide balance or address requests, including a bare 'balances', 'everyone's balances', or 'server balances'. Use view=balances for 'every user's balance', view=addresses for wallet-address questions, and view=both only when both were explicitly requested. Use getWalletBalance instead for one person's or the requester's singular balance. Balance views include the shared AI treasury plus only member wallets with a verified non-$0 balance; $0, unavailable, and missing member wallets are summarized but omitted. Address-only views include the AI and every existing member wallet without repeating balances or creating wallets. This directory is available to owner/ops, or to every member when WALLET_BALANCES_PUBLIC=true.",
-    userVisible: true,
+      "List the managed wallet directory for this Discord server. ALWAYS use this for plural or server-wide balance or address requests, including a bare 'balances', 'everyone's balances', or 'server balances'. Use view=balances for 'every user's balance', view=addresses for wallet-address questions, and view=both only when both were explicitly requested. Use getWalletBalance instead for one person's or the requester's singular balance. Balance views include the shared AI treasury plus only member wallets with a verified non-$0 balance; $0, unavailable, and missing member wallets are summarized but omitted. Address-only views include the AI and every existing member wallet without repeating balances or creating wallets. This directory is available to every member.",
     mutates: false,
     group: "external",
+    deploymentRequirement: "user_wallet",
     category: "external",
     toolClass: "external",
     outputContract: ["requested balances, addresses, or both", "shared AI treasury", "only verified non-$0 rows for balance views", "only existing wallets for address-only views", "compact Markdown table"],
@@ -61,9 +61,9 @@ export const walletUserToolContracts = [
     name: "getWagerHistory",
     description:
       "Read the current requester's canonical real-USD wager ledger, including verified RNG draws, settlement outcomes, stakes, payouts, net results, explanations, and originating Discord request links. ALWAYS use this instead of Discord history or agent memory when the user asks about their past bets, wagers, casino games, wins/losses, payouts, or coin-flip/dice/card results. Optionally filter by a short game term such as coin, blackjack, dice, or roulette. This is requester-scoped and read-only; never infer settled results from chat messages when this tool is available.",
-    userVisible: true,
     mutates: false,
     group: "external",
+    deploymentRequirement: "user_wallet",
     category: "external",
     toolClass: "external",
     outputContract: ["requester-scoped canonical wager entries", "verified RNG draw", "settlement outcome", "stake, payout, and net USD", "originating Discord request link"],
@@ -83,10 +83,10 @@ export const walletUserToolContracts = [
   defineTool({
     name: "transferWalletFunds",
     description:
-      "Transfer real USD out of the current Discord requester's managed wallet. The only allowed destinations are another verified Discord user's managed wallet or the shared bot wallet; arbitrary blockchain addresses are never accepted. Use only when the current prompt explicitly asks to send, pay, tip, give, deposit, return, or transfer money; never use this to charge or settle a game wager. The source, amount or explicit entire-balance request, and destination are parsed again from the current requester prompt and remain authoritative even if model arguments differ. A destination can be an ID, mention, username, or display name: pass the provided name directly and the tool will resolve it safely, so do not ask the user for an ID or mention. Ambiguous names fail without transferring. The bot wallet sponsors the network fee. Returns the confirmed transaction and fresh source/destination balances.",
-    userVisible: true,
+      "Transfer real USD out of the current Discord requester's managed wallet. The only allowed destinations are another verified Discord user's managed wallet or the shared bot wallet; arbitrary blockchain addresses are never accepted. Use only when the current request asks to move money; never use this to charge or settle a wager. Translate the request into the typed destination and either amountUsd or entireBalance. A destination can be an ID, mention, username, or display name: pass the provided name directly and the tool resolves it safely. Ambiguous names fail without transferring. Requester identity, managed endpoints, balances, receipts, and idempotency remain enforced by code.",
     mutates: true,
     group: "external",
+    deploymentRequirement: "user_wallet",
     category: "external",
     toolClass: "external",
     outputContract: ["confirmed USD amount and managed endpoints", "transaction hash and status", "fresh source and destination balances"],
@@ -98,9 +98,10 @@ export const walletUserToolContracts = [
       properties: {
         destination: { type: "string", enum: ["user", "bot"], description: "Managed destination type." },
         destinationUserId: { type: "string", description: "Required for destination=user. Discord ID, mention, username, or display name; plain names are resolved safely by the tool." },
-        amountUsd: { type: "number", description: "Positive USD amount to transfer." }
+        amountUsd: { type: "number", description: "Positive USD amount to transfer. Omit when entireBalance=true." },
+        entireBalance: { type: "boolean", description: "True only when the requester wants to send their entire available balance. Omit amountUsd in that case." }
       },
-      required: ["destination", "amountUsd"],
+      required: ["destination"],
       additionalProperties: false
     }
   }),
@@ -108,10 +109,10 @@ export const walletUserToolContracts = [
   defineTool({
     name: "requestStarterFunds",
     description:
-      "Fallback recheck for the current Discord requester's automatic starter funding. Before model/tool selection, the request lifecycle normally tops any verified live balance below the configured starter amount up to that target, so users do not need special wording and tiny dust balances cannot block play. Use this tool only to retry an explicit starter/refill request when automatic funding did not complete. Balances already at or above the target are ineligible; requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
-    userVisible: true,
+      "Top the current Discord requester's managed wallet up to the configured starter amount when the current message explicitly asks for starter funds, a refill, or a top-up. The agent chooses this tool normally; no funding happens before tool selection. Balances already at or above the target are ineligible; requester and destination are immutable, concurrent requests are guarded, arbitrary amounts are not accepted, and the result includes fresh user/AI balances plus a confirmed transaction.",
     mutates: true,
     group: "external",
+    deploymentRequirement: "user_wallet",
     category: "external",
     toolClass: "external",
     outputContract: ["eligibility from verified requester balance", "fixed starter amount", "confirmed transaction", "fresh requester and AI balances"],

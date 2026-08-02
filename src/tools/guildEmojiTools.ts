@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { summarizeForAudit } from "../util/text.js";
 import { imageReferencesForInput } from "./imageTools.js";
-import type { ToolContext } from "./types.js";
+import type { AgentResponse, ToolContext } from "./types.js";
 
 export type CreateDiscordEmojiInput = {
   name?: string;
@@ -17,16 +17,16 @@ const EMOJI_SIZE = 128;
 const MAX_ANIMATION_FRAMES = 60;
 const ALLOWED_SOURCE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]);
 
-export async function createDiscordEmoji(ctx: ToolContext, input: CreateDiscordEmojiInput): Promise<string> {
+export async function createDiscordEmoji(ctx: ToolContext, input: CreateDiscordEmojiInput): Promise<AgentResponse> {
   const requestedName = input.name?.trim() ?? "";
   const name = normalizeEmojiName(requestedName);
   if (!name) {
     await auditEmoji(ctx, input, "invalid or missing emoji name", true);
-    return "I need an emoji name with 2–32 letters, numbers, or underscores.";
+    return emojiError("invalid_name", "I need an emoji name with 2–32 letters, numbers, or underscores.");
   }
   if (!ctx.createDiscordEmoji) {
     await auditEmoji(ctx, input, "guild emoji creation is not wired in this runtime", true);
-    return "I cannot upload a server emoji from this runtime. Try asking me in a normal Discord server channel.";
+    return emojiError("emoji_runtime_unavailable", "I cannot upload a server emoji from this runtime. Try asking me in a normal Discord server channel.");
   }
 
   let source: EmojiSource | null;
@@ -35,11 +35,11 @@ export async function createDiscordEmoji(ctx: ToolContext, input: CreateDiscordE
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await auditEmoji(ctx, input, `image resolve failed: ${message}`, true);
-    return `I could not get an image for the Discord emoji: ${message}`;
+    return emojiError("image_source_unavailable", `I could not get an image for the Discord emoji: ${message}`);
   }
   if (!source) {
     await auditEmoji(ctx, input, "no image source", true);
-    return "I need an image URL or a generated, attached, or replied-to image to create the emoji.";
+    return emojiError("missing_image", "I need an image URL or a generated, attached, or replied-to image to create the emoji.");
   }
 
   let prepared: PreparedEmoji;
@@ -48,7 +48,7 @@ export async function createDiscordEmoji(ctx: ToolContext, input: CreateDiscordE
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await auditEmoji(ctx, input, `image preparation failed: ${message}`, true, { source: source.label });
-    return `I could not prepare that image as a Discord emoji: ${message}`;
+    return emojiError("image_preparation_failed", `I could not prepare that image as a Discord emoji: ${message}`);
   }
   const requireTransparent = input.requireTransparent ?? source.label.startsWith("generated image ");
   if (requireTransparent && prepared.sourceTransparency !== "transparent") {
@@ -56,39 +56,44 @@ export async function createDiscordEmoji(ctx: ToolContext, input: CreateDiscordE
       ? "source image is opaque; no emoji was uploaded"
       : "source transparency could not be verified; no emoji was uploaded";
     await auditEmoji(ctx, input, result, true, { source: source.label, sourceTransparency: prepared.sourceTransparency });
-    return [
+    return emojiError("transparency_required", [
       "I did not upload that emoji because the source does not contain verified alpha transparency.",
       "A checkerboard drawn into a JPEG/PNG is still an opaque background.",
       "Regenerate or provide a PNG/WebP with real transparency, then retry. Set requireTransparent=false only when an opaque rectangular emoji is intentional.",
-    ].join("\n");
+    ].join("\n"));
   }
 
+  let created: Awaited<ReturnType<NonNullable<ToolContext["createDiscordEmoji"]>>>;
   try {
-    const created = await ctx.createDiscordEmoji({
+    created = await ctx.createDiscordEmoji({
       name,
       image: prepared.buffer,
       auditLogReason: `AI emoji upload requested by ${ctx.userDisplayName} (${ctx.userId})`,
     });
-    await auditEmoji(ctx, input, `created emoji ${created.id}`, false, {
-      emojiId: created.id,
-      emojiName: created.name,
-      source: source.label,
-      bytes: prepared.buffer.length,
-      animationPreserved: prepared.animationPreserved,
-      sourceTransparency: prepared.sourceTransparency,
-    });
-    return [
-      `Uploaded server emoji ${created.mention} as :${created.name}:.`,
-      `Source: ${source.label}`,
-      `Prepared: ${EMOJI_SIZE}×${EMOJI_SIZE} WebP · ${Math.ceil(prepared.buffer.length / 1024)} KiB`,
-      `Transparency: ${prepared.sourceTransparency === "transparent" ? "real source alpha preserved" : "opaque source retained by request"}`,
-      prepared.animationFlattened ? "The source animation was flattened to its first frame to fit Discord's upload limit." : null,
-    ].filter((line): line is string => Boolean(line)).join("\n");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await auditEmoji(ctx, input, `Discord emoji upload failed: ${message}`, true, { source: source.label });
-    return `I could not upload the server emoji: ${message}`;
+    return emojiError("emoji_upload_failed", `I could not upload the server emoji: ${message}`, true);
   }
+  await auditEmoji(ctx, input, `created emoji ${created.id}`, false, {
+    emojiId: created.id,
+    emojiName: created.name,
+    source: source.label,
+    bytes: prepared.buffer.length,
+    animationPreserved: prepared.animationPreserved,
+    sourceTransparency: prepared.sourceTransparency,
+  }).catch(() => undefined);
+  return { content: [
+    `Uploaded server emoji ${created.mention} as :${created.name}:.`,
+    `Source: ${source.label}`,
+    `Prepared: ${EMOJI_SIZE}×${EMOJI_SIZE} WebP · ${Math.ceil(prepared.buffer.length / 1024)} KiB`,
+    `Transparency: ${prepared.sourceTransparency === "transparent" ? "real source alpha preserved" : "opaque source retained by request"}`,
+    prepared.animationFlattened ? "The source animation was flattened to its first frame to fit Discord's upload limit." : null,
+  ].filter((line): line is string => Boolean(line)).join("\n"), status: "ok", outcome: { kind: "discord_emoji", state: "succeeded", terminal: true } };
+}
+
+function emojiError(errorCode: string, content: string, retryable = false): AgentResponse {
+  return { content, status: "error", errorCode, retryable, outcome: { kind: "discord_emoji", state: "failed" } };
 }
 
 type EmojiSource =

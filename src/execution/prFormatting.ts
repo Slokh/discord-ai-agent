@@ -184,7 +184,29 @@ function genericMetadataText(value: string) {
 
 function boundedPublicDiff(diffPatch: string) {
   if (diffPatch.length <= MAX_PUBLIC_DIFF_CHARS) return diffPatch.trim() || "(not available)";
-  return `${diffPatch.slice(0, MAX_PUBLIC_DIFF_CHARS).trimEnd()}\n\n[diff truncated]`;
+  const sections = diffPatch.split(/(?=^diff --git )/m).filter((section) => section.trim());
+  if (sections.length <= 1) return `${diffPatch.slice(0, MAX_PUBLIC_DIFF_CHARS).trimEnd()}\n\n[diff truncated]`;
+  const marker = "\n\n[diff sampled across changed files]";
+  const contentBudget = MAX_PUBLIC_DIFF_CHARS - marker.length;
+  const selected = evenlySampleDiffSections(sections, Math.max(2, Math.floor(contentBudget / 200)));
+  const sectionBudget = Math.max(1, Math.floor((contentBudget - selected.length * 2) / selected.length));
+  const sampled = selected.map((section) => sampleDiffSection(section, sectionBudget)).join("\n\n");
+  return `${sampled.slice(0, MAX_PUBLIC_DIFF_CHARS - marker.length).trimEnd()}${marker}`;
+}
+
+function evenlySampleDiffSections(sections: string[], limit: number) {
+  if (sections.length <= limit) return sections;
+  return Array.from({ length: limit }, (_, index) =>
+    sections[Math.round(index * (sections.length - 1) / (limit - 1))]!,
+  );
+}
+
+function sampleDiffSection(section: string, budget: number) {
+  if (section.length <= budget) return section.trimEnd();
+  const gap = "\n[section truncated]\n";
+  const available = Math.max(1, budget - gap.length);
+  const headChars = Math.ceil(available * 0.7);
+  return `${section.slice(0, headChars).trimEnd()}${gap}${section.slice(-(available - headChars)).trimStart()}`;
 }
 
 function changedPathsFromPatch(diffPatch: string) {

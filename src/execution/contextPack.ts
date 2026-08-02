@@ -37,22 +37,23 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
   const projectMap = await existingProjectMap(checkoutDir, [
     {
       area: "Code-update task lifecycle",
-      purpose: "Requests to update the bot become durable agent tasks, Kubernetes sandbox runs, Discord progress edits, and PRs.",
+      purpose: "Explicit repository requests become durable agent tasks, isolated sandbox runs, verified diffs, Discord progress, and PRs.",
       files: [
         "src/tools/agentTaskTools.ts",
-        "src/tools/coreTools.ts",
+        "src/jobs/agentTaskEnqueue.ts",
         "src/jobs/queue.ts",
         "src/execution/backend.ts",
-        "src/execution/sandboxRunner.ts",
+        "src/execution/runnerPipeline.ts",
+        "src/execution/repoWorkspace.ts",
         "src/discord/taskNotifications.ts",
-        "src/db/repositories.ts"
+        "docs/code-updates.md"
       ],
-      checks: ["tests/unit/sandbox-runner.test.ts", "tests/unit/task-notifications.test.ts", "tests/integration/repository-db.test.ts"]
+      checks: ["tests/unit/sandbox-runner.test.ts", "tests/unit/task-notifications.test.ts", "tests/integration/jobs-db.test.ts"]
     },
     {
       area: "Discord mention and reply lifecycle",
-      purpose: "Incoming Discord messages are persisted, routed through the model/tool loop, and answered or updated in Discord.",
-      files: ["src/discord/client.ts", "src/discord/responseSink.ts", "src/agent/nanocodexAgentRuntime.ts", "src/discord/messagePersistence.ts", "src/db/repositories.ts"],
+      purpose: "Incoming Discord messages are persisted as durable executions, run through NanoCodex, and delivered exactly once.",
+      files: ["src/discord/messageIngress.ts", "src/discord/agentDelivery.ts", "src/discord/responseSink.ts", "src/discord/agentRuntimeRunner.ts", "src/agent/nanocodexAgentRuntime.ts", "docs/agent-system.md"],
       checks: ["tests/unit/discord-response-sink.test.ts", "tests/unit/discord-client.test.ts", "tests/integration/agent.test.ts", "tests/unit/message-persistence.test.ts"]
     },
     {
@@ -60,15 +61,17 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       purpose:
         "Discord history is stored, indexed, embedded, searched, summarized, and filtered through durable data owners before tools expose it to the model.",
       files: [
-        "src/db/repositories.ts",
+        "src/db/discordArchiveRepository.ts",
+        "src/db/retrievalRepository.ts",
         "src/discord/crawler.ts",
         "src/discord/messagePersistence.ts",
         "src/memory/search.ts",
         "src/memory/embedding.ts",
         "src/tools/discordHistoryFormatting.ts",
         "src/tools/discordStatsFormatting.ts",
-        "src/tools/discordChannelTopics.ts",
-        "src/tools/discordAttachments.ts"
+        "src/tools/discordRetrievalTools.ts",
+        "src/tools/discordFileTools.ts",
+        "docs/data.md"
       ],
       checks: [
         "tests/integration/repository-db.test.ts",
@@ -82,26 +85,29 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
       area: "Model-led tools",
       purpose: "Tools are explicit capabilities selected by the model; prefer improving schemas/results over hidden message-specific branching.",
       files: [
+        "src/tools/contracts/",
         "src/tools/registry.ts",
-        "src/tools/coreTools.ts",
-        "src/tools/agentTaskTools.ts",
-        "src/tools/discordHistoryFormatting.ts",
-        "src/tools/discordStatsFormatting.ts",
+        "src/tools/toolDefinition.ts",
+        "src/tools/toolScope.ts",
+        "src/agent/toolDispatcher.ts",
+        "src/tools/handlers/",
+        "src/capabilities/",
         "src/tools/types.ts",
-        "src/agent/nanocodexAgentRuntime.ts"
+        "src/agent/nanocodexAgentRuntime.ts",
+        "docs/agent-system.md"
       ],
-      checks: ["tests/unit/tool-registry.test.ts", "tests/unit/core-tools.test.ts", "tests/integration/agent.test.ts"]
+      checks: ["tests/unit/tool-registry.test.ts", "tests/unit/tool-contract-validation.test.ts", "tests/unit/tool-handler-conformance.test.ts", "tests/integration/agent.test.ts"]
     },
     {
       area: "Observability console",
       purpose: "Runs, spans, events, artifacts, and the React console explain what happened and where latency went.",
-      files: ["src/observability/runs.ts", "src/control/internalApi.ts", "src/control/console/App.tsx", "src/control/console/styles.css"],
+      files: ["src/observability/runs.ts", "src/observability/runtimeEventSchema.ts", "src/control/internalApiServer.ts", "src/control/console/App.tsx", "docs/operations.md"],
       checks: ["tests/unit/observability.test.ts", "tests/unit/internal-api-runs.test.ts", "tests/unit/run-console-timeline.test.ts"]
     },
     {
       area: "Architecture guides",
-      purpose: "Repo-level and folder-level docs explain ownership boundaries so code updates can avoid broad source archaeology.",
-      files: ["AGENTS.md", "docs/architecture.md", "docs/tool-design.md", "src/discord/README.md", "src/agent/README.md", "src/tools/README.md", "src/execution/README.md"],
+      purpose: "A small set of concept guides explains ownership and invariants without duplicating source-folder inventories.",
+      files: ["AGENTS.md", "docs/README.md", "docs/product.md", "docs/architecture.md", "docs/development.md"],
       checks: []
     }
   ]);
@@ -114,9 +120,9 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
           "Do not spend more than three targeted file reads before the first code diff when anchor targets exist."
         ]
       : []),
-    "Batch the first reconnaissance pass: read the closest owner, nearest helper/caller, closest README, and closest test together when possible.",
+    "Batch the first reconnaissance pass: read the closest owner, nearest helper/caller, owning concept guide, and closest test together when possible.",
     "Avoid repeated search/read cycles once the owner is clear; make the first patch, then let focused checks guide follow-up reads.",
-    "Choose the owner from repository docs, folder READMEs, source names, and exact anchors; do not rely on generated lifecycle classification.",
+    "Choose the owner from repository docs, source names, and exact anchors; do not rely on generated lifecycle classification.",
     "After identifying the relevant flow, make the smallest useful test or implementation edit before doing broad repo archaeology.",
     "If the request describes a bug, prefer a focused regression test plus the smallest fix.",
     "If the request describes behavior or UX, update the behavior directly and cover the important contract with tests.",

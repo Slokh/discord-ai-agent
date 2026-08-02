@@ -2,19 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   openRouterServerToolRegistry,
   localToolDefinitionsForModel,
-  renderToolList,
-  TOOL_GROUPS,
-  toolContracts,
   toolDefinitionsForModel,
-  toolRegistry,
-  toolSupportsCsvFormat
+  toolRegistry
 } from "../../src/tools/registry.js";
 
 describe("toolRegistry", () => {
   it("contains the local milestone tools", () => {
     expect(toolRegistry.map((tool) => tool.name)).toEqual([
-      "listTools",
-      "requestAdditionalTools",
       "loadSkillContext",
       "composeDiscordResponse",
       "findDiscordUsers",
@@ -75,28 +69,8 @@ describe("toolRegistry", () => {
     ]);
   });
 
-  it("renders a user-visible tool list", () => {
-    expect(renderToolList()).toContain("searchDiscordHistory");
-    expect(renderToolList()).not.toContain("requestAdditionalTools");
-    expect(renderToolList()).toContain("inspectDiscordImages");
-    expect(renderToolList()).toContain("inspectDiscordFile");
-    expect(renderToolList()).toContain("Generate an image");
-    expect(renderToolList()).toContain("web_search");
-  });
-
-  it("reuses compiled model definitions for stable scoped toolsets", () => {
+  it("reuses compiled model definitions for the stable deployment toolset", () => {
     expect(toolDefinitionsForModel()).toBe(toolDefinitionsForModel());
-  });
-
-  it("advertises deferred capabilities through the escalation interface", () => {
-    const definition = localToolDefinitionsForModel([
-      toolRegistry.find((entry) => entry.name === "requestAdditionalTools")!,
-    ])[0];
-    const parameters = JSON.stringify(definition?.function.parameters);
-
-    expect(parameters).toContain("discord-retrieval covers");
-    expect(parameters).toContain("codegen covers repository/PR/CI work");
-    expect(definition?.function.description).not.toContain("Example arguments:");
   });
 
   it("derives the rich presentation tool contract from the exhaustive runtime schema", () => {
@@ -155,8 +129,8 @@ describe("toolRegistry", () => {
     }
   });
 
-  it("exports a self-documenting contract for every local tool", () => {
-    const contracts = toolContracts();
+  it("keeps a self-documenting contract for every local tool", () => {
+    const contracts = toolRegistry;
     expect(contracts.map((tool) => tool.name)).toEqual(toolRegistry.map((tool) => tool.name));
     expect(contracts).toEqual(
       expect.arrayContaining([
@@ -199,19 +173,6 @@ describe("toolRegistry", () => {
     ).toBe(true);
   });
 
-  it("enumerates valid tool escalation groups in the model schema", () => {
-    const definition = toolDefinitionsForModel().find(
-      (tool) => "function" in tool && tool.function.name === "requestAdditionalTools"
-    );
-    if (!definition || !("function" in definition)) throw new Error("requestAdditionalTools definition not found");
-    const properties = definition.function.parameters.properties as Record<
-      string,
-      { items?: { enum?: string[] } }
-    >;
-
-    expect(properties.groups.items?.enum).toEqual(TOOL_GROUPS);
-  });
-
   it("tells the model to preserve code-update action intent", () => {
     const definition = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "runCodingAgent");
     if (!definition || !("function" in definition)) throw new Error("runCodingAgent definition not found");
@@ -250,7 +211,7 @@ describe("toolRegistry", () => {
   });
 
   it("classifies local tools into the model-facing taxonomy", () => {
-    const contracts = toolContracts();
+    const contracts = toolRegistry;
     expect(new Set(contracts.map((tool) => tool.toolClass))).toEqual(
       new Set(["resolver", "retrieval", "memory", "stats", "summary", "image", "generation", "coding", "ops", "external"])
     );
@@ -462,10 +423,15 @@ describe("toolRegistry", () => {
   });
 
   it("detects local tools that expose a CSV attachment format", () => {
-    expect(toolSupportsCsvFormat("getSpotifyPlaylistTracks")).toBe(true);
-    expect(toolSupportsCsvFormat("getSpotifyAlbumTracks")).toBe(true);
-    expect(toolSupportsCsvFormat("getSpotifyArtistDiscography")).toBe(true);
-    expect(toolSupportsCsvFormat("searchSpotify")).toBe(false);
-    expect(toolSupportsCsvFormat("queryGeneratedCsv")).toBe(false);
+    const supportsCsv = (name: string) => {
+      const properties = toolRegistry.find((tool) => tool.name === name)?.parameters.properties as Record<string, unknown> | undefined;
+      const format = properties?.format as { enum?: unknown[] } | undefined;
+      return Array.isArray(format?.enum) && format.enum.includes("csv");
+    };
+    expect(supportsCsv("getSpotifyPlaylistTracks")).toBe(true);
+    expect(supportsCsv("getSpotifyAlbumTracks")).toBe(true);
+    expect(supportsCsv("getSpotifyArtistDiscography")).toBe(true);
+    expect(supportsCsv("searchSpotify")).toBe(false);
+    expect(supportsCsv("queryGeneratedCsv")).toBe(false);
   });
 });

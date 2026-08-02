@@ -6,57 +6,20 @@ const AGENT_UPDATE_TITLE_MAX_CHARS = 80;
 const ACTIVE_AGENT_TASK_STALE_MS = 15 * 60 * 1000;
 
 export function agentUpdateTitleFromRequest(request: string, explicitTitle?: string | null): string {
-  const source = explicitTitle?.trim() || request.trim();
+  const explicit = explicitTitle?.trim();
+  const source = explicit || (request.trim().length <= AGENT_UPDATE_TITLE_MAX_CHARS ? request.trim() : "Repository update");
   const normalized = normalizeAgentUpdateTitle(source);
   return truncateTitleAtWordBoundary(normalized, AGENT_UPDATE_TITLE_MAX_CHARS) || "Agent update";
 }
 
 function normalizeAgentUpdateTitle(value: string): string {
-  let text = value
+  const text = value
     .replace(/<a?:([a-z0-9_-]+):\d+>/gi, (_, name: string) => `${name.replace(/[_-]+/g, " ")} emoji`)
     .replace(/\bemoji\s+emoji\b/gi, "emoji")
     .replace(/[`*_~]/g, "")
     .replace(/\s+/g, " ")
     .trim();
-
-  text = stripCodeUpdateChatter(text);
-  text = text.replace(/\.\s+(?:then|after|when)\b.*$/i, "").trim();
-
-  const insteadMatch = text.match(/^instead of\s+(.+?),\s*(?:can you\s+)?(?:please\s+)?(?:just\s+)?(.+)$/i);
-  if (insteadMatch) {
-    const oldBehavior = simplifyTitleFragment(insteadMatch[1] ?? "");
-    const newBehavior = simplifyTitleFragment(insteadMatch[2] ?? "");
-    text = `Replace ${oldBehavior} with ${newBehavior}`;
-  }
-
-  text = stripCodeUpdateChatter(text)
-    .replace(/\s+/g, " ")
-    .replace(/\s+([,.!?])/g, "$1")
-    .trim();
-
   return sentenceCaseTitle(text.replace(/[.!?]+$/g, ""));
-}
-
-function stripCodeUpdateChatter(value: string): string {
-  return value
-    .replace(/^(?:please\s+)?(?:can|could|would)\s+you\s+(?:please\s+)?/i, "")
-    .replace(/^(?:please\s+)?(?:update yourself|self[- ]?update)\s+(?:to\s+|so\s+that\s+)?/i, "")
-    .replace(/\b(?:open|create|make)\s+(?:a\s+)?(?:github\s+)?(?:pull request|pr)\b[.!?]?/gi, "")
-    .replace(/\b(?:in|as)\s+(?:a\s+)?(?:github\s+)?(?:pull request|pr)\b[.!?]?/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function simplifyTitleFragment(value: string) {
-  return value
-    .replace(/^replying\s+["']?thinking\.{0,3}["']?\s+when prompted\b/i, "Thinking reply")
-    .replace(/^react(?:ing)?\s+with\s+(?:the\s+)?(.+?\bemoji)\b(?:\s+to\s+the\s+prompt)?(?:\s+message)?/i, "$1")
-    .replace(/\bwhen prompted\b/gi, "")
-    .replace(/\bto the prompt(?: message)?\b/gi, "")
-    .replace(/\bcan you\b/gi, "")
-    .replace(/\bjust\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function sentenceCaseTitle(value: string) {

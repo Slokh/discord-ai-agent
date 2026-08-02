@@ -18,7 +18,7 @@ describe("agent task runtime write", () => {
       agentRuntimeRepo: agentRuntimeRepo as never,
       config: loadConfig(),
       job: agentTaskJob(),
-      backendName: "local-process-sandbox",
+      backendName: "kubernetes-sandbox",
       pgBossJobId: "pgboss-job-1"
     });
 
@@ -41,7 +41,7 @@ describe("agent task runtime write", () => {
           queue: "agent.task",
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
-          codegenBackend: "local-process",
+          codegenBackend: "kubernetes-job",
           codegenModel: "openai/gpt-5.6-terra",
           codegenReasoningEffort: "medium",
           codegenProvider: "openrouter"
@@ -79,7 +79,7 @@ describe("agent task runtime write", () => {
         harness: "runCodingAgent",
         reasoningEffort: "medium",
         metadata: expect.objectContaining({
-          backend: "local-process-sandbox",
+          backend: "kubernetes-sandbox",
           pgbossJobId: "pgboss-job-1",
           queue: "agent.task",
           parentAgentSessionId: "agent-session-parent",
@@ -99,7 +99,7 @@ describe("agent task runtime write", () => {
         metadata: expect.objectContaining({
           taskId: "task-1",
           jobId: "pgboss-job-1",
-          backend: "local-process-sandbox",
+          backend: "kubernetes-sandbox",
           queue: "agent.task",
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",
@@ -124,7 +124,7 @@ describe("agent task runtime write", () => {
       agentRuntimeRepo: agentRuntimeRepo as never,
       config: loadConfig(),
       job: agentTaskJob(),
-      backendName: "local-process-sandbox",
+      backendName: "kubernetes-sandbox",
       pgBossJobId: "pgboss-job-1"
     });
 
@@ -134,7 +134,7 @@ describe("agent task runtime write", () => {
       expect.objectContaining({
         executionId: "agent-task-execution-task-1",
         metadata: expect.objectContaining({
-          backend: "local-process-sandbox",
+          backend: "kubernetes-sandbox",
           pgbossJobId: "pgboss-job-1",
           parentAgentSessionId: "agent-session-parent",
           parentAgentExecutionId: "agent-execution-parent",

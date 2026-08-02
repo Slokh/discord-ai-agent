@@ -7,7 +7,6 @@ export const skillDiagnosticToolContracts = [
     examples: ["@ai deployment status"],
     description:
       "Report the running deployment revision, uptime, database health, active or stale code-update tasks, agent task metrics, and recent tasks. Use after deploys or when users ask whether the deployed bot is healthy or whether codegen is stuck.",
-    userVisible: true,
     mutates: false,
     group: "ops",
     category: "ops",
@@ -24,7 +23,6 @@ export const skillDiagnosticToolContracts = [
     examples: ["@ai how much have we spent today?"],
     description:
       "Report estimated model/tool spend for this Discord guild from tool audit logs. Use when ops users ask how much the bot has spent today or this month, or which tools/users drove spend.",
-    userVisible: true,
     mutates: false,
     group: "ops",
     category: "ops",
@@ -44,7 +42,6 @@ export const skillDiagnosticToolContracts = [
     toolClass: "ops",
     description:
       "Inspect Discord AI Agent's own normalized run diagnostics, model rounds, prompt composition, critical path, trace events, task events, terminal command events, and tool audit logs for debugging slow, failed, hung, or confusing bot behavior. When the user is replying to the run or bot response, omit traceId to resolve the reply chain automatically. Use detail=model_io only when the user explicitly asks to inspect the exact model input, output, or prompt; returned excerpts are permission-filtered, secret-redacted, and bounded.",
-    userVisible: true,
     mutates: false,
     group: "ops",
     category: "ops",

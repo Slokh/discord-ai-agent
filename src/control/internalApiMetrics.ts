@@ -84,12 +84,6 @@ export async function renderMetrics(repo: DiscordAiAgentRepository) {
       (row) =>
         `discord_ai_agent_sandbox_runs_total{status=${quoteMetricLabel(row.status)}} ${row.count}`,
     ),
-    "# HELP discord_ai_agent_agent_runtime_sandbox_leases_total Agent runtime sandbox leases by backend and status.",
-    "# TYPE discord_ai_agent_agent_runtime_sandbox_leases_total gauge",
-    ...taskMetrics.sandboxLeases.map(
-      (row) =>
-        `discord_ai_agent_agent_runtime_sandbox_leases_total{backend=${quoteMetricLabel(row.backend)},status=${quoteMetricLabel(row.status)}} ${row.count}`,
-    ),
     "# HELP discord_ai_agent_task_phase_duration_avg_ms Average code-update phase duration in milliseconds.",
     "# TYPE discord_ai_agent_task_phase_duration_avg_ms gauge",
     ...taskMetrics.taskPhaseDurations.map(

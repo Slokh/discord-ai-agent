@@ -10,6 +10,7 @@ function context(overrides: Partial<ToolContext> = {}): ToolContext {
     channelId: "22222",
     userId: "user",
     userDisplayName: "User",
+    requestMessageId: "77777",
     visibleChannelIds: ["22222", "44444"],
     mutationAuthorizedByCurrentInput: true,
     discordGuildEmojis: [{ id: "55555", name: "party", animated: false, mention: "<:party:55555>" }],
@@ -31,7 +32,7 @@ describe("addDiscordReaction", () => {
     await expect(addDiscordReaction(ctx, {
       messageIdOrUrl: "https://discord.com/channels/11111/44444/66666",
       emoji: "👍",
-    }, "please add 👍 to that message")).resolves.toContain("Added 👍");
+    }, "please add 👍 to that message")).resolves.toMatchObject({ content: expect.stringContaining("Added 👍") });
 
     expect(sender).toHaveBeenCalledWith({ channelId: "44444", messageId: "66666", emoji: "👍" });
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
@@ -53,6 +54,16 @@ describe("addDiscordReaction", () => {
     expect(sender).toHaveBeenCalledWith({ channelId: "22222", messageId: "66666", emoji: "<:party:55555>" });
   });
 
+  it("reacts to the current request when the model omits an explicit target", async () => {
+    const sender = vi.fn(async (input) => ({ url: "https://discord.test/current", ...input }));
+    const ctx = context({ addDiscordReaction: sender });
+
+    const result = await addDiscordReaction(ctx, { emoji: "<:party:55555>" }, "we shipped");
+
+    expect(result).toMatchObject({ status: "ok", outcome: { terminal: true } });
+    expect(sender).toHaveBeenCalledWith({ channelId: "22222", messageId: "77777", emoji: "<:party:55555>" });
+  });
+
   it("accepts model-led reaction intent when the current request contains the exact target URL", async () => {
     const sender = vi.fn(async (input) => ({
       guildId: "11111",
@@ -65,23 +76,23 @@ describe("addDiscordReaction", () => {
     await expect(addDiscordReaction(ctx, {
       messageIdOrUrl: target,
       emoji: "👍",
-    }, `boost this ${target}`)).resolves.toContain("Added 👍");
+    }, `boost this ${target}`)).resolves.toMatchObject({ content: expect.stringContaining("Added 👍") });
 
     expect(sender).toHaveBeenCalledWith({ channelId: "44444", messageId: "66666", emoji: "👍" });
   });
 
-  it("fails closed without explicit current-turn reaction intent", async () => {
-    const sender = vi.fn();
+  it("lets the model select a visible reversible reaction without keyword parsing", async () => {
+    const sender = vi.fn(async () => ({ messageId: "66666", channelId: "22222", url: "https://discord.test", emoji: "👍" }));
     const ctx = context({ addDiscordReaction: sender });
 
     const result = await addDiscordReaction(ctx, { messageIdOrUrl: "66666", emoji: "👍" }, "tell me what happened");
 
-    expect(result).toContain("current Discord message explicitly asks");
-    expect(sender).not.toHaveBeenCalled();
+    expect(result.content).toContain("Added 👍");
+    expect(sender).toHaveBeenCalled();
   });
 
-  it("does not let an exact target from prior context authorize a reaction", async () => {
-    const sender = vi.fn();
+  it("still validates an exact visible target selected by the model", async () => {
+    const sender = vi.fn(async () => ({ messageId: "66666", channelId: "44444", url: "https://discord.test", emoji: "👍" }));
     const ctx = context({ addDiscordReaction: sender });
 
     const result = await addDiscordReaction(ctx, {
@@ -89,8 +100,8 @@ describe("addDiscordReaction", () => {
       emoji: "👍",
     }, "tell me what happened");
 
-    expect(result).toContain("current Discord message explicitly asks");
-    expect(sender).not.toHaveBeenCalled();
+    expect(result.content).toContain("Added 👍");
+    expect(sender).toHaveBeenCalled();
   });
 
   it("fails closed when the current ingress kind cannot authorize mutations", async () => {
@@ -99,7 +110,7 @@ describe("addDiscordReaction", () => {
 
     const result = await addDiscordReaction(ctx, { messageIdOrUrl: "66666", emoji: "👍" }, "add 👍 to the message");
 
-    expect(result).toContain("current Discord message explicitly asks");
+    expect(result.content).toContain("current Discord message explicitly asks");
     expect(sender).not.toHaveBeenCalled();
   });
 
@@ -111,15 +122,15 @@ describe("addDiscordReaction", () => {
     await expect(addDiscordReaction(ctx, {
       messageIdOrUrl: "https://discord.com/channels/11111/99999/66666",
       emoji: "👍",
-    }, request)).resolves.toContain("outside your current Discord visibility");
+    }, request)).resolves.toMatchObject({ content: expect.stringContaining("outside your current Discord visibility") });
     await expect(addDiscordReaction(ctx, {
       messageIdOrUrl: "https://discord.com/channels/99999/22222/66666",
       emoji: "👍",
-    }, request)).resolves.toContain("outside your current Discord visibility");
+    }, request)).resolves.toMatchObject({ content: expect.stringContaining("outside your current Discord visibility") });
     await expect(addDiscordReaction(ctx, { messageIdOrUrl: "66666", emoji: "thumbs up" }, request))
-      .resolves.toContain("exactly one Unicode emoji");
+      .resolves.toMatchObject({ content: expect.stringContaining("exactly one Unicode emoji") });
     await expect(addDiscordReaction(ctx, { messageIdOrUrl: "66666", emoji: "<:other:77777>" }, request))
-      .resolves.toContain("not available in the current Discord server");
+      .resolves.toMatchObject({ content: expect.stringContaining("not available in the current Discord server") });
     expect(sender).not.toHaveBeenCalled();
   });
 
@@ -127,11 +138,23 @@ describe("addDiscordReaction", () => {
     const ctx = context({ addDiscordReaction: vi.fn(async () => { throw new Error("missing permissions"); }) });
 
     await expect(addDiscordReaction(ctx, { messageIdOrUrl: "66666", emoji: "👍" }, "add 👍 to the message"))
-      .resolves.toContain("missing permissions");
+      .resolves.toMatchObject({ content: expect.stringContaining("missing permissions") });
     expect(ctx.repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "addDiscordReaction",
       error: "missing permissions",
     }));
+  });
+
+  it("keeps a successful reaction successful when its audit write fails", async () => {
+    const sender = vi.fn(async () => ({ messageId: "66666", channelId: "22222", url: "https://discord.test", emoji: "👍" }));
+    const ctx = context({
+      addDiscordReaction: sender,
+      repo: { auditTool: vi.fn(async () => { throw new Error("audit unavailable"); }) } as unknown as ToolContext["repo"],
+    });
+
+    await expect(addDiscordReaction(ctx, { messageIdOrUrl: "66666", emoji: "👍" }, "add it"))
+      .resolves.toMatchObject({ status: "ok", outcome: { state: "succeeded" } });
+    expect(sender).toHaveBeenCalledOnce();
   });
 });
 

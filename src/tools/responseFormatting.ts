@@ -10,6 +10,11 @@ export function cleanResponse(content: string, maxChars: number) {
   return truncateForDiscord(normalized, maxChars);
 }
 
+/** Preserve tool evidence for the model; Discord-specific rendering happens only at delivery. */
+export function cleanToolResponse(content: string, _maxChars?: number) {
+  return content.trim() || "Done.";
+}
+
 export function formatDiscordMarkdownTables(content: string) {
   const lines = content.split(/\r?\n/);
   const output: string[] = [];

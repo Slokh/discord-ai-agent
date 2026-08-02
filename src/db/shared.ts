@@ -632,7 +632,6 @@ export function rowToAgentTask(row: any): AgentTaskRecord {
 }
 
 export function queuedAgentTaskStatusMessage(backend?: string | null) {
-  if (backend === "local-process-sandbox") return "Waiting for a warm codegen worker to become available.";
   if (backend === "kubernetes-sandbox") return "Waiting for a Kubernetes sandbox to start.";
   return "Waiting for a codegen sandbox to start.";
 }

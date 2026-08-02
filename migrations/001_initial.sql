@@ -678,22 +678,6 @@ CREATE TABLE IF NOT EXISTS agent_runtime_artifact_chunks (
   PRIMARY KEY (artifact_id, chunk_index)
 );
 
-CREATE TABLE IF NOT EXISTS agent_runtime_sandbox_leases (
-  sandbox_id text PRIMARY KEY,
-  repo text NOT NULL,
-  status text NOT NULL DEFAULT 'idle',
-  lease_owner text,
-  execution_id text REFERENCES agent_runtime_executions(execution_id) ON DELETE SET NULL,
-  heartbeat_at timestamptz,
-  last_used_at timestamptz,
-  metadata jsonb NOT NULL DEFAULT '{}',
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS agent_runtime_sandbox_leases_repo_status_idx
-  ON agent_runtime_sandbox_leases(repo, status, updated_at ASC);
-
 CREATE TABLE IF NOT EXISTS discord_delivery_obligations (
   execution_id text PRIMARY KEY,
   thread_key text,

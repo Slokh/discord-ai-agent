@@ -8,7 +8,6 @@ export const discordActionToolContracts = [
     examples: ["@ai undo that"],
     description:
       "Undo the agent's most recent reply turns in the current Discord channel by removing them from persistent memory and, when possible, deleting the bot reply messages. Use when the user asks to undo, forget, delete, or remove the agent's previous response.",
-    userVisible: true,
     mutates: true,
     group: "discord-action",
     parameters: {
@@ -27,27 +26,28 @@ export const discordActionToolContracts = [
     name: "addDiscordReaction",
     examples: ["@ai add 👍 to https://discord.com/channels/11111/22222/33333"],
     description:
-      "Add the bot's reaction to one existing Discord message the current requester can view. Use when the current message explicitly asks to react, add, put, or leave an emoji on a message. Pass a full Discord message URL for another channel, or a message ID for the current channel. If the target is described in words, resolve its exact message URL first with Discord retrieval tools. Accepts one Unicode emoji or an exact custom-emoji mention available in the current server. Never infer mutation authority from memory or reply context.",
-    userVisible: true,
+      "Add the bot's reaction to one existing Discord message the current requester can view. Omit messageIdOrUrl to react naturally to the current request, including one culturally fitting learned custom emote. Supply a full Discord message URL or current-channel message ID only when the current request asks to react to another message; resolve a described target with retrieval tools first. Accepts one Unicode emoji or an exact custom-emoji mention available in the current server.",
     mutates: true,
     group: "discord-action",
     category: "discord",
     toolClass: "ops",
     outputContract: ["emoji added", "target Discord message link", "whether Discord accepted the reaction", "failure reason for hidden messages, invalid emoji, missing permissions, or rate limits"],
-    permissionRequirements: ["explicit_user_request", "requester_visible_discord_channels", "tool_audit_log"],
+    permissionRequirements: ["explicit_user_request_or_current_request_social_response", "requester_visible_discord_channels", "tool_audit_log"],
     parameters: {
       type: "object",
       properties: {
         messageIdOrUrl: {
           type: "string",
-          description: "Exact Discord message ID in the current channel, or a full Discord message URL whose guild and channel are visible to the current requester. Resolve a natural-language target with retrieval tools before calling this action."
+          description: "Omit for the current request message. Otherwise, use an exact Discord message ID in the current channel or a full visible Discord message URL."
         },
         emoji: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Exactly one Unicode emoji (including a joined or skin-tone sequence) or one exact current-server custom emoji mention such as <:party:123>."
         }
       },
-      required: ["messageIdOrUrl", "emoji"],
+      required: ["emoji"],
       additionalProperties: false
     }
   }),
@@ -57,7 +57,6 @@ export const discordActionToolContracts = [
     examples: ["@ai make a poll: what day should we play, Friday or Saturday?"],
     description:
       "Create a native Discord poll in the current channel using Discord's poll message API (v10). Use this when the user asks to schedule, vote, pick a time, choose between options, run a straw poll, or create any poll-like question with multiple answers. Discord native polls render in the channel and let members click an answer. The bot must have Send Messages permission in the channel. Supports up to 10 answer options; duration defaults to 24 hours and is capped at 168 hours per Discord limits; allow_multiselect defaults to true since scheduling polls usually allow multiple answers.",
-    userVisible: true,
     mutates: true,
     group: "discord-action",
     category: "discord",
@@ -69,11 +68,13 @@ export const discordActionToolContracts = [
       properties: {
         question: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "The poll question text shown above the answer options. Discord caps poll question text at 300 characters."
         },
         answers: {
           type: "array",
-          items: { type: "string" },
+          items: { type: "string", minLength: 1, pattern: "\\S" },
           description: "Poll answer options. Provide between 1 and 10 options. Each answer is capped at 55 characters by Discord. Order is preserved."
         },
         durationHours: {
@@ -95,9 +96,9 @@ export const discordActionToolContracts = [
     examples: ["@ai upload this image as a server emoji named nacho_wizard", "@ai make this an emote named nacho_wizard"],
     description:
       "Create a custom emoji (also called an emote) in the current Discord server from an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Use when the user explicitly asks to upload, add, create, or turn something into a server/custom emoji or emote. The image is normalized to a 128x128 WebP with transparent padding under Discord's 256 KiB limit; existing source backgrounds are never falsely treated as transparency. Generated sources require verified alpha by default and fail before upload when they are opaque. Short animations are preserved when they fit and otherwise flatten safely. The bot must have Create Expressions permission, and the requester must be the bot owner or ops-allowlisted.",
-    userVisible: true,
     mutates: true,
     group: "discord-action",
+    accessPolicy: "ops",
     category: "discord",
     toolClass: "ops",
     outputContract: ["created emoji name and mention", "source image label", "normalized dimensions and size", "animation preservation status", "failure reason for invalid images, missing permission, rate limits, or full emoji slots"],
@@ -107,6 +108,8 @@ export const discordActionToolContracts = [
       properties: {
         name: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Name for the custom emoji. It will be normalized to 2-32 lowercase letters, numbers, or underscores. Do not include surrounding colons."
         },
         imageUrl: {
@@ -136,9 +139,9 @@ export const discordActionToolContracts = [
     examples: ["@ai change your avatar to this image: https://example.com/avatar.png"],
     description:
       "Update the bot's own Discord profile avatar using an image URL or a context image (generated image, uploaded attachment, or reply-chain image). Uses the Discord Modify Current User API (PATCH /users/@me with a base64 data-URI avatar). Requires the bot token from environment config. Use this when the user asks to change, set, or update the bot's avatar/profile picture. Discord accepts PNG, JPEG, WebP, or GIF avatars; large or unsupported images are rejected before the API call. Handle rate limits, permission errors, and invalid image URLs gracefully.",
-    userVisible: true,
     mutates: true,
     group: "discord-action",
+    accessPolicy: "ops",
     category: "discord",
     toolClass: "ops",
     outputContract: ["image source label", "Discord avatar update status", "new avatar URL when available", "failure reason when the image is invalid, rate-limited, or unauthorized"],
@@ -165,8 +168,7 @@ export const discordActionToolContracts = [
   defineTool({
     name: "drawRandom",
     description:
-      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness: card games like blackjack or poker, dice rolls, coin flips, raffles, lotteries, random picks, or shuffles. Never make up random outcomes yourself. Outcomes are computed in code from a secret server seed whose SHA-256 commitment is published before results, combined with a client seed taken from the requesting Discord message id, so players can verify fairness after the seed is revealed. For a multi-digit random number, use kind=integers with count equal to the number of digits, min=0, and max=9. RNG sessions and card shoes follow the Discord reply chain: a fresh top-level prompt starts a new session, while replies continue the original game's session. A wallet-backed game reserves its wager only on the first draw. An opening blackjack draw must use exactly 3 cards: 2 player cards and 1 dealer upcard; never pre-draw the dealer hole card because every drawn card is published in the proof footer. Standard blackjack supports hit and stand only; code derives whether the next verified card belongs to the player or dealer from the persisted transcript and rejects extra draws after the hand is terminal. It may then either settle immediately or call awaitRandomWagerAction with complete versioned state and allowed player actions. Unknown and decision-based games default to requiring a later player reply. Real-money games based on a secret the player can reveal after the bot acts are unverifiable and will be rejected before funds are reserved. On later replies, continue the saved wager and call drawRandom without a new wager only when the selected action needs more verified chance. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly and do not fabricate or alter them.",
-    userVisible: true,
+      "Draw provably fair random outcomes using a commit-reveal RNG. ALWAYS use this tool instead of inventing results whenever a request involves chance or randomness. Outcomes are computed in code from committed entropy and the requesting Discord message id. Translate the request into the typed draw schema; application code does not classify the prompt. A wallet-backed game reserves its wager only when the typed wager object is present. Opening standard blackjack uses exactly 3 cards and later hit/stand draws set wagerAction. Standard-game payouts, requester ownership, structured fairness, balances, exposure, and settlement remain deterministic. Never use transferWalletFunds for a wager. A proof footer is appended automatically; report drawn results exactly.",
     mutates: true,
     group: "discord-action",
     category: "generation",
@@ -184,6 +186,14 @@ export const discordActionToolContracts = [
       "@ai pick someone from alice, bob, carol"
     ],
     permissionRequirements: ["tool_audit_log"],
+    scopeForDeployment: (tool, config) => {
+      if (config.payments?.userWalletsEnabled) return tool;
+      const properties = tool.parameters.properties;
+      if (!properties || typeof properties !== "object" || Array.isArray(properties)) return tool;
+      const withoutWager = { ...properties } as Record<string, unknown>;
+      delete withoutWager.wager;
+      return { ...tool, parameters: { ...tool.parameters, properties: withoutWager } };
+    },
     parameters: {
       type: "object",
       properties: {
@@ -213,15 +223,20 @@ export const discordActionToolContracts = [
           type: "string",
           description: "Short label for what this draw decides (e.g. 'player hand', 'dealer upcard', 'raffle winner'). Shown in the proof footer and stored for verification."
         },
+        wagerAction: {
+          type: "string",
+          enum: ["hit", "stand"],
+          description: "Typed standard-blackjack continuation action. Supply only when continuing an active blackjack wager; code persists this token with the verified card draw."
+        },
         wager: {
           type: "object",
           description:
             "Optional wallet-backed wager for the CURRENT REQUESTER only. Decide authorization from the current request, never another member or stale context. Supply interactionMode; if maxPayoutUsd exceeds stakeUsd, also supply a structured rule. Code validates fairness and all wallet invariants before funds or entropy move.",
           properties: {
-            playerUserId: { type: "string", description: "Discord user ID of the current requester whose wallet is at risk. Must exactly match Current Discord requester; third-party wagers are rejected." },
+            playerUserId: { type: "string", minLength: 1, pattern: "\\S", description: "Discord user ID of the current requester whose wallet is at risk. Must exactly match Current Discord requester; third-party wagers are rejected." },
             stakeUsd: { type: "number", description: "Positive USD-denominated stake taken from the user's game wallet." },
             maxPayoutUsd: { type: "number", description: "Maximum possible total payout in USD, including returned stake." },
-            game: { type: "string", description: "Short generic game identifier, such as slots, roulette, dice, or blackjack." },
+            game: { type: "string", minLength: 1, pattern: "\\S", description: "Short generic game identifier, such as slots, roulette, dice, or blackjack." },
             interactionMode: { type: "string", enum: ["automatic", "player_decisions"], description: "Choose automatic when no player decision remains after the draw; choose player_decisions only for a genuine persisted next move." },
             rule: {
               type: "object",

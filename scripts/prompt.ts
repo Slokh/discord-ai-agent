@@ -45,7 +45,7 @@ async function main() {
     { loadConfig },
     { runMigrations },
     { createPool },
-    { DiscordAiAgentRepository },
+    { createAppDatabase },
     { AgentRuntimeRepository },
     { PaymentRepository },
     { OpenRouterClient },
@@ -76,7 +76,7 @@ async function main() {
   await runMigrations(config.databaseUrl);
 
   const pool = createPool(config);
-  const repo = new DiscordAiAgentRepository(pool);
+  const repo = createAppDatabase(pool);
   const agentRuntime = new AgentRuntimeRepository(pool);
   const paymentRepo = new PaymentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);

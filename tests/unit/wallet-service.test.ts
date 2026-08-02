@@ -376,9 +376,29 @@ describe("WalletService", () => {
       idempotencyKey: expect.stringContaining("request-1")
     }));
     expect(result.transfer.status).toBe("confirmed");
-    expect(result.source.balance.formatted).toBe("8");
-    expect(result.destination.balance.formatted).toBe("12");
+    expect(result.source.balance?.formatted).toBe("8");
+    expect(result.destination.balance?.formatted).toBe("12");
     expect(provider.getBalance).toHaveBeenCalledWith(expect.objectContaining({ blockNumber: 77n }));
+
+    provider.getBalance = vi.fn(async ({ blockNumber }) => {
+      if (blockNumber === 77n) throw new Error("balance indexer unavailable");
+      return 10_000_000n;
+    });
+    const record = vi.fn(async () => undefined);
+    const confirmedWithoutBalances = await service.transferFromUser({
+      guildId: "guild-a",
+      requestedByUserId: "sender",
+      destination: { kind: "user", userId: "receiver" },
+      amountUsd: 2,
+      requestId: "request-2",
+    }, record);
+
+    expect(confirmedWithoutBalances.transfer.status).toBe("confirmed");
+    expect(confirmedWithoutBalances.source.balance).toBeNull();
+    expect(confirmedWithoutBalances.destination.balance).toBeNull();
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: "wallet.transfer.post_balance_failed",
+    }));
   });
 
   it("resolves an explicit whole-balance transfer from the requester's live balance", async () => {
@@ -635,6 +655,27 @@ describe("WalletService", () => {
       amountAtomic: 400_000n,
       purpose: "admin_transfer"
     }));
+  });
+
+  it("reports a saved starter target when rebalance setup fails", async () => {
+    const bot = wallet({ id: "wallet-bot" });
+    const setWalletGuildStarterTargetUsd = vi.fn(async () => 0.25);
+    const repo = {
+      setWalletGuildStarterTargetUsd,
+      listUserWallets: vi.fn(async () => { throw new Error("wallet directory unavailable"); }),
+      ensureWalletPlaceholder: vi.fn(async () => bot),
+    } as unknown as PaymentRepository;
+    const service = new WalletService(loadConfig().payments, repo, providerFake());
+
+    await expect(service.setStarterTargetAndRebalance({
+      guildId: "guild-a", requestedByUserId: "admin", requestId: "request",
+      targetUsd: 0.25, rebalanceExisting: true, reason: "economy reset",
+    })).resolves.toMatchObject({
+      targetUsd: 0.25,
+      transferred: 0,
+      rebalanceError: "wallet directory unavailable",
+    });
+    expect(setWalletGuildStarterTargetUsd).toHaveBeenCalledOnce();
   });
 
   it("aggregates authoritative confirmed Tempo receipt fees for the scoped guild", async () => {

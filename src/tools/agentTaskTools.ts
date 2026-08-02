@@ -1,10 +1,10 @@
-import { enqueueAgentRuntimeCodeUpdateTask } from "../agent/runtimeControlPlane.js";
+import { enqueueAgentRuntimeCodeUpdateTask } from "../capabilities/codeUpdates.js";
 import { resolveGitHubTaskToken } from "../github/appToken.js";
 import { parseGitHubRepository } from "../github/repository.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentTaskRecord, AgentTaskStatus, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
-import { missingCodegenConfig } from "./toolScope.js";
-import type { ToolContext } from "./types.js";
+import { missingCodegenConfig } from "../capabilities/toolAvailability.js";
+import type { AgentResponse, ToolContext } from "./types.js";
 import {
   agentTaskAuditSummary,
   agentTaskRunConsoleUrl,
@@ -31,16 +31,16 @@ export async function createAgentUpdateFromRequest(
   request: string,
   title?: string | null,
   target: AgentUpdateTarget = {}
-): Promise<string> {
+): Promise<AgentResponse> {
   const notConfigured = codegenNotConfiguredMessage(ctx);
-  if (notConfigured) return notConfigured;
+  if (notConfigured) return agentTaskMutationResponse(notConfigured, false, "not_configured");
   const updateName = agentUpdateTitleFromRequest(request, title);
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId})`;
   const result = await enqueueAgentCodeUpdateTask(ctx, { request, updateName, requestedBy, ...target });
   const runConsoleUrl = agentTaskRunConsoleUrl(ctx.config, result.taskId);
   const response = formatAgentTaskResult({ ...result, runConsoleUrl });
-  await ctx.updateStatus?.(response);
+  await ctx.updateStatus?.(response).catch(() => undefined);
 
   await ctx.repo.auditTool({
     guildId: ctx.guildId,
@@ -49,9 +49,9 @@ export async function createAgentUpdateFromRequest(
     toolName: "runCodingAgent",
     argumentsSummary: summarizeForAudit({ request, updateName, ...target }),
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
-  });
+  }).catch(() => undefined);
 
-  return response;
+  return agentTaskMutationResponse(response, true);
 }
 
 async function enqueueAgentCodeUpdateTask(
@@ -385,14 +385,14 @@ export async function listAgentTasks(ctx: ToolContext, input: { statuses?: strin
   return ["Recent agent tasks:", ...tasks.map(formatAgentTaskLine)].join("\n");
 }
 
-export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string } = {}): Promise<string> {
+export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string } = {}): Promise<AgentResponse> {
   const notConfigured = codegenNotConfiguredMessage(ctx);
-  if (notConfigured) return notConfigured;
+  if (notConfigured) return agentTaskMutationResponse(notConfigured, false, "not_configured");
   const task = await resolveVisibleAgentTask(ctx, input.taskId, {
     statuses: ["failed", "no_changes", "cancelled"],
     limit: 1
   });
-  if (!task) return input.taskId ? `No retryable visible agent task matched \`${input.taskId}\`.` : "No recent failed, no-change, or cancelled agent task matched.";
+  if (!task) return agentTaskMutationResponse(input.taskId ? `No retryable visible agent task matched \`${input.taskId}\`.` : "No recent failed, no-change, or cancelled agent task matched.", false, "task_not_found");
 
   const requestedBy = `${ctx.userDisplayName} (${ctx.userId}) retrying ${task.taskId}`;
   const result = await enqueueAgentCodeUpdateTask(ctx, {
@@ -410,17 +410,17 @@ export async function retryAgentTask(ctx: ToolContext, input: { taskId?: string 
     toolName: "retryAgentTask",
     argumentsSummary: summarizeForAudit({ taskId: task.taskId }),
     resultSummary: summarizeForAudit(agentTaskAuditSummary(result))
-  });
+  }).catch(() => undefined);
 
-  return formatAgentTaskResult(result);
+  return agentTaskMutationResponse(formatAgentTaskResult(result), true);
 }
 
-export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string; reason?: string } = {}): Promise<string> {
+export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string; reason?: string } = {}): Promise<AgentResponse> {
   const task = await resolveVisibleAgentTask(ctx, input.taskId, {
     statuses: ["queued", "running"],
     limit: 1
   });
-  if (!task) return input.taskId ? `No active visible agent task matched \`${input.taskId}\`.` : "No active agent task matched.";
+  if (!task) return agentTaskMutationResponse(input.taskId ? `No active visible agent task matched \`${input.taskId}\`.` : "No active agent task matched.", false, "task_not_found");
 
   const cancelled = await ctx.repo.cancelAgentTask({
     taskId: task.taskId,
@@ -434,10 +434,20 @@ export async function cancelAgentTask(ctx: ToolContext, input: { taskId?: string
     toolName: "cancelAgentTask",
     argumentsSummary: summarizeForAudit({ taskId: task.taskId, reason: input.reason }),
     resultSummary: summarizeForAudit({ cancelled })
-  });
+  }).catch(() => undefined);
 
-  if (!cancelled) return `Task \`${task.taskId}\` was not cancelled, likely because it already finished.`;
-  return `Cancelled agent task \`${task.taskId}\`. The sandbox cleanup reconciler will remove any remaining Kubernetes resources.`;
+  if (!cancelled) return agentTaskMutationResponse(`Task \`${task.taskId}\` was not cancelled, likely because it already finished.`, false, "task_not_cancelled");
+  return agentTaskMutationResponse(`Cancelled agent task \`${task.taskId}\`. The sandbox cleanup reconciler will remove any remaining Kubernetes resources.`, true);
+}
+
+function agentTaskMutationResponse(content: string, succeeded: boolean, errorCode?: string): AgentResponse {
+  return {
+    content,
+    status: succeeded ? "ok" : "error",
+    errorCode,
+    retryable: false,
+    outcome: { kind: "agent_task", state: succeeded ? "succeeded" : "failed", terminal: true },
+  };
 }
 
 export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
@@ -486,7 +496,6 @@ export async function getDeploymentStatus(ctx: ToolContext): Promise<string> {
     `- Tool calls logged: ${health.toolCalls}`,
     `- Agent tasks: ${taskMetrics.tasksByStatus.map((row) => `${row.status}=${row.count}`).join(", ") || "none"}`,
     `- Agent backlog: ${formatAgentTaskBacklogSummary(taskMetrics.agentTaskBacklog)}`,
-    `- Codegen leases: ${formatLeaseMetricSummary(taskMetrics.sandboxLeases)}`,
     `- Codegen timings: ${formatCodegenMetricSummary(taskMetrics.taskPhaseDurations)}`,
     `- Sandbox cache: ${formatCacheMetricSummary(taskMetrics.sandboxCacheEvents)}`,
     activeTasks.length ? "Active code updates:" : "Active code updates: none",
@@ -587,11 +596,6 @@ function formatCodegenMetricSummary(rows: Array<{ phase: string; count: number; 
 function formatCacheMetricSummary(rows: Array<{ cacheType: string; cacheStatus: string; count: number }>) {
   if (rows.length === 0) return "none yet";
   return rows.map((row) => `${row.cacheType}.${row.cacheStatus}=${row.count}`).join(", ");
-}
-
-function formatLeaseMetricSummary(rows: Array<{ backend: string; status: string; count: number }>) {
-  if (rows.length === 0) return "none yet";
-  return rows.map((row) => `${row.backend}.${row.status}=${row.count}`).join(", ");
 }
 
 function formatAgentTaskBacklogSummary(rows: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>) {

@@ -15,6 +15,7 @@ import { mapAccount, mapTransfer, mapWager } from "./paymentRowMappers.js";
 import { getTransferWithClient, insertTransfer, TRANSFER_COLUMNS } from "./paymentTransferPersistence.js";
 import { validateStarterTopUp } from "./paymentTransferValidation.js";
 import { validateSettlementEvidence, validateSettlementOutcome } from "./paymentWagerValidation.js";
+import { paymentError } from "../payments/errors.js";
 import { listWagerHistory, type WagerHistoryQuery } from "./paymentWagerHistory.js";
 import { getActiveGameWager, getCurrentWager } from "./paymentWagerReadRepository.js";
 import {
@@ -24,7 +25,6 @@ import {
   listUserWallets,
   setWalletGuildStarterTargetUsd,
 } from "./paymentWalletReadRepository.js";
-
 const ACCOUNT_COLUMNS = `
   id, guild_id, owner_kind, discord_user_id, provider, provider_wallet_id,
   external_id, address, chain_id, status, error_message,
@@ -401,7 +401,7 @@ export class PaymentRepository {
         [input.requestId]
       );
       if (existingRequest.rows[0]) {
-        throw new Error("A wallet-backed wager already exists for this Discord request");
+        throw paymentError("wager_already_exists", "A wallet-backed wager already exists for this Discord request");
       }
       const existingGame = await client.query(
         `SELECT id FROM wallet_wager_reservations
@@ -411,7 +411,7 @@ export class PaymentRepository {
         [input.threadKey, input.requestedByUserId]
       );
       if (existingGame.rows[0]) {
-        throw new Error("An active wallet-backed game already exists in this Discord reply chain");
+        throw paymentError("active_game_exists", "An active wallet-backed game already exists in this Discord reply chain");
       }
       const [reserved, pendingTransfers] = await Promise.all([
         client.query(
@@ -445,8 +445,8 @@ export class PaymentRepository {
       const botReserved = BigInt(reserved.rows[0]?.bot_reserved ?? "0") +
         (transferReservations.get(input.bot.id) ?? 0n);
       const botExposure = input.maxPayoutAtomic > input.stakeAtomic ? input.maxPayoutAtomic - input.stakeAtomic : 0n;
-      if (userReserved + input.stakeAtomic > input.userBalanceAtomic) throw new Error("Insufficient user wallet balance for this wager");
-      if (botReserved + botExposure > input.botBalanceAtomic) throw new Error("The bot wallet cannot cover this wager's maximum payout");
+      if (userReserved + input.stakeAtomic > input.userBalanceAtomic) throw paymentError("insufficient_user_balance", "Insufficient user wallet balance for this wager");
+      if (botReserved + botExposure > input.botBalanceAtomic) throw paymentError("insufficient_bot_coverage", "The bot wallet cannot cover this wager's maximum payout");
       const id = `wager_${randomUUID()}`;
       const result = await client.query(
         `
@@ -484,7 +484,7 @@ export class PaymentRepository {
         "code" in error && error.code === "23505" &&
         "constraint" in error && error.constraint === "wallet_wagers_request_id_unique_idx"
       ) {
-        throw new Error("A wallet-backed wager already exists for this Discord request", { cause: error });
+        throw paymentError("wager_already_exists", "A wallet-backed wager already exists for this Discord request", { cause: error });
       }
       throw error;
     } finally {
@@ -535,13 +535,13 @@ export class PaymentRepository {
         `SELECT ${WAGER_COLUMNS} FROM wallet_wager_reservations WHERE id = $1 FOR UPDATE`,
         [input.wagerId]
       );
-      if (!currentResult.rows[0]) throw new Error(`Unknown wager ${input.wagerId}`);
+      if (!currentResult.rows[0]) throw paymentError("wager_not_found", `Unknown wager ${input.wagerId}`);
       const current = mapWager(currentResult.rows[0]);
       if (current.requestedByUserId !== input.requestedByUserId) {
-        throw new Error("Only the user who made this wager can update its game state");
+        throw paymentError("wager_requester_mismatch", "Only the user who made this wager can update its game state");
       }
-      if (current.status !== "drawn") throw new Error(`Wager ${input.wagerId} is ${current.status}, not active`);
-      if (current.expiresAt.getTime() <= Date.now()) throw new Error(`Wager ${input.wagerId} has expired`);
+      if (current.status !== "drawn") throw paymentError("wager_not_active", `Wager ${input.wagerId} is ${current.status}, not active`);
+      if (current.expiresAt.getTime() <= Date.now()) throw paymentError("wager_expired", `Wager ${input.wagerId} has expired`);
       if (current.lastActionRequestId === input.requestId) {
         await client.query("COMMIT");
         return current;
@@ -610,17 +610,17 @@ export class PaymentRepository {
         `SELECT ${WAGER_COLUMNS} FROM wallet_wager_reservations WHERE id = $1 FOR UPDATE`,
         [input.wagerId]
       );
-      if (!wagerResult.rows[0]) throw new Error(`Unknown wager ${input.wagerId}`);
+      if (!wagerResult.rows[0]) throw paymentError("wager_not_found", `Unknown wager ${input.wagerId}`);
       let wager = mapWager(wagerResult.rows[0]);
-      if (wager.requestedByUserId !== input.requestedByUserId) throw new Error("Only the user who made this wager can settle it");
+      if (wager.requestedByUserId !== input.requestedByUserId) throw paymentError("wager_requester_mismatch", "Only the user who made this wager can settle it");
       if (wager.status === "settled") {
         const transfer = wager.settlementTransferId ? await getTransferWithClient(client, wager.settlementTransferId) : null;
         await client.query("COMMIT");
         return { wager, transfer };
       }
-      if (wager.status !== "drawn") throw new Error(`Wager ${input.wagerId} is ${wager.status}, not ready to settle`);
+      if (wager.status !== "drawn") throw paymentError("wager_not_settleable", `Wager ${input.wagerId} is ${wager.status}, not ready to settle`);
       if (input.payoutAtomic < 0n || input.payoutAtomic > wager.maxPayoutAtomic) {
-        throw new Error("Payout is outside the wager's reserved range");
+        throw paymentError("payout_out_of_range", "Payout is outside the wager's reserved range");
       }
       const net = input.payoutAtomic - wager.stakeAtomic;
       validateSettlementOutcome(input.outcome, net);

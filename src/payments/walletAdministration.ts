@@ -58,6 +58,7 @@ export async function setStarterTargetAndRebalance(
   failed: number;
   totalToTreasuryUsd: string;
   totalFromTreasuryUsd: string;
+  rebalanceError?: string;
 }> {
   const targetUsd = normalizedUsd(input.targetUsd);
   if (targetUsd < 0 || targetUsd > 100) throw new Error("Starter target must be between $0 and $100 USD");
@@ -84,11 +85,23 @@ export async function setStarterTargetAndRebalance(
     };
   }
 
-  const [wallets, bot, token] = await Promise.all([
-    dependencies.repo.listUserWallets({ guildId: input.guildId, chainId: dependencies.provider.chainId }),
-    dependencies.ensureBotWallet(input.guildId, record),
-    dependencies.usdToken(),
-  ]);
+  let setup: Awaited<ReturnType<typeof loadRebalanceSetup>>;
+  try {
+    setup = await loadRebalanceSetup(dependencies, input.guildId, record);
+  } catch (error) {
+    const rebalanceError = errorMessage(error);
+    await emit(record, {
+      eventName: "wallet.starter_rebalance.setup_failed",
+      summary: "Starter target was updated but wallet rebalance setup failed",
+      level: "warn",
+      metadata: { guildId: input.guildId, targetUsd, error: rebalanceError },
+    });
+    return {
+      targetUsd, inspected: 0, transferred: 0, unchanged: 0, failed: 0,
+      totalToTreasuryUsd: "0", totalFromTreasuryUsd: "0", rebalanceError,
+    };
+  }
+  const { wallets, bot, token } = setup;
   const targetAtomic = usdToAtomic(targetUsd, token.decimals);
   let transferred = 0;
   let unchanged = 0;
@@ -221,7 +234,21 @@ function normalizedUsd(value: number): number {
 }
 
 async function emit(record: PaymentEventRecorder | undefined, event: Parameters<PaymentEventRecorder>[0]): Promise<void> {
-  await record?.(event);
+  if (!record) return;
+  await record(event).catch(() => undefined);
+}
+
+async function loadRebalanceSetup(
+  dependencies: WalletAdministrationDependencies,
+  guildId: string,
+  record?: PaymentEventRecorder,
+) {
+  const [wallets, bot, token] = await Promise.all([
+    dependencies.repo.listUserWallets({ guildId, chainId: dependencies.provider.chainId }),
+    dependencies.ensureBotWallet(guildId, record),
+    dependencies.usdToken(),
+  ]);
+  return { wallets, bot, token };
 }
 
 function errorMessage(error: unknown): string {

@@ -1,8 +1,7 @@
 import type { FunctionToolDefinition, OpenRouterServerToolDefinition, ToolDefinition } from "../models/openrouter.js";
-import type { ToolClass, ToolContract, ToolGroup, ToolName, ToolRegistryEntry } from "./toolDefinition.js";
+import type { ToolClass, ToolGroup, ToolName, ToolRegistryEntry } from "./toolDefinition.js";
 import { localToolContracts } from "./contracts/index.js";
-export { TOOL_GROUPS } from "./toolDefinition.js";
-export type { ToolClass, ToolContract, ToolGroup, ToolName, ToolRegistryEntry } from "./toolDefinition.js";
+export type { ToolClass, ToolGroup, ToolName, ToolRegistryEntry } from "./toolDefinition.js";
 
 export const toolRegistry: ToolRegistryEntry[] = [...localToolContracts];
 const toolByNameIndex = new Map(toolRegistry.map((tool) => [tool.name, tool]));
@@ -17,7 +16,6 @@ export type OpenRouterServerToolRegistryEntry = {
   toolClass: ToolClass;
   group: ToolGroup;
   outputContract: string[];
-  userVisible: boolean;
   parameters?: OpenRouterServerToolDefinition["parameters"];
 };
 
@@ -27,24 +25,21 @@ export const openRouterServerToolRegistry: OpenRouterServerToolRegistryEntry[] =
     description: "Search the public web for current or external information.",
     toolClass: "external",
     group: "external",
-    outputContract: ["query", "current web result summaries", "source URLs when available"],
-    userVisible: true
+    outputContract: ["query", "current web result summaries", "source URLs when available"]
   },
   {
     type: "openrouter:web_fetch",
     description: "Fetch and read a specific public URL when the user provides one or web search finds one worth opening.",
     toolClass: "external",
     group: "external",
-    outputContract: ["requested URL", "relevant fetched page content", "source URL"],
-    userVisible: true
+    outputContract: ["requested URL", "relevant fetched page content", "source URL"]
   },
   {
     type: "openrouter:datetime",
     description: "Get the current date and time for time-sensitive questions.",
     toolClass: "external",
     group: "external",
-    outputContract: ["current date/time", "timezone or locale context when available"],
-    userVisible: true
+    outputContract: ["current date/time", "timezone or locale context when available"]
   }
 ];
 
@@ -100,42 +95,4 @@ function toolDescriptionForModel(tool: ToolRegistryEntry): string {
     tool.description,
     `Returns: ${tool.outputContract.join("; ")}.`,
   ].filter(Boolean).join("\n");
-}
-
-let cachedToolContracts: ToolContract[] | undefined;
-export function toolContracts(): ToolContract[] {
-  return cachedToolContracts ??= toolRegistry.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    category: tool.category,
-    toolClass: tool.toolClass,
-    mutates: tool.mutates,
-    userVisible: tool.userVisible,
-    parameters: tool.parameters,
-    whenToUse: tool.description,
-    outputContract: tool.outputContract,
-    permissionRequirements: tool.permissionRequirements,
-    auditEvents: tool.auditEvents,
-    examples: tool.examples,
-    argumentExamples: tool.argumentExamples,
-  }));
-}
-
-export function renderToolList(options: { localTools?: ToolRegistryEntry[]; serverTools?: OpenRouterServerToolRegistryEntry[] } = {}) {
-  const localTools = options.localTools ?? toolRegistry;
-  const serverTools = options.serverTools ?? openRouterServerToolRegistry;
-  return [
-    "Discord AI Agent tools:",
-    ...localTools.filter((tool) => tool.userVisible).map((tool) => `- ${tool.name}: ${tool.description}`),
-    ...serverTools
-      .filter((tool) => tool.userVisible)
-      .map((tool) => `- ${tool.type.replace("openrouter:", "")}: ${tool.description}`)
-  ].join("\n");
-}
-
-export function toolSupportsCsvFormat(name: ToolName): boolean {
-  const tool = toolByName(name);
-  const properties = tool?.parameters.properties as Record<string, unknown> | undefined;
-  const format = properties?.format as { enum?: unknown[] } | undefined;
-  return Array.isArray(format?.enum) && format.enum.includes("csv");
 }

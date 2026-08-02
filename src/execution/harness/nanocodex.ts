@@ -1,6 +1,6 @@
 import path from "node:path";
-import { CODEGEN_REASONING } from "../../agent/modelPolicy.js";
 import { nanoCodexSessionId, runNanoCodexRuntime, type NanoCodexRuntimeEvent } from "../../agent/nanocodexRuntime.js";
+import { CODEGEN_REASONING } from "../codegenSelection.js";
 import { progress, recordArtifact } from "../callbacks.js";
 import { codeUpdatePrompt } from "../codegenPrompts.js";
 import { gitChangeStateMetadata, readGitChangeState } from "../repoWorkspace.js";

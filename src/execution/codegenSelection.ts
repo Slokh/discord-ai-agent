@@ -1,8 +1,9 @@
 import type { AppConfig } from "../config/env.js";
-import { CODEGEN_REASONING } from "../agent/modelPolicy.js";
+
+export const CODEGEN_REASONING = "medium" as const;
 
 export type CodegenExecutionSelection = {
-  codegenBackend: AppConfig["execution"]["codegenBackend"];
+  codegenBackend: "kubernetes-job";
   codegenModel: string;
   codegenProvider: string;
   codegenReasoningEffort: typeof CODEGEN_REASONING;
@@ -10,7 +11,7 @@ export type CodegenExecutionSelection = {
 
 export function codegenExecutionSelection(config: AppConfig): CodegenExecutionSelection {
   return {
-    codegenBackend: config.execution.codegenBackend,
+    codegenBackend: "kubernetes-job",
     codegenModel: config.openRouter.codegenModel,
     codegenProvider: providerForCodegenModel(config.openRouter.codegenModel),
     codegenReasoningEffort: CODEGEN_REASONING,

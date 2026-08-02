@@ -11,8 +11,7 @@ export type CodegenAttemptSummaryForDiagnosis = {
 
 export type TaskTimingsForDiagnosis = Record<string, number>;
 
-type CodegenFailureCategory =
-  | "no_first_edit"
+export type CodegenFailureCategory =
   | "no_diff"
   | "harness_startup"
   | "release_scan"
@@ -22,6 +21,18 @@ type CodegenFailureCategory =
   | "verification"
   | "command_failed"
   | "unknown";
+
+export class CodegenTaskError extends Error {
+  constructor(
+    readonly category: CodegenFailureCategory,
+    readonly phase: string | null,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "CodegenTaskError";
+  }
+}
 
 export type CodegenFailureDiagnosis = {
   category: CodegenFailureCategory;
@@ -40,10 +51,10 @@ export function diagnoseCodegenFailure(input: { error: unknown; timings: TaskTim
   const error = input.error instanceof Error ? input.error : new Error(String(input.error));
   const message = error.message;
   const attempts = codegenAttemptsFromError(error);
-  const failedPhase = inferFailedCodegenPhase(message, input.timings);
+  const failedPhase = error instanceof CodegenTaskError ? error.phase : inferFailedCodegenPhase(input.timings);
   const slowestPhase = slowestCodegenPhase(input.timings);
-  const category = classifyCodegenFailure(message, error.name, failedPhase, attempts);
-  const status = category === "no_diff" || category === "no_first_edit" ? "no_changes" : "failed";
+  const category = classifyCodegenFailure(error, failedPhase);
+  const status = category === "no_diff" ? "no_changes" : "failed";
   const summary = codegenFailureSummary(category);
   const finalResponse = finalResponseFromAttempts(attempts);
   return {
@@ -140,43 +151,27 @@ function finalResponseFromAttempts(attempts: CodegenAttemptSummaryForDiagnosis[]
 }
 
 function classifyCodegenFailure(
-  message: string,
-  errorName: string,
+  error: Error,
   failedPhase: string | null,
-  attempts: CodegenAttemptSummaryForDiagnosis[] = []
 ): CodegenFailureCategory {
-  const text = message.toLowerCase();
-  if (errorName === "CodegenNoDiffError" || text.includes("produced no diff")) {
-    return attempts.length > 0 && !attempts.some((attempt) => attemptProducedEditSignal(attempt)) ? "no_first_edit" : "no_diff";
-  }
-  if (text.includes("failed before starting a usable model turn")) {
-    return "harness_startup";
-  }
-  if (text.includes("release scan failed") || failedPhase === "scan") return "release_scan";
-  if (text.includes("typescript verification failed") || failedPhase === "typecheck") return "verification";
-  if (text.includes("git push") || failedPhase === "push") return "git_push";
-  if (text.includes("pull request") || text.includes("pulls.create") || failedPhase === "pr") return "github_pr";
-  if (text.includes("npm ci") || text.includes("npm install") || failedPhase === "dependencies") return "dependency_install";
-  if (text.includes("nanocodex")) return "command_failed";
-  return "unknown";
+  if (error instanceof CodegenTaskError) return error.category;
+  if (error.name === "CodegenNoDiffError") return "no_diff";
+  return categoryForCodegenPhase(failedPhase);
 }
 
-function attemptProducedEditSignal(attempt: CodegenAttemptSummaryForDiagnosis) {
-  if (attempt.producedDiff) return true;
-  const text = `${attempt.stdoutTail}\n${attempt.stderrTail}`.toLowerCase();
-  return /(?:\bfirst[_ -]?edit\b|\bfirst[_ -]?diff\b|\bapply_patch\b|\bedit_file\b|\bfile_edit\b|\btool_use\b.*\bedit\b|"name"\s*:\s*"edit"|"tool"\s*:\s*"edit")/.test(text);
-}
-
-function inferFailedCodegenPhase(message: string, timings: TaskTimingsForDiagnosis) {
-  const text = message.toLowerCase();
-  if (text.includes("release scan")) return "scan";
-  if (text.includes("typescript verification") || text.includes("typecheck")) return "typecheck";
-  if (text.includes("git push")) return "push";
-  if (text.includes("pull request")) return "pr";
-  if (text.includes("npm ci") || text.includes("npm install")) return "dependencies";
-  if (text.includes("nanocodex")) return "nanocodex";
+function inferFailedCodegenPhase(timings: TaskTimingsForDiagnosis) {
   const phases = Object.entries(timings).filter(([phase, durationMs]) => phase !== "total" && Number.isFinite(durationMs));
   return phases.at(-1)?.[0] ?? null;
+}
+
+export function categoryForCodegenPhase(phase: string | null): CodegenFailureCategory {
+  if (phase === "scan") return "release_scan";
+  if (phase === "typecheck" || phase === "verify") return "verification";
+  if (phase === "push") return "git_push";
+  if (phase === "pr" || phase === "prMetadata") return "github_pr";
+  if (phase?.toLowerCase().includes("dependencies")) return "dependency_install";
+  if (phase === "nanocodex") return "command_failed";
+  return "unknown";
 }
 
 function slowestCodegenPhase(timings: TaskTimingsForDiagnosis) {
@@ -190,8 +185,6 @@ function slowestCodegenPhase(timings: TaskTimingsForDiagnosis) {
 function codegenFailureSummary(category: CodegenFailureCategory) {
   const harnessName = "NanoCodex";
   switch (category) {
-    case "no_first_edit":
-      return `${harnessName} finished without making a code edit, so no PR was opened.`;
     case "no_diff":
       return `${harnessName} finished but left the repository with no code diff, so no PR was opened.`;
     case "harness_startup":
@@ -215,8 +208,6 @@ function codegenFailureSummary(category: CodegenFailureCategory) {
 
 function codegenFailureNextAction(category: CodegenFailureCategory, failedPhase: string | null) {
   switch (category) {
-    case "no_first_edit":
-      return "Inspect the harness transcript, prompt, and repository navigation context; improve repo ownership docs or task instructions so the agent makes an early focused edit.";
     case "no_diff":
       return "Inspect the harness transcript and repository navigation context; improve repo ownership docs or the coding prompt if the task should have produced a change.";
     case "harness_startup":

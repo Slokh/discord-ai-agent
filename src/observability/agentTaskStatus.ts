@@ -39,18 +39,6 @@ export type AgentTaskStatusSandboxRun = {
   updatedAt: Date;
 };
 
-export type AgentTaskStatusLease = {
-  sandboxId: string;
-  repo: string;
-  backend: string;
-  status: string;
-  leaseOwner: string | null;
-  executionId: string | null;
-  heartbeatAt: Date | null;
-  lastUsedAt: Date | null;
-  updatedAt: Date;
-};
-
 export type AgentRuntimeStatusSession = {
   sessionId: string;
   traceId: string | null;
@@ -80,7 +68,6 @@ export type AgentTaskStatusSnapshot = {
   recentTerminalTasks: AgentTaskStatusTask[];
   activeSandboxRuns: AgentTaskStatusSandboxRun[];
   pendingSandboxCleanup: AgentTaskStatusSandboxRun[];
-  leases: AgentTaskStatusLease[];
 };
 
 export type AgentTaskStatusOptions = {
@@ -99,8 +86,7 @@ export async function collectAgentTaskStatusSnapshot(pool: DbPool, options: Agen
     activeTasks,
     recentTerminalTasks,
     activeSandboxRuns,
-    pendingSandboxCleanup,
-    leases
+    pendingSandboxCleanup
   ] = await Promise.all([
     queryCounts(
       pool,
@@ -160,8 +146,7 @@ export async function collectAgentTaskStatusSnapshot(pool: DbPool, options: Agen
         LIMIT $1
       `,
       [limit]
-    ),
-    queryLeases(pool, limit)
+    )
   ]);
 
   return {
@@ -174,8 +159,7 @@ export async function collectAgentTaskStatusSnapshot(pool: DbPool, options: Agen
     activeTasks,
     recentTerminalTasks,
     activeSandboxRuns,
-    pendingSandboxCleanup,
-    leases
+    pendingSandboxCleanup
   };
 }
 
@@ -183,7 +167,6 @@ export function formatAgentTaskStatusSnapshot(snapshot: AgentTaskStatusSnapshot)
   const lines: string[] = [];
   const diagnostics = diagnoseAgentTaskStatus(snapshot);
   const activeStaleTasks = staleActiveTasks(snapshot);
-  const staleLeases = staleSandboxLeases(snapshot);
 
   lines.push("Agent task status");
   lines.push(`Generated: ${formatDateTime(snapshot.generatedAt)} | stale threshold: ${formatSeconds(snapshot.staleAfterMs)}`);
@@ -193,8 +176,7 @@ export function formatAgentTaskStatusSnapshot(snapshot: AgentTaskStatusSnapshot)
       `active tasks: ${snapshot.activeTasks.length}`,
       `stale active: ${activeStaleTasks.length}`,
       `active sandboxes: ${snapshot.activeSandboxRuns.length}`,
-      `pending cleanup: ${snapshot.pendingSandboxCleanup.length}`,
-      `stale leases: ${staleLeases.length}`
+      `pending cleanup: ${snapshot.pendingSandboxCleanup.length}`
     ].join(" | ")
   );
 
@@ -204,7 +186,6 @@ export function formatAgentTaskStatusSnapshot(snapshot: AgentTaskStatusSnapshot)
   appendCounts(lines, "pg-boss agent.task queue", snapshot.queueCounts);
   appendDiagnostics(lines, diagnostics);
   appendTasks(lines, "Active tasks", snapshot.activeTasks, snapshot);
-  appendLeases(lines, snapshot);
   appendSandboxRuns(lines, "Active sandbox runs", snapshot.activeSandboxRuns, snapshot);
   appendSandboxRuns(lines, "Sandbox cleanup backlog", snapshot.pendingSandboxCleanup, snapshot);
   appendTasks(lines, "Recent terminal tasks", snapshot.recentTerminalTasks, snapshot);
@@ -215,7 +196,6 @@ export function formatAgentTaskStatusSnapshot(snapshot: AgentTaskStatusSnapshot)
 export function diagnoseAgentTaskStatus(snapshot: AgentTaskStatusSnapshot): string[] {
   const diagnostics: string[] = [];
   const activeStaleTasks = staleActiveTasks(snapshot);
-  const staleLeases = staleSandboxLeases(snapshot);
   const blockedQueueCount = snapshot.queueCounts
     .filter((row) => ["created", "retry", "active"].includes(row.name))
     .reduce((total, row) => total + row.count, 0);
@@ -230,9 +210,6 @@ export function diagnoseAgentTaskStatus(snapshot: AgentTaskStatusSnapshot): stri
   if (blockedQueueCount > snapshot.activeTasks.length) {
     diagnostics.push(`pg-boss has ${blockedQueueCount} live agent.task ${plural(blockedQueueCount, "job")} for ${snapshot.activeTasks.length} tracked active ${plural(snapshot.activeTasks.length, "task")}.`);
   }
-  if (staleLeases.length > 0) {
-    diagnostics.push(`${staleLeases.length} agent-task sandbox ${plural(staleLeases.length, "lease")} ${verb(staleLeases.length, "has", "have")} stale heartbeats.`);
-  }
   if (snapshot.pendingSandboxCleanup.length > 0) {
     diagnostics.push(`${snapshot.pendingSandboxCleanup.length} terminal sandbox ${plural(snapshot.pendingSandboxCleanup.length, "run")} still ${verb(snapshot.pendingSandboxCleanup.length, "needs", "need")} cleanup.`);
   }
@@ -246,14 +223,6 @@ export function staleActiveTasks(snapshot: AgentTaskStatusSnapshot): AgentTaskSt
   return snapshot.activeTasks.filter((task) => {
     const progressedAt = task.progressUpdatedAt ?? task.updatedAt ?? task.startedAt ?? task.createdAt;
     return snapshot.generatedAt.getTime() - progressedAt.getTime() >= snapshot.staleAfterMs;
-  });
-}
-
-export function staleSandboxLeases(snapshot: AgentTaskStatusSnapshot): AgentTaskStatusLease[] {
-  return snapshot.leases.filter((lease) => {
-    if (lease.status !== "leased") return false;
-    const heartbeatAt = lease.heartbeatAt ?? lease.updatedAt;
-    return snapshot.generatedAt.getTime() - heartbeatAt.getTime() >= snapshot.staleAfterMs;
   });
 }
 
@@ -325,20 +294,6 @@ function appendAgentRuntimeSessions(
   }
 }
 
-function appendLeases(lines: string[], snapshot: AgentTaskStatusSnapshot) {
-  lines.push("");
-  lines.push(`Agent-task sandbox leases: ${snapshot.leases.length === 0 ? "none" : ""}`.trimEnd());
-  for (const lease of snapshot.leases) {
-    const heartbeatAgeMs = lease.heartbeatAt ? snapshot.generatedAt.getTime() - lease.heartbeatAt.getTime() : null;
-    const stale = staleSandboxLeases(snapshot).some((candidate) => candidate.sandboxId === lease.sandboxId);
-    lines.push(
-      `- ${lease.sandboxId} ${lease.status}${stale ? " stale" : ""} | backend=${lease.backend} | repo=${lease.repo} | heartbeat=${formatNullableAge(heartbeatAgeMs)}`
-    );
-    if (lease.executionId) lines.push(`  execution: ${lease.executionId}`);
-    if (lease.leaseOwner) lines.push(`  owner: ${lease.leaseOwner}`);
-  }
-}
-
 function appendSandboxRuns(lines: string[], title: string, runs: AgentTaskStatusSandboxRun[], snapshot: AgentTaskStatusSnapshot) {
   lines.push("");
   lines.push(`${title}: ${runs.length === 0 ? "none" : ""}`.trimEnd());
@@ -352,10 +307,6 @@ function appendSandboxRuns(lines: string[], title: string, runs: AgentTaskStatus
       `  ${run.backend}${run.namespace ? `/${run.namespace}` : ""}${run.backendJobName ? ` | job=${run.backendJobName}` : ""} | updated ${formatAge(updatedAgeMs)}`
     );
   }
-}
-
-function formatNullableAge(ageMs: number | null) {
-  return ageMs == null || !Number.isFinite(ageMs) ? "none" : formatAge(ageMs);
 }
 
 function formatAge(ageMs: number) {
@@ -415,24 +366,6 @@ async function queryAgentRuntimeSessions(pool: DbPool, limit: number): Promise<A
     [limit]
   );
   return rows.map(rowToAgentRuntimeSession);
-}
-
-async function queryLeases(pool: DbPool, limit: number): Promise<AgentTaskStatusLease[]> {
-  const rows = await optionalRows(
-    pool,
-    `
-      SELECT
-        sandbox_id, repo, status, lease_owner, execution_id, heartbeat_at, last_used_at,
-        metadata, updated_at
-      FROM agent_runtime_sandbox_leases
-      ORDER BY
-        CASE status WHEN 'leased' THEN 0 WHEN 'recycling' THEN 1 WHEN 'idle' THEN 2 ELSE 3 END,
-        updated_at ASC
-      LIMIT $1
-    `,
-    [limit]
-  );
-  return rows.map(rowToLease);
 }
 
 async function optionalRows(pool: DbPool, sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
@@ -502,21 +435,6 @@ function rowToAgentRuntimeSession(row: Record<string, unknown>): AgentRuntimeSta
   };
 }
 
-function rowToLease(row: Record<string, unknown>): AgentTaskStatusLease {
-  const metadata = objectValue(row.metadata);
-  return {
-    sandboxId: stringValue(row.sandbox_id),
-    repo: stringValue(row.repo),
-    backend: typeof metadata.backend === "string" && metadata.backend.trim() ? metadata.backend.trim() : "unknown",
-    status: stringValue(row.status),
-    leaseOwner: nullableString(row.lease_owner),
-    executionId: nullableString(row.execution_id),
-    heartbeatAt: nullableDate(row.heartbeat_at),
-    lastUsedAt: nullableDate(row.last_used_at),
-    updatedAt: dateValue(row.updated_at)
-  };
-}
-
 function isMissingRelationError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const code = "code" in error ? String(error.code) : "";
@@ -541,10 +459,6 @@ function dateValue(value: unknown) {
 function nullableDate(value: unknown) {
   if (value == null) return null;
   return dateValue(value);
-}
-
-function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function clampInteger(value: number, min: number, max: number) {

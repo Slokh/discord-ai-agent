@@ -31,23 +31,6 @@ jobs:
       API_TLS_CERTIFICATE_ARN: ${{ vars.API_TLS_CERTIFICATE_ARN }}
       CONTROL_UI_PUBLIC_URL: ${{ vars.CONTROL_UI_PUBLIC_URL }}
       RELEASE_NOTES_CHANNEL_ID: ${{ vars.RELEASE_NOTES_CHANNEL_ID }}
-      # Repo the bot opens code-update PRs against; defaults to this repo.
-      CODE_UPDATE_REPOSITORY: ${{ vars.CODE_UPDATE_REPOSITORY || github.repository }}
-      CODEGEN_WORKER_ENABLED: ${{ vars.CODEGEN_WORKER_ENABLED }}
-      CODEGEN_WORKER_REPLICAS: ${{ vars.CODEGEN_WORKER_REPLICAS }}
-      CODEGEN_LEASE_HEARTBEAT_SECONDS: ${{ vars.CODEGEN_LEASE_HEARTBEAT_SECONDS }}
-      CODEGEN_LEASE_STALE_SECONDS: ${{ vars.CODEGEN_LEASE_STALE_SECONDS }}
-      CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS: ${{ vars.CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS }}
-      CODEGEN_LEASE_ACQUIRE_POLL_SECONDS: ${{ vars.CODEGEN_LEASE_ACQUIRE_POLL_SECONDS }}
-      WALLET_ENABLED: ${{ vars.WALLET_ENABLED }}
-      USER_WALLETS_ENABLED: ${{ vars.USER_WALLETS_ENABLED }}
-      WALLET_BALANCES_PUBLIC: ${{ vars.WALLET_BALANCES_PUBLIC }}
-      TEMPO_NETWORK: ${{ vars.TEMPO_NETWORK }}
-      TEMPO_USD_TOKEN: ${{ vars.TEMPO_USD_TOKEN }}
-      WALLET_INITIAL_GRANT_USD: ${{ vars.WALLET_INITIAL_GRANT_USD }}
-      SANDBOX_CACHE_ENABLED: ${{ vars.SANDBOX_CACHE_ENABLED }}
-      SANDBOX_CACHE_SIZE: ${{ vars.SANDBOX_CACHE_SIZE }}
-      SANDBOX_CACHE_STORAGE_CLASS: ${{ vars.SANDBOX_CACHE_STORAGE_CLASS }}
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v7
@@ -76,7 +59,6 @@ jobs:
             --set "image.tag=$IMAGE_TAG"
             --set "sandbox.image=$REGISTRY/$ECR_REPOSITORY-sandbox:$IMAGE_TAG"
             --set-string "config.appRevision=$IMAGE_TAG"
-            --set "config.githubRepository=$CODE_UPDATE_REPOSITORY"
           )
           if [ -n "$previous_app_revision" ]; then
             helm_args+=(--set-string "config.previousAppRevision=$previous_app_revision")
@@ -97,57 +79,6 @@ jobs:
           fi
           if [ -n "${CONTROL_UI_PUBLIC_URL:-}" ]; then
             helm_args+=(--set-string "config.controlUiPublicUrl=$CONTROL_UI_PUBLIC_URL")
-          fi
-          is_true() {
-            case "${1:-}" in
-              1|true|TRUE|yes|YES|on|ON) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-          if is_true "$CODEGEN_WORKER_ENABLED"; then
-            helm_args+=(--set "codegenWorker.enabled=true")
-          fi
-          if [ -n "${CODEGEN_WORKER_REPLICAS:-}" ]; then
-            helm_args+=(--set "codegenWorker.replicas=$CODEGEN_WORKER_REPLICAS")
-          fi
-          if [ -n "${CODEGEN_LEASE_HEARTBEAT_SECONDS:-}" ]; then
-            helm_args+=(--set "codegenWorker.lease.heartbeatSeconds=$CODEGEN_LEASE_HEARTBEAT_SECONDS")
-          fi
-          if [ -n "${CODEGEN_LEASE_STALE_SECONDS:-}" ]; then
-            helm_args+=(--set "codegenWorker.lease.staleSeconds=$CODEGEN_LEASE_STALE_SECONDS")
-          fi
-          if [ -n "${CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS:-}" ]; then
-            helm_args+=(--set "codegenWorker.lease.acquireTimeoutSeconds=$CODEGEN_LEASE_ACQUIRE_TIMEOUT_SECONDS")
-          fi
-          if [ -n "${CODEGEN_LEASE_ACQUIRE_POLL_SECONDS:-}" ]; then
-            helm_args+=(--set "codegenWorker.lease.acquirePollSeconds=$CODEGEN_LEASE_ACQUIRE_POLL_SECONDS")
-          fi
-          if [ -n "${WALLET_ENABLED:-}" ]; then
-            helm_args+=(--set-string "config.walletEnabled=$WALLET_ENABLED")
-          fi
-          if [ -n "${USER_WALLETS_ENABLED:-}" ]; then
-            helm_args+=(--set-string "config.userWalletsEnabled=$USER_WALLETS_ENABLED")
-          fi
-          if [ -n "${WALLET_BALANCES_PUBLIC:-}" ]; then
-            helm_args+=(--set-string "config.walletBalancesPublic=$WALLET_BALANCES_PUBLIC")
-          fi
-          if [ -n "${TEMPO_NETWORK:-}" ]; then
-            helm_args+=(--set-string "config.tempoNetwork=$TEMPO_NETWORK")
-          fi
-          if [ -n "${TEMPO_USD_TOKEN:-}" ]; then
-            helm_args+=(--set-string "config.tempoUsdToken=$TEMPO_USD_TOKEN")
-          fi
-          if [ -n "${WALLET_INITIAL_GRANT_USD:-}" ]; then
-            helm_args+=(--set-string "config.walletInitialGrantUsd=$WALLET_INITIAL_GRANT_USD")
-          fi
-          if is_true "$SANDBOX_CACHE_ENABLED"; then
-            helm_args+=(--set "sandbox.cache.enabled=true")
-          fi
-          if [ -n "${SANDBOX_CACHE_SIZE:-}" ]; then
-            helm_args+=(--set-string "sandbox.cache.size=$SANDBOX_CACHE_SIZE")
-          fi
-          if [ -n "${SANDBOX_CACHE_STORAGE_CLASS:-}" ]; then
-            helm_args+=(--set-string "sandbox.cache.storageClassName=$SANDBOX_CACHE_STORAGE_CLASS")
           fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
             --atomic \

@@ -10,6 +10,7 @@ import {
   renderCodegenContextPack,
 } from "../../src/execution/codegenPrompts.js";
 import {
+  CodegenTaskError,
   diagnoseCodegenFailure,
   renderCodegenFailureDiagnosis,
 } from "../../src/execution/codegenFailureDiagnosis.js";
@@ -179,6 +180,29 @@ describe("sandboxRunner", () => {
     expect(prompts.join("\n")).not.toContain("Requested by");
   });
 
+  it("samples large PR diffs across early and late changed files", async () => {
+    const sections = Array.from({ length: 300 }, (_, index) => [
+      `diff --git a/src/file-${index}.ts b/src/file-${index}.ts`,
+      `--- a/src/file-${index}.ts`,
+      `+++ b/src/file-${index}.ts`,
+      `+marker-${index}-${"x".repeat(900)}`,
+    ].join("\n"));
+    let capturedPrompt = "";
+    await codeUpdatePullRequestMetadata({
+      diffStat: "80 files changed",
+      diffPatch: sections.join("\n"),
+      complete: async ({ userPrompt }) => {
+        capturedPrompt = userPrompt;
+        return { content: JSON.stringify({ title: "Update sampled files", why: "The implementation changes many files.", changes: ["Apply the sampled changes."] }) };
+      },
+    });
+
+    expect(capturedPrompt).toContain("src/file-0.ts");
+    expect(capturedPrompt).toContain("src/file-150.ts");
+    expect(capturedPrompt).toContain("src/file-299.ts");
+    expect(capturedPrompt).toContain("diff sampled across changed files");
+  });
+
   it("falls back to changed source paths instead of bug-report metadata", async () => {
     const diffPatch = "diff --git a/src/agent/nanocodexAgentRuntime.ts b/src/agent/nanocodexAgentRuntime.ts\n+recovery";
     const fallback = deterministicPullRequestMetadata("1 file changed, 1 insertion(+)", diffPatch);
@@ -218,7 +242,7 @@ describe("sandboxRunner", () => {
 
   it("classifies terminal codegen failures with actionable next steps", () => {
     const noDiff = diagnoseCodegenFailure({
-      error: new Error("Agent task produced no diff after NanoCodex attempt; no PR will be opened."),
+      error: new CodegenTaskError("no_diff", "nanocodex", "Agent task produced no diff after NanoCodex attempt; no PR will be opened."),
       timings: { repo: 120, nanocodex: 20_000, total: 21_000 }
     });
 
@@ -234,7 +258,7 @@ describe("sandboxRunner", () => {
     expect(noDiff.nextAction).toContain("repository navigation context");
 
     const scan = diagnoseCodegenFailure({
-      error: new Error("Release scan failed after agent task; refusing to push generated changes."),
+      error: new CodegenTaskError("release_scan", "scan", "Release scan failed after agent task; refusing to push generated changes."),
       timings: { repo: 100, scan: 2500, total: 3000 }
     });
 
@@ -249,7 +273,7 @@ describe("sandboxRunner", () => {
     expect(renderCodegenFailureDiagnosis(scan)).toContain("- scan: 2.5s");
 
     const verification = diagnoseCodegenFailure({
-      error: new Error("TypeScript verification failed after agent task; refusing to publish generated changes."),
+      error: new CodegenTaskError("verification", "typecheck", "TypeScript verification failed after agent task; refusing to publish generated changes."),
       timings: { typecheck: 5_000, total: 6_000 }
     });
     expect(verification).toEqual(expect.objectContaining({
@@ -259,7 +283,7 @@ describe("sandboxRunner", () => {
     }));
   });
 
-  it("distinguishes no-diff failures where the harness never made an edit", () => {
+  it("classifies typed no-diff failures without parsing command output", () => {
     const error = Object.assign(new Error("Agent task produced no diff after NanoCodex attempt; no PR will be opened."), {
       name: "CodegenNoDiffError",
       attempts: [
@@ -283,13 +307,13 @@ describe("sandboxRunner", () => {
 
     expect(diagnosis).toEqual(
       expect.objectContaining({
-        category: "no_first_edit",
+        category: "no_diff",
         status: "no_changes",
         failedPhase: "nanocodex"
       })
     );
-    expect(diagnosis.summary).toContain("NanoCodex finished without making a code edit");
-    expect(diagnosis.nextAction).toContain("early focused edit");
+    expect(diagnosis.summary).toContain("no code diff");
+    expect(diagnosis.nextAction).toContain("repository navigation context");
     expect(diagnosis.finalResponse).toBe("I found the config but did not edit it.");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Attempts");
     expect(renderCodegenFailureDiagnosis(diagnosis)).toContain("## Harness Final Answer");
@@ -327,7 +351,7 @@ describe("sandboxRunner", () => {
       await fs.mkdir(path.join(tempDir, "src", "tools"), { recursive: true });
       await fs.mkdir(path.join(tempDir, "src", "jobs"), { recursive: true });
       await fs.writeFile(path.join(tempDir, "AGENTS.md"), "guide\n", "utf8");
-      await fs.writeFile(path.join(tempDir, "src", "tools", "coreTools.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "tools", "registry.ts"), "export {}\n", "utf8");
       await fs.writeFile(path.join(tempDir, "src", "jobs", "queue.ts"), "export {}\n", "utf8");
 
       const context = await buildCodegenContextPack(tempDir);
@@ -335,7 +359,7 @@ describe("sandboxRunner", () => {
 
       expect(context.repoGuidePath).toBe("AGENTS.md");
       expect(rendered).toContain("Read AGENTS.md first");
-      expect(rendered).toContain("src/tools/coreTools.ts");
+      expect(rendered).toContain("src/tools/registry.ts");
       expect(rendered).toContain("src/jobs/queue.ts");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -441,7 +465,7 @@ describe("sandboxRunner", () => {
       taskRequest: "Change the user-visible loading state."
     });
 
-    expect(prompt).toContain("Let repo docs, folder READMEs, source ownership, and tests determine the implementation path");
+    expect(prompt).toContain("Let the repository concept guides, source ownership, exact anchors, and tests determine the implementation path");
     expect(prompt).toContain("Batch initial reconnaissance");
     expect(prompt).toContain("Do not keep alternating search/read/search/read");
     expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-progress first_edit");
@@ -546,7 +570,8 @@ describe("sandboxRunner", () => {
     expect(contextPack.requestAnchors).not.toEqual(expect.arrayContaining(["searchDiscordHistory", "getDiscordStats", "searchDiscordAttachments"]));
     expect(renderedContext).not.toContain("Focus:");
     expect(renderedContext).toContain("Discord knowledge, indexing, and retrieval");
-    expect(renderedContext).toContain("src/db/repositories.ts");
+    expect(renderedContext).toContain("src/db/discordArchiveRepository.ts");
+    expect(renderedContext).toContain("src/db/retrievalRepository.ts");
     expect(renderedContext).toContain("src/discord/crawler.ts");
     expect(renderedContext).toContain("src/discord/messagePersistence.ts");
   });
@@ -616,7 +641,7 @@ describe("sandboxRunner", () => {
       expect(renderedContext).toContain("Do not spend more than three targeted file reads before the first code diff");
       expect(prompt).toContain("If exact request anchors or target files are present");
       expect(prompt).toContain("patch the owning source file");
-      expect(prompt).toContain("Let repo docs, folder READMEs, source ownership, and tests determine the implementation path");
+      expect(prompt).toContain("Let the repository concept guides, source ownership, exact anchors, and tests determine the implementation path");
       expect(recovery).toContain("Patch-first targets from the original request anchors:");
       expect(recovery).toContain("Do not run more than one read/search command before the first patch");
       expect(recovery).toContain("Use apply_patch for the recovery edit when available");

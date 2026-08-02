@@ -7,7 +7,7 @@ import { DeliveryObligationsRepository } from "./db/deliveryObligationsRepositor
 import { runMigrations } from "./db/migrate.js";
 import { createPool } from "./db/pool.js";
 import { AgentRuntimeRepository } from "./db/agentRuntimeRepository.js";
-import { DiscordAiAgentRepository } from "./db/repositories.js";
+import { createAppDatabase } from "./db/repositories.js";
 import { createExecutionBackend } from "./execution/backend.js";
 import { startSandboxReconciler } from "./execution/reconciler.js";
 import { OpenRouterClient } from "./models/openrouter.js";
@@ -18,7 +18,7 @@ import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
 import { startJobs } from "./jobs/queue.js";
 import { startStaleRunReconciler } from "./observability/staleRuns.js";
 import { logger } from "./util/logger.js";
-import { createAgentRuntimeRunner } from "./agent/runtimeRunner.js";
+import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
 import { PaymentRepository } from "./db/paymentRepository.js";
 import { PrivyTempoWalletProvider } from "./payments/privyTempoWalletProvider.js";
 import { WalletService } from "./payments/walletService.js";
@@ -86,7 +86,7 @@ async function main() {
 
   const pool = createPool(config);
   logger.debug("Postgres pool created");
-  const repo = new DiscordAiAgentRepository(pool);
+  const repo = createAppDatabase(pool);
   const agentRuntimeRepo = new AgentRuntimeRepository(pool);
   const budgetRepo = new BudgetRepository(pool);
   const rngRepo = new RngRepository(pool);

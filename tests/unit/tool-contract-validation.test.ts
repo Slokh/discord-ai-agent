@@ -14,8 +14,24 @@ describe("tool contract validation", () => {
   });
 
   it("rejects malformed or non-object JSON even for argument-free tools", () => {
-    expect(validateToolCallArguments({ name: "listTools", arguments: {}, argumentsText: "not-json" }).ok).toBe(false);
-    expect(validateToolCallArguments({ name: "listTools", arguments: {}, argumentsText: "[]" }).ok).toBe(false);
+    expect(validateToolCallArguments({ name: "loadSkillContext", arguments: {}, argumentsText: "not-json" }).ok).toBe(false);
+    expect(validateToolCallArguments({ name: "loadSkillContext", arguments: {}, argumentsText: "[]" }).ok).toBe(false);
+  });
+
+  it("rejects empty and whitespace-only required strings", () => {
+    for (const [name, argumentsValue] of [
+      ["generateImage", { prompt: "" }],
+      ["searchSpotify", { query: "   " }],
+      ["findDiscordUsers", { query: "" }],
+      ["getDiscordMessageContext", { messageIdOrUrl: "\t" }],
+      ["runCodingAgent", { request: "fix it", title: " " }],
+    ] as const) {
+      expect(validateToolCallArguments({
+        name,
+        arguments: argumentsValue,
+        argumentsText: JSON.stringify(argumentsValue),
+      }).ok).toBe(false);
+    }
   });
 
   it("validates against the same deployment-narrowed schema shown to the model", () => {

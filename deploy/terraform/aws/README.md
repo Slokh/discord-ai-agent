@@ -27,11 +27,7 @@ After apply:
    - `ECR_REPOSITORY`: use the repository name, for example `discord-ai-agent`, not the full ECR URL.
    - optional `K8S_NAMESPACE`
    - optional `HELM_RELEASE`
-   - optional `CODEGEN_WORKER_ENABLED=true` to deploy the dedicated warm codegen worker.
-   - optional `SANDBOX_CACHE_ENABLED=true` to mount the shared sandbox cache PVC.
-   - optional `SANDBOX_CACHE_SIZE`, for example `20Gi`.
-   - optional `SANDBOX_CACHE_STORAGE_CLASS` when the default cluster storage class is not appropriate.
-3. Create the Kubernetes app Secret described in `../../../docs/eks-deploy.md`.
+3. Create the Kubernetes app Secret described in [`../../../docs/operations.md`](../../../docs/operations.md#kubernetes-production).
 4. Merge to `main`; CI builds images and deploys the Helm chart.
 
 The Terraform deliberately does not store Discord/OpenRouter/GitHub App secrets. Deliver those through your normal secret manager into the Kubernetes Secret.

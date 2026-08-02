@@ -34,7 +34,10 @@ describe("agent model settings", () => {
     await expect(setAgentModel(ownerCtx, {
       action: "set",
       model: "Luna",
-    })).resolves.toContain("Switched this server's NanoCodex model");
+    })).resolves.toEqual(expect.objectContaining({
+      content: expect.stringContaining("Switched this server's NanoCodex model"),
+      outcome: expect.objectContaining({ terminal: true }),
+    }));
     expect(repo.setGuildChatModelOverride).toHaveBeenCalledWith({
       guildId: "guild",
       chatModel: "openai/gpt-5.6-luna",
@@ -47,7 +50,7 @@ describe("agent model settings", () => {
     opsCtx.chatModelOverrideLoaded = true;
     opsCtx.requestText = "reset model";
     await expect(setAgentModel(opsCtx, { action: "reset" }))
-      .resolves.toContain("configured default");
+      .resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("configured default") }));
     expect(repo.clearGuildChatModelOverride).toHaveBeenCalledWith("guild");
     expect(effectiveAgentChatModel(opsCtx)).toBe("openai/gpt-5.6-sol");
   });
@@ -60,7 +63,7 @@ describe("agent model settings", () => {
     await expect(setAgentModel(ctx, {
       action: "set",
       model: "openai/gpt-5.6-luna",
-    })).resolves.toContain("restricted");
+    })).resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("restricted"), status: "error" }));
     expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
     expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "setAgentModel",
@@ -76,7 +79,7 @@ describe("agent model settings", () => {
     await expect(setAgentModel(ctx, {
       action: "set",
       model: "not-a-model",
-    })).resolves.toContain("couldn’t find");
+    })).resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("couldn’t find"), status: "error" }));
     expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
     expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
       toolName: "setAgentModel",
@@ -84,22 +87,19 @@ describe("agent model settings", () => {
     }));
   });
 
-  it("requires explicit current-turn mutation intent even when the model calls the tool", async () => {
+  it("uses the authorized model-selected typed target", async () => {
     const repo = settingsRepo();
     const ctx = context("owner", repo);
     ctx.requestText = "I literally added a tool for you to change models";
 
     await expect(setAgentModel(ctx, {
       action: "set",
-      model: "moonshotai/kimi-k3",
-    })).resolves.toContain("does not explicitly ask");
-    expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
-    expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
-      error: "agent_model_current_intent_required",
-    }));
+      model: "Luna",
+    })).resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("Switched") }));
+    expect(repo.setGuildChatModelOverride).toHaveBeenCalled();
   });
 
-  it("rejects a model-generated target that conflicts with the current request", async () => {
+  it("accepts a catalog-valid typed target without reparsing conversational wording", async () => {
     const repo = settingsRepo();
     const ctx = context("owner", repo);
     ctx.requestText = "switch to Luna";
@@ -107,11 +107,7 @@ describe("agent model settings", () => {
     await expect(setAgentModel(ctx, {
       action: "set",
       model: "openai/gpt-5.6-sol",
-    })).resolves.toContain("current message authorizes");
-    expect(repo.setGuildChatModelOverride).not.toHaveBeenCalled();
-    expect(repo.auditTool).toHaveBeenCalledWith(expect.objectContaining({
-      error: "agent_model_intent_mismatch",
-    }));
+    })).resolves.toEqual(expect.objectContaining({ content: expect.stringContaining("openai/gpt-5.6-sol") }));
   });
 });
 

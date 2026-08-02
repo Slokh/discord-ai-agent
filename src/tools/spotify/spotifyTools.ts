@@ -132,11 +132,11 @@ export async function searchSpotify(
 
   if (!query) {
     await audit(ctx, "searchSpotify", { error: "empty_query" });
-    return spotifyResponse("I need a search query to search Spotify.");
+    return spotifyErrorResponse("I need a search query to search Spotify.", "invalid_input");
   }
   if (!isSpotifyConfigured(ctx.config.spotify)) {
     await audit(ctx, "searchSpotify", { query, type, error: "not_configured" });
-    return spotifyResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to search Spotify.");
+    return spotifyErrorResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to search Spotify.", "not_configured");
   }
 
   try {
@@ -161,7 +161,7 @@ export async function searchSpotify(
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not search Spotify");
     await audit(ctx, "searchSpotify", { query, type, error: message });
-    return spotifyResponse(message);
+    return spotifyFailure(error, message);
   }
 }
 
@@ -174,13 +174,13 @@ export async function getSpotifyItem(
 
   if (!reference) {
     await audit(ctx, "getSpotifyItem", { input: input.itemIdOrUrl, type: input.type, error: "invalid_reference" });
-    return spotifyResponse(
+    return spotifyErrorResponse(
       "I could not find a Spotify item ID in that input. Pass an open.spotify.com URL, a spotify: URI, or a bare ID with type=track/artist/album/playlist/show/episode/audiobook/chapter."
-    );
+    , "invalid_input");
   }
   if (!isSpotifyConfigured(ctx.config.spotify)) {
     await audit(ctx, "getSpotifyItem", { type: reference.type, id: reference.id, error: "not_configured" });
-    return spotifyResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to read Spotify details.");
+    return spotifyErrorResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to read Spotify details.", "not_configured");
   }
 
   try {
@@ -190,7 +190,7 @@ export async function getSpotifyItem(
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not read that Spotify item");
     await audit(ctx, "getSpotifyItem", { type: reference.type, id: reference.id, error: message });
-    return spotifyResponse(message);
+    return spotifyFailure(error, message);
   }
 }
 
@@ -204,11 +204,11 @@ export async function getSpotifyPlaylistTracks(
 
   if (!playlistRef) {
     await audit(ctx, "getSpotifyPlaylistTracks", { input: input.playlistIdOrUrl, error: "invalid_playlist_id" });
-    return spotifyResponse("I could not find a Spotify playlist ID in that input. Pass a playlist ID, open.spotify.com playlist URL, or spotify:playlist URI.");
+    return spotifyErrorResponse("I could not find a Spotify playlist ID in that input. Pass a playlist ID, open.spotify.com playlist URL, or spotify:playlist URI.", "invalid_input");
   }
   if (!isSpotifyConfigured(ctx.config.spotify)) {
     await audit(ctx, "getSpotifyPlaylistTracks", { playlistId: playlistRef.id, error: "not_configured" });
-    return spotifyResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to read playlist tracks.");
+    return spotifyErrorResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to read playlist tracks.", "not_configured");
   }
 
   try {
@@ -219,7 +219,7 @@ export async function getSpotifyPlaylistTracks(
     } catch (error) {
       if (error instanceof SpotifyApiError && error.status === 403) {
         await audit(ctx, "getSpotifyPlaylistTracks", { playlistId: playlistRef.id, error: "playlist_items_forbidden" });
-        return spotifyResponse(formatPlaylistItemsForbidden(playlist));
+        return spotifyErrorResponse(formatPlaylistItemsForbidden(playlist), "permission_denied");
       } else {
         throw error;
       }
@@ -236,11 +236,13 @@ export async function getSpotifyPlaylistTracks(
       attachments: files.map((file) => file.name),
       table: table?.name
     });
-    return spotifyResponse(content, files, table ? [table] : undefined);
+    return spotifyResponse(content, files, table ? [table] : undefined, maxTracks < trackPage.total
+      ? { status: "partial", limitation: "result_limited" }
+      : {});
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not read that Spotify playlist");
     await audit(ctx, "getSpotifyPlaylistTracks", { playlistId: playlistRef.id, error: message });
-    return spotifyResponse(message);
+    return spotifyFailure(error, message);
   }
 }
 
@@ -254,11 +256,11 @@ export async function getSpotifyAlbumTracks(
 
   if (!albumRef) {
     await audit(ctx, "getSpotifyAlbumTracks", { input: input.albumIdOrUrl, error: "invalid_album_id" });
-    return spotifyResponse("I could not find a Spotify album ID in that input. Pass an album ID, open.spotify.com album URL, or spotify:album URI.");
+    return spotifyErrorResponse("I could not find a Spotify album ID in that input. Pass an album ID, open.spotify.com album URL, or spotify:album URI.", "invalid_input");
   }
   if (!isSpotifyConfigured(ctx.config.spotify)) {
     await audit(ctx, "getSpotifyAlbumTracks", { albumId: albumRef.id, error: "not_configured" });
-    return spotifyResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to read album tracks.");
+    return spotifyErrorResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to read album tracks.", "not_configured");
   }
 
   try {
@@ -275,11 +277,13 @@ export async function getSpotifyAlbumTracks(
       attachments: files.map((file) => file.name),
       table: table?.name
     });
-    return spotifyResponse(content, files, table ? [table] : undefined);
+    return spotifyResponse(content, files, table ? [table] : undefined, maxTracks < trackPage.total
+      ? { status: "partial", limitation: "result_limited" }
+      : {});
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not read that Spotify album");
     await audit(ctx, "getSpotifyAlbumTracks", { albumId: albumRef.id, error: message });
-    return spotifyResponse(message);
+    return spotifyFailure(error, message);
   }
 }
 
@@ -294,11 +298,11 @@ export async function getSpotifyArtistDiscography(
 
   if (!artistRef) {
     await audit(ctx, "getSpotifyArtistDiscography", { input: input.artistIdOrUrl, error: "invalid_artist_id" });
-    return spotifyResponse("I could not find a Spotify artist ID in that input. Pass an artist ID, open.spotify.com artist URL, or spotify:artist URI.");
+    return spotifyErrorResponse("I could not find a Spotify artist ID in that input. Pass an artist ID, open.spotify.com artist URL, or spotify:artist URI.", "invalid_input");
   }
   if (!isSpotifyConfigured(ctx.config.spotify)) {
     await audit(ctx, "getSpotifyArtistDiscography", { artistId: artistRef.id, error: "not_configured" });
-    return spotifyResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to read artist discographies.");
+    return spotifyErrorResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to read artist discographies.", "not_configured");
   }
 
   try {
@@ -316,11 +320,13 @@ export async function getSpotifyArtistDiscography(
       attachments: files.map((file) => file.name),
       table: table?.name
     });
-    return spotifyResponse(content, files, table ? [table] : undefined);
+    return spotifyResponse(content, files, table ? [table] : undefined, maxItems < page.total
+      ? { status: "partial", limitation: "result_limited" }
+      : {});
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not read that Spotify artist discography");
     await audit(ctx, "getSpotifyArtistDiscography", { artistId: artistRef.id, error: message });
-    return spotifyResponse(message);
+    return spotifyFailure(error, message);
   }
 }
 
@@ -333,25 +339,27 @@ export async function getSpotifyPlaylistStats(
 
   if (!playlistRef) {
     await audit(ctx, "getSpotifyPlaylistStats", { input: input.playlistIdOrUrl, error: "invalid_playlist_id" });
-    return spotifyResponse("I could not find a Spotify playlist ID in that input. Pass a playlist ID, open.spotify.com playlist URL, or spotify:playlist URI.");
+    return spotifyErrorResponse("I could not find a Spotify playlist ID in that input. Pass a playlist ID, open.spotify.com playlist URL, or spotify:playlist URI.", "invalid_input");
   }
   if (!isSpotifyConfigured(ctx.config.spotify)) {
     await audit(ctx, "getSpotifyPlaylistStats", { playlistId: playlistRef.id, error: "not_configured" });
-    return spotifyResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to analyze playlist stats.");
+    return spotifyErrorResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to analyze playlist stats.", "not_configured");
   }
 
   try {
     const playlist = await fetchSpotifyPlaylist(ctx.config.spotify, playlistRef.id);
     const tracks = await fetchPlaylistTracksWith403Handling(ctx, playlist, playlistRef.id, maxTracks, "getSpotifyPlaylistStats");
-    if (!tracks) return spotifyResponse(formatPlaylistItemsForbidden(playlist));
+    if (!tracks) return spotifyErrorResponse(formatPlaylistItemsForbidden(playlist), "permission_denied");
     const normalized = normalizePlaylistTracks(tracks.tracks);
     const content = formatPlaylistStats(playlist, normalized, tracks.total, maxTracks);
     await audit(ctx, "getSpotifyPlaylistStats", { playlistId: playlistRef.id, total: tracks.total, returned: normalized.length });
-    return spotifyResponse(content);
+    return spotifyResponse(content, undefined, undefined, maxTracks < tracks.total
+      ? { status: "partial", limitation: "result_limited" }
+      : {});
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not analyze that Spotify playlist");
     await audit(ctx, "getSpotifyPlaylistStats", { playlistId: playlistRef.id, error: message });
-    return spotifyResponse(message);
+    return spotifyFailure(error, message);
   }
 }
 
@@ -365,11 +373,11 @@ export async function compareSpotifyPlaylists(
 
   if (!playlistARef || !playlistBRef) {
     await audit(ctx, "compareSpotifyPlaylists", { error: "invalid_playlist_id" });
-    return spotifyResponse("I need two Spotify playlist IDs, open.spotify.com playlist URLs, or spotify:playlist URIs to compare playlists.");
+    return spotifyErrorResponse("I need two Spotify playlist IDs, open.spotify.com playlist URLs, or spotify:playlist URIs to compare playlists.", "invalid_input");
   }
   if (!isSpotifyConfigured(ctx.config.spotify)) {
     await audit(ctx, "compareSpotifyPlaylists", { playlistAId: playlistARef.id, playlistBId: playlistBRef.id, error: "not_configured" });
-    return spotifyResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to compare playlists.");
+    return spotifyErrorResponse("Spotify is not configured on this bot. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to compare playlists.", "not_configured");
   }
 
   try {
@@ -378,7 +386,7 @@ export async function compareSpotifyPlaylists(
     const tracksA = await fetchPlaylistTracksWith403Handling(ctx, playlistA, playlistARef.id, maxTracks, "compareSpotifyPlaylists");
     const tracksB = await fetchPlaylistTracksWith403Handling(ctx, playlistB, playlistBRef.id, maxTracks, "compareSpotifyPlaylists");
     if (!tracksA || !tracksB) {
-      return spotifyResponse("I can read both playlist metadata records, but Spotify returned 403 for at least one full item list, so I cannot compare their tracks safely.");
+      return spotifyErrorResponse("I can read both playlist metadata records, but Spotify returned 403 for at least one full item list, so I cannot compare their tracks safely.", "permission_denied");
     }
     const normalizedA = normalizePlaylistTracks(tracksA.tracks);
     const normalizedB = normalizePlaylistTracks(tracksB.tracks);
@@ -389,11 +397,14 @@ export async function compareSpotifyPlaylists(
       playlistATracks: normalizedA.length,
       playlistBTracks: normalizedB.length
     });
-    return spotifyResponse(content);
+    return spotifyResponse(content, undefined, undefined,
+      maxTracks < tracksA.total || maxTracks < tracksB.total
+        ? { status: "partial", limitation: "result_limited" }
+        : {});
   } catch (error) {
     const message = spotifyErrorMessage(error, "I could not compare those Spotify playlists");
     await audit(ctx, "compareSpotifyPlaylists", { playlistAId: playlistARef.id, playlistBId: playlistBRef.id, error: message });
-    return spotifyResponse(message);
+    return spotifyFailure(error, message);
   }
 }
 
@@ -630,7 +641,6 @@ async function spotifyApiError(response: Response, prefix: string): Promise<Spot
 function spotifyResponse(content: string, files?: AgentFile[], tables?: AgentTable[], meta: Pick<AgentResponse, "status" | "errorCode" | "retryable" | "limitation"> = {}): AgentResponse {
   return {
     content,
-    ...spotifyResponseMetadata(content),
     ...meta,
     files: files?.length ? files : undefined,
     tables: tables?.length ? tables : undefined,
@@ -638,14 +648,17 @@ function spotifyResponse(content: string, files?: AgentFile[], tables?: AgentTab
   };
 }
 
-function spotifyResponseMetadata(content: string): Pick<AgentResponse, "status" | "errorCode" | "retryable" | "limitation"> {
-  if (content.startsWith("Spotify rate-limited")) return { status: "error", errorCode: "rate_limited", retryable: true };
-  if (content.includes("Spotify is not configured")) return { status: "error", errorCode: "not_configured", retryable: false };
-  if (content.startsWith("I need ") || content.startsWith("I could not find a Spotify")) return { status: "error", errorCode: "invalid_input", retryable: false };
-  if (content.startsWith("I could not ")) return { status: "error", errorCode: "upstream_error", retryable: true };
-  if (content.includes("could not read playlist items")) return { status: "error", errorCode: "permission_denied", retryable: false };
-  if (content.includes("truncated") || content.includes("limited to")) return { status: "partial", limitation: "result_limited" };
-  return {};
+function spotifyErrorResponse(content: string, errorCode: string, retryable = false): AgentResponse {
+  return spotifyResponse(content, undefined, undefined, { status: "error", errorCode, retryable });
+}
+
+function spotifyFailure(error: unknown, content: string): AgentResponse {
+  if (error instanceof SpotifyApiError) {
+    if (error.status === 429) return spotifyErrorResponse(content, "rate_limited", true);
+    if (error.status === 401 || error.status === 403) return spotifyErrorResponse(content, "permission_denied");
+    if (error.status === 400 || error.status === 404) return spotifyErrorResponse(content, "invalid_input");
+  }
+  return spotifyErrorResponse(content, "upstream_error", true);
 }
 
 function spotifyItemType(value: string | undefined, fallback: SpotifyItemType): SpotifyItemType;

@@ -5,9 +5,10 @@ export const walletAdminToolContracts = [
     name: "adminTransferWalletFunds",
     description:
       "Perform an explicit payment-admin rebalancing or corrective transfer between any two managed wallets in the current Discord server: bot to user, user to bot, or user to user. Never accepts an external address. Use only when the bot owner or payment ops requester explicitly asks to rebalance, fund, reimburse, revert, or correct wallet state. Both user endpoints must be resolved to Discord IDs first. A reason is mandatory and the requester remains durably attributed.",
-    userVisible: true,
     mutates: true,
     group: "external",
+    deploymentRequirement: "user_wallet",
+    accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
     outputContract: ["admin-attributed source and destination", "confirmed USD amount and transaction hash", "fresh balances", "recorded reason"],
@@ -22,7 +23,7 @@ export const walletAdminToolContracts = [
         destination: { type: "string", enum: ["user", "bot"] },
         destinationUserId: { type: "string", description: "Required when destination=user." },
         amountUsd: { type: "number", description: "Positive USD amount to transfer." },
-        reason: { type: "string", description: "Required concise reason for the administrative transfer." }
+        reason: { type: "string", minLength: 1, pattern: "\\S", description: "Required concise reason for the administrative transfer." }
       },
       required: ["source", "destination", "amountUsd", "reason"],
       additionalProperties: false
@@ -32,10 +33,11 @@ export const walletAdminToolContracts = [
   defineTool({
     name: "adminSetWalletStarterAmount",
     description:
-      "Change this Discord server's durable starter-wallet target. When the same current prompt explicitly asks to sweep, reset, or rebalance every existing member wallet, also move each verified live balance to the new target using receipt-verified managed transfers; excess returns to the AI treasury and shortfalls are funded by it. Use only for an explicit owner/payment-ops request. The current prompt's stated amount and bulk-rebalance intent are parsed again in code and remain authoritative.",
-    userVisible: true,
+      "Change this Discord server's durable starter-wallet target. Set rebalanceExisting only when the requester also wants every existing member wallet adjusted to the new target. Code enforces owner/payment-ops permission, validates the typed amount, reads every balance live, and uses receipt-verified managed transfers; excess returns to the AI treasury and shortfalls are funded by it.",
     mutates: true,
     group: "external",
+    deploymentRequirement: "user_wallet",
+    accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
     outputContract: ["durable server starter amount", "existing wallet adjustment counts", "confirmed aggregate directions", "recorded reason"],
@@ -47,7 +49,7 @@ export const walletAdminToolContracts = [
       properties: {
         amountUsd: { type: "number", description: "New starter target stated in the current prompt." },
         rebalanceExisting: { type: "boolean", description: "True only when the current prompt explicitly requests all existing wallets be adjusted." },
-        reason: { type: "string", description: "Required concise reason for the administrative change." }
+        reason: { type: "string", minLength: 1, pattern: "\\S", description: "Required concise reason for the administrative change." }
       },
       required: ["amountUsd", "rebalanceExisting", "reason"],
       additionalProperties: false
@@ -58,9 +60,10 @@ export const walletAdminToolContracts = [
     name: "getWalletFeeSummary",
     description:
       "Read an authoritative server-wide total of network fees for confirmed managed-wallet transfers. Fetches current Tempo receipts for durable transfer hashes, computes fee-token charges using Tempo's receipt gas values, and states that the AI treasury sponsored member transfers. Use whenever an authorized payment admin asks about historical gas, fee, or transaction costs; never estimate from transfer count.",
-    userVisible: true,
     mutates: false,
     group: "external",
+    deploymentRequirement: "user_wallet",
+    accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
     outputContract: ["receipt-backed total USD fees", "covered confirmed-transfer count", "unavailable receipt count", "fee sponsorship attribution"],
@@ -74,9 +77,10 @@ export const walletAdminToolContracts = [
     name: "reconcileWalletTransfers",
     description:
       "Reconcile pending or uncertain managed-wallet transfers against Tempo and expire stale wager reservations. Use only when an authorized payment admin explicitly asks to reconcile or repair wallet state. Routine reconciliation runs automatically.",
-    userVisible: true,
     mutates: true,
     group: "external",
+    deploymentRequirement: "user_wallet",
+    accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
     outputContract: ["checked, confirmed, and failed transfer counts", "remaining uncertain state"],

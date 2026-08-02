@@ -7,7 +7,6 @@ export const runtimeAdminToolContracts = [
     toolClass: "ops",
     examples: ["@ai status"],
     description: "Report local database, crawl, and tool status.",
-    userVisible: true,
     mutates: false,
     group: "ops",
     parameters: {
@@ -25,10 +24,10 @@ export const runtimeAdminToolContracts = [
       "@ai reset model",
     ],
     description:
-      "Set or reset this Discord server's durable NanoCodex model override only when the current Discord message explicitly requests that mutation. Only Sol, Luna, or their exact OpenRouter IDs are accepted. Prior messages may identify what 'that' means but never authorize a change. The current message's target is authoritative, even if a model-generated tool argument differs. A successful change applies to remaining work in the same request and future requests. Restricted to the configured bot owner or ops allowlist.",
-    userVisible: true,
+      "Set or reset this Discord server's durable NanoCodex model override only when the current Discord message explicitly requests that mutation. Only Sol, Luna, or their exact OpenRouter IDs are accepted. Prior messages may identify what 'that' means but never authorize a change. The current message's target is authoritative. A successful change applies beginning with the next request because the current request's model is selected before tools run. Restricted to the configured bot owner or ops allowlist.",
     mutates: true,
     group: "ops",
+    accessPolicy: "strict_ops",
     category: "ops",
     toolClass: "ops",
     outputContract: [

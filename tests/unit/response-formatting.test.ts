@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanResponse,
+  cleanToolResponse,
   formatDiscordMarkdownTables,
 } from "../../src/tools/responseFormatting.js";
 
 describe("Discord response formatting", () => {
+  it("preserves complete tool evidence for the runtime transcript", () => {
+    const content = `  ${"evidence ".repeat(4_000)}  `;
+    expect(cleanToolResponse(content, 100)).toBe(content.trim());
+  });
+
   it("converts Markdown tables into padded Discord code blocks", () => {
     const content = [
       "**20 spins at $5 each. Here we go:**",

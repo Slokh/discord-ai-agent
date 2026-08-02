@@ -7,7 +7,6 @@ export const discordContextFileToolContracts = [
     toolClass: "retrieval",
     examples: ["@ai what just happened in here?"],
     description: "Get recent indexed messages from the current channel or specified visible channels.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     parameters: {
@@ -39,7 +38,6 @@ export const discordContextFileToolContracts = [
     examples: ["@ai show the context around this message link"],
     description:
       "Get an indexed Discord message plus nearby messages from the same channel using a specific Discord message link or message ID. Use for exact-message context, replies, or surrounding conversation. Do not use this to analyze broad search results; searchDiscordHistory evidence already includes message URLs.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     parameters: {
@@ -47,6 +45,8 @@ export const discordContextFileToolContracts = [
       properties: {
         messageIdOrUrl: {
           type: "string",
+          minLength: 1,
+          pattern: "\\S",
           description: "Discord message ID or https://discord.com/channels/.../.../... link."
         },
         before: {
@@ -67,7 +67,6 @@ export const discordContextFileToolContracts = [
     name: "listDiscordBugMarkers",
     description:
       "List the current requester's active Discord bug inbox: messages they personally reacted to with the Unicode 🐛 emoji. Use when the user asks about bugs/issues/messages they marked, flagged, or reacted to, especially before asking inspectAgentLogs or runCodingAgent to diagnose or fix them. Results are requester-scoped and permission-filtered, and include the marked message, its link, and the original/replied-to prompt when available. Never substitute aggregate reaction counts or another user's markers.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     category: "discord",
@@ -93,7 +92,6 @@ export const discordContextFileToolContracts = [
     examples: ["@ai find the image of nachos"],
     description:
       "Search indexed Discord attachments by filename, content type, surrounding message text, author, or channel. Returns attachment URLs and message links. For understanding what is in an image, call inspectDiscordImages after finding the relevant image URL.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     parameters: {
@@ -130,7 +128,6 @@ export const discordContextFileToolContracts = [
     name: "inspectDiscordFile",
     description:
       "Download and inspect permission-visible Discord file attachments from the current request, reply chain, or an explicit Discord message link/ID. It can also resolve and transcribe a public X/Twitter status video URL that appears in the current request or reply chain; pass that exact URL as publicMediaUrl. Use this for requests to read, open, parse, identify, summarize, compare, inspect, or transcribe files and media. It fetches fresh bounded media, detects real formats, transcribes common audio/video attachments including QuickTime MOV, and deduplicates identical extracted content across a bounded batch. Supports text/code/config/JSON/CSV/XML, safe ZIP listings, DOCX/PPTX/XLSX text, audio/video transcription, image identification, generic binary metadata/strings, iRacing .sto opaque-container metadata plus structured notes, and exact iRacing setup values from simulator Garage HTML exports or SDK .ibt telemetry containing CarSetup data. Multiple Discord files are inspected together by default when safely bounded; use batchMode=list or attachmentIdOrName to narrow them. Never claim scoped files or supported public media are inaccessible before trying this tool; if none is supplied, ask for the media.",
-    userVisible: true,
     mutates: false,
     group: "discord-retrieval",
     category: "discord",

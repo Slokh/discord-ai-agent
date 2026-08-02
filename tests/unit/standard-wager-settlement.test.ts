@@ -64,8 +64,8 @@ describe("standard wager settlement", () => {
   it("computes a blackjack win when the dealer busts instead of trusting model fields", () => {
     const result = deriveStandardWagerSettlement(wager(), [
       draw(2, ["J♥", "10♠", "9♥"], "standard blackjack opening deal: two player cards and one dealer upcard"),
-      draw(3, ["3♥"], "blackjack stand continuation card"),
-      draw(4, ["J♦"], "blackjack stand continuation card"),
+      draw(3, ["3♥"], "blackjack:stand"),
+      draw(4, ["J♦"], "blackjack:stand"),
     ]);
 
     expect(result).toEqual({
@@ -80,7 +80,7 @@ describe("standard wager settlement", () => {
   it("fails closed while the dealer must draw again", () => {
     const result = deriveStandardWagerSettlement(wager(), [
       draw(2, ["J♥", "10♠", "9♥"], "standard blackjack opening deal: two player cards and one dealer upcard"),
-      draw(3, ["3♥"], "blackjack stand continuation card"),
+      draw(3, ["3♥"], "blackjack:stand"),
     ]);
 
     expect(result).toEqual({
@@ -105,7 +105,7 @@ describe("standard wager settlement", () => {
       kind: "coin",
       params: { count: 1 },
       outcome: { kind: "coin", values: ["heads"] },
-      reason: "standard coin flip; player wins on tails",
+      reason: "coin:tails",
       requestId: "opening-request",
       messageId: "opening-request",
       requestedByUserId: "player",

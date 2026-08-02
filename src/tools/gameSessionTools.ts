@@ -1,8 +1,7 @@
 import { paymentRecorder } from "./paymentToolContext.js";
 import { currentWagerForContext } from "./randomTools.js";
-import type { ToolContext } from "./types.js";
+import type { AgentResponse, ToolContext } from "./types.js";
 
-const SUCCESS_PREFIX = "Wallet game paused for player action.";
 const MAX_STATE_BYTES = 12 * 1024;
 const MAX_ACTIONS = 12;
 
@@ -12,36 +11,36 @@ export async function awaitRandomWagerAction(ctx: ToolContext, input: {
   state?: Record<string, unknown>;
   allowedActions?: string[];
   prompt?: string;
-}): Promise<string> {
+}): Promise<AgentResponse> {
   if (!ctx.config.payments.userWalletsEnabled || !ctx.walletService) {
-    return "Wallet-backed game sessions are not enabled in this deployment.";
+    return gameSessionError("not_configured", "Wallet-backed game sessions are not enabled in this deployment.");
   }
   const requestId = ctx.requestId ?? ctx.requestMessageId;
   const prompt = input.prompt?.trim();
-  if (!requestId) return "A stable Discord request id is required to save game state.";
+  if (!requestId) return gameSessionError("missing_request_id", "A stable Discord request id is required to save game state.");
   if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion! < 0) {
-    return "expectedVersion must be the non-negative state version from the active wager.";
+    return gameSessionError("invalid_state_version", "expectedVersion must be the non-negative state version from the active wager.");
   }
   if (!input.state || typeof input.state !== "object" || Array.isArray(input.state)) {
-    return "state must be a JSON object containing everything needed to continue the game.";
+    return gameSessionError("invalid_game_state", "state must be a JSON object containing everything needed to continue the game.");
   }
   if (Buffer.byteLength(JSON.stringify(input.state), "utf8") > MAX_STATE_BYTES) {
-    return `state must be at most ${MAX_STATE_BYTES} bytes.`;
+    return gameSessionError("game_state_too_large", `state must be at most ${MAX_STATE_BYTES} bytes.`);
   }
   const allowedActions = normalizeActions(input.allowedActions);
-  if (allowedActions.length === 0) return "allowedActions must contain at least one distinct player action.";
+  if (allowedActions.length === 0) return gameSessionError("missing_allowed_actions", "allowedActions must contain at least one distinct player action.");
   if (allowedActions.some(isSettlementConfirmation)) {
-    return "allowedActions must be genuine gameplay decisions, not confirmation or settlement. Call settleRandomWager immediately when the outcome is already final.";
+    return gameSessionError("invalid_allowed_actions", "allowedActions must be genuine gameplay decisions, not confirmation or settlement. Call settleRandomWager immediately when the outcome is already final.");
   }
-  if (!prompt) return "prompt is required and must ask the player for their next decision.";
+  if (!prompt) return gameSessionError("missing_action_prompt", "prompt is required and must ask the player for their next decision.");
 
   const wager = await currentWagerForContext(ctx);
-  if (!wager) return "Could not pause wallet game: no active wager exists for this player in this Discord game session.";
+  if (!wager) return gameSessionError("active_wager_not_found", "Could not pause wallet game: no active wager exists for this player in this Discord game session.");
   if (
     wager.game.trim().toLowerCase() === "blackjack" &&
     allowedActions.some((action) => action !== "hit" && action !== "stand")
   ) {
-    return "Could not pause wallet game: standard blackjack currently supports only hit and stand so settlement remains deterministic.";
+    return gameSessionError("unsupported_blackjack_action", "Could not pause wallet game: standard blackjack currently supports only hit and stand so settlement remains deterministic.");
   }
   const suppliedWagerId = input.wagerId?.trim();
   if (suppliedWagerId && suppliedWagerId !== wager.id) {
@@ -63,22 +62,32 @@ export async function awaitRandomWagerAction(ctx: ToolContext, input: {
       allowedActions,
       prompt
     }, paymentRecorder(ctx));
-    return [
-      SUCCESS_PREFIX,
+    return {
+      content: [
+      "Wallet game paused for player action.",
       `Game: ${updated.game}`,
       `State version: ${updated.stateVersion}`,
       `Allowed actions: ${updated.allowedActions.join(", ")}`,
       `Prompt: ${updated.actionPrompt}`,
       `The wager remains reserved until the player replies, settlement succeeds, or the session expires.`
-    ].join("\n");
+      ].join("\n"),
+      status: "ok",
+      outcome: { kind: "wager", state: "awaiting_action", terminal: true },
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return `Could not pause wallet game: ${message}`;
+    return gameSessionError("game_session_update_failed", `Could not pause wallet game: ${message}`, true);
   }
 }
 
-export function isSuccessfulAwaitRandomWagerAction(content: string) {
-  return content.trimStart().startsWith(SUCCESS_PREFIX);
+function gameSessionError(errorCode: string, content: string, retryable = false): AgentResponse {
+  return {
+    content,
+    status: "error",
+    errorCode,
+    retryable,
+    outcome: { kind: "wager", state: "failed" },
+  };
 }
 
 function normalizeActions(actions: string[] | undefined) {
@@ -89,5 +98,6 @@ function normalizeActions(actions: string[] | undefined) {
 }
 
 function isSettlementConfirmation(action: string) {
-  return /^(?:confirm|settle|resolve|accept|acknowledge)(?:\s+(?:the\s+)?(?:result|outcome|wager|bet|game|settlement|payout|win|loss|to\s+settle))?$/i.test(action);
+  const words = action.trim().toLowerCase().split(/\s+/);
+  return ["confirm", "settle", "resolve", "accept", "acknowledge"].includes(words[0] ?? "");
 }

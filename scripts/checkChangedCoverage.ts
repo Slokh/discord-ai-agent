@@ -6,14 +6,19 @@ import { isTypeOnlyTypescriptSource } from "./coverageSource.js";
 
 const reportPath = path.resolve(process.argv[2] ?? "coverage/coverage-final.json");
 const minimum = Number(process.env.CHANGED_FILE_COVERAGE_MIN ?? 60);
-const enforcedPrefixes = ["src/agent/", "src/config/", "src/memory/", "src/models/", "src/observability/", "src/tools/"];
+const enforcedPrefixes = ["src/agent/", "src/capabilities/", "src/config/", "src/memory/", "src/models/", "src/observability/", "src/tools/"];
 const dbBackedCoverageFiles = new Set(["src/observability/dataRetention.ts"]);
-const report = JSON.parse(await readFile(reportPath, "utf8")) as Record<string, { s: Record<string, number> }>;
+type CoverageLocation = { start: { line: number }; end: { line: number } };
+type FileCoverage = { s: Record<string, number>; statementMap: Record<string, CoverageLocation> };
+
+const report = JSON.parse(await readFile(reportPath, "utf8")) as Record<string, FileCoverage>;
 const base = process.env.COVERAGE_BASE_REF ?? "origin/main";
-const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", `${base}...HEAD`, "--", "src/**/*.ts", "src/**/*.tsx"], { encoding: "utf8" })
-  .trim().split("\n").filter((file) => existsSync(file) && enforcedPrefixes.some((prefix) => file.startsWith(prefix)) && !dbBackedCoverageFiles.has(file));
+const addedLinesByFile = changedLines(base);
+const files = [...addedLinesByFile.keys()].filter(
+  (file) => existsSync(file) && enforcedPrefixes.some((prefix) => file.startsWith(prefix)) && !dbBackedCoverageFiles.has(file),
+);
 const failures: string[] = [];
-const groupedCoverage = new Map<string, number[]>();
+const allChangedStatements: number[] = [];
 for (const file of files) {
   const absolute = path.resolve(file);
   const coverage = report[absolute];
@@ -26,28 +31,56 @@ for (const file of files) {
     failures.push(`${file}: no coverage data`);
     continue;
   }
-  const statements = Object.values(coverage.s);
-  if (statements.length === 0) continue;
-  const group = coverageGroup(file);
-  if (group) {
-    groupedCoverage.set(group, [...(groupedCoverage.get(group) ?? []), ...statements]);
+  const addedLines = addedLinesByFile.get(file) ?? new Set<number>();
+  const statements = Object.entries(coverage.s).flatMap(([id, count]) => {
+    const location = coverage.statementMap[id];
+    return location && overlapsAddedLine(location, addedLines) ? [count] : [];
+  });
+  if (statements.length === 0) {
+    process.stdout.write(`${file}: skipped (no executable changed statements)\n`);
     continue;
   }
+  allChangedStatements.push(...statements);
   reportCoverage(file, statements);
 }
-for (const [group, statements] of groupedCoverage) reportCoverage(group, statements);
+if (allChangedStatements.length > 0) reportCoverage("All changed executable statements", allChangedStatements, true);
 
-function reportCoverage(label: string, statements: number[]) {
+function reportCoverage(label: string, statements: number[], enforce = false) {
   const covered = statements.filter((count) => count > 0).length;
   const percent = covered / statements.length * 100;
-  process.stdout.write(`${label}: ${percent.toFixed(1)}% changed-file statement coverage\n`);
-  if (percent < minimum) failures.push(`${label}: ${percent.toFixed(1)}% < ${minimum}%`);
+  process.stdout.write(`${label}: ${percent.toFixed(1)}% changed-line statement coverage\n`);
+  if (enforce && percent < minimum) failures.push(`${label}: ${percent.toFixed(1)}% < ${minimum}%`);
 }
-if (failures.length) throw new Error(`Changed-file coverage failed:\n${failures.join("\n")}`);
+if (failures.length) throw new Error(`Changed-line coverage failed:\n${failures.join("\n")}`);
 
-function coverageGroup(file: string): string | null {
-  // These are one table-driven execution layer split only for ownership and file size;
-  // enforce the same aggregate threshold the former single dispatcher received.
-  if (file.startsWith("src/agent/toolHandlers/")) return "src/agent/toolHandlers/*";
-  return null;
+function changedLines(baseRef: string) {
+  const diff = execFileSync(
+    "git",
+    ["diff", "--unified=0", "--no-color", "--find-renames=1%", "--diff-filter=ACMR", `${baseRef}...HEAD`, "--", "src/**/*.ts", "src/**/*.tsx"],
+    { encoding: "utf8" },
+  );
+  const linesByFile = new Map<string, Set<number>>();
+  let currentFile: string | undefined;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++ b/")) {
+      currentFile = line.slice("+++ b/".length);
+      if (!linesByFile.has(currentFile)) linesByFile.set(currentFile, new Set());
+      continue;
+    }
+    if (!currentFile || !line.startsWith("@@")) continue;
+    const range = line.match(/\+(\d+)(?:,(\d+))?/);
+    if (!range) continue;
+    const start = Number(range[1]);
+    const count = range[2] === undefined ? 1 : Number(range[2]);
+    const addedLines = linesByFile.get(currentFile)!;
+    for (let lineNumber = start; lineNumber < start + count; lineNumber += 1) addedLines.add(lineNumber);
+  }
+  return new Map([...linesByFile].filter(([, lines]) => lines.size > 0));
+}
+
+function overlapsAddedLine(location: CoverageLocation, addedLines: Set<number>) {
+  for (let line = location.start.line; line <= location.end.line; line += 1) {
+    if (addedLines.has(line)) return true;
+  }
+  return false;
 }

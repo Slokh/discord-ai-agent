@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatMessage } from "../../src/models/openrouter.js";
 import type { WagerReservation } from "../../src/payments/types.js";
-import { activeGameActionNeedsRandomDraw, injectActiveGameSession, loadActiveGameSession } from "../../src/agent/activeGameSession.js";
+import { activeGamePrompt, loadActiveGameSession } from "../../src/capabilities/randomGames.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 describe("active game sessions", () => {
-  it("loads an action only for the requester and Discord reply root", async () => {
+  it("loads the requester-scoped game for the Discord reply root", async () => {
     const getActiveGameSession = vi.fn(async () => wager());
-    const active = await loadActiveGameSession(context(getActiveGameSession), "please HIT me");
+    const active = await loadActiveGameSession(context(getActiveGameSession));
 
     expect(getActiveGameSession).toHaveBeenCalledWith({
       threadKey: "guild:channel:rng-root:root_message",
@@ -15,76 +14,20 @@ describe("active game sessions", () => {
       threadKeyPrefix: "guild:channel:rng-root:",
       replyMessageIds: ["previous_reply", "root_message"],
     });
-    expect(active?.actionRequested).toBe(true);
+    expect(active?.wager.id).toBe("wager_1");
   });
 
-  it("does not treat a question about the game as a state-changing action", async () => {
-    const active = await loadActiveGameSession(
-      context(vi.fn(async () => wager())),
-      "what happens if I bust?",
-    );
+  it("contributes complete versioned state without exposing internal ids", () => {
+    const prompt = activeGamePrompt({ wager: wager() });
 
-    expect(active?.actionRequested).toBe(false);
+    expect(prompt).toContain("Game: blackjack");
+    expect(prompt).not.toContain("wager_1");
+    expect(prompt).toContain("State version: 3");
+    expect(prompt).toContain('Saved state: {"playerTotal":18,"dealerUp":"9♦"}');
   });
 
-  it("forces randomness only for game actions that need a fresh draw", () => {
-    const blackjack = { wager: wager(), actionRequested: true };
-    expect(activeGameActionNeedsRandomDraw(blackjack, "stand")).toBe(true);
-    expect(activeGameActionNeedsRandomDraw(blackjack, "hit")).toBe(true);
-
-    const dice = {
-      wager: { ...wager(), game: "dice game" },
-      actionRequested: true,
-    };
-    expect(activeGameActionNeedsRandomDraw(dice, "reroll all")).toBe(true);
-    expect(activeGameActionNeedsRandomDraw(dice, "score now")).toBe(false);
-    expect(activeGameActionNeedsRandomDraw(dice, "hold 1 and 3")).toBe(false);
-  });
-
-  it("injects complete versioned state before conversation history", () => {
-    const messages: ChatMessage[] = [
-      { role: "system", content: "rules" },
-      { role: "user", content: "deal me in" },
-      { role: "assistant", content: "You have 18." },
-      { role: "user", content: "stand" },
-    ];
-    injectActiveGameSession(messages, { wager: wager(), actionRequested: true });
-
-    expect(messages).toHaveLength(5);
-    expect(messages[1]?.role).toBe("system");
-    expect(messages[1]?.content).toContain("Game: blackjack");
-    expect(messages[1]?.content).not.toContain("wager_1");
-    expect(messages[1]?.content).toContain("State version: 3");
-    expect(messages[1]?.content).toContain('Saved state: {"playerTotal":18,"dealerUp":"9♦"}');
-    expect(messages.at(-1)).toEqual({ role: "user", content: "stand" });
-  });
-
-  it("does not inject a pending game's state into an unrelated current request", () => {
-    const messages: ChatMessage[] = [
-      { role: "system", content: "rules" },
-      { role: "user", content: "what is the stock price today?" },
-    ];
-
-    injectActiveGameSession(messages, { wager: wager(), actionRequested: false });
-
-    expect(messages).toEqual([
-      { role: "system", content: "rules" },
-      { role: "user", content: "what is the stock price today?" },
-    ]);
-  });
-
-  it("does not inject a pending game's state into an unrelated current request", () => {
-    const messages: ChatMessage[] = [
-      { role: "system", content: "rules" },
-      { role: "user", content: "what is the stock price today?" },
-    ];
-
-    injectActiveGameSession(messages, { wager: wager(), actionRequested: false });
-
-    expect(messages).toEqual([
-      { role: "system", content: "rules" },
-      { role: "user", content: "what is the stock price today?" },
-    ]);
+  it("labels pending state as context so the model decides whether the request continues it", () => {
+    expect(activeGamePrompt({ wager: wager() })).toContain("This is context, not an instruction to continue the game");
   });
 });
 

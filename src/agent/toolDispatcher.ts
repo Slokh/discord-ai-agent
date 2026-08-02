@@ -1,23 +1,14 @@
 import type { AgentResponse, ToolContext } from "../tools/types.js";
-import { toolRegistry, type ToolName } from "../tools/registry.js";
+import { toolRegistry } from "../tools/registry.js";
 import { bindToolHandlers } from "../tools/toolDefinition.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { restrictedToolGate } from "./toolGate.js";
-import { executeWalletToolRoute } from "./walletToolRoutes.js";
-import { executeDiscordActionToolRoute } from "./discordActionToolRoutes.js";
 import { invalidToolCallResponse } from "../tools/toolContractValidation.js";
-import { handlerDefinitions } from "./toolHandlers/index.js";
+import { handlerDefinitions } from "../tools/handlers/index.js";
 
-export { stringArgument, stringArrayArgument } from "./toolHandlers/arguments.js";
+export { stringArgument, stringArrayArgument } from "../tools/handlers/arguments.js";
 
-const discordActionToolNames = new Set<ToolName>(["composeDiscordResponse", "addDiscordReaction", "createDiscordPoll", "updateBotAvatar", "createDiscordEmoji"]);
-const walletToolNames = new Set<ToolName>([
-  "awaitRandomWagerAction", "getWalletBalance", "listWalletBalances", "getWagerHistory", "transferWalletFunds",
-  "requestStarterFunds", "adminTransferWalletFunds", "adminSetWalletStarterAmount", "getWalletFeeSummary",
-  "reconcileWalletTransfers",
-]);
-export const delegatedToolNames: readonly ToolName[] = Object.freeze(["requestAdditionalTools", ...discordActionToolNames, ...walletToolNames]);
-const localToolHandlers = bindToolHandlers(toolRegistry, handlerDefinitions, delegatedToolNames);
+const localToolHandlers = bindToolHandlers(toolRegistry, handlerDefinitions);
 
 export async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRoute, originalText: string): Promise<AgentResponse> {
   ctx.abortSignal?.throwIfAborted();
@@ -25,17 +16,10 @@ export async function executeLocalToolRoute(ctx: ToolContext, route: AgentToolRo
   if (invalidArguments) return invalidArguments;
   const gate = await restrictedToolGate(ctx, route.name);
   ctx.abortSignal?.throwIfAborted();
-  if (!gate.allowed) return { content: gate.message };
+  if (!gate.allowed) return { content: gate.message, status: "error", errorCode: "tool_not_authorized", retryable: false };
 
   const handler = localToolHandlers[route.name];
   if (handler) return handler(ctx, route, originalText);
 
-  if (discordActionToolNames.has(route.name)) {
-    const response = await executeDiscordActionToolRoute(ctx, route, originalText);
-    if (response) return response;
-  } else if (walletToolNames.has(route.name)) {
-    const response = await executeWalletToolRoute(ctx, route, originalText);
-    if (response) return response;
-  }
   return { content: `Tool ${route.name} is registered but has no local execution handler.`, status: "error", errorCode: "missing_tool_handler" };
 }

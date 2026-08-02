@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   chatMessages,
-  currentDataGuidance,
-  discordEmojiReactionChoices,
-  loadDiscordEmojiPromptContext,
   toolResultContentForPrompt,
 } from "../../src/agent/promptBuilder.js";
+import { discordEmojiCulturePrompt, loadDiscordEmojiPromptContext } from "../../src/capabilities/discordEmoji.js";
+import { freshDataPromptContribution } from "../../src/capabilities/freshData.js";
 import { continuationEvidenceFromResponse } from "../../src/agent/continuationEvidence.js";
 import { buildAgentRuntimeTurnEnvelope } from "../../src/agent/runtimeEnvelope.js";
 import {
@@ -17,7 +16,7 @@ import {
 import type { ConversationMessage } from "../../src/db/repositories.js";
 import { loadConfig } from "../../src/config/env.js";
 import { toolDefinitionsForModel } from "../../src/tools/registry.js";
-import { scopedToolset, selectToolGroups } from "../../src/tools/toolScope.js";
+import { deploymentToolset } from "../../src/tools/toolScope.js";
 import type { DiscordAgentRequestInput } from "../../src/discord/requestContext.js";
 import type { DiscordReplyContext } from "../../src/tools/types.js";
 
@@ -84,11 +83,11 @@ function replyContext(): DiscordReplyContext {
 
 describe("prompt context cost controls", () => {
   it("keeps the large static system prompt first and byte-identical across per-turn inputs", () => {
-    const first = chatMessages("hi", "skill A", [], undefined, [], undefined, {
+    const first = chatMessages("hi", "skill A", [], undefined, undefined, {
       userId: "u1",
       userDisplayName: "Alice",
     });
-    const second = chatMessages("hello", "skill B", [], undefined, [], undefined, {
+    const second = chatMessages("hello", "skill B", [], undefined, undefined, {
       userId: "u2",
       userDisplayName: "Bob",
     });
@@ -100,7 +99,7 @@ describe("prompt context cost controls", () => {
     const requesterIndex = first.findIndex((message) => String(message.content).includes("Current Discord requester"));
     expect(requesterIndex).toBeGreaterThan(0);
     expect(String(first[requesterIndex]?.content)).toContain("immutable actor for the entire turn");
-    expect(String(first[requesterIndex]?.content)).toContain("every wallet lookup, transfer, wager, settlement");
+    expect(String(first[requesterIndex]?.content)).toContain("every protected read, mutation, audit");
   });
 
   it("treats harmless self-described aliases as conversation, not authority claims", () => {
@@ -109,7 +108,6 @@ describe("prompt context cost controls", () => {
       "",
       [],
       undefined,
-      [],
       undefined,
       {
         userId: "hunter-id",
@@ -169,7 +167,7 @@ describe("prompt context cost controls", () => {
   });
 
   it("teaches the model exact live server emoji mentions without changing the static prompt", () => {
-    const messages = chatMessages("nice", "", [], undefined, [], undefined, undefined, undefined, {
+    const emojiContent = discordEmojiCulturePrompt({
       emojis: [
         { id: "1", name: "party", animated: false, mention: "<:party:1>" },
         { id: "2", name: "wave", animated: true, mention: "<a:wave:2>" },
@@ -188,12 +186,17 @@ describe("prompt context cost controls", () => {
           createdAt: new Date("2026-07-18T00:00:00Z"),
         }],
       }],
-    });
+    })!;
+    const messages = chatMessages("nice", "", [], undefined, undefined, undefined, undefined, [{
+      section: "emoji_culture",
+      stability: "turn",
+      content: emojiContent,
+    }]);
     const prompt = messages.map((message) => String(message.content)).join("\n");
 
     expect(prompt).toContain("compact server-emoji culture guide");
     expect(prompt).toContain("choose at most one fitting emote treatment");
-    expect(prompt).toContain("<!-- discord-reaction:MENTION -->");
+    expect(prompt).toContain("reaction capability without a message target");
     expect(prompt).toContain("Never choose both inline use and a reaction");
     expect(prompt).toContain("<:party:1> (6 observed messages)");
     expect(prompt).not.toContain("<a:wave:2>");
@@ -220,39 +223,6 @@ describe("prompt context cost controls", () => {
     });
   });
 
-  it("offers source-message reactions only for learned reaction patterns", () => {
-    const emojis = [
-      { id: "1", name: "party", animated: false, mention: "<:party:1>" },
-      { id: "2", name: "wave", animated: true, mention: "<a:wave:2>" },
-    ];
-    const baseProfile = {
-      inlineUses: 3,
-      reactionUses: 3,
-      messageCount: 4,
-      lastUsedAt: new Date("2026-07-18T00:00:00Z"),
-    };
-    const profiles = [
-      {
-        ...baseProfile,
-        emojiId: "1",
-        examples: [{
-          emojiId: "1", kind: "reaction" as const, messageId: "message-1",
-          content: "we shipped", createdAt: new Date("2026-07-18T00:00:00Z"),
-        }],
-      },
-      {
-        ...baseProfile,
-        emojiId: "2",
-        examples: [{
-          emojiId: "2", kind: "inline" as const, messageId: "message-2",
-          content: "hello", createdAt: new Date("2026-07-18T00:00:00Z"),
-        }],
-      },
-    ];
-
-    expect(discordEmojiReactionChoices({ emojis, profiles })).toEqual(["<:party:1>"]);
-  });
-
   it("bounds learned emoji culture context instead of injecting the full palette", () => {
     const emojis = Array.from({ length: 100 }, (_, index) => ({
       id: String(index + 1),
@@ -275,7 +245,12 @@ describe("prompt context cost controls", () => {
       })),
     }));
 
-    const guide = chatMessages("nice", "", [], undefined, [], undefined, undefined, undefined, { emojis, profiles })
+    const emojiContent = discordEmojiCulturePrompt({ emojis, profiles })!;
+    const guide = chatMessages("nice", "", [], undefined, undefined, undefined, undefined, [{
+      section: "emoji_culture",
+      stability: "turn",
+      content: emojiContent,
+    }])
       .find((message) => String(message.content).includes("server-emoji culture guide"));
 
     expect(Buffer.byteLength(String(guide?.content), "utf8")).toBeLessThan(5 * 1024);
@@ -285,19 +260,21 @@ describe("prompt context cost controls", () => {
   });
 
   it("grounds relative dates and current offers in fresh tool evidence", () => {
-    const guidance = String(currentDataGuidance(new Date("2026-07-15T12:00:00.000Z")).content);
+    const contribution = freshDataPromptContribution(new Date("2026-07-15T12:00:00.000Z"));
+    const guidance = contribution.content;
 
     expect(guidance).toContain("Current UTC date: 2026-07-15");
     expect(guidance).toContain("this fall");
     expect(guidance).toContain("never answer from model memory");
-    expect(guidance).toContain("Use web_search first");
-    expect(guidance).toContain("sports rosters");
+    expect(guidance).toContain("external-data capability");
+    expect(guidance).toContain("sports");
     expect(guidance).toContain("Never say you ran a simulation, calculation, search, or tool");
-    expect(guidance).toContain("actual purchasable offers");
+    expect(guidance).toContain("current purchasable offer");
     expect(guidance).toContain("A verified date does not establish an exact hour");
-    expect(guidance).toContain("related patch or event");
+    expect(guidance).toContain("related event");
     expect(guidance).toContain("ask the shortest necessary follow-up");
-    expect(chatMessages("find current fares", "").map((message) => String(message.content)).join("\n")).toContain("Current UTC date:");
+    expect(chatMessages("find current fares", "", [], undefined, undefined, undefined, undefined, [contribution])
+      .map((message) => String(message.content)).join("\n")).toContain("Current UTC date:");
   });
 
   it("injects live current-message mention identities without importing old nicknames", () => {
@@ -306,7 +283,6 @@ describe("prompt context cost controls", () => {
       "",
       [],
       undefined,
-      [],
       undefined,
       {
         userId: "requester-id",
@@ -475,28 +451,6 @@ describe("prompt context cost controls", () => {
     expect(prompt).not.toContain("Recent completed turns from this channel");
   });
 
-  it("adds concise guidance only for the scoped tools without changing the cached core", () => {
-    const guidance = "Scoped operational guidance for the tools available in this turn:\n- Search fresh Discord evidence first.";
-    const messages = chatMessages(
-      "what did Alex say?",
-      "",
-      [],
-      undefined,
-      [],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      guidance,
-    );
-
-    expect(String(messages[0]?.content)).not.toContain("Search fresh Discord evidence first");
-    expect(messages.some((message) => String(message.content).includes("Search fresh Discord evidence first"))).toBe(true);
-    expect(messages.findIndex((message) => String(message.content).includes("Search fresh Discord evidence first")))
-      .toBeLessThan(messages.findIndex((message) => message.role === "user"));
-  });
-
   it("carries only scoped continuation pointers for a reply, never prior tool bodies", () => {
     const prompt = chatMessages("what did it find?", "", [
       conversationMessage({
@@ -597,17 +551,17 @@ describe("prompt context cost controls", () => {
   });
 
   it("caps large tool results before they re-enter the prompt", () => {
-    const content = "x".repeat(20 * 1024);
+    const content = `${"x".repeat(12 * 1024 - 1)}🙂${"y".repeat(8 * 1024)}`;
     const promptContent = toolResultContentForPrompt("searchDiscordHistory", { content });
     expect(promptContent.length).toBeLessThan(content.length);
     expect(promptContent).toContain("result truncated before re-entering the model prompt");
     expect(promptContent).toContain("agent runtime transcript");
+    expect(promptContent).not.toContain("�");
   });
 
-  it("keeps ordinary-chat static context within a strict schema budget", () => {
+  it("keeps one stable complete deployment contract", () => {
     const config = loadConfig();
-    const groups = selectToolGroups({ text: "hello there", hasImageAttachments: false, config });
-    const tools = scopedToolset({ config, groups });
+    const tools = deploymentToolset(config);
     const definitions = toolDefinitionsForModel({ localTools: tools.localTools, serverTools: tools.serverTools });
     const systemBytes = Buffer.byteLength(String(chatMessages("hello there", "")[0]?.content), "utf8");
     const localSchemaBytes = Buffer.byteLength(
@@ -615,12 +569,13 @@ describe("prompt context cost controls", () => {
       "utf8",
     );
 
-    expect(tools.localTools.map((tool) => tool.name)).toEqual(["listTools", "requestAdditionalTools", "loadSkillContext"]);
+    expect(tools.localTools.map((tool) => tool.name)).toContain("composeDiscordResponse");
+    expect(tools.localTools.map((tool) => tool.name)).not.toContain("requestAdditionalTools");
     expect(systemBytes).toBeLessThan(4_000);
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("searchDiscordHistory");
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("getDiscordStats");
     expect(String(chatMessages("hello there", "")[0]?.content)).not.toContain("runCodingAgent");
-    expect(localSchemaBytes).toBeLessThan(6_000);
-    expect(Buffer.byteLength(JSON.stringify(definitions), "utf8")).toBeLessThan(6_500);
+    expect(localSchemaBytes).toBeLessThan(120_000);
+    expect(Buffer.byteLength(JSON.stringify(definitions), "utf8")).toBeLessThan(125_000);
   });
 });

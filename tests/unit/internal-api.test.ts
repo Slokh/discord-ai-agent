@@ -41,7 +41,7 @@ describe("internal API UI authorization", () => {
 });
 
 describe("internal API metrics", () => {
-  it("renders codegen sandbox lease metrics", async () => {
+  it("renders codegen task and runtime metrics", async () => {
     const repo = {
       health: async () => ({
         messages: 2,
@@ -53,9 +53,8 @@ describe("internal API metrics", () => {
       }),
       getAgentTaskMetrics: async () => ({
         tasksByStatus: [],
-        agentTaskBacklog: [{ backend: "local-process-sandbox", status: "queued", count: 2, oldestAgeSeconds: 42 }],
+        agentTaskBacklog: [{ backend: "kubernetes-sandbox", status: "queued", count: 2, oldestAgeSeconds: 42 }],
         sandboxRunsByStatus: [],
-        sandboxLeases: [{ backend: "local-process-sandbox", status: "idle", count: 1 }],
         taskPhaseDurations: [],
         sandboxCacheEvents: []
       })
@@ -63,12 +62,10 @@ describe("internal API metrics", () => {
 
     const metrics = await renderMetrics(repo as any);
 
-    expect(metrics).toContain("# HELP discord_ai_agent_agent_runtime_sandbox_leases_total Agent runtime sandbox leases by backend and status.");
     expect(metrics).toContain("# TYPE discord_ai_agent_task_phase_duration_avg_ms gauge");
-    expect(metrics).toContain('discord_ai_agent_agent_runtime_sandbox_leases_total{backend="local-process-sandbox",status="idle"} 1');
     expect(metrics).toContain("# HELP discord_ai_agent_agent_task_backlog_oldest_age_seconds Oldest active queued/running agent task age by backend and status.");
-    expect(metrics).toContain('discord_ai_agent_agent_task_backlog_total{backend="local-process-sandbox",status="queued"} 2');
-    expect(metrics).toContain('discord_ai_agent_agent_task_backlog_oldest_age_seconds{backend="local-process-sandbox",status="queued"} 42');
+    expect(metrics).toContain('discord_ai_agent_agent_task_backlog_total{backend="kubernetes-sandbox",status="queued"} 2');
+    expect(metrics).toContain('discord_ai_agent_agent_task_backlog_oldest_age_seconds{backend="kubernetes-sandbox",status="queued"} 42');
     expect(metrics).toContain('discord_ai_agent_runtime_duration_ms_bucket{category="model",le="500"} 1');
     expect(metrics).toContain('discord_ai_agent_runtime_tokens{category="model",type="cached_input"} 40');
   });

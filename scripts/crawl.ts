@@ -2,7 +2,7 @@ import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { assertDiscordConfig, loadConfig } from "../src/config/env.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
-import { DiscordAiAgentRepository } from "../src/db/repositories.js";
+import { createAppDatabase } from "../src/db/repositories.js";
 import { DiscordCrawler } from "../src/discord/crawler.js";
 import { startJobs, type JobRuntime } from "../src/jobs/queue.js";
 import { logger } from "../src/util/logger.js";
@@ -28,7 +28,7 @@ async function main() {
   });
 
   try {
-    const repo = new DiscordAiAgentRepository(pool);
+    const repo = createAppDatabase(pool);
     jobs = await startJobs({
       config,
       crawler: {

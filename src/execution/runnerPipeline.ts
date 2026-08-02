@@ -4,7 +4,7 @@ import { Octokit } from "@octokit/rest";
 import type { AppConfig } from "../config/env.js";
 import { OpenRouterClient } from "../models/openrouter.js";
 import { complete, progress, recordArtifact } from "./callbacks.js";
-import { diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
+import { categoryForCodegenPhase, CodegenTaskError, diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
 import { renderCodegenContextPack } from "./codegenPrompts.js";
 import { runCommand } from "./commands.js";
 import { buildCodegenContextPack } from "./contextPack.js";
@@ -257,7 +257,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
           cacheSummary
         };
       }
-      throw new Error("Agent task produced no diff; no PR will be opened.");
+      throw new CodegenTaskError("no_diff", "diff", "Agent task produced no diff; no PR will be opened.");
     }
     if (env.taskType === "bug_report" && bugReportResult?.disposition !== "confirmed_fixed") {
       throw new Error("Bug task produced code changes without a confirmed_fixed validation result; refusing to push.");
@@ -310,13 +310,13 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       runCommand("npm", ["run", "typecheck"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "typecheck", env: npmScriptEnv })
     );
     if (typecheck.exitCode !== 0) {
-      throw new Error("TypeScript verification failed after agent task; refusing to publish generated changes.");
+      throw new CodegenTaskError("verification", "typecheck", "TypeScript verification failed after agent task; refusing to publish generated changes.");
     }
     const scan = await timedPhase(env, timings, "scan", "Running release scan before pushing generated changes.", async () =>
       runCommand("npm", ["run", "scan:release"], { cwd: checkoutDir, allowFailure: true, taskEnv: env, step: "scan", env: npmScriptEnv })
     );
     if (scan.exitCode !== 0) {
-      throw new Error("Release scan failed after agent task; refusing to push generated changes.");
+      throw new CodegenTaskError("release_scan", "scan", "Release scan failed after agent task; refusing to push generated changes.");
     }
 
     const prMetadata = target.pullRequestNumber
@@ -512,7 +512,9 @@ async function timedPhase<T>(
       durationMs,
       error: conciseError(error)
     }).catch(() => undefined);
-    throw error;
+    if (error instanceof CodegenTaskError || (error instanceof Error && error.name === "CodegenNoDiffError")) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CodegenTaskError(categoryForCodegenPhase(step), step, message, { cause: error });
   }
 }
 

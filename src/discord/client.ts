@@ -23,6 +23,7 @@ import { announceDeployment } from "./deploymentAnnouncements.js";
 import { handleDiscordRichInteraction } from "./components/interactionHandler.js";
 import { DiscordInteractionResponder } from "./components/interactionResponder.js";
 import { DiscordTaskSupervisor } from "./taskSupervisor.js";
+import { retryDeployedDiscordBugReports } from "./deployedBugRetry.js";
 
 export type DiscordAiAgentBotRuntime = {
   client: Client;
@@ -103,6 +104,12 @@ export function createDiscordAiAgentBot(input: {
       });
       if (result !== "disabled" && result !== "duplicate") logger.info({ result, revision: input.config.appRevision }, "Deployment announcement lifecycle completed");
     } });
+    if (input.agentRuntime) {
+      void taskSupervisor.run({ kind: "maintenance", label: "deployed_bug_retry", task: async () => {
+        const result = await retryDeployedDiscordBugReports({ ...input, client: readyClient });
+        if (result.eligible > 0) logger.info({ ...result, revision: input.config.appRevision }, "Processed deployed Discord bug retries");
+      } });
+    }
   });
 
   client.on(Events.ShardDisconnect, (event, shardId) => {

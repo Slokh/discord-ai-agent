@@ -41,6 +41,7 @@ export class DiscordResponseSink {
   private readonly loadingReactionEmoji: string;
   private readonly loadingReactionMatch: DiscordReactionMatch;
   private readonly deliveryNonce: string | null;
+  private readonly silentUntilFinal: boolean;
   private statusMessage: Message | null;
   private loadingReaction: Awaited<ReturnType<Message["react"]>> | null = null;
   private acknowledgementAttempted = false;
@@ -53,6 +54,7 @@ export class DiscordResponseSink {
     loadingReactionEmoji?: string;
     statusMessage?: Message | null;
     deliveryKey?: string | null;
+    silentUntilFinal?: boolean;
   }) {
     this.client = input.client;
     this.sourceMessage = input.sourceMessage;
@@ -62,6 +64,7 @@ export class DiscordResponseSink {
     this.loadingReactionMatch = parseDiscordReactionMatch(this.loadingReactionEmoji);
     this.deliveryNonce = input.deliveryKey ? discordDeliveryNonce(input.deliveryKey) : null;
     this.statusMessage = input.statusMessage ?? null;
+    this.silentUntilFinal = input.silentUntilFinal ?? false;
   }
 
   get statusChannelId() {
@@ -95,6 +98,10 @@ export class DiscordResponseSink {
   }
 
   async updateStatus(content: string): Promise<Message> {
+    if (this.silentUntilFinal) {
+      if (!this.statusMessage) throw new Error("Silent Discord response requires an existing message to replace at completion.");
+      return this.statusMessage;
+    }
     const cleanContent = cleanResponse(content, this.maxReplyChars);
     if (this.statusMessage) {
       const payload = this.statusUsesComponentsV2()

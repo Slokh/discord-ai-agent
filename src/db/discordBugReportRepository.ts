@@ -34,14 +34,53 @@ export async function createDiscordBugReport(pool: DbPool, input: {
 export async function attachDiscordBugReportTask(pool: DbPool, input: {
   reportId: string;
   taskId: string;
-  statusMessageId: string;
+  statusMessageId?: string | null;
 }) {
   await pool.query(
     `UPDATE discord_bug_reports
      SET task_id = $2, status_message_id = $3, status = 'queued', updated_at = now()
      WHERE report_id = $1`,
-    [input.reportId, input.taskId, input.statusMessageId],
+    [input.reportId, input.taskId, input.statusMessageId ?? null],
   );
+}
+
+export async function getDiscordBugReportForTask(pool: DbPool, taskId: string): Promise<DiscordBugReport | undefined> {
+  const result = await pool.query(
+    `SELECT * FROM discord_bug_reports WHERE task_id = $1 LIMIT 1`,
+    [taskId],
+  );
+  return result.rows[0] ? rowToDiscordBugReport(result.rows[0]) : undefined;
+}
+
+export async function listDiscordBugReportsAwaitingDeployment(pool: DbPool, limit = 20): Promise<DiscordBugReport[]> {
+  const result = await pool.query(
+    `SELECT *
+     FROM discord_bug_reports
+     WHERE status = 'completed'
+       AND disposition = 'confirmed_fixed'
+       AND pr_url IS NOT NULL
+       AND deployed_revision IS NULL
+     ORDER BY completed_at ASC NULLS LAST, updated_at ASC
+     LIMIT $1`,
+    [Math.max(1, Math.min(100, Math.trunc(limit)))],
+  );
+  return result.rows.map(rowToDiscordBugReport);
+}
+
+export async function claimDiscordBugReportDeployment(pool: DbPool, input: {
+  reportId: string;
+  mergeCommitSha: string;
+  deployedRevision: string;
+}): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE discord_bug_reports
+     SET merge_commit_sha = $2, deployed_revision = $3, updated_at = now()
+     WHERE report_id = $1
+       AND deployed_revision IS NULL
+     RETURNING report_id`,
+    [input.reportId, input.mergeCommitSha, input.deployedRevision],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function markDiscordBugReportFailed(pool: DbPool, input: { reportId: string; summary: string }) {

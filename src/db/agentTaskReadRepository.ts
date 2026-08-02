@@ -177,16 +177,26 @@ export async function listRenderableAgentTasks(pool: DbPool, limit = 20): Promis
           progress_updated_at, last_rendered_signature, last_rendered_at, terminal_rendered_at, updated_at
         FROM agent_tasks
         WHERE notification_error IS NULL
-          AND discord_response_channel_id IS NOT NULL
-          AND discord_response_message_id IS NOT NULL
           AND (
-            (status IN ('succeeded', 'failed', 'no_changes', 'cancelled') AND terminal_rendered_at IS NULL)
+            (
+              task_type = 'bug_report'
+              AND status IN ('failed', 'no_changes', 'cancelled')
+              AND terminal_rendered_at IS NULL
+            )
             OR
             (
-              status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+              discord_response_channel_id IS NOT NULL
+              AND discord_response_message_id IS NOT NULL
               AND (
-                last_rendered_at IS NULL
-                OR coalesce(progress_updated_at, updated_at) > last_rendered_at
+                (status IN ('succeeded', 'failed', 'no_changes', 'cancelled') AND terminal_rendered_at IS NULL)
+                OR
+                (
+                  status NOT IN ('succeeded', 'failed', 'no_changes', 'cancelled')
+                  AND (
+                    last_rendered_at IS NULL
+                    OR coalesce(progress_updated_at, updated_at) > last_rendered_at
+                  )
+                )
               )
             )
           )
@@ -573,4 +583,3 @@ export async function getAgentRuntimeTaskEvents(pool: DbPool, input: {
     );
     return result.rows.map(rowToTaskEvent);
   }
-

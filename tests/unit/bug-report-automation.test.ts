@@ -15,10 +15,13 @@ describe("Discord bug report automation", () => {
     expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.objectContaining({
       taskType: "bug_report",
       requestedBy: "user-1",
-      discordResponseMessageId: "status-1",
       request: expect.stringContaining("AI reply marked with 🐛")
     }));
-    expect(harness.repo.attachDiscordBugReportTask).toHaveBeenCalledWith(expect.objectContaining({ statusMessageId: "status-1" }));
+    expect(harness.jobs.enqueueAgentTask).toHaveBeenCalledWith(expect.not.objectContaining({
+      discordResponseMessageId: expect.anything(),
+    }));
+    expect(harness.repo.attachDiscordBugReportTask).toHaveBeenCalledWith(expect.objectContaining({ statusMessageId: null }));
+    expect(harness.message.reply).not.toHaveBeenCalled();
   });
 });
 

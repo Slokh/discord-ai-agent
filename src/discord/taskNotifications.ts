@@ -5,7 +5,7 @@ import { formatAgentTaskResult } from "../tools/agentTaskFormatting.js";
 import { cleanResponse } from "../tools/responseFormatting.js";
 import { durationMs, logger } from "../util/logger.js";
 import { runWithTrace } from "../util/trace.js";
-import { discordEdit } from "./api.js";
+import { discordEdit, discordReply } from "./api.js";
 
 const DEFAULT_POLL_MS = 2_000;
 const RENDER_LIMIT = 20;
@@ -69,6 +69,10 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
       messageId: task.taskId
     },
     async () => {
+      if (task.taskType === "bug_report" && isTerminalAgentTaskStatus(task.status) && !task.discordResponseMessageId) {
+        await renderSilentBugReportResult(input, task);
+        return;
+      }
       const runConsoleUrl = agentTaskRunConsoleUrl(input.config, task.taskId);
       const terminal = isTerminalAgentTaskStatus(task.status);
       const progressEvents = terminal ? undefined : await recentTaskEvents(input.repo, task);
@@ -131,6 +135,24 @@ async function renderTask(input: { client: Client; repo: DiscordAiAgentRepositor
       }
     }
   );
+}
+
+async function renderSilentBugReportResult(
+  input: { client: Client; repo: DiscordAiAgentRepository; config: AppConfig },
+  task: AgentTaskRecord,
+) {
+  const report = await input.repo.getDiscordBugReportForTask(task.taskId);
+  if (!report) throw new Error(`Bug-report task ${task.taskId} has no durable report.`);
+  const source = await fetchDiscordMessage(input.client, report.channelId, report.sourceMessageId);
+  const [taskEvents, commandEvents] = await taskDetails(input.repo, task);
+  const rendered = renderAgentTaskMessage(task, taskEvents, commandEvents, {
+    runConsoleUrl: agentTaskRunConsoleUrl(input.config, task.taskId),
+  });
+  const content = cleanResponse(rendered.content, input.config.maxReplyChars);
+  const replied = await discordReply(source, content, { logger });
+  if (!replied.ok) throw replied.error;
+  await input.repo.markAgentTaskRendered({ taskId: task.taskId, signature: rendered.signature, terminal: true });
+  logger.info({ taskId: task.taskId, status: task.status, replyMessageId: replied.value.id }, "Rendered terminal silent bug-report result");
 }
 
 export function renderAgentTaskMessage(
@@ -308,4 +330,11 @@ async function fetchTaskReply(client: Client, task: AgentTaskRecord): Promise<Me
     throw new Error(`Discord channel ${task.discordResponseChannelId} does not support message fetch.`);
   }
   return (await messages.fetch(task.discordResponseMessageId)) as Message;
+}
+
+async function fetchDiscordMessage(client: Client, channelId: string, messageId: string): Promise<Message> {
+  const channel = await client.channels.fetch(channelId);
+  const messages = (channel as any)?.messages;
+  if (!messages?.fetch) throw new Error(`Discord channel ${channelId} does not support message fetch.`);
+  return (await messages.fetch(messageId)) as Message;
 }

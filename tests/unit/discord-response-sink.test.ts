@@ -312,6 +312,27 @@ describe("DiscordResponseSink", () => {
     }));
   });
 
+  it("suppresses status edits until the final replacement is ready", async () => {
+    const statusMessage = fakeMessage({ id: "marked-reply" });
+    const sink = new DiscordResponseSink({
+      client: fakeClient(),
+      sourceMessage: fakeMessage() as any,
+      statusMessage: statusMessage as any,
+      maxReplyChars: 2_000,
+      logger: fakeLogger() as any,
+      silentUntilFinal: true,
+    });
+
+    await expect(sink.updateStatus("still working")).resolves.toBe(statusMessage);
+    expect(statusMessage.edit).not.toHaveBeenCalled();
+
+    await sink.sendFinal({ content: "corrected answer" });
+    expect(statusMessage.edit).toHaveBeenCalledWith({
+      content: "corrected answer",
+      allowedMentions: suppressedMentions,
+    });
+  });
+
   it("removes inactive controls with the compiled non-interactive fallback", async () => {
     const statusMessage = fakeMessage({ flags: { has: vi.fn(() => true) } });
     const sink = new DiscordResponseSink({ client: fakeClient(), sourceMessage: fakeMessage() as any, statusMessage: statusMessage as any, maxReplyChars: 2_000, logger: fakeLogger() as any });

@@ -129,6 +129,114 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     })).resolves.toEqual([]);
   });
 
+  it("claims deployed bug fixes once and renders only terminal silent failures", async () => {
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const userId = `user-${randomUUID()}`;
+    const sourceMessageId = `message-${randomUUID()}`;
+    const sessionId = `session-${randomUUID()}`;
+    const executionId = `execution-${randomUUID()}`;
+    const taskId = `task-${randomUUID()}`;
+    const reportId = `report-${randomUUID()}`;
+    await repo.upsertGuild({ id: guildId, name: "bug retry" });
+    await repo.upsertMessage({
+      id: sourceMessageId,
+      guildId,
+      channelId,
+      authorId: "user-bot",
+      authorUsername: "ai",
+      authorIsBot: true,
+      content: "incorrect answer",
+      normalizedContent: "incorrect answer",
+      createdAt: new Date(),
+    });
+    await agentRuntimeRepo.upsertSession({
+      sessionId,
+      traceId: sourceMessageId,
+      threadKey: `discord:${guildId}:${channelId}`,
+      guildId,
+      channelId,
+      userId,
+      request: "original prompt",
+      requestedBy: "test",
+      status: "succeeded",
+      metadata: { kind: "discord_channel" },
+    });
+    await agentRuntimeRepo.createExecution({
+      executionId,
+      sessionId,
+      traceId: sourceMessageId,
+      status: "succeeded",
+      harness: "nanocodex",
+    });
+    await repo.upsertAgentTaskQueued({
+      taskId,
+      traceId: sourceMessageId,
+      guildId,
+      channelId,
+      userId,
+      taskType: "bug_report",
+      title: "repair generated output delivery",
+      request: "bounded evidence",
+      requestedBy: userId,
+      backend: "kubernetes-sandbox",
+    });
+    await repo.createDiscordBugReport({
+      reportId,
+      guildId,
+      channelId,
+      sourceMessageId,
+      sourceSessionId: sessionId,
+      sourceExecutionId: executionId,
+      sourceRevision: "old-revision",
+      reportedByUserId: userId,
+    });
+    await repo.attachDiscordBugReportTask({ reportId, taskId, statusMessageId: null });
+    await repo.completeDiscordBugReportForTask({
+      taskId,
+      status: "completed",
+      disposition: "confirmed_fixed",
+      summary: "fixed",
+      prUrl: "https://github.com/example/repo/pull/12",
+    });
+
+    await expect(repo.getDiscordBugReportForTask(taskId)).resolves.toMatchObject({ reportId, statusMessageId: null });
+    await expect(repo.listDiscordBugReportsAwaitingDeployment()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ reportId })]),
+    );
+    await expect(repo.claimDiscordBugReportDeployment({
+      reportId,
+      mergeCommitSha: "merge-revision",
+      deployedRevision: "deployed-revision",
+    })).resolves.toBe(true);
+    await expect(repo.claimDiscordBugReportDeployment({
+      reportId,
+      mergeCommitSha: "merge-revision",
+      deployedRevision: "deployed-revision",
+    })).resolves.toBe(false);
+    await expect(repo.listDiscordBugReportsAwaitingDeployment()).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ reportId })]),
+    );
+
+    const failedTaskId = `task-${randomUUID()}`;
+    await repo.upsertAgentTaskQueued({
+      taskId: failedTaskId,
+      traceId: sourceMessageId,
+      guildId,
+      channelId,
+      userId,
+      taskType: "bug_report",
+      title: "validate bug",
+      request: "bounded evidence",
+      requestedBy: userId,
+      backend: "kubernetes-sandbox",
+    });
+    await repo.markAgentTaskFailed({ taskId: failedTaskId, status: "no_changes", error: "not reproduced" });
+    await expect(repo.listRenderableAgentTasks()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ taskId: failedTaskId, discordResponseMessageId: null })]),
+    );
+  });
+
   it("maintains compact custom emoji profiles from visible, privacy-safe indexed usage", async () => {
     const guildId = `guild-${randomUUID()}`;
     const visibleChannelId = `channel-${randomUUID()}`;

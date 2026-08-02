@@ -130,7 +130,7 @@ export function codeUpdatePrompt(env: CodegenPromptEnv, contextPack?: CodegenPro
     "- Run suggested anchor checks or the closest checks from repo docs when they match your edit. Do not run `npm run verify` or broad test suites; CI runs full verification after the PR opens.",
     "- If a check fails, inspect only the failing test/output and the directly owned code before patching again.",
     "- Do not commit, push, open a PR, or edit GitHub state yourself.",
-    "- Do not add request-only documentation artifacts; the PR body records the request.",
+    "- Do not add request-only documentation artifacts; the private task ledger retains the request and public PR metadata is derived separately from the resulting code diff.",
     "- Helper CLIs are available under `$AGENT_TOOL_SHIM_DIR`: `agent-task-context`, `agent-cache-info`, and `agent-progress <step> <message>`.",
     "- Use `$AGENT_TOOL_SHIM_DIR/agent-cache-info` if dependency/cache state matters; do not reinstall dependencies unless the task changed dependency manifests.",
     "- After the first meaningful edit, run `$AGENT_TOOL_SHIM_DIR/agent-progress first_edit \"Made the first focused code edit\"`.",

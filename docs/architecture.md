@@ -1,126 +1,122 @@
-# Architecture Map
+# Architecture
 
-This file is the short runtime map for coding agents. Read [`product-principles.md`](product-principles.md) for the behavior being protected, then prefer this file and the nearest `src/**/README.md` over rereading the whole repository before making a targeted change. Use [`engineering-guide.md`](engineering-guide.md) for feature workflow and verification.
+This guide is the system map. It explains the deployed processes, request lifecycles, durable sources of truth, and source ownership. Read [Product](product.md) first when changing a trust boundary or user-visible behavior.
 
-## Runtime Shape
+## System shape
 
-Discord AI Agent is a TypeScript Node app with three production roles:
+The application is TypeScript on Node.js 22 with Postgres, pgvector, Discord, OpenRouter, and the embedded NanoCodex runtime. One executable supports three roles:
 
-- `bot`: Discord gateway, mention detection, immediate acknowledgements, queue handoff, and background/task notifications.
-- `worker`: queue consumers for chat agent-runtime execution and final Discord delivery, crawl, embeddings, code-update tasks, reconciliation, and cleanup.
-- `api`: internal control plane for sandbox callbacks, run console APIs, metrics, and authenticated debugging UI.
+| Role | Owns |
+| --- | --- |
+| `bot` | Discord gateway events, ingress, reactions, delivery, component interactions, deployment announcements, and task notifications |
+| `worker` | Agent executions, crawl and embedding jobs, code-update jobs, reconciliation, compaction, and retention |
+| `api` | Authenticated control API, sandbox callbacks, metrics, and the run console |
 
-Postgres is the durable source of truth for Discord messages, embeddings, conversation memory, traces, process runs, task projections, sandbox runs, and the canonical `agent_runtime_*` session/execution/message/event/artifact ledger.
+`all` starts all roles for a fully configured single-process environment. Production normally splits them. Chat requires the bot plus a worker with agent-runtime work enabled. Code updates also require task work and the API callback surface.
 
-## Architectural Laws
+```text
+Discord message
+  -> bot persists request and execution
+  -> pg-boss job
+  -> worker resumes NanoCodex session and executes tools
+  -> durable result and delivery manifest
+  -> bot/worker delivery path posts one final reply
 
-These constraints are intentional. Do not treat them as temporary implementation accidents:
-
-- NanoCodex is the sole agent engine. Discord chat runs through the embedded native runtime; sandboxes are reserved for code-update tasks and expose NanoCodex workspace tools.
-- The `agent_runtime_*` ledger is the canonical execution history for chat and code-update work. Task and run views are projections, not competing ledgers.
-- Discord code owns delivery obligations and rendering; it does not own execution truth.
-- The immutable current requester and visible-channel set scope every tool call. Prior memory and model arguments cannot replace them.
-- The model owns semantic intent and presentation. Code owns permissions, live money, randomness, mutation authorization, durable transitions, retries, and exact delivery metadata.
-- User-facing Discord interaction remains commandless. Operator scripts and the authenticated console are recovery/debugging surfaces, not required user flows.
-- Private server content stays in `.discord-ai-agent/` or Postgres and is enforced by the release scanner.
-
-## Sources Of Truth
-
-| State | Canonical owner | Common readers/projections |
-| --- | --- | --- |
-| Prompt executions and code-update attempts | `src/db/agentRuntimeRepository.ts` with focused artifact persistence in `src/db/agentRuntimeArtifactRepository.ts` | `src/observability/runs.ts`, console, task status |
-| Discord messages, attachments, aliases, exclusions | Focused Discord archive repositories in `src/db/` | Retrieval, stats, crawl, and memory modules |
-| Conversation continuity | Conversation memory repository | `src/agent/promptBuilder.ts` |
-| Request identity and reply scope | Stored turn envelope from `src/agent/runtimeEnvelope.ts` | Runtime runner and `ToolContext` guards |
-| Pending Discord rendering | Delivery obligations repository | Discord delivery sweeps and `responseSink.ts` |
-| Wallet transfers and wagers | Payment repository plus receipt-verified chain state | Wallet service, payment tools, payments console |
-| Provable chance outcomes | RNG repository | Random tools, proof footers, verifier script |
-| Server overlays | Postgres | Prompt overlay loader and management surfaces |
-| Per-server NanoCodex model override | `guild_agent_settings` through `src/db/agentSettingsRepository.ts` | Guarded request preflight and `nanocodexAgentRuntime.ts` |
-| Static prompt skills | Repository `skills/` directory | Prompt skill loader |
-
-When a new feature needs durable state, extend the focused owner that represents its lifecycle. Do not introduce a convenience table or transcript that becomes a second source of truth.
-
-## Core Flows
-
-### Discord Message To Answer
-
-1. `src/discord/client.ts` receives a Discord message and checks whether the bot should respond.
-2. The client persists message/edit/delete state, records trace events, creates the durable agent-runtime session/execution with the user transcript message, and stores replayable turn-envelope/input-lines artifacts. Discord chat turns do not create `process_runs` rows.
-3. Queued execution loads that turn envelope when available, builds a `ToolContext`, and calls the selected prompt executor. The generic `/api/agent/sessions/:threadKey/execute` endpoint accepts durable `input_lines` artifacts and can enqueue this runtime job when called with Discord delivery context, which lets future chat adapters stay thin and route through the durable session API. Discord ingress and the API share the same `src/agent/runtimeControlPlane.ts` queue-handoff helper so the durable session event stream records `agent.execution.job_enqueued` consistently.
-4. Guarded request preflight loads the server's durable NanoCodex override. Discord chat defaults to Luna with high reasoning. Explicit owner/ops requests can switch between Sol and Luna or reset to the configured default before native execution; no other interactive agent model is accepted. Requester identity, skills, overlays, reply context, attachments, bounded conversation continuity, and current-turn reminders are assembled into NanoCodex instructions and input. A durable NanoCodex snapshot resumes subsequent turns without creating a second history ledger.
-5. NanoCodex selects from one stable, deployment-filtered local tool schema plus its hosted web search. Application tool arguments cross the strict native protocol and are validated again by the existing TypeScript contracts, gates, and deterministic implementations.
-6. Local tools execute through a fail-fast typed handler registry plus explicit high-risk delegated routers; turn-scoped files, tables, footer lines, and rich presentation flow through one `AgentTurnOutput` collector. Use `src/tools/README.md` to find the owning family before editing.
-7. Native NanoCodex lifecycle, tool, usage, checkpoint, completion, failure, and cancellation events are projected into the canonical runtime ledger. Tool actions remain separately audited; direct provider APIs for embeddings, images, and transcription are tool dependencies, not alternate agent engines.
-8. NanoCodex returns the final response/files. Discord persists a versioned delivery manifest before the first network write; bounded files are stored once as binary artifacts and referenced by size/checksum.
-9. `src/discord/presentationDelivery.ts` and `responseSink.ts` render the loading reaction, status message, final reply, Components V2 tree, attachments, or errors with stable enforced nonces. All asynchronous gateway work is supervised through one drain boundary; startup recovery verifies binary artifacts, replays the same intent, and reconciles the execution/memory ledgers without duplicating the Discord message.
-
-Utility reasoning calls use Luna with high reasoning. Code-update executions use Terra with medium reasoning through the same pinned NanoCodex runtime.
-
-End state: the canonical execution ledger is the agent-runtime session event stream. NanoCodex owns agent execution in chat and code-update sandboxes; Discord-specific code owns delivery obligations (acknowledgements, status edits, final replies, files, and cleanup), not execution state.
-
-### Discord Memory And Retrieval
-
-1. `src/discord/crawler.ts` and incremental message handlers store bot-visible messages and attachment metadata.
-2. Embedding workers fill vector data for stored messages.
-3. Repository retrieval queries and retrieval tools apply requester-visible channel filters before returning evidence.
-4. The agent should prefer broad primitives: exact/semantic history search, recent context, stats, attachment search, generic file inspection, image inspection, and summarization.
-5. Generic file inspection permission-checks explicit historical messages against requester-visible indexed channels, refreshes attachment URLs from Discord, performs bounded in-memory parsing without executing content, and records fetch/parser latency as runtime events.
-
-For durable knowledge changes such as excluding a channel, deleting indexed history, changing crawl behavior, embedding eligibility, stats, summaries, or attachment search, start with `src/db/README.md`, `src/discord/README.md`, and `src/memory/` before changing tool descriptions.
-
-### Code Update Request To PR
-
-1. The model calls `runCodingAgent` when any guild member explicitly asks the bot to update itself or to debug/fix GitHub, CI, PR, deployment, repository, or previous code-update task failures. Admission is the same for every member; the OpenRouter account credit limit is the spend ceiling.
-2. `src/tools/agentTaskTools.ts` edits the Discord status message with progress, creates the `runCodingAgent` tool message plus task-linked execution in the durable session, and then enqueues the sandbox worker. `src/jobs/agentTaskEnqueue.ts` writes the same canonical runtime records when a caller has not already created them.
-3. `src/jobs/agentTaskEnqueue.ts` owns the queue handoff transaction, then `src/jobs/queue.ts` claims the task and launches the configured execution backend.
-4. `src/execution/backend.ts` starts either a Kubernetes Job or local process sandbox.
-5. `src/execution/runnerPipeline.ts` orchestrates repo preparation, prompt/context, dependency cache, embedded NanoCodex execution, tests, scan, push, and PR creation; `src/execution/sandboxRunner.ts` is the executable entrypoint. Use `src/execution/README.md` before changing this path.
-6. Sandbox callbacks hit `src/control/internalApi.ts`, which persists command events, artifacts, spans, and terminal output. Worker lifecycle state such as start, warm-lease attachment, sandbox-run attachment, progress, and completion is recorded as `agent.task.*` runtime events.
-7. `src/discord/taskNotifications.ts` edits the original Discord status message with current progress and final PR/failure details from canonical `agent.task.*` runtime events. The run console, trace log inspection, and model-facing task-status tool use the same event stream for code-update task progress.
-
-Code-update tasks live in the generic agent runtime. New control-plane work should use `src/db/agentRuntimeRepository.ts` and `/api/agent/sessions/:threadKey` rather than adding codegen-only APIs.
-
-### Run Console And Debugging
-
-1. `src/observability/runs.ts` normalizes process runs, agent-runtime executions/messages/events/artifacts, trace events, tool audits, terminal logs, and task projections. Chat-run console views are derived from runtime executions/events/messages/artifacts; process runs remain for crawler, embedding, and task infrastructure.
-2. `src/control/internalApi.ts` exposes `/api/runs`, `/api/runs/:id`, artifact fetch, and streams.
-3. `src/control/console/` renders the React run console, including a dedicated Prompt Debugger for provider usage, cost, prompt/tool-schema composition, exact observed request/response captures, tool-round transcripts, and critical-path recommendations per call. Captures use the authenticated artifact API, pass through repository secret redaction, follow runtime artifact retention, and intentionally do not expose private chain-of-thought.
-4. `scripts/inspectRun.ts`, `scripts/agentTaskStatus.ts`, and `inspectAgentLogs` are terminal/model-accessible debugging paths. Operator scripts target the production control plane by default, resolving it from configured deployment access or the local Kubernetes context; direct local database inspection is explicit only.
-5. `inspectAgentLogs` accepts Discord message links, message IDs, run IDs, or trace IDs, and automatically resolves the reply root/direct parent when invoked from a Discord reply. For requester-visible runs it prioritizes model-round, prompt-composition, cache/cost, and critical-path diagnosis before normalized trace evidence; explicit `detail=model_io` requests may load bounded, secret-redacted prompt/response excerpts.
-6. Worker processes run `src/observability/artifactRetention.ts` periodically to delete expired large process-run and agent-runtime artifacts and their chunks.
-
-Useful terminal entrypoints:
-
-```sh
-npm run runs:inspect -- --list --kind codegen --sort slowest --limit 10
-npm run runs:inspect -- <run-id-or-discord-message-link> --terminal
-npm run tasks:status
+Code-change tool call
+  -> durable agent task
+  -> local-process or Kubernetes sandbox
+  -> verify and release scan
+  -> GitHub branch and PR
+  -> Discord task message reaches a terminal state
 ```
 
-`runs:inspect` includes model token usage when providers return usage metadata and estimated spend from audited model/tool calls. Use it before digging through raw artifacts when debugging latency or cost.
+`src/index.ts` wires roles and dependencies. `src/config/env.ts` is the canonical configuration schema. `src/jobs/queue.ts` registers recurring and queued work.
 
-## Overlay Boundary
+## Architectural invariants
 
-The base repo ships neutral defaults. Server-specific content lives outside Git in two overlay homes:
+- NanoCodex is the only agent engine. Chat runs in the application; only repository changes enter a sandbox.
+- `agent_runtime_*` is the canonical execution ledger for chat and code-update attempts.
+- Discord delivery obligations describe what still needs to be rendered; they are not a second execution ledger.
+- The model receives one stable tool schema narrowed only by deployment capability. It chooses tools directly.
+- Every tool call is revalidated against its canonical schema, current deployment, requester scope, and access policy.
+- The current requester and current-turn intent are immutable authority.
+- Postgres owns durable state. In-memory values may cache or coordinate but cannot become an alternate source of truth.
+- Migrations are forward-only. Fresh installs apply `migrations/001_initial.sql` and every later numbered migration.
+- Private community content belongs in Postgres or `.discord-ai-agent/`, never tracked source.
 
-- `.discord-ai-agent/` (gitignored): `prompt-overlay.md` persona/prompt overlay (path via `PROMPT_OVERLAY_PATH`, loaded by `src/agent/promptOverlay.ts` and merged into the system prompt each turn), private eval prompts under `evals/`, and local sandbox/codegen caches.
-- Postgres: per-guild server overlays (`server_overlays`, loaded during `src/agent/nanocodexAgentRuntime.ts` prompt assembly), user aliases, and all indexed Discord content.
+## Chat lifecycle
 
-`scripts/scanRelease.ts` enforces the boundary in CI (`npm run scan:release`): tracked files must not contain known-private strings, real-looking Discord snowflakes outside the fixture allowlist, or secret-shaped tokens.
+1. `src/discord/client.ts` wires Discord events. `messageIngress.ts` and `turnPreparation.ts` decide whether to respond, persist the message, resolve reply context, and create the runtime session/execution.
+2. `src/agent/runtimeEnvelope.ts` stores a replayable, requester-scoped turn envelope and input artifact. `runtimeControlPlane.ts` enqueues the execution.
+3. `src/agent/runtimeRunner.ts` reconstructs `ToolContext` from durable identifiers and calls `runtimeExecutor.ts`.
+4. `guardedAgentRequest.ts` loads the durable model override and active game. The remaining deterministic random-outcome guard protects unresolved chance/wager state.
+5. `nanocodexAgentRuntime.ts` builds the prompt, resumes a compatible opaque NanoCodex snapshot, exposes the deployment tool contract, and handles model/tool events.
+6. `toolDispatcher.ts` validates and gates the selected local tool, then dispatches through focused handlers in `src/agent/toolHandlers/`.
+7. Tools write files, tables, footers, or semantic Discord presentation to one turn output. Successful mutations are retained so a later model failure or timeout can still return the committed result.
+8. Runtime messages, events, artifacts, usage, and the next NanoCodex snapshot are stored in the canonical ledger.
+9. `src/discord/agentDelivery.ts` records a versioned delivery intent. `presentationDelivery.ts` and `responseSink.ts` render the final content, files, Components V2 payload, and cleanup. Startup sweeps replay incomplete obligations idempotently.
 
-## Change Guidance
+Prompts sharing a Discord thread key are serialized; different keys may execute concurrently. A loading reaction is delivery state, not a provisional textual answer.
 
-- Keep the Discord UX commandless: users should keep writing normal `@ai ...` prompts.
-- Prefer improving model-facing tool descriptions, schemas, and outputs over hidden regex branches.
-- Keep model-facing tools aligned with the taxonomy/output contracts in `docs/tool-design.md`.
-- Keep retrieval permission-aware.
-- Keep private server data out of committed fixtures/docs/evals.
-- For codegen reliability, improve context packaging, observable progress, and failure classification before changing harnesses.
-- For codegen latency, first check first-edit latency, round count, repeated reads, cache state, and prompt/context quality.
-- Do not inject long implementation-specific file lists into prompts when a stable domain README or ownership map can guide the agent.
-- If a request mentions tool names as part of a product behavior, classify the product behavior first. Tool-name anchors should only dominate when the task is about tool schemas, routing, arguments, or contracts.
-- For answer quality, add or update eval prompts before tuning prompts/tools.
-- For any complex feature, include requester scope, durable state, delivery, typed observability, recovery, focused tests, and docs in the design before implementing only the happy path.
+## Retrieval and memory lifecycle
 
-For the broader strategy, see [`improvement-plan.md`](improvement-plan.md). [`continuation-plan.md`](continuation-plan.md) and [`pre-release-plan.md`](pre-release-plan.md) are completed foundation/history records, not current task queues.
+1. Gateway persistence and `src/discord/crawler.ts` store bot-visible guild, channel, member, message, reaction, and attachment state.
+2. Embedding jobs fill the fixed-dimension pgvector index asynchronously. Lexical retrieval works before embeddings are complete.
+3. `src/db/retrievalRepository.ts` applies visible-channel, author, channel, thread, and date constraints before returning candidates.
+4. `src/memory/` and the Discord retrieval tools expose bounded lexical, semantic, recent-context, stats, summary, and attachment primitives.
+5. Conversation messages and compacted snapshots provide per-thread continuity to `promptBuilder.ts`; they never widen requester permissions.
+
+The data lifecycle is the first place to fix missing or stale Discord knowledge. Prompt wording cannot repair content that was never persisted, embedded, permission-filtered, or returned.
+
+## Code-update lifecycle
+
+1. The model selects `runCodingAgent` for an explicit request to change the repository, fix CI, inspect a PR, or repair a prior task.
+2. `src/tools/agentTaskTools.ts` creates the task projection and a task-linked runtime execution.
+3. `src/jobs/agentTaskEnqueue.ts` performs the atomic queue handoff.
+4. `src/execution/backend.ts` selects a local-process child or Kubernetes Job. Warm local workers coordinate through durable sandbox leases.
+5. `runnerPipeline.ts` prepares a cached mirror and isolated worktree, builds a focused context pack, runs NanoCodex with workspace tools, refreshes dependencies when manifests change, verifies, scans, pushes an allowed branch, and opens or updates a PR.
+6. Sandbox callbacks and command summaries become `agent.task.*` runtime events. Task rows remain projections used for status and Discord rendering.
+7. Reconcilers turn lost workers, stale leases, missing jobs, and absent terminal callbacks into explicit terminal states and cleanup.
+
+See [Code updates](code-updates.md) for publication and sandbox details.
+
+## Sources of truth
+
+| State | Canonical owner |
+| --- | --- |
+| Agent sessions, executions, transcript, events, artifacts, snapshots | `src/db/agentRuntimeRepository.ts` and `agentRuntimeArtifactRepository.ts` |
+| Discord archive, attachments, aliases, exclusions, crawl cursors | Focused repositories under `src/db/`, especially `discordArchiveRepository.ts` |
+| Retrieval and aggregates | `retrievalRepository.ts` and `retrievalStatsRepository.ts` |
+| Conversation continuity | `conversationMemoryRepository.ts` and `conversationCompaction.ts` |
+| Pending final rendering | `deliveryObligationsRepository.ts` |
+| Code-update task projection and reads | `agentTaskRepository.ts` and focused task read repositories |
+| Wallets, transfers, wagers, receipts | `paymentRepository.ts` and focused payment repositories |
+| Random sessions and draws | `rngRepository.ts` |
+| Server prompt overlays | `serverOverlayRepository.ts` |
+| Per-guild agent model selection | `agentSettingsRepository.ts` |
+
+`src/db/repositories.ts` is a compatibility facade over focused owners. New lifecycle logic belongs in the focused repository, not the facade.
+
+## Source ownership
+
+| Area | Main entry points | Closest verification |
+| --- | --- | --- |
+| Prompt and NanoCodex execution | `src/agent/nanocodexAgentRuntime.ts`, `promptBuilder.ts`, `runtimeRunner.ts` | `tests/unit/nanocodex-agent-runtime.test.ts`, prompt tests, agent integration tests |
+| Tool contract and dispatch | `src/tools/contracts/`, `registry.ts`, `src/agent/toolHandlers/` | registry, contract-validation, handler-conformance tests |
+| Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
+| Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
+| Control plane and console | `src/control/internalApiServer.ts`, `src/control/`, `src/control/console/` | internal API, observability, and console tests |
+| Queue ownership | `src/jobs/queue.ts`, `agentTaskEnqueue.ts`, `sandboxLeaseScheduler.ts` | queue unit tests and `tests/integration/jobs-db.test.ts` |
+| Code-update execution | `src/execution/backend.ts`, `runnerPipeline.ts`, `repoWorkspace.ts` | sandbox runner, backend, callback, and task tests |
+| Payments and games | `src/payments/`, `src/tools/walletTools.ts`, `randomTools.ts`, `standardWager*` | focused wallet/RNG tests and DB integration tests |
+| Configuration and startup | `src/config/env.ts`, `src/index.ts`, `.env.example` | config, startup, preflight, and Helm tests |
+
+## Observability
+
+Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. Large or sensitive details are retained as redacted artifacts rather than event metadata. The console, `runs:inspect`, `discord:debug`, task status, and metrics all project the same underlying ledger.
+
+Observability may expose model inputs/outputs and deterministic decisions after permission checks and redaction. It never claims to expose private chain of thought.
+
+## Overlay boundary
+
+Tracked source ships neutral defaults. Deployment-specific persona and instructions live in `.discord-ai-agent/prompt-overlay.md` or a Postgres server overlay. Private eval prompts live in `.discord-ai-agent/evals/`. Indexed messages, aliases, member data, bug markers, and traces live in Postgres. `npm run scan:release` enforces the public/private boundary.

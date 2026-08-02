@@ -1,0 +1,201 @@
+# Operations
+
+This guide covers installation, configuration, process roles, indexing, observability, production debugging, deployment, and recovery.
+
+## Requirements
+
+- Node.js 22+
+- Postgres with pgvector
+- Discord application and bot token
+- OpenRouter API key
+
+GitHub credentials and a task-signing secret are optional unless code-update PRs are enabled. Privy credentials are optional unless wallets are enabled. Spotify credentials are optional and only expose Spotify tools when complete.
+
+## Local setup
+
+```bash
+npm install
+cp .env.example .env
+docker compose up -d postgres
+npm run migrate
+npm run preflight
+```
+
+Set at least `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `OPENROUTER_API_KEY`, and `DATABASE_URL`. The example database URL uses the Compose Postgres on local port 5433.
+
+Generate the least-privilege Discord invite:
+
+```bash
+npm run invite-url
+```
+
+For a minimal split runtime, start the bot and chat worker in separate terminals:
+
+```bash
+npm run dev
+```
+
+```bash
+npm run worker
+```
+
+The bot handles gateway ingress and delivery. The worker executes queued chat requests. Start `npm run api` when using the run console or sandbox callbacks. `npm run start:all` is intended only for a fully configured built environment.
+
+## Configuration ownership
+
+`.env.example` is the annotated operator template. `src/config/env.ts` defines accepted values, defaults, validation, and role-specific assertions. Do not duplicate a complete variable catalog in prose.
+
+Important feature gates:
+
+| Capability | Required configuration |
+| --- | --- |
+| Chat | Discord token/client/guild, OpenRouter key, database |
+| Code updates | Repository, GitHub PAT or App credentials, task-signing secret, task worker; API for callbacks |
+| Spotify | Client ID and client secret |
+| Shared wallet | Wallet enabled plus Privy credentials |
+| Member wallets and wagers | Shared wallet plus user wallets enabled |
+| Public run console | API role, password, HTTPS/public URL when exposed |
+
+Administrative mutations use `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`. Image generation may be restricted to that allowlist. Code-update requests remain available to members when the feature is deployed.
+
+## Indexing and memory
+
+The gateway stores live message changes. Run an initial or repair crawl for historical coverage:
+
+```bash
+npm run crawl
+npm run embeddings:backfill
+```
+
+The worker drains embedding jobs. Use `npm run reindex` only when cursors must be reset and the guild intentionally recrawled. Lexical search is available before embeddings complete.
+
+Useful maintenance scripts include `aliases`, `blocked-users`, `embeddings:reprioritize`, and the retention/reconciliation work built into the worker. Run scripts against production only through their explicit production-aware path; do not point local experiments at the production database accidentally.
+
+## Production-first inspection
+
+Operator tools resolve the deployed control plane from `CONTROL_UI_PUBLIC_URL` or the active Kubernetes context. They fail rather than silently falling back to localhost or a local database. Use `--api-url` for another explicit control plane and `--source db` only for intentional isolated direct-DB inspection.
+
+```bash
+npm run runs:inspect -- --list --limit 20
+npm run tasks:status
+npm run console:dev:live
+```
+
+The API role serves authenticated run-console routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_UI_AUTH_PASSWORD`.
+
+## Debug a Discord result
+
+For a single Discord link, begin with:
+
+```bash
+npm run discord:debug -- <discord-message-link>
+```
+
+For a suspected rollout regression, audit the full channel and retained reply chains:
+
+```bash
+npm run discord:audit -- --channel <channel-id> --since-deploy --include-reply-chains
+```
+
+Investigation order:
+
+1. Resolve the deployed revision and rollout time.
+2. Confirm ingress captured the intended current message and reply chain.
+3. Inspect the persisted turn envelope, memory, and operative model input.
+4. Inspect selected tools, canonical arguments, typed results, and rejected gates.
+5. Separate model completion from delivery intent and Discord network writes.
+6. Cluster repeated failures by revision before changing code.
+7. Fix the smallest canonical owner and add focused regression coverage.
+
+Do not begin with browser scraping, provider blame, or source speculation when the runtime ledger can show what happened. Model I/O may be inspected after authorization and redaction; private chain of thought is not available or required.
+
+## Native bug inbox
+
+The Unicode `🐛` reaction marks a Discord message for requester-scoped debugging. `listDiscordBugMarkers` returns only markers and context the requester may see. Removing the reaction clears the marker.
+
+The repair workflow reproduces the linked run, adds a general regression test, opens a focused PR when requested, deploys after normal review, and retries the original prompt reply after the fix is live. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
+
+## Build and release verification
+
+Before deployment:
+
+```bash
+npm run preflight:deploy
+npm run verify
+npm run verify:db
+npm run eval -- --dry-run
+```
+
+CI builds the console and TypeScript runtime, runs verification and DB checks, scans source and container dependencies, runs CodeQL, publishes commit-tagged images, and then triggers deployment for the verified revision. Deployment should treat build, migration, Helm rollout, readiness, and Discord delivery as distinct stages.
+
+## Kubernetes production
+
+The reference deployment is the Helm chart in `deploy/helm/discord-ai-agent/`; `deploy/terraform/aws/` provides an AWS baseline for VPC, EKS, ECR, RDS, and GitHub OIDC.
+
+Create one namespace-scoped application Secret through your secret manager with the required app variables. Prefer GitHub App credentials in production. Add Privy credentials only when payments are enabled. Pods read secret values at startup, so restart deployments after secret changes.
+
+Install or upgrade:
+
+```bash
+helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
+  --namespace discord-ai-agent \
+  --create-namespace \
+  --set image.repository="$REGISTRY/discord-ai-agent" \
+  --set image.tag="$GIT_SHA" \
+  --set sandbox.image="$REGISTRY/discord-ai-agent-sandbox:$GIT_SHA" \
+  --set config.githubRepository="owner/repo"
+```
+
+Inspect rollout by role:
+
+```bash
+kubectl -n discord-ai-agent get pods
+kubectl -n discord-ai-agent logs deploy/discord-ai-agent-api
+kubectl -n discord-ai-agent logs deploy/discord-ai-agent-bot
+kubectl -n discord-ai-agent logs deploy/discord-ai-agent-worker
+kubectl -n discord-ai-agent logs deploy/discord-ai-agent-codegen-worker
+```
+
+The chart runs migrations as a hook, so runtime pods set `RUN_MIGRATIONS=false`. Commit-tagged application and sandbox images should be built once and promoted; the deployment workflow must not rebuild a different artifact.
+
+## Sandbox and network posture
+
+The worker service account may create per-task Jobs, Secrets, and ConfigMaps. The sandbox service account has no Kubernetes API access. Sandbox secrets omit Discord and database credentials. Network policy should permit the internal callback API, DNS, and required HTTPS destinations only.
+
+The chart can mount a persistent sandbox cache and run a dedicated warm codegen worker. A ReadWriteOnce cache normally implies one codegen worker unless the storage class and lease design explicitly support more.
+
+## Local Kubernetes validation
+
+Use kind or another local cluster when the Kubernetes sandbox path itself is under test:
+
+```bash
+kind create cluster --name discord-ai-agent
+docker build -t discord-ai-agent:local .
+kind load docker-image discord-ai-agent:local --name discord-ai-agent
+helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
+  --namespace discord-ai-agent --create-namespace \
+  --set image.repository=discord-ai-agent \
+  --set image.tag=local \
+  --set image.pullPolicy=IfNotPresent \
+  --set sandbox.image=discord-ai-agent:local \
+  --set sandbox.imagePullPolicy=IfNotPresent \
+  --set config.githubRepository="$GITHUB_REPOSITORY"
+```
+
+Create the application Secret first and point `DATABASE_URL` at a Postgres instance reachable from the cluster. Validate chat delivery and one harmless code-update request, then inspect the Job, callback events, PR, and cleanup. This is an advanced integration path, not the default contributor loop.
+
+## Recovery checks
+
+When production is unhealthy, inspect these independently:
+
+- database connectivity and migration completion;
+- bot gateway readiness and Discord permissions;
+- worker queue registration and backlog age;
+- agent-runtime silence/hard timeouts;
+- API authentication and callback reachability;
+- sandbox lease or Kubernetes Job state;
+- delivery obligations awaiting replay;
+- payment or transfer reconciliation when enabled;
+- deployed revision versus the revision that produced a run.
+
+Use provider or Kubernetes logs after the canonical ledger identifies the failing boundary. A successful model result with a pending delivery obligation is a delivery incident; a missing execution after persisted ingress is a queue incident; a submitted transfer without a terminal receipt is a reconciliation incident.

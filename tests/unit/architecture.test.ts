@@ -4,20 +4,21 @@ import { describe, expect, it } from "vitest";
 
 const SOURCE_LINE_LIMIT = 800;
 
-const requiredDomainReadmes = [
-  "src/README.md",
-  "src/agent/README.md",
-  "src/control/README.md",
-  "src/control/console/README.md",
-  "src/db/README.md",
-  "src/discord/README.md",
-  "src/execution/README.md",
-  "src/tools/README.md",
+const requiredArchitectureGuides = [
+  "docs/README.md",
+  "docs/product.md",
+  "docs/architecture.md",
+  "docs/agent-system.md",
+  "docs/data.md",
+  "docs/payments.md",
+  "docs/code-updates.md",
+  "docs/operations.md",
+  "docs/development.md",
 ];
 
 describe("architecture guardrails", () => {
-  it("keeps source-domain navigation docs present", async () => {
-    for (const readme of requiredDomainReadmes) {
+  it("keeps consolidated architecture guides present", async () => {
+    for (const readme of requiredArchitectureGuides) {
       await expect(
         fs.stat(path.join(process.cwd(), readme)),
       ).resolves.toMatchObject({ isFile: expect.any(Function) });

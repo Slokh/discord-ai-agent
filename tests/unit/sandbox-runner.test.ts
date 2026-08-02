@@ -351,7 +351,7 @@ describe("sandboxRunner", () => {
       await fs.mkdir(path.join(tempDir, "src", "tools"), { recursive: true });
       await fs.mkdir(path.join(tempDir, "src", "jobs"), { recursive: true });
       await fs.writeFile(path.join(tempDir, "AGENTS.md"), "guide\n", "utf8");
-      await fs.writeFile(path.join(tempDir, "src", "tools", "coreTools.ts"), "export {}\n", "utf8");
+      await fs.writeFile(path.join(tempDir, "src", "tools", "registry.ts"), "export {}\n", "utf8");
       await fs.writeFile(path.join(tempDir, "src", "jobs", "queue.ts"), "export {}\n", "utf8");
 
       const context = await buildCodegenContextPack(tempDir);
@@ -359,7 +359,7 @@ describe("sandboxRunner", () => {
 
       expect(context.repoGuidePath).toBe("AGENTS.md");
       expect(rendered).toContain("Read AGENTS.md first");
-      expect(rendered).toContain("src/tools/coreTools.ts");
+      expect(rendered).toContain("src/tools/registry.ts");
       expect(rendered).toContain("src/jobs/queue.ts");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -465,7 +465,7 @@ describe("sandboxRunner", () => {
       taskRequest: "Change the user-visible loading state."
     });
 
-    expect(prompt).toContain("Let repo docs, folder READMEs, source ownership, and tests determine the implementation path");
+    expect(prompt).toContain("Let the repository concept guides, source ownership, exact anchors, and tests determine the implementation path");
     expect(prompt).toContain("Batch initial reconnaissance");
     expect(prompt).toContain("Do not keep alternating search/read/search/read");
     expect(prompt).toContain("$AGENT_TOOL_SHIM_DIR/agent-progress first_edit");
@@ -570,7 +570,8 @@ describe("sandboxRunner", () => {
     expect(contextPack.requestAnchors).not.toEqual(expect.arrayContaining(["searchDiscordHistory", "getDiscordStats", "searchDiscordAttachments"]));
     expect(renderedContext).not.toContain("Focus:");
     expect(renderedContext).toContain("Discord knowledge, indexing, and retrieval");
-    expect(renderedContext).toContain("src/db/repositories.ts");
+    expect(renderedContext).toContain("src/db/discordArchiveRepository.ts");
+    expect(renderedContext).toContain("src/db/retrievalRepository.ts");
     expect(renderedContext).toContain("src/discord/crawler.ts");
     expect(renderedContext).toContain("src/discord/messagePersistence.ts");
   });
@@ -640,7 +641,7 @@ describe("sandboxRunner", () => {
       expect(renderedContext).toContain("Do not spend more than three targeted file reads before the first code diff");
       expect(prompt).toContain("If exact request anchors or target files are present");
       expect(prompt).toContain("patch the owning source file");
-      expect(prompt).toContain("Let repo docs, folder READMEs, source ownership, and tests determine the implementation path");
+      expect(prompt).toContain("Let the repository concept guides, source ownership, exact anchors, and tests determine the implementation path");
       expect(recovery).toContain("Patch-first targets from the original request anchors:");
       expect(recovery).toContain("Do not run more than one read/search command before the first patch");
       expect(recovery).toContain("Use apply_patch for the recovery edit when available");

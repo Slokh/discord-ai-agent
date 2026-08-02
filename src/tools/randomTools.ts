@@ -482,7 +482,7 @@ async function revealRandomnessCore(ctx: ToolContext, onRevealed?: () => void): 
     ...drawLines,
     ``,
     `Anyone can verify with: npm run verify:rng -- --session ${revealed.id}`,
-    `Or without database access: recompute sha256(serverSeed) and each draw from HMAC-SHA256(serverSeed, "clientSeed:nonce:block"); see docs/provable-rng.md.`,
+    `Or without database access: recompute sha256(serverSeed) and each draw from HMAC-SHA256(serverSeed, "clientSeed:nonce:block"); see docs/payments.md.`,
     `A fresh commitment (${shortHash(successor.commitment)}…) now covers future draws in this thread; the proof footer on this reply carries the full values.`,
     `Report the seed and commitment values exactly as shown; the proof footer repeats them verbatim.`
   ].join("\n");

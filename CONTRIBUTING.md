@@ -14,11 +14,9 @@ Use Node.js 22+. The compose Postgres listens on port 5433 for local and DB-back
 
 ## Navigation
 
-Start with `AGENTS.md` for repository workflow rules and ownership notes. Read `docs/architecture.md` for the system shape before broad runtime, retrieval, Discord, or observability changes.
+Start with `AGENTS.md` for mandatory workflow rules. Read `docs/product.md`, `docs/architecture.md`, and the single domain guide selected by `docs/README.md`. Source ownership and closest tests are maintained in the architecture guide rather than duplicated across source-folder READMEs.
 
-The folder `README.md` files under `src/` are the closest navigation map for owned areas, including agent, control, console, db, Discord, execution, and tools.
-
-Keep model-facing tool changes aligned with `docs/tool-design.md`.
+Keep model-facing changes aligned with `docs/agent-system.md` and repository workflow aligned with `docs/development.md`.
 
 ## Validation
 

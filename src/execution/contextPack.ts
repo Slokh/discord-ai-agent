@@ -53,7 +53,7 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
     {
       area: "Discord mention and reply lifecycle",
       purpose: "Incoming Discord messages are persisted as durable executions, run through NanoCodex, and delivered exactly once.",
-      files: ["src/discord/messageIngress.ts", "src/discord/agentDelivery.ts", "src/discord/responseSink.ts", "src/agent/nanocodexAgentRuntime.ts", "src/agent/runtimeRunner.ts", "docs/agent-system.md"],
+      files: ["src/discord/messageIngress.ts", "src/discord/agentDelivery.ts", "src/discord/responseSink.ts", "src/discord/agentRuntimeRunner.ts", "src/agent/nanocodexAgentRuntime.ts", "docs/agent-system.md"],
       checks: ["tests/unit/discord-response-sink.test.ts", "tests/unit/discord-client.test.ts", "tests/integration/agent.test.ts", "tests/unit/message-persistence.test.ts"]
     },
     {
@@ -90,7 +90,8 @@ export async function buildCodegenContextPack(checkoutDir: string, taskRequest =
         "src/tools/toolDefinition.ts",
         "src/tools/toolScope.ts",
         "src/agent/toolDispatcher.ts",
-        "src/agent/toolHandlers/",
+        "src/tools/handlers/",
+        "src/capabilities/",
         "src/tools/types.ts",
         "src/agent/nanocodexAgentRuntime.ts",
         "docs/agent-system.md"

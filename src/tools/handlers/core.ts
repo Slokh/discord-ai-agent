@@ -1,5 +1,5 @@
 import { loadSkillContext } from "../../skills/loader.js";
-import type { ToolName } from "../../tools/registry.js";
+import type { ToolName } from "../registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const coreToolHandlers = {

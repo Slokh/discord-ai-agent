@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Message } from "discord.js";
 import type { AppConfig } from "../config/env.js";
-import { enqueueAgentRuntimeCodeUpdateTask } from "../agent/runtimeControlPlane.js";
+import { enqueueAgentRuntimeCodeUpdateTask } from "../capabilities/codeUpdates.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
 import type { JobRuntime } from "../jobs/queue.js";

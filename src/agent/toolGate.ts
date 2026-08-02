@@ -14,20 +14,18 @@ export async function restrictedToolGate(ctx: ToolContext, toolName: ToolName): 
     return { allowed: false, message: "This input cannot authorize a mutating action because explicit current-message authority is missing. Ask the user to state that action in a new Discord message." };
   }
   const opsIds = ctx.config.allowlists?.opsUserIds ?? [];
-  if (tool?.accessPolicy === "ops" && !isAllowed(ctx, opsIds)) return denied(tool.accessPolicy);
-  if (tool?.accessPolicy === "strict_ops" && !isStrictlyAllowed(ctx, opsIds)) return denied(tool.accessPolicy);
-  if (tool?.accessPolicy === "image_allowlist" && ctx.config.allowlists?.imageToolsAllowlistOnly && !isAllowed(ctx, opsIds)) {
-    return denied(tool.accessPolicy);
+  if (tool?.accessPolicy === "ops" && !isAllowed(ctx, opsIds)) return denied();
+  if (tool?.accessPolicy === "strict_ops" && !isStrictlyAllowed(ctx, opsIds)) return denied();
+  if (tool?.accessPolicy === "configured_ops" && tool.accessPolicyEnabled?.(ctx.config) && !isAllowed(ctx, opsIds)) {
+    return denied(tool.accessDeniedMessage);
   }
   return { allowed: true };
 }
 
-function denied(policy: "ops" | "strict_ops" | "image_allowlist"): ToolGateDecision {
+function denied(message?: string): ToolGateDecision {
   return {
     allowed: false,
-    message: policy === "image_allowlist"
-      ? "Image generation is restricted to the bot owner or configured allowlist."
-      : "That action is restricted to the configured bot owner or ops allowlist.",
+    message: message ?? "That action is restricted to the configured bot owner or ops allowlist.",
   };
 }
 

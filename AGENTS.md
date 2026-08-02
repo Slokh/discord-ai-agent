@@ -76,8 +76,10 @@ or private-server context into Frog or GitHub.
   general invariant to prompt-keyword logic. Deterministic guards are for stable,
   high-consequence capabilities, not ordinary language understanding.
 - Keep model-facing contracts in focused `src/tools/contracts/` modules and
-  implementations in focused tool-family modules. `registry.ts` aggregates;
-  it does not become a behavioral switchboard.
+  execution adapters in `src/tools/handlers/`. Cross-turn feature integration
+  belongs in `src/capabilities/`. The generic `src/agent/` loop consumes only
+  those extension contracts; `registry.ts` aggregates and does not become a
+  behavioral switchboard.
 - Use `src/discord/responseSink.ts` for Discord-visible status/final delivery.
   Use `agent_runtime_*` as the canonical execution ledger; do not create a
   parallel history or run tracker.

@@ -1,13 +1,13 @@
-import { drawRandomResponse, revealRandomnessResponse, settleRandomWagerResponse } from "../../tools/randomTools.js";
-import { undoConversationTurnsResponse } from "../../tools/agentMemoryTools.js";
-import { updateBotAvatar } from "../../tools/botProfileTools.js";
-import { createDiscordPoll } from "../../tools/discordPollTools.js";
-import { addDiscordReaction } from "../../tools/discordReactionTools.js";
-import { createDiscordEmoji } from "../../tools/guildEmojiTools.js";
-import { composeDiscordResponse } from "../../tools/discordPresentationTools.js";
-import { cleanToolResponse } from "../../tools/responseFormatting.js";
+import { drawRandomResponse, revealRandomnessResponse, settleRandomWagerResponse } from "../randomTools.js";
+import { undoConversationTurnsResponse } from "../agentMemoryTools.js";
+import { updateBotAvatar } from "../botProfileTools.js";
+import { createDiscordPoll } from "../discordPollTools.js";
+import { addDiscordReaction } from "../discordReactionTools.js";
+import { createDiscordEmoji } from "../guildEmojiTools.js";
+import { composeDiscordResponse } from "../discordPresentationTools.js";
+import { cleanToolResponse } from "../responseFormatting.js";
 import { booleanArgument, stringArgument, stringArrayArgument, numberArgument, recordArgument } from "./arguments.js";
-import type { ToolName } from "../../tools/registry.js";
+import type { ToolName } from "../registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const discordActionToolHandlers = {

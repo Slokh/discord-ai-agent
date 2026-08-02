@@ -3,18 +3,16 @@ import { localToolDefinitionsForModel, toolByName, type ToolName } from "../tool
 import { deploymentToolset } from "../tools/toolScope.js";
 import { ensureAgentTurnOutput } from "../tools/turnOutput.js";
 import type { AgentResponse, ToolContext } from "../tools/types.js";
-import { effectiveAgentChatModel } from "../tools/agentModelTools.js";
+import { prepareAgentCapabilities } from "../capabilities/index.js";
 import { PRIMARY_AGENT_REASONING } from "./modelPolicy.js";
 import { loadSkills, renderSkillsForPrompt } from "../skills/loader.js";
 import { durationMs, previewText } from "../util/logger.js";
-import { injectActiveGameSession } from "./activeGameSession.js";
-import { runGuardedAgentRequest, type GuardedAgentRequest } from "./guardedAgentRequest.js";
+import type { AgentCapabilityRuntime } from "./capabilityRuntime.js";
 import { isAgentRuntimeTimeoutError, withAgentRuntimeTimeouts } from "./runtimeTimeouts.js";
 import { loadPromptOverlayText } from "./promptOverlay.js";
 import {
   chatMessages,
   loadServerOverlay,
-  prepareDiscordEmojiPromptContext,
   promptMessageMetadata,
   toolResultContentForPrompt,
 } from "./promptBuilder.js";
@@ -39,7 +37,7 @@ export async function executeNanoCodexAgentRuntime(input: {
   executeToolRoute?: typeof executeLocalToolRoute;
 }): Promise<AgentResponse> {
   const ctx = input.toolContext;
-  let guardedRequest: GuardedAgentRequest | undefined;
+  let capabilityRuntime: AgentCapabilityRuntime | undefined;
   const recoveryState: RuntimeRecoveryState = { successfulMutations: [] };
   try {
     return await withAgentRuntimeTimeouts({
@@ -50,18 +48,20 @@ export async function executeNanoCodexAgentRuntime(input: {
         ctx.noteProgress = noteProgress;
         ctx.abortSignal = abortSignal;
         ctx.requestText = input.text;
-        return runGuardedAgentRequest(
-          ctx,
-          input.text,
-          (request, executionText) => runRetainedNanoCodexTurn({ ...input, text: executionText, toolContext: ctx, request, recoveryState }),
-          (request) => { guardedRequest = request; },
-        );
+        capabilityRuntime = await prepareAgentCapabilities(ctx, input.text);
+        const response = await runRetainedNanoCodexTurn({
+          ...input,
+          toolContext: ctx,
+          capabilities: capabilityRuntime,
+          recoveryState,
+        });
+        return capabilityRuntime.finalizeResponse(response);
       },
     });
   } catch (error) {
     const output = ctx.turnOutput?.snapshot();
     if (!isAgentRuntimeTimeoutError(error)) throw error;
-    if (guardedRequest?.randomOutcomeGuard.requiresWagerResolution()) throw error;
+    if (capabilityRuntime?.blocksTimeoutRecovery()) throw error;
     const recoveredMutation = combineRecoveredMutations(recoveryState.successfulMutations);
     if (recoveredMutation) {
       await recordAgentEvent(ctx, {
@@ -102,7 +102,7 @@ async function runRetainedNanoCodexTurn(input: {
   binary?: string;
   runRuntime?: typeof runNanoCodexRuntime;
   executeToolRoute?: typeof executeLocalToolRoute;
-  request: GuardedAgentRequest;
+  capabilities: AgentCapabilityRuntime;
   recoveryState: RuntimeRecoveryState;
 }): Promise<AgentResponse> {
   const ctx = input.toolContext;
@@ -118,7 +118,6 @@ async function runRetainedNanoCodexTurn(input: {
   const text = input.text.trim();
   if (!text) return { content: "Say what you need after mentioning me." };
 
-  const randomGuard = input.request.randomOutcomeGuard;
   const turnOutput = ensureAgentTurnOutput(ctx);
   const memoryEvents: NonNullable<AgentResponse["memoryEvents"]> = [];
   const successfulMutatingToolResults = input.recoveryState.successfulMutations;
@@ -127,14 +126,14 @@ async function runRetainedNanoCodexTurn(input: {
     ctx,
     text,
     false,
-    input.request.activeGame,
+    input.capabilities.promptContributions,
   );
   // A stable full schema improves NanoCodex prompt-cache reuse and removes the
   // old mid-turn tool-expansion protocol. Deployment filtering still prevents
   // unavailable capabilities from entering the model contract.
   const localTools = deploymentToolset(ctx.config).localTools;
   const toolDefinitions = localToolDefinitionsForModel(localTools);
-  const model = effectiveAgentChatModel(ctx) ?? ctx.config.openRouter.chatModel;
+  const model = input.capabilities.model ?? ctx.config.openRouter.chatModel;
   const resumeContract = nanoCodexSessionResumeContract({
     instructions: initialPrompt.instructions,
     tools: toolDefinitions,
@@ -146,10 +145,9 @@ async function runRetainedNanoCodexTurn(input: {
     resumeContract,
   });
   const prompt = resume
-    ? await buildNanoCodexPrompt(ctx, text, true, input.request.activeGame)
+    ? await buildNanoCodexPrompt(ctx, text, true, input.capabilities.promptContributions)
     : initialPrompt;
   const allowedTools = new Set<ToolName>(localTools.map((tool) => tool.name));
-  let webEvidenceObserved = false;
   let toolSequence = 0;
   const promptSizes = {
     instructionBytes: Buffer.byteLength(prompt.instructions, "utf8"),
@@ -182,7 +180,6 @@ async function runRetainedNanoCodexTurn(input: {
       abortSignal: ctx.abortSignal,
       onProgress: ctx.noteProgress,
       onEvent: async (event) => {
-        if (isSuccessfulNanoWebSearchEvent(event)) webEvidenceObserved = true;
         await recordNanoCodexEvent(ctx, event);
       },
       executeTool: async (call) => {
@@ -217,7 +214,7 @@ async function runRetainedNanoCodexTurn(input: {
       if (toolResult.status !== "error" && toolResult.files?.length) {
         lastSuccessfulFileToolResult = toolResult;
       }
-      randomGuard.noteToolResult(route.name, toolResult);
+      input.capabilities.observeToolResult(route.name, toolResult);
       if (toolResult.files?.length) turnOutput.files.push(...toolResult.files);
       if (toolResult.tables?.length) turnOutput.tables.push(...toolResult.tables);
       memoryEvents.push({
@@ -317,7 +314,7 @@ async function runRetainedNanoCodexTurn(input: {
   await recordAgentEvent(ctx, {
     eventName: "agent.nanocodex.complete",
     summary: `NanoCodex completed with ${toolSequence} tool calls`,
-    metadata: { usage: result.usage, toolCalls: toolSequence, resumed: Boolean(resume), webEvidenceObserved },
+    metadata: { usage: result.usage, toolCalls: toolSequence, resumed: Boolean(resume) },
   });
   return response;
 }
@@ -344,31 +341,22 @@ async function buildNanoCodexPrompt(
   ctx: ToolContext,
   text: string,
   resumed: boolean,
-  activeGame: GuardedAgentRequest["activeGame"],
+  capabilityContributions: AgentCapabilityRuntime["promptContributions"],
 ) {
   const skills = renderSkillsForPrompt(await loadSkills());
   const serverOverlay = await loadServerOverlay(ctx);
   const promptOverlay = await loadPromptOverlayText(ctx.config.promptOverlayPath);
-  const emojiContext = await prepareDiscordEmojiPromptContext(ctx, text);
   const messages = chatMessages(
     text,
     skills,
     ctx.sessionMessages ?? [],
     ctx.replyContext,
-    ctx.requestAttachments,
     serverOverlay,
     { userId: ctx.userId, userDisplayName: ctx.userDisplayName, mentionedUsers: ctx.mentionedUsers },
     promptOverlay,
-    emojiContext,
+    capabilityContributions,
+    { displayName: ctx.config.discord.botName },
   );
-  const currentModel = effectiveAgentChatModel(ctx);
-  if (currentModel) {
-    messages.splice(Math.max(0, messages.length - 1), 0, {
-      role: "system",
-      content: `Current NanoCodex model for this turn: \`${currentModel}\`. Treat this as verified runtime context when answering model-identity questions.`,
-    });
-  }
-  injectActiveGameSession(messages, activeGame);
   const instructions = messages
     .filter((message, index) => isStableNanoCodexInstruction(message, index))
     .map((message) => textContent(message.content))
@@ -407,24 +395,6 @@ function objectArguments(value: unknown): Record<string, unknown> {
 
 function isRecoverableMutationResult(_toolName: ToolName, result: AgentResponse) {
   return result.status !== "error" && result.outcome?.terminal === true;
-}
-
-function isSuccessfulNanoWebSearchEvent(event: NanoCodexRuntimeEvent) {
-  if (event.type !== "tool.result") return false;
-  const toolName = typeof event.payload.toolName === "string"
-    ? event.payload.toolName
-    : typeof event.payload.tool_name === "string"
-      ? event.payload.tool_name
-      : typeof event.payload.name === "string"
-        ? event.payload.name
-        : undefined;
-  const status = typeof event.payload.status === "string" ? event.payload.status : undefined;
-  const sources = Array.isArray(event.payload.sources)
-    ? event.payload.sources
-    : Array.isArray(event.payload.citations)
-      ? event.payload.citations
-      : [];
-  return (toolName === "web_search" || toolName === "web__run") && status !== "failed" && sources.length > 0;
 }
 
 async function recordNanoCodexEvent(ctx: ToolContext, event: NanoCodexRuntimeEvent) {

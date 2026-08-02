@@ -1,9 +1,9 @@
-import { enqueueAgentRuntimeCodeUpdateTask } from "../agent/runtimeControlPlane.js";
+import { enqueueAgentRuntimeCodeUpdateTask } from "../capabilities/codeUpdates.js";
 import { resolveGitHubTaskToken } from "../github/appToken.js";
 import { parseGitHubRepository } from "../github/repository.js";
 import { summarizeForAudit, truncateForDiscord } from "../util/text.js";
 import type { AgentTaskRecord, AgentTaskStatus, SandboxCommandEvent, TaskEvent } from "../db/repositories.js";
-import { missingCodegenConfig } from "./toolScope.js";
+import { missingCodegenConfig } from "../capabilities/toolAvailability.js";
 import type { AgentResponse, ToolContext } from "./types.js";
 import {
   agentTaskAuditSummary,

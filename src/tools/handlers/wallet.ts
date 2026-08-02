@@ -8,11 +8,11 @@ import {
   reconcileWalletTransfers,
   requestStarterFunds,
   transferWalletFunds,
-} from "../../tools/walletTools.js";
-import { awaitRandomWagerAction } from "../../tools/gameSessionTools.js";
-import { cleanToolResponse } from "../../tools/responseFormatting.js";
-import type { ToolName } from "../../tools/registry.js";
-import type { AgentResponse } from "../../tools/types.js";
+} from "../walletTools.js";
+import { awaitRandomWagerAction } from "../gameSessionTools.js";
+import { cleanToolResponse } from "../responseFormatting.js";
+import type { ToolName } from "../registry.js";
+import type { AgentResponse } from "../types.js";
 import { numberArgument, recordArgument, stringArgument, stringArrayArgument } from "./arguments.js";
 import type { LocalToolHandler } from "./types.js";
 

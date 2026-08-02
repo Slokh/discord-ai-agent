@@ -1,10 +1,10 @@
-import { getDeploymentStatus } from "../../tools/agentTaskTools.js";
-import { setAgentModel } from "../../tools/agentModelTools.js";
-import { inspectAgentLogs, reportStatus } from "../../tools/discordOpsTools.js";
-import { getSpendSummary } from "../../tools/spendTools.js";
-import { cleanToolResponse } from "../../tools/responseFormatting.js";
+import { getDeploymentStatus } from "../agentTaskTools.js";
+import { setAgentModel } from "../agentModelTools.js";
+import { inspectAgentLogs, reportStatus } from "../discordOpsTools.js";
+import { getSpendSummary } from "../spendTools.js";
+import { cleanToolResponse } from "../responseFormatting.js";
 import { stringArgument, numberArgument } from "./arguments.js";
-import type { ToolName } from "../../tools/registry.js";
+import type { ToolName } from "../registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const opsToolHandlers = {

@@ -24,7 +24,7 @@ vi.mock("../../src/tools/spendTools.js", () => ({
   getSpendSummary: mocks.getSpendSummary,
 }));
 
-import { opsToolHandlers } from "../../src/agent/toolHandlers/ops.js";
+import { opsToolHandlers } from "../../src/tools/handlers/ops.js";
 
 const ctx = { config: { maxReplyChars: 1_800 } } as ToolContext;
 

@@ -1,5 +1,5 @@
-import { cleanToolResponse } from "../../tools/responseFormatting.js";
-import type { AgentResponse } from "../../tools/types.js";
+import { cleanToolResponse } from "../responseFormatting.js";
+import type { AgentResponse } from "../types.js";
 
 export function cleanAgentResponse(response: AgentResponse, maxChars: number): AgentResponse {
   return { ...response, content: cleanToolResponse(response.content, maxChars) };

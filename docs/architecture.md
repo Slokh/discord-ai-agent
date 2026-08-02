@@ -38,6 +38,7 @@ Code-change tool call
 - `agent_runtime_*` is the canonical execution ledger for chat and code-update attempts.
 - Discord delivery obligations describe what still needs to be rendered; they are not a second execution ledger.
 - The model receives one stable tool schema narrowed only by deployment capability. It chooses tools directly.
+- `src/agent/` is capability-agnostic. Installed product behavior enters through the capability session, tool contracts, and tool handlers rather than feature imports or tool-name branches in the model loop.
 - Every tool call is revalidated against its canonical schema, current deployment, requester scope, and access policy.
 - The current requester and current-turn intent are immutable authority.
 - Postgres owns durable state. In-memory values may cache or coordinate but cannot become an alternate source of truth.
@@ -48,10 +49,10 @@ Code-change tool call
 
 1. `src/discord/client.ts` wires Discord events. `messageIngress.ts` and `turnPreparation.ts` decide whether to respond, persist the message, resolve reply context, and create the runtime session/execution.
 2. `src/agent/runtimeEnvelope.ts` stores a replayable, requester-scoped turn envelope and input artifact. `runtimeControlPlane.ts` enqueues the execution.
-3. `src/agent/runtimeRunner.ts` reconstructs `ToolContext` from durable identifiers and calls `runtimeExecutor.ts`.
-4. `guardedAgentRequest.ts` loads the durable model override and active game. The remaining deterministic random-outcome guard protects unresolved chance/wager state.
-5. `nanocodexAgentRuntime.ts` builds the prompt, resumes a compatible opaque NanoCodex snapshot, exposes the deployment tool contract, and handles model/tool events.
-6. `toolDispatcher.ts` validates and gates the selected local tool, then dispatches through focused handlers in `src/agent/toolHandlers/`.
+3. `src/discord/agentRuntimeRunner.ts` composes Discord delivery and installed feature services around the generic executor; `runtimeExecutor.ts` invokes the agent runtime.
+4. `src/capabilities/index.ts` prepares one per-turn capability session. Installed modules may contribute model selection, bounded prompt context, tool-result observation, final-response obligations, and timeout-recovery constraints.
+5. `nanocodexAgentRuntime.ts` consumes only that generic session, builds the prompt, resumes a compatible opaque NanoCodex snapshot, exposes the deployment tool contract, and handles model/tool events.
+6. `toolDispatcher.ts` validates and gates the selected local tool, then dispatches through focused adapters in `src/tools/handlers/`.
 7. Tools write files, tables, footers, or semantic Discord presentation to one turn output. Successful mutations are retained so a later model failure or timeout can still return the committed result.
 8. Runtime messages, events, artifacts, usage, and the next NanoCodex snapshot are stored in the canonical ledger.
 9. `src/discord/agentDelivery.ts` records a versioned delivery intent. `presentationDelivery.ts` and `responseSink.ts` render the final content, files, Components V2 payload, and cleanup. Startup sweeps replay incomplete obligations idempotently.
@@ -101,8 +102,9 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 
 | Area | Main entry points | Closest verification |
 | --- | --- | --- |
-| Prompt and NanoCodex execution | `src/agent/nanocodexAgentRuntime.ts`, `promptBuilder.ts`, `runtimeRunner.ts` | `tests/unit/nanocodex-agent-runtime.test.ts`, prompt tests, agent integration tests |
-| Tool contract and dispatch | `src/tools/contracts/`, `registry.ts`, `src/agent/toolHandlers/` | registry, contract-validation, handler-conformance tests |
+| Generic prompt and NanoCodex execution | `src/agent/capabilityRuntime.ts`, `nanocodexAgentRuntime.ts`, `promptBuilder.ts` | architecture, NanoCodex runtime, prompt, and agent integration tests |
+| Installed capability lifecycle and feature orchestration | `src/capabilities/` | focused capability tests plus architecture boundary tests |
+| Tool contract and dispatch | `src/tools/contracts/`, `registry.ts`, `src/tools/handlers/` | registry, contract-validation, handler-conformance tests |
 | Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
 | Control plane and console | `src/control/internalApiServer.ts`, `src/control/`, `src/control/console/` | internal API, observability, and console tests |

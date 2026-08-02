@@ -1,6 +1,6 @@
-import { queryGeneratedCsv, queryGeneratedTable, readGeneratedFile } from "../../tools/generatedFileTools.js";
+import { queryGeneratedCsv, queryGeneratedTable, readGeneratedFile } from "../generatedFileTools.js";
 import { cleanAgentResponse, stringArgument, stringArrayArgument, numberArgument, booleanArgument } from "./arguments.js";
-import type { ToolName } from "../../tools/registry.js";
+import type { ToolName } from "../registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const generatedDataToolHandlers = {

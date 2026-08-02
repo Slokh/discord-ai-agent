@@ -4,9 +4,9 @@ import { bindToolHandlers } from "../tools/toolDefinition.js";
 import type { AgentToolRoute } from "./routerShared.js";
 import { restrictedToolGate } from "./toolGate.js";
 import { invalidToolCallResponse } from "../tools/toolContractValidation.js";
-import { handlerDefinitions } from "./toolHandlers/index.js";
+import { handlerDefinitions } from "../tools/handlers/index.js";
 
-export { stringArgument, stringArrayArgument } from "./toolHandlers/arguments.js";
+export { stringArgument, stringArrayArgument } from "../tools/handlers/arguments.js";
 
 const localToolHandlers = bindToolHandlers(toolRegistry, handlerDefinitions);
 

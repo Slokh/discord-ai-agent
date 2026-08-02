@@ -1,12 +1,12 @@
-import { listDiscordBugMarkers } from "../../tools/discordBugTools.js";
-import { inspectDiscordFile } from "../../tools/discordFileTools.js";
-import { findDiscordChannels, findDiscordUsers } from "../../tools/discordResolverTools.js";
-import { answerFromHistory, getDiscordMessageContext, getDiscordStats, getRecentDiscordMessages, searchDiscordAttachments } from "../../tools/discordRetrievalTools.js";
-import { getDiscordChannelTopics, summarizeCurrentThread, summarizeDiscordHistory } from "../../tools/discordSummaryTools.js";
-import { getAgentMemoryStats, getRecentAgentMemory } from "../../tools/agentMemoryTools.js";
-import { cleanToolResponse } from "../../tools/responseFormatting.js";
+import { listDiscordBugMarkers } from "../discordBugTools.js";
+import { inspectDiscordFile } from "../discordFileTools.js";
+import { findDiscordChannels, findDiscordUsers } from "../discordResolverTools.js";
+import { answerFromHistory, getDiscordMessageContext, getDiscordStats, getRecentDiscordMessages, searchDiscordAttachments } from "../discordRetrievalTools.js";
+import { getDiscordChannelTopics, summarizeCurrentThread, summarizeDiscordHistory } from "../discordSummaryTools.js";
+import { getAgentMemoryStats, getRecentAgentMemory } from "../agentMemoryTools.js";
+import { cleanToolResponse } from "../responseFormatting.js";
 import { stringArgument, stringArgumentPreservingEmpty, stringArrayArgument, enumArgument, numberArgument, booleanArgument } from "./arguments.js";
-import type { ToolName } from "../../tools/registry.js";
+import type { ToolName } from "../registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const discordRetrievalToolHandlers = {

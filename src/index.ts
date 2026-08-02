@@ -18,7 +18,7 @@ import { startAgentTaskNotifier } from "./discord/taskNotifications.js";
 import { startJobs } from "./jobs/queue.js";
 import { startStaleRunReconciler } from "./observability/staleRuns.js";
 import { logger } from "./util/logger.js";
-import { createAgentRuntimeRunner } from "./agent/runtimeRunner.js";
+import { createAgentRuntimeRunner } from "./discord/agentRuntimeRunner.js";
 import { PaymentRepository } from "./db/paymentRepository.js";
 import { PrivyTempoWalletProvider } from "./payments/privyTempoWalletProvider.js";
 import { WalletService } from "./payments/walletService.js";

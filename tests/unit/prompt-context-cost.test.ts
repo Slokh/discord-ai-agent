@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   chatMessages,
-  currentDataGuidance,
-  loadDiscordEmojiPromptContext,
   toolResultContentForPrompt,
 } from "../../src/agent/promptBuilder.js";
+import { discordEmojiCulturePrompt, loadDiscordEmojiPromptContext } from "../../src/capabilities/discordEmoji.js";
+import { freshDataPromptContribution } from "../../src/capabilities/freshData.js";
 import { continuationEvidenceFromResponse } from "../../src/agent/continuationEvidence.js";
 import { buildAgentRuntimeTurnEnvelope } from "../../src/agent/runtimeEnvelope.js";
 import {
@@ -83,11 +83,11 @@ function replyContext(): DiscordReplyContext {
 
 describe("prompt context cost controls", () => {
   it("keeps the large static system prompt first and byte-identical across per-turn inputs", () => {
-    const first = chatMessages("hi", "skill A", [], undefined, [], undefined, {
+    const first = chatMessages("hi", "skill A", [], undefined, undefined, {
       userId: "u1",
       userDisplayName: "Alice",
     });
-    const second = chatMessages("hello", "skill B", [], undefined, [], undefined, {
+    const second = chatMessages("hello", "skill B", [], undefined, undefined, {
       userId: "u2",
       userDisplayName: "Bob",
     });
@@ -99,7 +99,7 @@ describe("prompt context cost controls", () => {
     const requesterIndex = first.findIndex((message) => String(message.content).includes("Current Discord requester"));
     expect(requesterIndex).toBeGreaterThan(0);
     expect(String(first[requesterIndex]?.content)).toContain("immutable actor for the entire turn");
-    expect(String(first[requesterIndex]?.content)).toContain("every wallet lookup, transfer, wager, settlement");
+    expect(String(first[requesterIndex]?.content)).toContain("every protected read, mutation, audit");
   });
 
   it("treats harmless self-described aliases as conversation, not authority claims", () => {
@@ -108,7 +108,6 @@ describe("prompt context cost controls", () => {
       "",
       [],
       undefined,
-      [],
       undefined,
       {
         userId: "hunter-id",
@@ -168,7 +167,7 @@ describe("prompt context cost controls", () => {
   });
 
   it("teaches the model exact live server emoji mentions without changing the static prompt", () => {
-    const messages = chatMessages("nice", "", [], undefined, [], undefined, undefined, undefined, {
+    const emojiContent = discordEmojiCulturePrompt({
       emojis: [
         { id: "1", name: "party", animated: false, mention: "<:party:1>" },
         { id: "2", name: "wave", animated: true, mention: "<a:wave:2>" },
@@ -187,12 +186,17 @@ describe("prompt context cost controls", () => {
           createdAt: new Date("2026-07-18T00:00:00Z"),
         }],
       }],
-    });
+    })!;
+    const messages = chatMessages("nice", "", [], undefined, undefined, undefined, undefined, [{
+      section: "emoji_culture",
+      stability: "turn",
+      content: emojiContent,
+    }]);
     const prompt = messages.map((message) => String(message.content)).join("\n");
 
     expect(prompt).toContain("compact server-emoji culture guide");
     expect(prompt).toContain("choose at most one fitting emote treatment");
-    expect(prompt).toContain("use addDiscordReaction without a message target");
+    expect(prompt).toContain("reaction capability without a message target");
     expect(prompt).toContain("Never choose both inline use and a reaction");
     expect(prompt).toContain("<:party:1> (6 observed messages)");
     expect(prompt).not.toContain("<a:wave:2>");
@@ -241,7 +245,12 @@ describe("prompt context cost controls", () => {
       })),
     }));
 
-    const guide = chatMessages("nice", "", [], undefined, [], undefined, undefined, undefined, { emojis, profiles })
+    const emojiContent = discordEmojiCulturePrompt({ emojis, profiles })!;
+    const guide = chatMessages("nice", "", [], undefined, undefined, undefined, undefined, [{
+      section: "emoji_culture",
+      stability: "turn",
+      content: emojiContent,
+    }])
       .find((message) => String(message.content).includes("server-emoji culture guide"));
 
     expect(Buffer.byteLength(String(guide?.content), "utf8")).toBeLessThan(5 * 1024);
@@ -251,19 +260,21 @@ describe("prompt context cost controls", () => {
   });
 
   it("grounds relative dates and current offers in fresh tool evidence", () => {
-    const guidance = String(currentDataGuidance(new Date("2026-07-15T12:00:00.000Z")).content);
+    const contribution = freshDataPromptContribution(new Date("2026-07-15T12:00:00.000Z"));
+    const guidance = contribution.content;
 
     expect(guidance).toContain("Current UTC date: 2026-07-15");
     expect(guidance).toContain("this fall");
     expect(guidance).toContain("never answer from model memory");
-    expect(guidance).toContain("Use web_search first");
-    expect(guidance).toContain("sports rosters");
+    expect(guidance).toContain("external-data capability");
+    expect(guidance).toContain("sports");
     expect(guidance).toContain("Never say you ran a simulation, calculation, search, or tool");
-    expect(guidance).toContain("actual purchasable offers");
+    expect(guidance).toContain("current purchasable offer");
     expect(guidance).toContain("A verified date does not establish an exact hour");
-    expect(guidance).toContain("related patch or event");
+    expect(guidance).toContain("related event");
     expect(guidance).toContain("ask the shortest necessary follow-up");
-    expect(chatMessages("find current fares", "").map((message) => String(message.content)).join("\n")).toContain("Current UTC date:");
+    expect(chatMessages("find current fares", "", [], undefined, undefined, undefined, undefined, [contribution])
+      .map((message) => String(message.content)).join("\n")).toContain("Current UTC date:");
   });
 
   it("injects live current-message mention identities without importing old nicknames", () => {
@@ -272,7 +283,6 @@ describe("prompt context cost controls", () => {
       "",
       [],
       undefined,
-      [],
       undefined,
       {
         userId: "requester-id",

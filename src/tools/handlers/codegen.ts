@@ -1,7 +1,7 @@
-import { createAgentUpdateFromRequest, cancelAgentTask, getAgentTaskStatus, listAgentTasks, retryAgentTask } from "../../tools/agentTaskTools.js";
-import { cleanToolResponse } from "../../tools/responseFormatting.js";
+import { createAgentUpdateFromRequest, cancelAgentTask, getAgentTaskStatus, listAgentTasks, retryAgentTask } from "../agentTaskTools.js";
+import { cleanToolResponse } from "../responseFormatting.js";
 import { stringArgument, stringArrayArgument, numberArgument } from "./arguments.js";
-import type { ToolName } from "../../tools/registry.js";
+import type { ToolName } from "../registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const codegenToolHandlers = {

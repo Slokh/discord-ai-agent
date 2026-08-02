@@ -157,7 +157,7 @@ describe("runObservedModelCall", () => {
   });
 
   it("attributes prompt bytes to stable debugger sections", () => {
-    const messages = chatMessages("latest", "skills", [], undefined, [], undefined, {
+    const messages = chatMessages("latest", "skills", [], undefined, undefined, {
       userId: "user",
       userDisplayName: "User",
     });

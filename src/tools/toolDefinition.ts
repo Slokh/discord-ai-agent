@@ -1,4 +1,5 @@
 import type { FunctionToolDefinition } from "../models/openrouter.js";
+import type { AppConfig } from "../config/env.js";
 
 export const TOOL_NAMES = [
   "loadSkillContext", "composeDiscordResponse", "findDiscordUsers", "findDiscordChannels",
@@ -27,7 +28,10 @@ export type ToolRegistryEntry = {
   category: "discord" | "generation" | "memory" | "ops" | "coding" | "external";
   group: ToolGroup;
   deploymentRequirement: "always" | "spotify" | "codegen" | "wallet" | "user_wallet";
-  accessPolicy: "default" | "ops" | "strict_ops" | "image_allowlist";
+  accessPolicy: "default" | "ops" | "strict_ops" | "configured_ops";
+  accessPolicyEnabled?: (config: AppConfig) => boolean;
+  accessDeniedMessage?: string;
+  scopeForDeployment?: (tool: ToolRegistryEntry, config: AppConfig) => ToolRegistryEntry;
   toolClass: ToolClass;
   outputContract: string[];
   examples: string[];

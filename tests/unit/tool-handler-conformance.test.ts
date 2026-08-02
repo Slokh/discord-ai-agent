@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { handlerDefinitions, handlerFamilies } from "../../src/agent/toolHandlers/index.js";
+import { handlerDefinitions, handlerFamilies } from "../../src/tools/handlers/index.js";
 import { toolRegistry, type ToolName } from "../../src/tools/registry.js";
 import { bindToolHandlers } from "../../src/tools/toolDefinition.js";
 

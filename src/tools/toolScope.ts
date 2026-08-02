@@ -1,4 +1,5 @@
-import { hasGitHubTaskCredential, type AppConfig } from "../config/env.js";
+import type { AppConfig } from "../config/env.js";
+import { isToolCapabilityDeployed } from "../capabilities/toolAvailability.js";
 import {
   openRouterServerToolRegistry,
   toolRegistry,
@@ -23,29 +24,6 @@ export function deploymentToolset(config: AppConfig): DeploymentToolset {
   };
 }
 
-export function isSpotifyConfigured(config: AppConfig) {
-  return Boolean(config.spotify?.clientId?.trim() && config.spotify?.clientSecret?.trim());
-}
-
-export function isCodegenConfigured(config: AppConfig) {
-  return missingCodegenConfig(config).length === 0;
-}
-
-export function missingCodegenConfig(config: AppConfig): string[] {
-  const missing: string[] = [];
-  const repository = config.github?.repository?.trim();
-  if (!repository || repository === "owner/repo") missing.push("GITHUB_REPOSITORY");
-  if (!hasGitHubTaskCredential(config)) missing.push("GITHUB_TOKEN (or GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY + GITHUB_APP_INSTALLATION_ID)");
-  if (!config.execution?.taskSigningSecret) missing.push("TASK_SIGNING_SECRET");
-  return missing;
-}
-
 function isToolDeploymentAvailable(tool: ToolRegistryEntry, config: AppConfig) {
-  switch (tool.deploymentRequirement) {
-    case "spotify": return isSpotifyConfigured(config);
-    case "codegen": return isCodegenConfigured(config);
-    case "wallet": return Boolean(config.payments?.walletEnabled);
-    case "user_wallet": return Boolean(config.payments?.walletEnabled && config.payments?.userWalletsEnabled);
-    case "always": return true;
-  }
+  return isToolCapabilityDeployed(tool.deploymentRequirement, config);
 }

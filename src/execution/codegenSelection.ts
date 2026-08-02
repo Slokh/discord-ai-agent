@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config/env.js";
-import { CODEGEN_REASONING } from "../agent/modelPolicy.js";
+
+export const CODEGEN_REASONING = "medium" as const;
 
 export type CodegenExecutionSelection = {
   codegenBackend: AppConfig["execution"]["codegenBackend"];

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { RandomOutcomeGuard } from "../../src/agent/randomOutcomeGuard.js";
+import { RandomGameCapability } from "../../src/capabilities/randomGames.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 function toolResult(content: string, outcome?: { kind: string; state: "succeeded" | "failed" | "awaiting_action" | "settled"; wagerActive?: boolean }) {
@@ -13,12 +13,12 @@ describe("random outcome guard", () => {
     "Please choose the winner based on merit.",
     "Heads is usually the icon shown first.",
   ])("never classifies or blocks ordinary response prose: %s", async (content) => {
-    const guard = new RandomOutcomeGuard({} as ToolContext, "ordinary request");
-    await expect(guard.enforce({ content })).resolves.toEqual({ content });
+    const guard = new RandomGameCapability({} as ToolContext, "ordinary request");
+    await expect(guard.finalizeResponse({ content })).resolves.toEqual({ content });
   });
 
   it("rejects a final answer while a durable wager remains unresolved", async () => {
-    const guard = new RandomOutcomeGuard({
+    const guard = new RandomGameCapability({
       guildId: "guild",
       channelId: "channel",
       userId: "user",
@@ -28,12 +28,12 @@ describe("random outcome guard", () => {
       },
     } as unknown as ToolContext, "play the wager");
 
-    guard.noteToolResult("drawRandom", toolResult("draw", {
+    guard.observeToolResult("drawRandom", toolResult("draw", {
       kind: "rng_draw",
       state: "succeeded",
       wagerActive: true,
     }));
-    await expect(guard.enforce({
+    await expect(guard.finalizeResponse({
       content: "You win.",
       files: [{ name: "wrong.txt", contentType: "text/plain", data: Buffer.from("wrong") }],
       tables: [{ name: "Wrong", columns: ["x"], rows: [{ x: "y" }] }],
@@ -46,23 +46,23 @@ describe("random outcome guard", () => {
       discordPresentation: undefined,
     });
 
-    guard.noteToolResult("settleRandomWager", toolResult("settled", {
+    guard.observeToolResult("settleRandomWager", toolResult("settled", {
       kind: "wager",
       state: "settled",
     }));
-    await expect(guard.enforce({ content: "You win." })).resolves.toEqual({ content: "You win." });
+    await expect(guard.finalizeResponse({ content: "You win." })).resolves.toEqual({ content: "You win." });
   });
 
   it("allows a response after durable game state is saved", async () => {
-    const guard = new RandomOutcomeGuard({} as ToolContext, "hit");
-    guard.noteToolResult("drawRandom", {
+    const guard = new RandomGameCapability({} as ToolContext, "hit");
+    guard.observeToolResult("drawRandom", {
       content: "draw complete",
       outcome: { kind: "rng_draw", state: "succeeded", wagerActive: true },
     });
-    guard.noteToolResult("awaitRandomWagerAction", toolResult("paused", {
+    guard.observeToolResult("awaitRandomWagerAction", toolResult("paused", {
       kind: "wager",
       state: "awaiting_action",
     }));
-    await expect(guard.enforce({ content: "Hit or stand?" })).resolves.toEqual({ content: "Hit or stand?" });
+    await expect(guard.finalizeResponse({ content: "Hit or stand?" })).resolves.toEqual({ content: "Hit or stand?" });
   });
 });

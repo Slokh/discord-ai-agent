@@ -2,15 +2,16 @@ import type { Client } from "discord.js";
 import type { AppConfig } from "../config/env.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { BudgetRepository } from "../db/budgetRepository.js";
-import type { RngRepository } from "../db/rngRepository.js";
 import type { DeliveryObligationsRepository } from "../db/deliveryObligationsRepository.js";
 import type { DiscordAiAgentRepository } from "../db/repositories.js";
-import { runQueuedAgentRuntimeExecution } from "../discord/agentDelivery.js";
+import type { RngRepository } from "../db/rngRepository.js";
 import type { AgentRuntimeExecutionRunner } from "../jobs/queue.js";
 import type { OpenRouterClient } from "../models/openrouter.js";
-import { NanoCodexAgentRuntimePromptExecutor } from "./runtimeExecutor.js";
 import type { WalletService } from "../payments/walletService.js";
+import { NanoCodexAgentRuntimePromptExecutor } from "../agent/runtimeExecutor.js";
+import { runQueuedAgentRuntimeExecution } from "./agentDelivery.js";
 
+/** Composes Discord delivery and installed feature services around the generic agent executor. */
 export function createAgentRuntimeRunner(input: {
   config: AppConfig;
   repo: DiscordAiAgentRepository;

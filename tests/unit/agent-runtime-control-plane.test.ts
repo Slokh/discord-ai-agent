@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../src/config/env.js";
+import { enqueueAgentRuntimeCodeUpdateTask } from "../../src/capabilities/codeUpdates.js";
 import {
-  enqueueAgentRuntimeCodeUpdateTask,
   enqueueAgentRuntimeSessionExecution,
   missingAgentRuntimeExecutionJobContext,
   storeAgentRuntimeExecutionInputLines

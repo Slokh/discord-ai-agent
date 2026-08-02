@@ -1,8 +1,8 @@
-import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../../tools/imageTools.js";
+import { generateImage, getDiscordUserAvatar, inspectDiscordImages } from "../imageTools.js";
 import { isOpenRouterHttpError } from "../../models/openrouter.js";
-import { cleanToolResponse } from "../../tools/responseFormatting.js";
+import { cleanToolResponse } from "../responseFormatting.js";
 import { stringArgument, stringArrayArgument, numberArgument, booleanArgument } from "./arguments.js";
-import type { ToolName } from "../../tools/registry.js";
+import type { ToolName } from "../registry.js";
 import type { LocalToolHandler } from "./types.js";
 
 // Uniform signatures intentionally expose only the inputs each tool needs.

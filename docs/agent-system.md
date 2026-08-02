@@ -24,6 +24,8 @@ The TypeScript application owns:
 
 NanoCodex may request an action. The application decides whether that exact action is available and authorized, performs it, and returns typed evidence.
 
+The generic runtime under `src/agent/` knows only the capability-session interface, prompt contributions, tool registry, typed results, and execution lifecycle. It does not import individual product features or branch on their tool names.
+
 `src/agent/nanocodexRuntime.ts` owns the versioned process protocol. Request IDs, protocol versions, and terminal results are validated. Aborts terminate the process, and late tool calls still meet the application's abort and authority gates. Opaque NanoCodex snapshots are stored losslessly and resumed only when the session, model, instructions, and tool contract are compatible.
 
 ## Prompt construction
@@ -60,7 +62,19 @@ Each local tool is defined in a focused file under `src/tools/contracts/` and de
 - deployment requirement and access policy;
 - output promise, permission requirements, audit events, and examples.
 
-`src/tools/registry.ts` aggregates contracts. It must not become a switchboard for behavior. `toolContractValidation.ts` compiles the advertised schemas and validates canonical examples. `src/agent/toolHandlers/` binds every registered tool to exactly one focused adapter; startup fails for missing, duplicate, or unknown handlers.
+`src/tools/registry.ts` aggregates contracts. It must not become a switchboard for behavior. `toolContractValidation.ts` compiles the advertised schemas and validates canonical examples. `src/tools/handlers/` binds every registered tool to exactly one focused adapter; startup fails for missing, duplicate, or unknown handlers.
+
+## Capability boundary
+
+Features integrate through three explicit layers:
+
+1. `src/capabilities/` owns cross-turn and product integration that is not itself a tool call: model selection, dynamic prompt context, deployment availability, tool-result observation, final-response obligations, timeout constraints, and feature-specific task orchestration.
+2. `src/tools/contracts/` owns each model-visible capability's schema, examples, access policy, deployment narrowing, output promise, and audit contract.
+3. `src/tools/handlers/` adapts a validated tool call to its focused implementation in `src/tools/`, `src/payments/`, `src/execution/`, or another owning domain.
+
+Adding a capability should not require editing `nanocodexAgentRuntime.ts`, `promptBuilder.ts`, `toolDispatcher.ts`, `toolDeployment.ts`, or `toolScope.ts`. Add a focused contract and handler; add a capability-session contribution only when the feature truly needs non-tool per-turn lifecycle behavior. Keep provider clients and durable business rules in their owning domain, not in the handler or generic loop.
+
+The architecture test rejects known feature/tool names in the generic runtime and rejects reintroducing `src/agent/toolHandlers/`. This makes the boundary executable rather than relying on convention.
 
 ## Tool execution
 

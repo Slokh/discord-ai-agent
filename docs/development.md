@@ -49,13 +49,15 @@ Before adding a new tool, confirm that an existing primitive cannot satisfy the 
 
 1. Define the canonical schema and examples in the owning `src/tools/contracts/` family.
 2. Declare deployment requirements, access policy, mutation status, output promise, and audit events.
-3. Bind a focused handler under `src/agent/toolHandlers/`.
+3. Bind a focused handler under `src/tools/handlers/`.
 4. Validate permission and authority at execution time.
 5. Return a typed `AgentResponse`, including partial/error metadata where appropriate.
 6. Add contract, handler-conformance, and focused behavior coverage.
 7. Add or update an eval only when model selection or wording is the behavior under test.
 
 Do not create a natural-language router, hidden tool list, mid-turn expansion protocol, or regex response guard.
+
+If a feature needs prompt context, model selection, result observation, or a final-response invariant outside its tool call, add one focused module under `src/capabilities/` and register it in the capability composition root. Do not import that feature into the generic files under `src/agent/`. The architecture test enforces this separation.
 
 ## Tests and checks
 

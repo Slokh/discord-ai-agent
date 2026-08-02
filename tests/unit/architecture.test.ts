@@ -39,6 +39,56 @@ describe("architecture guardrails", () => {
     expect(oversized).toEqual([]);
   });
 
+  it("keeps product capabilities out of the generic agent loop", async () => {
+    const genericFiles = [
+      "src/agent/capabilityRuntime.ts",
+      "src/agent/nanocodexAgentRuntime.ts",
+      "src/agent/promptBuilder.ts",
+      "src/agent/runtimeControlPlane.ts",
+      "src/agent/toolDispatcher.ts",
+      "src/tools/toolDeployment.ts",
+      "src/tools/toolScope.ts",
+    ];
+    const featureNames = [
+      "addDiscordReaction",
+      "composeDiscordResponse",
+      "drawRandom",
+      "generateImage",
+      "inspectDiscordImages",
+      "runCodingAgent",
+      "setAgentModel",
+      "settleRandomWager",
+      "Spotify",
+      "transferWalletFunds",
+    ];
+
+    for (const file of genericFiles) {
+      const content = await fs.readFile(path.join(process.cwd(), file), "utf8");
+      for (const featureName of featureNames) {
+        expect(content, `${file} should not know capability ${featureName}`).not.toContain(featureName);
+      }
+    }
+    await expect(fs.stat(path.join(process.cwd(), "src/agent/toolHandlers"))).rejects.toThrow();
+
+    const agentFiles = await listSourceFiles(path.join(process.cwd(), "src/agent"));
+    const forbiddenFeatureImports = [
+      '"../payments/',
+      '"../execution/',
+      '"../tools/agentModelTools',
+      '"../tools/agentTaskTools',
+      '"../tools/imageTools',
+      '"../tools/randomTools',
+      '"../tools/spotifyTools',
+      '"../tools/walletTools',
+    ];
+    for (const file of agentFiles) {
+      const content = await fs.readFile(file, "utf8");
+      for (const importPath of forbiddenFeatureImports) {
+        expect(content, `${path.relative(process.cwd(), file)} should not import ${importPath}`).not.toContain(importPath);
+      }
+    }
+  });
+
   it("keeps relative source imports acyclic", async () => {
     const sourceFiles = await listSourceFiles(path.join(process.cwd(), "src"));
     const knownFiles = new Set(sourceFiles.map((file) => path.resolve(file)));

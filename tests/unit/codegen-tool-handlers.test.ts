@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../src/tools/agentTaskTools.js", () => mocks);
 
-import { codegenToolHandlers } from "../../src/agent/toolHandlers/codegen.js";
+import { codegenToolHandlers } from "../../src/tools/handlers/codegen.js";
 
 const ctx = { config: { maxReplyChars: 1_800 } } as ToolContext;
 

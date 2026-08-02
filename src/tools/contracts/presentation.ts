@@ -24,6 +24,33 @@ export const presentationToolContracts = [
         }],
       }],
     }],
+    scopeForDeployment: (tool, config) => {
+      const premiumSkuIds = config.discord?.premiumSkuIds ?? [];
+      return {
+        ...tool,
+        description: `${tool.description} Premium button SKUs available in this deployment: ${premiumSkuIds.length ? premiumSkuIds.join(", ") : "none"}.`,
+        parameters: scopePremiumButtonSchema(tool.parameters, premiumSkuIds) as ToolRegistryEntry["parameters"],
+      };
+    },
     parameters: discordPresentationToolParameters,
   }),
 ] satisfies ToolRegistryEntry[];
+
+function scopePremiumButtonSchema(value: unknown, skuIds: string[]): unknown {
+  if (Array.isArray(value)) return value.map((item) => scopePremiumButtonSchema(item, skuIds)).filter((item) => item !== undefined);
+  if (!value || typeof value !== "object") return value;
+  const object = value as Record<string, unknown>;
+  const properties = object.properties as Record<string, unknown> | undefined;
+  const style = properties?.style as { enum?: unknown[] } | undefined;
+  if (style?.enum?.length === 1 && style.enum[0] === "premium") {
+    if (!skuIds.length) return undefined;
+    return {
+      ...object,
+      properties: {
+        ...properties,
+        skuId: { type: "string", enum: skuIds, description: "A premium SKU configured for this Discord application." },
+      },
+    };
+  }
+  return Object.fromEntries(Object.entries(object).map(([key, child]) => [key, scopePremiumButtonSchema(child, skuIds)]));
+}

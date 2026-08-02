@@ -25,7 +25,8 @@ import {
 } from "../../src/execution/harness/nanocodex.js";
 import {
   codeUpdateBranchName,
-  codeUpdatePullRequestBody,
+  codeUpdatePullRequestMetadata,
+  deterministicPullRequestMetadata,
   codeUpdatePullRequestTitle,
 } from "../../src/execution/prFormatting.js";
 import {
@@ -113,38 +114,106 @@ describe("sandboxRunner", () => {
     );
   });
 
-  it("keeps generated PR bodies focused without private Discord content", () => {
-    const body = codeUpdatePullRequestBody({
-      env: {
-        taskRequest: "Use a loading reaction while the bot is working.",
-        requestedBy: "demo-user (1234567890123450001)"
-      }
+  it("derives specific PR metadata from only the public code diff", async () => {
+    const prompts: string[] = [];
+    const metadata = await codeUpdatePullRequestMetadata({
+      diffStat: [
+        " src/agent/nanocodexAgentRuntime.ts | 75 ++++++++++++++++++----------",
+        " tests/unit/nanocodex-agent-runtime.test.ts | 53 ++++++++++++++++++++",
+        " 2 files changed, 105 insertions(+), 23 deletions(-)",
+      ].join("\n"),
+      diffPatch: [
+        "diff --git a/src/agent/nanocodexAgentRuntime.ts b/src/agent/nanocodexAgentRuntime.ts",
+        "--- a/src/agent/nanocodexAgentRuntime.ts",
+        "+++ b/src/agent/nanocodexAgentRuntime.ts",
+        "@@ -1,3 +1,4 @@",
+        "+eventName: \"agent.nanocodex.timeout_output_recovered\"",
+        "diff --git a/tests/unit/nanocodex-agent-runtime.test.ts b/tests/unit/nanocodex-agent-runtime.test.ts",
+        "--- a/tests/unit/nanocodex-agent-runtime.test.ts",
+        "+++ b/tests/unit/nanocodex-agent-runtime.test.ts",
+        "+it(\"delivers generated files when the hard timeout wins\", async () => {})",
+      ].join("\n"),
+      complete: async ({ systemPrompt, userPrompt }) => {
+        prompts.push(systemPrompt, userPrompt);
+        return {
+          content: JSON.stringify({
+            title: "Recover generated files after agent runtime timeouts",
+            why: "Generated files could be lost when the runtime timed out after a file-producing tool completed.",
+            changes: [
+              "Return accumulated files and presentation metadata after timeout.",
+              "Cover both runtime exits and hard-timeout recovery paths.",
+            ],
+          }),
+          model: "openai/gpt-5.6-terra",
+          estimatedCostUsd: 0.002,
+        };
+      },
     });
 
-    expect(body).toBe(
+    expect(metadata).toEqual(expect.objectContaining({
+      title: "Recover generated files after agent runtime timeouts",
+      source: "diff_model",
+      model: "openai/gpt-5.6-terra",
+      estimatedCostUsd: 0.002,
+    }));
+    expect(metadata.body).toBe(
       [
         "## Why",
         "",
-        "Requested through the private Discord code-update workflow. Original member content and identity are intentionally omitted.",
+        "Generated files could be lost when the runtime timed out after a file-producing tool completed.",
         "",
         "## Changes",
         "",
-        "- Implemented the requested repository change in the isolated Discord AI Agent sandbox.",
-        "- The diff is limited to the files required by the request and its regression coverage.",
+        "- Return accumulated files and presentation metadata after timeout.",
+        "- Cover both runtime exits and hard-timeout recovery paths.",
         "",
         "## Testing",
         "",
-        "- Agent ran focused checks in the sandbox where applicable.",
         "- `npm run typecheck`: passed",
         "- `npm run scan:release`: passed",
-        "- Remaining repository verification is enforced by required PR checks before merge."
+        "- Required pull-request checks provide the remaining repository verification."
       ].join("\n")
     );
-    expect(body).not.toContain("## Context");
-    expect(body).not.toContain("Task ID");
-    expect(body).not.toContain("Codegen model");
-    expect(body).not.toContain("loading reaction");
-    expect(body).not.toContain("demo-user");
+    expect(prompts.join("\n")).toContain("timeout_output_recovered");
+    expect(prompts.join("\n")).not.toContain("private-request-marker");
+    expect(prompts.join("\n")).not.toContain("Requested by");
+  });
+
+  it("falls back to changed source paths instead of bug-report metadata", async () => {
+    const diffPatch = "diff --git a/src/agent/nanocodexAgentRuntime.ts b/src/agent/nanocodexAgentRuntime.ts\n+recovery";
+    const fallback = deterministicPullRequestMetadata("1 file changed, 1 insertion(+)", diffPatch);
+    expect(fallback.title).toBe("Improve NanoCodex agent runtime");
+    expect(fallback.body).toContain("`src/agent/nanocodexAgentRuntime.ts`");
+
+    const metadata = await codeUpdatePullRequestMetadata({
+      diffStat: "1 file changed, 1 insertion(+)",
+      diffPatch,
+      complete: async () => ({
+        content: JSON.stringify({
+          title: "Validate Discord bug report private-request-marker",
+          why: "Validate the report.",
+          changes: ["Implement the requested change."],
+        }),
+      }),
+    });
+    expect(metadata).toEqual(expect.objectContaining({
+      title: "Improve NanoCodex agent runtime",
+      source: "deterministic_fallback",
+      fallbackReason: expect.stringContaining("generic"),
+    }));
+
+    const genericBody = await codeUpdatePullRequestMetadata({
+      diffStat: "1 file changed, 1 insertion(+)",
+      diffPatch,
+      complete: async () => ({
+        content: JSON.stringify({
+          title: "Recover generated runtime files",
+          why: "Implement the requested repository change.",
+          changes: ["Update the required files."],
+        }),
+      }),
+    });
+    expect(genericBody.source).toBe("deterministic_fallback");
   });
 
   it("classifies terminal codegen failures with actionable next steps", () => {

@@ -1,8 +1,10 @@
+import path from "node:path";
 import { slugify } from "../util/text.js";
 
 const CODE_UPDATE_BRANCH_PREFIX = "agent";
 const CODE_UPDATE_BRANCH_SLUG_MAX_CHARS = 40;
 const CODE_UPDATE_BRANCH_SUFFIX_CHARS = 4;
+const MAX_PUBLIC_DIFF_CHARS = 40_000;
 const CODE_UPDATE_BRANCH_STOP_WORDS = new Set([
   "a",
   "an",
@@ -22,6 +24,20 @@ const CODE_UPDATE_BRANCH_STOP_WORDS = new Set([
   "with",
   "you"
 ]);
+
+export type CodeUpdatePullRequestMetadata = {
+  title: string;
+  body: string;
+  source: "diff_model" | "deterministic_fallback";
+  model?: string;
+  estimatedCostUsd?: number;
+  fallbackReason?: string;
+};
+
+export type PullRequestMetadataCompletion = (input: {
+  systemPrompt: string;
+  userPrompt: string;
+}) => Promise<{ content: string; model?: string; estimatedCostUsd?: number }>;
 
 export function codeUpdateBranchName(title: string, taskId?: string) {
   const suffix = codeUpdateBranchSuffix(taskId);
@@ -44,26 +60,156 @@ export function codeUpdatePullRequestTitle(title: string) {
   return `${cleaned[0]?.toUpperCase() ?? ""}${cleaned.slice(1)}`;
 }
 
-export function codeUpdatePullRequestBody(input: { env: { taskRequest: string; requestedBy: string; taskType?: string } }) {
+export async function codeUpdatePullRequestMetadata(input: {
+  diffStat: string;
+  diffPatch: string;
+  complete: PullRequestMetadataCompletion;
+}): Promise<CodeUpdatePullRequestMetadata> {
+  const fallback = deterministicPullRequestMetadata(input.diffStat, input.diffPatch);
+  const systemPrompt = [
+    "Write accurate public GitHub pull-request metadata from a source-code diff.",
+    "The diff is the only authority. Describe the behavior and implementation that actually changed.",
+    "Do not mention task IDs, Discord message IDs, bug-report validation, agents, sandboxes, prompts, or workflow metadata.",
+    "Avoid generic wording such as 'implement the requested change', 'update files', or 'add tests'.",
+    "Return one JSON object with exactly these fields:",
+    "- title: imperative, specific, no trailing punctuation, at most 72 characters",
+    "- why: one concise sentence explaining the behavior or defect addressed",
+    "- changes: an array of 1 to 4 concise implementation bullets",
+  ].join("\n");
+  const userPrompt = [
+    "Diff stat:",
+    input.diffStat.trim() || "(not available)",
+    "",
+    "Patch:",
+    boundedPublicDiff(input.diffPatch),
+  ].join("\n");
+
+  try {
+    const completion = await input.complete({ systemPrompt, userPrompt });
+    const parsed = parsePullRequestMetadata(completion.content);
+    if (!parsed) {
+      return { ...fallback, fallbackReason: "metadata model returned an invalid or generic result" };
+    }
+    return {
+      title: parsed.title,
+      body: renderPullRequestBody(parsed.why, parsed.changes),
+      source: "diff_model",
+      ...(completion.model ? { model: completion.model } : {}),
+      ...(completion.estimatedCostUsd != null ? { estimatedCostUsd: completion.estimatedCostUsd } : {}),
+    };
+  } catch (error) {
+    return {
+      ...fallback,
+      fallbackReason: error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240),
+    };
+  }
+}
+
+export function deterministicPullRequestMetadata(diffStat: string, diffPatch: string): CodeUpdatePullRequestMetadata {
+  const changedPaths = changedPathsFromPatch(diffPatch);
+  const implementationPaths = changedPaths.filter((file) => !isSupportFile(file));
+  const primaryPath = implementationPaths[0] ?? changedPaths[0] ?? "source";
+  const title = `Improve ${humanizeSourcePath(primaryPath)}`.slice(0, 72).trimEnd();
+  const listedPaths = changedPaths.slice(0, 4);
+  const changes = listedPaths.length > 0
+    ? listedPaths.map((file) => `Update \`${file}\` according to the resulting code diff.`)
+    : ["Apply the implementation captured in the resulting code diff."];
+  const extraCount = Math.max(0, changedPaths.length - listedPaths.length);
+  if (extraCount > 0) changes.push(`Update ${extraCount} additional changed file${extraCount === 1 ? "" : "s"}.`);
+  const statSummary = diffStat.trim().split("\n").at(-1)?.trim();
+  const why = `Updates ${humanizeSourcePath(primaryPath)} based on the implementation that was actually produced${statSummary ? ` (${statSummary})` : ""}.`;
+  return {
+    title,
+    body: renderPullRequestBody(why, changes),
+    source: "deterministic_fallback",
+  };
+}
+
+function renderPullRequestBody(why: string, changes: string[]) {
   return [
     "## Why",
     "",
-    input.env.taskType === "bug_report"
-      ? "Validated from a 🐛 reaction on an AI reply. Original private Discord evidence is intentionally omitted."
-      : "Requested through the private Discord code-update workflow. Original member content and identity are intentionally omitted.",
+    why,
     "",
     "## Changes",
     "",
-    "- Implemented the requested repository change in the isolated Discord AI Agent sandbox.",
-    "- The diff is limited to the files required by the request and its regression coverage.",
+    ...changes.map((change) => `- ${change}`),
     "",
     "## Testing",
     "",
-    "- Agent ran focused checks in the sandbox where applicable.",
     "- `npm run typecheck`: passed",
     "- `npm run scan:release`: passed",
-    "- Remaining repository verification is enforced by required PR checks before merge.",
+    "- Required pull-request checks provide the remaining repository verification.",
   ].join("\n");
+}
+
+function parsePullRequestMetadata(content: string): { title: string; why: string; changes: string[] } | null {
+  const start = content.indexOf("{");
+  const end = content.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const candidate = parsed as Record<string, unknown>;
+  const title = singleLine(candidate.title, 72);
+  const why = singleLine(candidate.why, 320);
+  const changes = Array.isArray(candidate.changes)
+    ? candidate.changes.map((change) => singleLine(change, 240)).filter((change): change is string => Boolean(change)).slice(0, 4)
+    : [];
+  if (
+    !title
+    || title.length < 8
+    || !why
+    || changes.length === 0
+    || genericMetadataText(title)
+    || genericMetadataText([why, ...changes].join(" "))
+  ) return null;
+  return { title: title.replace(/[.!?]+$/g, ""), why, changes };
+}
+
+function singleLine(value: unknown, maxChars: number) {
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/^[-*#\s]+/, "").replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, maxChars).trimEnd() : null;
+}
+
+function genericMetadataText(value: string) {
+  return /\b(?:validate\s+(?:discord\s+)?bug report|discord bug report|agent update|implement(?:ed)? the requested (?:repository )?change|isolated (?:agent )?sandbox|task[- ]?\d+)\b/i.test(value)
+    || /\b\d{12,}\b/.test(value);
+}
+
+function boundedPublicDiff(diffPatch: string) {
+  if (diffPatch.length <= MAX_PUBLIC_DIFF_CHARS) return diffPatch.trim() || "(not available)";
+  return `${diffPatch.slice(0, MAX_PUBLIC_DIFF_CHARS).trimEnd()}\n\n[diff truncated]`;
+}
+
+function changedPathsFromPatch(diffPatch: string) {
+  return [...diffPatch.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)]
+    .map((match) => match[2]?.trim())
+    .filter((file): file is string => Boolean(file));
+}
+
+function isSupportFile(file: string) {
+  return /^(?:tests?|docs?)\//.test(file) || /(?:^|\/)(?:README|CHANGELOG)(?:\.|$)/i.test(file);
+}
+
+function humanizeSourcePath(file: string) {
+  const basename = path.basename(file).replace(/\.(?:[cm]?[jt]sx?|json|md)$/i, "");
+  const words = basename
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  const label = words || "source behavior";
+  return label
+    .replace(/\bnanocodex\b/g, "NanoCodex")
+    .replace(/\bpr\b/g, "PR")
+    .replace(/^./, (character) => character.toUpperCase());
 }
 
 function conciseBranchSlug(title: string, maxChars: number) {

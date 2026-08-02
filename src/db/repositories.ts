@@ -440,6 +440,9 @@ export class DiscordAiAgentRepository {
   clearDiscordBugMarkersForMessage(input: { guildId: string; messageId: string }) { return discordBugMarkerRepository.clearDiscordBugMarkersForMessage(this.pool, input); }
   createDiscordBugReport(input: Parameters<typeof discordBugReportRepository.createDiscordBugReport>[1]): Promise<{ report: DiscordBugReport; created: boolean }> { return discordBugReportRepository.createDiscordBugReport(this.pool, input); }
   attachDiscordBugReportTask(input: Parameters<typeof discordBugReportRepository.attachDiscordBugReportTask>[1]) { return discordBugReportRepository.attachDiscordBugReportTask(this.pool, input); }
+  getDiscordBugReportForTask(taskId: string) { return discordBugReportRepository.getDiscordBugReportForTask(this.pool, taskId); }
+  listDiscordBugReportsAwaitingDeployment(limit = 20) { return discordBugReportRepository.listDiscordBugReportsAwaitingDeployment(this.pool, limit); }
+  claimDiscordBugReportDeployment(input: Parameters<typeof discordBugReportRepository.claimDiscordBugReportDeployment>[1]) { return discordBugReportRepository.claimDiscordBugReportDeployment(this.pool, input); }
   markDiscordBugReportFailed(input: Parameters<typeof discordBugReportRepository.markDiscordBugReportFailed>[1]) { return discordBugReportRepository.markDiscordBugReportFailed(this.pool, input); }
   completeDiscordBugReportForTask(input: Parameters<typeof discordBugReportRepository.completeDiscordBugReportForTask>[1]) { return discordBugReportRepository.completeDiscordBugReportForTask(this.pool, input); }
   isUserPrivacyDeleted(userId: string) { return discordArchiveRepository.isUserPrivacyDeleted(this.pool, userId); }

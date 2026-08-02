@@ -42,16 +42,6 @@ export async function automateDiscordBugReport(input: {
   });
   if (!created.created) return "duplicate" as const;
 
-  const status = await discordReply(
-    input.message,
-    "🐛 I’m validating this report now. If it’s a real bug, I’ll fix it, auto-merge it after checks pass, and deploy it.",
-    { logger }
-  );
-  if (!status.ok) {
-    await input.repo.markDiscordBugReportFailed({ reportId, summary: "Could not post the bug-validation status reply." });
-    return "reply_failed" as const;
-  }
-
   try {
     const session = await input.agentRuntime.getSession({ sessionId: execution.sessionId });
     if (!session) throw new Error("The original AI run is no longer available for validation.");
@@ -76,18 +66,16 @@ export async function automateDiscordBugReport(input: {
       guildId,
       channelId: input.message.channelId,
       userId: input.reportedByUserId,
-      discordResponseChannelId: input.message.channelId,
-      discordResponseMessageId: status.value.id,
       parentExecutionId: execution.executionId,
       taskId,
       taskType: "bug_report"
     });
-    await input.repo.attachDiscordBugReportTask({ reportId, taskId, statusMessageId: status.value.id });
+    await input.repo.attachDiscordBugReportTask({ reportId, taskId, statusMessageId: null });
     return "queued" as const;
   } catch (error) {
     const summary = error instanceof Error ? error.message : String(error);
     await input.repo.markDiscordBugReportFailed({ reportId, summary });
-    await status.value.edit(`🐛 I couldn’t start automated validation: ${summary}`).catch(() => undefined);
+    await discordReply(input.message, `🐛 I couldn’t start automated validation: ${summary}`, { logger }).catch(() => undefined);
     throw error;
   }
 }

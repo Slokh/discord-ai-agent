@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Octokit } from "@octokit/rest";
+import type { AppConfig } from "../config/env.js";
+import { OpenRouterClient } from "../models/openrouter.js";
 import { complete, progress, recordArtifact } from "./callbacks.js";
 import { diagnoseCodegenFailure, renderCodegenFailureDiagnosis, type CodegenFailureDiagnosis } from "./codegenFailureDiagnosis.js";
 import { renderCodegenContextPack } from "./codegenPrompts.js";
@@ -10,7 +12,7 @@ import { changedDependencyManifestFiles, codegenNpmScriptEnv, prepareDependencie
 import { readBugReportResult } from "./bugReportResult.js";
 import { NANOCODEX_RUNTIME_LABEL, nanoCodexModel, runNanoCodex } from "./harness/nanocodex.js";
 import type { AgentRunSummary, NanoCodexRunInput } from "./harness/types.js";
-import { codeUpdateBranchName, codeUpdatePullRequestBody, codeUpdatePullRequestTitle } from "./prFormatting.js";
+import { codeUpdateBranchName, codeUpdatePullRequestMetadata, codeUpdatePullRequestTitle } from "./prFormatting.js";
 import {
   assertCodeUpdatePushAllowed,
   branchPushRef,
@@ -106,8 +108,8 @@ async function recordCodegenFailureDiagnosis(env: SandboxEnv, diagnosis: Codegen
 
 export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, totalStartedAt: number) {
   const { owner, repo } = parseGitHubRepository(env.githubRepository);
-  const prTitle = codeUpdatePullRequestTitle(env.taskTitle);
-  const generatedBranchName = codeUpdateBranchName(prTitle, env.taskId);
+  const branchSeedTitle = codeUpdatePullRequestTitle(env.taskTitle);
+  const generatedBranchName = codeUpdateBranchName(branchSeedTitle, env.taskId);
   const cache = sandboxCachePaths(env, owner, repo);
   const cacheSummary: CacheSummary = {};
   await fs.mkdir(cache.workspacesDir, { recursive: true });
@@ -317,6 +319,50 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       throw new Error("Release scan failed after agent task; refusing to push generated changes.");
     }
 
+    const prMetadata = target.pullRequestNumber
+      ? null
+      : await timedPhase(
+          env,
+          timings,
+          "prMetadata",
+          "Deriving public pull-request metadata from the verified code diff.",
+          async () => codeUpdatePullRequestMetadata({
+            diffStat: diffStat.stdout,
+            diffPatch: diffPatch.stdout,
+            complete: async ({ systemPrompt, userPrompt }) => {
+              const client = new OpenRouterClient({
+                apiKey: env.openRouterApiKey,
+                baseUrl: env.openRouterBaseUrl,
+                chatModel: env.openRouterCodegenModel,
+              } as AppConfig["openRouter"]);
+              const result = await client.chat({
+                model: env.openRouterCodegenModel,
+                messages: [
+                  { role: "system", content: systemPrompt },
+                  { role: "user", content: userPrompt },
+                ],
+                reasoningEffort: "low",
+                maxTokens: 700,
+                retryPolicy: "cheap",
+              });
+              return {
+                content: result.content,
+                model: result.model,
+                estimatedCostUsd: result.estimatedCostUsd,
+              };
+            },
+          }),
+        );
+    if (prMetadata) {
+      await progress(env, "pr_metadata_ready", "Prepared pull-request title and body from the public code diff.", {
+        source: prMetadata.source,
+        model: prMetadata.model ?? null,
+        estimatedCostUsd: prMetadata.estimatedCostUsd ?? null,
+        fallbackReason: prMetadata.fallbackReason ?? null,
+      });
+    }
+    const prTitle = prMetadata?.title ?? branchSeedTitle;
+
     const preCommitChangeState = await readGitChangeState(checkoutDir, baseRevision);
     if (!preCommitChangeState.hasChanges) {
       throw new Error("Agent task changes disappeared before commit; no PR will be opened.");
@@ -349,7 +395,6 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     }, { branchName, targetPullRequestNumber: target.pullRequestNumber, updateExistingBranch: target.updateExistingBranch });
 
     const draft = false;
-    const finalPrBody = codeUpdatePullRequestBody({ env });
     let prUrl: string;
     let prNumber: number | null = target.pullRequestNumber;
     const updatedExistingPullRequest = Boolean(target.pullRequestNumber);
@@ -364,7 +409,7 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
       );
       prUrl = existingPr.data.html_url ?? target.pullRequestUrl ?? `https://github.com/${owner}/${repo}/pull/${target.pullRequestNumber}`;
     } else {
-      const initialPrBody = codeUpdatePullRequestBody({ env });
+      if (!prMetadata) throw new Error("Pull-request metadata was not prepared for a new PR.");
       const pr = await timedPhase(env, timings, "pr", target.updateExistingBranch ? "Opening a pull request for the target branch." : "Opening the GitHub pull request.", async () =>
         octokit.pulls.create({
           owner,
@@ -373,21 +418,11 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
           head: branchName,
           base: env.githubBaseBranch,
           draft,
-          body: initialPrBody
+          body: prMetadata.body
         }), { draft, branchName, updateExistingBranch: target.updateExistingBranch }
       );
       prNumber = pr.data.number;
       prUrl = pr.data.html_url;
-      await octokit.pulls
-        .update({
-          owner,
-          repo,
-          pull_number: pr.data.number,
-          body: finalPrBody
-        })
-        .catch((error) => {
-          console.error("Failed to update PR body with final timings", error);
-        });
     }
 
     let autoMergeEnabled = false;
@@ -406,13 +441,24 @@ export async function runCodeUpdate(env: SandboxEnv, timings: TaskTimings, total
     }
 
     timings.total = Date.now() - totalStartedAt;
-    await recordArtifact(env, {
-      kind: "pr_body",
-      name: "Pull request body",
-      content: finalPrBody,
-      contentType: "text/markdown",
-      metadata: { prUrl, prNumber, draft, verifyPassed: null, updatedExistingPullRequest }
-    });
+    if (prMetadata) {
+      await recordArtifact(env, {
+        kind: "pr_body",
+        name: "Pull request body",
+        content: prMetadata.body,
+        contentType: "text/markdown",
+        metadata: {
+          prUrl,
+          prNumber,
+          draft,
+          verifyPassed: null,
+          updatedExistingPullRequest,
+          source: prMetadata.source,
+          model: prMetadata.model ?? null,
+          estimatedCostUsd: prMetadata.estimatedCostUsd ?? null,
+        }
+      });
+    }
     await progress(env, "task_complete", "Code update task finished.", {
       durationMs: timings.total,
       timingsMs: timings,

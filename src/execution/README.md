@@ -34,7 +34,7 @@ Owns sandboxed code-update execution from queued task to PR.
 - `runCodingAgent` has explicit `code_change` and read-only `diagnosis` outcome contracts. Diagnosis may succeed with a grounded final result and no diff, never publishes a branch or PR, and must not be used for public-web reading or explanation.
 - Avoid production request classifiers that choose a lifecycle for the agent. Prefer exact anchors plus clear repo/folder ownership docs so the coding agent can decide the implementation path.
 - PR branch/title/body formatting lives in `prFormatting.ts`.
-- PR bodies describe the private Discord workflow and deterministic verification without copying the member request, identity, linked run evidence, or other private server context into GitHub.
+- New PR titles and bodies are generated after verification from the public code diff alone, so they describe the behavior and implementation that actually changed without copying the member request, identity, linked run evidence, or other private server context into GitHub. Invalid or unavailable model output falls back to changed source paths instead of task IDs or bug-report metadata.
 - Kubernetes/local-process launch behavior belongs in `backend.ts` and the queue/reconciler callers.
 - Prompt changes should stay generic and architecture-driven; prefer clearer repo ownership over adding task-specific prompt instructions.
 

@@ -14,7 +14,7 @@ describe("agent task enqueue", () => {
       config: loadConfig(),
       repo: repo as never,
       agentRuntimeRepo: agentRuntimeRepo as never,
-      backendName: "local-process-sandbox",
+      backendName: "kubernetes-sandbox",
       job: {
         taskId: "task-1",
         traceId: "prompt-message-1",
@@ -38,8 +38,8 @@ describe("agent task enqueue", () => {
         jobId: "pgboss-job-1",
         taskId: "task-1",
         queueName: "agent.task",
-        backendName: "local-process-sandbox",
-        codegenBackend: "local-process",
+        backendName: "kubernetes-sandbox",
+        codegenBackend: "kubernetes-job",
         codegenModel: "openai/gpt-5.6-terra",
         codegenReasoningEffort: "medium",
         codegenProvider: "openrouter"
@@ -63,7 +63,7 @@ describe("agent task enqueue", () => {
       1,
       expect.objectContaining({
         taskId: "task-1",
-        backend: "local-process-sandbox",
+        backend: "kubernetes-sandbox",
         parentAgentSessionId: "agent-session-parent",
         parentAgentExecutionId: "agent-execution-parent",
         parentAgentThreadKey: "discord:guild:channel"
@@ -74,7 +74,7 @@ describe("agent task enqueue", () => {
       expect.objectContaining({
         taskId: "task-1",
         pgBossJobId: "pgboss-job-1",
-        backend: "local-process-sandbox",
+        backend: "kubernetes-sandbox",
         parentAgentSessionId: "agent-session-parent",
         parentAgentExecutionId: "agent-execution-parent",
         parentAgentThreadKey: "discord:guild:channel"

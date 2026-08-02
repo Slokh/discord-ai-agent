@@ -76,7 +76,7 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
     title: input.title,
     request: input.request,
     requestedBy: input.requestedBy,
-    backend: initialAgentTaskBackendName(selection.codegenBackend),
+    backend: "kubernetes-sandbox",
     parentAgentSessionId: input.session.sessionId,
     parentAgentExecutionId: input.parentExecutionId ?? null,
     parentAgentThreadKey
@@ -238,10 +238,6 @@ export async function enqueueAgentRuntimeCodeUpdateTask(input: {
 
 function agentRuntimeCodeUpdateExecutionId(taskId: string) {
   return `agent-task-execution-${taskId}`;
-}
-
-function initialAgentTaskBackendName(codegenBackend: AppConfig["execution"]["codegenBackend"]) {
-  return codegenBackend === "local-process" ? "local-process-sandbox" : "kubernetes-sandbox";
 }
 
 function agentRuntimeCodeUpdateMessageId(taskId: string) {

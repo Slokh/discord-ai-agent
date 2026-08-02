@@ -11,7 +11,7 @@ import {
   type JobRuntime
 } from "../../src/jobs/queue.js";
 import { createPool } from "../../src/db/pool.js";
-import { DiscordAiAgentRepository } from "../../src/db/repositories.js";
+import { createAppDatabase } from "../../src/db/repositories.js";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
 
@@ -178,7 +178,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
   it("starts agent task sandboxes when the task worker is enabled", async () => {
     const config = testConfig();
     const pool = createPool(config);
-    const repo = new DiscordAiAgentRepository(pool);
+    const repo = createAppDatabase(pool);
     const agentRuntimeRepo = new AgentRuntimeRepository(pool);
     const processedRequests: string[] = [];
     const processedJobs: unknown[] = [];

@@ -141,8 +141,7 @@ describe("internal API run endpoints", () => {
         taskCounts: [{ name: "running", count: 1 }],
         queueCounts: [{ name: "active", count: 1 }],
         activeTasks: [expect.objectContaining({ taskId: "task-active", status: "running" })],
-        activeSandboxRuns: [expect.objectContaining({ sandboxRunId: "run-active", taskId: "task-active" })],
-        leases: [expect.objectContaining({ sandboxId: "sandbox-1", status: "leased" })]
+        activeSandboxRuns: [expect.objectContaining({ sandboxRunId: "run-active", taskId: "task-active" })]
       })
     );
   });
@@ -472,23 +471,6 @@ function fakeAgentTaskStatusPool() {
       }
       if (/FROM sandbox_runs sr\s+JOIN agent_tasks at ON at\.task_id = sr\.task_id\s+WHERE at\.status IN \('succeeded', 'failed', 'no_changes', 'cancelled'\)/.test(sql)) {
         return { rows: [] };
-      }
-      if (/FROM agent_runtime_sandbox_leases/.test(sql)) {
-        return {
-          rows: [
-            {
-              sandbox_id: "sandbox-1",
-              repo: "example/discord-ai-agent",
-              status: "leased",
-              lease_owner: "worker-1",
-              execution_id: "execution-1",
-              heartbeat_at: new Date("2026-07-01T12:00:03Z"),
-              last_used_at: new Date("2026-07-01T12:00:03Z"),
-              metadata: { backend: "local-process-sandbox" },
-              updated_at: new Date("2026-07-01T12:00:03Z")
-            }
-          ]
-        };
       }
       return { rows: [] };
     }

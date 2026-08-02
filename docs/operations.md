@@ -43,17 +43,16 @@ The bot handles gateway ingress and delivery. The worker executes queued chat re
 
 ## Configuration ownership
 
-`.env.example` is the annotated operator template. `src/config/env.ts` defines accepted values, defaults, validation, and role-specific assertions. Do not duplicate a complete variable catalog in prose.
+`.env.example` is the complete operator template. `src/config/env.ts` separates deployment inputs from versioned `productConfig`. Environment variables are reserved for credentials, private Discord identity/policy, release metadata, the externally routed control URL, Kubernetes namespace, and the immutable sandbox image. Model choices, limits, repository target, queue topology, and payment rail change through reviewed source.
 
 Important feature gates:
 
 | Capability | Required configuration |
 | --- | --- |
 | Chat | Discord token/client/guild, OpenRouter key, database |
-| Code updates | Repository, GitHub PAT or App credentials, task-signing secret, task worker; API for callbacks |
+| Code updates | GitHub PAT or App credentials, task-signing secret, worker; API for callbacks |
 | Spotify | Client ID and client secret |
-| Shared wallet | Wallet enabled plus Privy credentials |
-| Member wallets and wagers | Shared wallet plus user wallets enabled |
+| Wallets, transfers, and wagers | Both Privy credentials |
 | Public run console | API role, password, HTTPS/public URL when exposed |
 
 Administrative mutations use `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`. Image generation may be restricted to that allowlist. Code-update requests remain available to members when the feature is deployed.
@@ -73,7 +72,7 @@ Useful maintenance scripts include `aliases`, `blocked-users`, `embeddings:repri
 
 ## Production-first inspection
 
-Operator tools resolve the deployed control plane from `CONTROL_UI_PUBLIC_URL` or the active Kubernetes context. They fail rather than silently falling back to localhost or a local database. Use `--api-url` for another explicit control plane and `--source db` only for intentional isolated direct-DB inspection.
+Operator tools resolve the versioned production control-plane URL or the active Kubernetes context. They fail rather than silently falling back to localhost or a local database. Use `--api-url` for another explicit control plane and `--source db` only for intentional isolated direct-DB inspection.
 
 ```bash
 npm run runs:inspect -- --list --limit 20
@@ -142,8 +141,7 @@ helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
   --create-namespace \
   --set image.repository="$REGISTRY/discord-ai-agent" \
   --set image.tag="$GIT_SHA" \
-  --set sandbox.image="$REGISTRY/discord-ai-agent-sandbox:$GIT_SHA" \
-  --set config.githubRepository="owner/repo"
+  --set sandbox.image="$REGISTRY/discord-ai-agent-sandbox:$GIT_SHA"
 ```
 
 Inspect rollout by role:
@@ -153,16 +151,15 @@ kubectl -n discord-ai-agent get pods
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-api
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-bot
 kubectl -n discord-ai-agent logs deploy/discord-ai-agent-worker
-kubectl -n discord-ai-agent logs deploy/discord-ai-agent-codegen-worker
 ```
 
-The chart runs migrations as a hook, so runtime pods set `RUN_MIGRATIONS=false`. Commit-tagged application and sandbox images should be built once and promoted; the deployment workflow must not rebuild a different artifact.
+The chart runs migrations as a hook; production application pods never run migrations on startup. Commit-tagged application and sandbox images are built once and promoted; the deployment workflow must not rebuild a different artifact.
 
 ## Sandbox and network posture
 
 The worker service account may create per-task Jobs, Secrets, and ConfigMaps. The sandbox service account has no Kubernetes API access. Sandbox secrets omit Discord and database credentials. Network policy should permit the internal callback API, DNS, and required HTTPS destinations only.
 
-The chart can mount a persistent sandbox cache and run a dedicated warm codegen worker. A ReadWriteOnce cache normally implies one codegen worker unless the storage class and lease design explicitly support more.
+Every code-update task runs in a separate Kubernetes Job. The regular worker owns queue handoff and reconciliation; no dedicated warm worker, persistent cache, or alternate execution backend exists.
 
 ## Local Kubernetes validation
 
@@ -178,8 +175,7 @@ helm upgrade --install discord-ai-agent deploy/helm/discord-ai-agent \
   --set image.tag=local \
   --set image.pullPolicy=IfNotPresent \
   --set sandbox.image=discord-ai-agent:local \
-  --set sandbox.imagePullPolicy=IfNotPresent \
-  --set config.githubRepository="$GITHUB_REPOSITORY"
+  --set sandbox.imagePullPolicy=IfNotPresent
 ```
 
 Create the application Secret first and point `DATABASE_URL` at a Postgres instance reachable from the cluster. Validate chat delivery and one harmless code-update request, then inspect the Job, callback events, PR, and cleanup. This is an advanced integration path, not the default contributor loop.
@@ -193,7 +189,7 @@ When production is unhealthy, inspect these independently:
 - worker queue registration and backlog age;
 - agent-runtime silence/hard timeouts;
 - API authentication and callback reachability;
-- sandbox lease or Kubernetes Job state;
+- Kubernetes Job state;
 - delivery obligations awaiting replay;
 - payment or transfer reconciliation when enabled;
 - deployed revision versus the revision that produced a run.

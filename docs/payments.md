@@ -12,9 +12,9 @@ Never expose Privy secrets, signing credentials, private keys, or signed transac
 
 ## Enablement
 
-`WALLET_ENABLED=true` enables the shared bot wallet and requires Privy credentials. `USER_WALLETS_ENABLED=true` separately enables automatic member wallets, grants, member transfers, and wallet-backed wagers. Start on Tempo Moderato and validate the full lifecycle before mainnet.
+Supplying both `PRIVY_APP_ID` and `PRIVY_APP_SECRET` enables the complete wallet capability: the shared bot wallet, automatic member wallets, grants, transfers, and wallet-backed wagers. The product uses Tempo mainnet and `USDC.e`; changing that rail is a reviewed code and migration decision, not a deployment toggle.
 
-The bot wallet sponsors member-wallet fees and acts as the treasury for grants and games. `WALLET_BALANCES_PUBLIC` controls whether every member can list the identity-to-wallet balance directory; owner/ops retain administrative inspection.
+The bot wallet sponsors member-wallet fees and acts as the treasury for grants and games. The managed identity-to-wallet balance directory is visible to members; protected administrative operations still require owner/ops authority.
 
 ## Authority model
 

@@ -231,11 +231,10 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
     tasksByStatus: Array<{ status: string; count: number }>;
     agentTaskBacklog: Array<{ backend: string; status: string; count: number; oldestAgeSeconds: number }>;
     sandboxRunsByStatus: Array<{ status: string; count: number }>;
-    sandboxLeases: Array<{ backend: string; status: string; count: number }>;
     taskPhaseDurations: Array<{ phase: string; count: number; avgMs: number; maxMs: number }>;
     sandboxCacheEvents: Array<{ cacheType: string; cacheStatus: string; count: number }>;
   }> {
-    const [tasks, taskBacklog, sandboxRuns, sandboxLeases, phaseDurations, cacheEvents] = await Promise.all([
+    const [tasks, taskBacklog, sandboxRuns, phaseDurations, cacheEvents] = await Promise.all([
       pool.query("SELECT status, count(*)::int AS count FROM agent_tasks GROUP BY status ORDER BY status"),
       pool.query(`
         SELECT
@@ -249,15 +248,6 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
         ORDER BY backend, status
       `),
       pool.query("SELECT status, count(*)::int AS count FROM sandbox_runs GROUP BY status ORDER BY status"),
-      pool.query(`
-        SELECT
-          coalesce(nullif(metadata->>'backend', ''), 'unknown') AS backend,
-          status,
-          count(*)::int AS count
-        FROM agent_runtime_sandbox_leases
-        GROUP BY backend, status
-        ORDER BY backend, status
-      `),
       pool.query(`
         SELECT
           regexp_replace(metadata->>'step', '_complete$', '') AS phase,
@@ -293,11 +283,6 @@ export async function getAgentTaskMetrics(pool: DbPool, ): Promise<{
         oldestAgeSeconds: Number(row.oldest_age_seconds)
       })),
       sandboxRunsByStatus: sandboxRuns.rows.map((row) => ({ status: String(row.status), count: Number(row.count) })),
-      sandboxLeases: sandboxLeases.rows.map((row) => ({
-        backend: String(row.backend),
-        status: String(row.status),
-        count: Number(row.count)
-      })),
       taskPhaseDurations: phaseDurations.rows.map((row) => ({
         phase: String(row.phase),
         count: Number(row.count),

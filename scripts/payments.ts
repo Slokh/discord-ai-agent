@@ -23,7 +23,7 @@ async function main() {
     if (command === "rebalance") {
       assertPaymentConfig(config);
       if (!config.payments.walletEnabled || !config.payments.userWalletsEnabled) {
-        throw new Error("Wallet rebalancing requires WALLET_ENABLED=true and USER_WALLETS_ENABLED=true");
+        throw new Error("Wallet rebalancing requires complete Privy credentials.");
       }
       const requestedByUserId = config.allowlists.ownerUserId;
       if (!requestedByUserId) throw new Error("BOT_OWNER_USER_ID is required to attribute a wallet rebalance");

@@ -1,7 +1,7 @@
 import { loadConfig } from "../src/config/env.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { createPool, type DbPool } from "../src/db/pool.js";
-import { DiscordAiAgentRepository, type DiscordUserLookupResult } from "../src/db/repositories.js";
+import { createAppDatabase, type DiscordAiAgentRepository, type DiscordUserLookupResult } from "../src/db/repositories.js";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -14,7 +14,7 @@ async function main() {
   const config = loadConfig();
   await runMigrations(config.databaseUrl);
   const pool = createPool(config);
-  const repo = new DiscordAiAgentRepository(pool);
+  const repo = createAppDatabase(pool);
   try {
     if (command === "list") {
       const query = args.slice(1).join(" ");

@@ -292,44 +292,6 @@ export async function markAgentTaskProgress(pool: DbPool, input: {
     }).catch(() => undefined);
   }
 
-export async function recordAgentTaskSandboxLease(pool: DbPool, input: {
-    taskId: string;
-    backend?: string | null;
-    sandboxId: string;
-    leaseOwner?: string | null;
-    metadata?: Record<string, unknown>;
-  }) {
-    const executionMetadata = removeUndefinedValues({
-      ...(input.metadata ?? {}),
-      backend: input.backend ?? undefined,
-      sandboxId: input.sandboxId,
-      leaseOwner: input.leaseOwner ?? undefined
-    });
-    await pool
-      .query(
-        `
-          WITH updated_executions AS (
-            UPDATE agent_runtime_executions
-            SET sandbox_id = coalesce($2::text, sandbox_id),
-                metadata = metadata || $3::jsonb,
-                updated_at = now()
-            WHERE task_id = $1
-            RETURNING session_id
-          )
-          UPDATE agent_runtime_sessions
-          SET updated_at = now()
-          WHERE session_id IN (SELECT session_id FROM updated_executions)
-        `,
-        [input.taskId, input.sandboxId, JSON.stringify(executionMetadata)]
-      )
-      .catch(() => undefined);
-    await processRunRepository.updateProcessRun(pool, {
-      runId: input.taskId,
-      status: "running",
-      metadata: executionMetadata
-    }).catch(() => undefined);
-  }
-
 export async function recordSandboxRun(pool: DbPool, input: {
     taskId: string;
     sandboxRunId: string;
@@ -337,8 +299,6 @@ export async function recordSandboxRun(pool: DbPool, input: {
     namespace?: string | null;
     backendJobName?: string | null;
     image?: string | null;
-    sandboxId?: string | null;
-    leaseOwner?: string | null;
     metadata?: Record<string, unknown>;
   }) {
     const executionMetadata = removeUndefinedValues({
@@ -347,9 +307,7 @@ export async function recordSandboxRun(pool: DbPool, input: {
       backendJobName: input.backendJobName ?? undefined,
       namespace: input.namespace ?? undefined,
       image: input.image ?? undefined,
-      sandboxRunId: input.sandboxRunId,
-      sandboxId: input.sandboxId ?? undefined,
-      leaseOwner: input.leaseOwner ?? undefined
+      sandboxRunId: input.sandboxRunId
     });
     await pool.query(
       `
@@ -401,8 +359,7 @@ export async function recordSandboxRun(pool: DbPool, input: {
           WITH updated_executions AS (
             UPDATE agent_runtime_executions
             SET sandbox_run_id = coalesce($2::text, sandbox_run_id),
-                sandbox_id = coalesce($3::text, sandbox_id),
-                metadata = metadata || $4::jsonb,
+                metadata = metadata || $3::jsonb,
                 updated_at = now()
             WHERE task_id = $1
             RETURNING session_id
@@ -411,7 +368,7 @@ export async function recordSandboxRun(pool: DbPool, input: {
           SET updated_at = now()
           WHERE session_id IN (SELECT session_id FROM updated_executions)
         `,
-        [input.taskId, input.sandboxRunId, input.sandboxId ?? null, JSON.stringify(executionMetadata)]
+        [input.taskId, input.sandboxRunId, JSON.stringify(executionMetadata)]
       )
       .catch(() => undefined);
   }
@@ -483,17 +440,6 @@ export async function markAgentTaskSucceeded(pool: DbPool, input: {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
-          ),
-          lease_update AS (
-            UPDATE agent_runtime_sandbox_leases
-            SET status = 'idle',
-                lease_owner = NULL,
-                execution_id = NULL,
-                heartbeat_at = NULL,
-                last_used_at = now(),
-                metadata = metadata || jsonb_build_object('releasedBy', 'task.completed', 'releasedTaskId', $1, 'releasedStatus', 'succeeded'),
-                updated_at = now()
-            WHERE execution_id IN (SELECT execution_id FROM updated_execution)
           ),
           next_sequence AS (
             SELECT
@@ -581,17 +527,6 @@ export async function markAgentTaskFailed(pool: DbPool, input: {
                 completed_at = coalesce(completed_at, now()),
                 updated_at = now()
             WHERE session_id IN (SELECT session_id FROM updated_execution)
-          ),
-          lease_update AS (
-            UPDATE agent_runtime_sandbox_leases
-            SET status = 'idle',
-                lease_owner = NULL,
-                execution_id = NULL,
-                heartbeat_at = NULL,
-                last_used_at = now(),
-                metadata = metadata || jsonb_build_object('releasedBy', 'task.completed', 'releasedTaskId', $1, 'releasedStatus', $2),
-                updated_at = now()
-            WHERE execution_id IN (SELECT execution_id FROM updated_execution)
           ),
           next_sequence AS (
             SELECT

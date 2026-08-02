@@ -74,7 +74,7 @@ The `agent_runtime_*` tables explain both chat and code-update attempts:
 - messages store structured transcript entries;
 - events store typed lifecycle transitions and safe metadata;
 - artifacts and chunks store replay inputs, redacted model I/O, snapshots, files, and larger diagnostics;
-- sandbox leases coordinate warm code-update capacity.
+- task-linked executions record isolated code-update lifecycle and outcomes.
 
 Chat does not create a parallel process-run record. Code-update task rows are projections linked to the task runtime execution. The console and CLI inspectors normalize these sources for display without creating another history.
 

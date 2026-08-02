@@ -1,7 +1,7 @@
 import { assertOpenRouterConfig, loadConfig } from "../src/config/env.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
-import { DiscordAiAgentRepository } from "../src/db/repositories.js";
+import { createAppDatabase } from "../src/db/repositories.js";
 import { startJobs } from "../src/jobs/queue.js";
 import { embedStoredMessage, embedStoredMessages } from "../src/memory/embedding.js";
 import { OpenRouterClient } from "../src/models/openrouter.js";
@@ -22,7 +22,7 @@ async function main() {
   await runMigrations(config.databaseUrl);
 
   const pool = createPool(config);
-  const repo = new DiscordAiAgentRepository(pool);
+  const repo = createAppDatabase(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const jobs = await startJobs({
     config,

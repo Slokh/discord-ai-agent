@@ -1,7 +1,6 @@
 import { PgBoss } from "pg-boss";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/env.js";
-import { agentRuntimeSessionId } from "../db/agentRuntimeRepository.js";
 import type { AgentRuntimeRepository } from "../db/agentRuntimeRepository.js";
 import type { AgentTaskJob, AgentTaskStartResult } from "../execution/types.js";
 import type { ExecutionBackend, ExecutionContext } from "../execution/backend.js";
@@ -14,14 +13,6 @@ import type { OpenRouterClient } from "../models/openrouter.js";
 import { durationMs, logger } from "../util/logger.js";
 import { currentTraceContext, runWithTrace } from "../util/trace.js";
 import { enqueueAgentTaskJob, type AgentTaskEnqueueInput, type AgentTaskEnqueueResult } from "./agentTaskEnqueue.js";
-import {
-  createSandboxLeaseScheduler,
-  registerSandboxWorkerLease,
-  startSandboxLeaseHeartbeat,
-  waitForSandboxLease,
-  type SandboxLeaseScheduler
-} from "./sandboxLeaseScheduler.js";
-import { agentRuntimeExecutionIdForTask, agentRuntimeThreadKeyForTask } from "./agentTaskRuntimeWrite.js";
 import { agentTaskRuntimeParentMetadata } from "./agentTaskRuntimeParent.js";
 
 export const CRAWL_GUILD_JOB = "crawl.guild";
@@ -147,9 +138,6 @@ export async function startJobs(input: {
     "pg-boss ready"
   );
   const agentTaskBackendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
-  const codegenLeaseScheduler =
-    taskWorkerEnabled && input.agentTask && input.agentRuntimeRepo ? createSandboxLeaseScheduler(input.config, agentTaskBackendName) : null;
-  let stopSandboxLeaseHeartbeat: (() => Promise<void>) | undefined;
   const runsAnyWorker = crawlWorkerEnabled || embeddingWorkerEnabled || taskWorkerEnabled || agentRuntimeWorkerEnabled;
   const artifactRetentionMaintenance = runsAnyWorker
     ? startArtifactRetentionMaintenance({ repo: input.repo, agentRuntimeRepo: input.agentRuntimeRepo })
@@ -165,23 +153,6 @@ export async function startJobs(input: {
       })
     : null;
   const agentRuntimeRepo = input.agentRuntimeRepo;
-  if (codegenLeaseScheduler && input.agentRuntimeRepo) {
-    await registerSandboxWorkerLease(input.agentRuntimeRepo, codegenLeaseScheduler);
-    stopSandboxLeaseHeartbeat = startSandboxLeaseHeartbeat({
-      repo: input.agentRuntimeRepo,
-      scheduler: codegenLeaseScheduler,
-      onError: (error) => logger.warn({ err: error, sandboxId: codegenLeaseScheduler.sandboxId }, "Codegen worker lease heartbeat failed")
-    });
-    logger.info(
-      {
-        sandboxId: codegenLeaseScheduler.sandboxId,
-        leaseOwner: codegenLeaseScheduler.leaseOwner,
-        repo: codegenLeaseScheduler.repo
-      },
-      "Registered warm codegen worker lease"
-    );
-  }
-
   const runtime: JobRuntime = {
     boss,
     enqueueGuildCrawl: async () => {
@@ -247,7 +218,6 @@ export async function startJobs(input: {
       artifactRetentionMaintenance?.stop();
       dataRetentionMaintenance?.stop();
       conversationCompactionMaintenance?.stop();
-      await stopSandboxLeaseHeartbeat?.();
       await boss.stop({ graceful: true, timeout: 100_000 });
     }
   };
@@ -392,8 +362,6 @@ export async function startJobs(input: {
             );
             const backendName = input.agentTask?.name ?? defaultAgentTaskBackendName(input.config);
             const runtimeParentMetadata = agentTaskRuntimeParentMetadata(job.data);
-            const sessionId = agentRuntimeSessionId(agentRuntimeThreadKeyForTask(job.data));
-            const executionId = agentRuntimeExecutionIdForTask(job.data);
             await input.repo?.markAgentTaskRunning({
               taskId: job.data.taskId,
               backend: backendName,
@@ -412,23 +380,6 @@ export async function startJobs(input: {
               );
               return;
             }
-            const acquiredLease = await acquireLeaseForAgentTask({
-              scheduler: codegenLeaseScheduler,
-                    repo: input.repo,
-              sessionId,
-              executionId,
-              traceId: job.data.traceId,
-              taskId: job.data.taskId,
-              backendName
-            });
-            if (acquiredLease) {
-              await input.repo?.recordAgentTaskSandboxLease({
-                taskId: job.data.taskId,
-                backend: backendName,
-                sandboxId: acquiredLease.sandboxId,
-                leaseOwner: acquiredLease.leaseOwner
-              });
-            }
             try {
               let sandboxRunRecorded = false;
               const recordSandboxRunOnce = async (result: { sandboxRunId: string; backendJobName: string; namespace?: string | null; image?: string | null }) => {
@@ -438,15 +389,11 @@ export async function startJobs(input: {
                   sandboxRunId: result.sandboxRunId,
                   backend: backendName,
                   backendJobName: result.backendJobName,
-                  namespace:
-                    result.namespace ?? (backendName === "kubernetes-sandbox" ? input.config.execution.kubernetes.namespace : null),
-                  image: result.image ?? (backendName === "kubernetes-sandbox" ? input.config.execution.kubernetes.sandboxImage : null),
-                  sandboxId: acquiredLease?.sandboxId ?? null,
-                  leaseOwner: acquiredLease?.leaseOwner ?? null
+                  namespace: result.namespace ?? input.config.execution.kubernetes.namespace,
+                  image: result.image ?? input.config.execution.kubernetes.sandboxImage
                 });
               };
               const result = await input.agentTask!.start(job.data, {
-                sandboxId: acquiredLease?.sandboxId ?? null,
                 recordSandboxRun: recordSandboxRunOnce,
                 progress: async (event) => {
                   await input.repo?.markAgentTaskProgress({
@@ -623,54 +570,16 @@ export class KeyedSerialQueue {
   }
 }
 
-async function acquireLeaseForAgentTask(input: {
-  scheduler: SandboxLeaseScheduler | null;
-  agentRuntimeRepo?: AgentRuntimeRepository;
-  repo?: DiscordAiAgentRepository;
-  sessionId: string;
-  executionId: string;
-  traceId?: string | null;
-  taskId: string;
-  backendName: string;
-}) {
-  if (!input.scheduler || !input.agentRuntimeRepo) return undefined;
-  return waitForSandboxLease({
-    repo: input.agentRuntimeRepo,
-    scheduler: input.scheduler,
-    sessionId: input.sessionId,
-    executionId: input.executionId,
-    traceId: input.traceId,
-    taskId: input.taskId,
-    onWait: async ({ waitedMs, attempt }) => {
-      await input.repo?.markAgentTaskProgress({
-        taskId: input.taskId,
-        backend: input.backendName,
-        step: "sandbox_wait",
-        statusMessage: "Waiting for the warm codegen worker to become available.",
-        metadata: {
-          sandboxId: input.scheduler?.sandboxId ?? null,
-          waitedMs,
-          attempt,
-          timeoutMs: input.scheduler?.acquireTimeoutMs ?? null,
-          pollMs: input.scheduler?.acquirePollMs ?? null
-        }
-      });
-    }
-  });
-}
-
-function defaultAgentTaskBackendName(config: AppConfig) {
-  return config.execution.codegenBackend === "local-process" ? "local-process-sandbox" : "kubernetes-sandbox";
+function defaultAgentTaskBackendName(_config: AppConfig) {
+  return "kubernetes-sandbox";
 }
 
 function startingAgentTaskStatusMessage(backendName: string) {
-  if (backendName === "local-process-sandbox") return "Starting warm local codegen worker process.";
   if (backendName === "kubernetes-sandbox") return "Starting Kubernetes sandbox.";
   return "Starting codegen sandbox.";
 }
 
 function runningAgentTaskStatusMessage(backendName: string) {
-  if (backendName === "local-process-sandbox") return "Warm local codegen process is running the task.";
   if (backendName === "kubernetes-sandbox") return "Kubernetes sandbox is running the task.";
   return "Codegen sandbox is running the task.";
 }

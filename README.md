@@ -15,7 +15,7 @@ Discord mention or reply
   -> durable delivery posts one final Discord response
 ```
 
-Postgres with pgvector stores Discord history, retrieval data, conversation memory, runtime events and artifacts, delivery obligations, task state, and optional payment/game state. Chat executes inside the application. Repository changes execute in a local-process or Kubernetes sandbox and end in a verified GitHub PR.
+Postgres with pgvector stores Discord history, retrieval data, conversation memory, runtime events and artifacts, delivery obligations, task state, and optional payment/game state. Chat executes inside the application. Repository changes execute in isolated Kubernetes Jobs and end in a verified GitHub PR.
 
 The design is model-led and code-governed: the model owns language, relevance, tool choice, and presentation; code owns requester authority, permissions, changing facts, money, randomness, durable state, and delivery.
 
@@ -102,18 +102,17 @@ The worker drains the embedding queue. Keyword retrieval works before embeddings
 
 ## Optional code updates
 
-Set `GITHUB_REPOSITORY`, a fine-grained `GITHUB_TOKEN` or GitHub App credentials, and `TASK_SIGNING_SECRET`; enable the task worker and start the API role. The model then receives code-update tools and can turn explicit repository requests into sandboxed PRs.
+Set a fine-grained `GITHUB_TOKEN` or GitHub App credentials and `TASK_SIGNING_SECRET`, then start the worker and API roles. The model then receives code-update tools and can turn explicit repository requests into sandboxed PRs for this repository.
 
-The default `local-process` backend uses an isolated worktree and warm cache. `kubernetes-job` adds per-task Job isolation. See [Code updates](docs/code-updates.md) and [Operations](docs/operations.md).
+Each task gets its own Kubernetes Job, task-scoped credentials, worktree, verification, and cleanup. See [Code updates](docs/code-updates.md) and [Operations](docs/operations.md).
 
 ## Optional integrations
 
 - Spotify tools appear when both Spotify client credentials are configured.
-- Wallet tools require `WALLET_ENABLED=true` and Privy credentials.
-- Member transfers and wallet-backed wagers additionally require `USER_WALLETS_ENABLED=true`.
+- Wallets, member transfers, and wallet-backed wagers appear when both Privy credentials are configured.
 - Administrative mutations use the configured Discord owner/ops allowlists.
 
-All accepted variables and current defaults are documented in [`.env.example`](.env.example) and validated by `src/config/env.ts`.
+The small accepted environment surface is documented in [`.env.example`](.env.example). Stable product and architecture settings are versioned in `src/config/env.ts`.
 
 ## Development checks
 

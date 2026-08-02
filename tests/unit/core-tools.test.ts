@@ -1855,19 +1855,15 @@ describe("reportStatus", () => {
 });
 
 describe("getDeploymentStatus", () => {
-  it("includes codegen sandbox lease counts", async () => {
+  it("includes codegen backlog counts", async () => {
     const auditTool = vi.fn(async () => undefined);
     const ctx = {
       repo: {
         health: vi.fn(async () => ({ messages: 2, embeddings: 1, toolCalls: 3 })),
         getAgentTaskMetrics: vi.fn(async () => ({
           tasksByStatus: [{ status: "running", count: 1 }],
-          agentTaskBacklog: [{ backend: "local-process-sandbox", status: "running", count: 1, oldestAgeSeconds: 125 }],
+          agentTaskBacklog: [{ backend: "kubernetes-sandbox", status: "running", count: 1, oldestAgeSeconds: 125 }],
           sandboxRunsByStatus: [],
-          sandboxLeases: [
-            { backend: "local-process-sandbox", status: "idle", count: 1 },
-            { backend: "local-process-sandbox", status: "leased", count: 1 }
-          ],
           taskPhaseDurations: [],
           sandboxCacheEvents: []
         })),
@@ -1883,8 +1879,7 @@ describe("getDeploymentStatus", () => {
 
     const response = await getDeploymentStatus(ctx);
 
-    expect(response).toContain("Codegen leases: local-process-sandbox.idle=1, local-process-sandbox.leased=1");
-    expect(response).toContain("Agent backlog: local-process-sandbox.running=1 oldest=2m 5s");
+    expect(response).toContain("Agent backlog: kubernetes-sandbox.running=1 oldest=2m 5s");
     expect(auditTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "getDeploymentStatus" }));
   });
 

@@ -97,19 +97,6 @@ export type AgentRuntimeEventRecord = {
   createdAt: Date;
 };
 
-export type AgentRuntimeSandboxLeaseRecord = {
-  sandboxId: string;
-  repo: string;
-  status: "idle" | "leased" | "recycling" | "disabled";
-  leaseOwner: string | null;
-  executionId: string | null;
-  heartbeatAt: Date | null;
-  lastUsedAt: Date | null;
-  metadata: Record<string, unknown>;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
 export class AgentRuntimeRepository {
   private readonly artifacts: AgentRuntimeArtifactRepository;
 
@@ -538,149 +525,6 @@ export class AgentRuntimeRepository {
     return this.artifacts.cleanupExpiredArtifacts(limit);
   }
 
-  async upsertSandboxLease(input: {
-    sandboxId: string;
-    repo: string;
-    status?: AgentRuntimeSandboxLeaseRecord["status"];
-    leaseOwner?: string | null;
-    executionId?: string | null;
-    metadata?: Record<string, unknown>;
-  }): Promise<AgentRuntimeSandboxLeaseRecord> {
-    const result = await this.pool.query(
-      `
-        INSERT INTO agent_runtime_sandbox_leases(
-          sandbox_id, repo, status, lease_owner, execution_id, heartbeat_at,
-          last_used_at, metadata, updated_at
-        )
-        VALUES ($1, $2, coalesce($3, 'idle'), $4, $5, now(), now(), $6::jsonb, now())
-        ON CONFLICT(sandbox_id) DO UPDATE SET
-          repo = EXCLUDED.repo,
-          status = EXCLUDED.status,
-          lease_owner = EXCLUDED.lease_owner,
-          execution_id = EXCLUDED.execution_id,
-          heartbeat_at = now(),
-          last_used_at = now(),
-          metadata = agent_runtime_sandbox_leases.metadata || EXCLUDED.metadata,
-          updated_at = now()
-        RETURNING *
-      `,
-      [
-        input.sandboxId,
-        input.repo,
-        input.status ?? null,
-        input.leaseOwner ?? null,
-        input.executionId ?? null,
-        JSON.stringify(input.metadata ?? {})
-      ]
-    );
-    return rowToAgentRuntimeSandboxLease(result.rows[0]);
-  }
-
-  async acquireSandboxLease(input: {
-    repo: string;
-    executionId: string;
-    leaseOwner: string;
-    sandboxId?: string | null;
-    staleBefore?: Date | null;
-  }): Promise<AgentRuntimeSandboxLeaseRecord | undefined> {
-    const result = await this.pool.query(
-      `
-        WITH candidate AS (
-          SELECT sandbox_id
-          FROM agent_runtime_sandbox_leases
-          WHERE repo = $1
-            AND ($5::text IS NULL OR sandbox_id = $5)
-            AND status IN ('idle', 'leased')
-            AND (
-              status = 'idle'
-              OR heartbeat_at IS NULL
-              OR ($4::timestamptz IS NOT NULL AND heartbeat_at < $4)
-            )
-          ORDER BY status = 'idle' DESC, last_used_at ASC NULLS FIRST, updated_at ASC
-          LIMIT 1
-          FOR UPDATE SKIP LOCKED
-        )
-        UPDATE agent_runtime_sandbox_leases lease
-        SET status = 'leased',
-            lease_owner = $3,
-            execution_id = $2,
-            heartbeat_at = now(),
-            last_used_at = now(),
-            updated_at = now()
-        FROM candidate
-        WHERE lease.sandbox_id = candidate.sandbox_id
-        RETURNING lease.*
-      `,
-      [input.repo, input.executionId, input.leaseOwner, input.staleBefore ?? null, input.sandboxId ?? null]
-    );
-    return result.rows[0] ? rowToAgentRuntimeSandboxLease(result.rows[0]) : undefined;
-  }
-
-  async heartbeatSandboxLease(input: { sandboxId: string; metadata?: Record<string, unknown> }): Promise<AgentRuntimeSandboxLeaseRecord | undefined> {
-    const result = await this.pool.query(
-      `
-        UPDATE agent_runtime_sandbox_leases
-        SET heartbeat_at = now(),
-            metadata = metadata || $2::jsonb,
-            updated_at = now()
-        WHERE sandbox_id = $1
-          AND status IN ('idle', 'leased')
-        RETURNING *
-      `,
-      [input.sandboxId, JSON.stringify(input.metadata ?? {})]
-    );
-    return result.rows[0] ? rowToAgentRuntimeSandboxLease(result.rows[0]) : undefined;
-  }
-
-  async disableSandboxLease(input: { sandboxId: string; reason?: string | null; metadata?: Record<string, unknown> }): Promise<AgentRuntimeSandboxLeaseRecord | undefined> {
-    const result = await this.pool.query(
-      `
-        UPDATE agent_runtime_sandbox_leases
-        SET status = 'disabled',
-            lease_owner = NULL,
-            execution_id = NULL,
-            heartbeat_at = NULL,
-            metadata = metadata || $2::jsonb,
-            updated_at = now()
-        WHERE sandbox_id = $1
-        RETURNING *
-      `,
-      [
-        input.sandboxId,
-        JSON.stringify({
-          disabledReason: input.reason ?? null,
-          disabledAt: new Date().toISOString(),
-          ...(input.metadata ?? {})
-        })
-      ]
-    );
-    return result.rows[0] ? rowToAgentRuntimeSandboxLease(result.rows[0]) : undefined;
-  }
-
-  async releaseSandboxLease(input: {
-    sandboxId: string;
-    executionId?: string | null;
-    recycle?: boolean;
-    metadata?: Record<string, unknown>;
-  }): Promise<AgentRuntimeSandboxLeaseRecord | undefined> {
-    const result = await this.pool.query(
-      `
-        UPDATE agent_runtime_sandbox_leases
-        SET status = CASE WHEN $3 THEN 'recycling' ELSE 'idle' END,
-            lease_owner = NULL,
-            execution_id = NULL,
-            heartbeat_at = NULL,
-            last_used_at = now(),
-            metadata = metadata || $4::jsonb,
-            updated_at = now()
-        WHERE sandbox_id = $1
-          AND ($2::text IS NULL OR execution_id = $2)
-        RETURNING *
-      `,
-      [input.sandboxId, input.executionId ?? null, Boolean(input.recycle), JSON.stringify(input.metadata ?? {})]
-    );
-    return result.rows[0] ? rowToAgentRuntimeSandboxLease(result.rows[0]) : undefined;
-  }
 }
 
 function rowToAgentRuntimeSession(row: any): AgentRuntimeSessionRecord {
@@ -762,21 +606,6 @@ function rowToAgentRuntimeEvent(row: any): AgentRuntimeEventRecord {
     metadata: jsonObject(row.metadata),
     durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
     createdAt: new Date(row.created_at)
-  };
-}
-
-function rowToAgentRuntimeSandboxLease(row: any): AgentRuntimeSandboxLeaseRecord {
-  return {
-    sandboxId: String(row.sandbox_id),
-    repo: String(row.repo),
-    status: String(row.status) as AgentRuntimeSandboxLeaseRecord["status"],
-    leaseOwner: row.lease_owner == null ? null : String(row.lease_owner),
-    executionId: row.execution_id == null ? null : String(row.execution_id),
-    heartbeatAt: row.heartbeat_at == null ? null : new Date(row.heartbeat_at),
-    lastUsedAt: row.last_used_at == null ? null : new Date(row.last_used_at),
-    metadata: jsonObject(row.metadata),
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at)
   };
 }
 

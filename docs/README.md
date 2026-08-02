@@ -38,7 +38,7 @@ Documentation is part of the implementation contract:
 - Describe current behavior in present tense. Git history and closed PRs preserve migration history.
 - Prefer one complete conceptual guide over a README in every source directory.
 - Name the canonical data owner and the main source entry points, but do not inventory every file.
-- Put configuration defaults in `.env.example` and `src/config/env.ts`; guides explain when a setting matters.
+- Put credentials and deployment inputs in `.env.example`; put stable product and architecture settings in `src/config/env.ts`.
 - Put server-specific prompts, examples, Discord content, and evals in `.discord-ai-agent/` or Postgres, never in tracked docs.
 - Update the owning guide when a source of truth, trust boundary, lifecycle, or operator workflow changes.
 - Keep links relative and run `npm run docs:check` before publication.

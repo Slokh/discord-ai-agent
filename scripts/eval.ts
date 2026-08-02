@@ -468,14 +468,14 @@ export function extractPromptJson(stdout: string): PromptJsonOutput {
 }
 
 async function createTraceReader() {
-  const [{ loadConfig }, { createPool }, { DiscordAiAgentRepository }] = await Promise.all([
+  const [{ loadConfig }, { createPool }, { createAppDatabase }] = await Promise.all([
     import("../src/config/env.js"),
     import("../src/db/pool.js"),
     import("../src/db/repositories.js")
   ]);
   const config = loadConfig();
   const pool = createPool(config);
-  const repo = new DiscordAiAgentRepository(pool);
+  const repo = createAppDatabase(pool);
   return {
     async read(traceId: string): Promise<EvalTraceEvidence> {
       const [traceEvents, toolAudits] = await Promise.all([

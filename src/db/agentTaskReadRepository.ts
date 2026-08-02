@@ -296,17 +296,6 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
                   updated_at = now()
               WHERE session_id IN (SELECT session_id FROM updated_execution)
             ),
-            lease_update AS (
-              UPDATE agent_runtime_sandbox_leases
-              SET status = 'idle',
-                  lease_owner = NULL,
-                  execution_id = NULL,
-                  heartbeat_at = NULL,
-                  last_used_at = now(),
-                  metadata = metadata || jsonb_build_object('releasedBy', 'task.cancelled', 'releasedTaskId', $1, 'releasedStatus', 'cancelled'),
-                  updated_at = now()
-              WHERE execution_id IN (SELECT execution_id FROM updated_execution)
-            ),
             next_sequence AS (
               SELECT
                 updated_execution.session_id,

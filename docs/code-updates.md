@@ -15,7 +15,7 @@ The sandbox never receives the Discord token or database URL. It receives only t
 1. `src/tools/agentTaskTools.ts` records the task projection and a task-linked runtime execution, then returns a status result to the parent chat turn.
 2. `src/jobs/agentTaskEnqueue.ts` atomically hands the task to pg-boss. The parent tool call does not wait for the PR.
 3. Discord task notification code creates or edits one progress message for queued, running, and terminal state.
-4. `src/execution/backend.ts` selects `local-process` or `kubernetes-job`.
+4. `src/execution/backend.ts` creates an isolated Kubernetes Job.
 5. `src/execution/runnerPipeline.ts` runs the complete repository pipeline.
 6. Sandbox progress, commands, timings, cache state, and terminal callbacks become `agent.task.*` events in the canonical runtime ledger.
 7. The task ends as succeeded, failed, cancelled, or no-change, with a PR link or concrete reason.
@@ -57,24 +57,17 @@ The task request remains authoritative. Generated diagnoses, previous attempts, 
 
 GitHub App installation credentials are preferred in production. A local PAT should be fine-grained and limited to the configured repository.
 
-## Backends
-
-### Local process
-
-This is the default. A worker launches the sandbox runner as a child process and reuses the mirror, npm cache, dependency snapshots, and harness artifacts under `SANDBOX_CACHE_DIR`. A durable sandbox lease prevents multiple workers from claiming the same warm slot and records queue/acquire/heartbeat/release state.
-
-### Kubernetes Job
+## Kubernetes isolation
 
 This backend creates one Job, Secret, and ConfigMap per task. The worker service account can manage those resources; the sandbox service account has no Kubernetes API permissions. Callback tokens bind task and sandbox-run identity, timestamp, and body. Terminal callbacks are accepted once.
 
-NetworkPolicy should allow only DNS, the internal callback API, and the external hosts required for GitHub, OpenRouter, and package installation. A shared cache PVC is optional and must match the concurrency/storage model.
+NetworkPolicy should allow only DNS, the internal callback API, and the external hosts required for GitHub, OpenRouter, and package installation. A task uses only ephemeral local cache state; correctness never depends on cache persistence.
 
 ## Recovery
 
 Reconcilers handle:
 
 - a worker disappearing after a task starts;
-- stale or lost local-process leases;
 - a Kubernetes Job failing, disappearing, or never sending a terminal callback;
 - orphaned per-task Kubernetes resources;
 - callback replay or a callback for an already terminal task;
@@ -91,9 +84,6 @@ Inspect tasks with:
 ```bash
 npm run tasks:status
 npm run runs:inspect -- --list --limit 20
-npm run sandbox-cache:status
 ```
 
-Use `sandbox-cache:prune` for bounded cleanup. `sandbox-cache:clear` is destructive and requires deliberate operator use.
-
-Changes to this lifecycle should test queue handoff, status rendering, context selection, branch policy, dependency refresh, callback authentication, terminal idempotency, cleanup, and publication metadata as relevant. Run `npm run verify`; run `npm run verify:db` for queue, lease, task, or migration changes; run the appropriate smoke command only when credentials and external mutation are intentionally in scope.
+Changes to this lifecycle should test queue handoff, status rendering, context selection, branch policy, dependency refresh, callback authentication, terminal idempotency, cleanup, and publication metadata as relevant. Run `npm run verify`; run `npm run verify:db` for queue, task, or migration changes; run the appropriate smoke command only when credentials and external mutation are intentionally in scope.

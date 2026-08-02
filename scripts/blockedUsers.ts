@@ -1,7 +1,7 @@
 import { loadConfig } from "../src/config/env.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
-import { DiscordAiAgentRepository } from "../src/db/repositories.js";
+import { createAppDatabase } from "../src/db/repositories.js";
 
 type BlockCommand = "block" | "unblock" | "list";
 
@@ -19,7 +19,7 @@ async function main() {
 
   await runMigrations(config.databaseUrl);
   const pool = createPool(config);
-  const repo = new DiscordAiAgentRepository(pool);
+  const repo = createAppDatabase(pool);
 
   try {
     if (command === "list") {

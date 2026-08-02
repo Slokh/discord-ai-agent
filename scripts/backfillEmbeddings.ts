@@ -1,7 +1,7 @@
 import { assertDiscordConfig, assertOpenRouterConfig, loadConfig } from "../src/config/env.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { createPool } from "../src/db/pool.js";
-import { DiscordAiAgentRepository } from "../src/db/repositories.js";
+import { createAppDatabase } from "../src/db/repositories.js";
 import { startJobs } from "../src/jobs/queue.js";
 import { MESSAGE_EMBEDDING_INPUT_VERSION } from "../src/memory/embedding.js";
 import { logger } from "../src/util/logger.js";
@@ -28,7 +28,7 @@ async function main() {
   });
 
   try {
-    const repo = new DiscordAiAgentRepository(pool);
+    const repo = createAppDatabase(pool);
     const concurrency = parsePositiveIntArg(process.argv, "--concurrency") ?? DEFAULT_CONCURRENCY;
     const messageIds = await repo.messageIdsNeedingEmbeddings({
       guildId: config.discord.guildId,

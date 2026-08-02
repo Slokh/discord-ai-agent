@@ -29,19 +29,6 @@ sandbox:
       memory: 2Gi
   taskTimeoutSeconds: 1800
   ttlSecondsAfterFinished: 3600
-  cache:
-    enabled: false
-    mountPath: /var/cache/discord-ai-agent
-    size: 20Gi
-    accessModes:
-      - ReadWriteOnce
-    storageClassName: ""
-
-codegen:
-  # kubernetes-job keeps one isolated Kubernetes Job per code update.
-  # Prefer codegenWorker.enabled=true for warm local-process codegen so normal
-  # worker queues stay separate from code execution.
-  executionBackend: kubernetes-job
 
 secret:
   existingSecretName: discord-ai-agent-env
@@ -53,52 +40,6 @@ config:
   previousAppRevision: ""
   # Optional Discord channel for automatic plain-English deployment notes.
   releaseNotesChannelId: ""
-  botName: ai
-  githubRepository: owner/repo
-  githubBaseBranch: main
-  # Discord chat uses Luna/high; code updates use Terra/medium.
-  openRouterChatModel: openai/gpt-5.6-luna
-  openRouterUtilityModel: openai/gpt-5.6-luna
-  openRouterCodegenModel: openai/gpt-5.6-terra
-  openRouterEmbeddingModel: qwen/qwen3-embedding-8b
-  openRouterImageModel: google/gemini-3.1-flash-image
-  openRouterTranscriptionModel: openai/whisper-large-v3-turbo
-  embeddingDimensions: "1536"
-  discordAgentResponseTimeoutMs: "1800000"
-  agentPromptMaxConcurrency: "4"
-  chatSilenceTimeoutMs: "120000"
-  chatHardTimeoutMs: "600000"
-  retentionEventsDays: "60"
-  retentionAuditDays: "90"
-  retentionEmbeddingRunsDays: "14"
-  retentionRuntimeDays: "90"
-  memoryCompactionThreshold: "100"
-  memoryCompactionKeepRecent: "30"
-  crawlScheduleCron: "0 6 * * *"
-  walletEnabled: "false"
-  userWalletsEnabled: "false"
-  walletBalancesPublic: "false"
-  tempoNetwork: moderato
-  tempoUsdToken: USDC.e
-  walletInitialGrantUsd: "0.10"
-  databaseUrlSecretKey: DATABASE_URL
-  discordTokenSecretKey: DISCORD_TOKEN
-  discordClientIdSecretKey: DISCORD_CLIENT_ID
-  discordGuildIdSecretKey: DISCORD_GUILD_ID
-  openRouterApiKeySecretKey: OPENROUTER_API_KEY
-  spotifyClientIdSecretKey: SPOTIFY_CLIENT_ID
-  spotifyClientSecretKey: SPOTIFY_CLIENT_SECRET
-  privyAppIdSecretKey: PRIVY_APP_ID
-  privyAppSecretSecretKey: PRIVY_APP_SECRET
-  githubTokenSecretKey: GITHUB_TOKEN
-  githubAppIdSecretKey: GITHUB_APP_ID
-  githubAppPrivateKeySecretKey: GITHUB_APP_PRIVATE_KEY
-  githubAppInstallationIdSecretKey: GITHUB_APP_INSTALLATION_ID
-  taskSigningSecretKey: TASK_SIGNING_SECRET
-  controlUiAuthPasswordSecretKey: CONTROL_UI_AUTH_PASSWORD
-  botOwnerUserIdSecretKey: BOT_OWNER_USER_ID
-  opsAllowlistUserIdsSecretKey: OPS_ALLOWLIST_USER_IDS
-  imageToolsAllowlistOnlySecretKey: IMAGE_TOOLS_ALLOWLIST_ONLY
   controlUiPublicUrl: ""
 
 api:
@@ -125,34 +66,10 @@ bot:
     limits: { cpu: "1", memory: 1Gi }
 
 worker:
-  # Keep this at 1 with the default ReadWriteOnce sandbox cache PVC. Use RWX
-  # storage or a DB-backed cache/sandbox lease model before scaling codegen workers.
   replicas: 1
   terminationGracePeriodSeconds: 120
-  queues:
-    crawl: true
-    embedding: true
-    task: true
-    agentRuntime: true
   resources:
     requests: { cpu: 250m, memory: 512Mi }
-    limits: { cpu: "2", memory: 2Gi }
-
-codegenWorker:
-  # Optional dedicated warm codegen worker pool. When enabled, this Deployment
-  # runs only the agent.task queue with local-process warm execution and the
-  # regular worker stops consuming task jobs.
-  enabled: false
-  replicas: 1
-  terminationGracePeriodSeconds: 120
-  executionBackend: local-process
-  lease:
-    heartbeatSeconds: 15
-    staleSeconds: 120
-    acquireTimeoutSeconds: 1800
-    acquirePollSeconds: 5
-  resources:
-    requests: { cpu: 500m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }
 
 migrations:

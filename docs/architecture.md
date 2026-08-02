@@ -24,7 +24,7 @@ Discord message
 
 Code-change tool call
   -> durable agent task
-  -> local-process or Kubernetes sandbox
+  -> isolated Kubernetes Job
   -> verify and release scan
   -> GitHub branch and PR
   -> Discord task message reaches a terminal state
@@ -74,10 +74,10 @@ The data lifecycle is the first place to fix missing or stale Discord knowledge.
 1. The model selects `runCodingAgent` for an explicit request to change the repository, fix CI, inspect a PR, or repair a prior task.
 2. `src/tools/agentTaskTools.ts` creates the task projection and a task-linked runtime execution.
 3. `src/jobs/agentTaskEnqueue.ts` performs the atomic queue handoff.
-4. `src/execution/backend.ts` selects a local-process child or Kubernetes Job. Warm local workers coordinate through durable sandbox leases.
+4. `src/execution/backend.ts` creates one isolated Kubernetes Job with task-scoped configuration and credentials.
 5. `runnerPipeline.ts` prepares a cached mirror and isolated worktree, builds a focused context pack, runs NanoCodex with workspace tools, refreshes dependencies when manifests change, verifies, scans, pushes an allowed branch, and opens or updates a PR.
 6. Sandbox callbacks and command summaries become `agent.task.*` runtime events. Task rows remain projections used for status and Discord rendering.
-7. Reconcilers turn lost workers, stale leases, missing jobs, and absent terminal callbacks into explicit terminal states and cleanup.
+7. Reconcilers turn lost workers, missing Jobs, and absent terminal callbacks into explicit terminal states and cleanup.
 
 See [Code updates](code-updates.md) for publication and sandbox details.
 
@@ -96,7 +96,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Server prompt overlays | `serverOverlayRepository.ts` |
 | Per-guild agent model selection | `agentSettingsRepository.ts` |
 
-`src/db/repositories.ts` is a compatibility facade over focused owners. New lifecycle logic belongs in the focused repository, not the facade.
+`src/db/repositories.ts` composes the focused repository functions with one pool. It contains only cross-repository lifecycle coordination; SQL stays in the focused owner.
 
 ## Source ownership
 
@@ -108,7 +108,7 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Discord ingress and delivery | `src/discord/client.ts`, `messageIngress.ts`, `agentDelivery.ts`, `responseSink.ts` | Discord client/delivery/response-sink tests |
 | Discord data and retrieval | `src/discord/crawler.ts`, `src/db/*Repository.ts`, `src/memory/`, retrieval tools | crawler/search/tool tests and DB integration tests |
 | Control plane and console | `src/control/internalApiServer.ts`, `src/control/`, `src/control/console/` | internal API, observability, and console tests |
-| Queue ownership | `src/jobs/queue.ts`, `agentTaskEnqueue.ts`, `sandboxLeaseScheduler.ts` | queue unit tests and `tests/integration/jobs-db.test.ts` |
+| Queue ownership | `src/jobs/queue.ts`, `agentTaskEnqueue.ts` | queue unit tests and `tests/integration/jobs-db.test.ts` |
 | Code-update execution | `src/execution/backend.ts`, `runnerPipeline.ts`, `repoWorkspace.ts` | sandbox runner, backend, callback, and task tests |
 | Payments and games | `src/payments/`, `src/tools/walletTools.ts`, `randomTools.ts`, `standardWager*` | focused wallet/RNG tests and DB integration tests |
 | Configuration and startup | `src/config/env.ts`, `src/index.ts`, `.env.example` | config, startup, preflight, and Helm tests |

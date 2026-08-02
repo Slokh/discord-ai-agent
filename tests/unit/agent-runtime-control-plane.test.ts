@@ -151,7 +151,7 @@ describe("agent runtime control plane", () => {
         taskId: "task-runtime-first",
         queueName: "agent.task",
         backendName: "local-process-sandbox",
-        codegenBackend: "local-process" as const,
+        codegenBackend: "kubernetes-job" as const,
         codegenModel: "openai/gpt-5.6-terra" as const,
         codegenReasoningEffort: "medium" as const,
         codegenProvider: "openrouter"
@@ -187,7 +187,7 @@ describe("agent runtime control plane", () => {
         title: "Runtime-first code updates",
         request: "make code updates runtime-first",
         requestedBy: "Kartik",
-        backend: "local-process-sandbox",
+        backend: "kubernetes-sandbox",
         parentAgentSessionId: "agent-session-1",
         parentAgentExecutionId: "agent-execution-parent",
         parentAgentThreadKey: "discord:guild:channel"
@@ -236,7 +236,7 @@ describe("agent runtime control plane", () => {
           parentAgentSessionId: "agent-session-1",
           parentAgentExecutionId: "agent-execution-parent",
           parentAgentThreadKey: "discord:guild:channel",
-          codegenBackend: "local-process",
+          codegenBackend: "kubernetes-job",
           codegenModel: "openai/gpt-5.6-terra",
           codegenReasoningEffort: "medium",
           codegenProvider: "openrouter",
@@ -396,7 +396,7 @@ function fakeConfig() {
     },
     execution: {
       ...config.execution,
-      codegenBackend: "local-process" as const,
+      codegenBackend: "kubernetes-job" as const,
     }
   };
 }

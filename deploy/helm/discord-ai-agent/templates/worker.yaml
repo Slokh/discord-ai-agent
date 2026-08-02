@@ -30,19 +30,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["node", "dist/src/index.js", "worker"]
           env:
-            - name: DISCORD_AI_AGENT_PROCESS_ROLE
-              value: worker
             {{- include "discord-ai-agent.commonEnv" . | nindent 12 }}
-            - name: WORKER_CRAWL_ENABLED
-              value: {{ .Values.worker.queues.crawl | quote }}
-            - name: WORKER_EMBEDDING_ENABLED
-              value: {{ .Values.worker.queues.embedding | quote }}
-            - name: WORKER_TASK_ENABLED
-              value: {{ and .Values.worker.queues.task (not .Values.codegenWorker.enabled) | quote }}
-            - name: WORKER_AGENT_RUNTIME_ENABLED
-              value: {{ .Values.worker.queues.agentRuntime | quote }}
-            - name: CODEGEN_EXECUTION_BACKEND
-              value: {{ .Values.codegen.executionBackend | quote }}
             {{- include "discord-ai-agent.controlUiPublicEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.databaseEnv" . | nindent 12 }}
             {{- include "discord-ai-agent.discordEnv" . | nindent 12 }}
@@ -54,14 +42,3 @@ spec:
             {{- include "discord-ai-agent.sandboxLauncherEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
-          {{- if and .Values.sandbox.cache.enabled (eq .Values.codegen.executionBackend "local-process") }}
-          volumeMounts:
-            - name: sandbox-cache
-              mountPath: {{ .Values.sandbox.cache.mountPath | quote }}
-          {{- end }}
-      {{- if and .Values.sandbox.cache.enabled (eq .Values.codegen.executionBackend "local-process") }}
-      volumes:
-        - name: sandbox-cache
-          persistentVolumeClaim:
-            claimName: {{ include "discord-ai-agent.fullname" . }}-sandbox-cache
-      {{- end }}

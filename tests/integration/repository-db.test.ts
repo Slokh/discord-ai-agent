@@ -7,7 +7,7 @@ import { createPool, type DbPool } from "../../src/db/pool.js";
 import { runConversationCompactionOnce } from "../../src/db/conversationCompaction.js";
 import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
-import { passingStatsCanaryChannel, passingWebCanaryChannel } from "../../src/observability/postDeployCanaryEvidence.js";
+import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../../src/observability/postDeployCanaryEvidence.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -76,6 +76,10 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       metadata: { toolName: "web__run", status: "ok", outputChars: 24 },
     });
     await agentRuntimeRepo.recordEvent({
+      sessionId, executionId, traceId, kind: "tool", eventName: "agent.tool.complete",
+      metadata: { toolName: "drawRandom", status: "ok", outputChars: 120 },
+    });
+    await agentRuntimeRepo.recordEvent({
       sessionId, executionId, traceId, kind: "model", eventName: "agent.model.call.completed",
       metadata: {
         appRevision: "test-revision", callId: `call-${randomUUID()}`, purpose: "external_web_research",
@@ -87,6 +91,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
     await expect(passingStatsCanaryChannel(pool, traceId)).resolves.toBe(channelId);
     await expect(passingWebCanaryChannel(pool, traceId)).resolves.toBe(channelId);
+    await expect(passingRandomCanaryChannel(pool, traceId)).resolves.toBe(channelId);
 
     await agentRuntimeRepo.recordEvent({
       sessionId, executionId, traceId, kind: "tool", eventName: "agent.tool.complete",
@@ -94,6 +99,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     });
     await expect(passingStatsCanaryChannel(pool, traceId)).resolves.toBe(channelId);
     await expect(passingWebCanaryChannel(pool, traceId)).resolves.toBeUndefined();
+    await expect(passingRandomCanaryChannel(pool, traceId)).resolves.toBe(channelId);
   });
 
   it("allocates concurrent runtime event sequences without dropping evidence", async () => {

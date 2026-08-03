@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  passingRandomCanaryChannel,
   passingStatsCanaryChannel,
   passingWebCanaryChannel,
 } from "../../src/observability/postDeployCanaryEvidence.js";
@@ -31,9 +32,23 @@ describe("post-deploy canary evidence", () => {
     expect(sql).toContain("jsonb_each_text");
   });
 
+  it("requires one successful random tool call without runtime errors", async () => {
+    let submittedSql = "";
+    const query = vi.fn(async (sql: string) => {
+      submittedSql = sql;
+      return { rows: [{ channel_id: "random-channel" }] };
+    });
+
+    await expect(passingRandomCanaryChannel({ query } as never, "trace-random")).resolves.toBe("random-channel");
+    expect(submittedSql).toContain("event.metadata->>'toolName' = 'drawRandom'");
+    expect(submittedSql).toContain("event.level = 'error'");
+    expect(submittedSql).toContain(") = 1");
+  });
+
   it("rejects evidence without a channel", async () => {
     const query = vi.fn(async () => ({ rows: [] }));
     await expect(passingStatsCanaryChannel({ query } as never, "missing")).resolves.toBeUndefined();
     await expect(passingWebCanaryChannel({ query } as never, "missing")).resolves.toBeUndefined();
+    await expect(passingRandomCanaryChannel({ query } as never, "missing")).resolves.toBeUndefined();
   });
 });

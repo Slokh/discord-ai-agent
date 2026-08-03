@@ -98,7 +98,7 @@ describe("sandboxRunner", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends gh");
     expect(dockerfile).toContain("npm install --global npm@11.19.0");
     expect(dockerfile).not.toContain("nanocodex-bin");
-    expect(cargoManifest).toContain("9da913aeed3361b708cca8308e016125b84b9430");
+    expect(cargoManifest).toContain("09682059a17306e472c00c579baa6a2f15fa13f0");
     expect(dockerfile).toContain("/usr/local/bin/discord-agent-nanocodex-runtime");
     expect(dockerfile).not.toContain("/usr/local/bin/nanocodex");
   });

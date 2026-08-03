@@ -521,11 +521,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "r-efi",
  "rand_core 0.10.1",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -917,12 +915,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
-name = "lru-slab"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -962,7 +954,7 @@ dependencies = [
 [[package]]
 name = "nanocodex"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=09682059a17306e472c00c579baa6a2f15fa13f0#09682059a17306e472c00c579baa6a2f15fa13f0"
 dependencies = [
  "nanocodex-agent",
  "nanocodex-oai-api",
@@ -972,7 +964,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-agent"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=09682059a17306e472c00c579baa6a2f15fa13f0#09682059a17306e472c00c579baa6a2f15fa13f0"
 dependencies = [
  "chrono",
  "futures-util",
@@ -994,7 +986,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-oai-api"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=09682059a17306e472c00c579baa6a2f15fa13f0#09682059a17306e472c00c579baa6a2f15fa13f0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1020,7 +1012,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-tools"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=09682059a17306e472c00c579baa6a2f15fa13f0#09682059a17306e472c00c579baa6a2f15fa13f0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1050,7 +1042,7 @@ dependencies = [
 [[package]]
 name = "nanocodex-tools-macros"
 version = "0.3.0"
-source = "git+https://github.com/Slokh/nanocodex.git?rev=9da913aeed3361b708cca8308e016125b84b9430#9da913aeed3361b708cca8308e016125b84b9430"
+source = "git+https://github.com/Slokh/nanocodex.git?rev=09682059a17306e472c00c579baa6a2f15fa13f0#09682059a17306e472c00c579baa6a2f15fa13f0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1217,62 +1209,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
-name = "quinn"
-version = "0.11.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c1a41e437b6bbd489372cd4971de128e85c855f56c57f283d20ff016cf7c0a8"
-dependencies = [
- "bytes",
- "cfg_aliases 0.2.2",
- "pin-project-lite",
- "quinn-proto",
- "quinn-udp",
- "rustc-hash",
- "rustls",
- "socket2",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "web-time",
-]
-
-[[package]]
-name = "quinn-proto"
-version = "0.11.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
-dependencies = [
- "bytes",
- "getrandom 0.4.3",
- "lru-slab",
- "rand 0.10.2",
- "rand_pcg",
- "ring",
- "rustc-hash",
- "rustls",
- "rustls-pki-types",
- "slab",
- "thiserror 2.0.19",
- "tinyvec",
- "tracing",
- "web-time",
-]
-
-[[package]]
-name = "quinn-udp"
-version = "0.5.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35a133f956daabe89a61a685c2649f13d82d5aa4bd5d12d1277e1072a21c0694"
-dependencies = [
- "cfg_aliases 0.2.2",
- "libc",
- "once_cell",
- "socket2",
- "tracing",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1335,15 +1271,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
-name = "rand_pcg"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
-dependencies = [
- "rand_core 0.10.1",
-]
-
-[[package]]
 name = "relative-path"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1355,7 +1282,8 @@ dependencies = [
 [[package]]
 name = "reqwest"
 version = "0.13.4"
-source = "git+https://github.com/gakonst/reqwest?rev=d45d0c3d2b2a74b723f82791f464d6241f2c6e90#d45d0c3d2b2a74b723f82791f464d6241f2c6e90"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64",
  "bytes",
@@ -1371,7 +1299,6 @@ dependencies = [
  "log",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
@@ -1459,12 +1386,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc-hash"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
-
-[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1505,7 +1426,6 @@ version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
 dependencies = [
- "web-time",
  "zeroize",
 ]
 
@@ -1934,21 +1854,6 @@ dependencies = [
  "displaydoc",
  "zerovec",
 ]
-
-[[package]]
-name = "tinyvec"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
-dependencies = [
- "tinyvec_macros",
-]
-
-[[package]]
-name = "tinyvec_macros"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"

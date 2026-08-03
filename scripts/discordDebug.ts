@@ -82,7 +82,7 @@ class DiscordReader {
   }
   private async get<T>(path: string) {
     for (let attempt = 1; attempt <= 5; attempt += 1) {
-      const response = await fetch(`https://discord.com/api/v10${path}`, { headers: { authorization: `Bot ${this.token}` } });
+      const response = await boundedFetch(`https://discord.com/api/v10${path}`, { headers: { authorization: `Bot ${this.token}` } });
       if (response.ok) return await response.json() as T;
       if (response.status !== 429 || attempt === 5) throw new Error(`Discord GET ${path} failed: ${response.status}`);
       const body = await response.json().catch(() => ({})) as { retry_after?: number };
@@ -135,11 +135,11 @@ async function replyChain(discord: DiscordReader, message: DiscordMessage) {
 
 async function loadRun(apiUrl: string, auth: string | undefined, messageId: string) {
   const headers = auth ? { authorization: `Bearer ${auth}` } : undefined;
-  const resolved = await fetch(`${apiUrl.replace(/\/$/, "")}/api/runs/resolve?query=${encodeURIComponent(messageId)}`, { headers });
+  const resolved = await boundedFetch(`${apiUrl.replace(/\/$/, "")}/api/runs/resolve?query=${encodeURIComponent(messageId)}`, { headers });
   if (resolved.status === 404) return null;
   if (!resolved.ok) throw new Error(`Run resolve failed: ${resolved.status}`);
   const { run } = await resolved.json() as { run: { runId: string } };
-  const snapshot = await fetch(`${apiUrl.replace(/\/$/, "")}/api/runs/${encodeURIComponent(run.runId)}`, { headers });
+  const snapshot = await boundedFetch(`${apiUrl.replace(/\/$/, "")}/api/runs/${encodeURIComponent(run.runId)}`, { headers });
   if (!snapshot.ok) throw new Error(`Run fetch failed: ${snapshot.status}`);
   return await snapshot.json() as any;
 }
@@ -169,7 +169,7 @@ async function formatDebug(input: { message: DiscordMessage; chain: DiscordMessa
 async function latestPrompt(apiUrl: string, auth: string | undefined, run: any) {
   const artifact = [...run.artifacts].reverse().find((entry: any) => entry.kind === "model_prompt");
   if (!artifact) return null;
-  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/api/runs/${encodeURIComponent(run.run.runId)}/artifacts/${encodeURIComponent(artifact.artifactId)}`, { headers: auth ? { authorization: `Bearer ${auth}` } : undefined });
+  const response = await boundedFetch(`${apiUrl.replace(/\/$/, "")}/api/runs/${encodeURIComponent(run.run.runId)}/artifacts/${encodeURIComponent(artifact.artifactId)}`, { headers: auth ? { authorization: `Bearer ${auth}` } : undefined });
   if (!response.ok) return null;
   try { return JSON.parse(await response.text()) as { messages?: any[] }; } catch { return null; }
 }
@@ -186,15 +186,29 @@ function formatAudit(input: { channelId: string; since: Date; rows: any[] }) {
 function counts(values: string[]) { return [...new Map(values.map((value) => [value, values.filter((item) => item === value).length])).entries()].map(([name, count]) => ({ name, count })); }
 function channelIdFromReference(reference: string) { try { const parts = new URL(reference).pathname.split("/").filter(Boolean); return parts[parts.indexOf("channels") + 2]; } catch { return undefined; } }
 function deploymentStartedAt(namespace: string) {
-  const value = kubectl(["-n", namespace, "get", "deployment", "discord-ai-agent-bot", "-o", "jsonpath={.status.conditions[?(@.type==\"Available\")].lastTransitionTime}"]);
-  if (!value) throw new Error("Could not resolve the deployed bot timestamp; pass --since.");
+  const raw = kubectl(["-n", namespace, "get", "pods", "-l", "app.kubernetes.io/component=bot", "-o", "json"]);
+  const pods = raw ? JSON.parse(raw) as { items?: Array<{ metadata?: { creationTimestamp?: string }; status?: { conditions?: Array<{ type?: string; status?: string }> } }> } : null;
+  const ready = pods?.items?.filter((pod) => pod.status?.conditions?.some((condition) => condition.type === "Ready" && condition.status === "True")) ?? [];
+  const value = ready.map((pod) => pod.metadata?.creationTimestamp).filter((timestamp): timestamp is string => Boolean(timestamp)).sort().at(-1);
+  if (!value) throw new Error("Could not resolve the newest ready bot pod timestamp; pass --since.");
   return new Date(value);
 }
 function kubectl(args: string[]) {
   try {
-    return execFileSync("kubectl", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return execFileSync("kubectl", args, { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
     return "";
+  }
+}
+
+async function boundedFetch(url: string, init: RequestInit = {}) {
+  try {
+    return await fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(20_000) });
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new Error(`Production inspection request timed out after 20 seconds: ${new URL(url).pathname}`, { cause: error });
+    }
+    throw error;
   }
 }
 function parseArgs(argv: string[]): Args { const args: Args = { help: false, audit: false, sinceDeploy: false, includeReplyChains: false }; for (let index = 0; index < argv.length; index += 1) { const value = argv[index]!; if (value === "-h" || value === "--help") args.help = true; else if (value === "--audit") args.audit = true; else if (value === "--channel") args.channelId = argv[++index]; else if (value === "--since") args.since = new Date(argv[++index]!); else if (value === "--since-deploy") args.sinceDeploy = true; else if (value === "--include-reply-chains") args.includeReplyChains = true; else if (value === "--api-url") args.apiUrl = argv[++index]; else if (value === "--auth") args.auth = argv[++index]; else if (!value.startsWith("-")) args.reference = args.reference ? `${args.reference} ${value}` : value; else throw new Error(`Unknown option ${value}`); } if (args.since && Number.isNaN(+args.since)) throw new Error("--since must be an ISO timestamp."); return args; }

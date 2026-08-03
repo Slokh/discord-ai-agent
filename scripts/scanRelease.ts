@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -20,14 +21,27 @@ type DeniedTerm = {
   allowLine?: (line: string) => boolean;
 };
 
-// The canonical public repository home. Lines that reference it (package.json
-// repository/bugs URLs, SECURITY.md advisories link, issue templates) are
-// legitimate and exempt from the owner-handle rule. Built from pieces so this
-// file does not itself trip the scanner.
-const publicOwnerRepositoryPaths = [
-  ["github.com/", "Slo", "kh", "/discord-ai-agent"].join(""),
-  ["github.com/", "Slo", "kh", "/nanocodex"].join(""),
-].map((path) => path.toLowerCase());
+type ReleaseRepositoryPolicy = { publicRepositories?: unknown };
+
+// This tracked manifest is the only place public repository identities are
+// exempted from private-owner scanning. Adding a dependency fork is a small,
+// reviewable policy change rather than a new scanner branch or environment
+// variable.
+const publicOwnerRepositoryPaths = releasePublicRepositoryPaths();
+
+function releasePublicRepositoryPaths() {
+  const parsed = JSON.parse(readFileSync("release-public-repositories.json", "utf8")) as ReleaseRepositoryPolicy;
+  if (!Array.isArray(parsed.publicRepositories) || parsed.publicRepositories.length === 0) {
+    throw new Error("release-public-repositories.json must declare at least one public repository.");
+  }
+  return parsed.publicRepositories.flatMap((value) => {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value)) {
+      throw new Error(`Invalid public repository policy entry: ${JSON.stringify(value)}`);
+    }
+    const repository = value.toLowerCase();
+    return [repository, `github.com/${repository}`];
+  });
+}
 
 type PatternRule = {
   ruleId: string;

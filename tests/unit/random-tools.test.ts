@@ -13,9 +13,9 @@ import { recomputeStoredRngDraw, verifyRngCommitment, type StoredRngDrawKind } f
 import {
   drawRandom,
   drawRandomResponse,
-  revealRandomness,
-  settleRandomWager
+  revealRandomness
 } from "../../src/tools/randomTools.js";
+import { settleRandomWager } from "../../src/tools/randomWagerTools.js";
 import { discordActionToolHandlers } from "../../src/tools/handlers/discord-action.js";
 import type { DiscordReplyContext, ToolContext } from "../../src/tools/types.js";
 import { createAgentTurnOutput } from "../../src/tools/turnOutput.js";

@@ -1,4 +1,5 @@
-import { drawRandomResponse, revealRandomnessResponse, settleRandomWagerResponse } from "../randomTools.js";
+import { drawRandomResponse, revealRandomnessResponse } from "../randomTools.js";
+import { settleRandomWagerResponse } from "../randomWagerTools.js";
 import { undoConversationTurnsResponse } from "../agentMemoryTools.js";
 import { updateBotAvatar } from "../botProfileTools.js";
 import { createDiscordPoll } from "../discordPollTools.js";

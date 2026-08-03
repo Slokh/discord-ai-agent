@@ -94,7 +94,10 @@ describe("config", () => {
       expect(() => loadConfig()).toThrow(/must use HTTPS/i);
     });
     withEnv({ CONTROL_UI_PUBLIC_URL: "https://console.example.test", CONTROL_UI_AUTH_PASSWORD: "" }, () => {
-      expect(() => loadConfig()).toThrow(/AUTH_PASSWORD is required/i);
+      expect(() => loadConfig(["node", "index.js", "api"])).toThrow(/AUTH_PASSWORD is required/i);
+      expect(() => loadConfig(["node", "index.js", "all"])).toThrow(/AUTH_PASSWORD is required/i);
+      expect(loadConfig(["node", "index.js", "bot"]).controlUi.publicUrl).toBe("https://console.example.test");
+      expect(loadConfig(["node", "index.js", "worker"]).controlUi.publicUrl).toBe("https://console.example.test");
     });
     withEnv({ CONTROL_UI_PUBLIC_URL: "https://console.example.test", CONTROL_UI_AUTH_PASSWORD: "secret" }, () => {
       expect(loadConfig().controlUi.publicUrl).toBe("https://console.example.test");

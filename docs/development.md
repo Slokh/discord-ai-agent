@@ -82,6 +82,8 @@ Then use the proportionate broad checks:
 
 `npm run verify` runs lint, typecheck, unit/integration tests that do not require the DB gate, critical production dependency audit, docs links, and release scanning. `npm run verify:db` migrates the test database and runs DB integration suites.
 
+Each integration-test file receives its own migrated Postgres schema through `tests/integration/testDatabase.ts`. Files may run in parallel; do not restore global cleanup prefixes or `--no-file-parallelism` to hide ownership collisions. The migration-upgrade test manages a separate schema because it intentionally applies historical migrations one at a time.
+
 Do not add smoke or end-to-end coverage by reflex. Use it when the changed boundary cannot be proven below that level and external credentials/mutations are intentionally in scope.
 
 ## Evals

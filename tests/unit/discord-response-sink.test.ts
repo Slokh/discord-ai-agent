@@ -431,7 +431,7 @@ describe("DiscordResponseSink", () => {
     expect(reaction.users.remove).toHaveBeenCalledWith("bot-user");
   });
 
-  it("creates a fallback status message when acknowledgement reaction fails", async () => {
+  it("stays silent until the final reply when acknowledgement reaction fails", async () => {
     const sourceMessage = fakeMessage({
       react: vi.fn(async () => {
         throw new Error("missing reaction permission");
@@ -446,10 +446,7 @@ describe("DiscordResponseSink", () => {
 
     await sink.acknowledge();
 
-    expect(sourceMessage.reply).toHaveBeenCalledWith({
-      content: "Working on it...",
-      allowedMentions: suppressedMentions
-    });
+    expect(sourceMessage.reply).not.toHaveBeenCalled();
   });
 
   it("adds reactions to a final reply message", async () => {
@@ -565,7 +562,7 @@ describe("DiscordResponseSink", () => {
     expect(outcome.added).toEqual(["👍", "👎"]);
   });
 
-  it("does not throw if acknowledgement fallback or cleanup fails", async () => {    const sourceMessage = fakeMessage({
+  it("does not throw if acknowledgement or cleanup fails", async () => {    const sourceMessage = fakeMessage({
       react: vi.fn(async () => {
         throw new Error("missing reaction permission");
       }),

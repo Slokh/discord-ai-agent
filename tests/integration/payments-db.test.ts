@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { loadConfig } from "../../src/config/env.js";
 import { PaymentRepository } from "../../src/db/paymentRepository.js";
-import { createPool, type DbPool } from "../../src/db/pool.js";
+import type { DbPool } from "../../src/db/pool.js";
+import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -10,16 +10,18 @@ describe.skipIf(!runDbTests)("PaymentRepository database behavior", () => {
   let pool: DbPool;
   let repo: PaymentRepository;
   const guildPrefix = "payments-test-";
+  let database: IsolatedTestDatabase;
 
-  beforeAll(() => {
-    pool = createPool(loadConfig());
+  beforeAll(async () => {
+    database = await createIsolatedTestDatabase("payments");
+    pool = database.pool;
     repo = new PaymentRepository(pool);
   });
 
   afterEach(cleanup);
   afterAll(async () => {
     await cleanup();
-    await pool.end();
+    await database.cleanup();
   });
 
   async function cleanup() {

@@ -30,7 +30,7 @@ Code-change tool call
   -> Discord task message reaches a terminal state
 ```
 
-`src/index.ts` wires roles and dependencies. `src/config/env.ts` is the canonical configuration schema. `src/jobs/queue.ts` registers recurring and queued work.
+`src/index.ts` selects process roles and starts adapters. `src/runtime/applicationServices.ts` is the shared composition root for repositories, model access, randomness, payments, and delivery state; production and the local prompt runner consume the same services. `src/config/env.ts` is the canonical configuration schema. `src/jobs/queue.ts` registers recurring and queued work.
 
 ## Architectural invariants
 
@@ -112,6 +112,8 @@ See [Code updates](code-updates.md) for publication and sandbox details.
 | Code-update execution | `src/execution/backend.ts`, `runnerPipeline.ts`, `repoWorkspace.ts` | sandbox runner, backend, callback, and task tests |
 | Payments and games | `src/payments/`, `src/tools/walletTools.ts`, `randomTools.ts`, `randomWagerTools.ts`, `standardWager*` | focused wallet/RNG tests and DB integration tests |
 | Configuration and startup | `src/config/env.ts`, `src/index.ts`, `.env.example` | config, startup, preflight, and Helm tests |
+
+Entrypoints must not reconstruct application-owned services independently. Add a durable repository or provider once in `src/runtime/applicationServices.ts`, then pass the composed dependency to the role-specific adapter. Test doubles remain local to tests.
 
 ## Observability
 

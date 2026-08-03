@@ -717,6 +717,35 @@ button.count-chip:hover {
   gap: 8px;
 }
 
+.run-dashboard,
+.run-dashboard-totals {
+  display: grid;
+  gap: 8px;
+}
+
+.run-dashboard-totals {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.revision-quality {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 4px;
+  padding-top: 8px;
+}
+
+.revision-quality-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) repeat(3, minmax(48px, auto));
+  gap: 10px;
+}
+
+.revision-quality-head {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
 .diagnostics {
   display: grid;
   gap: 8px;

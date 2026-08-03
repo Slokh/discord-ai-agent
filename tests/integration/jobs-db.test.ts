@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgBoss } from "pg-boss";
-import { loadConfig } from "../../src/config/env.js";
 import {
   AGENT_RUNTIME_EXECUTION_JOB,
   AGENT_TASK_JOB,
@@ -14,18 +13,23 @@ import { createPool } from "../../src/db/pool.js";
 import { createAppDatabase } from "../../src/db/repositories.js";
 import { AgentRuntimeRepository } from "../../src/db/agentRuntimeRepository.js";
 import { agentRuntimeSessionId } from "../../src/db/agentRuntimeRepository.js";
+import { createIsolatedTestDatabase, type IsolatedTestDatabase } from "./testDatabase.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
+let jobsDatabase: IsolatedTestDatabase;
 
 describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
   const bosses: PgBoss[] = [];
   const runtimes: JobRuntime[] = [];
   const createdTaskIds = new Set<string>();
+  beforeAll(async () => {
+    jobsDatabase = await createIsolatedTestDatabase("jobs");
+  });
 
   afterAll(async () => {
     await Promise.all(runtimes.map((runtime) => runtime.stop().catch(() => undefined)));
     await Promise.all(bosses.map((boss) => boss.stop({ graceful: false, timeout: 5_000 }).catch(() => undefined)));
-    const pool = createPool(loadConfig());
+    const pool = jobsDatabase.pool;
     try {
       await pool.query("DROP SCHEMA IF EXISTS pgboss_test CASCADE");
       const taskIds = [...createdTaskIds];
@@ -37,7 +41,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
         await pool.query("DELETE FROM agent_tasks WHERE task_id = ANY($1::text[])", [taskIds]);
       }
     } finally {
-      await pool.end();
+      await jobsDatabase.cleanup();
     }
   });
 
@@ -494,7 +498,7 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
 });
 
 function testConfig() {
-  const config = loadConfig();
+  const config = jobsDatabase.config;
   return {
     ...config,
     discord: {

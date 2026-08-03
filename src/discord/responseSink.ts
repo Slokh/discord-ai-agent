@@ -8,7 +8,6 @@ import { plainDiscordComponentsV2Payload, validateDiscordAttachmentNames, type P
 import { discordEdit, discordReact, discordRemoveReaction, discordReply, discordSend } from "./api.js";
 
 export const DEFAULT_DISCORD_LOADING_REACTION = "⏳";
-const ACKNOWLEDGEMENT_FALLBACK_CONTENT = "Working on it...";
 
 export type DiscordResponseResult = {
   message: Message;
@@ -91,11 +90,6 @@ export class DiscordResponseSink {
       this.logger.debug({ emoji: this.loadingReactionEmoji }, "Added Discord loading reaction");
     } catch (error) {
       this.logger.warn({ err: error, emoji: this.loadingReactionEmoji }, "Failed to add Discord loading reaction");
-      try {
-        await this.updateStatus(ACKNOWLEDGEMENT_FALLBACK_CONTENT);
-      } catch (fallbackError) {
-        this.logger.warn({ err: fallbackError }, "Failed to create fallback Discord acknowledgement status");
-      }
     }
   }
 

@@ -1,7 +1,8 @@
+# syntax=docker/dockerfile:1.7
 FROM node:22-trixie-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 FROM deps AS build
 COPY tsconfig.json eslint.config.js vitest.config.ts vite.console.config.ts ./
@@ -17,7 +18,10 @@ COPY native/nanocodex-runtime /discord-agent-nanocodex-runtime
 RUN apt-get update \
   && apt-get install -y --no-install-recommends build-essential cmake git libssl-dev pkg-config \
   && rm -rf /var/lib/apt/lists/*
-RUN cargo build --locked --release --manifest-path /discord-agent-nanocodex-runtime/Cargo.toml \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+  --mount=type=cache,target=/usr/local/cargo/git \
+  --mount=type=cache,target=/discord-agent-nanocodex-runtime/target \
+  cargo build --locked --release --manifest-path /discord-agent-nanocodex-runtime/Cargo.toml \
   && cp /discord-agent-nanocodex-runtime/target/release/discord-agent-nanocodex-runtime /discord-agent-nanocodex-runtime-bin
 
 FROM node:22-trixie-slim AS runtime-base
@@ -31,7 +35,7 @@ RUN apt-get update \
 
 FROM runtime-base AS runtime
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev \
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev \
   && rm -f package-lock.json
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --from=nanocodex-build /discord-agent-nanocodex-runtime-bin /usr/local/bin/discord-agent-nanocodex-runtime
@@ -42,7 +46,7 @@ CMD ["node", "dist/src/index.js"]
 
 FROM runtime AS codegen
 USER root
-RUN npm install --global npm@11.19.0 \
+RUN --mount=type=cache,target=/root/.npm npm install --global npm@11.19.0 \
   && npm cache clean --force
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \

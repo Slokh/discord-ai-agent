@@ -70,7 +70,7 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 ## Discord behavior
 
 - Plain text is the default; Components V2 is for choices, forms, media, or hierarchy that materially benefit from native UI.
-- A loading reaction may indicate work. The bot does not post a placeholder reply that competes with the final response.
+- A loading reaction may indicate work. If that reaction cannot be added, the bot stays silent until the final response instead of posting a placeholder reply that competes with it.
 - Final content, files, components, and non-model footers are delivered through one durable response path.
 - Long-running code updates edit a dedicated task status message and finish with a PR or a concrete terminal reason.
 - Internal tool names, implementation jargon, canned report templates, and chain-of-thought claims do not belong in ordinary answers.

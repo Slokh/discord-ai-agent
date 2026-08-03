@@ -113,6 +113,8 @@ Add a numbered forward migration for schema or index changes. Keep migrations sa
 
 Use row locks, unique keys, compare-and-set versions, and explicit terminal-state checks where concurrent workers or retries can collide. Keep job payloads small: durable context belongs in rows or artifacts, while the queue carries identifiers required to resume.
 
+DB integration tests mirror that ownership boundary. Each test file creates, migrates, and drops an isolated schema, so destructive fixture cleanup cannot race another file and the suite can retain normal file-level parallelism.
+
 ## Retention and deletion
 
 Worker maintenance bounds events, audits, embedding process runs, runtime sessions, and artifacts using the configured retention windows. A value of zero disables the corresponding automatic cleanup. Conversation compaction separately limits raw continuity rows.

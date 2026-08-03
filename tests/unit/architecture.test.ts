@@ -100,6 +100,13 @@ describe("architecture guardrails", () => {
     expect(registry).not.toContain("contracts/index");
   });
 
+  it("wires durable randomness into the local prompt runtime", async () => {
+    const promptRuntime = await fs.readFile(path.join(process.cwd(), "scripts/prompt.ts"), "utf8");
+    expect(promptRuntime).toContain('import("../src/db/rngRepository.js")');
+    expect(promptRuntime).toContain("const rngRepo = new RngRepository(pool)");
+    expect(promptRuntime).toMatch(/toolContext:\s*\{[\s\S]*?\brngRepo,/);
+  });
+
   it("keeps relative source imports acyclic", async () => {
     const sourceFiles = await listSourceFiles(path.join(process.cwd(), "src"));
     const knownFiles = new Set(sourceFiles.map((file) => path.resolve(file)));

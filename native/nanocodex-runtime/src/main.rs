@@ -1,4 +1,9 @@
-use std::{collections::HashMap, io, sync::Arc};
+use std::{
+    collections::HashMap,
+    io::{self, BufRead},
+    sync::{Arc, Mutex as StdMutex},
+    thread,
+};
 
 use async_trait::async_trait;
 use nanocodex::{
@@ -13,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::{Mutex, mpsc, oneshot},
+    io::AsyncWriteExt,
+    sync::{mpsc, oneshot},
 };
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -103,6 +108,8 @@ enum OutboundMessage<'a> {
 enum RuntimeError {
     #[error("stdin closed before a run request was received")]
     MissingRunRequest,
+    #[error("stdin closed while the NanoCodex runtime was active")]
+    InputClosed,
     #[error("the first protocol message must be run")]
     RunRequestNotFirst,
     #[error("a second run request is not allowed")]
@@ -125,7 +132,7 @@ enum RuntimeError {
     Nanocodex(String),
 }
 
-type PendingCalls = Arc<Mutex<HashMap<String, oneshot::Sender<ToolOutput>>>>;
+type PendingCalls = Arc<StdMutex<HashMap<String, oneshot::Sender<ToolOutput>>>>;
 
 #[derive(Clone)]
 struct ProtocolTool {
@@ -148,7 +155,7 @@ impl Tool for ProtocolTool {
         };
         let call_id = context.call_id().to_owned();
         let (sender, receiver) = oneshot::channel();
-        self.pending.lock().await.insert(call_id.clone(), sender);
+        pending_calls(&self.pending).insert(call_id.clone(), sender);
         let message = serde_json::to_value(OutboundMessage::ToolCall {
             protocol_version: PROTOCOL_VERSION,
             request_id: &self.request_id,
@@ -158,7 +165,7 @@ impl Tool for ProtocolTool {
             arguments,
         })?;
         if self.outbound.send(message).is_err() {
-            self.pending.lock().await.remove(&call_id);
+            pending_calls(&self.pending).remove(&call_id);
             return Ok(ToolOutput::error(
                 "Application tool bridge closed before dispatch",
             ));
@@ -191,26 +198,32 @@ async fn run() -> Result<(), RuntimeError> {
     })
     .await?;
 
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let first = lines
-        .next_line()
-        .await?
-        .ok_or(RuntimeError::MissingRunRequest)?;
-    let InboundMessage::Run(request) = serde_json::from_str(&first)? else {
-        return Err(RuntimeError::RunRequestNotFirst);
-    };
+    // The application tool bridge must keep consuming stdin while Code Mode is
+    // running. A dedicated reader thread keeps protocol replies independent of
+    // the async executor that is driving the agent and its embedded runtime.
+    let pending: PendingCalls = Arc::new(StdMutex::new(HashMap::new()));
+    let (run_sender, run_receiver) = oneshot::channel();
+    let (input_error_sender, mut input_errors) = mpsc::unbounded_channel();
+    let input_pending = Arc::clone(&pending);
+    thread::Builder::new()
+        .name("nanocodex-protocol-input".to_owned())
+        .spawn(move || read_protocol_input(input_pending, run_sender, input_error_sender))
+        .map_err(RuntimeError::Read)?;
+    let request = run_receiver
+        .await
+        .map_err(|_| RuntimeError::MissingRunRequest)??;
 
-    let pending: PendingCalls = Arc::new(Mutex::new(HashMap::new()));
     let (outbound_sender, outbound_receiver) = mpsc::unbounded_channel();
     let writer = tokio::spawn(write_outbound(outbound_receiver));
-    let input_pending = Arc::clone(&pending);
-    let input = tokio::spawn(async move { read_tool_results(lines, input_pending).await });
 
     let request_id: Arc<str> = request.request_id.clone().into();
-    let result = run_agent(*request, request_id, outbound_sender.clone(), pending).await;
+    let agent = run_agent(*request, request_id, outbound_sender.clone(), pending);
+    tokio::pin!(agent);
+    let result = tokio::select! {
+        result = &mut agent => result,
+        Some(error) = input_errors.recv() => Err(error),
+    };
     drop(outbound_sender);
-    input.abort();
-    let _ = input.await;
     writer.await.map_err(|error| {
         RuntimeError::Nanocodex(format!("protocol writer task failed: {error}"))
     })??;
@@ -333,40 +346,82 @@ async fn run_agent(
     Ok(())
 }
 
-async fn read_tool_results(
-    mut lines: tokio::io::Lines<BufReader<tokio::io::Stdin>>,
+fn read_protocol_input(
     pending: PendingCalls,
-) -> Result<(), RuntimeError> {
-    while let Some(line) = lines.next_line().await? {
-        match serde_json::from_str::<InboundMessage>(&line)? {
-            InboundMessage::Run(_) => return Err(RuntimeError::DuplicateRunRequest),
-            InboundMessage::ToolResult {
-                call_id,
-                success,
-                output,
-                code_mode_value,
-                metadata,
-            } => {
-                let sender = pending
-                    .lock()
-                    .await
-                    .remove(&call_id)
-                    .ok_or_else(|| RuntimeError::UnknownToolCall(call_id.clone()))?;
-                let wire = nanocodex::tools::contract::ToolOutputWire {
-                    output,
+    run_sender: oneshot::Sender<Result<Box<RunRequest>, RuntimeError>>,
+    input_error_sender: mpsc::UnboundedSender<RuntimeError>,
+) {
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+    let first = match lines.next() {
+        Some(Ok(line)) => line,
+        Some(Err(error)) => {
+            let _ = run_sender.send(Err(RuntimeError::Read(error)));
+            return;
+        }
+        None => {
+            let _ = run_sender.send(Err(RuntimeError::MissingRunRequest));
+            return;
+        }
+    };
+    let request = match serde_json::from_str::<InboundMessage>(&first) {
+        Ok(InboundMessage::Run(request)) => request,
+        Ok(InboundMessage::ToolResult { .. }) => {
+            let _ = run_sender.send(Err(RuntimeError::RunRequestNotFirst));
+            return;
+        }
+        Err(error) => {
+            let _ = run_sender.send(Err(RuntimeError::Json(error)));
+            return;
+        }
+    };
+    if run_sender.send(Ok(request)).is_err() {
+        return;
+    }
+
+    for line in lines {
+        let result = (|| -> Result<(), RuntimeError> {
+            match serde_json::from_str::<InboundMessage>(&line?)? {
+                InboundMessage::Run(_) => return Err(RuntimeError::DuplicateRunRequest),
+                InboundMessage::ToolResult {
+                    call_id,
                     success,
-                    code_mode_value: code_mode_value
-                        .map(|value| serde_json::value::to_raw_value(&value))
-                        .transpose()?,
+                    output,
+                    code_mode_value,
                     metadata,
-                    process_trace: None,
-                };
-                let output = ToolOutput::from_wire(wire)?;
-                let _ = sender.send(output);
+                } => {
+                    let sender = pending_calls(&pending)
+                        .remove(&call_id)
+                        .ok_or_else(|| RuntimeError::UnknownToolCall(call_id.clone()))?;
+                    let wire = nanocodex::tools::contract::ToolOutputWire {
+                        output,
+                        success,
+                        code_mode_value: code_mode_value
+                            .map(|value| serde_json::value::to_raw_value(&value))
+                            .transpose()?,
+                        metadata,
+                        process_trace: None,
+                    };
+                    let output = ToolOutput::from_wire(wire)?;
+                    let _ = sender.send(output);
+                }
             }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = input_error_sender.send(error);
+            return;
         }
     }
-    Ok(())
+    let _ = input_error_sender.send(RuntimeError::InputClosed);
+}
+
+fn pending_calls(
+    pending: &PendingCalls,
+) -> std::sync::MutexGuard<'_, HashMap<String, oneshot::Sender<ToolOutput>>> {
+    pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 async fn write_outbound(mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<(), RuntimeError> {

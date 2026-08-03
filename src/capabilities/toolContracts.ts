@@ -14,6 +14,7 @@ import { walletUserToolContracts } from "../tools/contracts/wallet-user.js";
 import { walletAdminToolContracts } from "../tools/contracts/wallet-admin.js";
 import { spotifyCollectionToolContracts } from "../tools/contracts/spotify-collections.js";
 import { spotifyCatalogToolContracts } from "../tools/contracts/spotify-catalog.js";
+import { externalResearchToolContracts } from "../tools/contracts/external-research.js";
 import { TOOL_NAMES, type ToolName, type ToolRegistryEntry } from "../tools/toolDefinition.js";
 
 const definitions = [
@@ -33,6 +34,7 @@ const definitions = [
   ...walletAdminToolContracts,
   ...spotifyCollectionToolContracts,
   ...spotifyCatalogToolContracts,
+  ...externalResearchToolContracts,
 ];
 
 const byName = new Map(definitions.map((tool) => [tool.name, tool]));

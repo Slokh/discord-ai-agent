@@ -9,6 +9,7 @@ import { imageToolHandlers } from "../../src/tools/handlers/image.js";
 import { generatedDataToolHandlers } from "../../src/tools/handlers/generated-data.js";
 import { spotifyToolHandlers } from "../../src/tools/handlers/spotify.js";
 import { walletToolHandlers } from "../../src/tools/handlers/wallet.js";
+import { externalResearchToolHandlers } from "../../src/tools/handlers/external-research.js";
 import { toolRegistry, type ToolName } from "../../src/tools/registry.js";
 import { bindToolHandlers } from "../../src/tools/toolDefinition.js";
 
@@ -22,6 +23,7 @@ const handlerFamilies = {
   generatedData: generatedDataToolHandlers,
   spotify: spotifyToolHandlers,
   wallet: walletToolHandlers,
+  externalResearch: externalResearchToolHandlers,
 } as const;
 
 const expectedFamilyTools = {
@@ -52,6 +54,7 @@ const expectedFamilyTools = {
     "transferWalletFunds", "requestStarterFunds", "adminTransferWalletFunds",
     "adminSetWalletStarterAmount", "getWalletFeeSummary", "reconcileWalletTransfers",
   ],
+  externalResearch: ["researchWeb"],
 } satisfies Record<keyof typeof handlerFamilies, ToolName[]>;
 
 describe("tool handler conformance", () => {

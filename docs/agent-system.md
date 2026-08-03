@@ -8,7 +8,7 @@ The pinned native runtime under `native/nanocodex-runtime/` embeds the project N
 
 - retained model sessions and typed history;
 - compaction, prompt-cache identity, retries, and cancellation;
-- model/tool ordering and hosted web search;
+- model/tool ordering;
 - model, tool, usage, cost, checkpoint, and terminal events;
 - code-mode workspace execution inside code-update sandboxes.
 
@@ -48,7 +48,9 @@ Configuration is validated in `src/config/env.ts`:
 - Code updates default to Terra with medium reasoning.
 - Owner/ops may set a per-guild conversational override to Sol or Luna through the guarded model tool.
 
-Embeddings, image generation, and transcription are direct provider-backed tools. They are not alternate agent engines.
+Public-web research crosses the typed `researchWeb` application capability. Its focused handler calls the configured OpenRouter hosted search/fetch tools and records the nested provider request, usage, sources, and failure in the same runtime ledger. NanoCodex's provider-specific standalone search is disabled so the agent cannot bypass the configured provider or its application telemetry.
+
+Embeddings, image generation, and transcription are also direct provider-backed tools. They are not alternate agent engines.
 
 ## Tool contract
 

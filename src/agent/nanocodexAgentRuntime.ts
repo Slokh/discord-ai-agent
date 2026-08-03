@@ -176,7 +176,10 @@ async function runRetainedNanoCodexTurn(input: {
       sessionId: nanoCodexSessionId(session.sessionId),
       resume,
       tools: toolDefinitions,
-      hostedWebSearch: true,
+      // Provider-specific hosted tools cross typed application capability
+      // bridges so they share the configured transport, telemetry, and abort
+      // lifecycle with every other capability.
+      hostedWebSearch: false,
       abortSignal: ctx.abortSignal,
       onProgress: ctx.noteProgress,
       onEvent: async (event) => {

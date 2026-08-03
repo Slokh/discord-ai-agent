@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { extractPromptJson, type PromptJsonOutput } from "./promptJson.js";
+
+export { extractPromptJson } from "./promptJson.js";
 import { openRouterServerToolRegistry, toolRegistry } from "../src/tools/registry.js";
 
 const DEFAULT_EVAL_DIR = "evals/prompts";
@@ -75,19 +78,6 @@ export type EvalArgs = {
   list: boolean;
   json: boolean;
   promptTimeoutMs: number;
-};
-
-export type PromptJsonOutput = {
-  runId?: string;
-  traceId?: string;
-  guildId?: string;
-  channelId?: string;
-  channelName?: string | null;
-  visibleChannelCount?: number;
-  threadKey?: string | null;
-  durationMs?: number;
-  content: string;
-  files?: Array<{ name: string; contentType?: string; bytes: number; path: string }>;
 };
 
 export type EvalTraceEvidence = {
@@ -462,15 +452,6 @@ export function evaluatePromptAssertions(
   }
 
   return failures;
-}
-
-export function extractPromptJson(stdout: string): PromptJsonOutput {
-  const start = stdout.indexOf("{");
-  const end = stdout.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("No JSON object found in prompt stdout.");
-  const parsed = JSON.parse(stdout.slice(start, end + 1)) as PromptJsonOutput;
-  if (!parsed || typeof parsed.content !== "string") throw new Error("Prompt JSON output is missing content.");
-  return parsed;
 }
 
 async function createTraceReader() {

@@ -7,6 +7,7 @@ export const externalResearchToolHandlers = {
   web__run: async (ctx, route, originalText) => {
     const operations = route.arguments ?? {};
     const commands = JSON.stringify(operations);
+    const hostedTools = hostedToolsForOperations(operations);
     let response;
     try {
       response = await runObservedModelCall(ctx, {
@@ -24,7 +25,8 @@ export const externalResearchToolHandlers = {
               content: `Original request:\n${originalText}\n\nWeb operations:\n${commands}`,
             },
           ],
-          tools: openRouterServerToolDefinitionsForModel(),
+          tools: hostedTools,
+          toolChoice: "required",
           maxTokens: 1_200,
           reasoningEffort: "low",
           retryPolicy: "cheap",
@@ -46,6 +48,14 @@ export const externalResearchToolHandlers = {
     };
   },
 } satisfies Partial<Record<ToolName, LocalToolHandler>>;
+
+function hostedToolsForOperations(operations: Record<string, unknown>) {
+  const requestedTypes = new Set<string>();
+  if (operations.search_query != null) requestedTypes.add("openrouter:web_search");
+  if (operations.open != null) requestedTypes.add("openrouter:web_fetch");
+  if (operations.time != null) requestedTypes.add("openrouter:datetime");
+  return openRouterServerToolDefinitionsForModel().filter((tool) => requestedTypes.has(tool.type));
+}
 
 function uniqueSourceUrls(urls: string[]) {
   return [...new Set(urls.filter((url) => /^https?:\/\//.test(url)))];

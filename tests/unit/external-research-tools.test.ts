@@ -50,11 +50,37 @@ describe("web__run", () => {
     });
     expect(chat).toHaveBeenCalledWith(expect.objectContaining({
       model: "test/utility",
-      tools: expect.arrayContaining([
-        { type: "openrouter:web_search" },
-        { type: "openrouter:web_fetch" },
-      ]),
+      tools: [{ type: "openrouter:web_search" }],
+      toolChoice: "required",
       signal: undefined,
+    }));
+  });
+
+  it("offers only the hosted capability requested by the operation", async () => {
+    const chat = vi.fn(async () => ({
+      content: "The current UTC date is August 3, 2026.",
+      model: "test/utility",
+      finishReason: "stop",
+      serverToolUse: { datetime_requests: 1 },
+      toolCalls: [],
+      raw: {},
+    }));
+
+    const result = await externalResearchToolHandlers.web__run!(
+      context(chat),
+      {
+        id: "call-1",
+        name: "web__run",
+        arguments: { time: [{ utc_offset: "+00:00" }], response_length: "short" },
+        argumentsText: "{}",
+      },
+      "What is the date?",
+    );
+
+    expect(result).toEqual({ content: "The current UTC date is August 3, 2026." });
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      tools: [{ type: "openrouter:datetime" }],
+      toolChoice: "required",
     }));
   });
 

@@ -30,6 +30,9 @@ const MAX_IMAGE_REFERENCES = 4;
 const MAX_INLINE_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_INLINE_VISION_TOTAL_BYTES = 20 * 1024 * 1024;
 const VISION_IMAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
+// Image inspection is evidence for the requesting agent, not a second full answer.
+// Keep it bounded so a detailed visual request cannot consume the whole Discord turn.
+const VISION_INSPECTION_MAX_TOKENS = 1_024;
 
 export type GenerateImageInput = {
   prompt: string;
@@ -156,7 +159,7 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
       {
         role: "system",
         content:
-          "You inspect Discord image attachments for a Discord server assistant. Answer the user's visual question using only the supplied images and labels. Be concise, direct, and mention uncertainty only when the image is unclear."
+          "You inspect Discord image attachments for a Discord server assistant. Use the user's question only to identify the relevant visible evidence. Return concise, concrete visual facts from the supplied images and labels; do not produce a separate final answer, recommendation, or solve a problem depicted in an image. Include uncertainty only when the image is unclear."
       },
       {
         role: "user",
@@ -176,7 +179,7 @@ export async function inspectDiscordImages(ctx: ToolContext, input: InspectDisco
       }
     ],
     temperature: 0.2,
-    maxTokens: 4096
+    maxTokens: VISION_INSPECTION_MAX_TOKENS
   } });
 
   await ctx.repo.auditTool({

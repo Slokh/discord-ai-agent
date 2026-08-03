@@ -6,6 +6,7 @@ import {
   nanoCodexSessionId,
   nanoCodexToolDefinitions,
   runNanoCodexRuntime,
+  spawnRuntimeProcess,
 } from "../../src/agent/nanocodexRuntime.js";
 
 class FakeRuntimeProcess extends EventEmitter {
@@ -36,6 +37,14 @@ class FakeRuntimeProcess extends EventEmitter {
 }
 
 describe("NanoCodex native runtime protocol", () => {
+  it("isolates protocol input from process stdin", () => {
+    const child = spawnRuntimeProcess(process.execPath, {});
+    expect(child.protocolInput).toBeDefined();
+    expect((child as unknown as { stdin: null }).stdin).toBeNull();
+    child.protocolInput.end();
+    child.kill("SIGTERM");
+  });
+
   it("accepts every model supported by the owned NanoCodex fork", () => {
     expect(nanoCodexModel("openai/gpt-5.6-sol")).toBe("gpt-5.6-sol");
     expect(nanoCodexModel("openai/gpt-5.6-terra")).toBe("gpt-5.6-terra");

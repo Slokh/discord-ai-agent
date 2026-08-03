@@ -312,7 +312,7 @@ function responsesApiBase(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "").replace(/\/chat\/completions$/, "");
 }
 
-function spawnRuntimeProcess(binary: string, options: { cwd?: string; env?: NodeJS.ProcessEnv }): RuntimeProcess {
+export function spawnRuntimeProcess(binary: string, options: { cwd?: string; env?: NodeJS.ProcessEnv }): RuntimeProcess {
   const child = spawn(binary, [], {
     // Protocol traffic has its own pipe. Stdin stays closed so NanoCodex and
     // anything it launches cannot consume application control messages.

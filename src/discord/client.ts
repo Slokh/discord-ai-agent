@@ -95,21 +95,28 @@ export function createDiscordAiAgentBot(input: {
     expireComponentActions();
     componentActionCleanupTimer = setInterval(expireComponentActions, 60 * 60_000);
     componentActionCleanupTimer.unref?.();
-    void taskSupervisor.run({ kind: "maintenance", label: "deployment_announcement", task: async () => {
-      const result = await announceDeployment({
-      client: readyClient,
-      config: input.config,
-      repo: input.repo,
-      openRouter: input.openRouter
+    void taskSupervisor.run({ kind: "maintenance", label: "deployment_startup", task: async () => {
+      let deliveredBugFix = null;
+      if (input.agentRuntime) {
+        try {
+          const retryResult = await retryDeployedDiscordBugReports({ ...input, client: readyClient });
+          deliveredBugFix = retryResult.bugFixAnnouncement;
+          if (retryResult.eligible > 0) logger.info({ ...retryResult, revision: input.config.appRevision }, "Processed deployed Discord bug retries");
+        } catch (error) {
+          logger.warn({ err: error, revision: input.config.appRevision }, "Could not process deployed Discord bug retries before announcing the deployment");
+        }
+      }
+      const announcementResult = await announceDeployment({
+        client: readyClient,
+        config: input.config,
+        repo: input.repo,
+        openRouter: input.openRouter,
+        deliveredBugFix,
       });
-      if (result !== "disabled" && result !== "duplicate") logger.info({ result, revision: input.config.appRevision }, "Deployment announcement lifecycle completed");
+      if (announcementResult !== "disabled" && announcementResult !== "duplicate") {
+        logger.info({ result: announcementResult, revision: input.config.appRevision }, "Deployment announcement lifecycle completed");
+      }
     } });
-    if (input.agentRuntime) {
-      void taskSupervisor.run({ kind: "maintenance", label: "deployed_bug_retry", task: async () => {
-        const result = await retryDeployedDiscordBugReports({ ...input, client: readyClient });
-        if (result.eligible > 0) logger.info({ ...result, revision: input.config.appRevision }, "Processed deployed Discord bug retries");
-      } });
-    }
   });
 
   client.on(Events.ShardDisconnect, (event, shardId) => {

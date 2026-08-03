@@ -114,7 +114,7 @@ const declarations: readonly CapabilityDeclaration[] = [
   },
   {
     id: "externalResearch",
-    summary: "Current public-web search and page retrieval through the configured provider.",
+    summary: "Current public-web search, time, and page retrieval through the configured provider.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.externalResearch,
   },
 ];

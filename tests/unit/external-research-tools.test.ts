@@ -23,7 +23,7 @@ function context(chat: ToolContext["openRouter"]["chat"]): ToolContext {
   } as unknown as ToolContext;
 }
 
-describe("researchWeb", () => {
+describe("web__run", () => {
   it("uses the configured OpenRouter hosted tools and returns cited evidence", async () => {
     const chat = vi.fn(async () => ({
       content: "The current UTC date is August 3, 2026.",
@@ -34,12 +34,12 @@ describe("researchWeb", () => {
       toolCalls: [],
       raw: {},
     }));
-    const result = await externalResearchToolHandlers.researchWeb!(
+    const result = await externalResearchToolHandlers.web__run!(
       context(chat),
       {
         id: "call-1",
-        name: "researchWeb",
-        arguments: { question: "What is the current UTC date?", urls: ["https://example.com/date"] },
+        name: "web__run",
+        arguments: { search_query: [{ q: "current UTC date" }] },
         argumentsText: "{}",
       },
       "What is the date?",
@@ -59,12 +59,12 @@ describe("researchWeb", () => {
   });
 
   it("does not turn an ungrounded provider answer into fresh evidence", async () => {
-    const result = await externalResearchToolHandlers.researchWeb!(
+    const result = await externalResearchToolHandlers.web__run!(
       context(vi.fn(async () => ({ content: "I think it is today.", model: "test/utility", toolCalls: [], raw: {} }))),
       {
         id: "call-1",
-        name: "researchWeb",
-        arguments: { question: "What is the current UTC date?" },
+        name: "web__run",
+        arguments: { time: [{ utc_offset: "+00:00" }] },
         argumentsText: "{}",
       },
       "What is the date?",
@@ -74,12 +74,12 @@ describe("researchWeb", () => {
   });
 
   it("maps provider failures into a stable tool result", async () => {
-    const result = await externalResearchToolHandlers.researchWeb!(
+    const result = await externalResearchToolHandlers.web__run!(
       context(vi.fn(async () => { throw new Error("provider unavailable with private detail"); })),
       {
         id: "call-1",
-        name: "researchWeb",
-        arguments: { question: "What is the current UTC date?" },
+        name: "web__run",
+        arguments: { time: [{ utc_offset: "+00:00" }] },
         argumentsText: "{}",
       },
       "What is the date?",

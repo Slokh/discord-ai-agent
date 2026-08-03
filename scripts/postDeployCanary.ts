@@ -22,7 +22,7 @@ assertOpenRouterConfig(config);
 assertExecutionConfig(config);
 
 const deployed = deploymentToolset(config);
-for (const name of ["getDiscordStats", "searchDiscordHistory", "runCodingAgent", "researchWeb"] as const) {
+for (const name of ["getDiscordStats", "searchDiscordHistory", "runCodingAgent", "web__run"] as const) {
   if (!deployed.localTools.some((tool) => tool.name === name)) throw new Error(`Post-deploy canary is missing deployed capability ${name}.`);
 }
 for (const type of ["openrouter:web_search", "openrouter:web_fetch"] as const) {
@@ -35,7 +35,7 @@ const promptScript = fileURLToPath(new URL("./prompt.js", import.meta.url));
 const prompt = [
   "This is an automated private post-deploy canary.",
   "Use getDiscordStats to count messages in the current channel.",
-  "Use researchWeb exactly once to find the current UTC date from a reliable public source.",
+  "Use web__run exactly once to find the current UTC date from a reliable public source.",
   "Do not retry either tool; report a failure immediately if a tool fails.",
   "Reply with POST_DEPLOY_CANARY_OK, the numeric message count, and the UTC date.",
   "Do not quote, summarize, or identify any Discord message or member.",

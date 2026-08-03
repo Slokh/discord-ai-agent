@@ -105,7 +105,7 @@ if (missingManifestVariables.length || unusedManifestVariables.length) {
 
 export type AppConfig = ReturnType<typeof loadConfig>;
 
-export function loadConfig() {
+export function loadConfig(argv = process.argv) {
   // Production must surface stale deployment configuration. Local shells may
   // still carry old dotenv keys while developers migrate; those keys are not
   // parsed and therefore cannot change runtime behavior.
@@ -116,8 +116,8 @@ export function loadConfig() {
     throw new Error(`Invalid environment configuration:\n${formatted}`);
   }
   const env = parsed.data;
-  assertControlUiConfig(env.CONTROL_UI_PUBLIC_URL, env.CONTROL_UI_AUTH_PASSWORD);
-  const processRole = processRoleFromArgs();
+  const processRole = processRoleFromArgs(argv);
+  assertControlUiConfig(env.CONTROL_UI_PUBLIC_URL, env.CONTROL_UI_AUTH_PASSWORD, processRole);
   const walletEnabled = Boolean(env.PRIVY_APP_ID?.trim() && env.PRIVY_APP_SECRET?.trim());
 
   return {
@@ -235,12 +235,14 @@ function defaultLogLevel(nodeEnv: string) {
   return "debug";
 }
 
-function assertControlUiConfig(publicUrl: string | undefined, password: string) {
+function assertControlUiConfig(publicUrl: string | undefined, password: string, processRole: ProcessRole) {
   if (!publicUrl) return;
   const url = new URL(publicUrl);
   const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
   if (url.protocol !== "https:" && !local) throw new Error("CONTROL_UI_PUBLIC_URL must use HTTPS outside localhost.");
-  if (!password) throw new Error("CONTROL_UI_AUTH_PASSWORD is required when CONTROL_UI_PUBLIC_URL is configured.");
+  if ((processRole === "api" || processRole === "all") && !password) {
+    throw new Error("CONTROL_UI_AUTH_PASSWORD is required when the API serves a public control UI.");
+  }
 }
 
 function parseCsv(value: string) {

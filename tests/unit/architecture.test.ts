@@ -44,6 +44,8 @@ describe("architecture guardrails", () => {
       expect(workflow).toContain("--safe-summary");
       expect(workflow).toContain("--private-only");
     }
+    expect(deployment).toContain('test "$ready" = "$desired"');
+    expect(deployment).toContain('test "$updated" = "$desired"');
     expect(scheduled).not.toContain("upload-artifact");
   });
 

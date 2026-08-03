@@ -46,7 +46,7 @@ const { stdout } = await execFileAsync(process.execPath, [
   promptScript,
   "--no-memory",
   "--json",
-  "--user-id", "post-deploy-canary",
+  "--user-id", `post-deploy-canary-${config.appRevision.slice(0, 12)}`,
   "--user-name", "Post-deploy canary",
   prompt,
 ], {

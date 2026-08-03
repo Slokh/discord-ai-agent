@@ -51,7 +51,9 @@ describe("web__run", () => {
     expect(chat).toHaveBeenCalledWith(expect.objectContaining({
       model: "test/utility",
       tools: [{ type: "openrouter:web_search" }],
-      toolChoice: "required",
+      toolChoice: "auto",
+      maxTokens: 1_200,
+      reasoningEffort: "none",
       signal: undefined,
     }));
   });
@@ -80,7 +82,7 @@ describe("web__run", () => {
     expect(result).toEqual({ content: "The current UTC date is August 3, 2026." });
     expect(chat).toHaveBeenCalledWith(expect.objectContaining({
       tools: [{ type: "openrouter:datetime" }],
-      toolChoice: "required",
+      toolChoice: "auto",
     }));
   });
 
@@ -97,6 +99,28 @@ describe("web__run", () => {
     );
 
     expect(result).toMatchObject({ status: "error", errorCode: "external_evidence_missing", retryable: true });
+  });
+
+  it("does not turn an empty hosted-tool completion into evidence", async () => {
+    const result = await externalResearchToolHandlers.web__run!(
+      context(vi.fn(async () => ({
+        content: "",
+        model: "test/utility",
+        serverToolUse: { tool_calls_requested: 1, tool_calls_executed: 1 },
+        toolCalls: [],
+        raw: {},
+      }))),
+      {
+        id: "call-1",
+        name: "web__run",
+        arguments: { time: [{ utc_offset: "+00:00" }] },
+        argumentsText: "{}",
+      },
+      "What is the date?",
+    );
+
+    expect(result).toMatchObject({ status: "error", errorCode: "external_evidence_missing", retryable: true });
+    expect(result.content).toContain("without a readable result");
   });
 
   it("maps provider failures into a stable tool result", async () => {

@@ -18,7 +18,7 @@ export const externalResearchToolHandlers = {
             {
               role: "system",
               content:
-                "Execute the supplied public-web operations with the matching hosted tools. Return concise grounded findings. Include source URLs when the provider exposes them. State limitations instead of inventing facts.",
+                "Execute each supplied public-web operation exactly once with the matching hosted tool, then return concise grounded findings. Do not answer without using the requested hosted tools. Include source URLs when the provider exposes them. State limitations instead of inventing facts.",
             },
             {
               role: "user",
@@ -26,9 +26,9 @@ export const externalResearchToolHandlers = {
             },
           ],
           tools: hostedTools,
-          toolChoice: "required",
+          toolChoice: "auto",
           maxTokens: 1_200,
-          reasoningEffort: "low",
+          reasoningEffort: "none",
           retryPolicy: "cheap",
         },
         metadata: { operationNames: Object.keys(operations).sort() },
@@ -39,6 +39,9 @@ export const externalResearchToolHandlers = {
     const hostedUse = Object.values(response.serverToolUse ?? {}).some((count) => count > 0);
     if (!hostedUse) {
       return evidenceFailure("Hosted web research returned no current external evidence.");
+    }
+    if (!response.content.trim()) {
+      return evidenceFailure("Hosted web research completed without a readable result.");
     }
     const citations = uniqueSourceUrls(response.urlCitations?.map((citation) => citation.url) ?? []);
     return {

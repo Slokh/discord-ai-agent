@@ -13,6 +13,7 @@ import {
 import { createPool } from "../src/db/pool.js";
 import { resolveGitHubTaskToken } from "../src/execution/githubAuth.js";
 import { parseGitHubRepository } from "../src/github/repository.js";
+import { passingConversationChannel } from "../src/observability/postDeployCanaryEvidence.js";
 import { deploymentToolset } from "../src/tools/toolScope.js";
 import { extractPromptJson } from "./promptJson.js";
 
@@ -73,56 +74,6 @@ async function runConversationCanary(database: ReturnType<typeof createPool>) {
     }
   }
   throw new Error("Conversation canary did not produce complete durable evidence after two isolated attempts.");
-}
-
-async function passingConversationChannel(database: ReturnType<typeof createPool>, traceId: string) {
-  const [retrieval, web, hosted, execution] = await Promise.all([
-    database.query(
-      `SELECT 1
-       FROM agent_runtime_events
-       WHERE trace_id = $1
-         AND event_name = 'agent.tool.complete'
-         AND metadata->>'toolName' = 'getDiscordStats'
-         AND coalesce(metadata->>'status', 'ok') <> 'error'
-       LIMIT 1`,
-      [traceId],
-    ),
-    database.query(
-      `SELECT 1
-       FROM agent_runtime_events
-       WHERE trace_id = $1
-         AND event_name = 'agent.tool.complete'
-         AND metadata->>'toolName' = 'web__run'
-         AND coalesce(metadata->>'status', 'ok') <> 'error'
-         AND coalesce((metadata->>'outputChars')::integer, 0) > 0
-       LIMIT 1`,
-      [traceId],
-    ),
-    database.query(
-      `SELECT 1
-       FROM agent_runtime_events
-       WHERE trace_id = $1
-         AND event_name = 'agent.model.call.completed'
-         AND EXISTS (
-           SELECT 1
-           FROM jsonb_each_text(coalesce(metadata->'serverToolUse', '{}'::jsonb)) AS usage(name, count)
-           WHERE count::integer > 0
-         )
-       LIMIT 1`,
-      [traceId],
-    ),
-    database.query(
-      `SELECT session.channel_id
-       FROM agent_runtime_executions execution
-       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
-       WHERE execution.trace_id = $1
-       ORDER BY execution.created_at DESC
-       LIMIT 1`,
-      [traceId],
-    ),
-  ]);
-  if (retrieval.rowCount !== 1 || web.rowCount !== 1 || hosted.rowCount !== 1) return undefined;
-  return typeof execution.rows[0]?.channel_id === "string" ? execution.rows[0].channel_id : undefined;
 }
 
 async function verifyGitHub() {

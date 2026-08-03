@@ -16,6 +16,57 @@ export type RunSummaryListOptions = {
   limit?: number;
 };
 
+export type RunTriageSignal = { name: string; count: number; runIds: string[] };
+
+export function buildRunTriage(snapshots: RunSnapshot[]) {
+  const signals = new Map<string, Set<string>>();
+  const add = (name: string, runId: string) => {
+    const runs = signals.get(name) ?? new Set<string>();
+    runs.add(runId);
+    signals.set(name, runs);
+  };
+  for (const snapshot of snapshots) {
+    if (snapshot.run.status !== "succeeded") add(`run.${snapshot.run.status}`, snapshot.run.runId);
+    for (const event of snapshot.events) {
+      if (event.level === "warn" || event.level === "error") add(event.name, snapshot.run.runId);
+      if (event.name === "agent.tool.complete" && event.metadata.status === "error") {
+        add(`tool.error:${String(event.metadata.toolName ?? "unknown")}`, snapshot.run.runId);
+      }
+      if (event.name === "agent.tool.complete" && Number(event.metadata.outputChars) === 0) {
+        add(`tool.empty:${String(event.metadata.toolName ?? "unknown")}`, snapshot.run.runId);
+      }
+    }
+  }
+  return {
+    runCount: snapshots.length,
+    statuses: Object.fromEntries([...new Set(snapshots.map((snapshot) => snapshot.run.status))]
+      .sort()
+      .map((status) => [status, snapshots.filter((snapshot) => snapshot.run.status === status).length])),
+    signals: [...signals.entries()]
+      .map(([name, runIds]): RunTriageSignal => ({ name, count: runIds.size, runIds: [...runIds] }))
+      .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)),
+    slowestSuccessful: snapshots
+      .filter((snapshot) => snapshot.run.status === "succeeded" && snapshot.run.durationMs != null)
+      .sort((left, right) => (right.run.durationMs ?? 0) - (left.run.durationMs ?? 0))
+      .slice(0, 5)
+      .map((snapshot) => ({ runId: snapshot.run.runId, durationMs: snapshot.run.durationMs! })),
+  };
+}
+
+export function formatRunTriage(snapshots: RunSnapshot[]) {
+  const triage = buildRunTriage(snapshots);
+  const statuses = Object.entries(triage.statuses).map(([status, count]) => `${status}=${count}`).join(" | ") || "none";
+  const lines = [`Production run triage (${triage.runCount} runs)`, `Statuses: ${statuses}`, "", "Signals:"];
+  if (triage.signals.length === 0) lines.push("- none");
+  for (const signal of triage.signals) {
+    lines.push(`- ${signal.count} run${signal.count === 1 ? "" : "s"} | ${signal.name} | ${signal.runIds.slice(0, 3).join(", ")}`);
+  }
+  lines.push("", "Slowest successful runs:");
+  if (triage.slowestSuccessful.length === 0) lines.push("- none");
+  for (const run of triage.slowestSuccessful) lines.push(`- ${formatSeconds(run.durationMs)} | ${run.runId}`);
+  return `${lines.join("\n")}\n`;
+}
+
 export function formatRunSummaryList(runs: RunSummary[], options: RunSummaryListOptions = {}): string {
   const limit = clampInteger(options.limit ?? 20, 1, 500);
   const filtered = runs

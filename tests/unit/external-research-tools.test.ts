@@ -25,7 +25,10 @@ function context(chat: ToolContext["openRouter"]["chat"]): ToolContext {
 
 describe("web__run", () => {
   it("uses the configured OpenRouter hosted tools and returns cited evidence", async () => {
-    const chat = vi.fn(async () => ({
+    let submitted: { messages?: unknown[] } | undefined;
+    const chat = vi.fn(async (request: { messages?: unknown[] }) => {
+      submitted = request;
+      return ({
       content: "The current UTC date is August 3, 2026.",
       model: "test/utility",
       finishReason: "stop",
@@ -33,7 +36,8 @@ describe("web__run", () => {
       urlCitations: [{ url: "https://example.com/date", title: "Date" }],
       toolCalls: [],
       raw: {},
-    }));
+      });
+    }) as unknown as ToolContext["openRouter"]["chat"];
     const result = await externalResearchToolHandlers.web__run!(
       context(chat),
       {
@@ -56,6 +60,11 @@ describe("web__run", () => {
       reasoningEffort: "none",
       signal: undefined,
     }));
+    expect(submitted?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: expect.stringContaining("Authoritative web operations:") }),
+    ]));
+    expect(JSON.stringify(submitted?.messages)).not.toContain("What is the date?");
+    expect(JSON.stringify(submitted?.messages)).toContain("do not answer, mention, or infer any other part of the outer request");
   });
 
   it("offers only the hosted capability requested by the operation", async () => {

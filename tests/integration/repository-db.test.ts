@@ -7,6 +7,7 @@ import { createPool, type DbPool } from "../../src/db/pool.js";
 import { runConversationCompactionOnce } from "../../src/db/conversationCompaction.js";
 import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
+import { passingConversationChannel } from "../../src/observability/postDeployCanaryEvidence.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -50,6 +51,47 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(repo.getVisibleIndexedChannelIds(guildId, [parentId, privateThreadId])).resolves.toEqual(
       expect.arrayContaining([privateThreadId])
     );
+  });
+
+  it("accepts post-deploy canary evidence only from one successful execution", async () => {
+    const traceId = `trace-${randomUUID()}`;
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    await agentRuntimeRepo.upsertSession({
+      sessionId,
+      traceId,
+      threadKey: `discord:guild-${randomUUID()}:${channelId}`,
+      channelId,
+      request: "private canary",
+      status: "succeeded",
+    });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, traceId, status: "succeeded" });
+    await agentRuntimeRepo.recordEvent({
+      sessionId, executionId, traceId, kind: "tool", eventName: "agent.tool.complete",
+      metadata: { toolName: "getDiscordStats", status: "ok", outputChars: 2 },
+    });
+    await agentRuntimeRepo.recordEvent({
+      sessionId, executionId, traceId, kind: "tool", eventName: "agent.tool.complete",
+      metadata: { toolName: "web__run", status: "ok", outputChars: 24 },
+    });
+    await agentRuntimeRepo.recordEvent({
+      sessionId, executionId, traceId, kind: "model", eventName: "agent.model.call.completed",
+      metadata: {
+        appRevision: "test-revision", callId: `call-${randomUUID()}`, purpose: "external_web_research",
+        requestedModel: "test/model", messageCount: 1, promptBytes: 10, promptFingerprint: "a".repeat(64),
+        messageBytesByRole: { user: 10 }, toolCount: 1, toolSchemaBytes: 10, toolSchemaFingerprint: "b".repeat(64),
+        offeredTools: ["openrouter:datetime"], maxTokens: 100, serverToolUse: { datetime_requests: 1 },
+      },
+    });
+
+    await expect(passingConversationChannel(pool, traceId)).resolves.toBe(channelId);
+
+    await agentRuntimeRepo.recordEvent({
+      sessionId, executionId, traceId, kind: "tool", eventName: "agent.tool.complete",
+      metadata: { toolName: "web__run", status: "ok", outputChars: 24 },
+    });
+    await expect(passingConversationChannel(pool, traceId)).resolves.toBeUndefined();
   });
 
   it("stores a permission-filtered, requester-scoped Discord bug inbox", async () => {

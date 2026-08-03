@@ -29,7 +29,9 @@ import { effectiveMaximumPayoutUsd } from "./wagerTerms.js";
 import { normalizeDrawRandomInput, validateDrawInput, validateWagerInput } from "./randomInputValidation.js";
 import type { DrawRandomInput } from "./randomTypes.js";
 import {
+  isStandardWagerGame,
   prepareStandardWagerSettlement,
+  type WagerSettlementProposal,
 } from "./standardWagerRuntime.js";
 
 const MAX_FOOTER_OUTCOME_CHARS = 160;
@@ -343,17 +345,8 @@ async function settleRandomWagerCore(
 ): Promise<string> {
   if (!ctx.config.payments.userWalletsEnabled) return "User wallets and wallet-backed wagers are not enabled in this deployment.";
   if (!ctx.walletService) return "Wallet-backed wagers are not enabled in this deployment.";
-  const explanation = input.explanation?.trim();
   const requestId = ctx.requestId ?? ctx.requestMessageId;
   if (!requestId) return "A stable request id is required before a wager can be settled.";
-  if (input.payoutUsd == null || !Number.isFinite(input.payoutUsd) || input.payoutUsd < 0) {
-    return "payoutUsd must be a non-negative amount.";
-  }
-  if (!explanation) return "explanation is required and must show how the payout follows from the draw.";
-  if (!isSettlementOutcome(input.outcome)) return "outcome must be player_win, player_loss, or push.";
-  if (!isResolutionSource(input.resolutionSource)) {
-    return "resolutionSource must be verified_randomness or player_decision.";
-  }
   const wager = await currentWagerForContext(ctx);
   if (!wager) {
     return "Settlement rejected: no active wallet wager exists for this player in this Discord game session. No transfer was created.";
@@ -368,12 +361,25 @@ async function settleRandomWagerCore(
     });
   }
   const wagerId = wager.id;
-  const settlement = await prepareStandardWagerSettlement(ctx, wager, {
-    payoutUsd: input.payoutUsd,
-    outcome: input.outcome,
-    resolutionSource: input.resolutionSource,
-    explanation,
-  });
+  let proposal: WagerSettlementProposal | undefined;
+  if (!isStandardWagerGame(wager.game)) {
+    const explanation = input.explanation?.trim();
+    if (input.payoutUsd == null || !Number.isFinite(input.payoutUsd) || input.payoutUsd < 0) {
+      return "payoutUsd must be a non-negative amount for a custom game.";
+    }
+    if (!explanation) return "explanation is required for a custom game and must show how the payout follows from the draw.";
+    if (!isSettlementOutcome(input.outcome)) return "outcome must be player_win, player_loss, or push for a custom game.";
+    if (!isResolutionSource(input.resolutionSource)) {
+      return "resolutionSource must be verified_randomness or player_decision for a custom game.";
+    }
+    proposal = {
+      payoutUsd: input.payoutUsd,
+      outcome: input.outcome,
+      resolutionSource: input.resolutionSource,
+      explanation,
+    };
+  }
+  const settlement = await prepareStandardWagerSettlement(ctx, wager, proposal);
   if (typeof settlement === "string") return settlement;
   let settled: Awaited<ReturnType<typeof ctx.walletService.settleWager>>;
   try {

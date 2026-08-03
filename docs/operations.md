@@ -114,6 +114,8 @@ Do not begin with browser scraping, provider blame, or source speculation when t
 
 The Unicode `🐛` reaction marks a Discord message for requester-scoped debugging. `listDiscordBugMarkers` returns only markers and context the requester may see. Removing the reaction clears the marker.
 
+Unqualified requests such as “show my bug reports” or “fix my bugs” refer to this native inbox. GitHub/repository issue work requires explicit repository context. This distinction lives in tool contracts rather than keyword routing.
+
 The repair workflow reproduces the linked run, adds a general regression test, opens a focused PR when requested, deploys after normal review, and retries the original prompt reply after the fix is live. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
 
 Every bug-marked execution is also captured as private negative feedback. In the run console, classify the failure and add expected/forbidden tools or required/forbidden answer text, then run:
@@ -123,6 +125,12 @@ npm run eval:regressions
 ```
 
 The export stays under `.discord-ai-agent/evals/` with owner-only file permissions. Cases without an observable assertion remain skipped instead of pretending that a note is an executable test.
+
+## Production triage
+
+Use `npm run runs:triage -- --since <ISO timestamp>` to group canonical runtime-ledger failures, warning/error event names, failed or empty tool results, and the slowest successful runs. Add `--revision <sha>`, `--channel <id>`, `--warnings-only`, or `--json` as needed. The report contains run IDs and signal taxonomy, not private prompt text; inspect a selected run separately for retained evidence.
+
+Deleted reply parents are informational `discord.reply_context.unavailable` events. Unexpected fetch failures remain warnings, so warning-only triage is not polluted by normal Discord deletion.
 
 ## Build and release verification
 

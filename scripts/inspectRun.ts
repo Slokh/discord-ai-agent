@@ -1,7 +1,7 @@
 import { loadConfig } from "../src/config/env.js";
 import { createPool } from "../src/db/pool.js";
 import { createAppDatabase, type DiscordAiAgentRepository } from "../src/db/repositories.js";
-import { formatRunArtifacts, formatRunInspection, formatRunSummaryList, selectArtifacts } from "../src/observability/runInspector.js";
+import { buildRunTriage, formatRunArtifacts, formatRunInspection, formatRunSummaryList, formatRunTriage, selectArtifacts } from "../src/observability/runInspector.js";
 import { getRunSnapshot, listRunSummaries, resolveRunReference } from "../src/observability/runs.js";
 import type { RunSnapshot, RunSummary } from "../src/observability/runTypes.js";
 import { resolveProductionControlPlane } from "./productionControlPlane.js";
@@ -27,6 +27,7 @@ type Args = {
   revision?: string;
   since?: Date;
   warningsOnly: boolean;
+  triage: boolean;
 };
 
 async function main() {
@@ -93,6 +94,12 @@ async function writeRunList(
   const filtered = args.warningsOnly
     ? await filterWarningRuns(matching, loadSnapshot)
     : matching;
+  if (args.triage) {
+    const snapshots = (await Promise.all(filtered.map((run) => loadSnapshot(run.runId))))
+      .filter((snapshot): snapshot is RunSnapshot => snapshot != null);
+    process.stdout.write(args.json ? `${JSON.stringify(buildRunTriage(snapshots), null, 2)}\n` : formatRunTriage(snapshots));
+    return;
+  }
   if (args.json) {
     process.stdout.write(`${JSON.stringify({ runs: filtered }, null, 2)}\n`);
     return;
@@ -155,7 +162,8 @@ function parseArgs(argv: string[]): Args {
     sort: "updated",
     eventLimit: 80,
     terminalLimit: 40,
-    warningsOnly: false
+    warningsOnly: false,
+    triage: false
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -245,6 +253,11 @@ function parseArgs(argv: string[]): Args {
       args.warningsOnly = true;
       continue;
     }
+    if (arg === "--triage") {
+      args.triage = true;
+      args.list = true;
+      continue;
+    }
     if (arg === "--limit") {
       args.eventLimit = parseBoundedInteger(nextValue(argv, index, arg), 1, 500);
       index += 1;
@@ -302,7 +315,7 @@ async function loadSnapshotFromApi(input: { apiUrl: string; auth?: string; runId
 }
 
 function listFetchLimit(args: Args) {
-  return args.sort === "slowest" || args.kind || args.status || args.channelId || args.revision || args.since || args.warningsOnly
+  return args.sort === "slowest" || args.kind || args.status || args.channelId || args.revision || args.since || args.warningsOnly || args.triage
     ? Math.max(args.eventLimit, 200)
     : args.eventLimit;
 }
@@ -384,6 +397,7 @@ Options:
   --revision <sha>           Filter listed runs to one deployed application revision.
   --since <ISO timestamp>    Filter listed runs started at or after this time.
   --warnings-only            Filter listed runs with a failure/warning signal.
+  --triage                   Group failures, warning/error events, tool errors, empty results, and slow successful runs.
   --limit <count>            Timeline items to print. Default: 80.
   --metadata                 Include metadata JSON under timeline rows.
   --debug                    Include debug-level events.

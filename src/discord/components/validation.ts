@@ -213,58 +213,85 @@ export function parseDiscordPresentation(value: unknown): DiscordPresentation {
   return discordPresentationSchema.parse(value);
 }
 
-/** The model and runtime share one schema so Discord protocol constraints cannot drift. */
-export const discordPresentationToolParameters = compactDiscordPresentationToolParameters(
-  z.toJSONSchema(discordPresentationSchema, {
-    target: "openapi-3.0",
-    io: "input",
-    reused: "ref",
-  }) as Record<string, unknown>,
-);
-
-function compactDiscordPresentationToolParameters(schema: Record<string, unknown>): Record<string, unknown> {
-  const definitions = isRecord(schema.definitions) ? schema.definitions : {};
-  const premiumDefinitionRefs = new Set(Object.entries(definitions)
-    .filter(([, definition]) => isPremiumButtonJsonSchema(definition))
-    .map(([name]) => `#/definitions/${name}`));
-  const compacted = inlineSelectedJsonSchemaRefs(schema, definitions, premiumDefinitionRefs);
-  const compactedDefinitions = isRecord(compacted.definitions) ? { ...compacted.definitions } : {};
-  for (const ref of premiumDefinitionRefs) delete compactedDefinitions[ref.slice("#/definitions/".length)];
-
-  const properties = isRecord(compacted.properties) ? { ...compacted.properties } : {};
-  for (const name of ["version", "audience", "components"]) {
-    const ref = isRecord(properties[name]) ? properties[name].$ref : undefined;
-    if (typeof ref !== "string" || !ref.startsWith("#/definitions/")) continue;
-    const definition = compactedDefinitions[ref.slice("#/definitions/".length)];
-    if (isRecord(definition)) properties[name] = structuredClone(definition);
-  }
-  return { ...compacted, definitions: compactedDefinitions, properties };
-}
-
-function inlineSelectedJsonSchemaRefs(
-  value: unknown,
-  definitions: Record<string, unknown>,
-  selectedRefs: ReadonlySet<string>,
-): Record<string, unknown> {
-  const visit = (candidate: unknown): unknown => {
-    if (Array.isArray(candidate)) return candidate.map(visit);
-    if (!isRecord(candidate)) return candidate;
-    const ref = typeof candidate.$ref === "string" ? candidate.$ref : null;
-    if (ref && selectedRefs.has(ref)) {
-      const definition = definitions[ref.slice("#/definitions/".length)];
-      if (isRecord(definition)) return visit(structuredClone(definition));
-    }
-    return Object.fromEntries(Object.entries(candidate).map(([key, child]) => [key, visit(child)]));
-  };
-  return visit(value) as Record<string, unknown>;
-}
-
-function isPremiumButtonJsonSchema(value: unknown): boolean {
-  if (!isRecord(value) || !isRecord(value.properties) || !isRecord(value.properties.style)) return false;
-  return Array.isArray(value.properties.style.enum)
-    && value.properties.style.enum.length === 1
-    && value.properties.style.enum[0] === "premium";
-}
+// Keep the model contract semantic and compact. The Zod schema above remains the
+// authoritative protocol validator and returns precise errors for invalid layouts.
+export const discordPresentationToolParameters = {
+  type: "object",
+  properties: {
+    version: { type: "number", enum: [1], default: 1 },
+    audience: { type: "string", enum: ["requester", "channel"], default: "requester" },
+    expiresInMinutes: { type: "number", minimum: 1, maximum: 10_080 },
+    components: { type: "array", minItems: 1, maxItems: 40, items: { $ref: "#/definitions/component" } },
+  },
+  required: ["components"],
+  additionalProperties: false,
+  definitions: {
+    option: {
+      type: "object",
+      properties: {
+        label: { type: "string" }, value: { type: "string" }, description: { type: "string" },
+        default: { type: "boolean" }, emoji: { type: "object" },
+      },
+      required: ["label", "value"],
+      additionalProperties: false,
+    },
+    field: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["text", "text_input", "string_select", "user_select", "role_select", "mentionable_select", "channel_select", "file_upload", "radio_group", "checkbox_group", "checkbox"] },
+        key: { type: "string" }, label: { type: "string" }, content: { type: "string" }, description: { type: "string" },
+        style: { type: "string", enum: ["short", "paragraph"] }, placeholder: { type: "string" }, value: { type: "string" },
+        required: { type: "boolean" }, default: { type: "boolean" }, minLength: { type: "number" }, maxLength: { type: "number" },
+        minValues: { type: "number" }, maxValues: { type: "number" }, channelTypes: { type: "array", items: { type: "number" } },
+        options: { type: "array", items: { $ref: "#/definitions/option" } },
+        defaultValues: { type: "array", items: { type: "object" } },
+      },
+      required: ["type"],
+      additionalProperties: false,
+    },
+    action: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["continue", "modal"] }, prompt: { type: "string" }, singleUse: { type: "boolean" },
+        modal: {
+          type: "object",
+          properties: { title: { type: "string" }, fields: { type: "array", minItems: 1, maxItems: 5, items: { $ref: "#/definitions/field" } } },
+          required: ["title", "fields"], additionalProperties: false,
+        },
+      },
+      required: ["type", "prompt"],
+      additionalProperties: false,
+    },
+    component: {
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: ["action_row", "button", "string_select", "user_select", "role_select", "mentionable_select", "channel_select", "section", "text", "thumbnail", "media_gallery", "file", "separator", "container"] },
+            label: { type: "string" }, content: { type: "string" }, text: { type: "array", items: { type: "string" } },
+            style: { type: "string", enum: ["primary", "secondary", "success", "danger", "link"] }, url: { type: "string" },
+            description: { type: "string" }, spoiler: { type: "boolean" }, disabled: { type: "boolean" }, emoji: { type: "object" },
+            action: { $ref: "#/definitions/action" }, prompt: { type: "string" }, singleUse: { type: "boolean" },
+            placeholder: { type: "string" }, minValues: { type: "number" }, maxValues: { type: "number" },
+            channelTypes: { type: "array", items: { type: "number" } }, defaultValues: { type: "array", items: { type: "object" } },
+            options: { type: "array", items: { $ref: "#/definitions/option" } },
+            items: { type: "array", items: { type: "object" } }, accessory: { type: "object" },
+            divider: { type: "boolean" }, spacing: { type: "string", enum: ["small", "large"] }, accentColor: { type: "number" },
+            components: { type: "array", items: { $ref: "#/definitions/component" } },
+          },
+          required: ["type"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: { type: { type: "string", enum: ["button"] }, style: { type: "string", enum: ["premium"] }, skuId: { type: "string" } },
+          required: ["type", "style", "skuId"],
+          additionalProperties: false,
+        },
+      ],
+    },
+  },
+} as const;
 
 function countComponents(components: unknown[]): number {
   let count = 0;

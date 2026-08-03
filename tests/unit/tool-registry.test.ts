@@ -123,6 +123,10 @@ describe("toolRegistry", () => {
 
     expect(properties.request.description).toContain("Preserve the user's desired outcome");
     expect(properties.title.description).toContain("Name the intended change");
+    expect(definition.function.description).toContain("Generic requests about my bugs");
+    const bugInbox = toolDefinitionsForModel().find((tool) => "function" in tool && tool.function.name === "listDiscordBugMarkers");
+    if (!bugInbox || !("function" in bugInbox)) throw new Error("listDiscordBugMarkers definition not found");
+    expect(bugInbox.function.description).toContain("default for requests about my bugs");
   });
 
   it("exposes bounded batch controls for Discord file inspection", () => {
@@ -248,7 +252,7 @@ describe("toolRegistry", () => {
           type: "function",
           function: expect.objectContaining({
             name: "runCodingAgent",
-            description: expect.stringContaining("debug or fix failing CI/checks/tests")
+            description: expect.stringContaining("failing CI, checks, or tests")
           })
         }),
         expect.objectContaining({
@@ -354,6 +358,14 @@ describe("toolRegistry", () => {
         })
       ])
     );
+  });
+
+  it("keeps the stable complete model contract compact", () => {
+    const definitions = toolDefinitionsForModel();
+    const totalBytes = Buffer.byteLength(JSON.stringify(definitions));
+    const presentation = definitions.find((tool) => "function" in tool && tool.function.name === "composeDiscordResponse");
+    expect(totalBytes).toBeLessThan(82_000);
+    expect(Buffer.byteLength(JSON.stringify(presentation))).toBeLessThan(5_500);
   });
 
   it("enables the initial hosted OpenRouter tools", () => {

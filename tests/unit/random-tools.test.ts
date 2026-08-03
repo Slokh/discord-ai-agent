@@ -896,7 +896,7 @@ describe("drawRandom", () => {
     ]);
   });
 
-  it("corrects a model-authored blackjack loss when verified dealer cards bust", async () => {
+  it("derives standard blackjack settlement without model-authored payout fields", async () => {
     const wager = {
       id: "wager-blackjack",
       requestId: "opening-request",
@@ -990,12 +990,7 @@ describe("drawRandom", () => {
       } as unknown as ToolContext["walletService"],
     });
 
-    const response = await settleRandomWager(ctx, {
-      payoutUsd: 0,
-      outcome: "player_loss",
-      resolutionSource: "player_decision",
-      explanation: "Player stood on 20. Dealer reached 22, so the player loses.",
-    });
+    const response = await settleRandomWager(ctx, {});
 
     expect(settleWager).toHaveBeenCalledWith(expect.objectContaining({
       payoutUsd: 0.2,
@@ -1088,12 +1083,7 @@ describe("drawRandom", () => {
       } as unknown as ToolContext["walletService"],
     });
 
-    await settleRandomWager(ctx, {
-      payoutUsd: 0.1,
-      outcome: "push",
-      resolutionSource: "player_decision",
-      explanation: "Blackjack is still in progress and awaiting settlement.",
-    });
+    await settleRandomWager(ctx, {});
 
     expect(settleWager).toHaveBeenCalledWith(expect.objectContaining({
       payoutUsd: 0.2,

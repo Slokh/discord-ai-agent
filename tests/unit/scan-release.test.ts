@@ -72,4 +72,10 @@ describe("release scanner", () => {
       expect.objectContaining({ ruleId: "private-owner", line: 1 })
     ]);
   });
+
+  it("keeps public owner repository exemptions in one declarative allowlist", async () => {
+    const source = await import("node:fs/promises").then((fs) => fs.readFile("scripts/scanRelease.ts", "utf8"));
+    expect(source).toContain("publicOwnerRepositoryPaths");
+    expect(source).not.toContain("publicNanocodexForkPath");
+  });
 });

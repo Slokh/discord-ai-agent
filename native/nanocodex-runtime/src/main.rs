@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{self, BufRead, BufReader},
-    os::fd::FromRawFd,
+    os::fd::{FromRawFd, RawFd},
     sync::{Arc, Mutex as StdMutex},
     thread,
 };
@@ -201,6 +201,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), RuntimeError> {
+    let protocol_input = blocking_protocol_input(PROTOCOL_INPUT_FD)?;
     write_stdout(&OutboundMessage::Ready {
         protocol_version: PROTOCOL_VERSION,
     })
@@ -210,7 +211,6 @@ async fn run() -> Result<(), RuntimeError> {
     // the parent so the embedded runtime and its child processes can never
     // compete with protocol replies. A dedicated reader thread also keeps the
     // bridge independent of the async executor driving Code Mode.
-    let protocol_input = unsafe { File::from_raw_fd(PROTOCOL_INPUT_FD) };
     let pending: PendingCalls = Arc::new(StdMutex::new(HashMap::new()));
     let (outbound_sender, outbound_receiver) = mpsc::unbounded_channel();
     let writer = tokio::spawn(write_outbound(outbound_receiver));
@@ -246,6 +246,20 @@ async fn run() -> Result<(), RuntimeError> {
         RuntimeError::Nanocodex(format!("protocol writer task failed: {error}"))
     })??;
     result
+}
+
+fn blocking_protocol_input(fd: RawFd) -> Result<File, io::Error> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::O_NONBLOCK != 0 {
+        let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 async fn run_agent(
@@ -483,7 +497,25 @@ mod tests {
     use super::*;
     use nanocodex::tools::{ToolContext, runtime::ToolRuntime};
     use serde_json::json;
+    use std::os::fd::AsRawFd;
     use tokio::time::{Duration, timeout};
+
+    #[test]
+    fn protocol_input_clears_inherited_nonblocking_flag() {
+        let mut descriptors = [0; 2];
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        let read_fd = descriptors[0];
+        let write_fd = descriptors[1];
+        let flags = unsafe { libc::fcntl(read_fd, libc::F_GETFL) };
+        assert_ne!(flags, -1);
+        assert_ne!(unsafe { libc::fcntl(read_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) }, -1);
+
+        let input = blocking_protocol_input(read_fd).expect("blocking protocol input");
+        let blocking_flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) };
+        assert_eq!(blocking_flags & libc::O_NONBLOCK, 0);
+
+        assert_eq!(unsafe { libc::close(write_fd) }, 0);
+    }
 
     #[tokio::test]
     async fn protocol_tool_result_resumes_nested_code_mode_call() {

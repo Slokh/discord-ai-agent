@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { FunctionToolDefinition } from "../models/openrouter.js";
 
@@ -98,7 +98,9 @@ type RuntimeOutput =
     }
   | { type: "failed"; protocol_version: number; request_id?: string; error: string };
 
-type RuntimeProcess = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "once" | "kill">;
+type RuntimeProcess = Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr" | "once" | "kill"> & {
+  protocolInput: NodeJS.WritableStream;
+};
 
 export async function runNanoCodexRuntime(input: {
   binary?: string;
@@ -156,7 +158,7 @@ export async function runNanoCodexRuntime(input: {
     };
     const fail = (error: unknown) => finish(() => reject(error instanceof Error ? error : new Error(String(error))));
     const send = async (message: unknown) => await new Promise<void>((resolveSend, rejectSend) => {
-      child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+      child.protocolInput.write(`${JSON.stringify(message)}\n`, (error) => {
         if (error) rejectSend(error);
         else resolveSend();
       });
@@ -310,12 +312,20 @@ function responsesApiBase(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "").replace(/\/chat\/completions$/, "");
 }
 
-function spawnRuntimeProcess(binary: string, options: { cwd?: string; env?: NodeJS.ProcessEnv }): RuntimeProcess {
-  return spawn(binary, [], {
-    stdio: ["pipe", "pipe", "pipe"],
+export function spawnRuntimeProcess(binary: string, options: { cwd?: string; env?: NodeJS.ProcessEnv }): RuntimeProcess {
+  const child = spawn(binary, [], {
+    // Protocol traffic has its own pipe. Stdin stays closed so NanoCodex and
+    // anything it launches cannot consume application control messages.
+    stdio: ["ignore", "pipe", "pipe", "pipe"],
     ...(options.cwd ? { cwd: options.cwd } : {}),
     ...(options.env ? { env: options.env } : {}),
   });
+  const protocolInput = child.stdio[3];
+  if (!protocolInput || typeof protocolInput === "number" || !("write" in protocolInput)) {
+    child.kill("SIGTERM");
+    throw new Error("NanoCodex runtime protocol pipe was not created");
+  }
+  return Object.assign(child, { protocolInput }) as ChildProcess & RuntimeProcess;
 }
 
 function parseRuntimeOutput(line: string): RuntimeOutput {

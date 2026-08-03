@@ -18,6 +18,18 @@ const requiredArchitectureGuides = [
 ];
 
 describe("architecture guardrails", () => {
+  it("does not mount Kubernetes API credentials into app or sandbox service accounts", async () => {
+    const serviceAccounts = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/serviceaccounts.yaml"), "utf8");
+    expect(serviceAccounts.match(/automountServiceAccountToken: false/g)).toHaveLength(2);
+  });
+
+  it("keeps broad sandbox HTTPS egress away from private and metadata networks", async () => {
+    const policy = await fs.readFile(path.join(process.cwd(), "deploy/helm/discord-ai-agent/templates/networkpolicy.yaml"), "utf8");
+    for (const cidr of ["10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]) {
+      expect(policy).toContain(`- ${cidr}`);
+    }
+  });
+
   it("keeps consolidated architecture guides present", async () => {
     for (const readme of requiredArchitectureGuides) {
       await expect(

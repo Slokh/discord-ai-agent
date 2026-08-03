@@ -30,6 +30,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:coverage:changed": "tsx scripts/checkChangedCoverage.ts",
+    "test:reliability": "vitest run tests/unit/keyed-prompt-concurrency.test.ts tests/unit/discord-api.test.ts tests/unit/discord-response-sink.test.ts tests/unit/discord-delivery-sweep.test.ts tests/unit/openrouter.test.ts tests/unit/runtime-timeouts.test.ts tests/unit/agent-runtime-control-plane.test.ts tests/unit/sandbox-callbacks.test.ts tests/unit/sandbox-reconciler.test.ts",
     "test:db": "DISCORD_AI_AGENT_DB_TESTS=true vitest run tests/integration/repository-db.test.ts tests/integration/jobs-db.test.ts tests/integration/migration-upgrade-db.test.ts tests/integration/rng-db.test.ts tests/integration/payments-db.test.ts tests/integration/revision-quality-db.test.ts",
     "test:db:coverage": "DISCORD_AI_AGENT_DB_TESTS=true vitest run --coverage --coverage.reportsDirectory=coverage-db tests/integration/repository-db.test.ts tests/integration/jobs-db.test.ts tests/integration/migration-upgrade-db.test.ts tests/integration/rng-db.test.ts tests/integration/payments-db.test.ts tests/integration/revision-quality-db.test.ts",
     "test:watch": "vitest",

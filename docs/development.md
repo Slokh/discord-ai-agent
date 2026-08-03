@@ -57,6 +57,28 @@ Before adding a new tool, confirm that an existing primitive cannot satisfy the 
 
 Do not create a natural-language router, hidden tool list, mid-turn expansion protocol, or regex response guard.
 
+### Capability authoring template
+
+A capability is an installation record, not a new agent subsystem. Use this sequence as the complete template:
+
+1. Add or reuse the canonical tool name in `src/tools/toolDefinition.ts` under one capability ID.
+2. Put its schema, examples, availability predicate, access policy, mutation flag, and output promise in the closest `src/tools/contracts/` family.
+3. Put execution in the matching `src/tools/handlers/` family. The handler must revalidate current requester scope and return a typed `AgentResponse`.
+4. Declare the capability once with `defineCapability` in `src/capabilities/catalog.ts`. Add `prepareTurn`, result observation, or response finalization only when the feature truly has cross-turn lifecycle behavior.
+5. Add contract-validation, handler-conformance, and focused behavior coverage. The catalog rejects missing contracts, missing handlers, unknown handlers, duplicate handlers, duplicate tool names within a capability, and empty summaries.
+
+Minimal declaration shape:
+
+```ts
+defineCapability({
+  id: "existingCapabilityId",
+  summary: "One sentence describing the installed product boundary.",
+  toolNames: TOOL_NAMES_BY_CAPABILITY.existingCapabilityId,
+});
+```
+
+Do not add feature imports to `src/agent/`, a feature-name switch to `registry.ts`, a separate runtime ledger, or an environment flag for public behavior that can be versioned in source.
+
 If a feature needs prompt context, model selection, result observation, or a final-response invariant outside its tool call, add one focused module under `src/capabilities/` and register it in the capability composition root. Do not import that feature into the generic files under `src/agent/`. The architecture test enforces this separation.
 
 ## Tests and checks

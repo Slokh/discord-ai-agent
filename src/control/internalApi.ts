@@ -628,6 +628,7 @@ export async function handleInternalApiRequest(input: {
     if (task?.taskType === "bug_report") {
       const disposition = discordBugDisposition(body.metadata?.bugReportDisposition);
       const summary = typeof body.metadata?.bugReportSummary === "string" ? body.metadata.bugReportSummary : body.error ?? body.status;
+      const report = await input.repo.getDiscordBugReportForTask(taskId);
       await input.repo.completeDiscordBugReportForTask({
         taskId,
         status: body.status === "failed" || body.status === "cancelled" ? "failed" : "completed",
@@ -635,6 +636,18 @@ export async function handleInternalApiRequest(input: {
         summary,
         prUrl: body.prUrl ?? null
       });
+      if (report?.sourceExecutionId && disposition && ["confirmed_fixed", "confirmed_unfixed", "already_fixed"].includes(disposition)) {
+        const regression = automatedBugRegression(body.metadata?.bugReportRegression);
+        if (regression) {
+          await input.repo.upsertRunFeedback({
+            runId: report.sourceExecutionId,
+            rating: "bad",
+            note: "Classified automatically from private bug validation.",
+            ...regression,
+            captureEval: true,
+          });
+        }
+      }
     }
     sendJson(input.response, 200, { ok: true });
     return;
@@ -704,6 +717,27 @@ export async function handleInternalApiRequest(input: {
   }
 
   sendJson(input.response, 404, { error: "not_found" });
+}
+
+export function automatedBugRegression(value: unknown) {
+  try {
+    const parsed = parseRunFeedbackBody({
+      ...(value && typeof value === "object" && !Array.isArray(value) ? value : {}),
+      rating: "bad",
+      captureEval: true,
+    });
+    const assertionCount = parsed.expectedTools.length + parsed.forbiddenTools.length + parsed.mustContain.length + parsed.mustNotContain.length;
+    return parsed.failureMode && parsed.expectedBehavior && assertionCount > 0 ? {
+      expectedBehavior: parsed.expectedBehavior,
+      failureMode: parsed.failureMode,
+      expectedTools: parsed.expectedTools,
+      forbiddenTools: parsed.forbiddenTools,
+      mustContain: parsed.mustContain,
+      mustNotContain: parsed.mustNotContain,
+    } : null;
+  } catch {
+    return null;
+  }
 }
 
 function discordBugDisposition(value: unknown): import("../db/types.js").DiscordBugReportDisposition | null {

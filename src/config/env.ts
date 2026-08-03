@@ -116,6 +116,7 @@ export function loadConfig() {
     throw new Error(`Invalid environment configuration:\n${formatted}`);
   }
   const env = parsed.data;
+  assertControlUiConfig(env.CONTROL_UI_PUBLIC_URL, env.CONTROL_UI_AUTH_PASSWORD);
   const processRole = processRoleFromArgs();
   const walletEnabled = Boolean(env.PRIVY_APP_ID?.trim() && env.PRIVY_APP_SECRET?.trim());
 
@@ -232,6 +233,14 @@ function defaultLogLevel(nodeEnv: string) {
   if (nodeEnv === "test") return "silent";
   if (nodeEnv === "production") return "info";
   return "debug";
+}
+
+function assertControlUiConfig(publicUrl: string | undefined, password: string) {
+  if (!publicUrl) return;
+  const url = new URL(publicUrl);
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
+  if (url.protocol !== "https:" && !local) throw new Error("CONTROL_UI_PUBLIC_URL must use HTTPS outside localhost.");
+  if (!password) throw new Error("CONTROL_UI_AUTH_PASSWORD is required when CONTROL_UI_PUBLIC_URL is configured.");
 }
 
 function parseCsv(value: string) {

@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AppConfig } from "../config/env.js";
-import { authorizedUi, clearUiAuthCookie } from "./internalApiAuth.js";
+import { authorizedUi } from "./internalApiAuth.js";
 import {
   sendBuffer,
   sendHtml,
@@ -23,12 +23,6 @@ export async function handleInternalUiRoute(
     return true;
   }
 
-  if (method === "GET" && url.pathname === "/logout") {
-    clearUiAuthCookie(input.response, input.request);
-    sendRedirect(input.response, "/runs");
-    return true;
-  }
-
   if (method === "GET" && url.pathname.startsWith("/console/")) {
     if (!authorizedUi(input.config, input.request, input.response, url))
       return true;
@@ -42,46 +36,26 @@ export async function handleInternalUiRoute(
   }
 
   if (method === "GET" && url.pathname === "/") {
-    if (
-      !authorizedUi(input.config, input.request, input.response, url, {
-        redirectOnQueryAuth: true,
-      })
-    )
-      return true;
+    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
     sendRedirect(input.response, "/runs");
     return true;
   }
 
   if (method === "GET" && url.pathname === "/runs") {
-    if (
-      !authorizedUi(input.config, input.request, input.response, url, {
-        redirectOnQueryAuth: true,
-      })
-    )
-      return true;
+    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
     sendHtml(input.response, 200, await renderRunConsolePage());
     return true;
   }
 
   if (method === "GET" && url.pathname === "/payments") {
-    if (
-      !authorizedUi(input.config, input.request, input.response, url, {
-        redirectOnQueryAuth: true,
-      })
-    )
-      return true;
+    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
     sendHtml(input.response, 200, await renderRunConsolePage());
     return true;
   }
 
   const runPageMatch = url.pathname.match(/^\/runs\/([^/]+)$/);
   if (method === "GET" && runPageMatch) {
-    if (
-      !authorizedUi(input.config, input.request, input.response, url, {
-        redirectOnQueryAuth: true,
-      })
-    )
-      return true;
+    if (!authorizedUi(input.config, input.request, input.response, url)) return true;
     sendHtml(input.response, 200, await renderRunConsolePage());
     return true;
   }

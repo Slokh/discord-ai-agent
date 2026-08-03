@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IsolatedTestDatabase } from "./testDatabase.js";
 import { createIsolatedTestDatabase } from "./testDatabase.js";
-import { collectRevisionQuality } from "../../src/observability/revisionQuality.js";
+import { collectRevisionQuality, findBaselineRevision } from "../../src/observability/revisionQuality.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -24,6 +24,8 @@ describe.skipIf(!runDbTests)("revision quality database contract", () => {
       tools: [],
       signals: [],
       deliveries: [],
+      feedback: [],
     });
+    await expect(findBaselineRevision(database.pool, "test-revision", 48)).resolves.toBeNull();
   });
 });

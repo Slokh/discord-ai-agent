@@ -458,6 +458,51 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     expect(result.rows[0]?.user_id).toBe(userId);
   });
 
+  it("removes private runtime, feedback, bug, and derived conversation state for a deleted user", async () => {
+    const userId = `user-${randomUUID()}`;
+    const botUserId = `bot-${randomUUID()}`;
+    const guildId = `guild-${randomUUID()}`;
+    const channelId = `channel-${randomUUID()}`;
+    const messageId = `message-${randomUUID()}`;
+    const threadKey = `discord:${guildId}:${channelId}`;
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+
+    await repo.upsertGuild({ id: guildId, name: "privacy-test" });
+    await repo.upsertChannel({ id: channelId, guildId, name: "privacy", type: 0 });
+    await repo.upsertUser({ id: userId, username: "private-user" });
+    await repo.upsertUser({ id: botUserId, username: "bot", isBot: true });
+    await repo.upsertMessage({
+      id: messageId, guildId, channelId, authorId: botUserId, content: "private-derived-reply",
+      normalizedContent: "private-derived-reply", createdAt: new Date(),
+    });
+    await pool.query("INSERT INTO conversation_sessions(thread_key, guild_id, channel_id) VALUES ($1, $2, $3)", [threadKey, guildId, channelId]);
+    await pool.query(
+      "INSERT INTO conversation_messages(thread_key, role, author_id, author_display_name, content) VALUES ($1, 'user', $2, 'private-user', 'private request')",
+      [threadKey, userId],
+    );
+    await agentRuntimeRepo.upsertSession({
+      sessionId, threadKey, guildId, channelId, userId, requestedBy: userId,
+      request: "private runtime request", status: "succeeded",
+    });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "succeeded" });
+    await repo.upsertRunFeedback({ runId: executionId, rating: "bad", note: "private feedback", captureEval: true });
+    await repo.createDiscordBugReport({
+      reportId: `bug-${randomUUID()}`, guildId, channelId, sourceMessageId: messageId,
+      sourceSessionId: sessionId, sourceExecutionId: executionId, sourceRevision: "test-revision", reportedByUserId: userId,
+    });
+
+    await repo.requestUserDeletion(userId);
+
+    const [sessions, feedback, conversations, reports] = await Promise.all([
+      pool.query("SELECT count(*)::int AS count FROM agent_runtime_sessions WHERE session_id = $1", [sessionId]),
+      pool.query("SELECT count(*)::int AS count FROM agent_run_feedback WHERE run_id = $1", [executionId]),
+      pool.query("SELECT count(*)::int AS count FROM conversation_sessions WHERE thread_key = $1", [threadKey]),
+      pool.query("SELECT count(*)::int AS count FROM discord_bug_reports WHERE reported_by_user_id = $1", [userId]),
+    ]);
+    expect([sessions, feedback, conversations, reports].map((result) => result.rows[0]?.count)).toEqual([0, 0, 0, 0]);
+  });
+
   it("creates and updates Discord delivery obligations", async () => {
     const executionId = `agent-execution-${randomUUID()}`;
     const pending = await obligationsRepo.upsertPending({

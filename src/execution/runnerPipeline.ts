@@ -63,6 +63,7 @@ export async function main() {
         updatedExistingPullRequest: result.updatedExistingPullRequest,
         bugReportDisposition: result.bugReportResult?.disposition ?? null,
         bugReportSummary: result.bugReportResult?.summary ?? null,
+        bugReportRegression: result.bugReportResult?.regression ?? null,
         resultSummary,
         autoMergeEnabled: result.autoMergeEnabled
       }

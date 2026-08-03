@@ -416,6 +416,42 @@ describe.skipIf(!runDbTests)("pg-boss database behavior", () => {
     await runtime.stop();
   });
 
+  it("processes a durable runtime job after the queue producer restarts as a worker", async () => {
+    const config = testConfig();
+    const runId = `discord-run-restart-${randomUUID()}`;
+    const processedRunIds: string[] = [];
+    const producer = await startJobs({
+      config,
+      pgBossSchema: "pgboss_test",
+      crawlWorker: false,
+      embeddingWorker: false,
+      taskWorker: false,
+      agentRuntimeWorker: false,
+      crawler: { crawlConfiguredGuild: async () => undefined },
+    });
+    runtimes.push(producer);
+    await producer.enqueueAgentRuntimeExecution({
+      runId, traceId: runId, guildId: "guild", channelId: "channel", messageId: runId,
+      userId: "user", responseChannelId: "channel", text: "survive restart", rawContent: "survive restart",
+      mentionKind: "user", botRoleIds: [], requesterDisplayName: "Tester", enqueuedAt: new Date().toISOString(),
+    });
+    await producer.stop();
+
+    const worker = await startJobs({
+      config,
+      pgBossSchema: "pgboss_test",
+      crawlWorker: false,
+      embeddingWorker: false,
+      taskWorker: false,
+      agentRuntimeWorker: true,
+      crawler: { crawlConfiguredGuild: async () => undefined },
+      agentRuntime: { run: async (job) => { processedRunIds.push(job.runId); } },
+    });
+    runtimes.push(worker);
+    await waitFor(() => processedRunIds.includes(runId), 10_000);
+    await worker.stop();
+  });
+
   it("registers the reconciliation crawl schedule when a cron is configured", async () => {
     const config = { ...testConfig(), crawlScheduleCron: "30 5 * * *" };
     const runtime = await startJobs({

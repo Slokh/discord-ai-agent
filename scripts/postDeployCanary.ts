@@ -17,6 +17,7 @@ import { resolveGitHubTaskToken } from "../src/execution/githubAuth.js";
 import { taskBearerToken } from "../src/execution/token.js";
 import { parseGitHubRepository } from "../src/github/repository.js";
 import { passingRandomCanaryChannel, passingStatsCanaryChannel, passingWebCanaryChannel } from "../src/observability/postDeployCanaryEvidence.js";
+import { waitForSandboxCallback } from "../src/observability/sandboxCallbackCanary.js";
 import { deploymentToolset } from "../src/tools/toolScope.js";
 import { discordWrite } from "../src/discord/api.js";
 import { logger } from "../src/util/logger.js";
@@ -220,17 +221,17 @@ async function verifySandboxCallback(database: ReturnType<typeof createPool>) {
         },
       },
     });
-    const deadline = Date.now() + 120_000;
-    while (Date.now() < deadline) {
-      const job = await batch.readNamespacedJob({ namespace, name });
-      if ((job.status?.succeeded ?? 0) > 0) break;
-      if ((job.status?.failed ?? 0) > 0) throw new Error("Sandbox scheduling canary Job failed.");
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-    }
-    const task = await repo.getAgentTask(taskId);
-    if (task?.status !== "no_changes") {
-      throw new Error(`Sandbox callback canary did not reach a no-change terminal state (status=${task?.status ?? "missing"}).`);
-    }
+    await waitForSandboxCallback({
+      readTaskStatus: async () => (await repo.getAgentTask(taskId))?.status,
+      readJobStatus: async () => {
+        try {
+          return (await batch.readNamespacedJob({ namespace, name })).status;
+        } catch (error) {
+          if (kubernetesStatus(error) === 404) return undefined;
+          throw error;
+        }
+      },
+    });
   } finally {
     await batch.deleteNamespacedJob({ namespace, name, propagationPolicy: "Background" }).catch((error: unknown) => {
       if (kubernetesStatus(error) !== 404) throw error;

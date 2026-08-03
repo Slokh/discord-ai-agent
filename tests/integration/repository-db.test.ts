@@ -7,7 +7,7 @@ import { createPool, type DbPool } from "../../src/db/pool.js";
 import { runConversationCompactionOnce } from "../../src/db/conversationCompaction.js";
 import { createAppDatabase, type DiscordAiAgentRepository } from "../../src/db/repositories.js";
 import { runDataRetentionOnce } from "../../src/observability/dataRetention.js";
-import { passingConversationChannel } from "../../src/observability/postDeployCanaryEvidence.js";
+import { passingStatsCanaryChannel, passingWebCanaryChannel } from "../../src/observability/postDeployCanaryEvidence.js";
 
 const runDbTests = process.env.DISCORD_AI_AGENT_DB_TESTS === "true";
 
@@ -85,13 +85,15 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       },
     });
 
-    await expect(passingConversationChannel(pool, traceId)).resolves.toBe(channelId);
+    await expect(passingStatsCanaryChannel(pool, traceId)).resolves.toBe(channelId);
+    await expect(passingWebCanaryChannel(pool, traceId)).resolves.toBe(channelId);
 
     await agentRuntimeRepo.recordEvent({
       sessionId, executionId, traceId, kind: "tool", eventName: "agent.tool.complete",
       metadata: { toolName: "web__run", status: "ok", outputChars: 24 },
     });
-    await expect(passingConversationChannel(pool, traceId)).resolves.toBeUndefined();
+    await expect(passingStatsCanaryChannel(pool, traceId)).resolves.toBe(channelId);
+    await expect(passingWebCanaryChannel(pool, traceId)).resolves.toBeUndefined();
   });
 
   it("stores a permission-filtered, requester-scoped Discord bug inbox", async () => {

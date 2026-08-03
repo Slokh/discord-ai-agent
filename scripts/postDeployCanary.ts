@@ -13,7 +13,7 @@ import {
 import { createPool } from "../src/db/pool.js";
 import { resolveGitHubTaskToken } from "../src/execution/githubAuth.js";
 import { parseGitHubRepository } from "../src/github/repository.js";
-import { passingConversationChannel } from "../src/observability/postDeployCanaryEvidence.js";
+import { passingStatsCanaryChannel, passingWebCanaryChannel } from "../src/observability/postDeployCanaryEvidence.js";
 import { deploymentToolset } from "../src/tools/toolScope.js";
 import { extractPromptJson } from "./promptJson.js";
 
@@ -35,13 +35,20 @@ await Promise.all([verifyGitHub(), verifySandboxScheduling()]);
 
 const promptScript = fileURLToPath(new URL("./prompt.js", import.meta.url));
 const utcDate = new Date().toISOString().slice(0, 10);
-const prompt = [
+const privacyInstruction = "Do not quote, summarize, or identify any Discord message or member.";
+const statsPrompt = [
   "This is an automated private post-deploy canary.",
   `Use getDiscordStats exactly once with {"dateFrom":"${utcDate}","dateTo":"${utcDate}","metric":"messages","groupBy":"overall","limit":1} to count today's indexed visible messages.`,
+  "Do not call any other tool or retry this tool; report a failure immediately if it fails.",
+  "Reply with POST_DEPLOY_STATS_OK and the numeric message count.",
+  privacyInstruction,
+].join(" ");
+const webPrompt = [
+  "This is an automated private post-deploy canary.",
   'Use web__run exactly once with {"time":[{"utc_offset":"+00:00"}],"response_length":"short"} to get the current UTC date.',
-  "Do not retry either tool; report a failure immediately if a tool fails.",
-  "Reply with POST_DEPLOY_CANARY_OK, the numeric message count, and the UTC date.",
-  "Do not quote, summarize, or identify any Discord message or member.",
+  "Do not call any other tool or retry this tool; report a failure immediately if it fails.",
+  "Reply with POST_DEPLOY_WEB_OK and the UTC date.",
+  privacyInstruction,
 ].join(" ");
 const pool = createPool(config);
 const deliveryChannelId = await runConversationCanary(pool).finally(async () => pool.end());
@@ -50,6 +57,16 @@ await verifyDiscordDelivery(deliveryChannelId);
 process.stdout.write("Post-deploy canary passed: model, retrieval, hosted web, GitHub, sandbox scheduling, and Discord delivery are operational.\n");
 
 async function runConversationCanary(database: ReturnType<typeof createPool>) {
+  await runCapabilityCanary(database, statsPrompt, "POST_DEPLOY_STATS_OK", passingStatsCanaryChannel);
+  return await runCapabilityCanary(database, webPrompt, "POST_DEPLOY_WEB_OK", passingWebCanaryChannel);
+}
+
+async function runCapabilityCanary(
+  database: ReturnType<typeof createPool>,
+  prompt: string,
+  successMarker: string,
+  passingChannel: (database: ReturnType<typeof createPool>, traceId: string) => Promise<string | undefined>,
+) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       const { stdout } = await execFileAsync(process.execPath, [
@@ -62,18 +79,18 @@ async function runConversationCanary(database: ReturnType<typeof createPool>) {
       ], {
         cwd: process.cwd(),
         env: { ...process.env, LOG_LEVEL: "warn" },
-        timeout: 7 * 60 * 1_000,
+        timeout: 90_000,
         maxBuffer: 2 * 1024 * 1024,
       });
       const result = extractPromptJson(stdout);
-      if (typeof result.traceId !== "string" || !result.content.includes("POST_DEPLOY_CANARY_OK")) continue;
-      const channelId = await passingConversationChannel(database, result.traceId);
+      if (typeof result.traceId !== "string" || !result.content.includes(successMarker)) continue;
+      const channelId = await passingChannel(database, result.traceId);
       if (channelId) return channelId;
     } catch {
       // Retry the isolated conversation once; tools remain non-retriable inside each attempt.
     }
   }
-  throw new Error("Conversation canary did not produce complete durable evidence after two isolated attempts.");
+  throw new Error(`${successMarker} canary did not produce complete durable evidence after two isolated attempts.`);
 }
 
 async function verifyGitHub() {

@@ -129,10 +129,13 @@ export async function finishAgentRuntimePromptExecution(input: {
 }) {
   if (!input.agentRuntime || !input.session || !input.executionId) return;
   const executorName = input.executorName?.trim() || "nanocodex";
+  const assistantClientMessageId = input.replyMessageId === input.traceId
+    ? `${input.replyMessageId}:reply`
+    : input.replyMessageId;
   await input.agentRuntime.appendMessage({
     sessionId: input.session.sessionId,
     messageId: `agent-assistant-message-${input.replyMessageId}`,
-    clientMessageId: input.replyMessageId,
+    clientMessageId: assistantClientMessageId,
     role: "assistant",
     parts: [{ type: "text", text: input.responseContent }],
     metadata: {

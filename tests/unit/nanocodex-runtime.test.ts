@@ -159,6 +159,59 @@ describe("NanoCodex native runtime protocol", () => {
     await expect(result).rejects.toThrow(/request scope mismatch/);
   });
 
+  it("drains a terminal protocol line that races with process exit", async () => {
+    const child = new FakeRuntimeProcess();
+    const result = runNanoCodexRuntime({
+      apiKey: "secret-key",
+      apiBaseUrl: "https://openrouter.ai/api/v1",
+      model: "openai/gpt-5.6-sol",
+      thinking: "low",
+      instructions: "test",
+      prompt: "test",
+      requestId: "request-exit-race",
+      sessionId: "018f1f9a-7b3c-7a01-8000-000000000001",
+      tools: [],
+      executeTool: async () => ({ success: true, output: "unused" }),
+      spawnProcess: () => child as never,
+    });
+    child.send({ type: "ready", protocol_version: 1 });
+    child.send({
+      type: "completed",
+      protocol_version: 1,
+      request_id: "request-exit-race",
+      final_message: "drained",
+      usage: {},
+      snapshot: {},
+    });
+    child.emit("exit", 0, null);
+    child.stdout.end();
+
+    await expect(result).resolves.toMatchObject({ finalMessage: "drained" });
+  });
+
+  it("reports process exit after stdout drains without completion", async () => {
+    const child = new FakeRuntimeProcess();
+    const result = runNanoCodexRuntime({
+      apiKey: "secret-key",
+      apiBaseUrl: "https://openrouter.ai/api/v1",
+      model: "openai/gpt-5.6-sol",
+      thinking: "low",
+      instructions: "test",
+      prompt: "test",
+      requestId: "request-missing-completion",
+      sessionId: "018f1f9a-7b3c-7a01-8000-000000000001",
+      tools: [],
+      executeTool: async () => ({ success: true, output: "unused" }),
+      spawnProcess: () => child as never,
+    });
+    child.send({ type: "ready", protocol_version: 1 });
+    child.stderr.write("native failure");
+    child.emit("exit", 2, null);
+    child.stdout.end();
+
+    await expect(result).rejects.toThrow(/code=2.*native failure/);
+  });
+
   it("accepts only NanoCodex models and converts tool schemas", () => {
     expect(nanoCodexModel("openai/gpt-5.6-luna")).toBe("gpt-5.6-luna");
     expect(() => nanoCodexModel("z-ai/glm-5.2")).toThrow(/supports only/);

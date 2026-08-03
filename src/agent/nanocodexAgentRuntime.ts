@@ -402,9 +402,28 @@ function isRecoverableMutationResult(_toolName: ToolName, result: AgentResponse)
 
 async function recordNanoCodexEvent(ctx: ToolContext, event: NanoCodexRuntimeEvent) {
   if (event.type === "assistant.delta" || event.type === "reasoning.summary.delta" || event.type === "api.event") return;
+  const toolName = stringEventPayload(event.payload.tool);
+  const callId = stringEventPayload(event.payload.call_id);
+  const toolStatus = stringEventPayload(event.payload.status);
+  const durationNs = numberEventPayload(event.payload.duration_ns);
   await recordAgentEvent(ctx, {
     eventName: `agent.nanocodex.${event.type}`,
-    summary: `NanoCodex ${event.type}`,
-    metadata: { nanoSequence: event.seq, nanoRequestId: event.request_id },
+    summary: `NanoCodex ${event.type}${toolName ? `: ${toolName}` : ""}`,
+    metadata: {
+      nanoSequence: event.seq,
+      nanoRequestId: event.request_id,
+      ...(toolName ? { toolName } : {}),
+      ...(callId ? { callId } : {}),
+      ...(toolStatus ? { status: toolStatus } : {}),
+      ...(durationNs === undefined ? {} : { durationMs: Math.round(durationNs / 1_000_000) }),
+    },
   });
+}
+
+function stringEventPayload(value: unknown) {
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function numberEventPayload(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }

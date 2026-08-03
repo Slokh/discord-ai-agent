@@ -100,6 +100,26 @@ describe("agent runtime ledger", () => {
       })
     );
   });
+
+  it("keeps a local reply distinct when it reuses the prompt transport id", async () => {
+    const agentRuntime = fakeAgentRuntime();
+    await finishAgentRuntimePromptExecution({
+      agentRuntime: agentRuntime as never,
+      session: { sessionId: "agent-session-channel", traceId: "local-1" } as never,
+      executionId: "agent-execution-local-1",
+      traceId: "local-1",
+      status: "succeeded",
+      replyMessageId: "local-1",
+      replyUrl: "local://prompt/local-1",
+      responseContent: "done",
+      durationMs: 10,
+    });
+
+    expect(agentRuntime.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      role: "assistant",
+      clientMessageId: "local-1:reply",
+    }));
+  });
 });
 
 function fakeAgentRuntime() {

@@ -139,6 +139,7 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
         "028_nanocodex_runtime_defaults",
         "029_remove_sandbox_leases",
         "030_run_feedback_regression_contract",
+        "031_atomic_agent_event_sequences",
       ]) {
         await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
       }
@@ -155,6 +156,8 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
           forbidden_tools: ["transferWalletFunds"],
           must_contain: ["source"],
         })] }));
+      await expect(client.query("SELECT event_sequence FROM agent_runtime_executions WHERE execution_id = 'execution'"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ event_sequence: 1 })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

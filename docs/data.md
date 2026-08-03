@@ -74,6 +74,7 @@ The `agent_runtime_*` tables explain both chat and code-update attempts:
 - executions represent queued, running, and terminal attempts;
 - messages store structured transcript entries;
 - events store typed lifecycle transitions and safe metadata;
+- session and execution rows atomically allocate event sequence numbers, so concurrent model, tool, and delivery writers cannot overwrite or drop ledger evidence;
 - artifacts and chunks store replay inputs, redacted model I/O, snapshots, files, and larger diagnostics;
 - task-linked executions record isolated code-update lifecycle and outcomes.
 

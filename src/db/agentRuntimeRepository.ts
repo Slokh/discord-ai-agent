@@ -416,7 +416,6 @@ export class AgentRuntimeRepository {
     sessionId: string;
     executionId?: string | null;
     traceId?: string | null;
-    sequence?: number | null;
     kind: AgentRuntimeEventKind;
     level?: AgentRuntimeEventRecord["level"];
     eventName: string;
@@ -431,21 +430,30 @@ export class AgentRuntimeRepository {
     assertVersionedRuntimeEventMetadata(input.eventName, metadata);
     const result = await this.pool.query(
       `
-        WITH event_lock AS MATERIALIZED (
-          SELECT pg_advisory_xact_lock(hashtextextended(coalesce($2::text, $1::text), 0))
+        WITH execution_sequence AS (
+          UPDATE agent_runtime_executions
+          SET event_sequence = event_sequence + 1
+          WHERE $2::text IS NOT NULL
+            AND execution_id = $2
+          RETURNING event_sequence AS sequence
+        ),
+        session_sequence AS (
+          UPDATE agent_runtime_sessions
+          SET event_sequence = event_sequence + 1
+          WHERE $2::text IS NULL
+            AND session_id = $1
+          RETURNING event_sequence AS sequence
         ),
         next_sequence AS (
-          SELECT coalesce($4::int, coalesce(max(sequence), 0) + 1) AS sequence
-          FROM agent_runtime_events
-          CROSS JOIN event_lock
-          WHERE ($2::text IS NOT NULL AND execution_id = $2)
-             OR ($2::text IS NULL AND session_id = $1)
+          SELECT sequence FROM execution_sequence
+          UNION ALL
+          SELECT sequence FROM session_sequence
         )
         INSERT INTO agent_runtime_events(
           session_id, execution_id, trace_id, sequence, kind, level,
           event_name, summary, metadata, duration_ms, span_id, parent_span_id
         )
-        SELECT $1, $2, $3, sequence, $5, coalesce($6, 'info'), $7, $8, $9::jsonb, $10, $11, $12
+        SELECT $1, $2, $3, sequence, $4, coalesce($5, 'info'), $6, $7, $8::jsonb, $9, $10, $11
         FROM next_sequence
         RETURNING *
       `,
@@ -453,7 +461,6 @@ export class AgentRuntimeRepository {
         input.sessionId,
         input.executionId ?? null,
         input.traceId ?? trace?.traceId ?? null,
-        input.sequence ?? null,
         input.kind,
         input.level ?? null,
         input.eventName,

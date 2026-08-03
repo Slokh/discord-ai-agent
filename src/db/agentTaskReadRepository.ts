@@ -283,11 +283,12 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
             WITH updated_execution AS (
               UPDATE agent_runtime_executions
               SET status = 'cancelled',
+                  event_sequence = event_sequence + 1,
                   error = $2,
                   completed_at = coalesce(completed_at, now()),
                   updated_at = now()
               WHERE task_id = $1
-              RETURNING session_id, execution_id, trace_id, metadata->>'runtime' = 'agent' AS is_agent_runtime
+              RETURNING session_id, execution_id, trace_id, event_sequence AS sequence
             ),
             session_update AS (
               UPDATE agent_runtime_sessions
@@ -295,17 +296,6 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
                   completed_at = coalesce(completed_at, now()),
                   updated_at = now()
               WHERE session_id IN (SELECT session_id FROM updated_execution)
-            ),
-            next_sequence AS (
-              SELECT
-                updated_execution.session_id,
-                updated_execution.execution_id,
-                updated_execution.trace_id,
-                updated_execution.is_agent_runtime,
-                coalesce(max(agent_runtime_events.sequence), 0) + 1 AS sequence
-              FROM updated_execution
-              LEFT JOIN agent_runtime_events ON agent_runtime_events.execution_id = updated_execution.execution_id
-              GROUP BY updated_execution.session_id, updated_execution.execution_id, updated_execution.trace_id, updated_execution.is_agent_runtime
             )
             INSERT INTO agent_runtime_events(session_id, execution_id, trace_id, sequence, kind, level, event_name, summary, metadata)
             SELECT
@@ -318,7 +308,7 @@ export async function cancelAgentTask(pool: DbPool, input: { taskId: string; rea
               'agent.task.completed',
               $2,
               jsonb_build_object('taskId', $1, 'status', 'cancelled', 'error', $2)
-            FROM next_sequence
+            FROM updated_execution
           `,
           [input.taskId, message]
         )

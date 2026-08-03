@@ -96,6 +96,35 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     await expect(passingWebCanaryChannel(pool, traceId)).resolves.toBeUndefined();
   });
 
+  it("allocates concurrent runtime event sequences without dropping evidence", async () => {
+    const sessionId = `agent-session-${randomUUID()}`;
+    const executionId = `agent-execution-${randomUUID()}`;
+    await agentRuntimeRepo.upsertSession({
+      sessionId,
+      threadKey: `concurrent-events-${randomUUID()}`,
+      request: "concurrent events",
+      status: "running",
+    });
+    await agentRuntimeRepo.createExecution({ executionId, sessionId, status: "running" });
+
+    const events = await Promise.all(Array.from({ length: 24 }, (_, index) => agentRuntimeRepo.recordEvent({
+      sessionId,
+      executionId,
+      kind: "status",
+      eventName: "agent.test.concurrent",
+      metadata: { index },
+    })));
+
+    expect(events.map((event) => event.sequence).sort((left, right) => left - right))
+      .toEqual(Array.from({ length: 24 }, (_, index) => index + 1));
+    const stored = await pool.query(
+      "SELECT sequence FROM agent_runtime_events WHERE execution_id = $1 ORDER BY sequence",
+      [executionId],
+    );
+    expect(stored.rows.map((row) => Number(row.sequence)))
+      .toEqual(Array.from({ length: 24 }, (_, index) => index + 1));
+  });
+
   it("stores a permission-filtered, requester-scoped Discord bug inbox", async () => {
     const guildId = `guild-${randomUUID()}`;
     const visibleChannelId = `channel-${randomUUID()}`;

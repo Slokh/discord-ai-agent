@@ -45,7 +45,8 @@ const statsPrompt = [
 ].join(" ");
 const webPrompt = [
   "This is an automated private post-deploy canary.",
-  'Use web__run exactly once with {"time":[{"utc_offset":"+00:00"}],"response_length":"short"} to get the current UTC date.',
+  "Use web__run exactly once to get the current UTC date.",
+  'Pass one object argument, not a JSON string: {time: [{utc_offset: "+00:00"}], response_length: "short"}.',
   "Do not call any other tool or retry this tool; report a failure immediately if it fails.",
   "Reply with POST_DEPLOY_WEB_OK and the UTC date.",
   privacyInstruction,

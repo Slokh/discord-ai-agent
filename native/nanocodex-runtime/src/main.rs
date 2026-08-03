@@ -526,4 +526,85 @@ mod tests {
         assert!(execution.success);
         assert_eq!(execution.nested_calls.len(), 1);
     }
+
+    #[tokio::test]
+    async fn protocol_web_run_reaches_the_application_bridge() {
+        let definition: ToolDefinition = serde_json::from_value(json!({
+            "type": "function",
+            "name": "web__run",
+            "description": "Run web operations.",
+            "strict": false,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "time": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": { "utc_offset": { "type": "string" } },
+                            "required": ["utc_offset"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "response_length": { "type": "string", "enum": ["short", "medium", "long"] }
+                },
+                "anyOf": [{ "required": ["time"] }],
+                "additionalProperties": false
+            }
+        }))
+        .expect("valid web tool definition");
+        let result_directory = std::env::temp_dir().join(format!(
+            "nanocodex-runtime-web-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("current time")
+                .as_nanos(),
+        ));
+        std::fs::create_dir(&result_directory).expect("result directory");
+        let (outbound, mut calls) = mpsc::unbounded_channel();
+        let tools = Tools::builder()
+            .without_defaults()
+            .web_search(false)
+            .tool(ProtocolTool {
+                request_id: Arc::from("request-web-test"),
+                definition,
+                outbound,
+                result_directory: Arc::new(result_directory.clone()),
+                result_sequence: Arc::new(AtomicU64::new(1)),
+            })
+            .build()
+            .expect("valid tools");
+        let runtime = ToolRuntime::new_with_tools(".", None, None, &tools);
+        let result_sender = tokio::spawn(async move {
+            let call = calls.recv().await.expect("protocol web tool call");
+            let call_id = call["call_id"].as_str().expect("call id").to_owned();
+            let result_file = call["result_file"].as_str().expect("result file");
+            std::fs::write(
+                result_directory.join(result_file),
+                serde_json::to_vec(&json!({
+                    "call_id": call_id,
+                    "success": true,
+                    "output": "web bridge ok"
+                })).expect("result JSON"),
+            ).expect("write result");
+            result_directory
+        });
+        let history = Vec::new();
+        let context = ToolContext::new("gpt-5.6-sol", "session-web-test", "outer-call", &history, 1_000);
+        let execution = timeout(
+            Duration::from_secs(2),
+            runtime.execute_code(
+                r#"const value = await tools.web__run({time:[{utc_offset:"+00:00"}],response_length:"short"}); text(value);"#,
+                context,
+            ),
+        )
+        .await
+        .expect("code mode completed");
+
+        let result_directory = result_sender.await.expect("result sender completed");
+        std::fs::remove_dir_all(result_directory).expect("remove result directory");
+        assert!(execution.success, "{execution:?}");
+        assert_eq!(execution.nested_calls.len(), 1);
+    }
 }

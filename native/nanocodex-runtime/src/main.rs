@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::{self, BufRead, BufReader},
     os::fd::{FromRawFd, RawFd},
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Mutex as StdMutex},
     thread,
 };
@@ -26,6 +27,7 @@ use tokio::{
 
 const PROTOCOL_VERSION: u32 = 1;
 const PROTOCOL_INPUT_FD: i32 = 3;
+const PRIVATE_PROTOCOL_FD_MIN: i32 = 128;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -134,6 +136,8 @@ enum RuntimeError {
     UnknownToolCall(String),
     #[error("failed to read protocol input: {0}")]
     Read(#[from] io::Error),
+    #[error("protocol input thread stopped: {0}")]
+    InputThread(String),
     #[error("invalid protocol JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("NanoCodex failed: {0}")]
@@ -201,7 +205,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), RuntimeError> {
-    let protocol_input = blocking_protocol_input(PROTOCOL_INPUT_FD)?;
+    let protocol_input = private_protocol_input(PROTOCOL_INPUT_FD)?;
     write_stdout(&OutboundMessage::Ready {
         protocol_version: PROTOCOL_VERSION,
     })
@@ -218,16 +222,24 @@ async fn run() -> Result<(), RuntimeError> {
     let (input_error_sender, mut input_errors) = mpsc::unbounded_channel();
     let input_pending = Arc::clone(&pending);
     let input_outbound = outbound_sender.clone();
+    let thread_error_sender = input_error_sender.clone();
     thread::Builder::new()
         .name("nanocodex-protocol-input".to_owned())
         .spawn(move || {
-            read_protocol_input(
-                BufReader::new(protocol_input),
-                input_pending,
-                input_outbound,
-                run_sender,
-                input_error_sender,
-            );
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                read_protocol_input(
+                    BufReader::new(protocol_input),
+                    input_pending,
+                    input_outbound,
+                    run_sender,
+                    input_error_sender,
+                );
+            }));
+            let reason = match result {
+                Ok(()) => "reader exited".to_owned(),
+                Err(payload) => format!("reader panicked: {}", panic_message(payload)),
+            };
+            let _ = thread_error_sender.send(RuntimeError::InputThread(reason));
         })
         .map_err(RuntimeError::Read)?;
     let request = run_receiver
@@ -248,18 +260,41 @@ async fn run() -> Result<(), RuntimeError> {
     result
 }
 
-fn blocking_protocol_input(fd: RawFd) -> Result<File, io::Error> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 {
+fn private_protocol_input(fd: RawFd) -> Result<File, io::Error> {
+    let private_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, PRIVATE_PROTOCOL_FD_MIN) };
+    if private_fd == -1 {
         return Err(io::Error::last_os_error());
     }
+    if unsafe { libc::close(fd) } == -1 {
+        let error = io::Error::last_os_error();
+        unsafe { libc::close(private_fd) };
+        return Err(error);
+    }
+    let flags = unsafe { libc::fcntl(private_fd, libc::F_GETFL) };
+    if flags == -1 {
+        let error = io::Error::last_os_error();
+        unsafe { libc::close(private_fd) };
+        return Err(error);
+    }
     if flags & libc::O_NONBLOCK != 0 {
-        let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
+        let result = unsafe { libc::fcntl(private_fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
         if result == -1 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            unsafe { libc::close(private_fd) };
+            return Err(error);
         }
     }
-    Ok(unsafe { File::from_raw_fd(fd) })
+    Ok(unsafe { File::from_raw_fd(private_fd) })
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_owned()
+    }
 }
 
 async fn run_agent(
@@ -501,7 +536,7 @@ mod tests {
     use tokio::time::{Duration, timeout};
 
     #[test]
-    fn protocol_input_clears_inherited_nonblocking_flag() {
+    fn protocol_input_owns_a_private_blocking_close_on_exec_descriptor() {
         let mut descriptors = [0; 2];
         assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
         let read_fd = descriptors[0];
@@ -510,9 +545,13 @@ mod tests {
         assert_ne!(flags, -1);
         assert_ne!(unsafe { libc::fcntl(read_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) }, -1);
 
-        let input = blocking_protocol_input(read_fd).expect("blocking protocol input");
+        let input = private_protocol_input(read_fd).expect("private protocol input");
+        assert!(input.as_raw_fd() >= PRIVATE_PROTOCOL_FD_MIN);
         let blocking_flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) };
         assert_eq!(blocking_flags & libc::O_NONBLOCK, 0);
+        let descriptor_flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(descriptor_flags & libc::FD_CLOEXEC, 0);
+        assert_eq!(unsafe { libc::fcntl(read_fd, libc::F_GETFL) }, -1);
 
         assert_eq!(unsafe { libc::close(write_fd) }, 0);
     }

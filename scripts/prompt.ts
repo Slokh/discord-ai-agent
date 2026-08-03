@@ -47,6 +47,7 @@ async function main() {
     { createPool },
     { createAppDatabase },
     { AgentRuntimeRepository },
+    { RngRepository },
     { PaymentRepository },
     { OpenRouterClient },
     { PrivyTempoWalletProvider },
@@ -61,6 +62,7 @@ async function main() {
     import("../src/db/pool.js"),
     import("../src/db/repositories.js"),
     import("../src/db/agentRuntimeRepository.js"),
+    import("../src/db/rngRepository.js"),
     import("../src/db/paymentRepository.js"),
     import("../src/models/openrouter.js"),
     import("../src/payments/privyTempoWalletProvider.js"),
@@ -78,6 +80,7 @@ async function main() {
   const pool = createPool(config);
   const repo = createAppDatabase(pool);
   const agentRuntime = new AgentRuntimeRepository(pool);
+  const rngRepo = new RngRepository(pool);
   const paymentRepo = new PaymentRepository(pool);
   const openRouter = new OpenRouterClient(config.openRouter);
   const walletProvider = config.payments.walletEnabled && config.payments.privyAppId && config.payments.privyAppSecret
@@ -198,6 +201,7 @@ async function main() {
               agentRuntimeExecutionId: runtimeRef.executionId,
               openRouter,
               jobs,
+              rngRepo,
               walletService,
               guildId,
               channelId: currentChannel.id,

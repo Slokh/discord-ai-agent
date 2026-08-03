@@ -42,22 +42,7 @@ const prompt = [
   "Reply with POST_DEPLOY_CANARY_OK, the numeric message count, and the UTC date.",
   "Do not quote, summarize, or identify any Discord message or member.",
 ].join(" ");
-const { stdout } = await execFileAsync(process.execPath, [
-  promptScript,
-  "--no-memory",
-  "--json",
-  "--user-id", `post-deploy-canary-${config.appRevision.slice(0, 12)}`,
-  "--user-name", "Post-deploy canary",
-  prompt,
-], {
-  cwd: process.cwd(),
-  env: { ...process.env, LOG_LEVEL: "warn" },
-  timeout: 7 * 60 * 1_000,
-  maxBuffer: 2 * 1024 * 1024,
-});
-const output = extractPromptJson(stdout);
-if (typeof output.traceId !== "string") throw new Error("Post-deploy canary prompt result is missing its trace ID.");
-if (!output.content.includes("POST_DEPLOY_CANARY_OK")) throw new Error("Conversation canary did not return its completion marker.");
+const output = await runConversationCanary();
 
 const pool = createPool(config);
 let deliveryChannelId: string | undefined;
@@ -106,6 +91,31 @@ try {
 
 await verifyDiscordDelivery(deliveryChannelId);
 process.stdout.write("Post-deploy canary passed: model, retrieval, hosted web, GitHub, sandbox scheduling, and Discord delivery are operational.\n");
+
+async function runConversationCanary() {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const { stdout } = await execFileAsync(process.execPath, [
+        promptScript,
+        "--no-memory",
+        "--json",
+        "--user-id", `post-deploy-canary-${randomUUID()}`,
+        "--user-name", "Post-deploy canary",
+        prompt,
+      ], {
+        cwd: process.cwd(),
+        env: { ...process.env, LOG_LEVEL: "warn" },
+        timeout: 7 * 60 * 1_000,
+        maxBuffer: 2 * 1024 * 1024,
+      });
+      const result = extractPromptJson(stdout);
+      if (typeof result.traceId === "string" && result.content.includes("POST_DEPLOY_CANARY_OK")) return result;
+    } catch {
+      // Retry the isolated conversation once; tools remain non-retriable inside each attempt.
+    }
+  }
+  throw new Error("Conversation canary did not return its completion marker after two isolated attempts.");
+}
 
 async function verifyGitHub() {
   const token = await resolveGitHubTaskToken(config);

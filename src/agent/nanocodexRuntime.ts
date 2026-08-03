@@ -208,14 +208,7 @@ export async function runNanoCodexRuntime(input: {
           }
           case "tool_result_accepted":
             assertRequestId(input.requestId, message.request_id);
-            eventQueue = eventQueue.then(async () => {
-              if (eventFailure) return;
-              try {
-                await input.onToolResultAccepted?.(message.call_id);
-              } catch (error) {
-                eventFailure = error;
-              }
-            });
+            await input.onToolResultAccepted?.(message.call_id);
             return;
           case "completed":
             assertRequestId(input.requestId, message.request_id);

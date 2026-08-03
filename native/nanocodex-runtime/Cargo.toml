@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 async-trait = "0.1.89"
+libc = "0.2.189"
 nanocodex = { git = "https://github.com/Slokh/nanocodex.git", rev = "9da913aeed3361b708cca8308e016125b84b9430" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

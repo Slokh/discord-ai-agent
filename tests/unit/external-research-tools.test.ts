@@ -1,0 +1,91 @@
+import { describe, expect, it, vi } from "vitest";
+import { externalResearchToolHandlers } from "../../src/tools/handlers/external-research.js";
+import type { ToolContext } from "../../src/tools/types.js";
+
+function context(chat: ToolContext["openRouter"]["chat"]): ToolContext {
+  return {
+    config: {
+      appRevision: "test-revision",
+      openRouter: { utilityModel: "test/utility" },
+    } as never,
+    repo: {
+      recordTraceEvent: vi.fn(async () => undefined),
+      recordProcessRunSpan: vi.fn(async () => undefined),
+      auditTool: vi.fn(async () => undefined),
+    },
+    openRouter: { chat },
+    guildId: "guild",
+    channelId: "channel",
+    userId: "user",
+    userDisplayName: "User",
+    visibleChannelIds: [],
+    requestId: "trace-1",
+  } as unknown as ToolContext;
+}
+
+describe("researchWeb", () => {
+  it("uses the configured OpenRouter hosted tools and returns cited evidence", async () => {
+    const chat = vi.fn(async () => ({
+      content: "The current UTC date is August 3, 2026.",
+      model: "test/utility",
+      finishReason: "stop",
+      serverToolUse: { web_search_requests: 1 },
+      urlCitations: [{ url: "https://example.com/date", title: "Date" }],
+      toolCalls: [],
+      raw: {},
+    }));
+    const result = await externalResearchToolHandlers.researchWeb!(
+      context(chat),
+      {
+        id: "call-1",
+        name: "researchWeb",
+        arguments: { question: "What is the current UTC date?", urls: ["https://example.com/date"] },
+        argumentsText: "{}",
+      },
+      "What is the date?",
+    );
+
+    expect(result).toEqual({
+      content: "The current UTC date is August 3, 2026.\n\nSources:\n- https://example.com/date",
+    });
+    expect(chat).toHaveBeenCalledWith(expect.objectContaining({
+      model: "test/utility",
+      tools: expect.arrayContaining([
+        { type: "openrouter:web_search" },
+        { type: "openrouter:web_fetch" },
+      ]),
+      signal: undefined,
+    }));
+  });
+
+  it("does not turn an ungrounded provider answer into fresh evidence", async () => {
+    const result = await externalResearchToolHandlers.researchWeb!(
+      context(vi.fn(async () => ({ content: "I think it is today.", model: "test/utility", toolCalls: [], raw: {} }))),
+      {
+        id: "call-1",
+        name: "researchWeb",
+        arguments: { question: "What is the current UTC date?" },
+        argumentsText: "{}",
+      },
+      "What is the date?",
+    );
+
+    expect(result).toMatchObject({ status: "error", errorCode: "external_evidence_missing", retryable: true });
+  });
+
+  it("maps provider failures into a stable tool result", async () => {
+    const result = await externalResearchToolHandlers.researchWeb!(
+      context(vi.fn(async () => { throw new Error("provider unavailable with private detail"); })),
+      {
+        id: "call-1",
+        name: "researchWeb",
+        arguments: { question: "What is the current UTC date?" },
+        argumentsText: "{}",
+      },
+      "What is the date?",
+    );
+
+    expect(result).toMatchObject({ status: "error", errorCode: "external_evidence_missing", retryable: true });
+    expect(result.content).not.toContain("private detail");
+  });
+});

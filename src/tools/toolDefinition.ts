@@ -24,6 +24,7 @@ export const TOOL_NAMES_BY_CAPABILITY = {
     "getSpotifyPlaylistTracks", "getSpotifyAlbumTracks", "getSpotifyArtistDiscography", "getSpotifyPlaylistStats",
     "compareSpotifyPlaylists", "searchSpotify", "getSpotifyItem",
   ],
+  externalResearch: ["researchWeb"],
 } as const;
 
 export type ToolName = (typeof TOOL_NAMES_BY_CAPABILITY)[keyof typeof TOOL_NAMES_BY_CAPABILITY][number];

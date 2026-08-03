@@ -11,6 +11,7 @@ import { imageToolHandlers } from "../tools/handlers/image.js";
 import { generatedDataToolHandlers } from "../tools/handlers/generated-data.js";
 import { spotifyToolHandlers } from "../tools/handlers/spotify.js";
 import { walletToolHandlers } from "../tools/handlers/wallet.js";
+import { externalResearchToolHandlers } from "../tools/handlers/external-research.js";
 import {
   TOOL_NAMES_BY_CAPABILITY,
   type ToolName,
@@ -111,6 +112,11 @@ const declarations: readonly CapabilityDeclaration[] = [
     summary: "Current Spotify catalog and collection inspection.",
     toolNames: TOOL_NAMES_BY_CAPABILITY.spotify,
   },
+  {
+    id: "externalResearch",
+    summary: "Current public-web search and page retrieval through the configured provider.",
+    toolNames: TOOL_NAMES_BY_CAPABILITY.externalResearch,
+  },
 ];
 
 const handlerFamilies = [
@@ -123,6 +129,7 @@ const handlerFamilies = [
   generatedDataToolHandlers,
   spotifyToolHandlers,
   walletToolHandlers,
+  externalResearchToolHandlers,
 ] as const;
 const handlerEntries = handlerFamilies.flatMap((family) => Object.entries(family));
 const handlerNames = handlerEntries.map(([name]) => name);

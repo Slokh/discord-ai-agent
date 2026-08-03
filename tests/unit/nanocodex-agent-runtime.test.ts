@@ -20,12 +20,12 @@ describe("NanoCodex agent runtime executor", () => {
       expect(input.thinking).toBe("high");
       expect(input.sessionId).toMatch(/^[0-9a-f-]+$/);
       expect(input.sessionId).not.toBe("018f1f9a-7b3c-7a01-8000-000000000001");
-      expect(input.hostedWebSearch).toBe(true);
+      expect(input.hostedWebSearch).toBe(false);
       expect(input.instructions).not.toContain("Current Discord requester: Kartik");
       expect(input.prompt).toContain("Current Discord requester: Kartik");
       expect(input.prompt).toContain("Current NanoCodex model for this turn: `openai/gpt-5.6-luna`");
       expect(input.prompt).toContain("USER: hello");
-      expect(input.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(["loadSkillContext", "drawRandom"]));
+      expect(input.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(["loadSkillContext", "drawRandom", "researchWeb"]));
       await expect(input.executeTool({ callId: "bad-1", name: "notRegistered", arguments: {} })).resolves.toEqual({
         success: false,
         output: "Tool notRegistered is not available for this request.",

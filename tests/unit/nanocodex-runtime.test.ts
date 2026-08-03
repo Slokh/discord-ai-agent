@@ -46,6 +46,7 @@ describe("NanoCodex native runtime protocol", () => {
     const child = new FakeRuntimeProcess();
     const executeTool = vi.fn(async () => ({ success: true, output: "verified result" }));
     const onEvent = vi.fn();
+    const onToolResultAccepted = vi.fn();
     const resultPromise = runNanoCodexRuntime({
       apiKey: "secret-key",
       apiBaseUrl: "https://openrouter.ai/api/v1/",
@@ -65,6 +66,7 @@ describe("NanoCodex native runtime protocol", () => {
       }],
       executeTool,
       onEvent,
+      onToolResultAccepted,
       spawnProcess: () => child as never,
     });
 
@@ -105,6 +107,12 @@ describe("NanoCodex native runtime protocol", () => {
       success: true,
       output: "verified result",
     });
+    child.send({
+      type: "tool_result_accepted",
+      protocol_version: 1,
+      request_id: "request-1",
+      call_id: "call-1",
+    });
 
     const snapshot = {
       version: 1,
@@ -130,6 +138,7 @@ describe("NanoCodex native runtime protocol", () => {
       snapshot,
     });
     expect(onEvent).toHaveBeenCalledOnce();
+    expect(onToolResultAccepted).toHaveBeenCalledWith("call-1");
   });
 
   it("fails closed on request-scope mismatch", async () => {

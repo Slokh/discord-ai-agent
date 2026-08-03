@@ -90,6 +90,11 @@ enum OutboundMessage<'a> {
         name: &'a str,
         arguments: Value,
     },
+    ToolResultAccepted {
+        protocol_version: u32,
+        request_id: &'a str,
+        call_id: &'a str,
+    },
     Completed {
         protocol_version: u32,
         request_id: &'a str,
@@ -202,19 +207,26 @@ async fn run() -> Result<(), RuntimeError> {
     // running. A dedicated reader thread keeps protocol replies independent of
     // the async executor that is driving the agent and its embedded runtime.
     let pending: PendingCalls = Arc::new(StdMutex::new(HashMap::new()));
+    let (outbound_sender, outbound_receiver) = mpsc::unbounded_channel();
+    let writer = tokio::spawn(write_outbound(outbound_receiver));
     let (run_sender, run_receiver) = oneshot::channel();
     let (input_error_sender, mut input_errors) = mpsc::unbounded_channel();
     let input_pending = Arc::clone(&pending);
+    let input_outbound = outbound_sender.clone();
     thread::Builder::new()
         .name("nanocodex-protocol-input".to_owned())
-        .spawn(move || read_protocol_input(input_pending, run_sender, input_error_sender))
+        .spawn(move || {
+            read_protocol_input(
+                input_pending,
+                input_outbound,
+                run_sender,
+                input_error_sender,
+            );
+        })
         .map_err(RuntimeError::Read)?;
     let request = run_receiver
         .await
         .map_err(|_| RuntimeError::MissingRunRequest)??;
-
-    let (outbound_sender, outbound_receiver) = mpsc::unbounded_channel();
-    let writer = tokio::spawn(write_outbound(outbound_receiver));
 
     let request_id: Arc<str> = request.request_id.clone().into();
     let agent = run_agent(*request, request_id, outbound_sender.clone(), pending);
@@ -348,6 +360,7 @@ async fn run_agent(
 
 fn read_protocol_input(
     pending: PendingCalls,
+    outbound: mpsc::UnboundedSender<Value>,
     run_sender: oneshot::Sender<Result<Box<RunRequest>, RuntimeError>>,
     input_error_sender: mpsc::UnboundedSender<RuntimeError>,
 ) {
@@ -375,6 +388,7 @@ fn read_protocol_input(
             return;
         }
     };
+    let request_id = request.request_id.clone();
     if run_sender.send(Ok(request)).is_err() {
         return;
     }
@@ -403,7 +417,21 @@ fn read_protocol_input(
                         process_trace: None,
                     };
                     let output = ToolOutput::from_wire(wire)?;
-                    let _ = sender.send(output);
+                    sender.send(output).map_err(|_| {
+                        RuntimeError::Nanocodex(format!(
+                            "tool result receiver closed before accepting call {call_id}"
+                        ))
+                    })?;
+                    let accepted = serde_json::to_value(OutboundMessage::ToolResultAccepted {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: &request_id,
+                        call_id: &call_id,
+                    })?;
+                    outbound.send(accepted).map_err(|_| {
+                        RuntimeError::Nanocodex(
+                            "protocol writer closed before acknowledging a tool result".to_owned(),
+                        )
+                    })?;
                 }
             }
             Ok(())
@@ -442,4 +470,62 @@ async fn write_stdout(message: &impl Serialize) -> Result<(), RuntimeError> {
     stdout.write_all(&encoded).await?;
     stdout.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nanocodex::tools::{ToolContext, runtime::ToolRuntime};
+    use serde_json::json;
+    use tokio::time::{Duration, timeout};
+
+    #[tokio::test]
+    async fn protocol_tool_result_resumes_nested_code_mode_call() {
+        let definition: ToolDefinition = serde_json::from_value(json!({
+            "type": "function",
+            "name": "lookup",
+            "description": "Return a value.",
+            "strict": false,
+            "parameters": { "type": "object", "properties": {} }
+        }))
+        .expect("valid tool definition");
+        let pending: PendingCalls = Arc::new(StdMutex::new(HashMap::new()));
+        let (outbound, mut calls) = mpsc::unbounded_channel();
+        let tools = Tools::builder()
+            .without_defaults()
+            .tool(ProtocolTool {
+                request_id: Arc::from("request-test"),
+                definition,
+                outbound,
+                pending: Arc::clone(&pending),
+            })
+            .build()
+            .expect("valid tools");
+        let runtime = ToolRuntime::new_with_tools(".", None, None, &tools);
+        let result_sender = tokio::spawn(async move {
+            let call = calls.recv().await.expect("protocol tool call");
+            let call_id = call["call_id"].as_str().expect("call id").to_owned();
+            let sent = pending_calls(&pending)
+                .remove(&call_id)
+                .expect("pending call")
+                .send(ToolOutput::text("bridge ok"));
+            assert!(sent.is_ok(), "active receiver");
+        });
+        let history = Vec::new();
+        let context =
+            ToolContext::new("gpt-5.6-sol", "session-test", "outer-call", &history, 1_000);
+        let execution = timeout(
+            Duration::from_secs(2),
+            runtime.execute_code(
+                "const value = await tools.lookup({}); text(value);",
+                context,
+            ),
+        )
+        .await
+        .expect("code mode completed");
+
+        result_sender.await.expect("result sender completed");
+        assert!(execution.success);
+        assert_eq!(execution.nested_calls.len(), 1);
+    }
 }

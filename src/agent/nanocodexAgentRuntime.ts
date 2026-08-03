@@ -185,6 +185,13 @@ async function runRetainedNanoCodexTurn(input: {
       onEvent: async (event) => {
         await recordNanoCodexEvent(ctx, event);
       },
+      onToolResultAccepted: async (callId) => {
+        await recordAgentEvent(ctx, {
+          eventName: "agent.nanocodex.tool_result_accepted",
+          summary: "NanoCodex accepted an application tool result.",
+          metadata: { callId },
+        });
+      },
       executeTool: async (call) => {
       const startedAt = Date.now();
       toolSequence += 1;

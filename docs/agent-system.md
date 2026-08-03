@@ -26,7 +26,7 @@ NanoCodex may request an action. The application decides whether that exact acti
 
 The generic runtime under `src/agent/` knows only the capability-session interface, prompt contributions, tool registry, typed results, and execution lifecycle. It does not import individual product features or branch on their tool names.
 
-`src/agent/nanocodexRuntime.ts` owns the versioned process protocol. Request IDs, protocol versions, and terminal results are validated. The native runtime consumes application tool results on a dedicated protocol-input thread so Code Mode cannot starve its own tool bridge; malformed or closed input fails the run visibly. Aborts terminate the process, and late tool calls still meet the application's abort and authority gates. Opaque NanoCodex snapshots are stored losslessly and resumed only when the session, model, instructions, and tool contract are compatible.
+`src/agent/nanocodexRuntime.ts` owns the versioned process protocol. Request IDs, protocol versions, and terminal results are validated. Application tool-result writes wait until the child-process pipe has flushed, and the native runtime acknowledges acceptance in the canonical runtime ledger. The native runtime consumes those results on a dedicated protocol-input thread so Code Mode cannot starve its own tool bridge; malformed or closed input fails the run visibly. Aborts terminate the process, and late tool calls still meet the application's abort and authority gates. Opaque NanoCodex snapshots are stored losslessly and resumed only when the session, model, instructions, and tool contract are compatible.
 
 ## Prompt construction
 

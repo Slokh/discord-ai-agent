@@ -83,6 +83,12 @@ type RuntimeOutput =
       arguments: unknown;
     }
   | {
+      type: "tool_result_accepted";
+      protocol_version: number;
+      request_id: string;
+      call_id: string;
+    }
+  | {
       type: "completed";
       protocol_version: number;
       request_id: string;
@@ -113,6 +119,7 @@ export async function runNanoCodexRuntime(input: {
   tools: FunctionToolDefinition[];
   executeTool: (call: { callId: string; name: string; arguments: unknown }) => Promise<NanoCodexRuntimeToolResult>;
   onEvent?: (event: NanoCodexRuntimeEvent) => void | Promise<void>;
+  onToolResultAccepted?: (callId: string) => void | Promise<void>;
   onProgress?: () => void;
   abortSignal?: AbortSignal;
   processCwd?: string;
@@ -148,11 +155,12 @@ export async function runNanoCodexRuntime(input: {
       operation();
     };
     const fail = (error: unknown) => finish(() => reject(error instanceof Error ? error : new Error(String(error))));
-    const send = (message: unknown) => {
-      if (!child.stdin.write(`${JSON.stringify(message)}\n`)) {
-        child.stdin.once("drain", input.onProgress ?? (() => {}));
-      }
-    };
+    const send = async (message: unknown) => await new Promise<void>((resolveSend, rejectSend) => {
+      child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+        if (error) rejectSend(error);
+        else resolveSend();
+      });
+    });
 
     lines.on("line", (line) => {
       queue = queue.then(async () => {
@@ -163,7 +171,7 @@ export async function runNanoCodexRuntime(input: {
           case "ready":
             if (started) throw new Error("NanoCodex runtime emitted ready more than once");
             started = true;
-            send(runInput(input));
+            await send(runInput(input));
             return;
           case "event":
             assertRequestId(input.requestId, message.request_id);
@@ -186,7 +194,7 @@ export async function runNanoCodexRuntime(input: {
               name: message.name,
               arguments: message.arguments,
             });
-            send({
+            await send({
               type: "tool_result",
               call_id: message.call_id,
               success: result.success,
@@ -196,6 +204,17 @@ export async function runNanoCodexRuntime(input: {
             });
             return;
           }
+          case "tool_result_accepted":
+            assertRequestId(input.requestId, message.request_id);
+            eventQueue = eventQueue.then(async () => {
+              if (eventFailure) return;
+              try {
+                await input.onToolResultAccepted?.(message.call_id);
+              } catch (error) {
+                eventFailure = error;
+              }
+            });
+            return;
           case "completed":
             assertRequestId(input.requestId, message.request_id);
             await eventQueue;

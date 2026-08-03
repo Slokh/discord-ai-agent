@@ -23,6 +23,7 @@ Focused repositories under `src/db/` own persistence:
 | Retrieval and aggregates | `retrievalRepository.ts`, `retrievalStatsRepository.ts` |
 | Embedding queue and vectors | `embeddingRepository.ts` |
 | Conversation continuity and compaction | `conversationMemoryRepository.ts`, `conversationCompaction.ts` |
+| Human run review and private regression contracts | `agent_run_feedback` through `repositories.ts` |
 | Final Discord rendering obligations | `deliveryObligationsRepository.ts` |
 | Bug markers and automated reports | `discordBugMarkerRepository.ts`, `discordBugReportRepository.ts` |
 | Components V2 actions | `discordComponentActionRepository.ts` |
@@ -102,6 +103,8 @@ Tracked files contain neutral behavior only. Private data lives in:
 - Postgres for server overlays, Discord content, aliases, bug markers, model settings, traces, and memory.
 
 `npm run scan:release` rejects secret-shaped values, private markers, and real-looking Discord identifiers in tracked content. Never paste production prompt artifacts, member names, message links, dumps, or eval cases into public GitHub metadata.
+
+Run feedback stores reviewer rating, failure classification, expected behavior, and optional observable assertions. Capture-enabled rows export to `.discord-ai-agent/evals/`; private prompts and requester/channel coordinates never enter tracked fixtures. The feedback table is the durable source, while exported JSON is a disposable local projection used by the eval runner.
 
 ## Migrations and consistency
 

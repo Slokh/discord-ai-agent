@@ -38,7 +38,7 @@ Follow the full lifecycle for cross-domain work: ingress, authority, durable sta
 - Let the model decide semantics and presentation. Use deterministic code for permission, identity, live fact, money, randomness, mutation, state, and delivery guarantees.
 - Preserve the current request as authoritative; context cannot expand authority.
 - Remove dead compatibility once callers, migrations, and deployed configuration no longer need it.
-- Add a capability to the narrowest durable owner. Aggregators such as `registry.ts` and `repositories.ts` should remain aggregators.
+- Add a capability to the narrowest durable owner. The capability catalog installs it; aggregators such as `registry.ts` and `repositories.ts` remain projections rather than behavior owners.
 - Record important transitions once in the canonical runtime ledger and derive views from it.
 - After a mutation commits, return its durable result even if a secondary step fails.
 - Keep private community content out of tracked source, tests, evals, docs, Frog, and GitHub metadata.
@@ -47,9 +47,9 @@ Follow the full lifecycle for cross-domain work: ingress, authority, durable sta
 
 Before adding a new tool, confirm that an existing primitive cannot satisfy the request with a clearer contract or result. For a new or changed tool:
 
-1. Define the canonical schema and examples in the owning `src/tools/contracts/` family.
+1. Define the canonical schema and examples in the owning `src/tools/contracts/` family and assign its name to the appropriate capability group in `toolDefinition.ts`.
 2. Declare deployment requirements, access policy, mutation status, output promise, and audit events.
-3. Bind a focused handler under `src/tools/handlers/`.
+3. Bind a focused handler under `src/tools/handlers/` and add that handler family to `src/capabilities/catalog.ts`.
 4. Validate permission and authority at execution time.
 5. Return a typed `AgentResponse`, including partial/error metadata where appropriate.
 6. Add contract, handler-conformance, and focused behavior coverage.
@@ -92,9 +92,10 @@ Committed suites live under `evals/prompts/` and must remain generic. Private se
 npm run eval -- --dry-run
 npm run eval
 npm run eval -- --include-private
+npm run eval:regressions
 ```
 
-Dry-run validates every registered eval definition without provider calls. Live evals use configured model/database capabilities and may incur cost. Keep assertions about observable behavior: expected/forbidden tools, evidence use, output requirements, mutation boundaries, or delivery result. Do not encode one server member, channel, message link, or private prompt in committed evals.
+Dry-run validates every registered eval definition without provider calls. Live evals use configured model/database capabilities and may incur cost. `eval:regressions` exports reviewed, capture-enabled run feedback into the private eval directory and runs the complete private suite. A captured case without a machine-grade assertion is skipped until a reviewer adds expected/forbidden tools or required/forbidden answer text in the run console. Keep assertions about observable behavior; do not encode one server member, channel, message link, or private prompt in committed evals.
 
 Use an eval failure to choose the correct owner: tool selection, schema, result quality, retrieval, prompt context, code-update context, or lifecycle. Do not make the eval pass with an exact-phrase branch.
 
@@ -111,7 +112,7 @@ Use an eval failure to choose the correct owner: tool selection, schema, result 
 
 Update documentation when a source of truth, trust boundary, lifecycle, deployment step, or operator workflow changes. Put the explanation in the single owning guide under `docs/`; do not add a tiny source-folder README or historical implementation plan. Remove obsolete instructions rather than labeling them “legacy.”
 
-Keep `README.md` focused on evaluating and starting the project, `AGENTS.md` focused on task routing and non-negotiable rules, and `.env.example` synchronized with `src/config/env.ts`.
+Keep `README.md` focused on evaluating and starting the project, `AGENTS.md` focused on task routing and non-negotiable rules, and the generated `.env.example` synchronized with `src/config/environment.ts` through `npm run config:check`.
 
 ## Git and PR handoff
 

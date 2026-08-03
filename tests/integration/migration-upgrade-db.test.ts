@@ -134,6 +134,27 @@ describe.skipIf(!runDbTests)("forward migration upgrades", () => {
       `)).resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ version: "2" })] }));
       await expect(client.query("SELECT count(*)::int AS count FROM agent_runtime_artifact_chunks WHERE artifact_id = 'legacy-envelope'"))
         .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ count: 1 })] }));
+      for (const version of [
+        "027_discord_bug_reports",
+        "028_nanocodex_runtime_defaults",
+        "029_remove_sandbox_leases",
+        "030_run_feedback_regression_contract",
+      ]) {
+        await client.query(await readFile(path.resolve(`migrations/${version}.sql`), "utf8"));
+      }
+      await client.query(`
+        UPDATE agent_run_feedback
+        SET failure_mode = 'wrong_tool', expected_tools = ARRAY['searchDiscordHistory'],
+            forbidden_tools = ARRAY['transferWalletFunds'], must_contain = ARRAY['source']
+        WHERE run_id = 'execution'
+      `);
+      await expect(client.query("SELECT failure_mode, expected_tools, forbidden_tools, must_contain FROM agent_run_feedback WHERE run_id = 'execution'"))
+        .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({
+          failure_mode: "wrong_tool",
+          expected_tools: ["searchDiscordHistory"],
+          forbidden_tools: ["transferWalletFunds"],
+          must_contain: ["source"],
+        })] }));
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

@@ -4,7 +4,7 @@ import { inspectAgentLogs, reportStatus } from "../discordOpsTools.js";
 import { getSpendSummary } from "../spendTools.js";
 import { cleanToolResponse } from "../responseFormatting.js";
 import { stringArgument, numberArgument } from "./arguments.js";
-import type { ToolName } from "../registry.js";
+import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const opsToolHandlers = {

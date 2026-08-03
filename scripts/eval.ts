@@ -20,6 +20,7 @@ const evalPromptSchema = z.object({
   prompt: z.string().min(1),
   notes: z.string().optional(),
   expectedTools: z.array(z.string().min(1)).default([]),
+  forbiddenTools: z.array(z.string().min(1)).default([]),
   expectedRequestedTools: z.array(z.string().min(1)).default([]),
   mustContain: z.array(z.string().min(1)).default([]),
   mustNotContain: z.array(z.string().min(1)).default([]),
@@ -54,7 +55,9 @@ const evalPromptSchema = z.object({
 const evalSuiteSchema = z.object({
   version: z.literal(1),
   name: z.string().min(1),
-  prompts: z.array(evalPromptSchema).min(1)
+  // A fresh deployment may have no reviewed production cases yet. Keeping an
+  // empty generated suite valid makes the private regression loop composable.
+  prompts: z.array(evalPromptSchema)
 });
 
 export type EvalPrompt = z.infer<typeof evalPromptSchema>;
@@ -280,7 +283,7 @@ export async function loadEvalPrompts(args: Pick<EvalArgs, "files" | "dirs">): P
 
 export function validateEvalToolNames(prompts: EvalPrompt[], source = "eval suite"): void {
   for (const prompt of prompts) {
-    for (const name of [...prompt.expectedTools, ...prompt.expectedRequestedTools]) {
+    for (const name of [...prompt.expectedTools, ...prompt.forbiddenTools, ...prompt.expectedRequestedTools]) {
       if (!KNOWN_EVAL_TOOLS.has(name)) {
         throw new Error(`Unknown eval tool ${name} in ${prompt.id} (${source})`);
       }
@@ -430,6 +433,9 @@ export function evaluatePromptAssertions(
 
   for (const tool of prompt.expectedTools) {
     if (!observedTools.has(tool)) failures.push(`expected tool ${tool} was not observed`);
+  }
+  for (const tool of prompt.forbiddenTools) {
+    if (observedTools.has(tool)) failures.push(`forbidden tool ${tool} was observed`);
   }
   for (const tool of prompt.expectedRequestedTools) {
     if (!requestedTools.has(tool)) failures.push(`expected requested tool ${tool} was not observed`);

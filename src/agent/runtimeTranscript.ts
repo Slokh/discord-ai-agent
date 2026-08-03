@@ -1,6 +1,6 @@
 import type { AgentResponse } from "../tools/types.js";
 import type { ToolContext } from "../tools/types.js";
-import type { ToolName } from "../tools/registry.js";
+import type { ToolName } from "../tools/toolDefinition.js";
 import { logger } from "../util/logger.js";
 
 type TraceInput = Parameters<ToolContext["repo"]["recordTraceEvent"]>[0];

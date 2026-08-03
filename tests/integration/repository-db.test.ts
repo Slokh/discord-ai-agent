@@ -1687,7 +1687,7 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       userId,
       taskType: "code_update",
       title: "metrics test",
-      request: "measure cache",
+      request: "measure task timing",
       requestedBy: "test",
       backend: "kubernetes-sandbox"
     });
@@ -1719,20 +1719,12 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
       statusMessage: "Finished repo.",
       metadata: { durationMs: 120 }
     });
-    await repo.markAgentTaskProgress({
-      taskId,
-      step: "dependency_cache_hit",
-      statusMessage: "Restored dependencies.",
-      metadata: { cacheType: "dependencies", cacheStatus: "hit" }
-    });
-
     await expect(repo.getAgentTaskMetrics()).resolves.toEqual(
       expect.objectContaining({
         agentTaskBacklog: expect.arrayContaining([
           expect.objectContaining({ backend: "kubernetes-sandbox", status: "queued", count: 1, oldestAgeSeconds: expect.any(Number) })
         ]),
-        taskPhaseDurations: expect.arrayContaining([expect.objectContaining({ phase: "repo", count: 1, avgMs: 120, maxMs: 120 })]),
-        sandboxCacheEvents: expect.arrayContaining([expect.objectContaining({ cacheType: "dependencies", cacheStatus: "hit", count: 1 })])
+        taskPhaseDurations: expect.arrayContaining([expect.objectContaining({ phase: "repo", count: 1, avgMs: 120, maxMs: 120 })])
       })
     );
   });
@@ -2389,7 +2381,9 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
     const busyChannelId = `channel-${randomUUID()}`;
     const quietChannelId = `channel-${randomUUID()}`;
     const userId = `user-${randomUUID()}`;
-    const createdAt = new Date(Date.now() - 60_000);
+    // Keep both fixtures on an unambiguous UTC day; relative-to-now timestamps
+    // make this assertion flaky when CI crosses midnight between the two rows.
+    const createdAt = new Date("2025-01-15T12:00:00.000Z");
 
     await repo.upsertGuild({ id: guildId, name: "test" });
     await repo.upsertChannel({ id: busyChannelId, guildId, name: "busy", type: 0 });
@@ -3134,10 +3128,34 @@ describe.skipIf(!runDbTests)("DiscordAiAgentRepository database behavior", () =>
 
   it("stores review feedback and marks private eval captures", async () => {
     const runId = `run-${randomUUID()}`;
-    await expect(repo.upsertRunFeedback({ runId, rating: "bad", note: "Missed the source", expectedBehavior: "Search first", captureEval: true })).resolves.toEqual(
-      expect.objectContaining({ runId, rating: "bad", captureEval: true })
+    await expect(repo.upsertRunFeedback({
+      runId,
+      rating: "bad",
+      note: "Missed the source",
+      expectedBehavior: "Search first",
+      failureMode: "missing_evidence",
+      expectedTools: ["searchDiscordHistory"],
+      forbiddenTools: ["transferWalletFunds"],
+      mustContain: ["source"],
+      mustNotContain: ["I cannot"],
+      captureEval: true,
+    })).resolves.toEqual(
+      expect.objectContaining({ runId, rating: "bad", failureMode: "missing_evidence", expectedTools: ["searchDiscordHistory"], captureEval: true })
     );
-    await expect(repo.getRunFeedback(runId)).resolves.toEqual(expect.objectContaining({ note: "Missed the source", expectedBehavior: "Search first" }));
+    await expect(repo.getRunFeedback(runId)).resolves.toEqual(expect.objectContaining({
+      note: "Missed the source",
+      expectedBehavior: "Search first",
+      forbiddenTools: ["transferWalletFunds"],
+      mustContain: ["source"],
+      mustNotContain: ["I cannot"],
+    }));
+    await expect(repo.captureRunFeedbackForEval({ runId, note: "Automatic marker" })).resolves.toEqual(expect.objectContaining({
+      rating: "bad",
+      failureMode: "missing_evidence",
+      expectedTools: ["searchDiscordHistory"],
+      forbiddenTools: ["transferWalletFunds"],
+      captureEval: true,
+    }));
   });
 
   it("binds, scopes, and transactionally consumes Discord component actions", async () => {

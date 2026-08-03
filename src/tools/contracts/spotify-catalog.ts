@@ -1,6 +1,7 @@
-import { defineTool, type ToolRegistryEntry } from "../toolDefinition.js";
+import { spotifyAvailable } from "../../capabilities/spotify.js";
+import { defineTool, installToolsWhen, type ToolRegistryEntry } from "../toolDefinition.js";
 
-export const spotifyCatalogToolContracts = [
+export const spotifyCatalogToolContracts = installToolsWhen(spotifyAvailable, [
   defineTool({
     name: "searchSpotify",
     examples: ["@ai search Spotify for Running Up That Hill"],
@@ -64,4 +65,4 @@ export const spotifyCatalogToolContracts = [
       additionalProperties: false
     }
   }),
-] satisfies ToolRegistryEntry[];
+] satisfies ToolRegistryEntry[]);

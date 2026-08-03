@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SOURCE_LINE_LIMIT = 800;
+const SOURCE_LINE_LIMIT = 775;
 
 const requiredArchitectureGuides = [
   "docs/README.md",
   "docs/product.md",
   "docs/architecture.md",
+  "docs/configuration.md",
   "docs/agent-system.md",
   "docs/data.md",
   "docs/payments.md",
@@ -87,6 +88,16 @@ describe("architecture guardrails", () => {
         expect(content, `${path.relative(process.cwd(), file)} should not import ${importPath}`).not.toContain(importPath);
       }
     }
+  });
+
+  it("uses one installed capability composition root", async () => {
+    const catalog = await fs.readFile(path.join(process.cwd(), "src/capabilities/catalog.ts"), "utf8");
+    expect(catalog).toContain("installedCapabilities");
+    expect(catalog).toContain("installedToolContracts");
+    expect(catalog).toContain("installedToolHandlers");
+    const registry = await fs.readFile(path.join(process.cwd(), "src/tools/registry.ts"), "utf8");
+    expect(registry).toContain("capabilities/toolContracts");
+    expect(registry).not.toContain("contracts/index");
   });
 
   it("keeps relative source imports acyclic", async () => {

@@ -6,7 +6,7 @@ import { getDiscordChannelTopics, summarizeCurrentThread, summarizeDiscordHistor
 import { getAgentMemoryStats, getRecentAgentMemory } from "../agentMemoryTools.js";
 import { cleanToolResponse } from "../responseFormatting.js";
 import { stringArgument, stringArgumentPreservingEmpty, stringArrayArgument, enumArgument, numberArgument, booleanArgument } from "./arguments.js";
-import type { ToolName } from "../registry.js";
+import type { ToolName } from "../toolDefinition.js";
 import type { LocalToolHandler } from "./types.js";
 
 export const discordRetrievalToolHandlers = {

@@ -42,6 +42,11 @@ export async function automateDiscordBugReport(input: {
   });
   if (!created.created) return "duplicate" as const;
 
+  await input.repo.captureRunFeedbackForEval({
+    runId: execution.executionId,
+    note: "Captured automatically from a private Discord bug marker.",
+  }).catch((error) => logger.warn({ err: error, executionId: execution.executionId }, "Failed to capture bug-marked run for private evals"));
+
   try {
     const session = await input.agentRuntime.getSession({ sessionId: execution.sessionId });
     if (!session) throw new Error("The original AI run is no longer available for validation.");

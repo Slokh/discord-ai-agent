@@ -2,6 +2,7 @@ import "dotenv/config";
 import { existsSync } from "node:fs";
 import { z } from "zod";
 import { parseGitHubRepository } from "../github/repository.js";
+import { assertNoRetiredEnvironmentVariables, environmentVariableNames } from "./environment.js";
 
 type ProcessRole = "all" | "api" | "bot" | "worker";
 const PUBLIC_REPOSITORY_URL = "https://github.com/Slokh/discord-ai-agent";
@@ -92,9 +93,23 @@ const envSchema = z.object({
   SANDBOX_IMAGE: z.string().trim().optional()
 });
 
+const runtimeEnvironmentSchemaNames = new Set(Object.keys(envSchema.shape));
+const missingManifestVariables = [...runtimeEnvironmentSchemaNames].filter((name) => !environmentVariableNames.has(name));
+const unusedManifestVariables = [...environmentVariableNames].filter((name) => !runtimeEnvironmentSchemaNames.has(name));
+if (missingManifestVariables.length || unusedManifestVariables.length) {
+  throw new Error(
+    `Environment manifest/schema mismatch (missing from manifest: ${missingManifestVariables.join(", ") || "none"}; ` +
+    `missing from runtime schema: ${unusedManifestVariables.join(", ") || "none"}).`,
+  );
+}
+
 export type AppConfig = ReturnType<typeof loadConfig>;
 
 export function loadConfig() {
+  // Production must surface stale deployment configuration. Local shells may
+  // still carry old dotenv keys while developers migrate; those keys are not
+  // parsed and therefore cannot change runtime behavior.
+  if (process.env.NODE_ENV === "production") assertNoRetiredEnvironmentVariables(process.env);
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const formatted = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n");
@@ -147,7 +162,6 @@ export function loadConfig() {
     internalApi: { host: productConfig.control.host, port: productConfig.control.port },
     controlUi: { authPassword: env.CONTROL_UI_AUTH_PASSWORD, publicUrl: env.CONTROL_UI_PUBLIC_URL?.replace(/\/$/, "") || null },
     execution: {
-      controlPlaneInternalUrl: productConfig.control.internalUrl,
       taskSigningSecret: env.TASK_SIGNING_SECRET,
       sandbox: { taskTimeoutSeconds: productConfig.sandbox.taskTimeoutSeconds },
       kubernetes: {

@@ -76,15 +76,45 @@ export function createAppDatabase(pool: DbPool) {
       rating: "good" | "bad";
       note?: string | null;
       expectedBehavior?: string | null;
+      failureMode?: AgentRunFeedback["failureMode"];
+      expectedTools?: string[];
+      forbiddenTools?: string[];
+      mustContain?: string[];
+      mustNotContain?: string[];
       captureEval?: boolean;
     }): Promise<AgentRunFeedback> {
       const result = await pool.query(
-        `INSERT INTO agent_run_feedback(run_id, rating, note, expected_behavior, capture_eval)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO agent_run_feedback(
+           run_id, rating, note, expected_behavior, failure_mode,
+           expected_tools, forbidden_tools, must_contain, must_not_contain, capture_eval
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT(run_id) DO UPDATE SET rating = EXCLUDED.rating, note = EXCLUDED.note,
-           expected_behavior = EXCLUDED.expected_behavior, capture_eval = EXCLUDED.capture_eval, updated_at = now()
+           expected_behavior = EXCLUDED.expected_behavior, failure_mode = EXCLUDED.failure_mode,
+           expected_tools = EXCLUDED.expected_tools, forbidden_tools = EXCLUDED.forbidden_tools,
+           must_contain = EXCLUDED.must_contain, must_not_contain = EXCLUDED.must_not_contain,
+           capture_eval = EXCLUDED.capture_eval, updated_at = now()
          RETURNING *`,
-        [input.runId, input.rating, input.note ?? null, input.expectedBehavior ?? null, Boolean(input.captureEval)]
+        [
+          input.runId, input.rating, input.note ?? null, input.expectedBehavior ?? null, input.failureMode ?? null,
+          input.expectedTools ?? [], input.forbiddenTools ?? [], input.mustContain ?? [], input.mustNotContain ?? [],
+          Boolean(input.captureEval),
+        ]
+      );
+      return rowToRunFeedback(result.rows[0]);
+    },
+    async captureRunFeedbackForEval(input: { runId: string; note: string }): Promise<AgentRunFeedback> {
+      const result = await pool.query(
+        `INSERT INTO agent_run_feedback(run_id, rating, note, failure_mode, capture_eval)
+         VALUES ($1, 'bad', $2, 'other', true)
+         ON CONFLICT(run_id) DO UPDATE SET
+           rating = 'bad',
+           note = coalesce(agent_run_feedback.note, EXCLUDED.note),
+           failure_mode = coalesce(agent_run_feedback.failure_mode, EXCLUDED.failure_mode),
+           capture_eval = true,
+           updated_at = now()
+         RETURNING *`,
+        [input.runId, input.note],
       );
       return rowToRunFeedback(result.rows[0]);
     }
@@ -100,8 +130,17 @@ function rowToRunFeedback(row: any): AgentRunFeedback {
     rating: String(row.rating) as AgentRunFeedback["rating"],
     note: row.note == null ? null : String(row.note),
     expectedBehavior: row.expected_behavior == null ? null : String(row.expected_behavior),
+    failureMode: row.failure_mode == null ? null : String(row.failure_mode) as AgentRunFeedback["failureMode"],
+    expectedTools: stringList(row.expected_tools),
+    forbiddenTools: stringList(row.forbidden_tools),
+    mustContain: stringList(row.must_contain),
+    mustNotContain: stringList(row.must_not_contain),
     captureEval: Boolean(row.capture_eval),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at)
   };
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }

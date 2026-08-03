@@ -19,6 +19,7 @@ Then open only the guide that owns the change:
 | Wallets, transfers, wagers, games, randomness | [Payments and games](payments.md) |
 | Code-update tasks, sandboxes, GitHub publication | [Code updates](code-updates.md) |
 | Local setup, deployment, console, production debugging | [Operations](operations.md) |
+| Accepted environment variables and their ownership | [Configuration](configuration.md) |
 
 ## Guide contracts
 
@@ -29,6 +30,7 @@ Then open only the guide that owns the change:
 - [Payments and games](payments.md) explains managed wallets, transfer authority, receipt verification, wager state, settlement, and provable RNG.
 - [Code updates](code-updates.md) explains how a conversational request becomes a sandboxed, verified pull request.
 - [Operations](operations.md) explains configuration, process roles, local and Kubernetes operation, observability, and incident investigation.
+- [Configuration](configuration.md) is generated from the runtime manifest and lists every accepted deployment variable.
 - [Development](development.md) explains how agents should navigate, change, test, evaluate, and document the repository.
 
 ## Documentation rules

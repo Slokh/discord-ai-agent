@@ -13,7 +13,7 @@ import type { DiscordCrawler } from "./crawler.js";
 import { persistDiscordMessage } from "./messagePersistence.js";
 import { sweepDiscordDeliveryObligations } from "./deliverySweep.js";
 import { handleMessageCreate, queueIncomingMessageEmbedding } from "./messageIngress.js";
-import { handleRegenerateReplyReaction, handleUndoCrossReaction, persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
+import { handleUndoCrossReaction, persistReactionMessage, persistReactionMessageUpdate } from "./reactions.js";
 import { clearDiscordBugMarkersForMessage, clearDiscordBugMarkersForReaction, handleDiscordBugMarkerReaction } from "./bugMarkerReaction.js";
 import { deletedMessageIdsForConfiguredGuild, isSelfMessage, isSelfUser, shouldProcessGuildEvent } from "./mentionParsing.js";
 import { discordMessageTraceContext, recordTraceEvent } from "./requestContext.js";
@@ -184,9 +184,6 @@ export function createDiscordAiAgentBot(input: {
         }),
         handleDiscordBugMarkerReaction({ ...input, botUserId: client.user?.id }, reaction, user, true).catch((error) => {
           logger.warn({ err: error }, "Failed to add Discord bug marker");
-        }),
-        handleRegenerateReplyReaction(input, client, reaction, user).catch((error) => {
-          logger.warn({ err: error }, "Failed to handle regenerate reply reaction");
         })
       ]);
     }),

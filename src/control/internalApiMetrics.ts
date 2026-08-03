@@ -6,6 +6,9 @@ export async function renderMetrics(repo: DiscordAiAgentRepository) {
     repo.getAgentTaskMetrics(),
   ]);
   const runtimeTelemetry = health.runtimeTelemetry ?? [];
+  const answerQuality = health.answerQuality ?? [];
+  const toolQuality = health.toolQuality ?? [];
+  const feedbackQuality = health.feedbackQuality ?? [];
   const lines = [
     "# HELP discord_ai_agent_messages_indexed Indexed non-deleted Discord messages.",
     "# TYPE discord_ai_agent_messages_indexed gauge",
@@ -58,6 +61,27 @@ export async function renderMetrics(repo: DiscordAiAgentRepository) {
       `discord_ai_agent_runtime_tokens{category=${quoteMetricLabel(row.category)},type="cached_input"} ${row.cachedInputTokens}`,
       `discord_ai_agent_runtime_tokens{category=${quoteMetricLabel(row.category)},type="output"} ${row.outputTokens}`,
     ]),
+    "# HELP discord_ai_agent_answers_total Chat executions in the last 24 hours by model, revision, and terminal status.",
+    "# TYPE discord_ai_agent_answers_total gauge",
+    ...answerQuality.map((row) => `discord_ai_agent_answers_total{model=${quoteMetricLabel(row.model)},revision=${quoteMetricLabel(row.revision)},status=${quoteMetricLabel(row.status)}} ${row.count}`),
+    "# HELP discord_ai_agent_answer_duration_ms Chat execution latency in the last 24 hours by model, revision, and status.",
+    "# TYPE discord_ai_agent_answer_duration_ms summary",
+    ...answerQuality.flatMap((row) => [
+      `discord_ai_agent_answer_duration_ms_sum{model=${quoteMetricLabel(row.model)},revision=${quoteMetricLabel(row.revision)},status=${quoteMetricLabel(row.status)}} ${row.durationSumMs}`,
+      `discord_ai_agent_answer_duration_ms_count{model=${quoteMetricLabel(row.model)},revision=${quoteMetricLabel(row.revision)},status=${quoteMetricLabel(row.status)}} ${row.durationCount}`,
+    ]),
+    "# HELP discord_ai_agent_answer_cost_usd Estimated chat cost in the last 24 hours by model, revision, and status.",
+    "# TYPE discord_ai_agent_answer_cost_usd gauge",
+    ...answerQuality.map((row) => `discord_ai_agent_answer_cost_usd{model=${quoteMetricLabel(row.model)},revision=${quoteMetricLabel(row.revision)},status=${quoteMetricLabel(row.status)}} ${row.estimatedCostUsd}`),
+    "# HELP discord_ai_agent_tool_results_total Tool results in the last 24 hours by tool and typed status.",
+    "# TYPE discord_ai_agent_tool_results_total gauge",
+    ...toolQuality.map((row) => `discord_ai_agent_tool_results_total{tool=${quoteMetricLabel(row.toolName)},status=${quoteMetricLabel(row.status)}} ${row.count}`),
+    "# HELP discord_ai_agent_feedback_total Reviewed runs in the last 30 days by rating and failure mode.",
+    "# TYPE discord_ai_agent_feedback_total gauge",
+    ...feedbackQuality.map((row) => `discord_ai_agent_feedback_total{rating=${quoteMetricLabel(row.rating)},failure_mode=${quoteMetricLabel(row.failureMode)}} ${row.count}`),
+    "# HELP discord_ai_agent_delivery_recoveries_total Pending Discord responses recovered in the last 24 hours.",
+    "# TYPE discord_ai_agent_delivery_recoveries_total gauge",
+    `discord_ai_agent_delivery_recoveries_total ${health.deliveryRecoveries ?? 0}`,
     "# HELP discord_ai_agent_agent_tasks_total Agent tasks by status.",
     "# TYPE discord_ai_agent_agent_tasks_total gauge",
     ...taskMetrics.tasksByStatus.map(
@@ -95,14 +119,6 @@ export async function renderMetrics(repo: DiscordAiAgentRepository) {
     ...taskMetrics.taskPhaseDurations.map(
       (row) =>
         `discord_ai_agent_task_phase_duration_max_ms{phase=${quoteMetricLabel(row.phase)}} ${row.maxMs}`,
-    ),
-    "# HELP discord_ai_agent_sandbox_cache_events_total Sandbox cache hit/miss events by cache type.",
-    "# TYPE discord_ai_agent_sandbox_cache_events_total counter",
-    ...taskMetrics.sandboxCacheEvents.map(
-      (row) =>
-        `discord_ai_agent_sandbox_cache_events_total{cache_type=${quoteMetricLabel(row.cacheType)},cache_status=${quoteMetricLabel(
-          row.cacheStatus,
-        )}} ${row.count}`,
     ),
   ];
   return `${lines.join("\n")}\n`;

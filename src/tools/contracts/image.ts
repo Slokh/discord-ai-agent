@@ -73,9 +73,6 @@ export const imageToolContracts = [
       "Generate an image, or create an edited/modified version using reference images from the current Discord request, reply context, or explicit URLs. Use this for explicit make/draw/generate/regenerate requests and edits like 'make this into...', 'modify this', or 'use the attached image as a reference'. When the requested image must visibly contain exact words, names, labels, punctuation, or numbers, put every verbatim string in requiredText so the result is visually validated and corrected once before delivery. Do not call it for diagnosis-only questions such as why an image has a background or what format it uses unless the user also asks to change or regenerate the image. For emojis, stickers, cutouts, or background removal, explicitly request background=transparent and outputFormat=png. Set aspectRatio from the requested composition; the tool does not infer omitted controls.",
     mutates: false,
     group: "image",
-    accessPolicy: "configured_ops",
-    accessPolicyEnabled: (config) => Boolean(config.allowlists?.imageToolsAllowlistOnly),
-    accessDeniedMessage: "Image generation is restricted to the bot owner or configured allowlist.",
     parameters: {
       type: "object",
       properties: {

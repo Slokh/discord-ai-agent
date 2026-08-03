@@ -137,19 +137,16 @@ async function runCodegenSmokeCase(input: { args: SmokeArgs; config: ReturnType<
       TASK_TITLE: args.title,
       TASK_REQUEST: args.request,
       REQUESTED_BY: "local codegen smoke",
-      CONTROL_PLANE_INTERNAL_URL: controlPlaneInternalUrl,
       AGENT_TASK_TOKEN: taskToken,
       GITHUB_TOKEN: githubToken,
-      GITHUB_REPOSITORY: config.github.repository,
-      GITHUB_BASE_BRANCH: config.github.baseBranch,
       OPENROUTER_API_KEY: config.openRouter.apiKey,
-      OPENROUTER_BASE_URL: config.openRouter.baseUrl,
-      OPENROUTER_CODEGEN_MODEL: args.model,
-      SANDBOX_CACHE_DIR: cacheDir,
       SANDBOX_STARTED_AT_MS: String(Date.now()),
       NODE_ENV: "production"
     },
-    useBuiltRunner: args.useBuiltRunner
+    useBuiltRunner: args.useBuiltRunner,
+    model: args.model,
+    controlUrl: controlPlaneInternalUrl,
+    cacheDir,
   });
 
   const timeout = setTimeout(() => {
@@ -323,11 +320,11 @@ export function formatSmokeSuiteSummary(input: {
   return lines.join("\n");
 }
 
-function spawnRunner(input: { env: NodeJS.ProcessEnv; useBuiltRunner: boolean }) {
+function spawnRunner(input: { env: NodeJS.ProcessEnv; useBuiltRunner: boolean; model: string; controlUrl: string; cacheDir: string }) {
   const command = process.execPath;
   const runnerArgs = input.useBuiltRunner
-    ? ["dist/src/execution/sandboxRunner.js"]
-    : [path.resolve("node_modules/tsx/dist/cli.mjs"), "src/execution/sandboxRunner.ts"];
+    ? ["dist/src/execution/sandboxRunner.js", `--model=${input.model}`, `--control-url=${input.controlUrl}`, `--cache-dir=${input.cacheDir}`]
+    : [path.resolve("node_modules/tsx/dist/cli.mjs"), "src/execution/sandboxRunner.ts", `--model=${input.model}`, `--control-url=${input.controlUrl}`, `--cache-dir=${input.cacheDir}`];
   process.stdout.write(`$ ${command} ${runnerArgs.join(" ")}\n`);
   const child = spawn(command, runnerArgs, {
     cwd: process.cwd(),
@@ -537,7 +534,7 @@ export async function parseArgs(values: string[]): Promise<SmokeArgs> {
     : valueFor(values, "--request") ??
       "Make a tiny README.md wording change for a temporary local codegen smoke test. Keep it to one sentence and do not modify behavior.";
   return {
-    model: valueFor(values, "--model") ?? process.env.OPENROUTER_CODEGEN_MODEL ?? "openai/gpt-5.6-terra",
+    model: valueFor(values, "--model") ?? "openai/gpt-5.6-terra",
     title: valueFor(values, "--title") ?? "Local codegen smoke test",
     request,
     requestFile: requestFile ? path.resolve(requestFile) : undefined,

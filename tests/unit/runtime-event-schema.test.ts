@@ -54,5 +54,8 @@ describe("versioned runtime event metadata", () => {
   it("adds controlled category and phase dimensions", () => {
     expect(normalizeRuntimeEventMetadata({ eventName: "discord.mention.received" })).toEqual(expect.objectContaining({ schemaVersion: 1, category: "ingress", phase: "started" }));
     expect(normalizeRuntimeEventMetadata({ eventName: "retrieval.vector_sql.completed" })).toEqual(expect.objectContaining({ category: "retrieval", phase: "completed" }));
+    expect(normalizeRuntimeEventMetadata({ eventName: "agent.execution.context_ready" })).toEqual(expect.objectContaining({ category: "context", phase: "progress" }));
+    expect(normalizeRuntimeEventMetadata({ eventName: "unclassified.deliveryish.event" })).toEqual(expect.objectContaining({ category: "system", phase: "progress" }));
+    expect(normalizeRuntimeEventMetadata({ eventName: "custom.event", metadata: { phase: "failed" } })).toEqual(expect.objectContaining({ category: "system", phase: "failed" }));
   });
 });

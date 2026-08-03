@@ -87,9 +87,7 @@ export async function codeUpdatePullRequestMetadata(input: {
   try {
     const completion = await input.complete({ systemPrompt, userPrompt });
     const parsed = parsePullRequestMetadata(completion.content);
-    if (!parsed) {
-      return { ...fallback, fallbackReason: "metadata model returned an invalid or generic result" };
-    }
+    if (!parsed) return { ...fallback, fallbackReason: "metadata model returned an invalid result" };
     return {
       title: parsed.title,
       body: renderPullRequestBody(parsed.why, parsed.changes),
@@ -162,11 +160,8 @@ function parsePullRequestMetadata(content: string): { title: string; why: string
     : [];
   if (
     !title
-    || title.length < 8
     || !why
     || changes.length === 0
-    || genericMetadataText(title)
-    || genericMetadataText([why, ...changes].join(" "))
   ) return null;
   return { title: title.replace(/[.!?]+$/g, ""), why, changes };
 }
@@ -175,11 +170,6 @@ function singleLine(value: unknown, maxChars: number) {
   if (typeof value !== "string") return null;
   const normalized = value.replace(/^[-*#\s]+/, "").replace(/\s+/g, " ").trim();
   return normalized ? normalized.slice(0, maxChars).trimEnd() : null;
-}
-
-function genericMetadataText(value: string) {
-  return /\b(?:validate\s+(?:discord\s+)?bug report|discord bug report|agent update|implement(?:ed)? the requested (?:repository )?change|isolated (?:agent )?sandbox|task[- ]?\d+)\b/i.test(value)
-    || /\b\d{12,}\b/.test(value);
 }
 
 function boundedPublicDiff(diffPatch: string) {

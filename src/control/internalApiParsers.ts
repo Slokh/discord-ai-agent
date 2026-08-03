@@ -8,6 +8,7 @@ import type {
   AgentTaskProgressEvent,
 } from "../execution/types.js";
 import type { AgentRuntimeExecutionQueueInput } from "../agent/runtimeControlPlane.js";
+import { TOOL_NAMES } from "../tools/toolDefinition.js";
 
 const MAX_AGENT_RUNTIME_INPUT_LINES = 1000;
 const MAX_AGENT_RUNTIME_INPUT_LINE_BYTES = 1024 * 1024;
@@ -444,10 +445,41 @@ export function parseRunFeedbackBody(value: unknown) {
     typeof body.expectedBehavior === "string"
       ? body.expectedBehavior.trim().slice(0, 4000)
       : null;
+  const failureModes = ["wrong_answer", "unnecessary_refusal", "wrong_tool", "missing_evidence", "permission", "delivery", "latency", "other"] as const;
+  if (body.failureMode != null && body.failureMode !== "" && !failureModes.includes(body.failureMode as typeof failureModes[number])) {
+    throw new Error("Run feedback failure mode is not supported.");
+  }
+  const failureMode = typeof body.failureMode === "string" && failureModes.includes(body.failureMode as typeof failureModes[number])
+    ? body.failureMode as typeof failureModes[number]
+    : null;
+  const expectedTools = parseFeedbackLines(body.expectedTools);
+  const forbiddenTools = parseFeedbackLines(body.forbiddenTools);
+  validateFeedbackToolNames([...expectedTools, ...forbiddenTools]);
   return {
     rating: body.rating as "good" | "bad",
     note: note || null,
     expectedBehavior: expectedBehavior || null,
+    failureMode,
+    expectedTools,
+    forbiddenTools,
+    mustContain: parseFeedbackLines(body.mustContain),
+    mustNotContain: parseFeedbackLines(body.mustNotContain),
     captureEval: parseBooleanLike(body.captureEval),
   };
+}
+
+function validateFeedbackToolNames(names: string[]) {
+  const known = new Set<string>([
+    ...TOOL_NAMES,
+    "openrouter:web_search",
+    "openrouter:web_fetch",
+    "openrouter:datetime",
+  ]);
+  const unknown = names.filter((name) => !known.has(name));
+  if (unknown.length) throw new Error(`Run feedback contains unknown tools: ${unknown.join(", ")}.`);
+}
+
+function parseFeedbackLines(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? value.split("\n") : [];
+  return [...new Set(values.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))].slice(0, 50);
 }

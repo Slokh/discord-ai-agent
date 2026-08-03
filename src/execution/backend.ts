@@ -103,17 +103,10 @@ export class KubernetesExecutionBackend implements ExecutionBackend {
         SANDBOX_RUN_ID: sandboxRunId,
         TASK_TITLE: job.title,
         TASK_REQUEST: job.request,
-        BUG_REPORT_RESULT_PATH: `/tmp/${job.taskId}-bug-report-result.json`,
         REQUESTED_BY: job.requestedBy,
         TARGET_BRANCH: job.targetBranch ?? "",
         TARGET_PULL_REQUEST_NUMBER: job.targetPullRequestNumber == null ? "" : String(job.targetPullRequestNumber),
         TARGET_PULL_REQUEST_URL: job.targetPullRequestUrl ?? "",
-        CONTROL_PLANE_INTERNAL_URL: this.config.execution.controlPlaneInternalUrl,
-        GITHUB_REPOSITORY: this.config.github.repository,
-        GITHUB_BASE_BRANCH: this.config.github.baseBranch,
-        OPENROUTER_BASE_URL: this.config.openRouter.baseUrl,
-        OPENROUTER_CODEGEN_MODEL: this.config.openRouter.codegenModel,
-        SANDBOX_CACHE_DIR: "/tmp/discord-ai-agent-cache",
         SANDBOX_STARTED_AT_MS: String(Date.now())
       });
 

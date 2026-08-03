@@ -31,6 +31,7 @@ The design is model-led and code-governed: the model owns language, relevance, t
 - Optional Privy/Tempo managed wallets, transfers, wagers, and provable RNG
 - Sandboxed repository changes with verification, release scanning, and PR publication
 - Authenticated run console, typed runtime ledger, metrics, and recovery sweeps
+- Reviewed production feedback exported into a private executable regression suite
 
 ## Documentation
 
@@ -43,6 +44,7 @@ Start with the [documentation index](docs/README.md).
 - [Payments and games](docs/payments.md): wallets, transfers, wagers, and randomness
 - [Code updates](docs/code-updates.md): sandboxed repository work and GitHub publication
 - [Operations](docs/operations.md): setup, configuration, deployment, observability, and debugging
+- [Configuration](docs/configuration.md): generated accepted environment-variable contract
 - [Development](docs/development.md): investigation, implementation, tests, evals, and PR workflow
 
 Coding agents must also follow [AGENTS.md](AGENTS.md).

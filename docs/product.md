@@ -81,8 +81,9 @@ Randomness and wagers add two rules: exposure is reserved before entropy is cons
 2. A bad result is marked with `🐛` or investigated through its Discord link.
 3. The operator inspects the retained production run, including request, context, tools, typed outcomes, and delivery.
 4. A general fix is covered by the smallest useful test or eval.
-5. A code-update task or contributor opens a reviewable PR.
-6. CI, deployment evidence, and a Discord retest confirm the result.
+5. Review feedback records an observable failure mode and, where possible, executable expected/forbidden behavior in the private regression suite.
+6. A code-update task or contributor opens a reviewable PR.
+7. CI, the post-deploy capability canary, and a Discord retest confirm the result.
 
 Native bug markers are private and requester-scoped. Repository-development friction belongs in Frog. Neither private Discord content nor member identity belongs in public issues, PR bodies, fixtures, or docs.
 

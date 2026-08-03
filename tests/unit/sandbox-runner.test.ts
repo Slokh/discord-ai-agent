@@ -203,7 +203,7 @@ describe("sandboxRunner", () => {
     expect(capturedPrompt).toContain("diff sampled across changed files");
   });
 
-  it("falls back to changed source paths instead of bug-report metadata", async () => {
+  it("uses structurally valid diff-model metadata without phrase policing", async () => {
     const diffPatch = "diff --git a/src/agent/nanocodexAgentRuntime.ts b/src/agent/nanocodexAgentRuntime.ts\n+recovery";
     const fallback = deterministicPullRequestMetadata("1 file changed, 1 insertion(+)", diffPatch);
     expect(fallback.title).toBe("Improve NanoCodex agent runtime");
@@ -221,9 +221,8 @@ describe("sandboxRunner", () => {
       }),
     });
     expect(metadata).toEqual(expect.objectContaining({
-      title: "Improve NanoCodex agent runtime",
-      source: "deterministic_fallback",
-      fallbackReason: expect.stringContaining("generic"),
+      title: "Validate Discord bug report private-request-marker",
+      source: "diff_model",
     }));
 
     const genericBody = await codeUpdatePullRequestMetadata({
@@ -237,7 +236,7 @@ describe("sandboxRunner", () => {
         }),
       }),
     });
-    expect(genericBody.source).toBe("deterministic_fallback");
+    expect(genericBody.source).toBe("diff_model");
   });
 
   it("classifies terminal codegen failures with actionable next steps", () => {

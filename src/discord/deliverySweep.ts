@@ -117,6 +117,7 @@ async function sweepOne(input: SweepInput, obligation: DiscordDeliveryObligation
   }
   if (decision.action === "deliver") {
     await input.obligations.markDelivered({ executionId: obligation.executionId, statusChannelId: delivered.channelId, statusMessageId: delivered.id, metadata: { swept: true, textRecovery: true } });
+    if (execution) await recordDeliveryRecovery(input, execution, delivered.id, "stored_text");
   } else {
     await input.obligations.markAbandoned({ executionId: obligation.executionId, error: decision.error, metadata: { swept: true, noticeMessageId: delivered.id } });
   }
@@ -199,7 +200,26 @@ async function deliverIntent(
       },
     }).catch((error) => input.logger.warn({ err: error, executionId: execution.executionId, replyMessageId: reply.id }, "Failed to reconcile recovered conversation memory"));
   }
+  await recordDeliveryRecovery(input, execution, reply.id, "durable_intent", { richPresentationDelivered });
   input.logger.info({ executionId: execution.executionId, replyMessageId: reply.id, richPresentationDelivered }, "Recovered durable Discord delivery intent");
+}
+
+async function recordDeliveryRecovery(
+  input: Pick<SweepInput, "agentRuntime" | "logger">,
+  execution: AgentRuntimeExecutionRecord,
+  replyMessageId: string,
+  recoveryMode: "durable_intent" | "stored_text",
+  metadata: Record<string, unknown> = {},
+) {
+  await input.agentRuntime.recordEvent({
+    sessionId: execution.sessionId,
+    executionId: execution.executionId,
+    traceId: execution.traceId,
+    kind: "status",
+    eventName: "discord.delivery.recovered",
+    summary: "Recovered and delivered a previously pending Discord response.",
+    metadata: { replyMessageId, recoveryMode, ...metadata },
+  }).catch((error) => input.logger.warn({ err: error, executionId: execution.executionId }, "Failed to record recovered delivery"));
 }
 
 async function loadDeliveryIntent(agentRuntime: AgentRuntimeRepository, obligation: DiscordDeliveryObligationRecord): Promise<DiscordDeliveryIntent | null> {

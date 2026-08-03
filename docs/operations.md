@@ -43,7 +43,7 @@ The bot handles gateway ingress and delivery. The worker executes queued chat re
 
 ## Configuration ownership
 
-`.env.example` is the complete operator template. `src/config/env.ts` separates deployment inputs from versioned `productConfig`. Environment variables are reserved for credentials, private Discord identity/policy, release metadata, the externally routed control URL, Kubernetes namespace, and the immutable sandbox image. Model choices, limits, repository target, queue topology, and payment rail change through reviewed source.
+`.env.example` and [Configuration](configuration.md) are generated from the accepted manifest in `src/config/environment.ts`. `src/config/env.ts` separates those deployment inputs from versioned `productConfig`. Environment variables are reserved for credentials, private Discord identity/policy, release metadata, the externally routed control URL, Kubernetes namespace, and the immutable sandbox image. Model choices, limits, repository target, queue topology, and payment rail change through reviewed source. Production startup rejects retired variables; run `npm run config:check` whenever the manifest changes.
 
 Important feature gates:
 
@@ -55,7 +55,7 @@ Important feature gates:
 | Wallets, transfers, and wagers | Both Privy credentials |
 | Public run console | API role, password, HTTPS/public URL when exposed |
 
-Administrative mutations use `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`. Image generation may be restricted to that allowlist. Code-update requests remain available to members when the feature is deployed.
+Administrative mutations use `BOT_OWNER_USER_ID` and `OPS_ALLOWLIST_USER_IDS`. Code-update requests remain available to members when the feature is deployed.
 
 ## Indexing and memory
 
@@ -81,6 +81,8 @@ npm run console:dev:live
 ```
 
 The API role serves authenticated run-console routes and Prometheus metrics. Keep the service private when possible. If public, require HTTPS and `CONTROL_UI_AUTH_PASSWORD`.
+
+The metrics surface reports runtime event latency/cost/tokens, answer status/latency/cost by model and application revision, tool outcomes, reviewed run ratings and failure modes, delivery recoveries, and code-update backlog/phase timing. These are observable outcomes rather than guesses derived from answer wording; for example, unnecessary refusals are counted only when a reviewer classifies them.
 
 ## Debug a Discord result
 
@@ -114,6 +116,14 @@ The Unicode `🐛` reaction marks a Discord message for requester-scoped debuggi
 
 The repair workflow reproduces the linked run, adds a general regression test, opens a focused PR when requested, deploys after normal review, and retries the original prompt reply after the fix is live. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
 
+Every bug-marked execution is also captured as private negative feedback. In the run console, classify the failure and add expected/forbidden tools or required/forbidden answer text, then run:
+
+```bash
+npm run eval:regressions
+```
+
+The export stays under `.discord-ai-agent/evals/` with owner-only file permissions. Cases without an observable assertion remain skipped instead of pretending that a note is an executable test.
+
 ## Build and release verification
 
 Before deployment:
@@ -125,7 +135,7 @@ npm run verify:db
 npm run eval -- --dry-run
 ```
 
-CI builds the console and TypeScript runtime, runs verification and DB checks, scans source and container dependencies, runs CodeQL, publishes commit-tagged images, and then triggers deployment for the verified revision. Deployment should treat build, migration, Helm rollout, readiness, and Discord delivery as distinct stages.
+CI builds the console and TypeScript runtime, runs verification and DB checks, scans source and container dependencies, runs CodeQL, publishes commit-tagged images, and then triggers deployment for the verified revision. After Helm completes, deployment verifies each role's image and `APP_REVISION`, confirms the worker may create sandbox Jobs, and runs a private canary through the compiled prompt path. The canary proves a permission-scoped Discord stats call, an actual hosted web search, authenticated read access to the configured GitHub repository, sandbox-image scheduling and completion, and a real Discord send/delete cycle. A failed boundary fails the rollout instead of treating configured tool metadata as readiness. Build, migration, rollout, readiness, capability verification, and Discord delivery remain distinct stages.
 
 ## Kubernetes production
 

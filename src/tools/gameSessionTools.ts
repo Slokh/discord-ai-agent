@@ -29,9 +29,6 @@ export async function awaitRandomWagerAction(ctx: ToolContext, input: {
   }
   const allowedActions = normalizeActions(input.allowedActions);
   if (allowedActions.length === 0) return gameSessionError("missing_allowed_actions", "allowedActions must contain at least one distinct player action.");
-  if (allowedActions.some(isSettlementConfirmation)) {
-    return gameSessionError("invalid_allowed_actions", "allowedActions must be genuine gameplay decisions, not confirmation or settlement. Call settleRandomWager immediately when the outcome is already final.");
-  }
   if (!prompt) return gameSessionError("missing_action_prompt", "prompt is required and must ask the player for their next decision.");
 
   const wager = await currentWagerForContext(ctx);
@@ -95,9 +92,4 @@ function normalizeActions(actions: string[] | undefined) {
     .map((action) => action.trim().toLowerCase().replace(/\s+/g, " "))
     .filter((action) => action.length > 0 && action.length <= 80);
   return [...new Set(normalized)].slice(0, MAX_ACTIONS);
-}
-
-function isSettlementConfirmation(action: string) {
-  const words = action.trim().toLowerCase().split(/\s+/);
-  return ["confirm", "settle", "resolve", "accept", "acknowledge"].includes(words[0] ?? "");
 }

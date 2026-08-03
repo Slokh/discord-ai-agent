@@ -21,6 +21,17 @@ describe("payment tool permissions", () => {
     },
   );
 
+  it.each(["updateBotAvatar", "createDiscordEmoji"] as const)(
+    "fails closed for %s when no operator is configured",
+    async (toolName) => {
+      await expect(restrictedToolGate({
+        userId: "friend",
+        mutationAuthorizedByCurrentInput: true,
+        config: { allowlists: { ownerUserId: null, opsUserIds: [] } },
+      } as unknown as ToolContext, toolName)).resolves.toEqual(expect.objectContaining({ allowed: false }));
+    },
+  );
+
   it("fails closed for model changes unless an owner or op is configured", async () => {
     await expect(restrictedToolGate(context("friend"), "setAgentModel"))
       .resolves.toEqual(expect.objectContaining({ allowed: false }));

@@ -1,11 +1,9 @@
 use std::{
-    collections::HashMap,
     fs::File,
     io::{self, BufRead, BufReader},
     os::fd::{FromRawFd, RawFd},
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Mutex as StdMutex},
-    thread,
+    path::PathBuf,
+    sync::{Arc, atomic::{AtomicU64, Ordering}},
 };
 
 use async_trait::async_trait;
@@ -21,8 +19,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 use thiserror::Error;
 use tokio::{
+    fs,
     io::AsyncWriteExt,
-    sync::{mpsc, oneshot},
+    sync::mpsc,
+    time::{Duration, sleep},
 };
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -33,15 +33,18 @@ const PRIVATE_PROTOCOL_FD_MIN: i32 = 128;
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum InboundMessage {
     Run(Box<RunRequest>),
-    ToolResult {
-        call_id: String,
-        success: bool,
-        output: ToolOutputBody,
-        #[serde(default)]
-        code_mode_value: Option<Value>,
-        #[serde(default)]
-        metadata: Option<Box<RawValue>>,
-    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolResultMessage {
+    call_id: String,
+    success: bool,
+    output: ToolOutputBody,
+    #[serde(default)]
+    code_mode_value: Option<Value>,
+    #[serde(default)]
+    metadata: Option<Box<RawValue>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +68,7 @@ struct RunRequest {
     instructions: String,
     prompt: String,
     session_id: String,
+    result_directory: PathBuf,
     #[serde(default)]
     workspace: Option<String>,
     #[serde(default)]
@@ -94,6 +98,7 @@ enum OutboundMessage<'a> {
         call_id: &'a str,
         name: &'a str,
         arguments: Value,
+        result_file: &'a str,
     },
     ToolResultAccepted {
         protocol_version: u32,
@@ -118,12 +123,6 @@ enum OutboundMessage<'a> {
 enum RuntimeError {
     #[error("stdin closed before a run request was received")]
     MissingRunRequest,
-    #[error("stdin closed while the NanoCodex runtime was active")]
-    InputClosed,
-    #[error("the first protocol message must be run")]
-    RunRequestNotFirst,
-    #[error("a second run request is not allowed")]
-    DuplicateRunRequest,
     #[error("invalid model: {0}")]
     InvalidModel(String),
     #[error("invalid thinking level: {0}")]
@@ -132,26 +131,21 @@ enum RuntimeError {
     InvalidReasoningMode(String),
     #[error("invalid session ID: {0}")]
     InvalidSessionId(String),
-    #[error("tool result references unknown call ID: {0}")]
-    UnknownToolCall(String),
     #[error("failed to read protocol input: {0}")]
     Read(#[from] io::Error),
-    #[error("protocol input thread stopped: {0}")]
-    InputThread(String),
     #[error("invalid protocol JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("NanoCodex failed: {0}")]
     Nanocodex(String),
 }
 
-type PendingCalls = Arc<StdMutex<HashMap<String, oneshot::Sender<ToolOutput>>>>;
-
 #[derive(Clone)]
 struct ProtocolTool {
     request_id: Arc<str>,
     definition: ToolDefinition,
     outbound: mpsc::UnboundedSender<Value>,
-    pending: PendingCalls,
+    result_directory: Arc<PathBuf>,
+    result_sequence: Arc<AtomicU64>,
 }
 
 #[async_trait]
@@ -166,8 +160,10 @@ impl Tool for ProtocolTool {
             ToolInput::Freeform(text) => Value::String(text),
         };
         let call_id = context.call_id().to_owned();
-        let (sender, receiver) = oneshot::channel();
-        pending_calls(&self.pending).insert(call_id.clone(), sender);
+        let result_file = format!(
+            "result-{}.json",
+            self.result_sequence.fetch_add(1, Ordering::Relaxed),
+        );
         let message = serde_json::to_value(OutboundMessage::ToolCall {
             protocol_version: PROTOCOL_VERSION,
             request_id: &self.request_id,
@@ -175,18 +171,50 @@ impl Tool for ProtocolTool {
             call_id: &call_id,
             name: self.definition.name(),
             arguments,
+            result_file: &result_file,
         })?;
         if self.outbound.send(message).is_err() {
-            pending_calls(&self.pending).remove(&call_id);
             return Ok(ToolOutput::error(
                 "Application tool bridge closed before dispatch",
             ));
         }
-        match receiver.await {
-            Ok(output) => Ok(output),
-            Err(_) => Ok(ToolOutput::error(
-                "Application tool bridge closed before returning a result",
-            )),
+        let result = read_tool_result(self.result_directory.join(&result_file)).await?;
+        if result.call_id != call_id {
+            return Ok(ToolOutput::error("Application tool result call ID mismatch"));
+        }
+        let wire = nanocodex::tools::contract::ToolOutputWire {
+            output: result.output,
+            success: result.success,
+            code_mode_value: result
+                .code_mode_value
+                .map(|value| serde_json::value::to_raw_value(&value))
+                .transpose()?,
+            metadata: result.metadata,
+            process_trace: None,
+        };
+        let output = ToolOutput::from_wire(wire)?;
+        let accepted = serde_json::to_value(OutboundMessage::ToolResultAccepted {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: &self.request_id,
+            call_id: &call_id,
+        })?;
+        let _ = self.outbound.send(accepted);
+        Ok(output)
+    }
+}
+
+async fn read_tool_result(path: PathBuf) -> Result<ToolResultMessage, serde_json::Error> {
+    loop {
+        match fs::read(&path).await {
+            Ok(bytes) => {
+                let result = serde_json::from_slice(&bytes)?;
+                let _ = fs::remove_file(path).await;
+                return Ok(result);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(serde_json::Error::io(error)),
         }
     }
 }
@@ -211,48 +239,16 @@ async fn run() -> Result<(), RuntimeError> {
     })
     .await?;
 
-    // The application bridge owns fd 3. Stdin is deliberately disconnected by
-    // the parent so the embedded runtime and its child processes can never
-    // compete with protocol replies. A dedicated reader thread also keeps the
-    // bridge independent of the async executor driving Code Mode.
-    let pending: PendingCalls = Arc::new(StdMutex::new(HashMap::new()));
+    // fd 3 carries only the startup request and is closed before NanoCodex
+    // starts. Later tool results use the run's private filesystem mailbox.
+    let request = tokio::task::spawn_blocking(move || read_run_request(BufReader::new(protocol_input)))
+        .await
+        .map_err(|error| RuntimeError::Nanocodex(format!("protocol startup reader failed: {error}")))??;
     let (outbound_sender, outbound_receiver) = mpsc::unbounded_channel();
     let writer = tokio::spawn(write_outbound(outbound_receiver));
-    let (run_sender, run_receiver) = oneshot::channel();
-    let (input_error_sender, mut input_errors) = mpsc::unbounded_channel();
-    let input_pending = Arc::clone(&pending);
-    let input_outbound = outbound_sender.clone();
-    let thread_error_sender = input_error_sender.clone();
-    thread::Builder::new()
-        .name("nanocodex-protocol-input".to_owned())
-        .spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                read_protocol_input(
-                    BufReader::new(protocol_input),
-                    input_pending,
-                    input_outbound,
-                    run_sender,
-                    input_error_sender,
-                );
-            }));
-            let reason = match result {
-                Ok(()) => "reader exited".to_owned(),
-                Err(payload) => format!("reader panicked: {}", panic_message(payload)),
-            };
-            let _ = thread_error_sender.send(RuntimeError::InputThread(reason));
-        })
-        .map_err(RuntimeError::Read)?;
-    let request = run_receiver
-        .await
-        .map_err(|_| RuntimeError::MissingRunRequest)??;
 
     let request_id: Arc<str> = request.request_id.clone().into();
-    let agent = run_agent(*request, request_id, outbound_sender.clone(), pending);
-    tokio::pin!(agent);
-    let result = tokio::select! {
-        result = &mut agent => result,
-        Some(error) = input_errors.recv() => Err(error),
-    };
+    let result = run_agent(*request, request_id, outbound_sender.clone()).await;
     drop(outbound_sender);
     writer.await.map_err(|error| {
         RuntimeError::Nanocodex(format!("protocol writer task failed: {error}"))
@@ -287,22 +283,13 @@ fn private_protocol_input(fd: RawFd) -> Result<File, io::Error> {
     Ok(unsafe { File::from_raw_fd(private_fd) })
 }
 
-fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_owned()
-    }
-}
-
 async fn run_agent(
     request: RunRequest,
     request_id: Arc<str>,
     outbound: mpsc::UnboundedSender<Value>,
-    pending: PendingCalls,
 ) -> Result<(), RuntimeError> {
+    let result_directory = Arc::new(request.result_directory.clone());
+    let result_sequence = Arc::new(AtomicU64::new(1));
     let model = request
         .model
         .parse::<Model>()
@@ -346,7 +333,8 @@ async fn run_agent(
             request_id: Arc::clone(&request_id),
             definition,
             outbound: outbound.clone(),
-            pending: Arc::clone(&pending),
+            result_directory: Arc::clone(&result_directory),
+            result_sequence: Arc::clone(&result_sequence),
         });
     }
     let tools = tools
@@ -413,98 +401,16 @@ async fn run_agent(
     Ok(())
 }
 
-fn read_protocol_input(
-    mut input: impl BufRead,
-    pending: PendingCalls,
-    outbound: mpsc::UnboundedSender<Value>,
-    run_sender: oneshot::Sender<Result<Box<RunRequest>, RuntimeError>>,
-    input_error_sender: mpsc::UnboundedSender<RuntimeError>,
-) {
+fn read_run_request(mut input: impl BufRead) -> Result<Box<RunRequest>, RuntimeError> {
     let mut first = String::new();
     match input.read_line(&mut first) {
-        Ok(0) => {
-            let _ = run_sender.send(Err(RuntimeError::MissingRunRequest));
-            return;
-        }
+        Ok(0) => return Err(RuntimeError::MissingRunRequest),
         Ok(_) => {}
-        Err(error) => {
-            let _ = run_sender.send(Err(RuntimeError::Read(error)));
-            return;
-        }
+        Err(error) => return Err(RuntimeError::Read(error)),
     }
-    let request = match serde_json::from_str::<InboundMessage>(&first) {
-        Ok(InboundMessage::Run(request)) => request,
-        Ok(InboundMessage::ToolResult { .. }) => {
-            let _ = run_sender.send(Err(RuntimeError::RunRequestNotFirst));
-            return;
-        }
-        Err(error) => {
-            let _ = run_sender.send(Err(RuntimeError::Json(error)));
-            return;
-        }
-    };
-    let request_id = request.request_id.clone();
-    if run_sender.send(Ok(request)).is_err() {
-        return;
+    match serde_json::from_str::<InboundMessage>(&first)? {
+        InboundMessage::Run(request) => Ok(request),
     }
-
-    for line in input.lines() {
-        let result = (|| -> Result<(), RuntimeError> {
-            match serde_json::from_str::<InboundMessage>(&line?)? {
-                InboundMessage::Run(_) => return Err(RuntimeError::DuplicateRunRequest),
-                InboundMessage::ToolResult {
-                    call_id,
-                    success,
-                    output,
-                    code_mode_value,
-                    metadata,
-                } => {
-                    let sender = pending_calls(&pending)
-                        .remove(&call_id)
-                        .ok_or_else(|| RuntimeError::UnknownToolCall(call_id.clone()))?;
-                    let wire = nanocodex::tools::contract::ToolOutputWire {
-                        output,
-                        success,
-                        code_mode_value: code_mode_value
-                            .map(|value| serde_json::value::to_raw_value(&value))
-                            .transpose()?,
-                        metadata,
-                        process_trace: None,
-                    };
-                    let output = ToolOutput::from_wire(wire)?;
-                    sender.send(output).map_err(|_| {
-                        RuntimeError::Nanocodex(format!(
-                            "tool result receiver closed before accepting call {call_id}"
-                        ))
-                    })?;
-                    let accepted = serde_json::to_value(OutboundMessage::ToolResultAccepted {
-                        protocol_version: PROTOCOL_VERSION,
-                        request_id: &request_id,
-                        call_id: &call_id,
-                    })?;
-                    outbound.send(accepted).map_err(|_| {
-                        RuntimeError::Nanocodex(
-                            "protocol writer closed before acknowledging a tool result".to_owned(),
-                        )
-                    })?;
-                }
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let _ = input_error_sender.send(error);
-            return;
-        }
-    }
-    let _ = input_error_sender.send(RuntimeError::InputClosed);
-}
-
-fn pending_calls(
-    pending: &PendingCalls,
-) -> std::sync::MutexGuard<'_, HashMap<String, oneshot::Sender<ToolOutput>>> {
-    pending
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 async fn write_outbound(mut receiver: mpsc::UnboundedReceiver<Value>) -> Result<(), RuntimeError> {
@@ -566,7 +472,15 @@ mod tests {
             "parameters": { "type": "object", "properties": {} }
         }))
         .expect("valid tool definition");
-        let pending: PendingCalls = Arc::new(StdMutex::new(HashMap::new()));
+        let result_directory = std::env::temp_dir().join(format!(
+            "nanocodex-runtime-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("current time")
+                .as_nanos(),
+        ));
+        std::fs::create_dir(&result_directory).expect("result directory");
         let (outbound, mut calls) = mpsc::unbounded_channel();
         let tools = Tools::builder()
             .without_defaults()
@@ -574,7 +488,8 @@ mod tests {
                 request_id: Arc::from("request-test"),
                 definition,
                 outbound,
-                pending: Arc::clone(&pending),
+                result_directory: Arc::new(result_directory.clone()),
+                result_sequence: Arc::new(AtomicU64::new(1)),
             })
             .build()
             .expect("valid tools");
@@ -582,11 +497,16 @@ mod tests {
         let result_sender = tokio::spawn(async move {
             let call = calls.recv().await.expect("protocol tool call");
             let call_id = call["call_id"].as_str().expect("call id").to_owned();
-            let sent = pending_calls(&pending)
-                .remove(&call_id)
-                .expect("pending call")
-                .send(ToolOutput::text("bridge ok"));
-            assert!(sent.is_ok(), "active receiver");
+            let result_file = call["result_file"].as_str().expect("result file");
+            std::fs::write(
+                result_directory.join(result_file),
+                serde_json::to_vec(&json!({
+                    "call_id": call_id,
+                    "success": true,
+                    "output": "bridge ok"
+                })).expect("result JSON"),
+            ).expect("write result");
+            result_directory
         });
         let history = Vec::new();
         let context =
@@ -601,7 +521,8 @@ mod tests {
         .await
         .expect("code mode completed");
 
-        result_sender.await.expect("result sender completed");
+        let result_directory = result_sender.await.expect("result sender completed");
+        std::fs::remove_dir_all(result_directory).expect("remove result directory");
         assert!(execution.success);
         assert_eq!(execution.nested_calls.len(), 1);
     }

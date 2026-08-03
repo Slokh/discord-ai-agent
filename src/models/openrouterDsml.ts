@@ -22,7 +22,39 @@ export function parseDsmlToolCalls(content: string): ParsedToolCall[] {
 }
 
 export function stripDsmlToolCalls(content: string) {
-  return content.replace(/<[^>]*DSML[^>]*tool_calls[^>]*>[\s\S]*?<\/[^>]*DSML[^>]*tool_calls>/g, "");
+  let cursor = 0;
+  let result = "";
+  while (cursor < content.length) {
+    const block = nextToolCallsBlock(content, cursor);
+    if (!block) return result + content.slice(cursor);
+    result += content.slice(cursor, block.start);
+    cursor = block.end;
+  }
+  return result;
+}
+
+function nextToolCallsBlock(content: string, from: number): { start: number; end: number } | null {
+  let tagStart = content.indexOf("<", from);
+  while (tagStart >= 0) {
+    const tagEnd = content.indexOf(">", tagStart + 1);
+    if (tagEnd < 0) return null;
+    const tag = content.slice(tagStart + 1, tagEnd);
+    if (!tag.startsWith("/") && tag.includes("DSML") && tag.includes("tool_calls")) {
+      let closingStart = content.indexOf("<", tagEnd + 1);
+      while (closingStart >= 0) {
+        const closingEnd = content.indexOf(">", closingStart + 1);
+        if (closingEnd < 0) return null;
+        const closingTag = content.slice(closingStart + 1, closingEnd);
+        if (closingTag.startsWith("/") && closingTag.includes("DSML") && closingTag.includes("tool_calls")) {
+          return { start: tagStart, end: closingEnd + 1 };
+        }
+        closingStart = content.indexOf("<", closingEnd + 1);
+      }
+      return null;
+    }
+    tagStart = content.indexOf("<", tagEnd + 1);
+  }
+  return null;
 }
 
 function parseJsonishValue(value: string): unknown {

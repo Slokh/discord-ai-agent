@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { evaluateDeploymentHealth, type DeploymentHealth } from "./deploymentHealth.js";
 
 type CommandResult = { ok: true; stdout: string } | { ok: false; error: string };
 type Runner = (command: string, args: string[]) => CommandResult;
@@ -23,6 +24,7 @@ export type ReleaseStatus = {
   deployedRevision: string | null;
   revisionsAligned: boolean;
   rolloutReady: boolean;
+  deploymentHealth: DeploymentHealth | null;
   deploymentRun: Record<string, unknown> | null;
   quality: Record<string, unknown> | null;
   tasks: Record<string, unknown> | null;
@@ -56,7 +58,7 @@ export function collectReleaseStatus(input: {
   ));
   const deploymentPayload = jsonResult(
     runner("kubectl", [
-      "--namespace", namespace, "get", "deployments",
+      "--namespace", namespace, "get", "deployments,pods",
       "-l", "app.kubernetes.io/name=discord-ai-agent", "-o", "json",
     ]),
     warnings,
@@ -66,10 +68,12 @@ export function collectReleaseStatus(input: {
   const revisions = new Set(deployments.map((deployment) => deployment.revision).filter(Boolean));
   const deployedRevision = revisions.size === 1 ? [...revisions][0] ?? null : null;
   const revisionsAligned = deployments.length > 0 && revisions.size === 1;
-  const rolloutReady = deployments.length > 0
-    && deployments.every((deployment) => deployment.desired > 0 && deployment.ready === deployment.desired);
+  const deploymentHealth = deployedRevision
+    ? evaluateDeploymentHealth(deploymentPayload ?? {}, { release, expectedRevision: deployedRevision })
+    : null;
+  const rolloutReady = deploymentHealth?.healthy === true;
   if (!revisionsAligned) warnings.push("Application roles do not report one deployed revision.");
-  if (!rolloutReady) warnings.push("One or more application roles are not fully ready.");
+  if (!rolloutReady) warnings.push(...(deploymentHealth?.issues ?? ["One or more application roles are not fully ready."]));
 
   const deploymentRun = deployedRevision
     ? latestDeployRun(jsonArrayResult(runner("gh", [
@@ -104,6 +108,7 @@ export function collectReleaseStatus(input: {
     deployedRevision,
     revisionsAligned,
     rolloutReady,
+    deploymentHealth,
     deploymentRun,
     quality,
     tasks,
@@ -116,6 +121,7 @@ export function deploymentsFromKubernetes(payload: Record<string, unknown> | nul
   return items.flatMap((value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return [];
     const item = value as any;
+    if (item.kind && item.kind !== "Deployment") return [];
     const containers = item.spec?.template?.spec?.containers;
     const container = Array.isArray(containers) ? containers[0] : null;
     const env = Array.isArray(container?.env) ? container.env : [];

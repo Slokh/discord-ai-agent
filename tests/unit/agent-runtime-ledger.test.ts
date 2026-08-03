@@ -20,6 +20,7 @@ describe("agent runtime ledger", () => {
       discordUrl: "https://discord.com/channels/guild/channel/message",
       status: "queued",
       source: "test",
+      qualityCohort: "member",
       executorName: "nanocodex",
       appRevision: "abc123"
     });
@@ -31,7 +32,7 @@ describe("agent runtime ledger", () => {
         threadKey: "discord:guild:channel",
         status: "queued",
         harness: "nanocodex",
-        metadata: expect.objectContaining({ source: "test", executor: "nanocodex", appRevision: "abc123" })
+        metadata: expect.objectContaining({ source: "test", qualityCohort: "member", executor: "nanocodex", appRevision: "abc123" })
       })
     );
     expect(agentRuntime.createExecution).toHaveBeenCalledWith(

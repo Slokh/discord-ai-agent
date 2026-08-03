@@ -6,7 +6,8 @@ import {
 } from "../../scripts/releaseStatus.js";
 
 const kubernetesPayload = {
-  items: ["api", "bot", "worker"].map((component) => ({
+  items: ["api", "bot", "worker"].flatMap((component) => [{
+    kind: "Deployment",
     metadata: { name: `discord-ai-agent-${component}` },
     spec: {
       replicas: 1,
@@ -19,8 +20,13 @@ const kubernetesPayload = {
         },
       },
     },
-    status: { readyReplicas: 1 },
-  })),
+    status: { observedGeneration: 0, readyReplicas: 1, updatedReplicas: 1, availableReplicas: 1 },
+  }, {
+    kind: "Pod",
+    metadata: { name: `discord-ai-agent-${component}-pod`, labels: { "app.kubernetes.io/component": component } },
+    spec: { containers: [{ name: component, image: "registry/app:revision-a" }] },
+    status: { containerStatuses: [{ name: component, ready: true, restartCount: 0 }] },
+  }]),
 };
 
 describe("release status", () => {
@@ -38,7 +44,7 @@ describe("release status", () => {
       if (command === "helm") return { ok: true as const, stdout: JSON.stringify({ info: { status: "deployed" } }) };
       if (command === "gh" && args[0] === "pr") return { ok: true as const, stdout: JSON.stringify({ number: 343, statusCheckRollup: [{ conclusion: "SUCCESS" }] }) };
       if (command === "gh") return { ok: true as const, stdout: JSON.stringify([{ conclusion: "success", headSha: "revision-a", createdAt: "2026-08-03T00:00:00Z" }]) };
-      if (args.includes("deployments")) return { ok: true as const, stdout: JSON.stringify(kubernetesPayload) };
+      if (args.includes("deployments,pods")) return { ok: true as const, stdout: JSON.stringify(kubernetesPayload) };
       if (args.includes("agentTaskStatus.js")) return { ok: true as const, stdout: JSON.stringify({ activeAgentSessions: [], activeTasks: [], activeSandboxRuns: [], pendingSandboxCleanup: [] }) };
       return { ok: true as const, stdout: JSON.stringify({ assessment: { status: "pass" } }) };
     };
@@ -47,6 +53,7 @@ describe("release status", () => {
       deployedRevision: "revision-a",
       revisionsAligned: true,
       rolloutReady: true,
+      deploymentHealth: expect.objectContaining({ healthy: true }),
       warnings: [],
     });
     expect(releaseStatusExitCode(status)).toBe(0);
@@ -65,6 +72,7 @@ describe("release status", () => {
       deployedRevision: null,
       revisionsAligned: false,
       rolloutReady: true,
+      deploymentHealth: null,
       deploymentRun: null,
       quality: { assessment: { status: "fail" } },
       tasks: null,

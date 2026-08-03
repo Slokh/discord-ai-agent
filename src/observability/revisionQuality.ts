@@ -1,5 +1,7 @@
 import type { DbPool } from "../db/pool.js";
 
+const MEMBER_COHORT_SQL = "coalesce(nullif(execution.metadata->>'qualityCohort', ''), nullif(session.metadata->>'qualityCohort', '')) = 'member'";
+
 export type RevisionQuality = {
   revision: string;
   windowHours: number;
@@ -19,6 +21,7 @@ export type RevisionHealthPolicy = {
   maxBadFeedbackRate: number;
   maxP95Ms: number;
   maxPendingDeliveries: number;
+  maxAbandonedDeliveries: number;
   maxErrorSignals: number;
   maxFailureRateIncrease: number;
   maxLatencyMultiplier: number;
@@ -39,6 +42,7 @@ export type RevisionHealthAssessment = {
     badFeedbackRate: number;
     p95Ms: number;
     pendingDeliveries: number;
+    abandonedDeliveries: number;
     errorSignals: number;
   };
   violations: string[];
@@ -53,6 +57,7 @@ export const defaultRevisionHealthPolicy: RevisionHealthPolicy = Object.freeze({
   maxBadFeedbackRate: 0.2,
   maxP95Ms: 120_000,
   maxPendingDeliveries: 0,
+  maxAbandonedDeliveries: 0,
   maxErrorSignals: 0,
   maxFailureRateIncrease: 0.05,
   maxLatencyMultiplier: 1.5,
@@ -66,20 +71,21 @@ export async function collectRevisionQuality(
 ): Promise<RevisionQuality> {
   const [answers, tools, signals, deliveries, feedback] = await Promise.all([
     pool.query(
-      `SELECT coalesce(nullif(e.model, ''), 'unknown') AS model,
-              e.status,
+      `SELECT coalesce(nullif(execution.model, ''), 'unknown') AS model,
+              execution.status,
               count(*)::int AS count,
               round(coalesce(percentile_cont(0.95) WITHIN GROUP (
-                ORDER BY extract(epoch FROM (e.completed_at - e.started_at)) * 1000
-              ) FILTER (WHERE e.started_at IS NOT NULL AND e.completed_at IS NOT NULL), 0))::int AS p95_ms
-       FROM agent_runtime_executions e
-       JOIN agent_runtime_sessions s ON s.session_id = e.session_id
-       WHERE e.created_at >= now() - ($1::text || ' hours')::interval
-         AND e.task_id IS NULL
-         AND e.harness = 'nanocodex'
-         AND coalesce(nullif(e.metadata->>'appRevision', ''), nullif(s.metadata->>'appRevision', ''), 'unknown') = $2
-       GROUP BY 1, e.status
-       ORDER BY 1, e.status`,
+                ORDER BY extract(epoch FROM (execution.completed_at - execution.started_at)) * 1000
+              ) FILTER (WHERE execution.started_at IS NOT NULL AND execution.completed_at IS NOT NULL), 0))::int AS p95_ms
+       FROM agent_runtime_executions execution
+       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
+       WHERE execution.created_at >= now() - ($1::text || ' hours')::interval
+         AND execution.task_id IS NULL
+         AND execution.harness = 'nanocodex'
+         AND ${MEMBER_COHORT_SQL}
+         AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
+       GROUP BY 1, execution.status
+       ORDER BY 1, execution.status`,
       [hours, revision],
     ),
     pool.query(
@@ -93,6 +99,7 @@ export async function collectRevisionQuality(
          AND event.event_name = 'agent.tool.complete'
          AND execution.task_id IS NULL
          AND execution.harness = 'nanocodex'
+         AND ${MEMBER_COHORT_SQL}
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
        GROUP BY 1, 2
        ORDER BY 1, 2`,
@@ -107,6 +114,7 @@ export async function collectRevisionQuality(
          AND event.level IN ('warn', 'error')
          AND execution.task_id IS NULL
          AND execution.harness = 'nanocodex'
+         AND ${MEMBER_COHORT_SQL}
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
        GROUP BY event.level
        ORDER BY event.level`,
@@ -117,9 +125,11 @@ export async function collectRevisionQuality(
        FROM discord_delivery_obligations obligation
        JOIN agent_runtime_executions execution ON execution.execution_id = obligation.execution_id
        JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
-       WHERE (obligation.state = 'pending' OR obligation.created_at >= now() - ($1::text || ' hours')::interval)
+       WHERE ((obligation.state = 'pending' AND obligation.updated_at <= now() - interval '5 minutes')
+           OR (obligation.state <> 'pending' AND obligation.created_at >= now() - ($1::text || ' hours')::interval))
          AND execution.task_id IS NULL
          AND execution.harness = 'nanocodex'
+         AND ${MEMBER_COHORT_SQL}
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
        GROUP BY obligation.state
        ORDER BY obligation.state`,
@@ -135,6 +145,7 @@ export async function collectRevisionQuality(
        WHERE feedback.updated_at >= now() - ($1::text || ' hours')::interval
          AND execution.task_id IS NULL
          AND execution.harness = 'nanocodex'
+         AND ${MEMBER_COHORT_SQL}
          AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') = $2
        GROUP BY feedback.rating, feedback.failure_mode
        ORDER BY feedback.rating, feedback.failure_mode`,
@@ -164,6 +175,7 @@ export async function findBaselineRevision(pool: DbPool, revision: string, hours
      WHERE execution.created_at >= now() - ($1::text || ' hours')::interval
        AND execution.task_id IS NULL
        AND execution.harness = 'nanocodex'
+       AND ${MEMBER_COHORT_SQL}
        AND coalesce(nullif(execution.metadata->>'appRevision', ''), nullif(session.metadata->>'appRevision', ''), 'unknown') NOT IN ($2, 'unknown')
      GROUP BY 1
      ORDER BY latest_at DESC
@@ -196,7 +208,10 @@ export function assessRevisionQuality(
     violations.push(`answer p95 ${metrics.p95Ms}ms exceeds ${policy.maxP95Ms}ms`);
   }
   if (metrics.pendingDeliveries > policy.maxPendingDeliveries) {
-    violations.push(`${metrics.pendingDeliveries} pending deliveries exceed ${policy.maxPendingDeliveries}`);
+    violations.push(`${metrics.pendingDeliveries} overdue deliveries exceed ${policy.maxPendingDeliveries}`);
+  }
+  if (metrics.abandonedDeliveries > policy.maxAbandonedDeliveries) {
+    violations.push(`${metrics.abandonedDeliveries} abandoned deliveries exceed ${policy.maxAbandonedDeliveries}`);
   }
   if (metrics.errorSignals > policy.maxErrorSignals) {
     violations.push(`${metrics.errorSignals} error signals exceed ${policy.maxErrorSignals}`);
@@ -243,6 +258,7 @@ function qualityMetrics(quality: RevisionQuality): RevisionHealthAssessment["met
     badFeedbackRate: rate(badFeedback, answers),
     p95Ms: Math.max(0, ...quality.answers.map((row) => numeric(row.p95_ms))),
     pendingDeliveries: total(quality.deliveries, (row) => String(row.state) === "pending"),
+    abandonedDeliveries: total(quality.deliveries, (row) => String(row.state) === "abandoned"),
     errorSignals: total(quality.signals, (row) => String(row.level) === "error"),
   };
 }

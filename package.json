@@ -57,6 +57,7 @@
     "runs:inspect": "tsx scripts/inspectRun.ts",
     "quality:revision": "tsx scripts/revisionQuality.ts",
     "release:status": "tsx scripts/releaseStatus.ts",
+    "release:rollback": "tsx scripts/rollbackRelease.ts",
     "runs:triage": "tsx scripts/inspectRun.ts --triage",
     "discord:audit": "tsx scripts/discordDebug.ts --audit",
     "discord:debug": "tsx scripts/discordDebug.ts",

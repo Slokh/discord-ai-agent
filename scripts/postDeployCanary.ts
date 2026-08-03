@@ -42,57 +42,13 @@ const prompt = [
   "Reply with POST_DEPLOY_CANARY_OK, the numeric message count, and the UTC date.",
   "Do not quote, summarize, or identify any Discord message or member.",
 ].join(" ");
-const output = await runConversationCanary();
-
 const pool = createPool(config);
-let deliveryChannelId: string | undefined;
-try {
-  const [tool, web, execution] = await Promise.all([
-    pool.query(
-      `SELECT 1
-       FROM agent_runtime_events
-       WHERE trace_id = $1
-         AND event_name = 'agent.tool.complete'
-         AND metadata->>'toolName' = 'getDiscordStats'
-         AND coalesce(metadata->>'status', 'ok') <> 'error'
-       LIMIT 1`,
-      [output.traceId],
-    ),
-    pool.query(
-      `SELECT 1
-       FROM agent_runtime_events
-       WHERE trace_id = $1
-         AND event_name = 'agent.model.call.completed'
-         AND EXISTS (
-           SELECT 1
-           FROM jsonb_each_text(coalesce(metadata->'serverToolUse', '{}'::jsonb)) AS usage(name, count)
-           WHERE count::integer > 0
-         )
-       LIMIT 1`,
-      [output.traceId],
-    ),
-    pool.query(
-      `SELECT session.channel_id
-       FROM agent_runtime_executions execution
-       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
-       WHERE execution.trace_id = $1
-       ORDER BY execution.created_at DESC
-       LIMIT 1`,
-      [output.traceId],
-    ),
-  ]);
-  if (tool.rowCount !== 1) throw new Error("Conversation canary did not complete its permission-scoped retrieval tool.");
-  if (web.rowCount !== 1) throw new Error("Conversation canary did not execute a hosted web tool.");
-  deliveryChannelId = typeof execution.rows[0]?.channel_id === "string" ? execution.rows[0].channel_id : undefined;
-  if (!deliveryChannelId) throw new Error("Conversation canary did not retain its Discord channel scope.");
-} finally {
-  await pool.end();
-}
+const deliveryChannelId = await runConversationCanary(pool).finally(async () => pool.end());
 
 await verifyDiscordDelivery(deliveryChannelId);
 process.stdout.write("Post-deploy canary passed: model, retrieval, hosted web, GitHub, sandbox scheduling, and Discord delivery are operational.\n");
 
-async function runConversationCanary() {
+async function runConversationCanary(database: ReturnType<typeof createPool>) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       const { stdout } = await execFileAsync(process.execPath, [
@@ -109,12 +65,64 @@ async function runConversationCanary() {
         maxBuffer: 2 * 1024 * 1024,
       });
       const result = extractPromptJson(stdout);
-      if (typeof result.traceId === "string" && result.content.includes("POST_DEPLOY_CANARY_OK")) return result;
+      if (typeof result.traceId !== "string" || !result.content.includes("POST_DEPLOY_CANARY_OK")) continue;
+      const channelId = await passingConversationChannel(database, result.traceId);
+      if (channelId) return channelId;
     } catch {
       // Retry the isolated conversation once; tools remain non-retriable inside each attempt.
     }
   }
-  throw new Error("Conversation canary did not return its completion marker after two isolated attempts.");
+  throw new Error("Conversation canary did not produce complete durable evidence after two isolated attempts.");
+}
+
+async function passingConversationChannel(database: ReturnType<typeof createPool>, traceId: string) {
+  const [retrieval, web, hosted, execution] = await Promise.all([
+    database.query(
+      `SELECT 1
+       FROM agent_runtime_events
+       WHERE trace_id = $1
+         AND event_name = 'agent.tool.complete'
+         AND metadata->>'toolName' = 'getDiscordStats'
+         AND coalesce(metadata->>'status', 'ok') <> 'error'
+       LIMIT 1`,
+      [traceId],
+    ),
+    database.query(
+      `SELECT 1
+       FROM agent_runtime_events
+       WHERE trace_id = $1
+         AND event_name = 'agent.tool.complete'
+         AND metadata->>'toolName' = 'web__run'
+         AND coalesce(metadata->>'status', 'ok') <> 'error'
+         AND coalesce((metadata->>'outputChars')::integer, 0) > 0
+       LIMIT 1`,
+      [traceId],
+    ),
+    database.query(
+      `SELECT 1
+       FROM agent_runtime_events
+       WHERE trace_id = $1
+         AND event_name = 'agent.model.call.completed'
+         AND EXISTS (
+           SELECT 1
+           FROM jsonb_each_text(coalesce(metadata->'serverToolUse', '{}'::jsonb)) AS usage(name, count)
+           WHERE count::integer > 0
+         )
+       LIMIT 1`,
+      [traceId],
+    ),
+    database.query(
+      `SELECT session.channel_id
+       FROM agent_runtime_executions execution
+       JOIN agent_runtime_sessions session ON session.session_id = execution.session_id
+       WHERE execution.trace_id = $1
+       ORDER BY execution.created_at DESC
+       LIMIT 1`,
+      [traceId],
+    ),
+  ]);
+  if (retrieval.rowCount !== 1 || web.rowCount !== 1 || hosted.rowCount !== 1) return undefined;
+  return typeof execution.rows[0]?.channel_id === "string" ? execution.rows[0].channel_id : undefined;
 }
 
 async function verifyGitHub() {

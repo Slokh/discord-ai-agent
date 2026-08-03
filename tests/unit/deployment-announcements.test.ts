@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, type AppConfig } from "../../src/config/env.js";
 import { announceDeployment, __test } from "../../src/discord/deploymentAnnouncements.js";
+import { BUG_FIX_TITLE, formatUpdateAnnouncement } from "../../src/discord/updateAnnouncements.js";
 
 const oldRevision = "a".repeat(40);
 const newRevision = "b".repeat(40);
@@ -90,6 +91,25 @@ describe("deployment announcements", () => {
     expect(fixture.repo.markDeploymentAnnouncementPosted).toHaveBeenCalledWith(expect.objectContaining({ discordMessageId: "existing" }));
   });
 
+  it("records a contextual bug-fix update without duplicating it in the release channel", async () => {
+    const fixture = setup();
+    await expect(announceDeployment({
+      ...fixture,
+      deliveredBugFix: { content: "## 🐛 Bug fix\n- Better retries.", messageId: "bug-fix-update-1" },
+    } as any)).resolves.toBe("bug_fix");
+
+    expect(fixture.client.channels.fetch).not.toHaveBeenCalled();
+    expect(fixture.fetchImpl).not.toHaveBeenCalled();
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(fixture.repo.markDeploymentAnnouncementPosted).toHaveBeenCalledWith({
+      guildId: "guild-1",
+      revision: newRevision,
+      content: "## 🐛 Bug fix\n- Better retries.",
+      comparisonUrl: `https://github.com/example-org/example-agent/compare/${oldRevision}...${newRevision}`,
+      discordMessageId: "bug-fix-update-1",
+    });
+  });
+
   it("falls back to bounded commit summaries when the utility model is unavailable", async () => {
     const fixture = setup();
     fixture.openRouter.chat.mockRejectedValue(new Error("provider down"));
@@ -134,6 +154,18 @@ describe("deployment announcements", () => {
   it("formats deployed updates as a prominent heading with a compact linked footer", () => {
     expect(__test.formatAnnouncement("- Better replies.", "example/repo", oldRevision, newRevision)).toBe(
       `## ✨ Bot update\n- Better replies.\n\n-# [See everything in version ${newRevision.slice(0, 7)}](<https://github.com/example/repo/compare/${oldRevision}...${newRevision}>)`
+    );
+  });
+
+  it("uses the same update layout for a contextual bug fix", () => {
+    expect(formatUpdateAnnouncement({
+      body: "- Better replies.",
+      repository: "example/repo",
+      base: oldRevision,
+      head: newRevision,
+      title: BUG_FIX_TITLE,
+    })).toBe(
+      `## 🐛 Bug fix\n- Better replies.\n\n-# [See everything in version ${newRevision.slice(0, 7)}](<https://github.com/example/repo/compare/${oldRevision}...${newRevision}>)`
     );
   });
 });

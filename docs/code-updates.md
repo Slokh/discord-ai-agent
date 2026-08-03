@@ -20,7 +20,7 @@ The sandbox never receives the Discord token or database URL. It receives only t
 6. Sandbox progress, commands, timings, cache state, and terminal callbacks become `agent.task.*` events in the canonical runtime ledger.
 7. The task ends as succeeded, failed, cancelled, or no-change, with a PR link or concrete reason.
 
-The original conversational reply should be retried after a successfully deployed automated bug repair so the user receives the requested result, not only repair metadata.
+After a confirmed automated bug repair reaches production, the marked bot reply becomes a persistent `Bug fix` update using the same format as ordinary deployment notes. Posting that contextual update triggers a retry of the original request into a fresh reply; the release-notes channel does not receive a duplicate update for that revision.
 
 ## Sandbox pipeline
 

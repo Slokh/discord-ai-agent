@@ -1469,7 +1469,12 @@ describe("generateImage", () => {
       expect.objectContaining({
         model: "openai/gpt-5.6-luna",
         reasoningEffort: "high",
+        maxTokens: 1024,
         messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("do not produce a separate final answer")
+          }),
           expect.objectContaining({
             role: "user",
             content: expect.arrayContaining([

@@ -121,7 +121,7 @@ The Unicode `🐛` reaction marks a Discord message for requester-scoped debuggi
 
 Unqualified requests such as “show my bug reports” or “fix my bugs” refer to this native inbox. GitHub/repository issue work requires explicit repository context. This distinction lives in tool contracts rather than keyword routing.
 
-The repair workflow reproduces the linked run, adds a general regression test, opens a focused PR when requested, deploys after normal review, and retries the original prompt reply after the fix is live. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
+The repair workflow reproduces the linked run, adds a general regression test, opens a focused PR when requested, and deploys after normal review. Once live, the marked reply becomes a persistent `Bug fix` update and its successful posting triggers the original prompt again into a fresh reply; that revision is not duplicated in the release-notes channel. Never copy private marker content into Frog, a public issue, PR metadata, or tracked fixtures.
 
 Every bug-marked execution is also captured as private negative feedback. In the run console, classify the failure and add expected/forbidden tools or required/forbidden answer text, then run:
 

@@ -122,6 +122,8 @@ Entrypoints must not reconstruct application-owned services independently. Add a
 
 Important model, tool, provider, queue, sandbox, mutation, and delivery transitions are typed events. `runtimeEventSchema.ts` maps registered event namespaces and terminal segments to controlled category/phase dimensions; exceptional events may provide an explicit phase, while unknown names stay `system/progress` rather than being guessed from words embedded in a name. Large or sensitive details are retained as redacted artifacts rather than event metadata. The console, `runs:inspect`, `discord:debug`, task status, and metrics all project the same underlying ledger. Quality metrics group answer latency/cost/status by model and deployed revision, tool outcomes by typed status, reviewed feedback by failure mode, and recovered deliveries.
 
+Every prompt execution declares a quality cohort. Member-originated Discord turns are `member`; CLI, evaluation, and deployment probes are `synthetic`. Revision health, baselines, tool outcomes, feedback, and delivery alerts use only the member cohort, so automated checks cannot manufacture a healthy production sample.
+
 Observability may expose model inputs/outputs and deterministic decisions after permission checks and redaction. It never claims to expose private chain of thought.
 
 ## Overlay boundary

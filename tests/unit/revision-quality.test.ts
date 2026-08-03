@@ -31,6 +31,8 @@ describe("collectRevisionQuality", () => {
     expect(result.generatedAt).toEqual(expect.any(String));
     expect(query).toHaveBeenCalledTimes(5);
     expect(query.mock.calls[3]?.[0]).toContain("obligation.state");
+    expect(query.mock.calls[3]?.[0]).toContain("interval '5 minutes'");
+    expect(query.mock.calls.every((call) => call[0].includes("qualityCohort"))).toBe(true);
     expect(query.mock.calls.every((call) => call[1]?.[0] === 48 && call[1]?.[1] === "revision-1")).toBe(true);
   });
 
@@ -49,11 +51,12 @@ describe("assessRevisionQuality", () => {
   it("fails on durable delivery and error evidence even with a small sample", () => {
     const assessment = assessRevisionQuality(quality({ succeeded: 2 }, {
       signals: [{ level: "error", count: 1 }],
-      deliveries: [{ state: "pending", count: 1 }],
+      deliveries: [{ state: "pending", count: 1 }, { state: "abandoned", count: 1 }],
     }));
     expect(assessment.status).toBe("fail");
     expect(assessment.violations).toEqual(expect.arrayContaining([
-      "1 pending deliveries exceed 0",
+      "1 overdue deliveries exceed 0",
+      "1 abandoned deliveries exceed 0",
       "1 error signals exceed 0",
     ]));
   });

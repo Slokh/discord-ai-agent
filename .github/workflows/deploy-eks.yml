@@ -36,6 +36,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
@@ -81,7 +86,8 @@ jobs:
             helm_args+=(--set-string "config.controlUiPublicUrl=$CONTROL_UI_PUBLIC_URL")
           fi
           helm upgrade --install "$HELM_RELEASE" deploy/helm/discord-ai-agent \
-            --atomic \
+            --rollback-on-failure \
+            --force-conflicts \
             --wait \
             --timeout 10m \
             "${helm_args[@]}"
@@ -90,11 +96,12 @@ jobs:
           for component in api bot worker; do
             deployment="$HELM_RELEASE-$component"
             kubectl --namespace "$K8S_NAMESPACE" rollout status "deployment/$deployment" --timeout=2m
-            image="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$deployment" -o jsonpath='{.spec.template.spec.containers[0].image}')"
-            revision="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$deployment" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="APP_REVISION")].value}')"
-            test "${image##*:}" = "$IMAGE_TAG"
-            test "$revision" = "$IMAGE_TAG"
           done
+          npx tsx scripts/deploymentHealth.ts \
+            --namespace "$K8S_NAMESPACE" \
+            --release "$HELM_RELEASE" \
+            --revision "$IMAGE_TAG" \
+            --stability-seconds 0
           kubectl auth can-i create jobs.batch \
             --namespace "$K8S_NAMESPACE" \
             --as="system:serviceaccount:$K8S_NAMESPACE:$HELM_RELEASE-worker" | grep -qx yes
@@ -106,11 +113,8 @@ jobs:
             node dist/scripts/exportRunFeedbackEvals.js
           kubectl --namespace "$K8S_NAMESPACE" exec "deployment/$HELM_RELEASE-worker" -- \
             node dist/scripts/eval.js --private-only --safe-summary
-          for component in api bot worker; do
-            deployment="$HELM_RELEASE-$component"
-            desired="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$deployment" -o jsonpath='{.spec.replicas}')"
-            ready="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$deployment" -o jsonpath='{.status.readyReplicas}')"
-            updated="$(kubectl --namespace "$K8S_NAMESPACE" get deployment "$deployment" -o jsonpath='{.status.updatedReplicas}')"
-            test "$ready" = "$desired"
-            test "$updated" = "$desired"
-          done
+          npx tsx scripts/deploymentHealth.ts \
+            --namespace "$K8S_NAMESPACE" \
+            --release "$HELM_RELEASE" \
+            --revision "$IMAGE_TAG" \
+            --stability-seconds 30

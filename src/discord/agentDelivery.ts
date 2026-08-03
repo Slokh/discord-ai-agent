@@ -161,6 +161,7 @@ export async function executeDiscordAgentRequest(
     discordUrl: message.url,
     status: "running",
     source: `discord.${request.requestKind ?? request.turnEnvelope?.requestKind ?? "worker"}`,
+    qualityCohort: "member",
     executorName: agentExecutor.name,
     appRevision: input.config.appRevision,
     config: input.config

@@ -121,6 +121,7 @@ async function main() {
       discordUrl: `local://prompt/${requestId}`,
       status: "running",
       source: "cli.prompt",
+      qualityCohort: "synthetic",
       executorName: "nanocodex",
       appRevision: config.appRevision,
       config,

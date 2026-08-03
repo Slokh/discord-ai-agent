@@ -7,6 +7,8 @@ export type AgentPromptExecutionRef = {
   executionId: string;
 };
 
+export type AgentQualityCohort = "member" | "synthetic";
+
 export async function ensureAgentRuntimePromptExecution(input: {
   agentRuntime?: AgentRuntimeRepository;
   agentSessionId?: string | null;
@@ -22,6 +24,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
   discordUrl: string;
   status: Extract<AgentRuntimeStatus, "queued" | "running">;
   source: string;
+  qualityCohort: AgentQualityCohort;
   executorName?: string | null;
   appRevision?: string | null;
   config?: AppConfig | null;
@@ -49,6 +52,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
     metadata: {
       kind: "discord_channel",
       source: input.source,
+      qualityCohort: input.qualityCohort,
       executor: executorName,
       currentMessageId: input.requestId,
       discordUrl: input.discordUrl,
@@ -66,6 +70,7 @@ export async function ensureAgentRuntimePromptExecution(input: {
       promptMessageId: input.requestId,
       executionId,
       source: input.source,
+      qualityCohort: input.qualityCohort,
       discordUrl: input.discordUrl,
       rawContent: input.rawContent,
       title,

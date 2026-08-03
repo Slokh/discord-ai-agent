@@ -170,6 +170,7 @@ export async function handleMessageCreate(
     discordUrl: message.url,
     status: "queued",
     source: "discord.ingress",
+    qualityCohort: "member",
     executorName: input.agentExecutor?.name ?? "nanocodex",
     appRevision: input.config.appRevision,
     config: input.config

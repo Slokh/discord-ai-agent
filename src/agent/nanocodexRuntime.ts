@@ -136,6 +136,8 @@ export async function runNanoCodexRuntime(input: {
     let settled = false;
     let started = false;
     let queue = Promise.resolve();
+    let eventQueue = Promise.resolve();
+    let eventFailure: unknown;
     let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
 
     const finish = (operation: () => void) => {
@@ -165,7 +167,17 @@ export async function runNanoCodexRuntime(input: {
             return;
           case "event":
             assertRequestId(input.requestId, message.request_id);
-            await input.onEvent?.(message.event);
+            // Retained telemetry must preserve event order, but a slow storage
+            // write must not hold up a following protocol tool_call. Drain the
+            // telemetry queue before terminal completion instead.
+            eventQueue = eventQueue.then(async () => {
+              if (eventFailure) return;
+              try {
+                await input.onEvent?.(message.event);
+              } catch (error) {
+                eventFailure = error;
+              }
+            });
             return;
           case "tool_call": {
             assertRequestId(input.requestId, message.request_id);
@@ -186,6 +198,8 @@ export async function runNanoCodexRuntime(input: {
           }
           case "completed":
             assertRequestId(input.requestId, message.request_id);
+            await eventQueue;
+            if (eventFailure) throw eventFailure;
             finish(() => resolve({
               finalMessage: message.final_message,
               usage: message.usage,

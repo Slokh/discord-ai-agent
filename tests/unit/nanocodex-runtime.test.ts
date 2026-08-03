@@ -189,6 +189,64 @@ describe("NanoCodex native runtime protocol", () => {
     await expect(result).resolves.toMatchObject({ finalMessage: "drained" });
   });
 
+  it("dispatches protocol tool calls without waiting for retained event storage", async () => {
+    const child = new FakeRuntimeProcess();
+    let releaseEvent!: () => void;
+    const eventStored = new Promise<void>((resolve) => {
+      releaseEvent = resolve;
+    });
+    const executeTool = vi.fn(async () => ({ success: true, output: "fast result" }));
+    const result = runNanoCodexRuntime({
+      apiKey: "secret-key",
+      apiBaseUrl: "https://openrouter.ai/api/v1",
+      model: "openai/gpt-5.6-sol",
+      thinking: "low",
+      instructions: "test",
+      prompt: "test",
+      requestId: "request-event-lag",
+      sessionId: "018f1f9a-7b3c-7a01-8000-000000000001",
+      tools: [],
+      executeTool,
+      onEvent: async () => await eventStored,
+      spawnProcess: () => child as never,
+    });
+    child.send({ type: "ready", protocol_version: 1 });
+    child.send({
+      type: "event",
+      protocol_version: 1,
+      request_id: "request-event-lag",
+      event: { protocol_version: 1, request_id: "request-event-lag", seq: 1, type: "tool.call", payload: {} },
+    });
+    child.send({
+      type: "tool_call",
+      protocol_version: 1,
+      request_id: "request-event-lag",
+      session_id: "session-1",
+      call_id: "call-fast",
+      name: "lookup",
+      arguments: {},
+    });
+
+    await vi.waitFor(() => expect(executeTool).toHaveBeenCalledOnce());
+    expect(child.received).toContainEqual(expect.objectContaining({ type: "tool_result", call_id: "call-fast" }));
+
+    child.send({
+      type: "completed",
+      protocol_version: 1,
+      request_id: "request-event-lag",
+      final_message: "done",
+      usage: {},
+      snapshot: {},
+    });
+    let completed = false;
+    void result.then(() => { completed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(completed).toBe(false);
+
+    releaseEvent();
+    await expect(result).resolves.toMatchObject({ finalMessage: "done" });
+  });
+
   it("reports process exit after stdout drains without completion", async () => {
     const child = new FakeRuntimeProcess();
     const result = runNanoCodexRuntime({

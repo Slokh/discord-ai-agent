@@ -32,9 +32,10 @@ for (const type of ["openrouter:web_search", "openrouter:web_fetch"] as const) {
 await Promise.all([verifyGitHub(), verifySandboxScheduling()]);
 
 const promptScript = fileURLToPath(new URL("./prompt.js", import.meta.url));
+const utcDate = new Date().toISOString().slice(0, 10);
 const prompt = [
   "This is an automated private post-deploy canary.",
-  "Use getDiscordStats to count messages in the current channel.",
+  `Use getDiscordStats exactly once with {"dateFrom":"${utcDate}","dateTo":"${utcDate}","metric":"messages","groupBy":"overall","limit":1} to count today's indexed visible messages.`,
   'Use web__run exactly once with {"time":[{"utc_offset":"+00:00"}],"response_length":"short"} to get the current UTC date.',
   "Do not retry either tool; report a failure immediately if a tool fails.",
   "Reply with POST_DEPLOY_CANARY_OK, the numeric message count, and the UTC date.",
